@@ -39,6 +39,7 @@ public:
     static Command deserialize(const QString& serializedData);
     static QList<Command> loadByProject(const QString& projectId, QSqlDatabase& database);
     static Command parseCommandFromQuery(QSqlQuery& query);
+    static Command parseCommandFromQuery(QSqlQuery& query, const QString& projectId);
     
     // Core accessors
     QString id() const { return m_id; }

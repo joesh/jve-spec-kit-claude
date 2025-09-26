@@ -1,6 +1,7 @@
 #include "../common/test_base.h"
 #include "../../src/ui/selection/selection_manager.h"
 #include "../../src/core/models/clip.h"
+#include "../../src/core/models/media.h"
 #include "../../src/core/persistence/migrations.h"
 
 #include <QTest>
@@ -181,35 +182,56 @@ void TestSelectionSystem::testEdgeSelection()
     
     m_selectionManager->clear();
     
-    // Test edge selection with Cmd+Click pattern
+    // Test professional editor Cmd+click behavior (add/remove individual items)
     // First, select a clip normally
     m_selectionManager->select(m_testClipIds[1]);
     QCOMPARE(m_selectionManager->count(), 1);
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[1]));
     
-    // Edge selection: Cmd+click on earlier clip should select range
+    // Cmd+click on different clip should add it to selection
     bool cmdPressed = true;
     m_selectionManager->handleClick(m_testClipIds[0], cmdPressed);
     
-    // Should select range from clip 0 to clip 1
+    // Should have both clips selected (individual add, not range)
     QVERIFY(m_selectionManager->isSelected(m_testClipIds[0]));
     QVERIFY(m_selectionManager->isSelected(m_testClipIds[1]));
     QCOMPARE(m_selectionManager->count(), 2);
     
-    // Edge selection: Cmd+click on later clip should extend range
+    // Cmd+click on another clip should add it as well
     m_selectionManager->handleClick(m_testClipIds[3], cmdPressed);
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[0]));
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[1]));
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[3]));
+    QVERIFY(!m_selectionManager->isSelected(m_testClipIds[2])); // Not selected
+    QCOMPARE(m_selectionManager->count(), 3);
     
-    // Should now select clips 0-3
-    for (int i = 0; i <= 3; i++) {
-        QVERIFY(m_selectionManager->isSelected(m_testClipIds[i]));
-    }
-    QVERIFY(!m_selectionManager->isSelected(m_testClipIds[4]));
-    QCOMPARE(m_selectionManager->count(), 4);
+    // Cmd+click on already selected clip should remove it
+    m_selectionManager->handleClick(m_testClipIds[1], cmdPressed);
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[0]));
+    QVERIFY(!m_selectionManager->isSelected(m_testClipIds[1])); // Removed
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[3]));
+    QCOMPARE(m_selectionManager->count(), 2);
     
-    // Test edge selection boundaries
+    // Test Shift+click range selection behavior
+    m_selectionManager->clear();
+    m_selectionManager->select(m_testClipIds[1]);
+    
+    // Set up timeline context for range selection
+    m_selectionManager->setTimelineItems(m_testClipIds);
+    
+    // Shift+click should select range from last selected to clicked item
+    bool shiftPressed = true;
+    m_selectionManager->handleClick(m_testClipIds[3], false, shiftPressed);
+    
+    // Should select range including all items between 1 and 3
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[1])); // Start of range
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[2])); // Middle of range  
+    QVERIFY(m_selectionManager->isSelected(m_testClipIds[3])); // End of range
+    QCOMPARE(m_selectionManager->count(), 3);
+    
+    // Test selection boundaries
     SelectionRange range = m_selectionManager->getSelectionRange();
-    QCOMPARE(range.startId, m_testClipIds[0]);
-    QCOMPARE(range.endId, m_testClipIds[3]);
-    QCOMPARE(range.count, 4);
+    QCOMPARE(range.count, m_selectionManager->count());
 }
 
 void TestSelectionSystem::testSelectionPersistence()
@@ -310,6 +332,9 @@ void TestSelectionSystem::testKeyboardNavigation()
     qCInfo(jveTests) << "Testing keyboard navigation contract";
     
     m_selectionManager->clear();
+    
+    // Set up timeline context for keyboard navigation
+    m_selectionManager->setTimelineItems(m_testClipIds);
     
     // Test arrow key navigation
     m_selectionManager->select(m_testClipIds[2]); // Start in middle

@@ -63,5 +63,5 @@ private:
     QString m_currentStateHash;
     
     // Performance cache
-    QHash<QString, QString> m_stateHashCache;
+    mutable QHash<QString, QString> m_stateHashCache;
 };

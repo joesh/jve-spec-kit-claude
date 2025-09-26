@@ -234,10 +234,15 @@ bool Command::parseFromJson(const QJsonObject& json)
 
 Command Command::parseCommandFromQuery(QSqlQuery& query)
 {
+    return parseCommandFromQuery(query, ""); // Default to empty project ID for backwards compatibility
+}
+
+Command Command::parseCommandFromQuery(QSqlQuery& query, const QString& projectId)
+{
     QString id = query.value("id").toString();
     QString type = query.value("command_type").toString();
     
-    Command command(id, type, ""); // Project ID handled by application logic
+    Command command(id, type, projectId);
     command.m_sequenceNumber = query.value("sequence_number").toInt();
     command.m_preHash = query.value("pre_hash").toString();
     command.m_postHash = query.value("post_hash").toString();

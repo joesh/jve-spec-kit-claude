@@ -31,7 +31,8 @@ void SelectionManager::addToSelection(const QString& itemId)
     qCDebug(jveSelection) << "Adding to selection:" << itemId;
     
     // Algorithm: Insert item → Update tracking → Update range → Notify
-    if (m_selectedItems.insert(itemId)) {
+    if (!m_selectedItems.contains(itemId)) {
+        m_selectedItems.insert(itemId);
         m_lastSelectedItem = itemId;
         updateSelectionRange();
         notifySelectionChanged();
@@ -74,6 +75,11 @@ void SelectionManager::clear()
         m_currentRange = SelectionRange();
         notifySelectionChanged();
     }
+}
+
+void SelectionManager::setTimelineItems(const QStringList& orderedItems)
+{
+    m_timelineItems = orderedItems;
 }
 
 void SelectionManager::selectAll(const QStringList& items)
@@ -173,16 +179,19 @@ void SelectionManager::handleTriStateClick(const QString& trackId, const QString
     notifySelectionChanged();
 }
 
-void SelectionManager::handleClick(const QString& itemId, bool cmdPressed)
+void SelectionManager::handleClick(const QString& itemId, bool cmdPressed, bool shiftPressed)
 {
-    qCDebug(jveSelection) << "Handling click:" << itemId << "cmd:" << cmdPressed;
+    qCDebug(jveSelection) << "Handling click:" << itemId << "cmd:" << cmdPressed << "shift:" << shiftPressed;
     
     // Algorithm: Check modifiers → Perform selection → Update range
-    if (cmdPressed && !m_lastSelectedItem.isEmpty()) {
-        // Range selection from last selected to current
+    if (cmdPressed) {
+        // Cmd+click: Add/remove individual item (professional editor standard)
+        toggleSelection(itemId);
+    } else if (shiftPressed && !m_lastSelectedItem.isEmpty()) {
+        // Shift+click: Extend range selection (professional editor standard)
         selectRange(m_lastSelectedItem, itemId);
     } else {
-        // Normal selection
+        // Normal click: Replace selection
         select(itemId);
     }
 }
@@ -340,9 +349,12 @@ void SelectionManager::handleKeyPress(int key, Qt::KeyboardModifiers modifiers)
     if (modifiers & Qt::ControlModifier) {
         switch (key) {
         case Qt::Key_A:
-            // Ctrl+A: Select All - need items list from context
-            // For contract test, simulate select all
-            qCDebug(jveSelection) << "Select All requested";
+            // Ctrl+A: Select All from timeline context
+            if (!m_timelineItems.isEmpty()) {
+                selectAll(m_timelineItems);
+            } else {
+                qCDebug(jveSelection) << "Select All requested but no timeline context available";
+            }
             break;
             
         case Qt::Key_D:
@@ -382,22 +394,34 @@ void SelectionManager::notifySelectionChanged()
 QString SelectionManager::findNextItem(const QString& currentItem, SelectionDirection direction) const
 {
     // Algorithm: Determine direction → Find adjacent item → Return result
-    // For M1 Foundation, simplified navigation
-    // Real implementation would query timeline structure
+    if (m_timelineItems.isEmpty()) {
+        return QString(); // No timeline context available
+    }
+    
+    int currentIndex = m_timelineItems.indexOf(currentItem);
+    if (currentIndex == -1) {
+        return QString(); // Item not found in timeline
+    }
     
     switch (direction) {
     case SelectionDirection::Right:
     case SelectionDirection::Down:
-        // Simulate next item logic
-        return currentItem + "_next";
+        // Move to next item
+        if (currentIndex < m_timelineItems.size() - 1) {
+            return m_timelineItems[currentIndex + 1];
+        }
+        break;
         
     case SelectionDirection::Left:
     case SelectionDirection::Up:
-        // Simulate previous item logic  
-        return currentItem + "_prev";
+        // Move to previous item
+        if (currentIndex > 0) {
+            return m_timelineItems[currentIndex - 1];
+        }
+        break;
     }
     
-    return QString();
+    return QString(); // At boundary or invalid direction
 }
 
 QString SelectionManager::findPreviousItem(const QString& currentItem, SelectionDirection direction) const
@@ -411,12 +435,32 @@ void SelectionManager::selectRange(const QString& startId, const QString& endId)
     qCDebug(jveSelection) << "Selecting range from" << startId << "to" << endId;
     
     // Algorithm: Determine range → Select items → Update state
-    // For contract test, simulate range selection
-    m_selectedItems.insert(startId);
-    m_selectedItems.insert(endId);
+    m_selectedItems.clear();
     
-    // For M1 Foundation, simplified range logic
-    // Real implementation would query timeline items between positions
+    if (m_timelineItems.isEmpty()) {
+        // Fallback: just select start and end
+        m_selectedItems.insert(startId);
+        m_selectedItems.insert(endId);
+    } else {
+        // Use timeline context to select range
+        int startIndex = m_timelineItems.indexOf(startId);
+        int endIndex = m_timelineItems.indexOf(endId);
+        
+        if (startIndex != -1 && endIndex != -1) {
+            // Ensure proper order
+            int minIndex = qMin(startIndex, endIndex);
+            int maxIndex = qMax(startIndex, endIndex);
+            
+            // Select all items in range
+            for (int i = minIndex; i <= maxIndex; i++) {
+                m_selectedItems.insert(m_timelineItems[i]);
+            }
+        } else {
+            // Fallback if items not found in timeline
+            m_selectedItems.insert(startId);
+            m_selectedItems.insert(endId);
+        }
+    }
     
     updateSelectionRange();
     notifySelectionChanged();

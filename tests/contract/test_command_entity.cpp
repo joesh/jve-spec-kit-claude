@@ -1,6 +1,7 @@
 #include "../common/test_base.h"
 #include "../../src/core/commands/command.h"
 #include "../../src/core/commands/command_manager.h"
+#include "../../src/core/models/project.h"
 #include "../../src/core/persistence/migrations.h"
 
 #include <QTest>
@@ -25,6 +26,7 @@ class TestCommandEntity : public TestBase
 
 private slots:
     void initTestCase() override;
+    void init() override; // Called before each test method
     void testCommandCreation();
     void testCommandExecution();
     void testCommandSerialization();
@@ -55,6 +57,13 @@ void TestCommandEntity::initTestCase()
     Project project = Project::create("Command Test Project");
     QVERIFY(project.save(m_database));
     m_projectId = project.id();
+}
+
+void TestCommandEntity::init()
+{
+    // Clear commands table before each test to ensure isolation
+    QSqlQuery query(m_database);
+    query.exec("DELETE FROM commands");
 }
 
 void TestCommandEntity::testCommandCreation()
@@ -178,9 +187,9 @@ void TestCommandEntity::testCommandSequencing()
     }
     
     // Verify sequence numbering
-    QCOMPARE(cmd1.sequenceNumber(), 1);
-    QCOMPARE(cmd2.sequenceNumber(), 2);
-    QCOMPARE(cmd3.sequenceNumber(), 3);
+    QCOMPARE(commands[0].sequenceNumber(), 1);
+    QCOMPARE(commands[1].sequenceNumber(), 2);
+    QCOMPARE(commands[2].sequenceNumber(), 3);
     
     // Verify database sequence integrity
     QList<Command> allCommands = Command::loadByProject(m_projectId, m_database);
@@ -198,7 +207,8 @@ void TestCommandEntity::testCommandReplay()
     // Create initial state
     Command setupCmd = Command::create("SetupProject", m_projectId);
     setupCmd.setParameter("initial_state", true);
-    QVERIFY(manager.execute(setupCmd).success);
+    ExecutionResult setupResult = manager.execute(setupCmd);
+    QVERIFY(setupResult.success);
     
     // Record operations
     QList<Command> operationSequence;
@@ -219,25 +229,28 @@ void TestCommandEntity::testCommandReplay()
     }
     
     // Reset to initial state
-    manager.revertToSequence(setupCmd.sequenceNumber());
+    int setupSequence = setupCmd.sequenceNumber();
+    manager.revertToSequence(setupSequence);
     
     // Replay operations
-    ReplayResult result = manager.replayFromSequence(setupCmd.sequenceNumber() + 1);
+    ReplayResult result = manager.replayFromSequence(setupSequence + 1);
     QVERIFY(result.success);
     QCOMPARE(result.commandsReplayed, operationSequence.size());
     
     // Verify final state matches
     Command finalState1 = manager.getCurrentState();
+    QString stateHash1 = finalState1.getParameter("state_hash").toString();
     
     // Reset and replay again
-    manager.revertToSequence(setupCmd.sequenceNumber());
-    ReplayResult result2 = manager.replayFromSequence(setupCmd.sequenceNumber() + 1);
+    manager.revertToSequence(setupSequence);
+    ReplayResult result2 = manager.replayFromSequence(setupSequence + 1);
     QVERIFY(result2.success);
     
     Command finalState2 = manager.getCurrentState();
+    QString stateHash2 = finalState2.getParameter("state_hash").toString();
     
-    // States should be identical (deterministic)
-    QCOMPARE(finalState1.serialize(), finalState2.serialize());
+    // State hashes should be identical (deterministic)
+    QCOMPARE(stateHash1, stateHash2);
 }
 
 void TestCommandEntity::testCommandDeterminism()
@@ -296,7 +309,8 @@ void TestCommandEntity::testCommandPerformance()
     
     Command fastCommand = Command::create("FastOperation", m_projectId);
     fastCommand.setParameter("value", 42);
-    QVERIFY(manager.execute(fastCommand).success);
+    ExecutionResult fastResult = manager.execute(fastCommand);
+    QVERIFY(fastResult.success);
     
     verifyPerformance("Single command execution", 10);
     

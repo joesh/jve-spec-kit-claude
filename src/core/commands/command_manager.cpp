@@ -3,6 +3,7 @@
 
 #include <QSqlQuery>
 #include <QSqlError>
+#include <QSqlRecord>
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QLoggingCategory>
@@ -350,6 +351,14 @@ void CommandManager::updateCommandHashes(Command& command, const QString& preHas
 
 QList<Command> CommandManager::loadCommandsFromSequence(int startSequence) const
 {
+    // Get project ID from the projects table (single project per .jve file)
+    QString projectId;
+    QSqlQuery projectQuery(m_database);
+    projectQuery.prepare("SELECT id FROM projects LIMIT 1");
+    if (projectQuery.exec() && projectQuery.next()) {
+        projectId = projectQuery.value("id").toString();
+    }
+    
     QSqlQuery query(m_database);
     query.prepare("SELECT * FROM commands WHERE sequence_number >= ? ORDER BY sequence_number");
     query.addBindValue(startSequence);
@@ -357,7 +366,7 @@ QList<Command> CommandManager::loadCommandsFromSequence(int startSequence) const
     QList<Command> commands;
     if (query.exec()) {
         while (query.next()) {
-            Command command = Command::parseCommandFromQuery(query);
+            Command command = Command::parseCommandFromQuery(query, projectId);
             if (!command.id().isEmpty()) {
                 commands.append(command);
             }

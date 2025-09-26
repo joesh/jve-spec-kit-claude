@@ -100,6 +100,9 @@ public:
     void toggleSelection(const QString& itemId);
     void clear();
     
+    // Timeline context for range selection
+    void setTimelineItems(const QStringList& orderedItems);
+    
     // Batch selection operations
     void selectAll(const QStringList& items);
     void selectNone();
@@ -115,7 +118,7 @@ public:
     void handleTriStateClick(const QString& trackId, const QStringList& trackItems, SelectionState currentState);
     
     // Edge selection (Cmd+click patterns)
-    void handleClick(const QString& itemId, bool cmdPressed = false);
+    void handleClick(const QString& itemId, bool cmdPressed = false, bool shiftPressed = false);
     SelectionRange getSelectionRange() const;
     
     // Selection persistence
@@ -162,4 +165,7 @@ private:
     // Navigation state
     QString m_lastSelectedItem;
     QString m_rangeStartItem;
+    
+    // Timeline context for range operations
+    QStringList m_timelineItems;
 };
