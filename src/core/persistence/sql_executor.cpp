@@ -73,6 +73,15 @@ QSqlDatabase SqlExecutor::createMigrationConnection(const QString& projectPath)
         return QSqlDatabase(); // Return invalid database
     }
     
+    // Enable foreign keys immediately after connection is opened
+    QSqlQuery query(database);
+    if (!query.exec("PRAGMA foreign_keys = ON;")) {
+        qCCritical(jveSqlExecutor) << "Failed to enable foreign keys:" 
+                                   << query.lastError().text();
+        QSqlDatabase::removeDatabase(connectionName);
+        return QSqlDatabase();
+    }
+    
     qCDebug(jveSqlExecutor) << "Migration connection created:" << connectionName;
     return database;
 }
@@ -125,6 +134,7 @@ QStringList SqlExecutor::parseStatementsFromScript(const QString& script)
         }
         
         // Skip PRAGMA statements that can't be executed inside transactions
+        // Foreign keys are now handled at connection level
         if (trimmedLine.toUpper().startsWith("PRAGMA JOURNAL_MODE") ||
             trimmedLine.toUpper().startsWith("PRAGMA SYNCHRONOUS") ||
             trimmedLine.toUpper().startsWith("PRAGMA FOREIGN_KEYS")) {

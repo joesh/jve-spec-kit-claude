@@ -1,0 +1,128 @@
+openapi: 3.0.3
+info:
+  title: JVE Editor Command API
+  description: Internal API for deterministic command execution and replay
+  version: 1.0.0
+
+paths:
+  /commands/execute:
+    post:
+      summary: Execute editing command
+      description: Apply command with deterministic delta generation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandRequest'
+      responses:
+        200:
+          description: Command executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+        400:
+          description: Invalid command or arguments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /commands/undo:
+    post:
+      summary: Undo last command
+      description: Reverse last command using inverse delta
+      responses:
+        200:
+          description: Command undone successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+        400:
+          description: No command to undo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /commands/redo:
+    post:
+      summary: Redo last undone command
+      description: Re-apply last undone command
+      responses:
+        200:
+          description: Command redone successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+        400:
+          description: No command to redo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    CommandRequest:
+      type: object
+      required:
+        - command_type
+        - args
+      properties:
+        command_type:
+          type: string
+          enum: [create_clip, delete_clip, split_clip, ripple_delete, ripple_trim, roll_edit]
+        args:
+          type: object
+          additionalProperties: true
+        target_selection:
+          type: array
+          items:
+            type: string
+
+    CommandResponse:
+      type: object
+      required:
+        - command_id
+        - success
+        - delta
+        - post_hash
+      properties:
+        command_id:
+          type: string
+          format: uuid
+        success:
+          type: boolean
+        delta:
+          type: object
+          additionalProperties: true
+        post_hash:
+          type: string
+        inverse_delta:
+          type: object
+          additionalProperties: true
+        
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+        - hint
+        - audience
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        hint:
+          type: string
+        audience:
+          type: string
+          enum: [user, developer]

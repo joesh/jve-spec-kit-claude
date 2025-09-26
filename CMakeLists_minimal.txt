@@ -1,0 +1,64 @@
+cmake_minimum_required(VERSION 3.22)
+
+project(JVEEditorMinimal VERSION 1.0.0 LANGUAGES CXX)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find Qt6
+find_package(Qt6 REQUIRED COMPONENTS Core Sql Test)
+
+# Core model sources (only what we've implemented)
+set(CORE_SOURCES
+    src/core/models/project.cpp
+    src/core/models/sequence.cpp
+    src/core/models/track.cpp
+    src/core/models/clip.cpp
+    src/core/models/media.cpp
+    src/core/persistence/migrations.cpp
+    src/core/persistence/schema_validator.cpp
+    src/core/persistence/sql_executor.cpp
+)
+
+# Create core library with only implemented files
+add_library(JVECore STATIC ${CORE_SOURCES})
+
+target_link_libraries(JVECore
+    Qt6::Core
+    Qt6::Sql
+)
+
+target_include_directories(JVECore PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+)
+
+# Enable Qt's MOC, RCC, UIC
+qt6_standard_project_setup()
+
+# Test executable for project entity
+add_executable(test_project_entity 
+    tests/contract/test_project_entity.cpp
+    tests/common/test_base.h
+)
+
+target_link_libraries(test_project_entity
+    JVECore
+    Qt6::Test
+)
+
+# Test executable for sequence entity  
+add_executable(test_sequence_entity
+    tests/contract/test_sequence_entity.cpp
+    tests/common/test_base.h
+)
+
+target_link_libraries(test_sequence_entity
+    JVECore
+    Qt6::Test
+)
+
+# Enable testing
+enable_testing()
+add_test(NAME ProjectEntityTest COMMAND test_project_entity)
+add_test(NAME SequenceEntityTest COMMAND test_sequence_entity)

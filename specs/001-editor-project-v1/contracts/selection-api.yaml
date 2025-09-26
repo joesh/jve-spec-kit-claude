@@ -1,0 +1,214 @@
+openapi: 3.0.3
+info:
+  title: JVE Editor Selection API
+  description: Clip and edge selection management for Inspector and editing operations
+  version: 1.0.0
+
+paths:
+  /selection/clips:
+    get:
+      summary: Get selected clips
+      description: Retrieve current clip selection
+      responses:
+        200:
+          description: Current selection returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClipSelectionResponse'
+    
+    post:
+      summary: Set clip selection
+      description: Update selected clips with multi-selection support
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetClipSelectionRequest'
+      responses:
+        200:
+          description: Selection updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClipSelectionResponse'
+
+  /selection/edges:
+    get:
+      summary: Get selected edges
+      description: Retrieve current edge selection for ripple/roll operations
+      responses:
+        200:
+          description: Current edge selection returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EdgeSelectionResponse'
+    
+    post:
+      summary: Set edge selection
+      description: Update selected edges with Cmd+click multi-selection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetEdgeSelectionRequest'
+      responses:
+        200:
+          description: Edge selection updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EdgeSelectionResponse'
+
+  /selection/properties:
+    get:
+      summary: Get properties for selection
+      description: Retrieve properties/metadata for selected clips with tri-state handling
+      responses:
+        200:
+          description: Properties returned with tri-state values
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelectionPropertiesResponse'
+    
+    post:
+      summary: Set property across selection
+      description: Apply property value to all selected clips
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetSelectionPropertyRequest'
+      responses:
+        200:
+          description: Property applied to selection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelectionPropertiesResponse'
+
+components:
+  schemas:
+    SetClipSelectionRequest:
+      type: object
+      required:
+        - selection_mode
+        - clip_ids
+      properties:
+        selection_mode:
+          type: string
+          enum: [replace, add, remove, toggle]
+        clip_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    SetEdgeSelectionRequest:
+      type: object
+      required:
+        - selection_mode
+        - edges
+      properties:
+        selection_mode:
+          type: string
+          enum: [replace, add, remove, toggle]
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClipEdge'
+
+    SetSelectionPropertyRequest:
+      type: object
+      required:
+        - property_name
+        - property_value
+      properties:
+        property_name:
+          type: string
+        property_value:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: object
+        apply_to_metadata:
+          type: boolean
+          default: false
+
+    ClipSelectionResponse:
+      type: object
+      required:
+        - selected_clips
+      properties:
+        selected_clips:
+          type: array
+          items:
+            type: string
+            format: uuid
+        selection_count:
+          type: integer
+
+    EdgeSelectionResponse:
+      type: object
+      required:
+        - selected_edges
+      properties:
+        selected_edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClipEdge'
+        selection_count:
+          type: integer
+
+    SelectionPropertiesResponse:
+      type: object
+      required:
+        - properties
+        - metadata
+      properties:
+        properties:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PropertyValue'
+        metadata:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PropertyValue'
+
+    PropertyValue:
+      type: object
+      required:
+        - value
+        - state
+      properties:
+        value:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: object
+        state:
+          type: string
+          enum: [determinate, indeterminate]
+          description: "indeterminate when multiple clips have different values"
+        can_undo:
+          type: boolean
+
+    ClipEdge:
+      type: object
+      required:
+        - clip_id
+        - edge_type
+      properties:
+        clip_id:
+          type: string
+          format: uuid
+        edge_type:
+          type: string
+          enum: [head, tail]
