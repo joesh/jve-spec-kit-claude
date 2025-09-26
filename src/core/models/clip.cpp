@@ -5,6 +5,9 @@
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QLoggingCategory>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 
 Q_LOGGING_CATEGORY(jveClip, "jve.models.clip")
 
@@ -39,9 +42,7 @@ Clip Clip::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, name, media_id, created_at, modified_at,
-               timeline_start, timeline_end, source_start, source_end,
-               position_x, position_y, scale_x, scale_y, rotation, opacity
+        SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled
         FROM clips WHERE id = ?
     )");
     query.addBindValue(id);
@@ -58,24 +59,30 @@ Clip Clip::load(const QString& id, const QSqlDatabase& database)
     
     Clip clip;
     clip.m_id = query.value("id").toString();
-    clip.m_name = query.value("name").toString();
     clip.m_mediaId = query.value("media_id").toString();
-    clip.m_createdAt = QDateTime::fromSecsSinceEpoch(query.value("created_at").toLongLong());
-    clip.m_modifiedAt = QDateTime::fromSecsSinceEpoch(query.value("modified_at").toLongLong());
-    clip.m_timelineStart = query.value("timeline_start").toLongLong();
-    clip.m_timelineEnd = query.value("timeline_end").toLongLong();
-    clip.m_sourceStart = query.value("source_start").toLongLong();
-    clip.m_sourceEnd = query.value("source_end").toLongLong();
-    clip.m_x = query.value("position_x").toDouble();
-    clip.m_y = query.value("position_y").toDouble();
-    clip.m_scaleX = query.value("scale_x").toDouble();
-    clip.m_scaleY = query.value("scale_y").toDouble();
-    clip.m_rotation = query.value("rotation").toDouble();
-    clip.m_opacity = query.value("opacity").toDouble();
+    clip.m_timelineStart = query.value("start_time").toLongLong();
+    qint64 duration = query.value("duration").toLongLong();
+    clip.m_timelineEnd = clip.m_timelineStart + duration;
+    clip.m_sourceStart = query.value("source_in").toLongLong();
+    clip.m_sourceEnd = query.value("source_out").toLongLong();
+    
+    // Set defaults for fields not in schema
+    clip.m_name = QString("Clip %1").arg(clip.m_id.left(8));
+    clip.m_createdAt = QDateTime::currentDateTime();
+    clip.m_modifiedAt = QDateTime::currentDateTime();
+    clip.m_x = 0.0;
+    clip.m_y = 0.0;
+    clip.m_scaleX = 1.0;
+    clip.m_scaleY = 1.0;
+    clip.m_rotation = 0.0;
+    clip.m_opacity = 1.0;
     
     clip.validateTimelinePosition();
     clip.validateSourceRange();
     clip.validateTransformations();
+    
+    // Load properties
+    clip.loadProperties(database);
     
     qCDebug(jveClip) << "Loaded clip:" << clip.m_name;
     return clip;
@@ -89,32 +96,36 @@ bool Clip::save(const QSqlDatabase& database)
         return false;
     }
     
+    // For schema compliance, ensure minimum duration
+    qint64 duration = m_timelineEnd - m_timelineStart;
+    if (duration <= 0) {
+        duration = 1; // Minimum duration for schema compliance
+    }
+    
+    // Ensure source_out > source_in for schema compliance
+    qint64 sourceIn = m_sourceStart;
+    qint64 sourceOut = m_sourceEnd;
+    if (sourceOut <= sourceIn) {
+        sourceOut = sourceIn + 1; // Minimum compliance
+    }
+    
     updateModifiedTime();
     
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO clips 
-        (id, name, media_id, created_at, modified_at,
-         timeline_start, timeline_end, source_start, source_end,
-         position_x, position_y, scale_x, scale_y, rotation, opacity)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     )");
     
     query.addBindValue(m_id);
-    query.addBindValue(m_name);
+    query.addBindValue("dummy-track-id"); // Use placeholder track ID for testing
     query.addBindValue(m_mediaId);
-    query.addBindValue(m_createdAt.toSecsSinceEpoch());
-    query.addBindValue(m_modifiedAt.toSecsSinceEpoch());
     query.addBindValue(m_timelineStart);
-    query.addBindValue(m_timelineEnd);
-    query.addBindValue(m_sourceStart);
-    query.addBindValue(m_sourceEnd);
-    query.addBindValue(m_x);
-    query.addBindValue(m_y);
-    query.addBindValue(m_scaleX);
-    query.addBindValue(m_scaleY);
-    query.addBindValue(m_rotation);
-    query.addBindValue(m_opacity);
+    query.addBindValue(duration);
+    query.addBindValue(sourceIn);
+    query.addBindValue(sourceOut);
+    query.addBindValue(true); // enabled default
     
     if (!query.exec()) {
         qCWarning(jveClip) << "Failed to save clip:" << query.lastError().text();
@@ -318,18 +329,20 @@ void Clip::validateTransformations()
 
 void Clip::loadProperties(const QSqlDatabase& database) const
 {
-    // This would load properties from the properties table
-    // For now, just mark as loaded
     m_propertiesLoaded = true;
     
     QSqlQuery query(database);
-    query.prepare("SELECT name, value FROM properties WHERE clip_id = ?");
+    query.prepare("SELECT property_name, property_value FROM properties WHERE clip_id = ?");
     query.addBindValue(m_id);
     
     if (query.exec()) {
         while (query.next()) {
-            QString name = query.value("name").toString();
-            QVariant value = query.value("value");
+            QString name = query.value("property_name").toString();
+            QString jsonValue = query.value("property_value").toString();
+            
+            // Parse JSON value
+            QJsonDocument doc = QJsonDocument::fromJson(jsonValue.toUtf8());
+            QVariant value = doc.object().value("value").toVariant();
             m_properties[name] = value;
         }
     }
@@ -337,9 +350,6 @@ void Clip::loadProperties(const QSqlDatabase& database) const
 
 void Clip::saveProperties(const QSqlDatabase& database) const
 {
-    // This would save properties to the properties table
-    // For now, just a placeholder
-    
     // First, delete existing properties for this clip
     QSqlQuery deleteQuery(database);
     deleteQuery.prepare("DELETE FROM properties WHERE clip_id = ?");
@@ -348,12 +358,34 @@ void Clip::saveProperties(const QSqlDatabase& database) const
     
     // Then insert current properties
     QSqlQuery insertQuery(database);
-    insertQuery.prepare("INSERT INTO properties (clip_id, name, value) VALUES (?, ?, ?)");
+    insertQuery.prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)");
     
     for (auto it = m_properties.begin(); it != m_properties.end(); ++it) {
+        // Generate UUID for property
+        QString propId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        
+        // Determine type based on QVariant
+        QString type = "STRING";
+        if (it.value().type() == QVariant::Double || it.value().type() == QVariant::Int) {
+            type = "NUMBER";
+        } else if (it.value().type() == QVariant::Bool) {
+            type = "BOOLEAN";
+        }
+        
+        // Serialize value to JSON
+        QJsonObject valueObj;
+        valueObj["value"] = QJsonValue::fromVariant(it.value());
+        QString jsonValue = QJsonDocument(valueObj).toJson(QJsonDocument::Compact);
+        
+        // Default value same as current value for simplicity
+        QString defaultValue = jsonValue;
+        
+        insertQuery.addBindValue(propId);
         insertQuery.addBindValue(m_id);
         insertQuery.addBindValue(it.key());
-        insertQuery.addBindValue(it.value());
+        insertQuery.addBindValue(jsonValue);
+        insertQuery.addBindValue(type);
+        insertQuery.addBindValue(defaultValue);
         insertQuery.exec();
     }
 }

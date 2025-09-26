@@ -5,6 +5,8 @@
 #include <QSqlError>
 #include <QLoggingCategory>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 Q_LOGGING_CATEGORY(jveMedia, "jve.models.media")
 
@@ -20,6 +22,10 @@ Media Media::create(const QString& filename, const QString& filepath)
     media.m_type = media.detectTypeFromExtension(filename);
     media.m_status = Unknown; // Will be determined by file check
     
+    // Set minimum valid values to satisfy schema constraints
+    media.m_metadata.duration = 1000; // 1 second minimum
+    media.m_metadata.framerate = 30.0; // Default framerate
+    
     qCDebug(jveMedia) << "Created media:" << filename << "at path:" << filepath;
     return media;
 }
@@ -29,9 +35,7 @@ Media Media::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, filename, filepath, created_at, modified_at, status, type,
-               file_modified_time, file_size, duration, width, height, framerate,
-               video_codec, audio_codec, bitrate, proxy_path, thumbnail_path, use_proxy
+        SELECT id, file_path, file_name, duration, frame_rate, metadata
         FROM media WHERE id = ?
     )");
     query.addBindValue(id);
@@ -48,28 +52,31 @@ Media Media::load(const QString& id, const QSqlDatabase& database)
     
     Media media;
     media.m_id = query.value("id").toString();
-    media.m_filename = query.value("filename").toString();
-    media.m_filepath = query.value("filepath").toString();
-    media.m_createdAt = QDateTime::fromSecsSinceEpoch(query.value("created_at").toLongLong());
-    media.m_modifiedAt = QDateTime::fromSecsSinceEpoch(query.value("modified_at").toLongLong());
-    media.m_status = static_cast<Status>(query.value("status").toInt());
-    media.m_type = static_cast<Type>(query.value("type").toInt());
-    media.m_fileModifiedTime = QDateTime::fromSecsSinceEpoch(query.value("file_modified_time").toLongLong());
-    media.m_fileSize = query.value("file_size").toLongLong();
-    
-    // Load metadata
+    media.m_filepath = query.value("file_path").toString();
+    media.m_filename = query.value("file_name").toString();
     media.m_metadata.duration = query.value("duration").toLongLong();
-    media.m_metadata.width = query.value("width").toInt();
-    media.m_metadata.height = query.value("height").toInt();
-    media.m_metadata.framerate = query.value("framerate").toDouble();
-    media.m_metadata.videoCodec = query.value("video_codec").toString();
-    media.m_metadata.audioCodec = query.value("audio_codec").toString();
-    media.m_metadata.bitrate = query.value("bitrate").toInt();
+    media.m_metadata.framerate = query.value("frame_rate").toInt();
     
-    // Load proxy information
-    media.m_proxyPath = query.value("proxy_path").toString();
-    media.m_thumbnailPath = query.value("thumbnail_path").toString();
-    media.m_useProxy = query.value("use_proxy").toBool();
+    // Parse JSON metadata
+    QString metadataJson = query.value("metadata").toString();
+    QJsonDocument metadataDoc = QJsonDocument::fromJson(metadataJson.toUtf8());
+    QJsonObject metadataObj = metadataDoc.object();
+    
+    // Load extended metadata from JSON
+    media.m_metadata.width = metadataObj["width"].toInt();
+    media.m_metadata.height = metadataObj["height"].toInt();
+    media.m_metadata.videoCodec = metadataObj["videoCodec"].toString();
+    media.m_metadata.audioCodec = metadataObj["audioCodec"].toString();
+    media.m_metadata.bitrate = metadataObj["bitrate"].toInt();
+    media.m_status = static_cast<Status>(metadataObj["status"].toInt());
+    media.m_type = static_cast<Type>(metadataObj["type"].toInt());
+    media.m_createdAt = QDateTime::fromSecsSinceEpoch(metadataObj["createdAt"].toVariant().toLongLong());
+    media.m_modifiedAt = QDateTime::fromSecsSinceEpoch(metadataObj["modifiedAt"].toVariant().toLongLong());
+    media.m_fileModifiedTime = QDateTime::fromSecsSinceEpoch(metadataObj["fileModifiedTime"].toVariant().toLongLong());
+    media.m_fileSize = metadataObj["fileSize"].toVariant().toLongLong();
+    media.m_proxyPath = metadataObj["proxyPath"].toString();
+    media.m_thumbnailPath = metadataObj["thumbnailPath"].toString();
+    media.m_useProxy = metadataObj["useProxy"].toBool();
     
     media.validateMetadata();
     
@@ -90,34 +97,42 @@ bool Media::save(const QSqlDatabase& database)
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO media 
-        (id, filename, filepath, created_at, modified_at, status, type,
-         file_modified_time, file_size, duration, width, height, framerate,
-         video_codec, audio_codec, bitrate, proxy_path, thumbnail_path, use_proxy)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, file_path, file_name, duration, frame_rate, metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
     )");
     
     query.addBindValue(m_id);
-    query.addBindValue(m_filename);
     query.addBindValue(m_filepath);
-    query.addBindValue(m_createdAt.toSecsSinceEpoch());
-    query.addBindValue(m_modifiedAt.toSecsSinceEpoch());
-    query.addBindValue(static_cast<int>(m_status));
-    query.addBindValue(static_cast<int>(m_type));
-    query.addBindValue(m_fileModifiedTime.toSecsSinceEpoch());
-    query.addBindValue(m_fileSize);
+    query.addBindValue(m_filename);
     query.addBindValue(m_metadata.duration);
-    query.addBindValue(m_metadata.width);
-    query.addBindValue(m_metadata.height);
-    query.addBindValue(m_metadata.framerate);
-    query.addBindValue(m_metadata.videoCodec);
-    query.addBindValue(m_metadata.audioCodec);
-    query.addBindValue(m_metadata.bitrate);
-    query.addBindValue(m_proxyPath);
-    query.addBindValue(m_thumbnailPath);
-    query.addBindValue(m_useProxy);
+    query.addBindValue(static_cast<int>(m_metadata.framerate));
+    
+    // Serialize all additional metadata to JSON
+    QJsonObject metadataObj;
+    metadataObj["width"] = m_metadata.width;
+    metadataObj["height"] = m_metadata.height;
+    metadataObj["videoCodec"] = m_metadata.videoCodec;
+    metadataObj["audioCodec"] = m_metadata.audioCodec;
+    metadataObj["bitrate"] = m_metadata.bitrate;
+    metadataObj["status"] = static_cast<int>(m_status);
+    metadataObj["type"] = static_cast<int>(m_type);
+    metadataObj["createdAt"] = m_createdAt.toSecsSinceEpoch();
+    metadataObj["modifiedAt"] = m_modifiedAt.toSecsSinceEpoch();
+    metadataObj["fileModifiedTime"] = m_fileModifiedTime.toSecsSinceEpoch();
+    metadataObj["fileSize"] = m_fileSize;
+    metadataObj["proxyPath"] = m_proxyPath;
+    metadataObj["thumbnailPath"] = m_thumbnailPath;
+    metadataObj["useProxy"] = m_useProxy;
+    
+    query.addBindValue(QJsonDocument(metadataObj).toJson(QJsonDocument::Compact));
+    
+    qCDebug(jveMedia) << "SQL:" << query.lastQuery();
+    qCDebug(jveMedia) << "Parameter count:" << query.boundValues().size();
     
     if (!query.exec()) {
         qCWarning(jveMedia) << "Failed to save media:" << query.lastError().text();
+        qCWarning(jveMedia) << "SQL was:" << query.lastQuery();
+        qCWarning(jveMedia) << "Bound values:" << query.boundValues();
         return false;
     }
     

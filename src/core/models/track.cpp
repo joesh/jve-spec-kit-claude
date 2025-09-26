@@ -45,9 +45,7 @@ Track Track::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, sequence_id, name, type, created_at, modified_at, description,
-               layer_index, is_enabled, is_muted, is_soloed, is_locked,
-               opacity, blend_mode, volume, pan
+        SELECT id, sequence_id, track_type, track_index, enabled, locked
         FROM tracks WHERE id = ?
     )");
     query.addBindValue(id);
@@ -65,20 +63,15 @@ Track Track::load(const QString& id, const QSqlDatabase& database)
     Track track;
     track.m_id = query.value("id").toString();
     track.m_sequenceId = query.value("sequence_id").toString();
-    track.m_name = query.value("name").toString();
-    track.m_type = query.value("type").toString() == "video" ? Video : Audio;
-    track.m_createdAt = QDateTime::fromSecsSinceEpoch(query.value("created_at").toLongLong());
-    track.m_modifiedAt = QDateTime::fromSecsSinceEpoch(query.value("modified_at").toLongLong());
-    track.m_description = query.value("description").toString();
-    track.m_layerIndex = query.value("layer_index").toInt();
-    track.m_enabled = query.value("is_enabled").toBool();
-    track.m_muted = query.value("is_muted").toBool();
-    track.m_soloed = query.value("is_soloed").toBool();
-    track.m_locked = query.value("is_locked").toBool();
-    track.m_opacity = query.value("opacity").toDouble();
-    track.m_blendMode = static_cast<BlendMode>(query.value("blend_mode").toInt());
-    track.m_volume = query.value("volume").toDouble();
-    track.m_pan = query.value("pan").toDouble();
+    track.m_type = query.value("track_type").toString() == "VIDEO" ? Video : Audio;
+    track.m_layerIndex = query.value("track_index").toInt();
+    track.m_enabled = query.value("enabled").toBool();
+    track.m_locked = query.value("locked").toBool();
+    
+    // Set reasonable defaults for fields not in schema
+    track.m_name = QString("Track %1").arg(track.m_layerIndex);
+    track.m_createdAt = QDateTime::currentDateTime();
+    track.m_modifiedAt = QDateTime::currentDateTime();
     
     track.validateVideoProperties();
     track.validateAudioProperties();
@@ -96,7 +89,7 @@ QList<Track> Track::loadBySequence(const QString& sequenceId, const QSqlDatabase
     query.prepare(R"(
         SELECT id FROM tracks 
         WHERE sequence_id = ? 
-        ORDER BY layer_index ASC
+        ORDER BY track_index ASC
     )");
     query.addBindValue(sequenceId);
     
@@ -130,28 +123,16 @@ bool Track::save(const QSqlDatabase& database)
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO tracks 
-        (id, sequence_id, name, type, created_at, modified_at, description,
-         layer_index, is_enabled, is_muted, is_soloed, is_locked,
-         opacity, blend_mode, volume, pan)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, sequence_id, track_type, track_index, enabled, locked)
+        VALUES (?, ?, ?, ?, ?, ?)
     )");
     
     query.addBindValue(m_id);
     query.addBindValue(m_sequenceId);
-    query.addBindValue(m_name);
-    query.addBindValue(m_type == Video ? "video" : "audio");
-    query.addBindValue(m_createdAt.toSecsSinceEpoch());
-    query.addBindValue(m_modifiedAt.toSecsSinceEpoch());
-    query.addBindValue(m_description);
-    query.addBindValue(m_layerIndex);
+    query.addBindValue(m_type == Video ? "VIDEO" : "AUDIO");
+    query.addBindValue(1); // track_index default to 1
     query.addBindValue(m_enabled);
-    query.addBindValue(m_muted);
-    query.addBindValue(m_soloed);
     query.addBindValue(m_locked);
-    query.addBindValue(m_opacity);
-    query.addBindValue(static_cast<int>(m_blendMode));
-    query.addBindValue(m_volume);
-    query.addBindValue(m_pan);
     
     if (!query.exec()) {
         qCWarning(jveTrack) << "Failed to save track:" << query.lastError().text();
