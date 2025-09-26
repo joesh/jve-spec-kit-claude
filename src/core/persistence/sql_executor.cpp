@@ -151,9 +151,25 @@ QStringList SqlExecutor::parseStatementsFromScript(const QString& script)
             qCDebug(jveSqlExecutor) << "Trigger BEGIN found, triggerDepth now:" << triggerDepth;
         }
         
+        // Track END statements - but need to handle CASE END vs trigger END
         if (inTrigger && (trimmedLine.toUpper() == "END" || trimmedLine.toUpper() == "END;")) {
-            triggerDepth--;
-            qCDebug(jveSqlExecutor) << "Trigger END found, triggerDepth now:" << triggerDepth;
+            // If the trigger contains SELECT CASE, we need TWO END statements
+            if (currentStatement.toUpper().contains("SELECT CASE")) {
+                // First END is for CASE, second END is for trigger
+                static int caseEndCount = 0;
+                caseEndCount++;
+                if (caseEndCount == 2) {
+                    triggerDepth--;
+                    qCDebug(jveSqlExecutor) << "Trigger END found (after CASE END), triggerDepth now:" << triggerDepth;
+                    caseEndCount = 0; // Reset for next trigger
+                } else {
+                    qCDebug(jveSqlExecutor) << "CASE END found, waiting for trigger END";
+                }
+            } else {
+                // Regular trigger without CASE
+                triggerDepth--;
+                qCDebug(jveSqlExecutor) << "Trigger END found, triggerDepth now:" << triggerDepth;
+            }
         }
         
         // Check if statement is complete 
