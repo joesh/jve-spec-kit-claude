@@ -104,7 +104,8 @@ QStringList SqlExecutor::parseStatementsFromScript(const QString& script)
     QStringList cleanStatements;
     QString currentStatement;
     QStringList lines = script.split('\n');
-    int blockDepth = 0;
+    int triggerDepth = 0;  // Track only trigger/procedure blocks
+    bool inTrigger = false;
     
     for (const QString& line : lines) {
         QString trimmedLine = line.trimmed();
@@ -138,23 +139,38 @@ QStringList SqlExecutor::parseStatementsFromScript(const QString& script)
             currentStatement += " " + trimmedLine;
         }
         
-        // Track block depth for triggers and views
-        if (trimmedLine.toUpper().contains("BEGIN")) {
-            blockDepth++;
+        // Track trigger/procedure boundaries specifically - only check once per statement
+        if (!inTrigger && currentStatement.toUpper().startsWith("CREATE TRIGGER")) {
+            inTrigger = true;
+            qCDebug(jveSqlExecutor) << "Starting trigger definition";
         }
-        if (trimmedLine.toUpper().startsWith("END")) {
-            blockDepth--;
+        
+        // Track BEGIN/END depth only for triggers/procedures
+        if (inTrigger && trimmedLine.toUpper() == "BEGIN") {
+            triggerDepth++;
+            qCDebug(jveSqlExecutor) << "Trigger BEGIN found, triggerDepth now:" << triggerDepth;
+        }
+        
+        if (inTrigger && (trimmedLine.toUpper() == "END" || trimmedLine.toUpper() == "END;")) {
+            triggerDepth--;
+            qCDebug(jveSqlExecutor) << "Trigger END found, triggerDepth now:" << triggerDepth;
         }
         
         // Check if statement is complete 
-        // Statement ends with semicolon AND we're not inside a block
-        if (trimmedLine.endsWith(';') && blockDepth == 0) {
+        // Statement ends with semicolon AND we're not inside a trigger block
+        if (trimmedLine.endsWith(';') && (!inTrigger || triggerDepth == 0)) {
             QString completeStatement = currentStatement.trimmed();
             if (!completeStatement.isEmpty()) {
+                if (completeStatement.toUpper().contains("PREVENT_CLIP_OVERLAP")) {
+                    qCDebug(jveSqlExecutor) << "FULL TRIGGER STATEMENT:" << completeStatement;
+                }
                 qCDebug(jveSqlExecutor) << "Adding statement:" << completeStatement.left(50) + "...";
                 cleanStatements.append(completeStatement);
             }
             currentStatement.clear();
+            // Reset trigger state after each statement completion
+            inTrigger = false;
+            triggerDepth = 0;
         }
     }
     
