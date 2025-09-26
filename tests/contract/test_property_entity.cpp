@@ -1,6 +1,7 @@
 #include "../common/test_base.h"
 #include "../../src/core/models/property.h"
 #include "../../src/core/models/clip.h"
+#include "../../src/core/models/media.h"
 #include "../../src/core/persistence/migrations.h"
 
 #include <QTest>

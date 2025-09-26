@@ -6,6 +6,7 @@
 #include <QLoggingCategory>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QDebug>
 
 Q_LOGGING_CATEGORY(jveProperty, "jve.property")
@@ -88,12 +89,24 @@ QList<Property> Property::loadByClip(const QString& clipId, QSqlDatabase& databa
             QString typeStr = query.value("property_type").toString();
             property.m_type = property.stringToPropertyType(typeStr);
             
-            // Parse JSON values
+            // Parse JSON values and extended metadata
             QJsonDocument valueDoc = QJsonDocument::fromJson(query.value("property_value").toString().toUtf8());
-            property.m_value = valueDoc.object().toVariantMap().value("value");
+            QJsonObject valueObj = valueDoc.object();
+            property.m_value = valueObj.value("value").toVariant();
+            property.m_group = valueObj.value("group").toString();
+            property.m_minimum = valueObj.value("minimum").toVariant();
+            property.m_maximum = valueObj.value("maximum").toVariant();
+            
+            // Parse enum values
+            QJsonArray enumArray = valueObj.value("enumValues").toArray();
+            QStringList enumValues;
+            for (const QJsonValue& val : enumArray) {
+                enumValues.append(val.toString());
+            }
+            property.m_enumValues = enumValues;
             
             QJsonDocument defaultDoc = QJsonDocument::fromJson(query.value("default_value").toString().toUtf8());
-            property.m_defaultValue = defaultDoc.object().toVariantMap().value("value");
+            property.m_defaultValue = defaultDoc.object().value("value").toVariant();
             
             property.m_isLoaded = true;
             property.loadKeyframesFromDatabase(database);
@@ -333,9 +346,13 @@ bool Property::saveToDatabase(QSqlDatabase& database)
     query.addBindValue(m_clipId);
     query.addBindValue(m_name);
     
-    // Serialize values to JSON
+    // Serialize values to JSON with extended metadata
     QJsonObject valueObj;
     valueObj["value"] = QJsonValue::fromVariant(m_value);
+    valueObj["group"] = m_group;
+    valueObj["minimum"] = QJsonValue::fromVariant(m_minimum);
+    valueObj["maximum"] = QJsonValue::fromVariant(m_maximum);
+    valueObj["enumValues"] = QJsonArray::fromStringList(m_enumValues);
     query.addBindValue(QJsonDocument(valueObj).toJson(QJsonDocument::Compact));
     
     query.addBindValue(propertyTypeToString(m_type));
