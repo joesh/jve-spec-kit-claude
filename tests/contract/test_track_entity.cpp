@@ -1,11 +1,13 @@
 #include "../common/test_base.h"
 #include "../../src/core/models/track.h"
+#include "../../src/core/models/clip.h"
 #include "../../src/core/models/sequence.h"
 #include "../../src/core/models/project.h"
 #include "../../src/core/persistence/migrations.h"
 
 #include <QTest>
 #include <QSqlDatabase>
+#include <QSqlQuery>
 
 /**
  * Contract Test T007: Track Entity

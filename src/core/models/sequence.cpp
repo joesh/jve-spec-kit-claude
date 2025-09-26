@@ -28,8 +28,7 @@ Sequence Sequence::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, project_id, name, created_at, modified_at, description,
-               framerate, width, height, duration_ms
+        SELECT id, project_id, name, frame_rate, timecode_start, duration
         FROM sequences WHERE id = ?
     )");
     query.addBindValue(id);
@@ -48,13 +47,13 @@ Sequence Sequence::load(const QString& id, const QSqlDatabase& database)
     sequence.m_id = query.value("id").toString();
     sequence.m_projectId = query.value("project_id").toString();
     sequence.m_name = query.value("name").toString();
-    sequence.m_createdAt = QDateTime::fromSecsSinceEpoch(query.value("created_at").toLongLong());
-    sequence.m_modifiedAt = QDateTime::fromSecsSinceEpoch(query.value("modified_at").toLongLong());
-    sequence.m_description = query.value("description").toString();
-    sequence.m_framerate = query.value("framerate").toDouble();
-    sequence.m_width = query.value("width").toInt();
-    sequence.m_height = query.value("height").toInt();
-    sequence.m_duration = query.value("duration_ms").toLongLong();
+    sequence.m_framerate = query.value("frame_rate").toDouble();
+    // timecode_start = query.value("timecode_start").toLongLong(); // Not stored in model yet
+    sequence.m_duration = query.value("duration").toLongLong();
+    
+    // Set reasonable defaults for fields not in schema
+    sequence.m_createdAt = QDateTime::currentDateTime();
+    sequence.m_modifiedAt = QDateTime::currentDateTime();
     
     sequence.validateFramerate();
     sequence.validateResolution();
@@ -72,7 +71,7 @@ QList<Sequence> Sequence::loadByProject(const QString& projectId, const QSqlData
     query.prepare(R"(
         SELECT id FROM sequences 
         WHERE project_id = ? 
-        ORDER BY created_at ASC
+        ORDER BY name ASC
     )");
     query.addBindValue(projectId);
     
@@ -106,20 +105,15 @@ bool Sequence::save(const QSqlDatabase& database)
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO sequences 
-        (id, project_id, name, created_at, modified_at, description,
-         framerate, width, height, duration_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, project_id, name, frame_rate, timecode_start, duration)
+        VALUES (?, ?, ?, ?, ?, ?)
     )");
     
     query.addBindValue(m_id);
     query.addBindValue(m_projectId);
     query.addBindValue(m_name);
-    query.addBindValue(m_createdAt.toSecsSinceEpoch());
-    query.addBindValue(m_modifiedAt.toSecsSinceEpoch());
-    query.addBindValue(m_description);
     query.addBindValue(m_framerate);
-    query.addBindValue(m_width);
-    query.addBindValue(m_height);
+    query.addBindValue(0); // timecode_start default to 0
     query.addBindValue(m_duration);
     
     if (!query.exec()) {

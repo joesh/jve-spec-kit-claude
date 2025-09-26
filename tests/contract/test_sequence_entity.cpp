@@ -5,6 +5,7 @@
 
 #include <QTest>
 #include <QSqlDatabase>
+#include <QSqlQuery>
 
 /**
  * Contract Test T006: Sequence Entity

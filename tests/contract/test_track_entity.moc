@@ -1,0 +1,172 @@
+/****************************************************************************
+** Meta object code from reading C++ file 'test_track_entity.cpp'
+**
+** Created by: The Qt Meta Object Compiler version 69 (Qt 6.9.1)
+**
+** WARNING! All changes made in this file will be lost!
+*****************************************************************************/
+
+#include <QtCore/qmetatype.h>
+
+#include <QtCore/qtmochelpers.h>
+
+#include <memory>
+
+
+#include <QtCore/qxptype_traits.h>
+#if !defined(Q_MOC_OUTPUT_REVISION)
+#error "The header file 'test_track_entity.cpp' doesn't include <QObject>."
+#elif Q_MOC_OUTPUT_REVISION != 69
+#error "This file was generated using the moc from 6.9.1. It"
+#error "cannot be used with the include files from this version of Qt."
+#error "(The moc has changed too much.)"
+#endif
+
+#ifndef Q_CONSTINIT
+#define Q_CONSTINIT
+#endif
+
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
+QT_WARNING_DISABLE_GCC("-Wuseless-cast")
+namespace {
+struct qt_meta_tag_ZN15TestTrackEntityE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto TestTrackEntity::qt_create_metaobjectdata<qt_meta_tag_ZN15TestTrackEntityE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "TestTrackEntity",
+        "initTestCase",
+        "",
+        "cleanupTestCase",
+        "testTrackCreation",
+        "testTrackPersistence",
+        "testTrackLoading",
+        "testTrackMetadata",
+        "testVideoTrackProperties",
+        "testAudioTrackProperties",
+        "testTrackTypeValidation",
+        "testTrackOrdering",
+        "testTrackLayerManagement",
+        "testTrackStateManagement",
+        "testTrackClipContainer",
+        "testClipPositioning",
+        "testTrackDurationCalculation",
+        "testTrackLoadPerformance",
+        "testTrackRenderingPerformance"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Slot 'initTestCase'
+        QtMocHelpers::SlotData<void()>(1, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'cleanupTestCase'
+        QtMocHelpers::SlotData<void()>(3, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackCreation'
+        QtMocHelpers::SlotData<void()>(4, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackPersistence'
+        QtMocHelpers::SlotData<void()>(5, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackLoading'
+        QtMocHelpers::SlotData<void()>(6, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackMetadata'
+        QtMocHelpers::SlotData<void()>(7, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testVideoTrackProperties'
+        QtMocHelpers::SlotData<void()>(8, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testAudioTrackProperties'
+        QtMocHelpers::SlotData<void()>(9, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackTypeValidation'
+        QtMocHelpers::SlotData<void()>(10, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackOrdering'
+        QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackLayerManagement'
+        QtMocHelpers::SlotData<void()>(12, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackStateManagement'
+        QtMocHelpers::SlotData<void()>(13, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackClipContainer'
+        QtMocHelpers::SlotData<void()>(14, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testClipPositioning'
+        QtMocHelpers::SlotData<void()>(15, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackDurationCalculation'
+        QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackLoadPerformance'
+        QtMocHelpers::SlotData<void()>(17, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTrackRenderingPerformance'
+        QtMocHelpers::SlotData<void()>(18, 2, QMC::AccessPrivate, QMetaType::Void),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<TestTrackEntity, qt_meta_tag_ZN15TestTrackEntityE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject TestTrackEntity::staticMetaObject = { {
+    QMetaObject::SuperData::link<TestBase::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN15TestTrackEntityE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN15TestTrackEntityE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN15TestTrackEntityE_t>.metaTypes,
+    nullptr
+} };
+
+void TestTrackEntity::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<TestTrackEntity *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->initTestCase(); break;
+        case 1: _t->cleanupTestCase(); break;
+        case 2: _t->testTrackCreation(); break;
+        case 3: _t->testTrackPersistence(); break;
+        case 4: _t->testTrackLoading(); break;
+        case 5: _t->testTrackMetadata(); break;
+        case 6: _t->testVideoTrackProperties(); break;
+        case 7: _t->testAudioTrackProperties(); break;
+        case 8: _t->testTrackTypeValidation(); break;
+        case 9: _t->testTrackOrdering(); break;
+        case 10: _t->testTrackLayerManagement(); break;
+        case 11: _t->testTrackStateManagement(); break;
+        case 12: _t->testTrackClipContainer(); break;
+        case 13: _t->testClipPositioning(); break;
+        case 14: _t->testTrackDurationCalculation(); break;
+        case 15: _t->testTrackLoadPerformance(); break;
+        case 16: _t->testTrackRenderingPerformance(); break;
+        default: ;
+        }
+    }
+    (void)_a;
+}
+
+const QMetaObject *TestTrackEntity::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *TestTrackEntity::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN15TestTrackEntityE_t>.strings))
+        return static_cast<void*>(this);
+    return TestBase::qt_metacast(_clname);
+}
+
+int TestTrackEntity::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = TestBase::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 17)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 17;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 17)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 17;
+    }
+    return _id;
+}
+QT_WARNING_POP
