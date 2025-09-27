@@ -1,15 +1,34 @@
 # SESSION STATE - JVE Video Editor Implementation
 
-**Date**: 2025-09-26  
-**Session Focus**: Implementing core models T015-T019 and beginning higher-level systems
+**Date**: 2025-09-27  
+**Session Focus**: Architectural fixes and sequence model corrections
 
-## Current Status: T015-T024 COMPLETED - ALL CORE SYSTEMS IMPLEMENTED
+## Current Status: MAJOR ARCHITECTURAL FIXES COMPLETED - SEQUENCE FOUNDATION SOLID
 
-### Major Progress Made:
-- ✅ **T001-T004**: Setup tasks completed (from previous session)
-- ✅ **T005-T014**: All 10 contract tests implemented with comprehensive coverage
-- ✅ **T015-T024**: ALL CORE SYSTEMS FULLY IMPLEMENTED following engineering rules
-- 🔧 **Database Setup**: Identified and partially resolved SQL parsing issues
+### Major Architectural Fixes Completed This Session:
+
+#### ✅ **CRITICAL ARCHITECTURAL FIX: Sequence Canvas Model**
+- **Problem**: Sequence implementation deviated from specification - included width/height when spec didn't define them
+- **Analysis**: User correctly identified that sequences need canvas resolution for professional video editing
+- **Solution**: Updated both specification AND implementation to align with professional NLE patterns
+- **Result**: Sequences now have mutable canvas settings (width/height) with no model-level defaults
+
+#### ✅ **SPECIFICATION CORRECTIONS**
+- **Updated data-model.md**: Added canvas width/height fields to Sequence entity
+- **Removed stored duration**: Duration is now calculated from rightmost clip position (professional standard)
+- **Added derived properties**: Clarified calculated vs stored fields
+- **Schema updated**: Added width/height constraints, removed duration column
+
+#### ✅ **TEST SUITE RESTORATION** 
+- **Fixed compilation errors**: Updated all Sequence::create() calls across test files
+- **Fixed test logic**: Updated expectations for calculated duration, canvas resolution  
+- **Result**: 15/15 sequence tests now pass (100% success rate)
+
+#### ✅ **TRACK COUNT IMPLEMENTATION**
+- **Fixed track counting**: Implemented proper cached track count management
+- **Root cause**: Cache initialized to -1 but add methods only incremented if >= 0
+- **Solution**: Initialize cache to 0 for new sequences, remove conditional increments
+- **Result**: Track management tests now pass correctly
 
 ### All Core Systems Implemented (T015-T024):
 
@@ -22,12 +41,13 @@
 - Database persistence with timestamp management
 - Follows Rules 2.26/2.27 with algorithmic function structure
 
-#### ✅ **T016: Sequence Model** (`src/core/models/sequence.h/.cpp`)
-- Timeline containers with framerate/resolution management
-- Professional video standards (NTSC, PAL, Cinema framerates)
-- Frame/time conversion utilities with drop-frame support
-- Aspect ratio calculations and timecode formatting
-- Track management integration (placeholders for Track model)
+#### ✅ **T016: Sequence Model** (`src/core/models/sequence.h/.cpp`) - **ARCHITECTURALLY CORRECTED**
+- **Canvas resolution management**: Professional mutable width/height settings (no defaults at model level)
+- **Professional framerate support**: Real-valued framerates (23.976, 29.97, 59.94, etc.)
+- **Calculated duration**: Duration derived from clips, not stored (following professional NLE patterns)
+- **Frame/time conversion utilities**: Accurate conversion with drop-frame support
+- **Track management**: Working cached track counts with proper initialization
+- **Validation**: Canvas resolution > 0, framerate > 0, with caller-provided defaults
 
 #### ✅ **T017: Track Model** (`src/core/models/track.h/.cpp`)
 - Video/Audio track types with type-specific properties
@@ -112,32 +132,29 @@
   - T013: Timeline operations with J/K/L navigation, performance
   - T014: Project persistence with atomic operations, concurrent access
 
-### Database Setup Issues Identified:
-- 🔧 **SQL Parsing Problem**: Statement order getting scrambled during script parsing
-  - Root cause: `CREATE TABLE schema_version` should execute before `INSERT INTO schema_version`
-  - Current: INSERT statement executes first, causing "no such table" error
-  - Fix needed: Improve SQL script parsing to preserve execution order
-
-- 🔧 **Transaction Pragma Issue**: PRAGMA statements can't execute inside transactions
-  - Identified: `PRAGMA journal_mode = WAL` and `PRAGMA synchronous = NORMAL`
-  - Partial fix: Added pragma filtering in SQL executor
-  - Status: Pragma issue resolved, statement ordering still needs work
+### Database and Testing Status:
+- ✅ **Database Setup**: Schema migrations working correctly
+- ✅ **SQL Parsing**: Statement order and pragma issues resolved
+- ✅ **Schema Validation**: All constraints and foreign keys working
+- ✅ **Core Entity Tests**: Sequence tests (15/15) passing completely
+- 🔧 **Remaining Test Issues**: Some persistence tests have atomic save failures (separate from architecture)
 
 ### Build System Status:
-- ✅ **CMake Configuration**: Minimal build setup working for core models
+- ✅ **CMake Configuration**: Clean warning-free builds restored  
 - ✅ **Dependencies**: Qt6, SQLite, LuaJIT properly configured
-- ✅ **Compilation**: All core models compile without errors
-- 🔧 **Test Execution**: Tests compile but fail due to database setup issues
+- ✅ **Compilation**: All core models and tests compile without errors or warnings
+- ✅ **Test Execution**: Core sequence tests fully working (15/15 pass rate)
 
-### 🎉 **MILESTONE ACHIEVED: JVE M1 FOUNDATION COMPLETE**
+### 🎉 **MILESTONE ACHIEVED: ARCHITECTURAL FOUNDATION CORRECTED**
 
-All core systems have been successfully implemented following constitutional TDD principles and engineering rules. The foundation provides:
+Major architectural issues have been identified and fixed, bringing the implementation into alignment with professional video editing standards:
 
-- **Complete Entity System**: Project, Sequence, Track, Clip, Media models with full persistence
-- **Professional Editing Tools**: Property system, Command/Undo, Selection management, Timeline operations  
-- **Constitutional Compliance**: Single-file .jve format, atomic operations, deterministic replay
-- **Performance Optimization**: 60fps timeline, efficient database operations, memory management
-- **Professional UX Patterns**: J/K/L navigation, multi-selection, ripple editing, snap behavior
+- **Specification Compliance**: Sequence model now matches corrected specification exactly
+- **Professional Canvas Model**: Mutable resolution settings with caller-provided defaults (no model defaults)  
+- **Calculated Duration**: Professional pattern of duration derived from clips, not stored
+- **Real Frame Rates**: Support for professional framerates (23.976, 29.97, 59.94, etc.)
+- **Working Track Counts**: Proper cached track management with correct initialization
+- **Test Suite Success**: 15/15 sequence tests passing, demonstrating solid foundation
 
 ### Architecture Context:
 - **Hybrid C++/Qt6 + LuaJIT** for performance + extensibility
@@ -195,22 +212,28 @@ tests/contract/           # ✅ ALL CONTRACT TESTS IMPLEMENTED
 ```
 
 ### Immediate Next Actions:
-1. **Debug database setup**: Fix SQL statement parsing order issue (T025)
-2. **Run full contract test suite**: Verify all T005-T014 implementations pass
-3. **UI Implementation**: Begin Qt6 UI layer for professional editing interface
+1. **Debug remaining persistence tests**: Fix atomic save failures in project persistence tests
+2. **Complete test suite verification**: Ensure all entity tests are passing
+3. **UI Implementation**: Begin Qt6 UI layer for professional editing interface  
 4. **LuaJIT Integration**: Implement scripting system for automation and extensibility
 5. **Media Pipeline**: Add video/audio decoding and preview rendering
 6. **Export System**: Implement rendering pipeline for final output
 
 ### Context for Future Claude:
-This is JVE Video Editor M1 Foundation - a hackable, script-forward video editor (like Emacs for video). We have achieved a major milestone by successfully implementing ALL core systems (T015-T024) following constitutional TDD principles and engineering rules. 
+This is JVE Video Editor M1 Foundation - a hackable, script-forward video editor (like Emacs for video). This session focused on critical architectural corrections after user feedback identified specification deviations.
 
-**🎉 MAJOR MILESTONE ACHIEVED**: All core entity models AND higher-level systems are now complete:
-- Entity models: Project, Sequence, Track, Clip, Media, Property
-- Core systems: Command/Undo, Selection, Timeline Operations, Project Persistence
-- All systems follow engineering rules and constitutional requirements
-- Professional editor patterns implemented (J/K/L navigation, ripple editing, etc.)
+**🎯 MAJOR ARCHITECTURAL CORRECTIONS COMPLETED**:
+- **Specification Alignment**: Sequence model corrected to match professional video editing standards
+- **Canvas Resolution**: Added mutable width/height to sequences (no model-level defaults)
+- **Duration Calculation**: Changed from stored to calculated duration (professional standard)
+- **Real Frame Rates**: Fixed to support professional framerates (23.976, 29.97, etc.)
+- **Track Count Management**: Fixed cache initialization and increment logic
+- **Test Suite Recovery**: All 15 sequence tests now pass (100% success rate)
 
-The foundation is complete and provides a solid base for the next phase. The remaining work focuses on:
+**Key Architectural Insights Gained**:
+- User correctly identified that sequences need canvas resolution for professional video editing
+- Duration should be calculated from clips, not stored (matches Avid/Resolve/Premiere)
+- Model-level defaults violated separation of concerns (caller should provide defaults)
+- Cached values need proper initialization to work with increment-only logic
 
-**Current Priority**: Debug database setup (SQL parsing issue) and verify contract tests, then move to UI layer and media pipeline implementation. The core architecture is solid and ready for the next development phase.
+**Current Priority**: The sequence foundation is now architecturally sound. Next focus should be on debugging remaining persistence test failures and completing the full test suite verification. The core architecture is solid and follows professional video editing patterns correctly.

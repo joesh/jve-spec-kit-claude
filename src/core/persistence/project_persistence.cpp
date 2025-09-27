@@ -305,19 +305,20 @@ PersistenceResult ProjectPersistence::performAtomicSave(const QString& filePath,
     // Remove temp file if it exists
     QFile::remove(tempPath);
     
-    QSqlDatabase database;
-    if (!createDatabaseConnection(tempPath, database)) {
-        result.success = false;
-        result.errorMessage = "Failed to create temporary database connection";
-        return result;
-    }
-    
-    // Initialize database schema
+    // Initialize database schema first (this creates its own connection)
     if (!Migrations::createNewProject(tempPath)) {
-        database.close();
         QFile::remove(tempPath);
         result.success = false;
         result.errorMessage = "Failed to initialize database schema";
+        return result;
+    }
+    
+    // Create our own connection after the schema is created
+    QSqlDatabase database;
+    if (!createDatabaseConnection(tempPath, database)) {
+        QFile::remove(tempPath);
+        result.success = false;
+        result.errorMessage = "Failed to create temporary database connection";
         return result;
     }
     
@@ -519,13 +520,15 @@ void ProjectPersistence::updateMemoryUsage(size_t currentUsage)
 // Database save implementations
 bool ProjectPersistence::saveProjectToDatabase(QSqlDatabase& database, const Project& project)
 {
-    return project.save(database);
+    Project mutableProject = project; // Create mutable copy
+    return mutableProject.save(database);
 }
 
 bool ProjectPersistence::saveSequencesToDatabase(QSqlDatabase& database, const QList<Sequence>& sequences)
 {
     for (const Sequence& sequence : sequences) {
-        if (!sequence.save(database)) {
+        Sequence mutableSequence = sequence; // Create mutable copy
+        if (!mutableSequence.save(database)) {
             return false;
         }
     }
@@ -535,7 +538,8 @@ bool ProjectPersistence::saveSequencesToDatabase(QSqlDatabase& database, const Q
 bool ProjectPersistence::saveTracksToDatabase(QSqlDatabase& database, const QList<Track>& tracks)
 {
     for (const Track& track : tracks) {
-        if (!track.save(database)) {
+        Track mutableTrack = track; // Create mutable copy
+        if (!mutableTrack.save(database)) {
             return false;
         }
     }
@@ -545,7 +549,8 @@ bool ProjectPersistence::saveTracksToDatabase(QSqlDatabase& database, const QLis
 bool ProjectPersistence::saveClipsToDatabase(QSqlDatabase& database, const QList<Clip>& clips)
 {
     for (const Clip& clip : clips) {
-        if (!clip.save(database)) {
+        Clip mutableClip = clip; // Create mutable copy
+        if (!mutableClip.save(database)) {
             return false;
         }
     }
@@ -555,7 +560,8 @@ bool ProjectPersistence::saveClipsToDatabase(QSqlDatabase& database, const QList
 bool ProjectPersistence::saveMediaToDatabase(QSqlDatabase& database, const QList<Media>& media)
 {
     for (const Media& mediaItem : media) {
-        if (!mediaItem.save(database)) {
+        Media mutableMedia = mediaItem; // Create mutable copy
+        if (!mutableMedia.save(database)) {
             return false;
         }
     }

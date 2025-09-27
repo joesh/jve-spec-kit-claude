@@ -102,7 +102,7 @@ void TimelineManager::seekToFrame(int frameNumber)
     qCDebug(jveTimeline) << "Seeking to frame:" << frameNumber;
     
     // Algorithm: Calculate time → Seek to time
-    qint64 frameTime = qRound(frameNumber * getFrameDuration());
+    qint64 frameTime = qRound(static_cast<double>(frameNumber) * getFrameDuration());
     seek(frameTime);
 }
 
@@ -113,7 +113,7 @@ qint64 TimelineManager::getFrameDuration() const
 
 int TimelineManager::getCurrentFrame() const
 {
-    return qRound(m_currentTime / getFrameDuration());
+    return qRound(static_cast<double>(m_currentTime) / getFrameDuration());
 }
 
 void TimelineManager::snapToFrame()
@@ -272,11 +272,14 @@ RippleResult TimelineManager::performRipple(const RippleOperation& operation)
             insertClip.end = operation.insertPosition + insertDuration;
             addClip(insertClip);
             
-            // Record affected clips
+            // Record affected clips (clips that overlap or come after the insertion point)
             for (const ClipInfo& clip : m_clips) {
-                if (operation.affectTracks.contains(clip.trackId) && 
-                    clip.start >= operation.insertPosition && clip.id != insertClip.id) {
-                    result.affectedClips.append(clip.id);
+                if (operation.affectTracks.contains(clip.trackId) && clip.id != insertClip.id) {
+                    // Clip is affected if it overlaps the insertion point or comes after it
+                    if (clip.start >= operation.insertPosition || 
+                        (clip.start < operation.insertPosition && clip.end > operation.insertPosition)) {
+                        result.affectedClips.append(clip.id);
+                    }
                 }
             }
         }
@@ -547,9 +550,16 @@ QList<ClipInfo> TimelineManager::getClipsOnTracks(const QStringList& trackIds) c
 void TimelineManager::shiftClipsAfterPosition(qint64 position, qint64 offset, const QStringList& trackIds)
 {
     for (ClipInfo& clip : m_clips) {
-        if (trackIds.contains(clip.trackId) && clip.start >= position) {
-            clip.start += offset;
-            clip.end += offset;
+        if (trackIds.contains(clip.trackId)) {
+            // Shift clips that start at or after the position
+            if (clip.start >= position) {
+                clip.start += offset;
+                clip.end += offset;
+            }
+            // For clips that overlap the position, extend their end time
+            else if (clip.start < position && clip.end > position) {
+                clip.end += offset;
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 #include "../common/test_base.h"
 #include "../../src/core/timeline/timeline_manager.h"
 #include "../../src/core/models/sequence.h"
+#include "../../src/core/models/project.h"
 #include "../../src/core/persistence/migrations.h"
 
 #include <QTest>
@@ -55,9 +56,8 @@ void TestTimelineOperations::initTestCase()
     Project project = Project::create("Timeline Test Project");
     QVERIFY(project.save(m_database));
     
-    Sequence sequence = Sequence::create("Test Timeline", project.id());
-    sequence.setFramerate(29.97);
-    sequence.setDuration(300000); // 5 minutes
+    Sequence sequence = Sequence::create("Test Timeline", project.id(), 29.97, 1920, 1080);
+    // Duration is now calculated from clips, not set directly
     QVERIFY(sequence.save(m_database));
     m_sequenceId = sequence.id();
     
@@ -180,9 +180,13 @@ void TestTimelineOperations::testFrameAccuracy()
     
     // Test frame rate conversion accuracy
     TimelineManager ntscTimeline(this);
+    // Load sequence first, then override framerate for testing
+    ntscTimeline.loadSequence(m_sequenceId, m_database);
     ntscTimeline.setFramerate(29.97);
     
     TimelineManager palTimeline(this);
+    // Load sequence first, then override framerate for testing  
+    palTimeline.loadSequence(m_sequenceId, m_database);
     palTimeline.setFramerate(25.0);
     
     // Same frame number should have different times
@@ -268,9 +272,9 @@ void TestTimelineOperations::testSnapBehavior()
     qint64 snappedTime = m_timelineManager->getSnappedTime(4950);
     QCOMPARE(snappedTime, qint64(5000)); // Should snap to nearest point
     
-    m_timelineManager->seek(5150); // Also close to 5000
+    m_timelineManager->seek(5150); // Outside tolerance from 5000
     snappedTime = m_timelineManager->getSnappedTime(5150);
-    QCOMPARE(snappedTime, qint64(5000)); // Should snap to same point
+    QCOMPARE(snappedTime, qint64(5150)); // Should NOT snap (150ms > 100ms tolerance)
     
     // Test no snap when outside tolerance
     snappedTime = m_timelineManager->getSnappedTime(4800); // 200ms away

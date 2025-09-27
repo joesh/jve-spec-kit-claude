@@ -55,7 +55,7 @@ Media Media::load(const QString& id, const QSqlDatabase& database)
     media.m_filepath = query.value("file_path").toString();
     media.m_filename = query.value("file_name").toString();
     media.m_metadata.duration = query.value("duration").toLongLong();
-    media.m_metadata.framerate = query.value("frame_rate").toInt();
+    media.m_metadata.framerate = query.value("frame_rate").toDouble();
     
     // Parse JSON metadata
     QString metadataJson = query.value("metadata").toString();
@@ -95,17 +95,23 @@ bool Media::save(const QSqlDatabase& database)
     updateModifiedTime();
     
     QSqlQuery query(database);
-    query.prepare(R"(
+    QString sqlStatement = R"(
         INSERT OR REPLACE INTO media 
         (id, file_path, file_name, duration, frame_rate, metadata)
         VALUES (?, ?, ?, ?, ?, ?)
-    )");
+    )";
+    
+    if (!query.prepare(sqlStatement)) {
+        qCWarning(jveMedia) << "Failed to prepare query:" << query.lastError().text();
+        qCWarning(jveMedia) << "SQL was:" << sqlStatement;
+        return false;
+    }
     
     query.addBindValue(m_id);
     query.addBindValue(m_filepath);
     query.addBindValue(m_filename);
     query.addBindValue(m_metadata.duration);
-    query.addBindValue(static_cast<int>(m_metadata.framerate));
+    query.addBindValue(m_metadata.framerate); // Schema now uses REAL
     
     // Serialize all additional metadata to JSON
     QJsonObject metadataObj;

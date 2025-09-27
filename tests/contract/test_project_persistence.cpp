@@ -35,6 +35,10 @@ private slots:
 private:
     ProjectPersistence* m_persistence;
     QString m_testProjectPath;
+    
+    // Helper methods
+    ProjectData createLargeProjectData(int clipCount = 100);
+    ProjectData createComplexProjectData();
 };
 
 void TestProjectPersistence::initTestCase()
@@ -53,18 +57,18 @@ void TestProjectPersistence::testAtomicSaveLoad()
     
     // Create comprehensive project data
     ProjectData projectData;
-    projectData.project.setName("Atomic Test Project");
+    projectData.project = Project::create("Atomic Test Project");
     projectData.project.setSettings(R"({"theme": "dark", "autoSave": true})");
     
     // Add sequences
-    Sequence sequence1 = Sequence::create("Main Timeline", projectData.project.id());
+    Sequence sequence1 = Sequence::create("Main Timeline", projectData.project.id(), 24.0, 1920, 1080);
     sequence1.setFramerate(29.97);
-    sequence1.setResolution(1920, 1080);
+    // Canvas resolution set in create() call
     projectData.sequences.append(sequence1);
     
-    Sequence sequence2 = Sequence::create("B-Roll Timeline", projectData.project.id());
+    Sequence sequence2 = Sequence::create("B-Roll Timeline", projectData.project.id(), 29.97, 1920, 1080);
     sequence2.setFramerate(29.97);
-    sequence2.setResolution(1920, 1080);
+    // Canvas resolution set in create() call
     projectData.sequences.append(sequence2);
     
     // Add media
@@ -73,6 +77,7 @@ void TestProjectPersistence::testAtomicSaveLoad()
     metadata1.duration = 120000;
     metadata1.width = 1920;
     metadata1.height = 1080;
+    metadata1.framerate = 24; // Fix: Set valid framerate > 0
     media1.setMetadata(metadata1);
     projectData.media.append(media1);
     
@@ -81,6 +86,7 @@ void TestProjectPersistence::testAtomicSaveLoad()
     projectData.tracks.append(videoTrack);
     
     Clip clip1 = Clip::create("Clip 1", media1.id());
+    clip1.setTrackId(videoTrack.id());
     clip1.setTimelinePosition(0, 5000);
     projectData.clips.append(clip1);
     
@@ -250,7 +256,7 @@ void TestProjectPersistence::testBackupRecovery()
     originalData.project.setSettings(R"({"version": 1, "important": true})");
     
     // Add some content
-    Sequence sequence = Sequence::create("Main Timeline", originalData.project.id());
+    Sequence sequence = Sequence::create("Main Timeline", originalData.project.id(), 25.0, 1920, 1080);
     originalData.sequences.append(sequence);
     
     // Save project
@@ -431,12 +437,13 @@ ProjectData TestProjectPersistence::createLargeProjectData(int clipCount)
         metadata.duration = 60000;
         metadata.width = 1920;
         metadata.height = 1080;
+        metadata.framerate = 24; // Fix: Set valid framerate > 0
         media.setMetadata(metadata);
         data.media.append(media);
     }
     
     // Create sequences and tracks
-    Sequence sequence = Sequence::create("Large Timeline", data.project.id());
+    Sequence sequence = Sequence::create("Large Timeline", data.project.id(), 30.0, 1920, 1080);
     data.sequences.append(sequence);
     
     for (int t = 0; t < 10; t++) {

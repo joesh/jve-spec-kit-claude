@@ -16,26 +16,31 @@
 **State Transitions**: Created → Modified → Saved
 
 ### Sequence
-**Purpose**: Timeline container with tracks and clips
+**Purpose**: Timeline container with tracks and clips, defines canvas/composition settings
 **Fields**:
 - `id` (UUID): Unique sequence identifier
 - `project_id` (UUID): Foreign key to Project
 - `name` (string): User-visible sequence name
-- `frame_rate` (integer): Frames per second (e.g., 24, 30, 60)
+- `frame_rate` (real): Frames per second (e.g., 23.976, 24, 29.97, 30, 59.94, 60)
+- `width` (integer): Canvas width in pixels (e.g., 1920, 3840)
+- `height` (integer): Canvas height in pixels (e.g., 1080, 2160)
 - `timecode_start` (integer): Starting timecode in ticks
-- `duration` (integer): Total sequence duration in ticks
 
 **Relationships**: 
 - Belongs to Project
 - One-to-many with Tracks
-**Validation Rules**: Frame rate must be positive, duration >= 0
+**Validation Rules**: Frame rate must be positive, canvas resolution must be valid (width > 0, height > 0)
 **State Transitions**: Created → Populated → Modified
+**Derived Properties**: 
+- `duration` (calculated): Total sequence duration from rightmost clip position
+- `aspect_ratio` (calculated): width / height ratio
 
 ### Track
 **Purpose**: Container for clips with video/audio designation
 **Fields**:
 - `id` (UUID): Unique track identifier
 - `sequence_id` (UUID): Foreign key to Sequence
+- `name` (string): User-visible track name (e.g., "Video 1", "Dialogue", "Music")
 - `track_type` (enum): VIDEO or AUDIO
 - `track_index` (integer): Display order (V1, V2, A1, A2, etc.)
 - `enabled` (boolean): Track enabled/disabled state
@@ -73,7 +78,7 @@
 - `file_path` (string): Path to source media file
 - `file_name` (string): Original filename
 - `duration` (integer): Media duration in ticks
-- `frame_rate` (integer): Source frame rate
+- `frame_rate` (real): Source frame rate
 - `metadata` (JSON): Technical metadata (codec, resolution, etc.)
 
 **Relationships**: One-to-many with Clips

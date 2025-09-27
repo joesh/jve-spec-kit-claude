@@ -59,6 +59,7 @@ Clip Clip::load(const QString& id, const QSqlDatabase& database)
     
     Clip clip;
     clip.m_id = query.value("id").toString();
+    clip.m_trackId = query.value("track_id").toString();
     clip.m_mediaId = query.value("media_id").toString();
     clip.m_timelineStart = query.value("start_time").toLongLong();
     qint64 duration = query.value("duration").toLongLong();
@@ -119,7 +120,7 @@ bool Clip::save(const QSqlDatabase& database)
     )");
     
     query.addBindValue(m_id);
-    query.addBindValue("dummy-track-id"); // Use placeholder track ID for testing
+    query.addBindValue(m_trackId.isEmpty() ? QVariant() : m_trackId); // NULL if no track
     query.addBindValue(m_mediaId);
     query.addBindValue(m_timelineStart);
     query.addBindValue(duration);
@@ -145,6 +146,14 @@ void Clip::setName(const QString& name)
 {
     if (m_name != name) {
         m_name = name;
+        updateModifiedTime();
+    }
+}
+
+void Clip::setTrackId(const QString& trackId)
+{
+    if (m_trackId != trackId) {
+        m_trackId = trackId;
         updateModifiedTime();
     }
 }
@@ -366,9 +375,9 @@ void Clip::saveProperties(const QSqlDatabase& database) const
         
         // Determine type based on QVariant
         QString type = "STRING";
-        if (it.value().type() == QVariant::Double || it.value().type() == QVariant::Int) {
+        if (it.value().typeId() == QMetaType::Double || it.value().typeId() == QMetaType::Int) {
             type = "NUMBER";
-        } else if (it.value().type() == QVariant::Bool) {
+        } else if (it.value().typeId() == QMetaType::Bool) {
             type = "BOOLEAN";
         }
         

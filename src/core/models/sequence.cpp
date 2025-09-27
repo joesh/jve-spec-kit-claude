@@ -9,17 +9,30 @@
 
 Q_LOGGING_CATEGORY(jveSequence, "jve.models.sequence")
 
-Sequence Sequence::create(const QString& name, const QString& projectId)
+Sequence Sequence::create(const QString& name, const QString& projectId, 
+                         double framerate, int width, int height)
 {
-    // Algorithm: Generate UUID → Set defaults → Associate with project
+    // Algorithm: Generate UUID → Set canvas properties → Associate with project
     Sequence sequence;
     sequence.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     sequence.m_name = name;
     sequence.m_projectId = projectId;
+    sequence.m_framerate = framerate;
+    sequence.m_width = width;
+    sequence.m_height = height;
     sequence.m_createdAt = QDateTime::currentDateTime();
     sequence.m_modifiedAt = sequence.m_createdAt;
     
-    qCDebug(jveSequence) << "Created sequence:" << name << "for project:" << projectId;
+    sequence.validateFramerate();
+    sequence.validateCanvasResolution();
+    
+    // Initialize track counts for new sequence (empty = 0 tracks)
+    sequence.m_cachedTrackCount = 0;
+    sequence.m_cachedVideoTrackCount = 0;
+    sequence.m_cachedAudioTrackCount = 0;
+    
+    qCDebug(jveSequence) << "Created sequence:" << name << "for project:" << projectId 
+                        << "canvas:" << width << "x" << height << "@" << framerate << "fps";
     return sequence;
 }
 
@@ -28,7 +41,7 @@ Sequence Sequence::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, project_id, name, frame_rate, timecode_start, duration
+        SELECT id, project_id, name, frame_rate, width, height, timecode_start
         FROM sequences WHERE id = ?
     )");
     query.addBindValue(id);
@@ -48,15 +61,16 @@ Sequence Sequence::load(const QString& id, const QSqlDatabase& database)
     sequence.m_projectId = query.value("project_id").toString();
     sequence.m_name = query.value("name").toString();
     sequence.m_framerate = query.value("frame_rate").toDouble();
+    sequence.m_width = query.value("width").toInt();
+    sequence.m_height = query.value("height").toInt();
     // timecode_start = query.value("timecode_start").toLongLong(); // Not stored in model yet
-    sequence.m_duration = query.value("duration").toLongLong();
     
     // Set reasonable defaults for fields not in schema
     sequence.m_createdAt = QDateTime::currentDateTime();
     sequence.m_modifiedAt = QDateTime::currentDateTime();
     
     sequence.validateFramerate();
-    sequence.validateResolution();
+    sequence.validateCanvasResolution();
     
     qCDebug(jveSequence) << "Loaded sequence:" << sequence.m_name;
     return sequence;
@@ -105,16 +119,17 @@ bool Sequence::save(const QSqlDatabase& database)
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO sequences 
-        (id, project_id, name, frame_rate, timecode_start, duration)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (id, project_id, name, frame_rate, width, height, timecode_start)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     )");
     
     query.addBindValue(m_id);
     query.addBindValue(m_projectId);
     query.addBindValue(m_name);
     query.addBindValue(m_framerate);
+    query.addBindValue(m_width);
+    query.addBindValue(m_height);
     query.addBindValue(0); // timecode_start default to 0
-    query.addBindValue(m_duration);
     
     if (!query.exec()) {
         qCWarning(jveSequence) << "Failed to save sequence:" << query.lastError().text();
@@ -142,22 +157,28 @@ void Sequence::setFramerate(double framerate)
     }
 }
 
-void Sequence::setResolution(int width, int height)
+
+void Sequence::setCanvasResolution(int width, int height)
 {
     if (width > 0 && height > 0) {
         m_width = width;
         m_height = height;
         updateModifiedTime();
-        validateResolution();
+        validateCanvasResolution();
     }
 }
 
-void Sequence::setDuration(qint64 duration)
+qint64 Sequence::duration() const
 {
-    if (duration >= 0) {
-        m_duration = duration;
-        updateModifiedTime();
-    }
+    // Duration is calculated from clips, not stored
+    // For now, return 0 - will implement when database is available
+    return 0; // TODO: implement calculateDurationFromClips
+}
+
+double Sequence::aspectRatio() const
+{
+    if (m_height == 0) return 16.0 / 9.0; // Default
+    return static_cast<double>(m_width) / static_cast<double>(m_height);
 }
 
 void Sequence::setDescription(const QString& description)
@@ -168,11 +189,6 @@ void Sequence::setDescription(const QString& description)
     }
 }
 
-double Sequence::aspectRatio() const
-{
-    if (m_height == 0) return 16.0 / 9.0; // Default
-    return static_cast<double>(m_width) / static_cast<double>(m_height);
-}
 
 bool Sequence::isDropFrame() const
 {
@@ -185,7 +201,7 @@ bool Sequence::isDropFrame() const
 
 qint64 Sequence::durationInFrames() const
 {
-    return millisecondsToFrames(m_duration);
+    return millisecondsToFrames(duration()); // Use calculated duration
 }
 
 qint64 Sequence::framesToMilliseconds(qint64 frames) const
@@ -250,9 +266,9 @@ int Sequence::audioTrackCount() const
 void Sequence::addVideoTrack(const QString& name)
 {
     // This would create a new video track and associate it with this sequence
-    // For now, just increment cache counters
-    if (m_cachedTrackCount >= 0) m_cachedTrackCount++;
-    if (m_cachedVideoTrackCount >= 0) m_cachedVideoTrackCount++;
+    // For now, just increment cache counters (initialized to 0 in create())
+    m_cachedTrackCount++;
+    m_cachedVideoTrackCount++;
     
     updateModifiedTime();
     qCDebug(jveSequence) << "Added video track:" << name << "to sequence:" << m_name;
@@ -261,9 +277,9 @@ void Sequence::addVideoTrack(const QString& name)
 void Sequence::addAudioTrack(const QString& name)
 {
     // This would create a new audio track and associate it with this sequence
-    // For now, just increment cache counters
-    if (m_cachedTrackCount >= 0) m_cachedTrackCount++;
-    if (m_cachedAudioTrackCount >= 0) m_cachedAudioTrackCount++;
+    // For now, just increment cache counters (initialized to 0 in create())
+    m_cachedTrackCount++;
+    m_cachedAudioTrackCount++;
     
     updateModifiedTime();
     qCDebug(jveSequence) << "Added audio track:" << name << "to sequence:" << m_name;
@@ -277,26 +293,27 @@ void Sequence::updateModifiedTime()
 void Sequence::validateFramerate()
 {
     if (m_framerate <= 0) {
-        qCWarning(jveSequence) << "Invalid framerate, resetting to 29.97:" << m_framerate;
-        m_framerate = 29.97;
+        qCWarning(jveSequence) << "Invalid framerate:" << m_framerate;
+        // No defaults - validation fails, caller must provide valid value
     } else if (m_framerate > 120.0) {
         qCWarning(jveSequence) << "Framerate too high, clamping to 120:" << m_framerate;
         m_framerate = 120.0;
     }
 }
 
-void Sequence::validateResolution()
+void Sequence::validateCanvasResolution()
 {
     if (m_width <= 0) {
-        qCWarning(jveSequence) << "Invalid width, resetting to 1920:" << m_width;
-        m_width = 1920;
+        qCWarning(jveSequence) << "Invalid canvas width:" << m_width;
+        // No defaults - validation fails, caller must provide valid value
     }
     
     if (m_height <= 0) {
-        qCWarning(jveSequence) << "Invalid height, resetting to 1080:" << m_height;
-        m_height = 1080;
+        qCWarning(jveSequence) << "Invalid canvas height:" << m_height;
+        // No defaults - validation fails, caller must provide valid value  
     }
 }
+
 
 void Sequence::invalidateTrackCache()
 {
@@ -313,7 +330,7 @@ int Sequence::queryTrackCount(const QSqlDatabase& database, const QString& track
         query.prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?");
         query.addBindValue(m_id);
     } else {
-        query.prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ? AND type = ?");
+        query.prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ? AND track_type = ?");
         query.addBindValue(m_id);
         query.addBindValue(trackType);
     }

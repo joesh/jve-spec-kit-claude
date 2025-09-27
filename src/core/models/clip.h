@@ -49,6 +49,8 @@ public:
     void setName(const QString& name);
     
     QString mediaId() const { return m_mediaId; }
+    QString trackId() const { return m_trackId; }
+    void setTrackId(const QString& trackId);
     QDateTime createdAt() const { return m_createdAt; }
     QDateTime modifiedAt() const { return m_modifiedAt; }
     
@@ -100,6 +102,7 @@ private:
     QString m_id;
     QString m_name;
     QString m_mediaId;
+    QString m_trackId;
     QDateTime m_createdAt;
     QDateTime m_modifiedAt;
     

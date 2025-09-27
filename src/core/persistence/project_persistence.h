@@ -33,14 +33,6 @@ struct PersistenceResult {
     std::optional<ProjectData> projectData;
 };
 
-struct MediaMetadata {
-    qint64 duration = 0;
-    int width = 0;
-    int height = 0;
-    double framerate = 0.0;
-    QString codec;
-    QString format;
-};
 
 struct RecoveryResult {
     bool success = false;

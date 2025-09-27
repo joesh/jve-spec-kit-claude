@@ -25,14 +25,15 @@ CREATE TABLE IF NOT EXISTS projects (
     CONSTRAINT valid_timestamps CHECK(created_at <= modified_at)
 );
 
--- Sequences table: Timeline containers with tracks and clips
+-- Sequences table: Timeline containers with canvas settings
 CREATE TABLE IF NOT EXISTS sequences (
     id TEXT PRIMARY KEY,                    -- UUID
     project_id TEXT NOT NULL,
     name TEXT NOT NULL CHECK(length(name) > 0),
-    frame_rate INTEGER NOT NULL CHECK(frame_rate > 0),
+    frame_rate REAL NOT NULL CHECK(frame_rate > 0),
+    width INTEGER NOT NULL CHECK(width > 0),
+    height INTEGER NOT NULL CHECK(height > 0),
     timecode_start INTEGER NOT NULL DEFAULT 0 CHECK(timecode_start >= 0),
-    duration INTEGER NOT NULL DEFAULT 0 CHECK(duration >= 0),
     
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS sequences (
 CREATE TABLE IF NOT EXISTS tracks (
     id TEXT PRIMARY KEY,                    -- UUID
     sequence_id TEXT NOT NULL,
+    name TEXT NOT NULL CHECK(length(name) > 0),
     track_type TEXT NOT NULL CHECK(track_type IN ('VIDEO', 'AUDIO')),
     track_index INTEGER NOT NULL,           -- Display order (V1=1, V2=2, A1=1, A2=2)
     enabled BOOLEAN NOT NULL DEFAULT 1,
@@ -58,7 +60,7 @@ CREATE TABLE IF NOT EXISTS media (
     file_path TEXT NOT NULL,                -- Absolute path to source file
     file_name TEXT NOT NULL,                -- Original filename
     duration INTEGER NOT NULL CHECK(duration > 0),
-    frame_rate INTEGER NOT NULL CHECK(frame_rate > 0),
+    frame_rate REAL NOT NULL CHECK(frame_rate > 0),
     metadata TEXT DEFAULT '{}',             -- JSON technical metadata (codec, resolution, etc.)
     
     -- File path should be unique per project (handled at application level)
@@ -68,7 +70,7 @@ CREATE TABLE IF NOT EXISTS media (
 -- Clips table: Media references with timeline position and properties
 CREATE TABLE IF NOT EXISTS clips (
     id TEXT PRIMARY KEY,                    -- UUID
-    track_id TEXT NOT NULL,
+    track_id TEXT,                          -- NULL when clip not yet on timeline
     media_id TEXT,                          -- NULL for generated clips (bars, tone, etc.)
     start_time INTEGER NOT NULL CHECK(start_time >= 0),
     duration INTEGER NOT NULL CHECK(duration > 0),

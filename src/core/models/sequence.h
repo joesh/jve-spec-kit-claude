@@ -25,10 +25,11 @@ public:
     Sequence& operator=(Sequence&& other) noexcept = default;
     
     /**
-     * Create new sequence with generated ID
-     * Algorithm: Generate UUID → Set defaults → Associate with project
+     * Create new sequence with generated ID and required canvas settings
+     * Algorithm: Generate UUID → Set canvas properties → Associate with project
      */
-    static Sequence create(const QString& name, const QString& projectId);
+    static Sequence create(const QString& name, const QString& projectId, 
+                          double framerate, int width, int height);
     
     /**
      * Load sequence from database by ID
@@ -58,16 +59,16 @@ public:
     QDateTime createdAt() const { return m_createdAt; }
     QDateTime modifiedAt() const { return m_modifiedAt; }
     
-    // Timeline properties
+    // Canvas properties (mutable sequence settings)
     double framerate() const { return m_framerate; }
     void setFramerate(double framerate);
     
     int width() const { return m_width; }
     int height() const { return m_height; }
-    void setResolution(int width, int height);
+    void setCanvasResolution(int width, int height);
     
-    qint64 duration() const { return m_duration; } // Duration in milliseconds
-    void setDuration(qint64 duration);
+    // Derived properties (calculated from clips)
+    qint64 duration() const; // Calculated from rightmost clip position
     
     // Description/metadata
     QString description() const { return m_description; }
@@ -90,8 +91,11 @@ public:
     void addVideoTrack(const QString& name);
     void addAudioTrack(const QString& name);
     
-    // Validation and state
-    bool isValid() const { return !m_id.isEmpty() && !m_name.isEmpty() && !m_projectId.isEmpty(); }
+    // Validation and state  
+    bool isValid() const { 
+        return !m_id.isEmpty() && !m_name.isEmpty() && !m_projectId.isEmpty() 
+               && m_framerate > 0.0 && m_width > 0 && m_height > 0; 
+    }
 
 private:
     QString m_id;
@@ -101,11 +105,10 @@ private:
     QDateTime m_modifiedAt;
     QString m_description;
     
-    // Timeline properties
-    double m_framerate = 29.97; // Default NTSC
-    int m_width = 1920;         // Default HD
-    int m_height = 1080;
-    qint64 m_duration = 0;      // Milliseconds
+    // Canvas properties (no defaults - must be set explicitly)
+    double m_framerate = 0.0;
+    int m_width = 0;
+    int m_height = 0;
     
     // Track counts (cached for performance)
     mutable int m_cachedTrackCount = -1;
@@ -115,7 +118,8 @@ private:
     // Helper functions for algorithmic breakdown (Rule 2.26)
     void updateModifiedTime();
     void validateFramerate();
-    void validateResolution();
+    void validateCanvasResolution();
     void invalidateTrackCache();
     int queryTrackCount(const QSqlDatabase& database, const QString& trackType = QString()) const;
+    qint64 calculateDurationFromClips(const QSqlDatabase& database) const;
 };

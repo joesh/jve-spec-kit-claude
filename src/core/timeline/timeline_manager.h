@@ -35,6 +35,10 @@ struct ClipInfo {
     QString trackId;
     QString mediaId;
     bool enabled = true;
+    
+    bool operator==(const ClipInfo& other) const {
+        return id == other.id;
+    }
 };
 
 struct TimelineGap {

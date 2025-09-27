@@ -80,7 +80,7 @@ void TestTrackEntity::initTestCase()
     QVERIFY(project.save(m_database));
     m_projectId = project.id();
     
-    Sequence sequence = Sequence::create("Track Test Sequence", m_projectId);
+    Sequence sequence = Sequence::create("Track Test Sequence", m_projectId, 24.0, 1920, 1080);
     QVERIFY(sequence.save(m_database));
     m_sequenceId = sequence.id();
 }

@@ -45,7 +45,7 @@ Track Track::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, sequence_id, track_type, track_index, enabled, locked
+        SELECT id, sequence_id, name, track_type, track_index, enabled, locked
         FROM tracks WHERE id = ?
     )");
     query.addBindValue(id);
@@ -63,13 +63,13 @@ Track Track::load(const QString& id, const QSqlDatabase& database)
     Track track;
     track.m_id = query.value("id").toString();
     track.m_sequenceId = query.value("sequence_id").toString();
+    track.m_name = query.value("name").toString();
     track.m_type = query.value("track_type").toString() == "VIDEO" ? Video : Audio;
     track.m_layerIndex = query.value("track_index").toInt();
     track.m_enabled = query.value("enabled").toBool();
     track.m_locked = query.value("locked").toBool();
     
     // Set reasonable defaults for fields not in schema
-    track.m_name = QString("Track %1").arg(track.m_layerIndex);
     track.m_createdAt = QDateTime::currentDateTime();
     track.m_modifiedAt = QDateTime::currentDateTime();
     
@@ -123,12 +123,13 @@ bool Track::save(const QSqlDatabase& database)
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO tracks 
-        (id, sequence_id, track_type, track_index, enabled, locked)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (id, sequence_id, name, track_type, track_index, enabled, locked)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     )");
     
     query.addBindValue(m_id);
     query.addBindValue(m_sequenceId);
+    query.addBindValue(m_name);
     query.addBindValue(m_type == Video ? "VIDEO" : "AUDIO");
     query.addBindValue(1); // track_index default to 1
     query.addBindValue(m_enabled);
