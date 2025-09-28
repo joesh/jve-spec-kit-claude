@@ -12,6 +12,8 @@
 #include <QSqlRecord>
 #include <QCryptographicHash>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QLoggingCategory>
 #include <QDebug>
 
@@ -79,7 +81,8 @@ ExecutionResult CommandManager::execute(Command& command)
     } else {
         command.setStatus(Command::Failed);
         result.success = false;
-        result.errorMessage = "Command execution failed";
+        result.errorMessage = m_lastErrorMessage.isEmpty() ? "Command execution failed" : m_lastErrorMessage;
+        m_lastErrorMessage.clear(); // Reset for next command
     }
     
     return result;
@@ -346,6 +349,24 @@ bool CommandManager::executeCommandImplementation(Command& command)
         return executeTimelineRippleTrim(command);
     } else if (command.type() == "roll_edit") {
         return executeTimelineRollEdit(command);
+    } else if (command.type() == "set_clip_selection") {
+        return executeSetClipSelection(command);
+    } else if (command.type() == "set_edge_selection") {
+        return executeSetEdgeSelection(command);
+    } else if (command.type() == "set_selection_properties") {
+        return executeSetSelectionProperties(command);
+    } else if (command.type() == "clear_selection") {
+        return executeClearSelection(command);
+    } else if (command.type() == "set_keyframe") {
+        return executeSetKeyframe(command);
+    } else if (command.type() == "delete_keyframe") {
+        return executeDeleteKeyframe(command);
+    } else if (command.type() == "reset_property") {
+        return executeResetProperty(command);
+    } else if (command.type() == "copy_properties") {
+        return executeCopyProperties(command);
+    } else if (command.type() == "paste_properties") {
+        return executePasteProperties(command);
     } else if (command.type() == "FastOperation" || 
                command.type() == "BatchOperation" || 
                command.type() == "ComplexOperation") {
@@ -353,7 +374,9 @@ bool CommandManager::executeCommandImplementation(Command& command)
         return true;
     }
     
-    qCWarning(jveCommandManager, "Unknown command type: %s", qPrintable(command.type()));
+    QString errorMsg = QString("Unknown command type: %1").arg(command.type());
+    qCWarning(jveCommandManager, "%s", qPrintable(errorMsg));
+    m_lastErrorMessage = errorMsg;
     return false;
 }
 
@@ -747,7 +770,9 @@ bool CommandManager::executeTimelineCreateClip(Command& command)
     qint64 duration = command.getParameter("duration").toLongLong();
     
     if (trackId.isEmpty() && mediaId.isEmpty()) {
-        qCWarning(jveCommandManager, "TimelineCreateClip: Missing required parameters");
+        QString errorMsg = "TimelineCreateClip: Missing required parameters";
+        qCWarning(jveCommandManager, "%s", qPrintable(errorMsg));
+        m_lastErrorMessage = errorMsg;
         return false;
     }
     
@@ -888,11 +913,13 @@ bool CommandManager::executeTimelineRippleTrim(Command& command)
     
     // Algorithm: Get parameters → Load clip → Trim and shift → Update positions → Save → Update command
     QString clipId = command.getParameter("clip_id").toString();
-    qint64 trimTime = command.getParameter("trim_time").toLongLong();
-    QString trimSide = command.getParameter("trim_side").toString(); // "head" or "tail"
+    qint64 trimTime = command.getParameter("new_time").toLongLong();
+    QString trimSide = command.getParameter("edge").toString(); // "head" or "tail"
     
     if (clipId.isEmpty() || trimTime <= 0 || trimSide.isEmpty()) {
-        qCWarning(jveCommandManager, "TimelineRippleTrim: Missing required parameters");
+        QString errorMsg = "TimelineRippleTrim: Missing required parameters";
+        qCWarning(jveCommandManager, "%s", qPrintable(errorMsg));
+        m_lastErrorMessage = errorMsg;
         return false;
     }
     
@@ -930,12 +957,14 @@ bool CommandManager::executeTimelineRollEdit(Command& command)
     qCDebug(jveCommandManager, "Executing timeline roll_edit command");
     
     // Algorithm: Get parameters → Load adjacent clips → Adjust durations → Save → Update command
-    QString leftClipId = command.getParameter("left_clip_id").toString();
-    QString rightClipId = command.getParameter("right_clip_id").toString();
-    qint64 rollTime = command.getParameter("roll_time").toLongLong();
+    QString leftClipId = command.getParameter("clip_a_id").toString();
+    QString rightClipId = command.getParameter("clip_b_id").toString();
+    qint64 rollTime = command.getParameter("new_boundary_time").toLongLong();
     
     if (leftClipId.isEmpty() || rightClipId.isEmpty() || rollTime == 0) {
-        qCWarning(jveCommandManager, "TimelineRollEdit: Missing required parameters");
+        QString errorMsg = "TimelineRollEdit: Missing required parameters";
+        qCWarning(jveCommandManager, "%s", qPrintable(errorMsg));
+        m_lastErrorMessage = errorMsg;
         return false;
     }
     
@@ -965,4 +994,630 @@ bool CommandManager::executeTimelineRollEdit(Command& command)
         qCWarning(jveCommandManager, "Failed to apply roll edit");
         return false;
     }
+}
+
+bool CommandManager::executeSetClipSelection(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing set_clip_selection command");
+    
+    // Algorithm: Get parameters → Store previous selection → Apply new selection → Save → Update command
+    QString selectionMode = command.getParameter("selection_mode").toString();
+    QStringList clipIds = command.getParameter("clip_ids").toStringList();
+    
+    if (selectionMode.isEmpty()) {
+        qCWarning(jveCommandManager, "SetClipSelection: Missing required selection_mode parameter");
+        return false;
+    }
+    
+    // For command system integration, we store selection state in a special table/properties
+    // This allows selection operations to be undoable
+    
+    // Store previous selection for undo
+    QSqlQuery query(m_database);
+    query.prepare("SELECT clip_id FROM properties WHERE property_name = 'selected' AND property_value = 'true'");
+    QStringList previousSelection;
+    if (query.exec()) {
+        while (query.next()) {
+            previousSelection.append(query.value(0).toString());
+        }
+    }
+    command.setParameter("previous_selection", previousSelection);
+    
+    // Apply new selection based on mode
+    if (selectionMode == "replace") {
+        // Clear all existing selections
+        QSqlQuery clearQuery(m_database);
+        clearQuery.prepare("UPDATE properties SET property_value = 'false' WHERE property_name = 'selected'");
+        clearQuery.exec();
+        
+        // Set new selections
+        for (const QString& clipId : clipIds) {
+            Property property = Property::create("selected", clipId);
+            property.setValue(true);
+            property.save(m_database);
+        }
+    } else if (selectionMode == "add") {
+        // Add to existing selection
+        for (const QString& clipId : clipIds) {
+            Property property = Property::create("selected", clipId);
+            property.setValue(true);
+            property.save(m_database);
+        }
+    } else if (selectionMode == "remove") {
+        // Remove from selection
+        for (const QString& clipId : clipIds) {
+            Property property = Property::create("selected", clipId);
+            property.setValue(false);
+            property.save(m_database);
+        }
+    } else if (selectionMode == "toggle") {
+        // Toggle selection state
+        for (const QString& clipId : clipIds) {
+            QSqlQuery toggleQuery(m_database);
+            toggleQuery.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = 'selected'");
+            toggleQuery.addBindValue(clipId);
+            bool currentlySelected = false;
+            if (toggleQuery.exec() && toggleQuery.next()) {
+                currentlySelected = toggleQuery.value(0).toBool();
+            }
+            
+            Property property = Property::create("selected", clipId);
+            property.setValue(!currentlySelected);
+            property.save(m_database);
+        }
+    }
+    
+    // Store operation details for undo
+    command.setParameter("applied_selection_mode", selectionMode);
+    command.setParameter("applied_clip_ids", clipIds);
+    
+    qCInfo(jveCommandManager, "Set clip selection: %s mode with %lld clips", 
+           qPrintable(selectionMode), clipIds.size());
+    return true;
+}
+
+bool CommandManager::executeSetEdgeSelection(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing set_edge_selection command");
+    
+    // Algorithm: Get parameters → Store previous edge selection → Apply new selection → Save → Update command
+    QString selectionMode = command.getParameter("selection_mode").toString();
+    QJsonArray edges = QJsonArray::fromVariantList(command.getParameter("edges").toList());
+    
+    if (selectionMode.isEmpty()) {
+        qCWarning(jveCommandManager, "SetEdgeSelection: Missing required selection_mode parameter");
+        return false;
+    }
+    
+    // Store previous edge selection for undo
+    QSqlQuery query(m_database);
+    query.prepare("SELECT clip_id, property_value FROM properties WHERE property_name LIKE 'edge_selected_%'");
+    QJsonArray previousEdgeSelection;
+    if (query.exec()) {
+        while (query.next()) {
+            QString clipId = query.value(0).toString();
+            QString edgeType = query.value(1).toString();
+            QJsonObject edge;
+            edge["clip_id"] = clipId;
+            edge["edge_type"] = edgeType;
+            previousEdgeSelection.append(edge);
+        }
+    }
+    command.setParameter("previous_edge_selection", QVariant::fromValue(previousEdgeSelection));
+    
+    // Apply edge selection based on mode
+    if (selectionMode == "replace") {
+        // Clear all existing edge selections
+        QSqlQuery clearQuery(m_database);
+        clearQuery.prepare("DELETE FROM properties WHERE property_name LIKE 'edge_selected_%'");
+        clearQuery.exec();
+    }
+    
+    // Process each edge in the selection
+    for (const QJsonValue& edgeValue : edges) {
+        QJsonObject edge = edgeValue.toObject();
+        QString clipId = edge["clip_id"].toString();
+        QString edgeType = edge["edge_type"].toString(); // "head" or "tail"
+        
+        if (clipId.isEmpty() || edgeType.isEmpty()) {
+            continue;
+        }
+        
+        QString propertyName = QString("edge_selected_%1").arg(edgeType);
+        
+        if (selectionMode == "add" || selectionMode == "replace") {
+            Property property = Property::create(propertyName, clipId);
+            property.setValue(edgeType);
+            property.save(m_database);
+        } else if (selectionMode == "remove") {
+            QSqlQuery removeQuery(m_database);
+            removeQuery.prepare("DELETE FROM properties WHERE clip_id = ? AND property_name = ?");
+            removeQuery.addBindValue(clipId);
+            removeQuery.addBindValue(propertyName);
+            removeQuery.exec();
+        } else if (selectionMode == "toggle") {
+            QSqlQuery checkQuery(m_database);
+            checkQuery.prepare("SELECT COUNT(*) FROM properties WHERE clip_id = ? AND property_name = ?");
+            checkQuery.addBindValue(clipId);
+            checkQuery.addBindValue(propertyName);
+            bool exists = false;
+            if (checkQuery.exec() && checkQuery.next()) {
+                exists = checkQuery.value(0).toInt() > 0;
+            }
+            
+            if (exists) {
+                QSqlQuery removeQuery(m_database);
+                removeQuery.prepare("DELETE FROM properties WHERE clip_id = ? AND property_name = ?");
+                removeQuery.addBindValue(clipId);
+                removeQuery.addBindValue(propertyName);
+                removeQuery.exec();
+            } else {
+                Property property = Property::create(propertyName, clipId);
+                property.setValue(edgeType);
+                property.save(m_database);
+            }
+        }
+    }
+    
+    command.setParameter("applied_edge_selection_mode", selectionMode);
+    command.setParameter("applied_edges", QVariant::fromValue(edges));
+    
+    qCInfo(jveCommandManager, "Set edge selection: %s mode with %lld edges", 
+           qPrintable(selectionMode), (qint64)edges.size());
+    return true;
+}
+
+bool CommandManager::executeSetSelectionProperties(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing set_selection_properties command");
+    
+    // Algorithm: Get current selection → Get property parameters → Store previous values → Apply new values → Save → Update command
+    QString propertyName = command.getParameter("property_name").toString();
+    QVariant propertyValue = command.getParameter("property_value");
+    bool applyToMetadata = command.getParameter("apply_to_metadata").toBool();
+    
+    if (propertyName.isEmpty()) {
+        qCWarning(jveCommandManager, "SetSelectionProperties: Missing required property_name parameter");
+        return false;
+    }
+    
+    // Get current selection
+    QSqlQuery selectionQuery(m_database);
+    selectionQuery.prepare("SELECT clip_id FROM properties WHERE property_name = 'selected' AND property_value = 'true'");
+    QStringList selectedClips;
+    if (selectionQuery.exec()) {
+        while (selectionQuery.next()) {
+            selectedClips.append(selectionQuery.value(0).toString());
+        }
+    }
+    
+    if (selectedClips.isEmpty()) {
+        qCWarning(jveCommandManager, "SetSelectionProperties: No clips selected");
+        return false;
+    }
+    
+    // Store previous values for undo
+    QJsonObject previousValues;
+    for (const QString& clipId : selectedClips) {
+        QSqlQuery valueQuery(m_database);
+        if (applyToMetadata) {
+            valueQuery.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = ? AND entity_type = 'metadata'");
+        } else {
+            valueQuery.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = ? AND entity_type != 'metadata'");
+        }
+        valueQuery.addBindValue(clipId);
+        valueQuery.addBindValue(propertyName);
+        
+        if (valueQuery.exec() && valueQuery.next()) {
+            previousValues[clipId] = valueQuery.value(0).toString();
+        } else {
+            previousValues[clipId] = QJsonValue(); // null for non-existent properties
+        }
+    }
+    command.setParameter("previous_property_values", QVariant::fromValue(previousValues));
+    
+    // Apply property to all selected clips
+    int appliedCount = 0;
+    for (const QString& clipId : selectedClips) {
+        Property property = Property::create(propertyName, clipId);
+        if (applyToMetadata) {
+            // For metadata properties, use a different property name pattern
+            Property metadataProperty = Property::create("metadata_" + propertyName, clipId);
+            metadataProperty.setValue(propertyValue);
+            if (metadataProperty.save(m_database)) {
+                appliedCount++;
+            }
+            continue;
+        }
+        property.setValue(propertyValue);
+        
+        if (property.save(m_database)) {
+            appliedCount++;
+        }
+    }
+    
+    command.setParameter("applied_property_name", propertyName);
+    command.setParameter("applied_property_value", propertyValue);
+    command.setParameter("applied_to_metadata", applyToMetadata);
+    command.setParameter("affected_clips", selectedClips);
+    command.setParameter("applied_count", appliedCount);
+    
+    qCInfo(jveCommandManager, "Applied property %s to %d selected clips", 
+           qPrintable(propertyName), appliedCount);
+    return true;
+}
+
+bool CommandManager::executeClearSelection(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing clear_selection command");
+    
+    // Algorithm: Get current selection → Store for undo → Clear all selections → Update command
+    
+    // Store current selection for undo
+    QSqlQuery query(m_database);
+    query.prepare("SELECT clip_id FROM properties WHERE property_name = 'selected' AND property_value = 'true'");
+    QStringList previousSelection;
+    if (query.exec()) {
+        while (query.next()) {
+            previousSelection.append(query.value(0).toString());
+        }
+    }
+    command.setParameter("previous_selection", previousSelection);
+    
+    // Store current edge selection for undo
+    QSqlQuery edgeQuery(m_database);
+    edgeQuery.prepare("SELECT clip_id, property_value FROM properties WHERE property_name LIKE 'edge_selected_%'");
+    QJsonArray previousEdgeSelection;
+    if (edgeQuery.exec()) {
+        while (edgeQuery.next()) {
+            QString clipId = edgeQuery.value(0).toString();
+            QString edgeType = edgeQuery.value(1).toString();
+            QJsonObject edge;
+            edge["clip_id"] = clipId;
+            edge["edge_type"] = edgeType;
+            previousEdgeSelection.append(edge);
+        }
+    }
+    command.setParameter("previous_edge_selection", QVariant::fromValue(previousEdgeSelection));
+    
+    // Clear all selections
+    QSqlQuery clearClipsQuery(m_database);
+    clearClipsQuery.prepare("UPDATE properties SET property_value = 'false' WHERE property_name = 'selected'");
+    bool clipsCleared = clearClipsQuery.exec();
+    
+    QSqlQuery clearEdgesQuery(m_database);
+    clearEdgesQuery.prepare("DELETE FROM properties WHERE property_name LIKE 'edge_selected_%'");
+    bool edgesCleared = clearEdgesQuery.exec();
+    
+    command.setParameter("cleared_clips_count", previousSelection.size());
+    command.setParameter("cleared_edges_count", previousEdgeSelection.size());
+    
+    if (clipsCleared && edgesCleared) {
+        qCInfo(jveCommandManager, "Cleared selection: %lld clips, %lld edges", 
+               (qint64)previousSelection.size(), (qint64)previousEdgeSelection.size());
+        return true;
+    } else {
+        qCWarning(jveCommandManager, "Failed to clear all selections");
+        return false;
+    }
+}
+
+bool CommandManager::executeSetKeyframe(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing set_keyframe command");
+    
+    // Algorithm: Get parameters → Load property → Store previous keyframes → Add/update keyframe → Save → Update command
+    QString clipId = command.getParameter("clip_id").toString();
+    QString propertyName = command.getParameter("property_name").toString();
+    qint64 time = command.getParameter("time").toLongLong();
+    QVariant value = command.getParameter("value");
+    
+    if (clipId.isEmpty() || propertyName.isEmpty() || time < 0) {
+        qCWarning(jveCommandManager, "SetKeyframe: Missing required parameters");
+        return false;
+    }
+    
+    Property property = Property::create(propertyName, clipId);
+    
+    // Store previous keyframe state for undo
+    // In a full implementation, this would query existing keyframes
+    QJsonObject previousKeyframes;
+    previousKeyframes["time"] = time;
+    previousKeyframes["existed"] = false; // Simplified - real implementation would check if keyframe existed
+    command.setParameter("previous_keyframes", QVariant::fromValue(previousKeyframes));
+    
+    // Set the keyframe value
+    // For simplicity, we're storing this as a property with time suffix
+    QString keyframePropertyName = QString("%1_keyframe_%2").arg(propertyName).arg(time);
+    Property keyframeProperty = Property::create(keyframePropertyName, clipId);
+    keyframeProperty.setValue(value);
+    
+    if (keyframeProperty.save(m_database)) {
+        // Also update the main property value
+        property.setValue(value);
+        property.save(m_database);
+        
+        command.setParameter("keyframe_property_name", keyframePropertyName);
+        command.setParameter("keyframe_time", time);
+        command.setParameter("keyframe_value", value);
+        
+        qCInfo(jveCommandManager, "Set keyframe for %s at time %lld on clip %s", 
+               qPrintable(propertyName), time, qPrintable(clipId));
+        return true;
+    } else {
+        qCWarning(jveCommandManager, "Failed to save keyframe");
+        return false;
+    }
+}
+
+bool CommandManager::executeDeleteKeyframe(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing delete_keyframe command");
+    
+    // Algorithm: Get parameters → Load keyframe → Store for undo → Delete → Update command
+    QString clipId = command.getParameter("clip_id").toString();
+    QString propertyName = command.getParameter("property_name").toString();
+    qint64 time = command.getParameter("time").toLongLong();
+    
+    if (clipId.isEmpty() || propertyName.isEmpty() || time < 0) {
+        qCWarning(jveCommandManager, "DeleteKeyframe: Missing required parameters");
+        return false;
+    }
+    
+    QString keyframePropertyName = QString("%1_keyframe_%2").arg(propertyName).arg(time);
+    
+    // Get existing keyframe value for undo
+    QSqlQuery query(m_database);
+    query.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = ?");
+    query.addBindValue(clipId);
+    query.addBindValue(keyframePropertyName);
+    
+    QVariant previousValue;
+    bool keyframeExisted = false;
+    if (query.exec() && query.next()) {
+        previousValue = query.value(0);
+        keyframeExisted = true;
+    }
+    
+    command.setParameter("deleted_keyframe_existed", keyframeExisted);
+    command.setParameter("deleted_keyframe_value", previousValue);
+    command.setParameter("deleted_keyframe_property", keyframePropertyName);
+    
+    if (keyframeExisted) {
+        // Delete the keyframe
+        QSqlQuery deleteQuery(m_database);
+        deleteQuery.prepare("DELETE FROM properties WHERE clip_id = ? AND property_name = ?");
+        deleteQuery.addBindValue(clipId);
+        deleteQuery.addBindValue(keyframePropertyName);
+        
+        if (deleteQuery.exec()) {
+            qCInfo(jveCommandManager, "Deleted keyframe for %s at time %lld on clip %s", 
+                   qPrintable(propertyName), time, qPrintable(clipId));
+            return true;
+        } else {
+            qCWarning(jveCommandManager, "Failed to delete keyframe");
+            return false;
+        }
+    } else {
+        qCWarning(jveCommandManager, "DeleteKeyframe: Keyframe does not exist");
+        return false;
+    }
+}
+
+bool CommandManager::executeResetProperty(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing reset_property command");
+    
+    // Algorithm: Get parameters → Load property → Store current value → Reset to default → Save → Update command
+    QString clipId = command.getParameter("clip_id").toString();
+    QString propertyName = command.getParameter("property_name").toString();
+    
+    if (clipId.isEmpty() || propertyName.isEmpty()) {
+        qCWarning(jveCommandManager, "ResetProperty: Missing required parameters");
+        return false;
+    }
+    
+    // Get current property value for undo
+    QSqlQuery query(m_database);
+    query.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = ?");
+    query.addBindValue(clipId);
+    query.addBindValue(propertyName);
+    
+    QVariant currentValue;
+    bool propertyExists = false;
+    if (query.exec() && query.next()) {
+        currentValue = query.value(0);
+        propertyExists = true;
+    }
+    
+    command.setParameter("previous_property_value", currentValue);
+    command.setParameter("property_existed", propertyExists);
+    
+    // Reset to default value (implementation-specific)
+    QVariant defaultValue;
+    if (propertyName == "opacity") {
+        defaultValue = 1.0;
+    } else if (propertyName == "scale") {
+        defaultValue = 1.0;
+    } else if (propertyName == "rotation") {
+        defaultValue = 0.0;
+    } else if (propertyName == "position_x" || propertyName == "position_y") {
+        defaultValue = 0.0;
+    } else if (propertyName == "enabled") {
+        defaultValue = true;
+    } else {
+        // Generic default for unknown properties
+        defaultValue = QVariant();
+    }
+    
+    Property property = Property::create(propertyName, clipId);
+    property.setValue(defaultValue);
+    
+    if (property.save(m_database)) {
+        // Also clear any keyframes for this property
+        QSqlQuery clearKeyframes(m_database);
+        clearKeyframes.prepare("DELETE FROM properties WHERE clip_id = ? AND property_name LIKE ?");
+        clearKeyframes.addBindValue(clipId);
+        clearKeyframes.addBindValue(propertyName + "_keyframe_%");
+        clearKeyframes.exec();
+        
+        command.setParameter("reset_to_value", defaultValue);
+        
+        qCInfo(jveCommandManager, "Reset property %s to default value on clip %s", 
+               qPrintable(propertyName), qPrintable(clipId));
+        return true;
+    } else {
+        qCWarning(jveCommandManager, "Failed to reset property");
+        return false;
+    }
+}
+
+bool CommandManager::executeCopyProperties(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing copy_properties command");
+    
+    // Algorithm: Get source clip → Get properties to copy → Store in command for paste → Update command
+    QString sourceClipId = command.getParameter("source_clip_id").toString();
+    QStringList propertyNames = command.getParameter("property_names").toStringList();
+    
+    if (sourceClipId.isEmpty()) {
+        qCWarning(jveCommandManager, "CopyProperties: Missing required source_clip_id parameter");
+        return false;
+    }
+    
+    // If no specific properties specified, copy all
+    if (propertyNames.isEmpty()) {
+        QSqlQuery query(m_database);
+        query.prepare("SELECT DISTINCT property_name FROM properties WHERE clip_id = ? AND property_name NOT LIKE '%_keyframe_%'");
+        query.addBindValue(sourceClipId);
+        if (query.exec()) {
+            while (query.next()) {
+                propertyNames.append(query.value(0).toString());
+            }
+        }
+    }
+    
+    // Copy property values
+    QJsonObject copiedProperties;
+    QJsonObject copiedKeyframes;
+    
+    for (const QString& propName : propertyNames) {
+        // Copy main property value
+        QSqlQuery propQuery(m_database);
+        propQuery.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = ?");
+        propQuery.addBindValue(sourceClipId);
+        propQuery.addBindValue(propName);
+        if (propQuery.exec() && propQuery.next()) {
+            copiedProperties[propName] = propQuery.value(0).toString();
+        }
+        
+        // Copy keyframes for this property
+        QSqlQuery keyframeQuery(m_database);
+        keyframeQuery.prepare("SELECT property_name, property_value FROM properties WHERE clip_id = ? AND property_name LIKE ?");
+        keyframeQuery.addBindValue(sourceClipId);
+        keyframeQuery.addBindValue(propName + "_keyframe_%");
+        if (keyframeQuery.exec()) {
+            while (keyframeQuery.next()) {
+                QString keyframeName = keyframeQuery.value(0).toString();
+                QString keyframeValue = keyframeQuery.value(1).toString();
+                copiedKeyframes[keyframeName] = keyframeValue;
+            }
+        }
+    }
+    
+    command.setParameter("copied_properties", QVariant::fromValue(copiedProperties));
+    command.setParameter("copied_keyframes", QVariant::fromValue(copiedKeyframes));
+    command.setParameter("source_clip_id", sourceClipId);
+    command.setParameter("copied_property_names", propertyNames);
+    
+    qCInfo(jveCommandManager, "Copied %lld properties from clip %s", 
+           static_cast<long long>(propertyNames.size()), qPrintable(sourceClipId));
+    return true;
+}
+
+bool CommandManager::executePasteProperties(Command& command)
+{
+    qCDebug(jveCommandManager, "Executing paste_properties command");
+    
+    // Algorithm: Get target clips → Get copied properties → Store previous values → Apply new values → Save → Update command
+    QStringList targetClipIds = command.getParameter("target_clip_ids").toStringList();
+    QJsonObject copiedProperties = command.getParameter("copied_properties").toJsonObject();
+    QJsonObject copiedKeyframes = command.getParameter("copied_keyframes").toJsonObject();
+    
+    if (targetClipIds.isEmpty() || copiedProperties.isEmpty()) {
+        qCWarning(jveCommandManager, "PasteProperties: Missing required parameters or no properties to paste");
+        return false;
+    }
+    
+    // Store previous values for undo
+    QJsonObject previousValues;
+    QJsonObject previousKeyframes;
+    
+    for (const QString& clipId : targetClipIds) {
+        QJsonObject clipPreviousProps;
+        QJsonObject clipPreviousKeyframes;
+        
+        // Store previous property values
+        for (auto it = copiedProperties.begin(); it != copiedProperties.end(); ++it) {
+            QString propName = it.key();
+            QSqlQuery query(m_database);
+            query.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = ?");
+            query.addBindValue(clipId);
+            query.addBindValue(propName);
+            if (query.exec() && query.next()) {
+                clipPreviousProps[propName] = query.value(0).toString();
+            }
+        }
+        
+        // Store previous keyframes
+        for (auto it = copiedKeyframes.begin(); it != copiedKeyframes.end(); ++it) {
+            QString keyframeName = it.key();
+            QSqlQuery query(m_database);
+            query.prepare("SELECT property_value FROM properties WHERE clip_id = ? AND property_name = ?");
+            query.addBindValue(clipId);
+            query.addBindValue(keyframeName);
+            if (query.exec() && query.next()) {
+                clipPreviousKeyframes[keyframeName] = query.value(0).toString();
+            }
+        }
+        
+        previousValues[clipId] = clipPreviousProps;
+        previousKeyframes[clipId] = clipPreviousKeyframes;
+    }
+    
+    command.setParameter("previous_property_values", QVariant::fromValue(previousValues));
+    command.setParameter("previous_keyframes", QVariant::fromValue(previousKeyframes));
+    
+    // Apply copied properties to target clips
+    int appliedCount = 0;
+    for (const QString& clipId : targetClipIds) {
+        // Apply main properties
+        for (auto it = copiedProperties.begin(); it != copiedProperties.end(); ++it) {
+            QString propName = it.key();
+            QVariant propValue = it.value().toVariant();
+            
+            Property property = Property::create(propName, clipId);
+            property.setValue(propValue);
+            if (property.save(m_database)) {
+                appliedCount++;
+            }
+        }
+        
+        // Apply keyframes
+        for (auto it = copiedKeyframes.begin(); it != copiedKeyframes.end(); ++it) {
+            QString keyframeName = it.key();
+            QVariant keyframeValue = it.value().toVariant();
+            
+            Property keyframeProperty = Property::create(keyframeName, clipId);
+            keyframeProperty.setValue(keyframeValue);
+            keyframeProperty.save(m_database);
+        }
+    }
+    
+    command.setParameter("paste_target_clips", targetClipIds);
+    command.setParameter("applied_property_count", appliedCount);
+    
+    qCInfo(jveCommandManager, "Pasted properties to %lld clips with %d property applications", 
+           (qint64)targetClipIds.size(), appliedCount);
+    return true;
 }

@@ -47,8 +47,12 @@ public:
     void reset();
 
 private:
+    // Algorithm implementations
+    QJsonObject createCommandDelta(const Command& command, const QString& commandType);
+    
     QSqlDatabase m_database;
     QList<CommandResponse> m_commandHistory;
+    QList<Command> m_undoStack; // Store complete undo commands
     CommandManager* m_commandManager;
     QString m_currentProjectId;
 };

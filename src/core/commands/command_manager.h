@@ -76,6 +76,19 @@ private:
     bool executeTimelineRippleTrim(Command& command);
     bool executeTimelineRollEdit(Command& command);
     
+    // Selection system commands
+    bool executeSetClipSelection(Command& command);
+    bool executeSetEdgeSelection(Command& command);
+    bool executeSetSelectionProperties(Command& command);
+    bool executeClearSelection(Command& command);
+    
+    // Property manipulation commands
+    bool executeSetKeyframe(Command& command);
+    bool executeDeleteKeyframe(Command& command);
+    bool executeResetProperty(Command& command);
+    bool executeCopyProperties(Command& command);
+    bool executePasteProperties(Command& command);
+    
     // Database reference
     QSqlDatabase& m_database;
     
@@ -85,4 +98,7 @@ private:
     
     // Performance cache
     mutable QHash<QString, QString> m_stateHashCache;
+    
+    // Error tracking
+    QString m_lastErrorMessage;
 };

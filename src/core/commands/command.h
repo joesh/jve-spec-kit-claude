@@ -84,6 +84,7 @@ private:
     // Algorithm implementations
     QString generateUniqueId();
     Command createUndoCommand() const;
+    QString getInverseCommandType() const;
     QJsonObject serializeToJson() const;
     bool parseFromJson(const QJsonObject& json);
     bool saveToDatabase(QSqlDatabase& database);

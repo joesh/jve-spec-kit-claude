@@ -151,11 +151,29 @@ void TestCommandExecute::testCommandExecuteSplitClip()
 {
     qCInfo(jveTests, "Testing POST /commands/execute for split_clip command");
     
+    // First create a clip to split
+    QJsonObject createRequest;
+    createRequest["command_type"] = "create_clip";
+    QJsonObject createArgs;
+    createArgs["sequence_id"] = m_sequenceId;
+    createArgs["track_id"] = "track1";
+    createArgs["media_id"] = "media1";
+    createArgs["start_time"] = 0;
+    createArgs["end_time"] = 5000;
+    createRequest["args"] = createArgs;
+    
+    CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
+    QVERIFY(createResponse.success);
+    
+    // Extract clip ID from delta
+    QString clipId = createResponse.delta["clips_created"].toArray().first().toObject()["id"].toString();
+    
+    // Now split the clip
     QJsonObject request;
     request["command_type"] = "split_clip";
     
     QJsonObject args;
-    args["clip_id"] = "test_clip_id";
+    args["clip_id"] = clipId;
     args["split_time"] = 2500; // Split at 2.5 seconds
     request["args"] = args;
     
@@ -176,11 +194,28 @@ void TestCommandExecute::testCommandExecuteRippleDelete()
 {
     qCInfo(jveTests, "Testing POST /commands/execute for ripple_delete command");
     
+    // First create a clip to ripple delete
+    QJsonObject createRequest;
+    createRequest["command_type"] = "create_clip";
+    QJsonObject createArgs;
+    createArgs["sequence_id"] = m_sequenceId;
+    createArgs["track_id"] = "track1";
+    createArgs["media_id"] = "media1";
+    createArgs["start_time"] = 0;
+    createArgs["end_time"] = 5000;
+    createRequest["args"] = createArgs;
+    
+    CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
+    QVERIFY(createResponse.success);
+    
+    // Extract clip ID from delta
+    QString clipId = createResponse.delta["clips_created"].toArray().first().toObject()["id"].toString();
+    
     QJsonObject request;
     request["command_type"] = "ripple_delete";
     
     QJsonObject args;
-    args["clip_id"] = "test_clip_id";
+    args["clip_id"] = clipId;
     args["affect_tracks"] = QJsonArray{"track1", "track2"};
     request["args"] = args;
     
@@ -195,11 +230,28 @@ void TestCommandExecute::testCommandExecuteRippleTrim()
 {
     qCInfo(jveTests, "Testing POST /commands/execute for ripple_trim command");
     
+    // First create a clip to ripple trim
+    QJsonObject createRequest;
+    createRequest["command_type"] = "create_clip";
+    QJsonObject createArgs;
+    createArgs["sequence_id"] = m_sequenceId;
+    createArgs["track_id"] = "track1";
+    createArgs["media_id"] = "media1";
+    createArgs["start_time"] = 0;
+    createArgs["end_time"] = 5000;
+    createRequest["args"] = createArgs;
+    
+    CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
+    QVERIFY(createResponse.success);
+    
+    // Extract clip ID from delta
+    QString clipId = createResponse.delta["clips_created"].toArray().first().toObject()["id"].toString();
+    
     QJsonObject request;
     request["command_type"] = "ripple_trim";
     
     QJsonObject args;
-    args["clip_id"] = "test_clip_id";
+    args["clip_id"] = clipId;
     args["edge"] = "head"; // or "tail"
     args["new_time"] = 1000;
     args["affect_tracks"] = QJsonArray{"track1"};
@@ -216,12 +268,41 @@ void TestCommandExecute::testCommandExecuteRollEdit()
 {
     qCInfo(jveTests, "Testing POST /commands/execute for roll_edit command");
     
+    // Create two adjacent clips for roll edit
+    QJsonObject createRequest1;
+    createRequest1["command_type"] = "create_clip";
+    QJsonObject createArgs1;
+    createArgs1["sequence_id"] = m_sequenceId;
+    createArgs1["track_id"] = "track1";
+    createArgs1["media_id"] = "media1";
+    createArgs1["start_time"] = 0;
+    createArgs1["end_time"] = 3000;
+    createRequest1["args"] = createArgs1;
+    
+    CommandResponse createResponse1 = m_dispatcher->executeCommand(createRequest1);
+    QVERIFY(createResponse1.success);
+    QString clipAId = createResponse1.delta["clips_created"].toArray().first().toObject()["id"].toString();
+    
+    QJsonObject createRequest2;
+    createRequest2["command_type"] = "create_clip";
+    QJsonObject createArgs2;
+    createArgs2["sequence_id"] = m_sequenceId;
+    createArgs2["track_id"] = "track1";
+    createArgs2["media_id"] = "media1";
+    createArgs2["start_time"] = 3000;
+    createArgs2["end_time"] = 6000;
+    createRequest2["args"] = createArgs2;
+    
+    CommandResponse createResponse2 = m_dispatcher->executeCommand(createRequest2);
+    QVERIFY(createResponse2.success);
+    QString clipBId = createResponse2.delta["clips_created"].toArray().first().toObject()["id"].toString();
+    
     QJsonObject request;
     request["command_type"] = "roll_edit";
     
     QJsonObject args;
-    args["clip_a_id"] = "clip_a";
-    args["clip_b_id"] = "clip_b";
+    args["clip_a_id"] = clipAId;
+    args["clip_b_id"] = clipBId;
     args["new_boundary_time"] = 3000;
     request["args"] = args;
     

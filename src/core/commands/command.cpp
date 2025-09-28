@@ -101,27 +101,64 @@ Command Command::createUndo() const
 {
     qCDebug(jveCommand, "Creating undo command for: %s", qPrintable(m_type));
     
-    // Algorithm: Create opposite → Copy parameters → Swap values → Return undo
-    Command undoCommand = Command::create(m_type, m_projectId);
+    // Algorithm: Determine inverse operation → Create opposite command → Set parameters
+    QString undoType = getInverseCommandType();
+    Command undoCommand = Command::create(undoType, m_projectId);
     
-    // Copy all parameters
-    for (auto it = m_parameters.begin(); it != m_parameters.end(); ++it) {
-        undoCommand.setParameter(it.key(), it.value());
-    }
-    
-    // For property commands, swap value with previous_value
-    if (m_type == "SetClipProperty" || m_type == "SetProperty") {
+    // Set undo-specific parameters based on command type
+    if (m_type == "create_clip" || m_type == "TimelineCreateClip") {
+        // Undo create_clip: delete the created clip
+        QString createdClipId = getParameter("created_clip_id").toString();
+        if (!createdClipId.isEmpty()) {
+            undoCommand.setParameter("clip_id", createdClipId);
+            undoCommand.setParameter("track_id", getParameter("track_id"));
+        }
+    } else if (m_type == "delete_clip" || m_type == "TimelineDeleteClip") {
+        // Undo delete_clip: recreate the clip
+        undoCommand.setParameter("track_id", getParameter("track_id"));
+        undoCommand.setParameter("media_id", getParameter("media_id"));
+        undoCommand.setParameter("clip_name", getParameter("clip_name"));
+        undoCommand.setParameter("start_time", getParameter("start_time"));
+        undoCommand.setParameter("duration", getParameter("duration"));
+    } else if (m_type == "SetClipProperty" || m_type == "SetProperty") {
+        // For property commands, swap value with previous_value
         QVariant currentValue = getParameter("value");
         QVariant previousValue = getParameter("previous_value");
         
         undoCommand.setParameter("value", previousValue);
         undoCommand.setParameter("previous_value", currentValue);
+        undoCommand.setParameter("property_name", getParameter("property_name"));
+        undoCommand.setParameter("clip_id", getParameter("clip_id"));
+    } else {
+        // For other commands, copy all parameters as fallback
+        for (auto it = m_parameters.begin(); it != m_parameters.end(); ++it) {
+            undoCommand.setParameter(it.key(), it.value());
+        }
     }
     
     // Copy metadata
     undoCommand.setMetadata(m_metadata);
     
     return undoCommand;
+}
+
+QString Command::getInverseCommandType() const
+{
+    // Algorithm: Map command types to their inverse operations
+    if (m_type == "create_clip" || m_type == "TimelineCreateClip") {
+        return "delete_clip";
+    } else if (m_type == "delete_clip" || m_type == "TimelineDeleteClip") {
+        return "create_clip";
+    } else if (m_type == "SetClipProperty" || m_type == "SetProperty") {
+        return m_type; // Property commands undo by swapping values
+    } else if (m_type == "SetKeyframe") {
+        return "DeleteKeyframe";
+    } else if (m_type == "DeleteKeyframe") {
+        return "SetKeyframe";
+    } else {
+        // For other commands, use the same type with parameter reversal
+        return m_type;
+    }
 }
 
 QString Command::serialize() const
