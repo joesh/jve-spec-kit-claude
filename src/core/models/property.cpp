@@ -13,7 +13,7 @@ Q_LOGGING_CATEGORY(jveProperty, "jve.property")
 
 Property Property::create(const QString& name, const QString& clipId)
 {
-    qCDebug(jveProperty) << "Creating property:" << name << "for clip:" << clipId;
+    qCDebug(jveProperty, "Creating property: %s for clip: %s", qPrintable(name), qPrintable(clipId));
     
     // Algorithm: Generate ID → Initialize → Set defaults → Return instance
     QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -31,7 +31,7 @@ Property Property::create(const QString& name, const QString& clipId)
 
 Property Property::load(const QString& id, QSqlDatabase& database)
 {
-    qCDebug(jveProperty) << "Loading property:" << id;
+    qCDebug(jveProperty, "Loading property: %s", qPrintable(id));
     
     // Algorithm: Query → Parse → Load keyframes → Return instance
     QSqlQuery query(database);
@@ -39,7 +39,7 @@ Property Property::load(const QString& id, QSqlDatabase& database)
     query.addBindValue(id);
     
     if (!query.exec() || !query.next()) {
-        qCWarning(jveProperty) << "Failed to load property:" << id << query.lastError().text();
+        qCWarning(jveProperty, "Failed to load property: %s %s", qPrintable(id), qPrintable(query.lastError().text()));
         return Property();
     }
     
@@ -70,7 +70,7 @@ Property Property::load(const QString& id, QSqlDatabase& database)
 
 QList<Property> Property::loadByClip(const QString& clipId, QSqlDatabase& database)
 {
-    qCDebug(jveProperty) << "Loading properties for clip:" << clipId;
+    qCDebug(jveProperty, "Loading properties for clip: %s", qPrintable(clipId));
     
     // Algorithm: Query all → Parse each → Load keyframes → Return collection
     QSqlQuery query(database);
@@ -119,7 +119,7 @@ QList<Property> Property::loadByClip(const QString& clipId, QSqlDatabase& databa
 
 QList<Property> Property::loadByGroup(const QString& clipId, const QString& group, QSqlDatabase& database)
 {
-    qCDebug(jveProperty) << "Loading properties by group:" << group << "for clip:" << clipId;
+    qCDebug(jveProperty, "Loading properties by group: %s for clip: %s", qPrintable(group), qPrintable(clipId));
     
     // Algorithm: Query filtered → Parse each → Load keyframes → Return collection
     QList<Property> allProperties = loadByClip(clipId, database);
@@ -136,7 +136,7 @@ QList<Property> Property::loadByGroup(const QString& clipId, const QString& grou
 
 bool Property::resetGroup(const QString& clipId, const QString& group, QSqlDatabase& database)
 {
-    qCDebug(jveProperty) << "Resetting group:" << group << "for clip:" << clipId;
+    qCDebug(jveProperty, "Resetting group: %s for clip: %s", qPrintable(group), qPrintable(clipId));
     
     // Algorithm: Load group → Reset values → Save batch → Return result
     QList<Property> groupProperties = loadByGroup(clipId, group, database);
@@ -152,7 +152,7 @@ bool Property::resetGroup(const QString& clipId, const QString& group, QSqlDatab
 
 bool Property::copyGroup(const QString& fromClipId, const QString& group, const QString& toClipId, QSqlDatabase& database)
 {
-    qCDebug(jveProperty) << "Copying group:" << group << "from:" << fromClipId << "to:" << toClipId;
+    qCDebug(jveProperty, "Copying group: %s from: %s to: %s", qPrintable(group), qPrintable(fromClipId), qPrintable(toClipId));
     
     // Algorithm: Load source → Clone with new clip → Save batch → Return result
     QList<Property> sourceProperties = loadByGroup(fromClipId, group, database);
@@ -177,7 +177,7 @@ bool Property::setValue(const QVariant& value)
 {
     // Algorithm: Validate → Clamp → Store → Mark dirty → Return success
     if (!validateValue(value)) {
-        qCWarning(jveProperty) << "Invalid value for property:" << m_name << value;
+        qCWarning(jveProperty, "Invalid value for property: %s %s", qPrintable(m_name), qPrintable(value.toString()));
         return false;
     }
     
@@ -240,7 +240,7 @@ void Property::addKeyframe(qint64 time, const QVariant& value)
     if (validateValue(value)) {
         m_keyframes[time] = clampValue(value);
         markDirty();
-        qCDebug(jveProperty) << "Added keyframe at" << time << "with value" << value;
+        qCDebug(jveProperty, "Added keyframe at %lld with value %s", time, qPrintable(value.toString()));
     }
 }
 
@@ -251,7 +251,7 @@ bool Property::removeKeyframe(qint64 time)
     if (existed) {
         m_keyframes.remove(time);
         markDirty();
-        qCDebug(jveProperty) << "Removed keyframe at" << time;
+        qCDebug(jveProperty, "Removed keyframe at %lld", time);
     }
     return existed;
 }
@@ -261,7 +261,7 @@ void Property::clearKeyframes()
     if (!m_keyframes.isEmpty()) {
         m_keyframes.clear();
         markDirty();
-        qCDebug(jveProperty) << "Cleared all keyframes for property:" << m_name;
+        qCDebug(jveProperty, "Cleared all keyframes for property: %s", qPrintable(m_name));
     }
 }
 
@@ -273,7 +273,7 @@ double Property::getValueAtTime(qint64 time) const
 
 bool Property::save(QSqlDatabase& database)
 {
-    qCDebug(jveProperty) << "Saving property:" << m_name;
+    qCDebug(jveProperty, "Saving property: %s", qPrintable(m_name));
     
     // Algorithm: Save property → Save keyframes → Clear dirty → Return success
     bool propertySuccess = saveToDatabase(database);
@@ -362,7 +362,7 @@ bool Property::saveToDatabase(QSqlDatabase& database)
     query.addBindValue(QJsonDocument(defaultObj).toJson(QJsonDocument::Compact));
     
     if (!query.exec()) {
-        qCCritical(jveProperty) << "Failed to save property:" << query.lastError().text();
+        qCCritical(jveProperty, "Failed to save property: %s", qPrintable(query.lastError().text()));
         return false;
     }
     
@@ -371,6 +371,7 @@ bool Property::saveToDatabase(QSqlDatabase& database)
 
 bool Property::saveKeyframesToDatabase(QSqlDatabase& database)
 {
+    Q_UNUSED(database)
     // For M1 Foundation, keyframes stored as JSON in separate table
     // Implementation would create keyframes table and serialize m_keyframes
     return true; // Simplified for core implementation
@@ -378,6 +379,7 @@ bool Property::saveKeyframesToDatabase(QSqlDatabase& database)
 
 bool Property::loadKeyframesFromDatabase(QSqlDatabase& database)
 {
+    Q_UNUSED(database)
     // For M1 Foundation, load keyframes from separate table
     // Implementation would query and deserialize keyframes
     return true; // Simplified for core implementation

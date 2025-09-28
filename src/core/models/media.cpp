@@ -26,7 +26,7 @@ Media Media::create(const QString& filename, const QString& filepath)
     media.m_metadata.duration = 1000; // 1 second minimum
     media.m_metadata.framerate = 30.0; // Default framerate
     
-    qCDebug(jveMedia) << "Created media:" << filename << "at path:" << filepath;
+    qCDebug(jveMedia, "Created media: %s at path: %s", qPrintable(filename), qPrintable(filepath));
     return media;
 }
 
@@ -41,12 +41,12 @@ Media Media::load(const QString& id, const QSqlDatabase& database)
     query.addBindValue(id);
     
     if (!query.exec()) {
-        qCWarning(jveMedia) << "Failed to load media:" << query.lastError().text();
+        qCWarning(jveMedia, "Failed to load media: %s", qPrintable(query.lastError().text()));
         return Media();
     }
     
     if (!query.next()) {
-        qCDebug(jveMedia) << "Media not found:" << id;
+        qCDebug(jveMedia, "Media not found: %s", qPrintable(id));
         return Media();
     }
     
@@ -80,7 +80,7 @@ Media Media::load(const QString& id, const QSqlDatabase& database)
     
     media.validateMetadata();
     
-    qCDebug(jveMedia) << "Loaded media:" << media.m_filename;
+    qCDebug(jveMedia, "Loaded media: %s", qPrintable(media.m_filename));
     return media;
 }
 
@@ -88,7 +88,7 @@ bool Media::save(const QSqlDatabase& database)
 {
     // Algorithm: Validate data → Execute insert/update → Update timestamps
     if (!isValid()) {
-        qCWarning(jveMedia) << "Cannot save invalid media";
+        qCWarning(jveMedia, "Cannot save invalid media");
         return false;
     }
     
@@ -102,8 +102,8 @@ bool Media::save(const QSqlDatabase& database)
     )";
     
     if (!query.prepare(sqlStatement)) {
-        qCWarning(jveMedia) << "Failed to prepare query:" << query.lastError().text();
-        qCWarning(jveMedia) << "SQL was:" << sqlStatement;
+        qCWarning(jveMedia, "Failed to prepare query: %s", qPrintable(query.lastError().text()));
+        qCWarning(jveMedia, "SQL was: %s", qPrintable(sqlStatement));
         return false;
     }
     
@@ -132,17 +132,17 @@ bool Media::save(const QSqlDatabase& database)
     
     query.addBindValue(QJsonDocument(metadataObj).toJson(QJsonDocument::Compact));
     
-    qCDebug(jveMedia) << "SQL:" << query.lastQuery();
-    qCDebug(jveMedia) << "Parameter count:" << query.boundValues().size();
+    qCDebug(jveMedia, "SQL: %s", qPrintable(query.lastQuery()));
+    qCDebug(jveMedia, "Parameter count: %lld", (long long)query.boundValues().size());
     
     if (!query.exec()) {
-        qCWarning(jveMedia) << "Failed to save media:" << query.lastError().text();
-        qCWarning(jveMedia) << "SQL was:" << query.lastQuery();
-        qCWarning(jveMedia) << "Bound values:" << query.boundValues();
+        qCWarning(jveMedia, "Failed to save media: %s", qPrintable(query.lastError().text()));
+        qCWarning(jveMedia, "SQL was: %s", qPrintable(query.lastQuery()));
+        qCWarning(jveMedia, "Bound values: %s", qPrintable(QVariant(query.boundValues()).toString()));
         return false;
     }
     
-    qCDebug(jveMedia) << "Saved media:" << m_filename;
+    qCDebug(jveMedia, "Saved media: %s", qPrintable(m_filename));
     return true;
 }
 

@@ -14,7 +14,7 @@ Q_LOGGING_CATEGORY(jveCommandManager, "jve.command.manager")
 CommandManager::CommandManager(QSqlDatabase& database)
     : m_database(database), m_lastSequenceNumber(0), m_currentStateHash("")
 {
-    qCDebug(jveCommandManager) << "Initializing CommandManager";
+    qCDebug(jveCommandManager, "Initializing CommandManager");
     
     // Algorithm: Query last sequence → Initialize state → Setup cache
     QSqlQuery query(database);
@@ -24,12 +24,12 @@ CommandManager::CommandManager(QSqlDatabase& database)
         m_lastSequenceNumber = query.value(0).toInt();
     }
     
-    qCDebug(jveCommandManager) << "Last sequence number:" << m_lastSequenceNumber;
+    qCDebug(jveCommandManager, "Last sequence number: %d", m_lastSequenceNumber);
 }
 
 ExecutionResult CommandManager::execute(Command& command)
 {
-    qCDebug(jveCommandManager) << "Executing command:" << command.type();
+    qCDebug(jveCommandManager, "Executing command: %s", qPrintable(command.type()));
     
     // Algorithm: Validate → Assign sequence → Execute → Update hashes → Save → Return result
     ExecutionResult result;
@@ -81,7 +81,7 @@ ExecutionResult CommandManager::execute(Command& command)
 
 ExecutionResult CommandManager::executeUndo(const Command& originalCommand)
 {
-    qCDebug(jveCommandManager) << "Executing undo for command:" << originalCommand.type();
+    qCDebug(jveCommandManager, "Executing undo for command: %s", qPrintable(originalCommand.type()));
     
     // Algorithm: Create undo → Execute → Return result
     Command undoCommand = originalCommand.createUndo();
@@ -90,7 +90,7 @@ ExecutionResult CommandManager::executeUndo(const Command& originalCommand)
 
 QList<ExecutionResult> CommandManager::executeBatch(QList<Command>& commands)
 {
-    qCDebug(jveCommandManager) << "Executing batch of" << commands.size() << "commands";
+    qCDebug(jveCommandManager, "Executing batch of %lld commands", static_cast<long long>(commands.size()));
     
     // Algorithm: Process each → Collect results → Return batch results
     QList<ExecutionResult> results;
@@ -101,7 +101,7 @@ QList<ExecutionResult> CommandManager::executeBatch(QList<Command>& commands)
         
         // Stop batch if any command fails (atomic operation)
         if (!result.success) {
-            qCWarning(jveCommandManager) << "Batch execution failed at command:" << command.type();
+            qCWarning(jveCommandManager, "Batch execution failed at command: %s", qPrintable(command.type()));
             break;
         }
     }
@@ -111,7 +111,7 @@ QList<ExecutionResult> CommandManager::executeBatch(QList<Command>& commands)
 
 void CommandManager::revertToSequence(int sequenceNumber)
 {
-    qCInfo(jveCommandManager) << "Reverting to sequence:" << sequenceNumber;
+    qCInfo(jveCommandManager, "Reverting to sequence: %d", sequenceNumber);
     
     // Algorithm: Mark later commands → Update state → Clear cache
     QSqlQuery query(m_database);
@@ -119,7 +119,7 @@ void CommandManager::revertToSequence(int sequenceNumber)
     query.addBindValue(sequenceNumber);
     
     if (!query.exec()) {
-        qCCritical(jveCommandManager) << "Failed to revert commands:" << query.lastError().text();
+        qCCritical(jveCommandManager, "Failed to revert commands: %s", qPrintable(query.lastError().text()));
         return;
     }
     
@@ -129,7 +129,7 @@ void CommandManager::revertToSequence(int sequenceNumber)
 
 QString CommandManager::getProjectState(const QString& projectId) const
 {
-    qCDebug(jveCommandManager) << "Getting project state for:" << projectId;
+    qCDebug(jveCommandManager, "Getting project state for: %s", qPrintable(projectId));
     
     // Algorithm: Check cache → Calculate hash → Store cache → Return state
     if (m_stateHashCache.contains(projectId)) {
@@ -155,7 +155,7 @@ Command CommandManager::getCurrentState() const
 
 ReplayResult CommandManager::replayFromSequence(int startSequenceNumber)
 {
-    qCInfo(jveCommandManager) << "Replaying commands from sequence:" << startSequenceNumber;
+    qCInfo(jveCommandManager, "Replaying commands from sequence: %d", startSequenceNumber);
     
     // Algorithm: Load commands → Execute each → Track results → Return summary
     ReplayResult result;
@@ -184,7 +184,7 @@ ReplayResult CommandManager::replayFromSequence(int startSequenceNumber)
 
 ReplayResult CommandManager::replayAll()
 {
-    qCInfo(jveCommandManager) << "Replaying all commands";
+    qCInfo(jveCommandManager, "Replaying all commands");
     
     // Algorithm: Start from sequence 1 → Replay all → Return result
     return replayFromSequence(1);
@@ -192,14 +192,14 @@ ReplayResult CommandManager::replayAll()
 
 bool CommandManager::validateSequenceIntegrity() const
 {
-    qCDebug(jveCommandManager) << "Validating command sequence integrity";
+    qCDebug(jveCommandManager, "Validating command sequence integrity");
     
     // Algorithm: Query sequences → Check continuity → Validate hashes → Return valid
     QSqlQuery query(m_database);
     query.prepare("SELECT sequence_number, pre_hash, post_hash FROM commands ORDER BY sequence_number");
     
     if (!query.exec()) {
-        qCWarning(jveCommandManager) << "Failed to query commands for validation";
+        qCWarning(jveCommandManager, "Failed to query commands for validation");
         return false;
     }
     
@@ -217,7 +217,7 @@ bool CommandManager::validateSequenceIntegrity() const
         
         // Check hash chain continuity
         if (preHash != expectedHash) {
-            qCWarning(jveCommandManager) << "Hash chain break at sequence:" << sequence;
+            qCWarning(jveCommandManager, "Hash chain break at sequence: %d", sequence);
             return false;
         }
         
@@ -229,7 +229,7 @@ bool CommandManager::validateSequenceIntegrity() const
 
 void CommandManager::repairSequenceNumbers()
 {
-    qCInfo(jveCommandManager) << "Repairing command sequence numbers";
+    qCInfo(jveCommandManager, "Repairing command sequence numbers");
     
     // Algorithm: Load by timestamp → Reassign sequences → Update database
     QSqlQuery selectQuery(m_database);
@@ -305,7 +305,7 @@ bool CommandManager::executeCommandImplementation(Command& command)
     // Algorithm: Route by type → Execute logic → Return success
     // For M1 Foundation, simplified command execution
     
-    qCDebug(jveCommandManager) << "Executing command implementation:" << command.type();
+    qCDebug(jveCommandManager, "Executing command implementation: %s", qPrintable(command.type()));
     
     if (command.type() == "CreateClip" || 
         command.type() == "SetProperty" || 
@@ -324,7 +324,7 @@ bool CommandManager::executeCommandImplementation(Command& command)
         return true;
     }
     
-    qCWarning(jveCommandManager) << "Unknown command type:" << command.type();
+    qCWarning(jveCommandManager, "Unknown command type: %s", qPrintable(command.type()));
     return false;
 }
 

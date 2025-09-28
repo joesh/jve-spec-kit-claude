@@ -67,7 +67,7 @@ void TestTimelineOperations::initTestCase()
 
 void TestTimelineOperations::testPlaybackControl()
 {
-    qCInfo(jveTests) << "Testing playback control contract";
+    qCInfo(jveTests, "Testing playback control contract");
     verifyLibraryFirstCompliance();
     
     // Initial state
@@ -103,7 +103,7 @@ void TestTimelineOperations::testPlaybackControl()
 
 void TestTimelineOperations::testTimelineNavigation()
 {
-    qCInfo(jveTests) << "Testing timeline navigation contract";
+    qCInfo(jveTests, "Testing timeline navigation contract");
     
     // J/K/L key behavior tests
     m_timelineManager->seek(60000); // Start at 1 minute
@@ -155,7 +155,7 @@ void TestTimelineOperations::testTimelineNavigation()
 
 void TestTimelineOperations::testFrameAccuracy()
 {
-    qCInfo(jveTests) << "Testing frame accuracy contract";
+    qCInfo(jveTests, "Testing frame accuracy contract");
     
     // Test frame-based positioning
     double framerate = 29.97;
@@ -201,7 +201,7 @@ void TestTimelineOperations::testFrameAccuracy()
 
 void TestTimelineOperations::testRippleEditing()
 {
-    qCInfo(jveTests) << "Testing ripple editing contract";
+    qCInfo(jveTests, "Testing ripple editing contract");
     
     // Set up timeline with clips
     m_timelineManager->seek(0);
@@ -253,7 +253,7 @@ void TestTimelineOperations::testRippleEditing()
 
 void TestTimelineOperations::testSnapBehavior()
 {
-    qCInfo(jveTests) << "Testing snap behavior contract";
+    qCInfo(jveTests, "Testing snap behavior contract");
     
     // Enable snapping
     m_timelineManager->setSnapEnabled(true);
@@ -302,7 +302,7 @@ void TestTimelineOperations::testSnapBehavior()
 
 void TestTimelineOperations::testTimelinePerformance()
 {
-    qCInfo(jveTests) << "Testing timeline performance contract";
+    qCInfo(jveTests, "Testing timeline performance contract");
     
     // Test 60fps preview requirement (16.67ms per frame)
     m_timer.restart();

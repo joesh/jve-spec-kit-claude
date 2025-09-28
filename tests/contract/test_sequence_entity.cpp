@@ -85,7 +85,7 @@ void TestSequenceEntity::cleanupTestCase()
 
 void TestSequenceEntity::testSequenceCreation()
 {
-    qCInfo(jveTests) << "Testing Sequence creation contract";
+    qCInfo(jveTests, "Testing Sequence creation contract");
     verifyLibraryFirstCompliance();
     
     // Contract: Sequence::create() with project association
@@ -107,7 +107,7 @@ void TestSequenceEntity::testSequenceCreation()
 
 void TestSequenceEntity::testSequencePersistence()
 {
-    qCInfo(jveTests) << "Testing Sequence persistence contract";
+    qCInfo(jveTests, "Testing Sequence persistence contract");
     
     Sequence sequence = Sequence::create("Persistence Test", m_projectId, 25.0, 3840, 2160);
     QVERIFY(sequence.isValid());
@@ -134,7 +134,7 @@ void TestSequenceEntity::testSequencePersistence()
 
 void TestSequenceEntity::testSequenceLoading()
 {
-    qCInfo(jveTests) << "Testing Sequence loading contract";
+    qCInfo(jveTests, "Testing Sequence loading contract");
     
     // Create and save sequence
     Sequence original = Sequence::create("Loading Test", m_projectId, 29.97, 1920, 1080);
@@ -156,7 +156,7 @@ void TestSequenceEntity::testSequenceLoading()
 
 void TestSequenceEntity::testSequenceMetadata()
 {
-    qCInfo(jveTests) << "Testing Sequence metadata contract";
+    qCInfo(jveTests, "Testing Sequence metadata contract");
     
     Sequence sequence = Sequence::create("Metadata Test", m_projectId, 30.0, 1920, 1080);
     QDateTime created = sequence.createdAt();
@@ -172,7 +172,7 @@ void TestSequenceEntity::testSequenceMetadata()
 
 void TestSequenceEntity::testTimelineProperties()
 {
-    qCInfo(jveTests) << "Testing timeline properties contract";
+    qCInfo(jveTests, "Testing timeline properties contract");
     
     Sequence sequence = Sequence::create("Timeline Test", m_projectId, 24.0, 1920, 1080);
     
@@ -196,7 +196,7 @@ void TestSequenceEntity::testTimelineProperties()
 
 void TestSequenceEntity::testFramerateHandling()
 {
-    qCInfo(jveTests) << "Testing framerate handling contract";
+    qCInfo(jveTests, "Testing framerate handling contract");
     
     Sequence sequence = Sequence::create("Framerate Test", m_projectId, 59.94, 1920, 1080);
     
@@ -230,7 +230,7 @@ void TestSequenceEntity::testFramerateHandling()
 
 void TestSequenceEntity::testResolutionSettings()
 {
-    qCInfo(jveTests) << "Testing resolution settings contract";
+    qCInfo(jveTests, "Testing resolution settings contract");
     
     Sequence sequence = Sequence::create("Resolution Test", m_projectId, 24.0, 1920, 1080);
     
@@ -267,7 +267,7 @@ void TestSequenceEntity::testResolutionSettings()
 
 void TestSequenceEntity::testDurationCalculation()
 {
-    qCInfo(jveTests) << "Testing duration calculation contract";
+    qCInfo(jveTests, "Testing duration calculation contract");
     
     Sequence sequence = Sequence::create("Duration Test", m_projectId, 29.97, 1920, 1080);
     sequence.setFramerate(25.0); // For easy calculation
@@ -288,7 +288,7 @@ void TestSequenceEntity::testDurationCalculation()
 
 void TestSequenceEntity::testProjectSequenceRelationship()
 {
-    qCInfo(jveTests) << "Testing project-sequence relationship contract";
+    qCInfo(jveTests, "Testing project-sequence relationship contract");
     
     // Create multiple sequences for same project
     Sequence seq1 = Sequence::create("Sequence 1", m_projectId, 24.0, 1920, 1080);
@@ -309,7 +309,7 @@ void TestSequenceEntity::testProjectSequenceRelationship()
 
 void TestSequenceEntity::testMultiSequenceSupport()
 {
-    qCInfo(jveTests) << "Testing multi-sequence support contract";
+    qCInfo(jveTests, "Testing multi-sequence support contract");
     
     // Create sequences with different configurations
     Sequence mainTimeline = Sequence::create("Main Timeline", m_projectId, 24.0, 1920, 1080);
@@ -352,7 +352,7 @@ void TestSequenceEntity::testMultiSequenceSupport()
 
 void TestSequenceEntity::testSequenceTrackManagement()
 {
-    qCInfo(jveTests) << "Testing sequence track management contract";
+    qCInfo(jveTests, "Testing sequence track management contract");
     
     Sequence sequence = Sequence::create("Track Management Test", m_projectId, 29.97, 1920, 1080);
     QVERIFY(sequence.save(m_database));
@@ -372,7 +372,7 @@ void TestSequenceEntity::testSequenceTrackManagement()
 
 void TestSequenceEntity::testSequenceLoadPerformance()
 {
-    qCInfo(jveTests) << "Testing sequence load performance contract";
+    qCInfo(jveTests, "Testing sequence load performance contract");
     
     Sequence sequence = Sequence::create("Performance Test", m_projectId, 29.97, 1920, 1080);
     QVERIFY(sequence.save(m_database));
@@ -386,7 +386,7 @@ void TestSequenceEntity::testSequenceLoadPerformance()
 
 void TestSequenceEntity::testTimelineCalculationPerformance()
 {
-    qCInfo(jveTests) << "Testing timeline calculation performance contract";
+    qCInfo(jveTests, "Testing timeline calculation performance contract");
     
     Sequence sequence = Sequence::create("Calculation Test", m_projectId, 60.0, 3840, 2160);
     sequence.setFramerate(29.97);

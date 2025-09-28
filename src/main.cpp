@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
     // Set up application data directory
     QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     if (!QDir().mkpath(appDataDir)) {
-        qCCritical(jveMain) << "Failed to create application data directory:" << appDataDir;
+        qCCritical(jveMain, "Failed to create application data directory: %s", qPrintable(appDataDir));
         return -1;
     }
     
@@ -45,14 +45,14 @@ int main(int argc, char *argv[])
     MainWindow window;
     window.show();
     
-    qCInfo(jveMain) << "JVE Editor started successfully";
+    qCInfo(jveMain, "JVE Editor started successfully");
     
     int result = app.exec();
     
     // Cleanup
     LuaRuntime::cleanup();
     
-    qCInfo(jveMain) << "JVE Editor shutdown complete";
+    qCInfo(jveMain, "JVE Editor shutdown complete");
     
     return result;
 }

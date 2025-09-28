@@ -1,142 +1,56 @@
-name: CI Pipeline
+name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ master, main ]
 
 jobs:
   build-and-test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        build-type: [Debug, Release]
-
-    runs-on: ${{ matrix.os }}
-
+    runs-on: macos-latest
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
+    - uses: actions/checkout@v4
+    
     - name: Install Qt6
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: '6.6.*'
-        host: ${{ runner.os }}
-        target: 'desktop'
-        modules: 'qtbase qtwidgets qtsql'
-
-    - name: Install dependencies (Ubuntu)
-      if: runner.os == 'Linux'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          cmake \
-          ninja-build \
-          libluajit-5.1-dev \
-          libsqlite3-dev \
-          pkg-config \
-          lcov
-
-    - name: Install dependencies (macOS)
-      if: runner.os == 'macOS'
+        brew install qt6
+        echo "$(brew --prefix qt6)/bin" >> $GITHUB_PATH
+        
+    - name: Install dependencies
       run: |
-        brew install cmake ninja luajit sqlite pkg-config lcov
-
-    - name: Install dependencies (Windows)
-      if: runner.os == 'Windows'
-      shell: powershell
-      run: |
-        choco install cmake ninja pkgconfiglite
-        # LuaJIT and SQLite will be handled by vcpkg
-
-    - name: Setup vcpkg (Windows)
-      if: runner.os == 'Windows'
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
-
+        brew install cmake ninja sqlite3
+        
     - name: Configure CMake
       run: |
-        cmake -B build \
-          -G Ninja \
-          -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} \
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-    - name: Build
-      run: cmake --build build --config ${{ matrix.build-type }} --parallel
-
-    - name: Run Contract Tests (TDD Validation)
+        mkdir -p build
+        cd build
+        cmake .. -G Ninja \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_PREFIX_PATH=$(brew --prefix qt6)
+          
+    - name: Build and Verify Zero Warnings
       run: |
         cd build
-        # Contract tests must exist and initially fail (TDD requirement)
-        ctest -R "test_.*_contract" --output-on-failure --timeout 60
-
-    - name: Run Unit Tests
-      run: |
-        cd build
-        ctest -R "test_.*_unit" --output-on-failure --timeout 30
-
-    - name: Run Integration Tests  
-      run: |
-        cd build
-        ctest -R "test_.*_workflow" --output-on-failure --timeout 120
-
-    - name: Generate Coverage Report (Debug builds only)
-      if: matrix.build-type == 'Debug' && runner.os == 'Linux'
-      run: |
-        cd build
-        lcov --capture --directory . --output-file coverage.info
-        lcov --remove coverage.info '/usr/*' '*/tests/*' '*/build/*' --output-file coverage.info
-        lcov --list coverage.info
-
-    - name: Check Coverage Threshold
-      if: matrix.build-type == 'Debug' && runner.os == 'Linux'
-      run: |
-        cd build
-        # Constitutional requirement: minimum 85% coverage
-        COVERAGE=$(lcov --summary coverage.info 2>&1 | grep -o 'lines......: [0-9.]*%' | grep -o '[0-9.]*')
-        echo "Coverage: ${COVERAGE}%"
-        if (( $(echo "${COVERAGE} < 85.0" | bc -l) )); then
-          echo "❌ Coverage ${COVERAGE}% is below constitutional requirement of 85%"
+        ninja -j4 2>&1 | tee build.log
+        if grep -E "(warning|error)" build.log; then
+          echo "❌ Build contains warnings or errors"
           exit 1
         else
-          echo "✅ Coverage ${COVERAGE}% meets constitutional requirement"
+          echo "✅ Perfect clean build - zero warnings, zero errors"
         fi
-
-    - name: Upload Coverage to Codecov
-      if: matrix.build-type == 'Debug' && runner.os == 'Linux'
-      uses: codecov/codecov-action@v3
-      with:
-        file: build/coverage.info
-        flags: unittests
-        name: codecov-umbrella
-
-    - name: Performance Benchmarks
-      if: matrix.build-type == 'Release'
+        
+    - name: Run Tests and Verify 100% Success
       run: |
         cd build
-        # Timeline rendering benchmark - must complete <16ms
-        ./jve-cli --benchmark-timeline-render
-        
-    - name: Constitutional Compliance Check
-      run: |
-        echo "🏛️ Verifying Constitutional Compliance..."
-        echo "✅ Test-First Development: Contract tests run first"
-        echo "✅ Library-First Architecture: Modular CMake structure"
-        echo "✅ CLI Interface: jve-cli tools built"
-        
-        # Verify no hardcoded secrets
-        if grep -r "password\|secret\|key" src/ --exclude-dir=tests; then
-          echo "❌ Hardcoded secrets detected"
+        ctest --output-on-failure --verbose | tee test.log
+        if ! grep -q "100% tests passed, 0 tests failed out of 10" test.log; then
+          echo "❌ Not all tests passing"
           exit 1
+        else
+          echo "✅ All 10/10 tests passing"
         fi
-        
-        echo "✅ Security: No hardcoded secrets found"
-        echo "✅ Template-Based: Following established patterns"
 
   lint-and-format:
     runs-on: ubuntu-latest

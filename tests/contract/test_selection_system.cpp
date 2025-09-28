@@ -70,7 +70,7 @@ void TestSelectionSystem::initTestCase()
 
 void TestSelectionSystem::testBasicSelection()
 {
-    qCInfo(jveTests) << "Testing basic selection contract";
+    qCInfo(jveTests, "Testing basic selection contract");
     verifyLibraryFirstCompliance();
     
     // Initial state - nothing selected
@@ -94,7 +94,7 @@ void TestSelectionSystem::testBasicSelection()
 
 void TestSelectionSystem::testMultiSelection()
 {
-    qCInfo(jveTests) << "Testing multi-selection contract";
+    qCInfo(jveTests, "Testing multi-selection contract");
     
     m_selectionManager->clear();
     
@@ -132,7 +132,7 @@ void TestSelectionSystem::testMultiSelection()
 
 void TestSelectionSystem::testTriStateControls()
 {
-    qCInfo(jveTests) << "Testing tri-state selection controls contract";
+    qCInfo(jveTests, "Testing tri-state selection controls contract");
     
     m_selectionManager->clear();
     
@@ -178,7 +178,7 @@ void TestSelectionSystem::testTriStateControls()
 
 void TestSelectionSystem::testEdgeSelection()
 {
-    qCInfo(jveTests) << "Testing edge selection contract";
+    qCInfo(jveTests, "Testing edge selection contract");
     
     m_selectionManager->clear();
     
@@ -236,7 +236,7 @@ void TestSelectionSystem::testEdgeSelection()
 
 void TestSelectionSystem::testSelectionPersistence()
 {
-    qCInfo(jveTests) << "Testing selection persistence contract";
+    qCInfo(jveTests, "Testing selection persistence contract");
     
     // Create a selection
     m_selectionManager->clear();
@@ -280,7 +280,7 @@ void TestSelectionSystem::testSelectionPersistence()
 
 void TestSelectionSystem::testSelectionOperations()
 {
-    qCInfo(jveTests) << "Testing selection-based operations contract";
+    qCInfo(jveTests, "Testing selection-based operations contract");
     
     // Create selection for batch operations
     m_selectionManager->clear();
@@ -329,7 +329,7 @@ void TestSelectionSystem::testSelectionOperations()
 
 void TestSelectionSystem::testKeyboardNavigation()
 {
-    qCInfo(jveTests) << "Testing keyboard navigation contract";
+    qCInfo(jveTests, "Testing keyboard navigation contract");
     
     m_selectionManager->clear();
     
@@ -376,7 +376,7 @@ void TestSelectionSystem::testKeyboardNavigation()
 
 void TestSelectionSystem::testSelectionPerformance()
 {
-    qCInfo(jveTests) << "Testing selection performance contract";
+    qCInfo(jveTests, "Testing selection performance contract");
     
     // Create many items for performance testing
     QList<QString> manyItems;

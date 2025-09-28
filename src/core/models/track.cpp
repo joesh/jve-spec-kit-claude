@@ -20,7 +20,7 @@ Track Track::createVideo(const QString& name, const QString& sequenceId)
     track.m_modifiedAt = track.m_createdAt;
     track.initializeDefaults();
     
-    qCDebug(jveTrack) << "Created video track:" << name << "for sequence:" << sequenceId;
+    qCDebug(jveTrack, "Created video track: %s for sequence: %s", qPrintable(name), qPrintable(sequenceId));
     return track;
 }
 
@@ -36,7 +36,7 @@ Track Track::createAudio(const QString& name, const QString& sequenceId)
     track.m_modifiedAt = track.m_createdAt;
     track.initializeDefaults();
     
-    qCDebug(jveTrack) << "Created audio track:" << name << "for sequence:" << sequenceId;
+    qCDebug(jveTrack, "Created audio track: %s for sequence: %s", qPrintable(name), qPrintable(sequenceId));
     return track;
 }
 
@@ -45,18 +45,18 @@ Track Track::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, sequence_id, name, track_type, track_index, enabled, locked
+        SELECT id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan
         FROM tracks WHERE id = ?
     )");
     query.addBindValue(id);
     
     if (!query.exec()) {
-        qCWarning(jveTrack) << "Failed to load track:" << query.lastError().text();
+        qCWarning(jveTrack, "Failed to load track: %s", qPrintable(query.lastError().text()));
         return Track();
     }
     
     if (!query.next()) {
-        qCDebug(jveTrack) << "Track not found:" << id;
+        qCDebug(jveTrack, "Track not found: %s", qPrintable(id));
         return Track();
     }
     
@@ -68,15 +68,20 @@ Track Track::load(const QString& id, const QSqlDatabase& database)
     track.m_layerIndex = query.value("track_index").toInt();
     track.m_enabled = query.value("enabled").toBool();
     track.m_locked = query.value("locked").toBool();
+    track.m_muted = query.value("muted").toBool();
+    track.m_soloed = query.value("soloed").toBool();
+    track.m_volume = query.value("volume").toDouble();
+    track.m_pan = query.value("pan").toDouble();
     
-    // Set reasonable defaults for fields not in schema
+    // Set defaults for fields not persisted in database
     track.m_createdAt = QDateTime::currentDateTime();
     track.m_modifiedAt = QDateTime::currentDateTime();
+    track.m_opacity = 1.0; // Default full opacity for video tracks
     
     track.validateVideoProperties();
     track.validateAudioProperties();
     
-    qCDebug(jveTrack) << "Loaded track:" << track.m_name;
+    qCDebug(jveTrack, "Loaded track: %s", qPrintable(track.m_name));
     return track;
 }
 
@@ -94,7 +99,7 @@ QList<Track> Track::loadBySequence(const QString& sequenceId, const QSqlDatabase
     query.addBindValue(sequenceId);
     
     if (!query.exec()) {
-        qCWarning(jveTrack) << "Failed to load tracks for sequence:" << query.lastError().text();
+        qCWarning(jveTrack, "Failed to load tracks for sequence: %s", qPrintable(query.lastError().text()));
         return tracks;
     }
     
@@ -106,7 +111,7 @@ QList<Track> Track::loadBySequence(const QString& sequenceId, const QSqlDatabase
         }
     }
     
-    qCDebug(jveTrack) << "Loaded" << tracks.size() << "tracks for sequence:" << sequenceId;
+    qCDebug(jveTrack, "Loaded %lld tracks for sequence: %s", (long long)tracks.size(), qPrintable(sequenceId));
     return tracks;
 }
 
@@ -114,7 +119,7 @@ bool Track::save(const QSqlDatabase& database)
 {
     // Algorithm: Validate data → Execute insert/update → Update timestamps
     if (!isValid()) {
-        qCWarning(jveTrack) << "Cannot save invalid track";
+        qCWarning(jveTrack, "Cannot save invalid track");
         return false;
     }
     
@@ -123,24 +128,28 @@ bool Track::save(const QSqlDatabase& database)
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO tracks 
-        (id, sequence_id, name, track_type, track_index, enabled, locked)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     )");
     
     query.addBindValue(m_id);
     query.addBindValue(m_sequenceId);
     query.addBindValue(m_name);
     query.addBindValue(m_type == Video ? "VIDEO" : "AUDIO");
-    query.addBindValue(1); // track_index default to 1
+    query.addBindValue(m_layerIndex);
     query.addBindValue(m_enabled);
     query.addBindValue(m_locked);
+    query.addBindValue(m_muted);
+    query.addBindValue(m_soloed);
+    query.addBindValue(m_volume);
+    query.addBindValue(m_pan);
     
     if (!query.exec()) {
-        qCWarning(jveTrack) << "Failed to save track:" << query.lastError().text();
+        qCWarning(jveTrack, "Failed to save track: %s", qPrintable(query.lastError().text()));
         return false;
     }
     
-    qCDebug(jveTrack) << "Saved track:" << m_name;
+    qCDebug(jveTrack, "Saved track: %s", qPrintable(m_name));
     return true;
 }
 
@@ -241,46 +250,136 @@ void Track::setPan(double pan)
     }
 }
 
-int Track::clipCount() const
+int Track::clipCount(const QSqlDatabase& database) const
 {
-    // Placeholder - would query database for clips in this track
-    return m_cachedClipCount >= 0 ? m_cachedClipCount : 0;
+    // Algorithm: Query database → Count clips for this track
+    QSqlQuery query(database);
+    query.prepare("SELECT COUNT(*) FROM clips WHERE track_id = ?");
+    query.addBindValue(m_id);
+    
+    if (!query.exec()) {
+        qCWarning(jveTrack, "Failed to count clips: %s", qPrintable(query.lastError().text()));
+        return 0;
+    }
+    
+    if (query.next()) {
+        return query.value(0).toInt();
+    }
+    
+    return 0;
 }
 
-qint64 Track::duration() const
+qint64 Track::duration(const QSqlDatabase& database) const
 {
-    // Placeholder - would calculate from clips in this track
-    return m_cachedDuration >= 0 ? m_cachedDuration : 0;
+    // Algorithm: Use cached duration if manually set, otherwise query database
+    if (m_cachedDuration >= 0) {
+        return m_cachedDuration;
+    }
+    
+    // Query database → Find max (start_time + duration) for this track
+    QSqlQuery query(database);
+    query.prepare("SELECT MAX(start_time + duration) FROM clips WHERE track_id = ?");
+    query.addBindValue(m_id);
+    
+    if (!query.exec()) {
+        qCWarning(jveTrack, "Failed to calculate track duration: %s", qPrintable(query.lastError().text()));
+        return 0;
+    }
+    
+    if (query.next()) {
+        return query.value(0).toLongLong();
+    }
+    
+    return 0;
 }
 
-void Track::addClip(const Clip& clip)
+void Track::addClip(const Clip& clip, const QSqlDatabase& database)
 {
-    // Placeholder - would add clip to database with track association
-    if (m_cachedClipCount >= 0) m_cachedClipCount++;
+    // Algorithm: Set track association → Save clip to database → Update timestamps
+    Clip clipCopy = clip;
+    clipCopy.setTrackId(m_id);
+    
+    if (!clipCopy.save(database)) {
+        qCWarning(jveTrack, "Failed to save clip to track: %s", qPrintable(m_name));
+        return;
+    }
+    
     invalidateClipCache();
     updateModifiedTime();
+    qCDebug(jveTrack, "Added clip: %s to track: %s", qPrintable(clip.name()), qPrintable(m_name));
 }
 
-bool Track::hasOverlappingClips(const Clip& clip) const
+bool Track::hasOverlappingClips(const Clip& clip, const QSqlDatabase& database) const
 {
-    // Placeholder - would check for overlaps with existing clips
-    Q_UNUSED(clip)
-    return false; // Simplified for now
+    // Algorithm: Query database → Check for time range overlaps with existing clips
+    QSqlQuery query(database);
+    query.prepare(R"(
+        SELECT COUNT(*) FROM clips 
+        WHERE track_id = ? 
+        AND id != ?
+        AND NOT (
+            ? >= (start_time + duration) OR
+            (? + ?) <= start_time
+        )
+    )");
+    query.addBindValue(m_id);
+    query.addBindValue(clip.id());
+    query.addBindValue(clip.timelineStart());
+    query.addBindValue(clip.timelineStart());
+    query.addBindValue(clip.duration());
+    
+    if (!query.exec()) {
+        qCWarning(jveTrack, "Failed to check clip overlaps: %s", qPrintable(query.lastError().text()));
+        return false;
+    }
+    
+    if (query.next()) {
+        return query.value(0).toInt() > 0;
+    }
+    
+    return false;
 }
 
-void Track::insertClipAt(const Clip& clip, qint64 position)
+void Track::insertClipAt(const Clip& clip, qint64 position, const QSqlDatabase& database)
 {
-    // Placeholder - would insert clip at specific position
-    Q_UNUSED(clip)
-    Q_UNUSED(position)
-    addClip(clip); // Simplified
+    // Algorithm: Set position → Add clip to database with track association  
+    Clip clipCopy = clip;
+    qint64 duration = clipCopy.duration(); // Preserve existing timeline duration
+    clipCopy.setTimelinePosition(position, position + duration);
+    addClip(clipCopy, database);
 }
 
-QList<Clip> Track::getClipsAtTime(qint64 time) const
+QList<Clip> Track::getClipsAtTime(qint64 time, const QSqlDatabase& database) const
 {
-    // Placeholder - would query clips overlapping the given time
-    Q_UNUSED(time)
-    return QList<Clip>(); // Simplified for now
+    // Algorithm: Query database → Find clips overlapping the given time
+    QList<Clip> clips;
+    
+    QSqlQuery query(database);
+    query.prepare(R"(
+        SELECT id FROM clips 
+        WHERE track_id = ? 
+        AND start_time <= ? 
+        AND (start_time + duration) > ?
+        ORDER BY start_time ASC
+    )");
+    query.addBindValue(m_id);
+    query.addBindValue(time);
+    query.addBindValue(time);
+    
+    if (!query.exec()) {
+        qCWarning(jveTrack, "Failed to query clips at time: %s", qPrintable(query.lastError().text()));
+        return clips;
+    }
+    
+    while (query.next()) {
+        QString clipId = query.value("id").toString();
+        Clip clip = Clip::load(clipId, database);
+        if (clip.isValid()) {
+            clips.append(clip);
+        }
+    }
+    
+    return clips;
 }
 
 void Track::trimToContent()
@@ -299,11 +398,10 @@ void Track::padToLength(qint64 length)
 
 void Track::trimToLength(qint64 length)
 {
-    if (m_cachedDuration > length) {
-        m_cachedDuration = length;
-        // Would also trim any clips that extend beyond this length
-        updateModifiedTime();
-    }
+    // Set cached duration to the trimmed length (implementation simplified)
+    m_cachedDuration = length;
+    // Would also trim any clips that extend beyond this length
+    updateModifiedTime();
 }
 
 bool Track::isRenderableAtTime(double time) const

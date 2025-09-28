@@ -75,7 +75,7 @@ void TestProjectEntity::cleanupTestCase()
 
 void TestProjectEntity::testProjectCreation()
 {
-    qCInfo(jveTests) << "Testing Project creation contract";
+    qCInfo(jveTests, "Testing Project creation contract");
     verifyLibraryFirstCompliance();
     
     // Contract: Project::create() should generate unique ID and set creation time
@@ -93,7 +93,7 @@ void TestProjectEntity::testProjectCreation()
 
 void TestProjectEntity::testProjectPersistence()
 {
-    qCInfo(jveTests) << "Testing Project persistence contract";
+    qCInfo(jveTests, "Testing Project persistence contract");
     
     // Contract: Project::save() should atomically persist to database
     Project project = Project::create("Persistence Test");
@@ -118,7 +118,7 @@ void TestProjectEntity::testProjectPersistence()
 
 void TestProjectEntity::testProjectLoading()
 {
-    qCInfo(jveTests) << "Testing Project loading contract";
+    qCInfo(jveTests, "Testing Project loading contract");
     
     // Contract: Project::load() should restore complete state from database
     QString testId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -150,7 +150,7 @@ void TestProjectEntity::testProjectLoading()
 
 void TestProjectEntity::testProjectMetadata()
 {
-    qCInfo(jveTests) << "Testing Project metadata contract";
+    qCInfo(jveTests, "Testing Project metadata contract");
     
     // Contract: Metadata must be properly managed and updated
     Project project = Project::create("Metadata Test");
@@ -169,7 +169,7 @@ void TestProjectEntity::testProjectMetadata()
 
 void TestProjectEntity::testProjectSettings()
 {
-    qCInfo(jveTests) << "Testing Project settings contract";
+    qCInfo(jveTests, "Testing Project settings contract");
     
     // Contract: Settings must serialize/deserialize JSON correctly
     Project project = Project::create("Settings Test");
@@ -201,7 +201,7 @@ void TestProjectEntity::testProjectSettings()
 
 void TestProjectEntity::testSingleFileFormat()
 {
-    qCInfo(jveTests) << "Testing constitutional single-file format contract";
+    qCInfo(jveTests, "Testing constitutional single-file format contract");
     
     // Contract: All project data must be contained in single .jve file
     QFileInfo projectFile(m_testDatabasePath);
@@ -219,7 +219,7 @@ void TestProjectEntity::testSingleFileFormat()
 
 void TestProjectEntity::testAtomicSaveOperations()
 {
-    qCInfo(jveTests) << "Testing atomic save operations contract";
+    qCInfo(jveTests, "Testing atomic save operations contract");
     
     // Contract: Save operations must be atomic (all-or-nothing)
     Project project = Project::create("Atomic Test");
@@ -241,7 +241,7 @@ void TestProjectEntity::testAtomicSaveOperations()
 
 void TestProjectEntity::testDeterministicSerialization()
 {
-    qCInfo(jveTests) << "Testing deterministic serialization contract";
+    qCInfo(jveTests, "Testing deterministic serialization contract");
     
     // Contract: Same project state must serialize identically
     Project project1 = Project::createWithId("fixed-id-test", "Deterministic Test");
@@ -266,7 +266,7 @@ void TestProjectEntity::testDeterministicSerialization()
 
 void TestProjectEntity::testProjectLoadPerformance()
 {
-    qCInfo(jveTests) << "Testing Project load performance contract";
+    qCInfo(jveTests, "Testing Project load performance contract");
     
     // Contract: Project loading must meet performance requirements
     Project project = Project::create("Performance Test");
@@ -281,7 +281,7 @@ void TestProjectEntity::testProjectLoadPerformance()
 
 void TestProjectEntity::testProjectSavePerformance()
 {
-    qCInfo(jveTests) << "Testing Project save performance contract";
+    qCInfo(jveTests, "Testing Project save performance contract");
     
     // Contract: Project saving must meet performance requirements
     Project project = Project::create("Save Performance Test");

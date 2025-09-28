@@ -62,7 +62,7 @@ void TestPropertyEntity::initTestCase()
 
 void TestPropertyEntity::testPropertyCreation()
 {
-    qCInfo(jveTests) << "Testing Property creation contract";
+    qCInfo(jveTests, "Testing Property creation contract");
     verifyLibraryFirstCompliance();
     
     Property brightness = Property::create("brightness", m_clipId);
@@ -80,7 +80,7 @@ void TestPropertyEntity::testPropertyCreation()
 
 void TestPropertyEntity::testPropertyTypes()
 {
-    qCInfo(jveTests) << "Testing property type system contract";
+    qCInfo(jveTests, "Testing property type system contract");
     
     // Number property
     Property numberProp = Property::create("opacity", m_clipId);
@@ -115,7 +115,7 @@ void TestPropertyEntity::testPropertyTypes()
 
 void TestPropertyEntity::testPropertyValidation()
 {
-    qCInfo(jveTests) << "Testing property validation contract";
+    qCInfo(jveTests, "Testing property validation contract");
     
     Property opacity = Property::create("opacity", m_clipId);
     opacity.setType(Property::Number);
@@ -156,7 +156,7 @@ void TestPropertyEntity::testPropertyValidation()
 
 void TestPropertyEntity::testPropertyAnimation()
 {
-    qCInfo(jveTests) << "Testing property animation contract";
+    qCInfo(jveTests, "Testing property animation contract");
     
     Property animatedProp = Property::create("scale", m_clipId);
     animatedProp.setType(Property::Number);
@@ -189,7 +189,7 @@ void TestPropertyEntity::testPropertyAnimation()
 
 void TestPropertyEntity::testPropertyGroups()
 {
-    qCInfo(jveTests) << "Testing property grouping contract";
+    qCInfo(jveTests, "Testing property grouping contract");
     
     // Transform group
     Property posX = Property::create("position.x", m_clipId);
@@ -235,7 +235,7 @@ void TestPropertyEntity::testPropertyGroups()
 
 void TestPropertyEntity::testPropertyPerformance()
 {
-    qCInfo(jveTests) << "Testing property performance contract";
+    qCInfo(jveTests, "Testing property performance contract");
     
     m_timer.restart();
     

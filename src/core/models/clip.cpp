@@ -33,7 +33,7 @@ Clip Clip::create(const QString& name, const QString& mediaId)
     clip.m_rotation = 0.0;
     clip.m_opacity = 1.0;
     
-    qCDebug(jveClip) << "Created clip:" << name << "with media:" << mediaId;
+    qCDebug(jveClip, "Created clip: %s with media: %s", qPrintable(name), qPrintable(mediaId));
     return clip;
 }
 
@@ -48,12 +48,12 @@ Clip Clip::load(const QString& id, const QSqlDatabase& database)
     query.addBindValue(id);
     
     if (!query.exec()) {
-        qCWarning(jveClip) << "Failed to load clip:" << query.lastError().text();
+        qCWarning(jveClip, "Failed to load clip: %s", qPrintable(query.lastError().text()));
         return Clip();
     }
     
     if (!query.next()) {
-        qCDebug(jveClip) << "Clip not found:" << id;
+        qCDebug(jveClip, "Clip not found: %s", qPrintable(id));
         return Clip();
     }
     
@@ -85,7 +85,7 @@ Clip Clip::load(const QString& id, const QSqlDatabase& database)
     // Load properties
     clip.loadProperties(database);
     
-    qCDebug(jveClip) << "Loaded clip:" << clip.m_name;
+    qCDebug(jveClip, "Loaded clip: %s", qPrintable(clip.m_name));
     return clip;
 }
 
@@ -93,7 +93,7 @@ bool Clip::save(const QSqlDatabase& database)
 {
     // Algorithm: Validate data → Execute insert/update → Update timestamps
     if (!isValid()) {
-        qCWarning(jveClip) << "Cannot save invalid clip";
+        qCWarning(jveClip, "Cannot save invalid clip");
         return false;
     }
     
@@ -129,7 +129,7 @@ bool Clip::save(const QSqlDatabase& database)
     query.addBindValue(true); // enabled default
     
     if (!query.exec()) {
-        qCWarning(jveClip) << "Failed to save clip:" << query.lastError().text();
+        qCWarning(jveClip, "Failed to save clip: %s", qPrintable(query.lastError().text()));
         return false;
     }
     
@@ -138,7 +138,7 @@ bool Clip::save(const QSqlDatabase& database)
         saveProperties(database);
     }
     
-    qCDebug(jveClip) << "Saved clip:" << m_name;
+    qCDebug(jveClip, "Saved clip: %s", qPrintable(m_name));
     return true;
 }
 

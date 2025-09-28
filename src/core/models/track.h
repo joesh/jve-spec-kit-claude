@@ -140,14 +140,14 @@ public:
     bool acceptsEditing() const { return !m_locked; }
     
     // Clip management
-    int clipCount() const;
-    qint64 duration() const;
-    bool isEmpty() const { return clipCount() == 0; }
+    int clipCount(const QSqlDatabase& database) const;
+    qint64 duration(const QSqlDatabase& database) const;
+    bool isEmpty(const QSqlDatabase& database) const { return clipCount(database) == 0; }
     
-    void addClip(const Clip& clip);
-    bool hasOverlappingClips(const Clip& clip) const;
-    void insertClipAt(const Clip& clip, qint64 position);
-    QList<Clip> getClipsAtTime(qint64 time) const;
+    void addClip(const Clip& clip, const QSqlDatabase& database);
+    bool hasOverlappingClips(const Clip& clip, const QSqlDatabase& database) const;
+    void insertClipAt(const Clip& clip, qint64 position, const QSqlDatabase& database);
+    QList<Clip> getClipsAtTime(qint64 time, const QSqlDatabase& database) const;
     
     void trimToContent();
     void padToLength(qint64 length);

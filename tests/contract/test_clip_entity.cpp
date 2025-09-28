@@ -59,7 +59,7 @@ void TestClipEntity::initTestCase()
 
 void TestClipEntity::testClipCreation()
 {
-    qCInfo(jveTests) << "Testing Clip creation contract";
+    qCInfo(jveTests, "Testing Clip creation contract");
     verifyLibraryFirstCompliance();
     
     Clip clip = Clip::create("Test Clip", m_mediaId);
@@ -79,7 +79,7 @@ void TestClipEntity::testClipCreation()
 
 void TestClipEntity::testClipTimelinePositioning()
 {
-    qCInfo(jveTests) << "Testing clip timeline positioning contract";
+    qCInfo(jveTests, "Testing clip timeline positioning contract");
     
     Clip clip = Clip::create("Position Test", m_mediaId);
     
@@ -98,7 +98,7 @@ void TestClipEntity::testClipTimelinePositioning()
 
 void TestClipEntity::testClipMediaReference()
 {
-    qCInfo(jveTests) << "Testing clip media reference contract";
+    qCInfo(jveTests, "Testing clip media reference contract");
     
     Clip clip = Clip::create("Media Reference Test", m_mediaId);
     
@@ -117,7 +117,7 @@ void TestClipEntity::testClipMediaReference()
 
 void TestClipEntity::testClipTransformations()
 {
-    qCInfo(jveTests) << "Testing clip transformations contract";
+    qCInfo(jveTests, "Testing clip transformations contract");
     
     Clip clip = Clip::create("Transform Test", m_mediaId);
     
@@ -142,7 +142,7 @@ void TestClipEntity::testClipTransformations()
 
 void TestClipEntity::testClipTrimming()
 {
-    qCInfo(jveTests) << "Testing clip trimming contract";
+    qCInfo(jveTests, "Testing clip trimming contract");
     
     Clip clip = Clip::create("Trim Test", m_mediaId);
     clip.setTimelinePosition(5000, 15000);
@@ -163,7 +163,7 @@ void TestClipEntity::testClipTrimming()
 
 void TestClipEntity::testClipPropertyManagement()
 {
-    qCInfo(jveTests) << "Testing clip property management contract";
+    qCInfo(jveTests, "Testing clip property management contract");
     
     Clip clip = Clip::create("Property Test", m_mediaId);
     QVERIFY(clip.save(m_database));
@@ -185,7 +185,7 @@ void TestClipEntity::testClipPropertyManagement()
 
 void TestClipEntity::testClipPerformance()
 {
-    qCInfo(jveTests) << "Testing clip performance contract";
+    qCInfo(jveTests, "Testing clip performance contract");
     
     m_timer.restart();
     Clip clip = Clip::create("Performance Test", m_mediaId);

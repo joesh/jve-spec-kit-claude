@@ -12,7 +12,7 @@ Q_LOGGING_CATEGORY(jveCommand, "jve.command")
 
 Command Command::create(const QString& type, const QString& projectId)
 {
-    qCDebug(jveCommand) << "Creating command:" << type << "for project:" << projectId;
+    qCDebug(jveCommand, "Creating command: %s for project: %s", qPrintable(type), qPrintable(projectId));
     
     // Algorithm: Generate ID → Initialize → Set defaults → Return instance
     QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -26,12 +26,12 @@ Command Command::create(const QString& type, const QString& projectId)
 
 Command Command::deserialize(const QString& serializedData)
 {
-    qCDebug(jveCommand) << "Deserializing command from JSON";
+    qCDebug(jveCommand, "Deserializing command from JSON");
     
     // Algorithm: Parse JSON → Create instance → Set data → Return command
     QJsonDocument doc = QJsonDocument::fromJson(serializedData.toUtf8());
     if (doc.isNull() || !doc.isObject()) {
-        qCWarning(jveCommand) << "Invalid JSON for command deserialization";
+        qCWarning(jveCommand, "Invalid JSON for command deserialization");
         return Command();
     }
     
@@ -39,7 +39,7 @@ Command Command::deserialize(const QString& serializedData)
     Command command;
     
     if (!command.parseFromJson(json)) {
-        qCWarning(jveCommand) << "Failed to parse command from JSON";
+        qCWarning(jveCommand, "Failed to parse command from JSON");
         return Command();
     }
     
@@ -48,7 +48,7 @@ Command Command::deserialize(const QString& serializedData)
 
 QList<Command> Command::loadByProject(const QString& projectId, QSqlDatabase& database)
 {
-    qCDebug(jveCommand) << "Loading commands for project:" << projectId;
+    qCDebug(jveCommand, "Loading commands for project: %s", qPrintable(projectId));
     
     // Algorithm: Query → Parse each → Return sorted collection
     QSqlQuery query(database);
@@ -99,7 +99,7 @@ void Command::setExecutedAt(const QDateTime& timestamp)
 
 Command Command::createUndo() const
 {
-    qCDebug(jveCommand) << "Creating undo command for:" << m_type;
+    qCDebug(jveCommand, "Creating undo command for: %s", qPrintable(m_type));
     
     // Algorithm: Create opposite → Copy parameters → Swap values → Return undo
     Command undoCommand = Command::create(m_type, m_projectId);
@@ -126,7 +126,7 @@ Command Command::createUndo() const
 
 QString Command::serialize() const
 {
-    qCDebug(jveCommand) << "Serializing command:" << m_type;
+    qCDebug(jveCommand, "Serializing command: %s", qPrintable(m_type));
     
     // Algorithm: Create JSON object → Serialize → Return string
     QJsonObject json = serializeToJson();
@@ -137,7 +137,7 @@ QString Command::serialize() const
 
 bool Command::save(QSqlDatabase& database)
 {
-    qCDebug(jveCommand) << "Saving command:" << m_type;
+    qCDebug(jveCommand, "Saving command: %s", qPrintable(m_type));
     
     // Algorithm: Serialize parameters → Execute query → Return success
     return saveToDatabase(database);
@@ -292,7 +292,7 @@ bool Command::saveToDatabase(QSqlDatabase& database)
     query.addBindValue(m_createdAt.toMSecsSinceEpoch());
     
     if (!query.exec()) {
-        qCCritical(jveCommand) << "Failed to save command:" << query.lastError().text();
+        qCCritical(jveCommand, "Failed to save command: %s", qPrintable(query.lastError().text()));
         return false;
     }
     

@@ -26,7 +26,7 @@ Project Project::createWithId(const QString& id, const QString& name)
     project.m_modifiedAt = project.m_createdAt;
     project.m_settings = "{}";
     
-    qCDebug(jveProject) << "Created project:" << name << "with ID:" << id;
+    qCDebug(jveProject, "Created project: %s with ID: %s", qPrintable(name), qPrintable(id));
     return project;
 }
 
@@ -38,12 +38,12 @@ Project Project::load(const QString& id, const QSqlDatabase& database)
     query.addBindValue(id);
     
     if (!query.exec()) {
-        qCWarning(jveProject) << "Failed to load project:" << query.lastError().text();
+        qCWarning(jveProject, "Failed to load project: %s", qPrintable(query.lastError().text()));
         return Project(); // Invalid project
     }
     
     if (!query.next()) {
-        qCDebug(jveProject) << "Project not found:" << id;
+        qCDebug(jveProject, "Project not found: %s", qPrintable(id));
         return Project(); // Invalid project
     }
     
@@ -55,11 +55,11 @@ Project Project::load(const QString& id, const QSqlDatabase& database)
     project.m_settings = query.value("settings").toString();
     
     if (!project.validateSettings(project.m_settings)) {
-        qCWarning(jveProject) << "Invalid settings JSON for project:" << id;
+        qCWarning(jveProject, "Invalid settings JSON for project: %s", qPrintable(id));
         project.m_settings = "{}"; // Reset to default
     }
     
-    qCDebug(jveProject) << "Loaded project:" << project.m_name;
+    qCDebug(jveProject, "Loaded project: %s", qPrintable(project.m_name));
     return project;
 }
 
@@ -67,7 +67,7 @@ bool Project::save(const QSqlDatabase& database)
 {
     // Algorithm: Validate data → Execute insert/update → Update timestamps
     if (!isValid()) {
-        qCWarning(jveProject) << "Cannot save invalid project";
+        qCWarning(jveProject, "Cannot save invalid project");
         return false;
     }
     
@@ -87,11 +87,11 @@ bool Project::save(const QSqlDatabase& database)
     query.addBindValue(m_settings);
     
     if (!query.exec()) {
-        qCWarning(jveProject) << "Failed to save project:" << query.lastError().text();
+        qCWarning(jveProject, "Failed to save project: %s", qPrintable(query.lastError().text()));
         return false;
     }
     
-    qCDebug(jveProject) << "Saved project:" << m_name;
+    qCDebug(jveProject, "Saved project: %s", qPrintable(m_name));
     return true;
 }
 
@@ -111,7 +111,7 @@ void Project::setSettings(const QString& settingsJson)
             updateModifiedTime();
         }
     } else {
-        qCWarning(jveProject) << "Invalid settings JSON provided";
+        qCWarning(jveProject, "Invalid settings JSON provided");
     }
 }
 
@@ -150,7 +150,7 @@ Project Project::deserialize(const QString& data)
     QJsonDocument doc = QJsonDocument::fromJson(data.toUtf8(), &error);
     
     if (error.error != QJsonParseError::NoError) {
-        qCWarning(jveProject) << "Failed to deserialize project:" << error.errorString();
+        qCWarning(jveProject, "Failed to deserialize project: %s", qPrintable(error.errorString()));
         return Project();
     }
     
@@ -191,7 +191,7 @@ QJsonObject Project::parseSettings() const
     QJsonDocument doc = QJsonDocument::fromJson(m_settings.toUtf8(), &error);
     
     if (error.error != QJsonParseError::NoError) {
-        qCWarning(jveProject) << "Failed to parse settings JSON:" << error.errorString();
+        qCWarning(jveProject, "Failed to parse settings JSON: %s", qPrintable(error.errorString()));
         return QJsonObject(); // Empty object
     }
     

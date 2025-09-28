@@ -68,7 +68,7 @@ void TestCommandEntity::init()
 
 void TestCommandEntity::testCommandCreation()
 {
-    qCInfo(jveTests) << "Testing Command creation contract";
+    qCInfo(jveTests, "Testing Command creation contract");
     verifyLibraryFirstCompliance();
     
     Command command = Command::create("CreateClip", m_projectId);
@@ -92,7 +92,7 @@ void TestCommandEntity::testCommandCreation()
 
 void TestCommandEntity::testCommandExecution()
 {
-    qCInfo(jveTests) << "Testing command execution contract";
+    qCInfo(jveTests, "Testing command execution contract");
     
     CommandManager manager(m_database);
     
@@ -125,7 +125,7 @@ void TestCommandEntity::testCommandExecution()
 
 void TestCommandEntity::testCommandSerialization()
 {
-    qCInfo(jveTests) << "Testing command serialization contract";
+    qCInfo(jveTests, "Testing command serialization contract");
     
     Command command = Command::create("ComplexOperation", m_projectId);
     command.setParameter("string_param", "test string");
@@ -159,7 +159,7 @@ void TestCommandEntity::testCommandSerialization()
 
 void TestCommandEntity::testCommandSequencing()
 {
-    qCInfo(jveTests) << "Testing command sequencing contract";
+    qCInfo(jveTests, "Testing command sequencing contract");
     
     CommandManager manager(m_database);
     
@@ -200,7 +200,7 @@ void TestCommandEntity::testCommandSequencing()
 
 void TestCommandEntity::testCommandReplay()
 {
-    qCInfo(jveTests) << "Testing command replay contract";
+    qCInfo(jveTests, "Testing command replay contract");
     
     CommandManager manager(m_database);
     
@@ -255,7 +255,7 @@ void TestCommandEntity::testCommandReplay()
 
 void TestCommandEntity::testCommandDeterminism()
 {
-    qCInfo(jveTests) << "Testing constitutional determinism contract";
+    qCInfo(jveTests, "Testing constitutional determinism contract");
     verifyCommandDeterminism({"CreateClip", "SetProperty", "DeleteClip"});
     
     CommandManager manager1(m_database);
@@ -300,7 +300,7 @@ void TestCommandEntity::testCommandDeterminism()
 
 void TestCommandEntity::testCommandPerformance()
 {
-    qCInfo(jveTests) << "Testing command performance contract";
+    qCInfo(jveTests, "Testing command performance contract");
     
     CommandManager manager(m_database);
     

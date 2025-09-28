@@ -51,7 +51,7 @@ void TestMediaEntity::initTestCase()
 
 void TestMediaEntity::testMediaCreation()
 {
-    qCInfo(jveTests) << "Testing Media creation contract";
+    qCInfo(jveTests, "Testing Media creation contract");
     verifyLibraryFirstCompliance();
     
     Media media = Media::create("test_video.mp4", "/path/to/test_video.mp4");
@@ -64,14 +64,14 @@ void TestMediaEntity::testMediaCreation()
     // Default state
     QCOMPARE(media.status(), Media::Unknown);
     QVERIFY(!media.isOnline());
-    QCOMPARE(media.type(), Media::UnknownType);
+    QCOMPARE(media.type(), Media::Video);  // Auto-detected from .mp4 extension
     
     verifyPerformance("Media creation", 10);
 }
 
 void TestMediaEntity::testMediaMetadataExtraction()
 {
-    qCInfo(jveTests) << "Testing media metadata extraction contract";
+    qCInfo(jveTests, "Testing media metadata extraction contract");
     
     Media videoMedia = Media::create("sample.mp4", "/path/to/sample.mp4");
     
@@ -98,7 +98,7 @@ void TestMediaEntity::testMediaMetadataExtraction()
 
 void TestMediaEntity::testMediaTypeDetection()
 {
-    qCInfo(jveTests) << "Testing media type detection contract";
+    qCInfo(jveTests, "Testing media type detection contract");
     
     // Test video file detection
     Media videoFile = Media::create("video.mp4", "/path/video.mp4");
@@ -128,7 +128,7 @@ void TestMediaEntity::testMediaTypeDetection()
 
 void TestMediaEntity::testMediaFileMonitoring()
 {
-    qCInfo(jveTests) << "Testing media file monitoring contract";
+    qCInfo(jveTests, "Testing media file monitoring contract");
     
     Media media = Media::create("monitored.mp4", "/real/path/monitored.mp4");
     
@@ -156,7 +156,7 @@ void TestMediaEntity::testMediaFileMonitoring()
 
 void TestMediaEntity::testMediaProxyManagement()
 {
-    qCInfo(jveTests) << "Testing media proxy management contract";
+    qCInfo(jveTests, "Testing media proxy management contract");
     
     Media media = Media::create("proxy_test.mov", "/path/proxy_test.mov");
     
@@ -191,7 +191,7 @@ void TestMediaEntity::testMediaProxyManagement()
 
 void TestMediaEntity::testMediaPerformance()
 {
-    qCInfo(jveTests) << "Testing media performance contract";
+    qCInfo(jveTests, "Testing media performance contract");
     
     m_timer.restart();
     Media media = Media::create("performance.mp4", "/path/performance.mp4");
@@ -200,6 +200,7 @@ void TestMediaEntity::testMediaPerformance()
     metadata.duration = 60000;
     metadata.width = 1920;
     metadata.height = 1080;
+    metadata.framerate = 30.0;  // Set valid framerate to satisfy CHECK constraint
     media.setMetadata(metadata);
     
     QVERIFY(media.save(m_database));

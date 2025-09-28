@@ -19,7 +19,7 @@ Q_LOGGING_CATEGORY(jvePersistence, "jve.persistence")
 ProjectPersistence::ProjectPersistence(QObject* parent)
     : QObject(parent)
 {
-    qCDebug(jvePersistence) << "Initializing ProjectPersistence";
+    qCDebug(jvePersistence, "Initializing ProjectPersistence");
 }
 
 ProjectPersistence::~ProjectPersistence()
@@ -32,7 +32,7 @@ ProjectPersistence::~ProjectPersistence()
 
 PersistenceResult ProjectPersistence::saveProject(const QString& filePath, const ProjectData& data)
 {
-    qCDebug(jvePersistence) << "Saving project to:" << filePath;
+    qCDebug(jvePersistence, "Saving project to: %s", qPrintable(filePath));
     
     // Algorithm: Validate → Lock → Backup → Save → Unlock → Return result
     PersistenceResult result;
@@ -52,7 +52,7 @@ PersistenceResult ProjectPersistence::saveProject(const QString& filePath, const
     // Create backup before saving
     if (QFile::exists(filePath)) {
         if (!createBackupBeforeSave(filePath)) {
-            qCWarning(jvePersistence) << "Failed to create backup, but continuing with save";
+            qCWarning(jvePersistence, "Failed to create backup, but continuing with save");
         }
     }
     
@@ -68,7 +68,7 @@ PersistenceResult ProjectPersistence::saveProject(const QString& filePath, const
 
 PersistenceResult ProjectPersistence::loadProject(const QString& filePath)
 {
-    qCDebug(jvePersistence) << "Loading project from:" << filePath;
+    qCDebug(jvePersistence, "Loading project from: %s", qPrintable(filePath));
     
     // Algorithm: Validate → Load → Return result
     PersistenceResult result;
@@ -90,7 +90,7 @@ PersistenceResult ProjectPersistence::loadProject(const QString& filePath)
 
 bool ProjectPersistence::validateFileFormat(const QString& filePath) const
 {
-    qCDebug(jvePersistence) << "Validating file format:" << filePath;
+    qCDebug(jvePersistence, "Validating file format: %s", qPrintable(filePath));
     
     // Algorithm: Check extension → Verify headers → Validate structure
     if (!validateJveExtension(filePath)) {
@@ -119,7 +119,7 @@ bool ProjectPersistence::validateFileFormat(const QString& filePath) const
 
 PersistenceResult ProjectPersistence::createOldVersionFile(const QString& filePath, int version)
 {
-    qCDebug(jvePersistence) << "Creating old version file:" << filePath << "version:" << version;
+    qCDebug(jvePersistence, "Creating old version file: %s version: %d", qPrintable(filePath), version);
     
     // Algorithm: Create database → Set version → Return result
     PersistenceResult result;
@@ -152,7 +152,7 @@ PersistenceResult ProjectPersistence::createOldVersionFile(const QString& filePa
 
 QStringList ProjectPersistence::findBackupFiles(const QString& projectPath) const
 {
-    qCDebug(jvePersistence) << "Finding backup files for:" << projectPath;
+    qCDebug(jvePersistence, "Finding backup files for: %s", qPrintable(projectPath));
     
     // Algorithm: Get directory → Filter backups → Return sorted list
     QFileInfo projectFile(projectPath);
@@ -176,7 +176,7 @@ QStringList ProjectPersistence::findBackupFiles(const QString& projectPath) cons
 
 RecoveryResult ProjectPersistence::attemptRecovery(const QString& projectPath)
 {
-    qCDebug(jvePersistence) << "Attempting recovery for:" << projectPath;
+    qCDebug(jvePersistence, "Attempting recovery for: %s", qPrintable(projectPath));
     
     // Algorithm: Find backups → Try recovery → Return result
     RecoveryResult result;
@@ -196,7 +196,7 @@ RecoveryResult ProjectPersistence::attemptRecovery(const QString& projectPath)
                 result.success = true;
                 result.usedBackup = true;
                 result.backupPath = backupPath;
-                qCInfo(jvePersistence) << "Successfully recovered from backup:" << backupPath;
+                qCInfo(jvePersistence, "Successfully recovered from backup: %s", qPrintable(backupPath));
                 break;
             }
         }
@@ -211,7 +211,7 @@ RecoveryResult ProjectPersistence::attemptRecovery(const QString& projectPath)
 
 QString ProjectPersistence::createManualBackup(const QString& projectPath, const QString& label)
 {
-    qCDebug(jvePersistence) << "Creating manual backup:" << projectPath << "label:" << label;
+    qCDebug(jvePersistence, "Creating manual backup: %s label: %s", qPrintable(projectPath), qPrintable(label));
     
     // Algorithm: Generate path → Copy file → Return path
     QString backupPath = generateBackupPath(projectPath, label);
@@ -225,7 +225,7 @@ QString ProjectPersistence::createManualBackup(const QString& projectPath, const
 
 DatabaseInfo ProjectPersistence::getDatabaseInfo(const QString& projectPath) const
 {
-    qCDebug(jvePersistence) << "Getting database info for:" << projectPath;
+    qCDebug(jvePersistence, "Getting database info for: %s", qPrintable(projectPath));
     
     // Algorithm: Connect → Query info → Return structure
     DatabaseInfo info;
@@ -272,7 +272,7 @@ DatabaseInfo ProjectPersistence::getDatabaseInfo(const QString& projectPath) con
 
 QStringList ProjectPersistence::getExternalDependencies(const ProjectData& data) const
 {
-    qCDebug(jvePersistence) << "Getting external dependencies";
+    qCDebug(jvePersistence, "Getting external dependencies");
     
     // Algorithm: Collect media paths → Filter valid → Return list
     QStringList dependencies;
@@ -295,7 +295,7 @@ bool ProjectPersistence::validateJveExtension(const QString& filePath) const
 
 PersistenceResult ProjectPersistence::performAtomicSave(const QString& filePath, const ProjectData& data)
 {
-    qCDebug(jvePersistence) << "Performing atomic save";
+    qCDebug(jvePersistence, "Performing atomic save");
     
     // Algorithm: Create temp → Save to temp → Replace original → Return result
     PersistenceResult result;
@@ -351,7 +351,7 @@ PersistenceResult ProjectPersistence::performAtomicSave(const QString& filePath,
 
 PersistenceResult ProjectPersistence::performAtomicLoad(const QString& filePath)
 {
-    qCDebug(jvePersistence) << "Performing atomic load";
+    qCDebug(jvePersistence, "Performing atomic load");
     
     // Algorithm: Connect → Load → Return result
     PersistenceResult result;
@@ -380,15 +380,16 @@ PersistenceResult ProjectPersistence::performAtomicLoad(const QString& filePath)
 
 bool ProjectPersistence::createDatabaseConnection(const QString& filePath, QSqlDatabase& database)
 {
-    QString connectionName = QString("project_%1_%2")
+    QString connectionName = QString("project_%1_%2_%3")
         .arg(QFileInfo(filePath).baseName())
-        .arg(QDateTime::currentMSecsSinceEpoch());
+        .arg(QDateTime::currentMSecsSinceEpoch())
+        .arg(reinterpret_cast<quintptr>(QThread::currentThread()));
     
     database = QSqlDatabase::addDatabase("QSQLITE", connectionName);
     database.setDatabaseName(filePath);
     
     if (!database.open()) {
-        qCCritical(jvePersistence) << "Failed to open database:" << database.lastError().text();
+        qCCritical(jvePersistence, "Failed to open database: %s", qPrintable(database.lastError().text()));
         QSqlDatabase::removeDatabase(connectionName);
         return false;
     }
@@ -398,7 +399,7 @@ bool ProjectPersistence::createDatabaseConnection(const QString& filePath, QSqlD
 
 bool ProjectPersistence::saveProjectData(QSqlDatabase& database, const ProjectData& data)
 {
-    qCDebug(jvePersistence) << "Saving project data";
+    qCDebug(jvePersistence, "Saving project data");
     
     // Algorithm: Begin transaction → Save all → Commit → Return success
     database.transaction();
@@ -412,10 +413,10 @@ bool ProjectPersistence::saveProjectData(QSqlDatabase& database, const ProjectDa
     
     if (success) {
         database.commit();
-        qCDebug(jvePersistence) << "Successfully saved all project data";
+        qCDebug(jvePersistence, "Successfully saved all project data");
     } else {
         database.rollback();
-        qCWarning(jvePersistence) << "Failed to save project data, rolled back transaction";
+        qCWarning(jvePersistence, "Failed to save project data, rolled back transaction");
     }
     
     return success;
@@ -423,7 +424,7 @@ bool ProjectPersistence::saveProjectData(QSqlDatabase& database, const ProjectDa
 
 ProjectData ProjectPersistence::loadProjectData(QSqlDatabase& database)
 {
-    qCDebug(jvePersistence) << "Loading project data";
+    qCDebug(jvePersistence, "Loading project data");
     
     // Algorithm: Load project → Load related data → Return structure
     ProjectData data;

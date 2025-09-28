@@ -9,12 +9,12 @@ Q_LOGGING_CATEGORY(jveSelection, "jve.selection")
 SelectionManager::SelectionManager(QObject* parent)
     : QObject(parent)
 {
-    qCDebug(jveSelection) << "Initializing SelectionManager";
+    qCDebug(jveSelection, "Initializing SelectionManager");
 }
 
 void SelectionManager::select(const QString& itemId)
 {
-    qCDebug(jveSelection) << "Selecting item:" << itemId;
+    qCDebug(jveSelection, "Selecting item: %s", qPrintable(itemId));
     
     // Algorithm: Clear previous → Add item → Update range → Notify
     m_selectedItems.clear();
@@ -28,7 +28,7 @@ void SelectionManager::select(const QString& itemId)
 
 void SelectionManager::addToSelection(const QString& itemId)
 {
-    qCDebug(jveSelection) << "Adding to selection:" << itemId;
+    qCDebug(jveSelection, "Adding to selection: %s", qPrintable(itemId));
     
     // Algorithm: Insert item → Update tracking → Update range → Notify
     if (!m_selectedItems.contains(itemId)) {
@@ -41,7 +41,7 @@ void SelectionManager::addToSelection(const QString& itemId)
 
 void SelectionManager::removeFromSelection(const QString& itemId)
 {
-    qCDebug(jveSelection) << "Removing from selection:" << itemId;
+    qCDebug(jveSelection, "Removing from selection: %s", qPrintable(itemId));
     
     // Algorithm: Remove item → Update tracking → Update range → Notify
     if (m_selectedItems.remove(itemId)) {
@@ -65,7 +65,7 @@ void SelectionManager::toggleSelection(const QString& itemId)
 
 void SelectionManager::clear()
 {
-    qCDebug(jveSelection) << "Clearing selection";
+    qCDebug(jveSelection, "Clearing selection");
     
     // Algorithm: Clear data → Reset state → Notify
     if (!m_selectedItems.isEmpty()) {
@@ -84,7 +84,7 @@ void SelectionManager::setTimelineItems(const QStringList& orderedItems)
 
 void SelectionManager::selectAll(const QStringList& items)
 {
-    qCDebug(jveSelection) << "Selecting all items:" << items.size();
+    qCDebug(jveSelection, "Selecting all items: %lld", static_cast<long long>(items.size()));
     
     // Algorithm: Clear → Add all → Update tracking → Notify
     m_selectedItems.clear();
@@ -128,7 +128,7 @@ QStringList SelectionManager::getSelectedItems() const
 
 SelectionState SelectionManager::getTrackSelectionState(const QString& trackId, const QStringList& trackItems) const
 {
-    qCDebug(jveSelection) << "Getting track selection state for:" << trackId;
+    qCDebug(jveSelection, "Getting track selection state for: %s", qPrintable(trackId));
     
     // Algorithm: Count selected → Determine state → Return result
     int selectedCount = 0;
@@ -149,7 +149,7 @@ SelectionState SelectionManager::getTrackSelectionState(const QString& trackId, 
 
 void SelectionManager::handleTriStateClick(const QString& trackId, const QStringList& trackItems, SelectionState currentState)
 {
-    qCDebug(jveSelection) << "Handling tri-state click for track:" << trackId << "state:" << static_cast<int>(currentState);
+    qCDebug(jveSelection, "Handling tri-state click for track: %s state: %d", qPrintable(trackId), static_cast<int>(currentState));
     
     // Algorithm: Route by state → Perform action → Notify
     switch (currentState) {
@@ -181,7 +181,7 @@ void SelectionManager::handleTriStateClick(const QString& trackId, const QString
 
 void SelectionManager::handleClick(const QString& itemId, bool cmdPressed, bool shiftPressed)
 {
-    qCDebug(jveSelection) << "Handling click:" << itemId << "cmd:" << cmdPressed << "shift:" << shiftPressed;
+    qCDebug(jveSelection, "Handling click: %s cmd: %s shift: %s", qPrintable(itemId), cmdPressed ? "true" : "false", shiftPressed ? "true" : "false");
     
     // Algorithm: Check modifiers → Perform selection → Update range
     if (cmdPressed) {
@@ -203,7 +203,7 @@ SelectionRange SelectionManager::getSelectionRange() const
 
 SelectionSnapshot SelectionManager::saveSnapshot() const
 {
-    qCDebug(jveSelection) << "Saving selection snapshot";
+    qCDebug(jveSelection, "Saving selection snapshot");
     
     // Algorithm: Create snapshot → Populate → Return
     SelectionSnapshot snapshot;
@@ -214,7 +214,7 @@ SelectionSnapshot SelectionManager::saveSnapshot() const
 
 void SelectionManager::restoreSnapshot(const SelectionSnapshot& snapshot)
 {
-    qCDebug(jveSelection) << "Restoring selection snapshot with" << snapshot.items.size() << "items";
+    qCDebug(jveSelection, "Restoring selection snapshot with %lld items", static_cast<long long>(snapshot.items.size()));
     
     // Algorithm: Clear current → Restore items → Update state → Notify
     m_selectedItems.clear();
@@ -233,7 +233,7 @@ void SelectionManager::restoreSnapshot(const SelectionSnapshot& snapshot)
 
 QString SelectionManager::beginOperation(const QString& operationName)
 {
-    qCDebug(jveSelection) << "Beginning operation:" << operationName;
+    qCDebug(jveSelection, "Beginning operation: %s", qPrintable(operationName));
     
     // Algorithm: Generate ID → Save snapshot → Store operation → Return ID
     QString operationId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -247,7 +247,7 @@ QString SelectionManager::beginOperation(const QString& operationName)
 
 void SelectionManager::endOperation(const QString& operationId)
 {
-    qCDebug(jveSelection) << "Ending operation:" << operationId;
+    qCDebug(jveSelection, "Ending operation: %s", qPrintable(operationId));
     
     // For M1 Foundation, operations complete immediately
     // Real implementation would handle async operations
@@ -255,7 +255,7 @@ void SelectionManager::endOperation(const QString& operationId)
 
 SelectionOperation SelectionManager::createBatchOperation(const QString& operationType)
 {
-    qCDebug(jveSelection) << "Creating batch operation:" << operationType;
+    qCDebug(jveSelection, "Creating batch operation: %s", qPrintable(operationType));
     
     // Algorithm: Create operation → Set targets → Return operation
     SelectionOperation operation;
@@ -267,7 +267,7 @@ SelectionOperation SelectionManager::createBatchOperation(const QString& operati
 
 ExecutionResult SelectionManager::executeOperation(const SelectionOperation& operation)
 {
-    qCDebug(jveSelection) << "Executing selection operation:" << operation.type;
+    qCDebug(jveSelection, "Executing selection operation: %s", qPrintable(operation.type));
     
     // Algorithm: Validate → Execute → Create result → Return
     ExecutionResult result;
@@ -301,7 +301,7 @@ bool SelectionManager::canUndo() const
 
 void SelectionManager::undo()
 {
-    qCDebug(jveSelection) << "Undoing last selection operation";
+    qCDebug(jveSelection, "Undoing last selection operation");
     
     // Algorithm: Check availability → Get last → Restore → Remove
     if (!m_snapshots.isEmpty()) {
@@ -313,7 +313,7 @@ void SelectionManager::undo()
 
 void SelectionManager::moveSelection(SelectionDirection direction)
 {
-    qCDebug(jveSelection) << "Moving selection:" << static_cast<int>(direction);
+    qCDebug(jveSelection, "Moving selection: %d", static_cast<int>(direction));
     
     // Algorithm: Find current → Determine next → Select next
     if (m_lastSelectedItem.isEmpty()) {
@@ -328,7 +328,7 @@ void SelectionManager::moveSelection(SelectionDirection direction)
 
 void SelectionManager::extendSelection(SelectionDirection direction)
 {
-    qCDebug(jveSelection) << "Extending selection:" << static_cast<int>(direction);
+    qCDebug(jveSelection, "Extending selection: %d", static_cast<int>(direction));
     
     // Algorithm: Find current → Determine next → Add to selection
     if (m_lastSelectedItem.isEmpty()) {
@@ -343,7 +343,7 @@ void SelectionManager::extendSelection(SelectionDirection direction)
 
 void SelectionManager::handleKeyPress(int key, Qt::KeyboardModifiers modifiers)
 {
-    qCDebug(jveSelection) << "Handling key press:" << key << "modifiers:" << modifiers;
+    qCDebug(jveSelection, "Handling key press: %d modifiers: %d", key, static_cast<int>(modifiers));
     
     // Algorithm: Route by key → Execute command
     if (modifiers & Qt::ControlModifier) {
@@ -353,7 +353,7 @@ void SelectionManager::handleKeyPress(int key, Qt::KeyboardModifiers modifiers)
             if (!m_timelineItems.isEmpty()) {
                 selectAll(m_timelineItems);
             } else {
-                qCDebug(jveSelection) << "Select All requested but no timeline context available";
+                qCDebug(jveSelection, "Select All requested but no timeline context available");
             }
             break;
             
@@ -387,7 +387,7 @@ void SelectionManager::updateSelectionRange()
 void SelectionManager::notifySelectionChanged()
 {
     QStringList items = getSelectedItems();
-    qCDebug(jveSelection) << "Selection changed. Count:" << items.size();
+    qCDebug(jveSelection, "Selection changed. Count: %lld", static_cast<long long>(items.size()));
     emit selectionChanged(items);
 }
 
@@ -432,7 +432,7 @@ QString SelectionManager::findPreviousItem(const QString& currentItem, Selection
 
 void SelectionManager::selectRange(const QString& startId, const QString& endId)
 {
-    qCDebug(jveSelection) << "Selecting range from" << startId << "to" << endId;
+    qCDebug(jveSelection, "Selecting range from %s to %s", qPrintable(startId), qPrintable(endId));
     
     // Algorithm: Determine range → Select items → Update state
     m_selectedItems.clear();
@@ -469,7 +469,7 @@ void SelectionManager::selectRange(const QString& startId, const QString& endId)
 void SelectionManager::executeSelectionCommand(const SelectionOperation& operation)
 {
     // Algorithm: Route by type → Execute logic → Update state
-    qCDebug(jveSelection) << "Executing command:" << operation.type << "on" << operation.targetItems.size() << "items";
+    qCDebug(jveSelection, "Executing command: %s on %lld items", qPrintable(operation.type), static_cast<long long>(operation.targetItems.size()));
     
     // For M1 Foundation, commands are simulated
     // Real implementation would apply actual transformations/property changes

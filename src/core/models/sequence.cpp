@@ -31,8 +31,8 @@ Sequence Sequence::create(const QString& name, const QString& projectId,
     sequence.m_cachedVideoTrackCount = 0;
     sequence.m_cachedAudioTrackCount = 0;
     
-    qCDebug(jveSequence) << "Created sequence:" << name << "for project:" << projectId 
-                        << "canvas:" << width << "x" << height << "@" << framerate << "fps";
+    qCDebug(jveSequence, "Created sequence: %s for project: %s canvas: %dx%d@%gfps", 
+                        qPrintable(name), qPrintable(projectId), width, height, framerate);
     return sequence;
 }
 
@@ -47,12 +47,12 @@ Sequence Sequence::load(const QString& id, const QSqlDatabase& database)
     query.addBindValue(id);
     
     if (!query.exec()) {
-        qCWarning(jveSequence) << "Failed to load sequence:" << query.lastError().text();
+        qCWarning(jveSequence, "Failed to load sequence: %s", qPrintable(query.lastError().text()));
         return Sequence();
     }
     
     if (!query.next()) {
-        qCDebug(jveSequence) << "Sequence not found:" << id;
+        qCDebug(jveSequence, "Sequence not found: %s", qPrintable(id));
         return Sequence();
     }
     
@@ -72,7 +72,7 @@ Sequence Sequence::load(const QString& id, const QSqlDatabase& database)
     sequence.validateFramerate();
     sequence.validateCanvasResolution();
     
-    qCDebug(jveSequence) << "Loaded sequence:" << sequence.m_name;
+    qCDebug(jveSequence, "Loaded sequence: %s", qPrintable(sequence.m_name));
     return sequence;
 }
 
@@ -90,7 +90,7 @@ QList<Sequence> Sequence::loadByProject(const QString& projectId, const QSqlData
     query.addBindValue(projectId);
     
     if (!query.exec()) {
-        qCWarning(jveSequence) << "Failed to load sequences for project:" << query.lastError().text();
+        qCWarning(jveSequence, "Failed to load sequences for project: %s", qPrintable(query.lastError().text()));
         return sequences;
     }
     
@@ -102,7 +102,7 @@ QList<Sequence> Sequence::loadByProject(const QString& projectId, const QSqlData
         }
     }
     
-    qCDebug(jveSequence) << "Loaded" << sequences.size() << "sequences for project:" << projectId;
+    qCDebug(jveSequence, "Loaded %lld sequences for project: %s", (long long)sequences.size(), qPrintable(projectId));
     return sequences;
 }
 
@@ -110,7 +110,7 @@ bool Sequence::save(const QSqlDatabase& database)
 {
     // Algorithm: Validate data → Execute insert/update → Update timestamps
     if (!isValid()) {
-        qCWarning(jveSequence) << "Cannot save invalid sequence";
+        qCWarning(jveSequence, "Cannot save invalid sequence");
         return false;
     }
     
@@ -132,11 +132,11 @@ bool Sequence::save(const QSqlDatabase& database)
     query.addBindValue(0); // timecode_start default to 0
     
     if (!query.exec()) {
-        qCWarning(jveSequence) << "Failed to save sequence:" << query.lastError().text();
+        qCWarning(jveSequence, "Failed to save sequence: %s", qPrintable(query.lastError().text()));
         return false;
     }
     
-    qCDebug(jveSequence) << "Saved sequence:" << m_name;
+    qCDebug(jveSequence, "Saved sequence: %s", qPrintable(m_name));
     return true;
 }
 
@@ -271,7 +271,7 @@ void Sequence::addVideoTrack(const QString& name)
     m_cachedVideoTrackCount++;
     
     updateModifiedTime();
-    qCDebug(jveSequence) << "Added video track:" << name << "to sequence:" << m_name;
+    qCDebug(jveSequence, "Added video track: %s to sequence: %s", qPrintable(name), qPrintable(m_name));
 }
 
 void Sequence::addAudioTrack(const QString& name)
@@ -282,7 +282,7 @@ void Sequence::addAudioTrack(const QString& name)
     m_cachedAudioTrackCount++;
     
     updateModifiedTime();
-    qCDebug(jveSequence) << "Added audio track:" << name << "to sequence:" << m_name;
+    qCDebug(jveSequence, "Added audio track: %s to sequence: %s", qPrintable(name), qPrintable(m_name));
 }
 
 void Sequence::updateModifiedTime()
@@ -293,10 +293,10 @@ void Sequence::updateModifiedTime()
 void Sequence::validateFramerate()
 {
     if (m_framerate <= 0) {
-        qCWarning(jveSequence) << "Invalid framerate:" << m_framerate;
+        qCWarning(jveSequence, "Invalid framerate: %g", m_framerate);
         // No defaults - validation fails, caller must provide valid value
     } else if (m_framerate > 120.0) {
-        qCWarning(jveSequence) << "Framerate too high, clamping to 120:" << m_framerate;
+        qCWarning(jveSequence, "Framerate too high, clamping to 120: %g", m_framerate);
         m_framerate = 120.0;
     }
 }
@@ -304,12 +304,12 @@ void Sequence::validateFramerate()
 void Sequence::validateCanvasResolution()
 {
     if (m_width <= 0) {
-        qCWarning(jveSequence) << "Invalid canvas width:" << m_width;
+        qCWarning(jveSequence, "Invalid canvas width: %d", m_width);
         // No defaults - validation fails, caller must provide valid value
     }
     
     if (m_height <= 0) {
-        qCWarning(jveSequence) << "Invalid canvas height:" << m_height;
+        qCWarning(jveSequence, "Invalid canvas height: %d", m_height);
         // No defaults - validation fails, caller must provide valid value  
     }
 }
@@ -339,6 +339,6 @@ int Sequence::queryTrackCount(const QSqlDatabase& database, const QString& track
         return query.value(0).toInt();
     }
     
-    qCWarning(jveSequence) << "Failed to query track count:" << query.lastError().text();
+    qCWarning(jveSequence, "Failed to query track count: %s", qPrintable(query.lastError().text()));
     return 0;
 }

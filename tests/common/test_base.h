@@ -36,7 +36,7 @@ protected slots:
     virtual void initTestCase() {
         // Set up logging for tests
         QLoggingCategory::setFilterRules("jve.tests=true");
-        qCInfo(jveTests) << "Initializing test case:" << metaObject()->className();
+        qCInfo(jveTests, "Initializing test case: %s", metaObject()->className());
         
         // Create temporary directory for test data
         m_testDataDir = std::make_unique<QTemporaryDir>();
@@ -53,7 +53,7 @@ protected slots:
      * Clean up after each test method
      */
     virtual void cleanupTestCase() {
-        qCInfo(jveTests) << "Cleaning up test case:" << metaObject()->className();
+        qCInfo(jveTests, "Cleaning up test case: %s", metaObject()->className());
         m_testDataDir.reset();
     }
     
@@ -70,7 +70,7 @@ protected slots:
     virtual void cleanup() {
         auto elapsedMs = m_timer.elapsed();
         if (elapsedMs > 1000) { // Log slow tests
-            qCWarning(jveTests) << "Slow test detected:" << elapsedMs << "ms";
+            qCWarning(jveTests, "Slow test detected: %lldms", elapsedMs);
         }
     }
 
@@ -84,7 +84,7 @@ protected:
             QFAIL(qPrintable(QString("Performance requirement failed: %1 took %2ms (max: %3ms)")
                            .arg(operation).arg(elapsed).arg(maxMs)));
         }
-        qCInfo(jveTests) << operation << "completed in" << elapsed << "ms";
+        qCInfo(jveTests, "%s completed in %lldms", operation.toUtf8().constData(), elapsed);
     }
     
     /**
@@ -106,7 +106,7 @@ protected:
     void verifyTDDCompliance() {
         // This method documents the TDD expectation
         // Contract tests MUST fail initially
-        qCInfo(jveTests) << "TDD Compliance: Test written before implementation";
+        qCInfo(jveTests, "TDD Compliance: Test written before implementation");
     }
     
     /**
@@ -116,7 +116,7 @@ protected:
     void verifyCommandDeterminism(const QStringList& commands) {
         // TODO: Implement when command system is available
         Q_UNUSED(commands)
-        qCInfo(jveTests) << "Command determinism verification placeholder";
+        qCInfo(jveTests, "Command determinism verification placeholder");
     }
     
     /**
@@ -124,7 +124,7 @@ protected:
      * Components must be independently testable
      */
     void verifyLibraryFirstCompliance() {
-        qCInfo(jveTests) << "Library-First Compliance: Component tested in isolation";
+        qCInfo(jveTests, "Library-First Compliance: Component tested in isolation");
     }
 };
 

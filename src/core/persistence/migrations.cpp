@@ -13,20 +13,20 @@ Q_LOGGING_CATEGORY(jveMigrations, "jve.migrations")
 
 void Migrations::initialize()
 {
-    qCInfo(jveMigrations) << "Initializing JVE Editor migration system v" << schema::CURRENT_SCHEMA_VERSION;
+    qCInfo(jveMigrations, "Initializing JVE Editor migration system v%d", schema::CURRENT_SCHEMA_VERSION);
     
     // Algorithm: Verify schema files → Log readiness status
     if (!verifySchemaFilesExist()) {
-        qCCritical(jveMigrations) << "Schema file not found - database operations will fail";
+        qCCritical(jveMigrations, "Schema file not found - database operations will fail");
         return;
     }
     
-    qCInfo(jveMigrations) << "Migration system ready - latest schema version:" << schema::CURRENT_SCHEMA_VERSION;
+    qCInfo(jveMigrations, "Migration system ready - latest schema version: %d", schema::CURRENT_SCHEMA_VERSION);
 }
 
 bool Migrations::applyMigrations(QSqlDatabase& database, const QString& projectPath)
 {
-    qCInfo(jveMigrations) << "Applying migrations to project:" << projectPath;
+    qCInfo(jveMigrations, "Applying migrations to project: %s", qPrintable(projectPath));
     
     // Algorithm: Validate database → Check versions → Apply updates → Verify results
     if (!validateDatabaseConnection(database)) {
@@ -39,8 +39,7 @@ bool Migrations::applyMigrations(QSqlDatabase& database, const QString& projectP
     }
     
     if (versions.isDowngrade) {
-        qCCritical(jveMigrations) << "Database version" << versions.current 
-                                 << "is newer than supported version" << versions.target;
+        qCCritical(jveMigrations, "Database version %d is newer than supported version %d", versions.current, versions.target);
         return false;
     }
     
@@ -49,7 +48,7 @@ bool Migrations::applyMigrations(QSqlDatabase& database, const QString& projectP
 
 bool Migrations::createNewProject(const QString& projectPath)
 {
-    qCInfo(jveMigrations) << "Creating new project:" << projectPath;
+    qCInfo(jveMigrations, "Creating new project: %s", qPrintable(projectPath));
     
     // Algorithm: Prepare file → Create connection → Apply schema → Cleanup
     if (!prepareProjectFile(projectPath)) {
@@ -66,7 +65,7 @@ bool Migrations::createNewProject(const QString& projectPath)
     cleanupMigrationConnection(db);
     
     if (success) {
-        qCInfo(jveMigrations) << "New project created successfully";
+        qCInfo(jveMigrations, "New project created successfully");
     }
     
     return success;
@@ -88,7 +87,7 @@ bool Migrations::verifySchemaFilesExist()
 bool Migrations::validateDatabaseConnection(const QSqlDatabase& database)
 {
     if (!database.isOpen()) {
-        qCCritical(jveMigrations) << "Database not open for migrations";
+        qCCritical(jveMigrations, "Database not open for migrations");
         return false;
     }
     
@@ -101,11 +100,11 @@ Migrations::VersionInfo Migrations::determineVersionUpgrade(const QSqlDatabase& 
     info.current = SchemaValidator::getCurrentSchemaVersion(database);
     info.target = schema::CURRENT_SCHEMA_VERSION;
     
-    qCInfo(jveMigrations) << "Schema version:" << info.current << "→" << info.target;
+    qCInfo(jveMigrations, "Schema version: %d → %d", info.current, info.target);
     
     if (info.current == info.target) {
         info.upgradeNeeded = false;
-        qCInfo(jveMigrations) << "Database already at latest schema version";
+        qCInfo(jveMigrations, "Database already at latest schema version");
     } else if (info.current > info.target) {
         info.isDowngrade = true;
     } else {
@@ -127,7 +126,7 @@ bool Migrations::executeVersionUpgrade(QSqlDatabase& database, const VersionInfo
     }
     
     if (!database.commit()) {
-        qCCritical(jveMigrations) << "Failed to commit migrations:" << database.lastError().text();
+        qCCritical(jveMigrations, "Failed to commit migrations: %s", qPrintable(database.lastError().text()));
         return false;
     }
     
@@ -137,10 +136,10 @@ bool Migrations::executeVersionUpgrade(QSqlDatabase& database, const VersionInfo
 bool Migrations::applyMigrationsInSequence(QSqlDatabase& database, int fromVersion, int toVersion)
 {
     for (int version = fromVersion + 1; version <= toVersion; version++) {
-        qCInfo(jveMigrations) << "Applying migration to version" << version;
+        qCInfo(jveMigrations, "Applying migration to version %d", version);
         
         if (!SqlExecutor::applyMigrationVersion(database, version)) {
-            qCCritical(jveMigrations) << "Migration to version" << version << "failed";
+            qCCritical(jveMigrations, "Migration to version %d failed", version);
             return false;
         }
     }
@@ -154,9 +153,9 @@ bool Migrations::validateFinalMigrationState(const QSqlDatabase& database)
                 SchemaValidator::verifyConstitutionalCompliance(database);
     
     if (valid) {
-        qCInfo(jveMigrations) << "All migrations applied successfully";
+        qCInfo(jveMigrations, "All migrations applied successfully");
     } else {
-        qCCritical(jveMigrations) << "Migration validation failed";
+        qCCritical(jveMigrations, "Migration validation failed");
     }
     
     return valid;
@@ -169,7 +168,7 @@ bool Migrations::prepareProjectFile(const QString& projectPath)
     
     if (QFile::exists(projectPath)) {
         if (!QFile::remove(projectPath)) {
-            qCCritical(jveMigrations) << "Failed to remove existing project file";
+            qCCritical(jveMigrations, "Failed to remove existing project file");
             return false;
         }
     }

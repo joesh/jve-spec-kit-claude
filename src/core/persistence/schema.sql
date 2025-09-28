@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     track_index INTEGER NOT NULL,           -- Display order (V1=1, V2=2, A1=1, A2=2)
     enabled BOOLEAN NOT NULL DEFAULT 1,
     locked BOOLEAN NOT NULL DEFAULT 0,
+    muted BOOLEAN NOT NULL DEFAULT 0,
+    soloed BOOLEAN NOT NULL DEFAULT 0,
+    volume REAL NOT NULL DEFAULT 1.0 CHECK(volume >= 0.0 AND volume <= 2.0),
+    pan REAL NOT NULL DEFAULT 0.0 CHECK(pan >= -1.0 AND pan <= 1.0),
     
     FOREIGN KEY (sequence_id) REFERENCES sequences(id) ON DELETE CASCADE,
     

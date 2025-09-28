@@ -12,7 +12,7 @@ Q_LOGGING_CATEGORY(jveTimeline, "jve.timeline")
 TimelineManager::TimelineManager(QObject* parent)
     : QObject(parent)
 {
-    qCDebug(jveTimeline) << "Initializing TimelineManager";
+    qCDebug(jveTimeline, "Initializing TimelineManager");
     
     // Algorithm: Create timer → Configure → Connect signals
     m_playbackTimer = new QTimer(this);
@@ -24,7 +24,7 @@ TimelineManager::TimelineManager(QObject* parent)
 
 void TimelineManager::loadSequence(const QString& sequenceId, QSqlDatabase& database)
 {
-    qCDebug(jveTimeline) << "Loading sequence:" << sequenceId;
+    qCDebug(jveTimeline, "Loading sequence: %s", qPrintable(sequenceId));
     
     // Algorithm: Store references → Load metadata → Load clips → Validate
     m_sequenceId = sequenceId;
@@ -46,13 +46,13 @@ void TimelineManager::loadSequence(const QString& sequenceId, QSqlDatabase& data
 
 void TimelineManager::setFramerate(double framerate)
 {
-    qCDebug(jveTimeline) << "Setting framerate:" << framerate;
+    qCDebug(jveTimeline, "Setting framerate: %g", framerate);
     m_framerate = framerate;
 }
 
 void TimelineManager::play()
 {
-    qCDebug(jveTimeline) << "Starting playback";
+    qCDebug(jveTimeline, "Starting playback");
     
     // Algorithm: Set state → Start timer → Notify
     m_playbackState = PlaybackState::Playing;
@@ -64,7 +64,7 @@ void TimelineManager::play()
 
 void TimelineManager::pause()
 {
-    qCDebug(jveTimeline) << "Pausing playback";
+    qCDebug(jveTimeline, "Pausing playback");
     
     // Algorithm: Set state → Stop timer → Notify
     m_playbackState = PlaybackState::Paused;
@@ -75,7 +75,7 @@ void TimelineManager::pause()
 
 void TimelineManager::stop()
 {
-    qCDebug(jveTimeline) << "Stopping playback";
+    qCDebug(jveTimeline, "Stopping playback");
     
     // Algorithm: Stop timer → Reset position → Set state → Notify
     m_playbackTimer->stop();
@@ -88,10 +88,12 @@ void TimelineManager::stop()
 
 void TimelineManager::seek(qint64 timeMs)
 {
-    qCDebug(jveTimeline) << "Seeking to:" << timeMs;
+    qCDebug(jveTimeline, "Seeking to: %lld", timeMs);
     
     // Algorithm: Clamp time → Set position → Notify
-    m_currentTime = qBound(qint64(0), timeMs, m_sequenceDuration);
+    // Allow seeking beyond current content for professional editor behavior
+    qint64 maxSeekTime = qMax(m_sequenceDuration, qint64(24 * 60 * 60 * 1000)); // 24 hours max
+    m_currentTime = qBound(qint64(0), timeMs, maxSeekTime);
     
     emit currentTimeChanged(m_currentTime);
     emit frameChanged(getCurrentFrame());
@@ -99,7 +101,7 @@ void TimelineManager::seek(qint64 timeMs)
 
 void TimelineManager::seekToFrame(int frameNumber)
 {
-    qCDebug(jveTimeline) << "Seeking to frame:" << frameNumber;
+    qCDebug(jveTimeline, "Seeking to frame: %d", frameNumber);
     
     // Algorithm: Calculate time → Seek to time
     qint64 frameTime = qRound(static_cast<double>(frameNumber) * getFrameDuration());
@@ -118,7 +120,7 @@ int TimelineManager::getCurrentFrame() const
 
 void TimelineManager::snapToFrame()
 {
-    qCDebug(jveTimeline) << "Snapping to frame";
+    qCDebug(jveTimeline, "Snapping to frame");
     
     // Algorithm: Get current frame → Calculate exact time → Seek
     int currentFrame = getCurrentFrame();
@@ -128,7 +130,7 @@ void TimelineManager::snapToFrame()
 
 void TimelineManager::stepForward()
 {
-    qCDebug(jveTimeline) << "Stepping forward";
+    qCDebug(jveTimeline, "Stepping forward");
     
     // Algorithm: Calculate next frame → Seek
     qint64 nextTime = m_currentTime + getFrameDuration();
@@ -137,7 +139,7 @@ void TimelineManager::stepForward()
 
 void TimelineManager::stepBackward()
 {
-    qCDebug(jveTimeline) << "Stepping backward";
+    qCDebug(jveTimeline, "Stepping backward");
     
     // Algorithm: Calculate previous frame → Seek
     qint64 prevTime = m_currentTime - getFrameDuration();
@@ -146,19 +148,19 @@ void TimelineManager::stepBackward()
 
 void TimelineManager::goToStart()
 {
-    qCDebug(jveTimeline) << "Going to start";
+    qCDebug(jveTimeline, "Going to start");
     seek(0);
 }
 
 void TimelineManager::goToEnd()
 {
-    qCDebug(jveTimeline) << "Going to end";
+    qCDebug(jveTimeline, "Going to end");
     seek(m_sequenceDuration);
 }
 
 void TimelineManager::handleKeyPress(char key)
 {
-    qCDebug(jveTimeline) << "Handling key press:" << key;
+    qCDebug(jveTimeline, "Handling key press: %c", key);
     
     // Algorithm: Route by key → Execute command
     switch (key) {
@@ -197,7 +199,7 @@ void TimelineManager::handleKeyPress(char key)
 
 void TimelineManager::addClip(const ClipInfo& clip)
 {
-    qCDebug(jveTimeline) << "Adding clip:" << clip.id;
+    qCDebug(jveTimeline, "Adding clip: %s", qPrintable(clip.id));
     
     // Algorithm: Validate → Insert → Sort → Update metrics
     m_clips.append(clip);
@@ -224,7 +226,7 @@ ClipInfo TimelineManager::getClip(const QString& clipId) const
 
 RippleResult TimelineManager::performRipple(const RippleOperation& operation)
 {
-    qCDebug(jveTimeline) << "Performing ripple operation:" << static_cast<int>(operation.type);
+    qCDebug(jveTimeline, "Performing ripple operation: %d", static_cast<int>(operation.type));
     
     // Algorithm: Validate → Execute → Update positions → Return result
     RippleResult result;
@@ -298,7 +300,7 @@ RippleResult TimelineManager::performRipple(const RippleOperation& operation)
 
 void TimelineManager::removeGaps(const QStringList& trackIds)
 {
-    qCDebug(jveTimeline) << "Removing gaps on tracks:" << trackIds;
+    qCDebug(jveTimeline, "Removing gaps on tracks: %s", qPrintable(trackIds.join(", ")));
     
     // Algorithm: Find gaps → Shift clips → Validate
     for (const QString& trackId : trackIds) {
@@ -338,7 +340,7 @@ void TimelineManager::removeGaps(const QStringList& trackIds)
 
 QList<TimelineGap> TimelineManager::findGaps(const QStringList& trackIds) const
 {
-    qCDebug(jveTimeline) << "Finding gaps on tracks:" << trackIds;
+    qCDebug(jveTimeline, "Finding gaps on tracks: %s", qPrintable(trackIds.join(", ")));
     
     // Algorithm: Analyze clips → Identify gaps → Return list
     QList<TimelineGap> gaps;
@@ -376,19 +378,19 @@ QList<TimelineGap> TimelineManager::findGaps(const QStringList& trackIds) const
 
 void TimelineManager::setSnapEnabled(bool enabled)
 {
-    qCDebug(jveTimeline) << "Setting snap enabled:" << enabled;
+    qCDebug(jveTimeline, "Setting snap enabled: %s", enabled ? "true" : "false");
     m_snapEnabled = enabled;
 }
 
 void TimelineManager::setSnapTolerance(int toleranceMs)
 {
-    qCDebug(jveTimeline) << "Setting snap tolerance:" << toleranceMs;
+    qCDebug(jveTimeline, "Setting snap tolerance: %d", toleranceMs);
     m_snapTolerance = toleranceMs;
 }
 
 void TimelineManager::setSnapPoints(const QList<qint64>& points)
 {
-    qCDebug(jveTimeline) << "Setting snap points:" << points.size();
+    qCDebug(jveTimeline, "Setting snap points: %lld", static_cast<long long>(points.size()));
     m_snapPoints = points;
 }
 
@@ -411,13 +413,13 @@ qint64 TimelineManager::getSnappedTime(qint64 timeMs) const
 
 void TimelineManager::setMagneticTimelineEnabled(bool enabled)
 {
-    qCDebug(jveTimeline) << "Setting magnetic timeline enabled:" << enabled;
+    qCDebug(jveTimeline, "Setting magnetic timeline enabled: %s", enabled ? "true" : "false");
     m_magneticTimelineEnabled = enabled;
 }
 
 ClipDragResult TimelineManager::dragClip(const ClipInfo& clip, qint64 newStartTime)
 {
-    qCDebug(jveTimeline) << "Dragging clip:" << clip.id << "to:" << newStartTime;
+    qCDebug(jveTimeline, "Dragging clip: %s to: %lld", qPrintable(clip.id), newStartTime);
     
     // Algorithm: Check magnetic → Find snap target → Calculate result
     ClipDragResult result;
@@ -461,22 +463,26 @@ ClipDragResult TimelineManager::dragClip(const ClipInfo& clip, qint64 newStartTi
 
 TimelineMetrics TimelineManager::calculateMetrics() const
 {
-    qCDebug(jveTimeline) << "Calculating timeline metrics";
+    qCDebug(jveTimeline, "Calculating timeline metrics");
     
     // Algorithm: Analyze clips → Calculate stats → Return metrics
     TimelineMetrics metrics;
     
     metrics.clipCount = m_clips.size();
-    metrics.totalDuration = m_sequenceDuration;
     
-    // Calculate track count and average clip length
+    // Calculate track count, total duration, and average clip length
     QSet<QString> uniqueTracks;
     qint64 totalClipDuration = 0;
+    qint64 timelineEnd = 0;
     
     for (const ClipInfo& clip : m_clips) {
         uniqueTracks.insert(clip.trackId);
         totalClipDuration += (clip.end - clip.start);
+        timelineEnd = qMax(timelineEnd, clip.end);  // Find the end of timeline content
     }
+    
+    // Set total duration to actual timeline content duration
+    metrics.totalDuration = timelineEnd;
     
     metrics.trackCount = uniqueTracks.size();
     metrics.trackIds = uniqueTracks.values();
@@ -523,7 +529,7 @@ void TimelineManager::validateTimelineConsistency()
 {
     // Algorithm: Check overlaps → Validate durations → Log issues
     // For M1 Foundation, basic validation
-    qCDebug(jveTimeline) << "Validating timeline consistency";
+    qCDebug(jveTimeline, "Validating timeline consistency");
 }
 
 ClipInfo* TimelineManager::findClipById(const QString& clipId)
@@ -616,5 +622,5 @@ void TimelineManager::loadClipsFromDatabase()
         }
     }
     
-    qCDebug(jveTimeline) << "Loaded" << m_clips.size() << "clips from database";
+    qCDebug(jveTimeline, "Loaded %lld clips from database", static_cast<long long>(m_clips.size()));
 }
