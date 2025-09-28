@@ -265,12 +265,12 @@ SelectionOperation SelectionManager::createBatchOperation(const QString& operati
     return operation;
 }
 
-ExecutionResult SelectionManager::executeOperation(const SelectionOperation& operation)
+SelectionExecutionResult SelectionManager::executeOperation(const SelectionOperation& operation)
 {
     qCDebug(jveSelection, "Executing selection operation: %s", qPrintable(operation.type));
     
     // Algorithm: Validate → Execute → Create result → Return
-    ExecutionResult result;
+    SelectionExecutionResult result;
     
     if (operation.targetItems.isEmpty()) {
         result.success = false;

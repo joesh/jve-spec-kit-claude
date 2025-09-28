@@ -55,6 +55,27 @@ private:
     void updateCommandHashes(Command& command, const QString& preHash);
     QList<Command> loadCommandsFromSequence(int startSequence) const;
     
+    // Command type implementations
+    bool executeCreateProject(Command& command);
+    bool executeLoadProject(Command& command);
+    bool executeCreateSequence(Command& command);
+    bool executeImportMedia(Command& command);
+    bool executeSetClipProperty(Command& command);
+    bool executeSetProperty(Command& command);
+    bool executeModifyProperty(Command& command);
+    bool executeCreateClip(Command& command);
+    bool executeAddTrack(Command& command);
+    bool executeAddClip(Command& command);
+    bool executeSetupProject(Command& command);
+    
+    // Timeline operation commands
+    bool executeTimelineCreateClip(Command& command);
+    bool executeTimelineDeleteClip(Command& command);
+    bool executeTimelineSplitClip(Command& command);
+    bool executeTimelineRippleDelete(Command& command);
+    bool executeTimelineRippleTrim(Command& command);
+    bool executeTimelineRollEdit(Command& command);
+    
     // Database reference
     QSqlDatabase& m_database;
     

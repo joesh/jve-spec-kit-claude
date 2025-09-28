@@ -64,7 +64,7 @@ struct SelectionOperation {
     void setTransform(const TransformData& t) { transform = t; }
 };
 
-struct ExecutionResult {
+struct SelectionExecutionResult {
     bool success = false;
     QString errorMessage;
     QStringList affectedItems;
@@ -129,7 +129,7 @@ public:
     
     // Selection-based operations
     SelectionOperation createBatchOperation(const QString& operationType);
-    ExecutionResult executeOperation(const SelectionOperation& operation);
+    SelectionExecutionResult executeOperation(const SelectionOperation& operation);
     bool canUndo() const;
     void undo();
     

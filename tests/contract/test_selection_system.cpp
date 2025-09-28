@@ -296,7 +296,7 @@ void TestSelectionSystem::testSelectionOperations()
     SelectionOperation operation = m_selectionManager->createBatchOperation("SetProperties");
     operation.setParameters(properties);
     
-    ExecutionResult result = m_selectionManager->executeOperation(operation);
+    SelectionExecutionResult result = m_selectionManager->executeOperation(operation);
     QVERIFY(result.success);
     QCOMPARE(result.affectedItems.size(), 3);
     
@@ -315,7 +315,7 @@ void TestSelectionSystem::testSelectionOperations()
     SelectionOperation transformOp = m_selectionManager->createBatchOperation("Transform");
     transformOp.setTransform(transform);
     
-    ExecutionResult transformResult = m_selectionManager->executeOperation(transformOp);
+    SelectionExecutionResult transformResult = m_selectionManager->executeOperation(transformOp);
     QVERIFY(transformResult.success);
     QCOMPARE(transformResult.affectedItems.size(), 3);
     
