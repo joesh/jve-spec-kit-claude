@@ -75,6 +75,7 @@ set(UI_SOURCES
     src/ui/media/media_browser_panel.cpp
     src/ui/project/project_panel.cpp
     src/ui/main/main_window.cpp
+    src/ui/input/keyboard_shortcuts.cpp
 )
 
 # LUA and CLI sources not yet implemented in M1 Foundation

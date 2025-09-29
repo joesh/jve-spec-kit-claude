@@ -17,6 +17,7 @@ MainWindow::MainWindow(QWidget* parent)
     // Initialize core components first
     m_commandDispatcher = new CommandDispatcher(this);
     m_selectionManager = new SelectionManager(this);
+    m_keyboardShortcuts = new KeyboardShortcuts(this);
     m_settings = new QSettings(this);
     
     setupUI();
@@ -254,32 +255,82 @@ void MainWindow::connectSignals()
 
 void MainWindow::setupKeyboardShortcuts()
 {
-    // File shortcuts
+    // Load default shortcuts into the keyboard shortcuts system
+    m_keyboardShortcuts->loadDefaultShortcuts();
+    
+    // Connect keyboard shortcut signals to main window actions
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::playPauseRequested, 
+            this, [this]() { qCDebug(jveMainWindow) << "Play/Pause requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::stopRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Stop requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::playBackwardRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Play backward requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::playForwardRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Play forward requested"; });
+    
+    // Editing shortcuts
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::bladeToolRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Blade tool requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::selectionToolRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Selection tool requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::arrowToolRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Arrow tool requested"; });
+    
+    // Timeline shortcuts
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::splitClipRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Split clip requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::deleteClipRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Delete clip requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::copyRequested,
+            this, &MainWindow::onCopy);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::pasteRequested,
+            this, &MainWindow::onPaste);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::cutRequested,
+            this, &MainWindow::onCut);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::undoRequested,
+            this, &MainWindow::onUndo);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::redoRequested,
+            this, &MainWindow::onRedo);
+    
+    // Selection shortcuts
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::selectAllRequested,
+            this, &MainWindow::onSelectAll);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::deselectAllRequested,
+            this, &MainWindow::onDeselectAll);
+    
+    // Navigation shortcuts
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::zoomInRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Zoom in requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::zoomOutRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Zoom out requested"; });
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::zoomToFitRequested,
+            this, [this]() { qCDebug(jveMainWindow) << "Zoom to fit requested"; });
+    
+    // Window shortcuts
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::toggleTimelineRequested,
+            this, &MainWindow::onToggleTimeline);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::toggleInspectorRequested,
+            this, &MainWindow::onToggleInspector);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::toggleMediaBrowserRequested,
+            this, &MainWindow::onToggleMediaBrowser);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::toggleProjectRequested,
+            this, &MainWindow::onToggleProject);
+    connect(m_keyboardShortcuts, &KeyboardShortcuts::toggleFullScreenRequested,
+            this, &MainWindow::onToggleFullScreen);
+    
+    // Set keyboard shortcut context based on focus
+    connect(this, &MainWindow::projectOpened, [this](const Project&) {
+        m_keyboardShortcuts->setActiveContext(KeyboardShortcuts::GlobalContext);
+    });
+    
+    // Traditional action shortcuts (fallback for menu access)
     m_newProjectAction->setShortcut(QKeySequence::New);
     m_openProjectAction->setShortcut(QKeySequence::Open);
     m_saveProjectAction->setShortcut(QKeySequence::Save);
     m_saveProjectAsAction->setShortcut(QKeySequence::SaveAs);
     m_importMediaAction->setShortcut(QKeySequence("Ctrl+I"));
     m_exitAction->setShortcut(QKeySequence::Quit);
-    
-    // Edit shortcuts
-    m_undoAction->setShortcut(QKeySequence::Undo);
-    m_redoAction->setShortcut(QKeySequence::Redo);
-    m_cutAction->setShortcut(QKeySequence::Cut);
-    m_copyAction->setShortcut(QKeySequence::Copy);
-    m_pasteAction->setShortcut(QKeySequence::Paste);
-    m_selectAllAction->setShortcut(QKeySequence::SelectAll);
-    m_deselectAllAction->setShortcut(QKeySequence("Ctrl+D"));
-    
-    // View shortcuts
-    m_toggleFullScreenAction->setShortcut(QKeySequence::FullScreen);
     m_showPreferencesAction->setShortcut(QKeySequence::Preferences);
-    
-    // Professional video editing shortcuts
-    m_toggleTimelineAction->setShortcut(QKeySequence("F1"));
-    m_toggleInspectorAction->setShortcut(QKeySequence("F2"));
-    m_toggleMediaBrowserAction->setShortcut(QKeySequence("F3"));
-    m_toggleProjectAction->setShortcut(QKeySequence("F4"));
 }
 
 // Menu creation methods

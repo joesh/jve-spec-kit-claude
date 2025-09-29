@@ -4,6 +4,7 @@
 #include "XGR2Y73JXP/moc_command_dispatcher.cpp"
 #include "L7NLU6VBVA/moc_project_persistence.cpp"
 #include "VM3IGXGCA7/moc_timeline_manager.cpp"
+#include "5QFCAYAKM4/moc_keyboard_shortcuts.cpp"
 #include "7AVVNI2THU/moc_inspector_panel.cpp"
 #include "RTSUUPBLSA/moc_main_window.cpp"
 #include "46IJ4LTV2J/moc_media_browser_panel.cpp"

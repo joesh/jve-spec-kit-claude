@@ -1023,6 +1023,8 @@ JVECore_autogen/timestamp: \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/persistence/sql_executor.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.h \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/input/keyboard_shortcuts.cpp \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/input/keyboard_shortcuts.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/inspector/inspector_panel.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/inspector/inspector_panel.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/main/main_window.cpp \
@@ -1044,6 +1046,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonArray \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QList \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QLoggingCategory \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMap \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMimeData \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMutex \
@@ -1144,6 +1147,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qlist.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qlocale.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qlogging.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qloggingcategory.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qmalloc.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qmap.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qmargins.h \
@@ -1240,11 +1244,13 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QFontMetrics \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QIcon \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QKeyEvent \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QKeySequence \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QMouseEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QPainter \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QPen \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QPixmap \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QResizeEvent \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QShortcut \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QTransform \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QWheelEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qaction.h \
@@ -1281,6 +1287,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qrgba64.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qscreen.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qscreen_platform.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qshortcut.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qtextcursor.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qtextdocument.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qtextformat.h \

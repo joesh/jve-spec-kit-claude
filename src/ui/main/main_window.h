@@ -28,6 +28,7 @@
 #include "ui/media/media_browser_panel.h"
 #include "ui/project/project_panel.h"
 #include "ui/selection/selection_manager.h"
+#include "ui/input/keyboard_shortcuts.h"
 
 /**
  * Professional main window for video editing application
@@ -228,6 +229,7 @@ private:
     // Core components
     CommandDispatcher* m_commandDispatcher = nullptr;
     SelectionManager* m_selectionManager = nullptr;
+    KeyboardShortcuts* m_keyboardShortcuts = nullptr;
     Project m_currentProject;
     
     // UI panels
