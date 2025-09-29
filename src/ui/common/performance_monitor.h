@@ -191,6 +191,8 @@ signals:
     void bottleneckDetected(PerformanceMetric metric, qreal value, qreal target);
     void performanceImproved(PerformanceMetric metric, qreal improvement);
     void memoryLeakDetected(const QString& component, qint64 leakedBytes);
+    void memoryPressureDetected();
+    void systemPerformanceChanged(const QString& reason);
 
     // Optimization notifications
     void optimizationApplied(OptimizationStrategy strategy, const QStringList& changes);
@@ -255,6 +257,10 @@ private:
     void storeMetric(PerformanceMetric metric, qreal value);
     void trimMetricHistory();
     void exportPerformanceData(const QString& filePath) const;
+    
+    // Preview quality management
+    qreal getCurrentPreviewQuality() const;
+    qreal getTargetPreviewQuality() const;
 
 private:
     // Monitoring state
@@ -266,6 +272,7 @@ private:
     // Timers and threads
     QTimer* m_metricsTimer = nullptr;
     QTimer* m_optimizationTimer = nullptr;
+    QTimer* m_memoryCleanupTimer = nullptr;
     QElapsedTimer m_sessionTimer;
 
     // Performance data storage

@@ -504,3 +504,66 @@ bool ThemeManager::isColorDark(const QColor& color) const
     double luminance = (0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()) / 255.0;
     return luminance < 0.5;
 }
+
+void ThemeManager::onPreviewTimer()
+{
+    qCDebug(jveTheme) << "Preview timer timeout - applying preview theme";
+    
+    // Apply the currently previewed theme permanently
+    if (!m_previewThemeName.isEmpty()) {
+        setCurrentTheme(m_previewThemeName);
+        m_previewThemeName.clear();
+        saveCurrentTheme();
+        
+        emit themeChanged(m_currentTheme.type, m_currentTheme.name);
+        qCDebug(jveTheme) << "Preview theme applied and saved:" << m_currentTheme.name;
+    }
+}
+
+void ThemeManager::onSystemThemeChanged()
+{
+    qCDebug(jveTheme) << "System theme changed - checking for auto-adaptation";
+    
+    // Check if we should adapt to system theme changes
+    if (m_settings->value("adaptToSystemTheme", false).toBool()) {
+        // Detect system theme (simplified detection)
+        bool systemIsDark = false;
+        if (m_application) {
+            QPalette systemPalette = m_application->palette();
+            QColor windowColor = systemPalette.color(QPalette::Window);
+            systemIsDark = isColorDark(windowColor);
+        }
+        
+        // Switch to appropriate theme
+        if (systemIsDark && !m_currentTheme.colors.isDark) {
+            setCurrentTheme("Professional Dark");
+            qCDebug(jveTheme) << "Switched to dark theme following system";
+        } else if (!systemIsDark && m_currentTheme.colors.isDark) {
+            setCurrentTheme("Light Professional");
+            qCDebug(jveTheme) << "Switched to light theme following system";
+        }
+    }
+}
+
+void ThemeManager::onHighDPIChanged(qreal ratio)
+{
+    qCDebug(jveTheme) << "High DPI changed - ratio:" << ratio;
+    
+    // Update fonts for new DPI scaling
+    Theme updatedTheme = m_currentTheme;
+    
+    // Scale font sizes based on DPI ratio
+    for (auto& font : updatedTheme.fonts.fonts) {
+        int originalSize = font.pointSize();
+        if (originalSize > 0) {
+            int scaledSize = qRound(originalSize * ratio);
+            font.setPointSize(qMax(8, scaledSize)); // Minimum font size of 8
+        }
+    }
+    
+    // Apply updated theme
+    m_currentTheme = updatedTheme;
+    emit themeChanged(m_currentTheme.type, m_currentTheme.name);
+    
+    qCDebug(jveTheme) << "Fonts scaled for DPI ratio:" << ratio;
+}

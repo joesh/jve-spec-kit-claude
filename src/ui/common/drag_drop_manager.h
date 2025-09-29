@@ -171,6 +171,8 @@ signals:
     void showInsertionIndicator(const QPoint& position);
     void hideInsertionIndicator();
     void showDropZoneHighlight(DropZone zone, bool highlight);
+    void dragFeedbackUpdate();
+    void snapFeedbackUpdate();
 
 public slots:
     void onSelectionChanged(const QStringList& selectedItems);
@@ -242,6 +244,8 @@ private:
     // Professional editing state
     qint64 m_playheadPosition = 0;
     QStringList m_selectedItems;
+    bool m_dragActive = false;
+    bool m_snapActive = false;
 
     // Cursors for different operations
     QCursor m_insertCursor;

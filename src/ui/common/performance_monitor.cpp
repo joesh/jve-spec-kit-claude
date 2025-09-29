@@ -612,3 +612,88 @@ void PerformanceMonitor::onApplicationStateChanged(Qt::ApplicationState state)
         break;
     }
 }
+
+void PerformanceMonitor::onMemoryPressure()
+{
+    qCWarning(jvePerformance) << "Memory pressure detected - initiating cleanup";
+    
+    // Immediately start aggressive cleanup
+    cleanupUnusedResources();
+    optimizeMemoryUsage();
+    
+    // Temporarily reduce quality settings
+    qreal currentQuality = getCurrentPreviewQuality();
+    adjustPreviewQuality(currentQuality * 0.5); // Reduce quality by 50%
+    
+    // Emit signal for UI components to reduce memory usage
+    emit memoryPressureDetected();
+    
+    // Schedule memory cleanup timer if not already running
+    if (!m_memoryCleanupTimer) {
+        m_memoryCleanupTimer = new QTimer(this);
+        m_memoryCleanupTimer->setSingleShot(true);
+        connect(m_memoryCleanupTimer, &QTimer::timeout, [this]() {
+            // Restore quality after pressure subsides
+            qreal targetQuality = getTargetPreviewQuality();
+            adjustPreviewQuality(targetQuality);
+        });
+    }
+    
+    m_memoryCleanupTimer->start(30000); // Restore after 30 seconds
+}
+
+void PerformanceMonitor::onSystemPerformanceChanged()
+{
+    qCDebug(jvePerformance) << "System performance change detected - reassessing capabilities";
+    
+    // Re-detect system capabilities
+    SystemCapabilities newCaps = detectSystemCapabilities();
+    bool significantChange = false;
+    
+    // Check for significant changes in system capabilities
+    if (abs(newCaps.cpuCores - m_systemCapabilities.cpuCores) > 1 ||
+        abs(newCaps.totalMemory - m_systemCapabilities.totalMemory) > (1LL * 1024 * 1024 * 1024) || // 1GB change
+        newCaps.hasHardwareAcceleration != m_systemCapabilities.hasHardwareAcceleration) {
+        significantChange = true;
+    }
+    
+    if (significantChange) {
+        m_systemCapabilities = newCaps;
+        
+        // Trigger re-optimization with new capabilities
+        QString reason = QString("System capabilities changed - CPU cores: %1, Memory: %2GB, GPU acceleration: %3")
+                           .arg(newCaps.cpuCores)
+                           .arg(newCaps.totalMemory / (1024.0 * 1024.0 * 1024.0), 0, 'f', 1)
+                           .arg(newCaps.hasHardwareAcceleration ? "enabled" : "disabled");
+        
+        emit systemPerformanceChanged(reason);
+        
+        // Apply new optimization strategy based on updated capabilities
+        performAdaptiveOptimization();
+    }
+}
+
+qreal PerformanceMonitor::getCurrentPreviewQuality() const
+{
+    // Return current preview quality setting (would be stored as member variable)
+    return 1.0; // Default full quality
+}
+
+qreal PerformanceMonitor::getTargetPreviewQuality() const
+{
+    // Return target preview quality based on current strategy
+    switch (m_strategy) {
+    case HighQuality:
+        return 1.0;
+    case Professional:
+        return 0.9;
+    case Balanced:
+        return 0.75;
+    case Performance:
+        return 0.6;
+    case Battery:
+        return 0.5;
+    default:
+        return 0.75;
+    }
+}

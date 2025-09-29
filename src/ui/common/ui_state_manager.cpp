@@ -682,3 +682,152 @@ void UIStateManager::onApplicationExit()
     saveAllStates();
     clearCrashRecoveryData();
 }
+
+void UIStateManager::onSettingsFileChanged()
+{
+    qCDebug(jveUIState) << "Settings file changed - reloading configuration";
+    
+    // Reload settings from all scopes
+    for (auto scope : {ApplicationScope, ProjectScope, SessionScope, WorkspaceScope}) {
+        if (m_settings.contains(scope)) {
+            delete m_settings[scope];
+            m_settings.remove(scope);
+        }
+    }
+    
+    // Re-initialize settings
+    restoreAllStates();
+    emit settingsReloaded();
+}
+
+void UIStateManager::saveCrashRecoveryData()
+{
+    if (!m_crashRecoveryEnabled) {
+        return;
+    }
+    
+    qCDebug(jveUIState) << "Saving crash recovery data";
+    
+    QJsonObject recoveryData;
+    recoveryData["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+    recoveryData["version"] = QCoreApplication::applicationVersion();
+    
+    // Save current state
+    if (m_mainWindow) {
+        WindowState windowState = getWindowState(ApplicationScope);
+        recoveryData["windowState"] = windowStateToJson(windowState);
+    }
+    
+    // Save current workspace
+    recoveryData["currentWorkspace"] = m_currentWorkspace;
+    recoveryData["workspaceState"] = captureCurrentWorkspaceState();
+    
+    // Write to crash recovery file
+    QString recoveryPath = QDir(m_settingsPath).absoluteFilePath("crash_recovery.json");
+    QFile recoveryFile(recoveryPath);
+    if (recoveryFile.open(QIODevice::WriteOnly)) {
+        QJsonDocument doc(recoveryData);
+        recoveryFile.write(doc.toJson());
+        recoveryFile.close();
+        qCDebug(jveUIState) << "Crash recovery data saved to:" << recoveryPath;
+    } else {
+        qCWarning(jveUIState) << "Failed to save crash recovery data:" << recoveryFile.errorString();
+    }
+}
+
+void UIStateManager::clearCrashRecoveryData()
+{
+    QString recoveryPath = QDir(m_settingsPath).absoluteFilePath("crash_recovery.json");
+    QFile recoveryFile(recoveryPath);
+    if (recoveryFile.exists()) {
+        if (recoveryFile.remove()) {
+            qCDebug(jveUIState) << "Crash recovery data cleared";
+        } else {
+            qCWarning(jveUIState) << "Failed to clear crash recovery data:" << recoveryFile.errorString();
+        }
+    }
+}
+
+void UIStateManager::saveWorkspaceToSettings(const QString& workspaceName, const QJsonObject& workspaceData)
+{
+    QSettings* settings = getSettings(WorkspaceScope);
+    settings->beginGroup("CustomWorkspaces");
+    
+    // Convert QJsonObject to settings-compatible format
+    settings->setValue(workspaceName + "/name", workspaceData["name"].toString());
+    settings->setValue(workspaceName + "/type", workspaceData["type"].toInt());
+    settings->setValue(workspaceName + "/description", workspaceData["description"].toString());
+    
+    // Save workspace configuration as JSON string
+    QJsonDocument doc(workspaceData);
+    settings->setValue(workspaceName + "/configuration", doc.toJson(QJsonDocument::Compact));
+    
+    settings->endGroup();
+    settings->sync();
+    
+    qCDebug(jveUIState) << "Workspace saved to settings:" << workspaceName;
+}
+
+QJsonObject UIStateManager::loadWorkspaceFromSettings(const QString& workspaceName) const
+{
+    QSettings* settings = getSettings(WorkspaceScope);
+    settings->beginGroup("CustomWorkspaces");
+    
+    if (!settings->childGroups().contains(workspaceName)) {
+        settings->endGroup();
+        return QJsonObject();
+    }
+    
+    settings->beginGroup(workspaceName);
+    
+    QJsonObject workspaceData;
+    workspaceData["name"] = settings->value("name").toString();
+    workspaceData["type"] = settings->value("type").toInt();
+    workspaceData["description"] = settings->value("description").toString();
+    
+    // Load full configuration from JSON string
+    QByteArray configData = settings->value("configuration").toByteArray();
+    if (!configData.isEmpty()) {
+        QJsonDocument doc = QJsonDocument::fromJson(configData);
+        if (!doc.isNull() && doc.isObject()) {
+            QJsonObject fullConfig = doc.object();
+            // Merge with basic data
+            for (auto it = fullConfig.begin(); it != fullConfig.end(); ++it) {
+                workspaceData[it.key()] = it.value();
+            }
+        }
+    }
+    
+    settings->endGroup();
+    settings->endGroup();
+    
+    qCDebug(jveUIState) << "Workspace loaded from settings:" << workspaceName;
+    return workspaceData;
+}
+
+void UIStateManager::onWorkspaceChangeRequested(const QString& workspaceName)
+{
+    qCDebug(jveUIState) << "Workspace change requested:" << workspaceName;
+    
+    if (m_currentWorkspace == workspaceName) {
+        qCDebug(jveUIState) << "Already in requested workspace";
+        return;
+    }
+    
+    // Save current workspace state before switching
+    if (!m_currentWorkspace.isEmpty()) {
+        QJsonObject currentState = captureCurrentWorkspaceState();
+        saveWorkspaceToSettings(m_currentWorkspace, currentState);
+    }
+    
+    // Load and apply new workspace
+    QJsonObject newWorkspaceData = loadWorkspaceFromSettings(workspaceName);
+    if (!newWorkspaceData.isEmpty()) {
+        applyWorkspaceState(newWorkspaceData);
+        m_currentWorkspace = workspaceName;
+        emit workspaceChanged(workspaceName);
+        qCDebug(jveUIState) << "Switched to workspace:" << workspaceName;
+    } else {
+        qCWarning(jveUIState) << "Failed to load workspace:" << workspaceName;
+    }
+}

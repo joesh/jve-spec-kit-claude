@@ -277,6 +277,7 @@ private:
     bool m_previewActive = false;
     Theme m_originalTheme;
     QTimer* m_previewTimer = nullptr;
+    QString m_previewThemeName;
 
     // Application integration
     QApplication* m_application = nullptr;

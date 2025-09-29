@@ -582,3 +582,22 @@ void DragDropManager::onDropModeChanged(DropMode mode)
     Q_UNUSED(mode)
     // Update UI indicators for drop mode
 }
+
+void DragDropManager::onDragTimer()
+{
+    // Timer for drag operation feedback and animations
+    if (m_dragActive) {
+        emit dragFeedbackUpdate();
+        qCDebug(jveDragDrop) << "Drag timer tick - providing visual feedback";
+    }
+}
+
+void DragDropManager::onSnapTimer()
+{
+    // Timer for snap operation processing
+    if (m_snapActive) {
+        // Process snap calculations and provide visual feedback
+        emit snapFeedbackUpdate();
+        qCDebug(jveDragDrop) << "Snap timer tick - processing snap feedback";
+    }
+}
