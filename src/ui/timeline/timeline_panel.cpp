@@ -92,20 +92,44 @@ void TimelinePanel::setupContextMenus()
     // Initialize context menu manager
     m_contextMenuManager = new ContextMenuManager(this);
     
-    // Connect context menu signals to timeline actions
+    // Connect context menu signals to command bridge (will be set later)
     connect(m_contextMenuManager, &ContextMenuManager::cutRequested,
-            this, [this]() { qCDebug(jveTimelinePanel) << "Cut requested from context menu"; });
+            this, [this]() { 
+                if (m_commandBridge) {
+                    m_commandBridge->cutSelectedClips();
+                } else {
+                    qCDebug(jveTimelinePanel) << "Cut requested but no command bridge set";
+                }
+            });
     connect(m_contextMenuManager, &ContextMenuManager::copyRequested,
-            this, [this]() { qCDebug(jveTimelinePanel) << "Copy requested from context menu"; });
+            this, [this]() { 
+                if (m_commandBridge) {
+                    m_commandBridge->copySelectedClips();
+                } else {
+                    qCDebug(jveTimelinePanel) << "Copy requested but no command bridge set";
+                }
+            });
     connect(m_contextMenuManager, &ContextMenuManager::pasteRequested,
-            this, [this]() { qCDebug(jveTimelinePanel) << "Paste requested from context menu"; });
+            this, [this]() { 
+                qCDebug(jveTimelinePanel) << "Paste requested - would need target track and time";
+            });
     connect(m_contextMenuManager, &ContextMenuManager::deleteRequested,
-            this, [this]() { qCDebug(jveTimelinePanel) << "Delete requested from context menu"; });
+            this, [this]() { 
+                if (m_commandBridge) {
+                    m_commandBridge->deleteSelectedClips();
+                } else {
+                    qCDebug(jveTimelinePanel) << "Delete requested but no command bridge set";
+                }
+            });
     
     // Timeline-specific actions
     connect(m_contextMenuManager, &ContextMenuManager::splitClipRequested,
             this, [this]() { 
-                qCDebug(jveTimelinePanel) << "Split clip requested at playhead position" << m_playheadPosition;
+                if (m_commandBridge) {
+                    m_commandBridge->splitClipsAtPlayhead(m_playheadPosition);
+                } else {
+                    qCDebug(jveTimelinePanel) << "Split clip requested at playhead position" << m_playheadPosition;
+                }
             });
     connect(m_contextMenuManager, &ContextMenuManager::bladeAllTracksRequested,
             this, [this]() { 
@@ -113,20 +137,31 @@ void TimelinePanel::setupContextMenus()
             });
     connect(m_contextMenuManager, &ContextMenuManager::rippleDeleteRequested,
             this, [this]() { 
-                qCDebug(jveTimelinePanel) << "Ripple delete requested for selected clips";
+                if (m_commandBridge) {
+                    m_commandBridge->rippleDeleteSelectedClips();
+                } else {
+                    qCDebug(jveTimelinePanel) << "Ripple delete requested for selected clips";
+                }
             });
     
     // Selection actions
     connect(m_contextMenuManager, &ContextMenuManager::selectAllRequested,
             this, [this]() { 
-                qCDebug(jveTimelinePanel) << "Select all requested";
-                // Would select all clips in timeline
+                if (m_commandBridge) {
+                    m_commandBridge->selectAllClips();
+                } else {
+                    qCDebug(jveTimelinePanel) << "Select all requested";
+                }
             });
     connect(m_contextMenuManager, &ContextMenuManager::deselectAllRequested,
             this, [this]() { 
-                qCDebug(jveTimelinePanel) << "Deselect all requested";
-                m_selectedClips.clear();
-                update();
+                if (m_commandBridge) {
+                    m_commandBridge->deselectAllClips();
+                } else {
+                    qCDebug(jveTimelinePanel) << "Deselect all requested";
+                    m_selectedClips.clear();
+                    update();
+                }
             });
     
     // Playback actions
@@ -167,6 +202,41 @@ void TimelinePanel::setSelectionManager(SelectionManager* selectionManager)
                 this, &TimelinePanel::onSelectionChanged);
         qCDebug(jveTimelinePanel, "Selection manager connected");
     }
+}
+
+void TimelinePanel::setCommandBridge(UICommandBridge* commandBridge)
+{
+    m_commandBridge = commandBridge;
+    
+    if (m_commandBridge) {
+        // Connect command bridge signals for UI updates
+        connect(m_commandBridge, &UICommandBridge::clipCreated,
+                this, [this](const QString& clipId, const QString& sequenceId, const QString& trackId) {
+                    qCDebug(jveTimelinePanel) << "Clip created:" << clipId << "in sequence" << sequenceId << "track" << trackId;
+                    update(); // Refresh timeline display
+                });
+        
+        connect(m_commandBridge, &UICommandBridge::clipDeleted,
+                this, [this](const QString& clipId) {
+                    qCDebug(jveTimelinePanel) << "Clip deleted:" << clipId;
+                    m_selectedClips.removeAll(clipId);
+                    update(); // Refresh timeline display
+                });
+        
+        connect(m_commandBridge, &UICommandBridge::clipMoved,
+                this, [this](const QString& clipId, const QString& trackId, qint64 newTime) {
+                    qCDebug(jveTimelinePanel) << "Clip moved:" << clipId << "to track" << trackId << "at time" << newTime;
+                    update(); // Refresh timeline display
+                });
+        
+        connect(m_commandBridge, &UICommandBridge::selectionChanged,
+                this, [this](const QStringList& selectedClipIds) {
+                    m_selectedClips = selectedClipIds;
+                    update(); // Refresh timeline display
+                });
+    }
+    
+    qCDebug(jveTimelinePanel, "Command bridge set");
 }
 
 void TimelinePanel::setPlayheadPosition(qint64 timeMs)

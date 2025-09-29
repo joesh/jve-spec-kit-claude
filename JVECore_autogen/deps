@@ -1025,6 +1025,8 @@ JVECore_autogen/timestamp: \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/common/context_menu_manager.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/common/context_menu_manager.h \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/common/ui_command_bridge.cpp \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/common/ui_command_bridge.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/input/keyboard_shortcuts.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/input/keyboard_shortcuts.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/inspector/inspector_panel.cpp \
@@ -1046,6 +1048,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QFileSystemWatcher \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QHash \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonArray \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonDocument \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QList \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QLoggingCategory \

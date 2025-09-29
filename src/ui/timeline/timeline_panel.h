@@ -31,6 +31,7 @@
 #include "ui/common/context_menu_manager.h"
 #include "core/commands/command_dispatcher.h"
 #include "ui/selection/selection_manager.h"
+#include "ui/common/ui_command_bridge.h"
 
 /**
  * Professional timeline panel for video editing
@@ -59,6 +60,7 @@ public:
     void setSequence(const Sequence& sequence);
     void setCommandDispatcher(CommandDispatcher* dispatcher);
     void setSelectionManager(SelectionManager* selectionManager);
+    void setCommandBridge(UICommandBridge* commandBridge);
     
     // Timeline control
     void setPlayheadPosition(qint64 timeMs);
@@ -154,6 +156,7 @@ private:
     CommandDispatcher* m_commandDispatcher = nullptr;
     SelectionManager* m_selectionManager = nullptr;
     ContextMenuManager* m_contextMenuManager = nullptr;
+    UICommandBridge* m_commandBridge = nullptr;
     
     // UI components
     QScrollArea* m_scrollArea = nullptr;

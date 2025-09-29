@@ -77,6 +77,7 @@ set(UI_SOURCES
     src/ui/main/main_window.cpp
     src/ui/input/keyboard_shortcuts.cpp
     src/ui/common/context_menu_manager.cpp
+    src/ui/common/ui_command_bridge.cpp
 )
 
 # LUA and CLI sources not yet implemented in M1 Foundation

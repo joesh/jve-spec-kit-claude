@@ -29,6 +29,7 @@
 #include "ui/project/project_panel.h"
 #include "ui/selection/selection_manager.h"
 #include "ui/input/keyboard_shortcuts.h"
+#include "ui/common/ui_command_bridge.h"
 
 /**
  * Professional main window for video editing application
@@ -230,6 +231,7 @@ private:
     CommandDispatcher* m_commandDispatcher = nullptr;
     SelectionManager* m_selectionManager = nullptr;
     KeyboardShortcuts* m_keyboardShortcuts = nullptr;
+    UICommandBridge* m_commandBridge = nullptr;
     Project m_currentProject;
     
     // UI panels

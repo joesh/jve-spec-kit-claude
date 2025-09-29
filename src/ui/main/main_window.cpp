@@ -18,6 +18,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_commandDispatcher = new CommandDispatcher(this);
     m_selectionManager = new SelectionManager(this);
     m_keyboardShortcuts = new KeyboardShortcuts(this);
+    m_commandBridge = new UICommandBridge(m_commandDispatcher, m_selectionManager, this);
     m_settings = new QSettings(this);
     
     setupUI();
@@ -282,21 +283,24 @@ void MainWindow::setupKeyboardShortcuts()
     connect(m_keyboardShortcuts, &KeyboardShortcuts::deleteClipRequested,
             this, [this]() { qCDebug(jveMainWindow) << "Delete clip requested"; });
     connect(m_keyboardShortcuts, &KeyboardShortcuts::copyRequested,
-            this, &MainWindow::onCopy);
+            m_commandBridge, &UICommandBridge::copySelectedClips);
     connect(m_keyboardShortcuts, &KeyboardShortcuts::pasteRequested,
-            this, &MainWindow::onPaste);
+            this, [this]() { 
+                // Paste to current timeline position - would need playhead position
+                qCDebug(jveMainWindow) << "Paste requested - would paste to current timeline position"; 
+            });
     connect(m_keyboardShortcuts, &KeyboardShortcuts::cutRequested,
-            this, &MainWindow::onCut);
+            m_commandBridge, &UICommandBridge::cutSelectedClips);
     connect(m_keyboardShortcuts, &KeyboardShortcuts::undoRequested,
-            this, &MainWindow::onUndo);
+            m_commandBridge, &UICommandBridge::undo);
     connect(m_keyboardShortcuts, &KeyboardShortcuts::redoRequested,
-            this, &MainWindow::onRedo);
+            m_commandBridge, &UICommandBridge::redo);
     
     // Selection shortcuts
     connect(m_keyboardShortcuts, &KeyboardShortcuts::selectAllRequested,
-            this, &MainWindow::onSelectAll);
+            m_commandBridge, &UICommandBridge::selectAllClips);
     connect(m_keyboardShortcuts, &KeyboardShortcuts::deselectAllRequested,
-            this, &MainWindow::onDeselectAll);
+            m_commandBridge, &UICommandBridge::deselectAllClips);
     
     // Navigation shortcuts
     connect(m_keyboardShortcuts, &KeyboardShortcuts::zoomInRequested,

@@ -938,10 +938,12 @@
   /Users/joe/Local/jve-spec-kit-claude/src/core/models/sequence.h \
   /Users/joe/Local/jve-spec-kit-claude/src/core/models/track.h \
   /Users/joe/Local/jve-spec-kit-claude/src/ui/common/context_menu_manager.h \
+  /Users/joe/Local/jve-spec-kit-claude/src/ui/common/ui_command_bridge.h \
   /Users/joe/Local/jve-spec-kit-claude/src/ui/selection/selection_manager.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QDateTime \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QElapsedTimer \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QHash \
+  /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonDocument \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QList \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QLoggingCategory \
