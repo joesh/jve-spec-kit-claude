@@ -1007,6 +1007,7 @@
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QStandardPaths \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QString \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QTemporaryDir \
+  /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QUuid \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/q17memory.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/q20functional.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/q20iterator.h \
@@ -1218,8 +1219,10 @@
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qwindow.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qwindowdefs.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/QSqlDatabase \
+  /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/QSqlError \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/QSqlQuery \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qsqldatabase.h \
+  /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qsqlerror.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qsqlquery.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsql-config.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsqlexports.h \

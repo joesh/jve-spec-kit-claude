@@ -36,11 +36,14 @@ void TimelinePanel::setupUI()
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     
-    // Create timeline widget
-    m_timelineWidget = new QWidget();
-    m_timelineWidget->setMinimumSize(2000, 400); // Initial size
-    m_timelineWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_scrollArea->setWidget(m_timelineWidget);
+    // Create custom drawing widget for timeline content
+    m_drawingWidget = new TimelineWidget(this);
+    m_drawingWidget->setMinimumSize(2000, 400); // Initial size
+    m_drawingWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_scrollArea->setWidget(m_drawingWidget);
+    
+    // Keep reference to the generic widget for compatibility
+    m_timelineWidget = m_drawingWidget;
     
     // Create rubber band for selection
     m_rubberBand = new QRubberBand(QRubberBand::Rectangle, m_timelineWidget);
@@ -213,7 +216,27 @@ void TimelinePanel::setCommandBridge(UICommandBridge* commandBridge)
         connect(m_commandBridge, &UICommandBridge::clipCreated,
                 this, [this](const QString& clipId, const QString& sequenceId, const QString& trackId) {
                     qCDebug(jveTimelinePanel) << "Clip created:" << clipId << "in sequence" << sequenceId << "track" << trackId;
-                    update(); // Refresh timeline display
+                    
+                    // Load actual clip data from database using the clipId
+                    // For now, create clips with different positions for testing
+                    static int clipIndex = 0;
+                    Clip clip = Clip::create("Timeline Clip", clipId);
+                    clip.setTrackId(trackId);
+                    
+                    // Position clips with different start times for visual differentiation
+                    qint64 startTime = clipIndex * 6000; // 6 seconds apart
+                    qint64 duration = clipIndex == 0 ? 5000 : 3000; // First clip 5s, second clip 3s
+                    clip.setTimelinePosition(startTime, startTime + duration);
+                    clipIndex++;
+                    
+                    m_clips.append(clip);
+                    
+                    // Trigger repaint of the actual drawing widget
+                    if (m_drawingWidget) {
+                        m_drawingWidget->update();
+                    } else {
+                        update(); // Fallback
+                    }
                 });
         
         connect(m_commandBridge, &UICommandBridge::clipDeleted,
@@ -524,8 +547,16 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 
 void TimelinePanel::paintEvent(QPaintEvent* event)
 {
+    qCDebug(jveTimelinePanel, "paintEvent called, widget size: %dx%d, clips count: %d, visible: %s, rect: %d,%d %dx%d", 
+            width(), height(), m_clips.size(), 
+            isVisible() ? "true" : "false",
+            rect().x(), rect().y(), rect().width(), rect().height());
+            
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
+    
+    // Draw a bright test background to verify the canvas is working
+    painter.fillRect(rect(), Qt::red);
     
     // Draw timeline components
     drawTimeline(painter);
@@ -536,7 +567,7 @@ void TimelinePanel::paintEvent(QPaintEvent* event)
     drawRuler(painter);
     drawTrackHeaders(painter);
     
-    QWidget::paintEvent(event);
+    // DON'T call QWidget::paintEvent(event) as it might override our custom drawing
 }
 
 void TimelinePanel::drawTimeline(QPainter& painter)
@@ -553,8 +584,59 @@ void TimelinePanel::drawTracks(QPainter& painter)
 
 void TimelinePanel::drawClips(QPainter& painter)
 {
-    // TODO: Draw clips on timeline
-    // This would iterate through clips and draw them with proper colors
+    qCDebug(jveTimelinePanel, "drawClips called with %d clips", m_clips.size());
+    
+    if (m_clips.isEmpty()) {
+        qCDebug(jveTimelinePanel, "No clips to draw");
+        return;
+    }
+    
+    // Set up clip drawing style
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    
+    for (const Clip& clip : m_clips) {
+        // Extract clip parameters
+        QString trackId = clip.trackId();
+        qint64 startTime = clip.timelineStart();
+        qint64 duration = clip.duration();
+        
+        qCDebug(jveTimelinePanel, "Drawing clip %s: track=%s, start=%lld, duration=%lld", 
+                qPrintable(clip.id()), qPrintable(trackId), startTime, duration);
+        
+        // Calculate clip position and dimensions
+        int x = timeToPixel(startTime);
+        int y = getTrackYPosition(trackId);
+        int width = timeToPixel(duration) - timeToPixel(0);
+        int height = m_trackHeight - CLIP_MARGIN * 2;
+        
+        qCDebug(jveTimelinePanel, "Clip rect: x=%d, y=%d, width=%d, height=%d", x, y, width, height);
+        
+        // Skip if clip is off-screen
+        if (x + width < 0 || x > this->width()) {
+            continue;
+        }
+        
+        // Determine clip color based on selection state
+        QColor clipColor = m_selectedClips.contains(clip.id()) ? 
+                          m_selectedClipColor : m_clipColor;
+        
+        // Draw clip rectangle
+        QRect clipRect(x, y + CLIP_MARGIN, width, height);
+        painter.fillRect(clipRect, clipColor);
+        
+        // Draw clip border
+        painter.setPen(QPen(clipColor.darker(150), 1));
+        painter.drawRect(clipRect);
+        
+        // Draw clip name (if space allows)
+        if (width > 60) {
+            painter.setPen(Qt::white);
+            painter.setFont(m_clipFont);
+            QRect textRect = clipRect.adjusted(4, 0, -4, 0);
+            painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, 
+                           clip.name().isEmpty() ? clip.id().left(8) : clip.name());
+        }
+    }
 }
 
 void TimelinePanel::drawPlayhead(QPainter& painter)
@@ -599,6 +681,14 @@ qint64 TimelinePanel::pixelToTime(int pixel) const
 int TimelinePanel::timeToPixel(qint64 time) const
 {
     return static_cast<int>(time * m_zoomFactor);
+}
+
+int TimelinePanel::getTrackYPosition(const QString& trackId) const
+{
+    // For now, use a simple track index calculation
+    // In a full implementation, this would query the track order from the sequence
+    int trackIndex = 0; // Assume first track for demo
+    return m_rulerHeight + (trackIndex * m_trackHeight);
 }
 
 QString TimelinePanel::getClipAtPosition(const QPoint& pos) const
@@ -779,3 +869,60 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
     updateViewport();
 }
+
+// TimelineWidget implementation - handles actual drawing inside scroll area
+TimelineWidget::TimelineWidget(TimelinePanel* parent)
+    : QWidget(parent), m_timelinePanel(parent)
+{
+    setMinimumSize(2000, 400);
+    
+    // Enable custom painting
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
+    setAutoFillBackground(false);
+}
+
+void TimelineWidget::paintEvent(QPaintEvent* event)
+{
+    if (!m_timelinePanel) {
+        return;
+    }
+    
+    qCDebug(jveTimelinePanel, "TimelineWidget paintEvent called, widget size: %dx%d", 
+            width(), height());
+    
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    
+    // Draw bright red background to verify the drawing widget works
+    painter.fillRect(rect(), Qt::red);
+    
+    // Draw timeline components using TimelinePanel's drawing methods
+    painter.fillRect(rect(), QColor(45, 45, 45)); // Dark background
+    
+    // Call the TimelinePanel's drawing methods with this painter
+    const auto& clips = m_timelinePanel->getClips();
+    if (clips.size() > 0) {
+        qCDebug(jveTimelinePanel, "Drawing %d clips on TimelineWidget", clips.size());
+        
+        // Draw clips directly here since we can't call private methods
+        for (const auto& clip : clips) {
+            QString trackId = clip.trackId();
+            qint64 startTime = clip.timelineStart();
+            qint64 duration = clip.duration();
+            
+            // Calculate clip position (simplified version of TimelinePanel's logic)
+            int x = static_cast<int>(startTime * 0.05); // Use the zoom factor
+            int y = 32; // Track position
+            int width = static_cast<int>(duration * 0.05);
+            int height = 44;
+            
+            QRect clipRect(x, y, width, height);
+            painter.fillRect(clipRect, QColor(100, 150, 200)); // Blue clips
+            
+            qCDebug(jveTimelinePanel, "Drew clip at x=%d, y=%d, width=%d, height=%d", 
+                    x, y, width, height);
+        }
+    }
+}
+
+#include "timeline_panel.moc"

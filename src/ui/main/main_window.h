@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <QSettings>
 #include <QCloseEvent>
+#include <QSqlDatabase>
 #include <QResizeEvent>
 #include <QKeyEvent>
 #include <QDragEnterEvent>
@@ -171,6 +172,9 @@ private:
     void setupCentralWidget();
     void connectSignals();
     void setupKeyboardShortcuts();
+    void initializeDatabase();
+    void testCommandExecution();
+    void testAutoImport();
     
     // Menu creation
     QMenu* createFileMenu();
@@ -233,6 +237,11 @@ private:
     KeyboardShortcuts* m_keyboardShortcuts = nullptr;
     UICommandBridge* m_commandBridge = nullptr;
     Project m_currentProject;
+    
+    // Database and project state
+    QSqlDatabase m_database;
+    QString m_currentProjectId;
+    QString m_currentSequenceId;
     
     // UI panels
     TimelinePanel* m_timelinePanel = nullptr;

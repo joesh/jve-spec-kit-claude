@@ -367,13 +367,12 @@ void UICommandBridge::executeCommandAsync(const QString& commandType, const QJso
 QJsonObject UICommandBridge::buildTimelineCommand(const QString& operation, const QJsonObject& parameters)
 {
     QJsonObject command;
-    command["command"] = operation;
-    command["sequence_id"] = m_currentSequenceId;
+    command["command_type"] = operation;
     
-    // Merge parameters
-    for (auto it = parameters.begin(); it != parameters.end(); ++it) {
-        command[it.key()] = it.value();
-    }
+    // Wrap parameters in args object as expected by CommandDispatcher
+    QJsonObject args = parameters;
+    args["sequence_id"] = m_currentSequenceId;
+    command["args"] = args;
     
     return command;
 }
@@ -381,20 +380,19 @@ QJsonObject UICommandBridge::buildTimelineCommand(const QString& operation, cons
 QJsonObject UICommandBridge::buildSelectionCommand(const QString& operation, const QJsonObject& parameters)
 {
     QJsonObject command;
-    command["command"] = operation;
-    command["sequence_id"] = m_currentSequenceId;
+    command["command_type"] = operation;
+    
+    // Wrap parameters in args object as expected by CommandDispatcher
+    QJsonObject args = parameters;
+    args["sequence_id"] = m_currentSequenceId;
     
     // Add current selection context
     QJsonArray selectedClips;
     for (const QString& clipId : m_selectedClipIds) {
         selectedClips.append(clipId);
     }
-    command["selected_clips"] = selectedClips;
-    
-    // Merge parameters
-    for (auto it = parameters.begin(); it != parameters.end(); ++it) {
-        command[it.key()] = it.value();
-    }
+    args["selected_clips"] = selectedClips;
+    command["args"] = args;
     
     return command;
 }
@@ -402,13 +400,12 @@ QJsonObject UICommandBridge::buildSelectionCommand(const QString& operation, con
 QJsonObject UICommandBridge::buildPropertyCommand(const QString& operation, const QJsonObject& parameters)
 {
     QJsonObject command;
-    command["command"] = operation;
-    command["sequence_id"] = m_currentSequenceId;
+    command["command_type"] = operation;
     
-    // Merge parameters
-    for (auto it = parameters.begin(); it != parameters.end(); ++it) {
-        command[it.key()] = it.value();
-    }
+    // Wrap parameters in args object as expected by CommandDispatcher
+    QJsonObject args = parameters;
+    args["sequence_id"] = m_currentSequenceId;
+    command["args"] = args;
     
     return command;
 }
@@ -416,12 +413,10 @@ QJsonObject UICommandBridge::buildPropertyCommand(const QString& operation, cons
 QJsonObject UICommandBridge::buildMediaCommand(const QString& operation, const QJsonObject& parameters)
 {
     QJsonObject command;
-    command["command"] = operation;
+    command["command_type"] = operation;
     
-    // Merge parameters
-    for (auto it = parameters.begin(); it != parameters.end(); ++it) {
-        command[it.key()] = it.value();
-    }
+    // Wrap parameters in args object as expected by CommandDispatcher
+    command["args"] = parameters;
     
     return command;
 }
@@ -429,12 +424,10 @@ QJsonObject UICommandBridge::buildMediaCommand(const QString& operation, const Q
 QJsonObject UICommandBridge::buildProjectCommand(const QString& operation, const QJsonObject& parameters)
 {
     QJsonObject command;
-    command["command"] = operation;
+    command["command_type"] = operation;
     
-    // Merge parameters
-    for (auto it = parameters.begin(); it != parameters.end(); ++it) {
-        command[it.key()] = it.value();
-    }
+    // Wrap parameters in args object as expected by CommandDispatcher
+    command["args"] = parameters;
     
     return command;
 }
@@ -505,27 +498,33 @@ void UICommandBridge::updateUIFromResult(const QString& commandType, const QJson
 
 void UICommandBridge::extractClipChanges(const QJsonObject& result)
 {
-    if (result.contains("clips_created")) {
-        QJsonArray created = result["clips_created"].toArray();
+    qCDebug(jveUICommandBridge, "Extracting clip changes from result with keys: %s", 
+            qPrintable(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+    
+    // Extract the delta object which contains the actual clip changes
+    QJsonObject delta = result["delta"].toObject();
+    
+    if (delta.contains("clips_created")) {
+        QJsonArray created = delta["clips_created"].toArray();
         for (const auto& value : created) {
             QJsonObject clip = value.toObject();
-            QString clipId = clip["clip_id"].toString();
-            QString sequenceId = clip["sequence_id"].toString();
+            QString clipId = clip["id"].toString();
+            QString sequenceId = ""; // sequence_id not provided in delta, will get from current sequence
             QString trackId = clip["track_id"].toString();
             emit clipCreated(clipId, sequenceId, trackId);
         }
     }
     
-    if (result.contains("clips_deleted")) {
-        QJsonArray deleted = result["clips_deleted"].toArray();
+    if (delta.contains("clips_deleted")) {
+        QJsonArray deleted = delta["clips_deleted"].toArray();
         for (const auto& value : deleted) {
             QString clipId = value.toString();
             emit clipDeleted(clipId);
         }
     }
     
-    if (result.contains("clips_modified")) {
-        QJsonArray modified = result["clips_modified"].toArray();
+    if (delta.contains("clips_modified")) {
+        QJsonArray modified = delta["clips_modified"].toArray();
         for (const auto& value : modified) {
             QJsonObject clip = value.toObject();
             QString clipId = clip["clip_id"].toString();

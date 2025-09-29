@@ -34,6 +34,9 @@
 #include "ui/common/ui_command_bridge.h"
 #include "ui/common/selection_visualizer.h"
 
+// Forward declaration for custom timeline widget
+class TimelineWidget;
+
 /**
  * Professional timeline panel for video editing
  * 
@@ -88,6 +91,9 @@ public:
     void zoomToFit();
     void zoomToSelection();
     void frameView();
+    
+    // Accessor for clips (needed by TimelineWidget)
+    const QList<Clip>& getClips() const { return m_clips; }
 
 signals:
     void playheadPositionChanged(qint64 timeMs);
@@ -138,6 +144,7 @@ private:
     int timeToPixel(qint64 time) const;
     QString getTrackAtPosition(const QPoint& pos) const;
     QString getClipAtPosition(const QPoint& pos) const;
+    int getTrackYPosition(const QString& trackId) const;
     void updateClipPositions();
     void updateScrollBars();
     
@@ -168,7 +175,7 @@ private:
     
     // Timeline state
     qint64 m_playheadPosition = 0;
-    double m_zoomFactor = 1.0;
+    double m_zoomFactor = 0.05; // 1 pixel = 20ms, so ~30 seconds fits in 1500 pixels
     int m_trackHeight = 48;
     int m_trackHeaderWidth = 200;
     int m_rulerHeight = 32;
@@ -177,6 +184,9 @@ private:
     QStringList m_selectedClips;
     QPoint m_lastMousePos;
     QString m_draggedClip;
+    
+    // Clips data
+    QList<Clip> m_clips;
     bool m_isDragging = false;
     bool m_isSelecting = false;
     QRubberBand* m_rubberBand = nullptr;
@@ -208,4 +218,27 @@ private:
     QColor m_rulerColor = QColor(80, 80, 80);
     QFont m_timeFont = QFont("Arial", 10);
     QFont m_clipFont = QFont("Arial", 9);
+    
+    // Reference to the actual drawing widget
+    TimelineWidget* m_drawingWidget = nullptr;
+};
+
+/**
+ * Custom widget that handles the actual timeline drawing
+ * This widget is placed inside the scroll area and handles all painting
+ */
+class TimelineWidget : public QWidget
+{
+    Q_OBJECT
+    
+public:
+    explicit TimelineWidget(TimelinePanel* parent = nullptr);
+    
+    void setTimelinePanel(TimelinePanel* panel) { m_timelinePanel = panel; }
+    
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    
+private:
+    TimelinePanel* m_timelinePanel = nullptr;
 };

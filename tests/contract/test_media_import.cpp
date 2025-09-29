@@ -7,6 +7,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSqlQuery>
+#include <QSqlError>
+#include <QUuid>
 
 /**
  * Contract Test T011: Media Import API
@@ -65,10 +67,21 @@ void TestMediaImport::initTestCase()
         db.setDatabaseName(projectPath);
         QVERIFY(db.open());
         
-        QSqlQuery query(db);
-        query.exec("SELECT id FROM projects LIMIT 1");
-        if (query.next()) {
-            m_validProjectId = query.value(0).toString();
+        // Create a test project in the database
+        QSqlQuery insertQuery(db);
+        insertQuery.prepare("INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES (?, ?, ?, ?, ?)");
+        QString testProjectId = "test-project-" + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        qint64 currentTime = QDateTime::currentSecsSinceEpoch();
+        insertQuery.addBindValue(testProjectId);
+        insertQuery.addBindValue("Media Import Test Project");
+        insertQuery.addBindValue(currentTime);
+        insertQuery.addBindValue(currentTime);
+        insertQuery.addBindValue("{}");
+        
+        if (insertQuery.exec()) {
+            m_validProjectId = testProjectId;
+        } else {
+            qCWarning(jveTests, "Failed to create test project: %s", insertQuery.lastError().text().toUtf8().constData());
         }
         db.close();
         QSqlDatabase::removeDatabase("media_test_setup");

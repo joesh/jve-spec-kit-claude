@@ -1,4 +1,8 @@
 #include "main_window.h"
+#include "../../core/api/project_manager.h"
+#include "../../core/persistence/migrations.h"
+#include "../../core/models/project.h"
+#include "../../core/models/sequence.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QFileDialog>
@@ -8,6 +12,9 @@
 #include <QUrl>
 #include <QSplitter>
 #include <QLoggingCategory>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QDir>
 
 Q_LOGGING_CATEGORY(jveMainWindow, "jve.ui.main")
 
@@ -20,6 +27,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_keyboardShortcuts = new KeyboardShortcuts(this);
     m_commandBridge = new UICommandBridge(m_commandDispatcher, m_selectionManager, this);
     m_settings = new QSettings(this);
+    
+    // Initialize database for command system
+    initializeDatabase();
     
     setupUI();
     setupMenuBar();
@@ -53,6 +63,12 @@ MainWindow::MainWindow(QWidget* parent)
     updateWindowTitle();
     
     qCDebug(jveMainWindow, "Main window initialized");
+    
+    // Test command execution (temporary debug code) - run after UI is fully set up
+    testCommandExecution();
+    
+    // Test auto import (temporary debug code) - run after UI is fully set up 
+    testAutoImport();
 }
 
 void MainWindow::setupUI()
@@ -677,6 +693,7 @@ QDockWidget* MainWindow::createTimelineDock()
     m_timelinePanel = new TimelinePanel();
     m_timelinePanel->setCommandDispatcher(m_commandDispatcher);
     m_timelinePanel->setSelectionManager(m_selectionManager);
+    m_timelinePanel->setCommandBridge(m_commandBridge);
     
     dock->setWidget(m_timelinePanel);
     return dock;
@@ -1080,7 +1097,45 @@ void MainWindow::onOpenProject() { openProject(); }
 void MainWindow::onSaveProject() { saveProject(); }
 void MainWindow::onSaveProjectAs() { saveProjectAs(); }
 void MainWindow::onCloseProject() { closeProject(); }
-void MainWindow::onImportMedia() { importMedia(); }
+void MainWindow::onImportMedia() 
+{ 
+    // Open file dialog to select media files
+    QStringList filePaths = QFileDialog::getOpenFileNames(
+        this,
+        "Import Media Files",
+        QStandardPaths::writableLocation(QStandardPaths::MoviesLocation),
+        "Media Files (*.mp4 *.mov *.avi *.mkv *.wav *.mp3 *.aac *.jpg *.png);;All Files (*)"
+    );
+    
+    if (!filePaths.isEmpty()) {
+        // Import each file and collect media IDs
+        QStringList mediaIds;
+        ProjectManager* projectManager = new ProjectManager(this);
+        
+        for (const QString& filePath : filePaths) {
+            QJsonObject request;
+            request["file_path"] = filePath;
+            
+            // Import media through API - use dummy project ID for now
+            QJsonObject response = projectManager->importMedia("current-project", request);
+            
+            if (!response.contains("error") && response.contains("id")) {
+                mediaIds.append(response["id"].toString());
+                qCDebug(jveMainWindow, "Successfully imported media: %s -> %s", 
+                       qPrintable(filePath), qPrintable(response["id"].toString()));
+            } else {
+                qCWarning(jveMainWindow, "Failed to import media: %s - %s", 
+                         qPrintable(filePath), qPrintable(response["error"].toString()));
+            }
+        }
+        
+        if (!mediaIds.isEmpty()) {
+            onMediaImported(mediaIds);
+        }
+        
+        projectManager->deleteLater();
+    }
+}
 void MainWindow::onExportSequence() { exportSequence(); }
 void MainWindow::onExit() { close(); }
 
@@ -1128,9 +1183,31 @@ void MainWindow::onSequenceSelected(const QString& sequenceId) {
 }
 
 void MainWindow::onMediaImported(const QStringList& mediaIds) {
-    Q_UNUSED(mediaIds)
     m_statusLabel->setText(QString("Imported %1 media files").arg(mediaIds.size()));
     m_statusTimer->start(STATUS_TIMEOUT_MS);
+    
+    // Auto-add imported media as clips to the timeline
+    if (!mediaIds.isEmpty() && m_commandBridge && !m_currentSequenceId.isEmpty()) {
+        // Use the current sequence from the initialized database
+        QString sequenceId = m_currentSequenceId;
+        QString trackId = "track-1";       // Default video track (would need track creation)
+        qint64 startTime = 0;              // Start at beginning
+        
+        for (int i = 0; i < mediaIds.size(); ++i) {
+            const QString& mediaId = mediaIds[i];
+            
+            // Place clips sequentially, assume 10 second duration for now
+            qint64 clipStartTime = startTime + (i * 10000); // 10 seconds apart in milliseconds
+            qint64 clipDuration = 10000; // 10 seconds in milliseconds
+            
+            m_commandBridge->createClip(sequenceId, trackId, mediaId, clipStartTime, clipDuration);
+            
+            qCDebug(jveMainWindow, "Creating clip from media %s at time %lld", 
+                   qPrintable(mediaId), clipStartTime);
+        }
+        
+        qCDebug(jveMainWindow, "Added %d clips to timeline", mediaIds.size());
+    }
 }
 
 void MainWindow::onCommandExecuted() {
@@ -1150,6 +1227,117 @@ void MainWindow::onProgressUpdate(int percentage, const QString& message) {
     }
 }
 
+// Test command execution  
+void MainWindow::testCommandExecution()
+{
+    qCDebug(jveMainWindow, "Testing command execution...");
+    
+    if (!m_commandBridge || m_currentSequenceId.isEmpty()) {
+        qCWarning(jveMainWindow, "Cannot test commands - command bridge or sequence not ready");
+        return;
+    }
+    
+    // Test creating a clip
+    QString testMediaId = "test-media-123";
+    QString trackId = "track-1";
+    qint64 startTime = 0;
+    qint64 duration = 5000; // 5 seconds
+    
+    qCDebug(jveMainWindow, "Executing test createClip command...");
+    m_commandBridge->createClip(m_currentSequenceId, trackId, testMediaId, startTime, duration);
+    qCDebug(jveMainWindow, "Test createClip command sent");
+}
+
+// Test auto import function
+void MainWindow::testAutoImport()
+{
+    qCDebug(jveMainWindow, "Testing auto import...");
+    
+    if (!m_commandBridge) {
+        qCWarning(jveMainWindow, "Cannot test auto import - command bridge not ready");
+        return;
+    }
+    
+    // Test importing the provided image path
+    QStringList testFiles;
+    testFiles << "/var/folders/xf/0xjb7ffs77d4lttc9drj0pb80000gn/T/TemporaryItems/NSIRD_screencaptureui_XMpVQs/Screenshot 2025-01-29 at 11.44.19 AM.png";
+    
+    qCDebug(jveMainWindow, "Executing test import for %d files...", testFiles.size());
+    
+    // This should trigger the media import system and create clips
+    for (const QString& filePath : testFiles) {
+        if (QFile::exists(filePath)) {
+            qCDebug(jveMainWindow, "Importing file: %s", qPrintable(filePath));
+            m_commandBridge->importMedia(QStringList() << filePath);
+        } else {
+            qCWarning(jveMainWindow, "Test file does not exist: %s", qPrintable(filePath));
+            // Create a dummy clip anyway for testing
+            QString testMediaId = "test-image-media";
+            QString trackId = "track-1";
+            qint64 startTime = 1000; // Start at 1 second
+            qint64 duration = 3000; // 3 seconds
+            
+            qCDebug(jveMainWindow, "Creating dummy clip for testing...");
+            m_commandBridge->createClip(m_currentSequenceId, trackId, testMediaId, startTime, duration);
+        }
+    }
+    
+    qCDebug(jveMainWindow, "Test auto import completed");
+}
+
+// Database initialization
+void MainWindow::initializeDatabase()
+{
+    // Create a temporary database for the session
+    // In a real application, this would open an existing project or create a new one
+    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    QString dbPath = QDir(tempDir).filePath("jve_session.db");
+    
+    // Remove existing temp database to start fresh
+    if (QFile::exists(dbPath)) {
+        QFile::remove(dbPath);
+    }
+    
+    // Create new database
+    if (!Migrations::createNewProject(dbPath)) {
+        qCWarning(jveMainWindow, "Failed to create session database");
+        return;
+    }
+    
+    // Connect to the database
+    m_database = QSqlDatabase::addDatabase("QSQLITE", "main_session");
+    m_database.setDatabaseName(dbPath);
+    
+    if (!m_database.open()) {
+        qCWarning(jveMainWindow, "Failed to open session database: %s", 
+                 qPrintable(m_database.lastError().text()));
+        return;
+    }
+    
+    // Set database on command dispatcher
+    m_commandDispatcher->setDatabase(m_database);
+    
+    // Create a default project and sequence
+    Project project = Project::create("Default Project");
+    if (project.save(m_database)) {
+        m_currentProjectId = project.id();
+        
+        // Create a default sequence
+        Sequence sequence = Sequence::create("Sequence 1", m_currentProjectId, 29.97, 1920, 1080);
+        if (sequence.save(m_database)) {
+            m_currentSequenceId = sequence.id();
+            // Set the current sequence in the command bridge
+            // (This requires adding a setter method to UICommandBridge)
+            qCInfo(jveMainWindow, "Initialized session with project: %s, sequence: %s", 
+                   qPrintable(m_currentProjectId), qPrintable(m_currentSequenceId));
+        } else {
+            qCWarning(jveMainWindow, "Failed to create default sequence");
+        }
+    } else {
+        qCWarning(jveMainWindow, "Failed to create default project");
+    }
+}
+
 // Placeholder implementations
 void MainWindow::recentProjects() {}
 void MainWindow::resetLayout() {}
@@ -1163,7 +1351,7 @@ void MainWindow::toggleMediaBrowserPanel() { m_mediaBrowserDock->setVisible(!m_m
 void MainWindow::toggleProjectPanel() { m_projectDock->setVisible(!m_projectDock->isVisible()); }
 void MainWindow::toggleFullScreen() { setWindowState(windowState() ^ Qt::WindowFullScreen); }
 void MainWindow::showPreferences() {}
-void MainWindow::importMedia() { onImportMedia(); }
+void MainWindow::importMedia() { onImportMedia(); } // Public interface - calls the slot
 void MainWindow::importProject() {}
 void MainWindow::exportSequence() {}
 void MainWindow::exportFrame() {}
