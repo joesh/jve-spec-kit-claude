@@ -79,6 +79,10 @@ set(UI_SOURCES
     src/ui/common/context_menu_manager.cpp
     src/ui/common/ui_command_bridge.cpp
     src/ui/common/selection_visualizer.cpp
+    src/ui/common/drag_drop_manager.cpp
+    src/ui/common/ui_state_manager.cpp
+    src/ui/common/theme_manager.cpp
+    src/ui/common/performance_monitor.cpp
 )
 
 # LUA and CLI sources not yet implemented in M1 Foundation
