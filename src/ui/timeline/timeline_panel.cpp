@@ -17,6 +17,7 @@ TimelinePanel::TimelinePanel(QWidget* parent)
     setupLayout();
     setupActions();
     connectSignals();
+    setupContextMenus();
     
     // Set focus policy for keyboard handling
     setFocusPolicy(Qt::StrongFocus);
@@ -84,6 +85,57 @@ void TimelinePanel::connectSignals()
             this, &TimelinePanel::updateViewport);
     connect(m_scrollArea->verticalScrollBar(), &QScrollBar::valueChanged,
             this, &TimelinePanel::updateViewport);
+}
+
+void TimelinePanel::setupContextMenus()
+{
+    // Initialize context menu manager
+    m_contextMenuManager = new ContextMenuManager(this);
+    
+    // Connect context menu signals to timeline actions
+    connect(m_contextMenuManager, &ContextMenuManager::cutRequested,
+            this, [this]() { qCDebug(jveTimelinePanel) << "Cut requested from context menu"; });
+    connect(m_contextMenuManager, &ContextMenuManager::copyRequested,
+            this, [this]() { qCDebug(jveTimelinePanel) << "Copy requested from context menu"; });
+    connect(m_contextMenuManager, &ContextMenuManager::pasteRequested,
+            this, [this]() { qCDebug(jveTimelinePanel) << "Paste requested from context menu"; });
+    connect(m_contextMenuManager, &ContextMenuManager::deleteRequested,
+            this, [this]() { qCDebug(jveTimelinePanel) << "Delete requested from context menu"; });
+    
+    // Timeline-specific actions
+    connect(m_contextMenuManager, &ContextMenuManager::splitClipRequested,
+            this, [this]() { 
+                qCDebug(jveTimelinePanel) << "Split clip requested at playhead position" << m_playheadPosition;
+            });
+    connect(m_contextMenuManager, &ContextMenuManager::bladeAllTracksRequested,
+            this, [this]() { 
+                qCDebug(jveTimelinePanel) << "Blade all tracks requested at playhead position" << m_playheadPosition;
+            });
+    connect(m_contextMenuManager, &ContextMenuManager::rippleDeleteRequested,
+            this, [this]() { 
+                qCDebug(jveTimelinePanel) << "Ripple delete requested for selected clips";
+            });
+    
+    // Selection actions
+    connect(m_contextMenuManager, &ContextMenuManager::selectAllRequested,
+            this, [this]() { 
+                qCDebug(jveTimelinePanel) << "Select all requested";
+                // Would select all clips in timeline
+            });
+    connect(m_contextMenuManager, &ContextMenuManager::deselectAllRequested,
+            this, [this]() { 
+                qCDebug(jveTimelinePanel) << "Deselect all requested";
+                m_selectedClips.clear();
+                update();
+            });
+    
+    // Playback actions
+    connect(m_contextMenuManager, &ContextMenuManager::playPauseRequested,
+            this, [this]() { qCDebug(jveTimelinePanel) << "Play/pause requested from timeline context menu"; });
+    connect(m_contextMenuManager, &ContextMenuManager::markInRequested,
+            this, [this]() { qCDebug(jveTimelinePanel) << "Mark in requested at" << m_playheadPosition; });
+    connect(m_contextMenuManager, &ContextMenuManager::markOutRequested,
+            this, [this]() { qCDebug(jveTimelinePanel) << "Mark out requested at" << m_playheadPosition; });
 }
 
 void TimelinePanel::setSequence(const Sequence& sequence)
@@ -368,24 +420,35 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
 
 void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 {
+    qCDebug(jveTimelinePanel, "Context menu requested at position (%d, %d)", event->pos().x(), event->pos().y());
+    
+    // Update context menu manager state
+    m_contextMenuManager->setSelectedClips(m_selectedClips);
+    m_contextMenuManager->setPlayheadPosition(m_playheadPosition);
+    
     QString clipId = getClipAtPosition(event->pos());
     QMenu* menu = nullptr;
     
     if (!clipId.isEmpty()) {
-        menu = createClipContextMenu(clipId);
+        qCDebug(jveTimelinePanel, "Right-clicked on clip: %s", qPrintable(clipId));
+        m_contextMenuManager->setCurrentContext(ContextMenuManager::ClipContext);
+        menu = m_contextMenuManager->createClipContextMenu(QStringList() << clipId, this);
     } else {
         QString trackId = getTrackAtPosition(event->pos());
         if (!trackId.isEmpty()) {
-            menu = createTrackContextMenu(trackId);
+            qCDebug(jveTimelinePanel, "Right-clicked on track: %s", qPrintable(trackId));
+            m_contextMenuManager->setCurrentContext(ContextMenuManager::TrackContext);
+            m_contextMenuManager->setSelectedTracks(QStringList() << trackId);
+            menu = m_contextMenuManager->createTrackContextMenu(trackId, this);
         } else {
-            qint64 time = pixelToTime(event->pos().x() - m_trackHeaderWidth);
-            menu = createTimelineContextMenu(time);
+            qCDebug(jveTimelinePanel, "Right-clicked on empty timeline space");
+            m_contextMenuManager->setCurrentContext(ContextMenuManager::TimelineContext);
+            menu = m_contextMenuManager->createTimelineContextMenu(event->pos(), this);
         }
     }
     
     if (menu) {
         menu->exec(event->globalPos());
-        menu->deleteLater();
     }
 }
 

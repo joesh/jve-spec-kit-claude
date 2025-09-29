@@ -28,6 +28,7 @@
 #include "core/models/sequence.h"
 #include "core/models/track.h"
 #include "core/models/clip.h"
+#include "ui/common/context_menu_manager.h"
 #include "core/commands/command_dispatcher.h"
 #include "ui/selection/selection_manager.h"
 
@@ -116,6 +117,7 @@ private:
     void setupLayout();
     void setupActions();
     void connectSignals();
+    void setupContextMenus();
     
     // Drawing methods
     void drawTimeline(QPainter& painter);
@@ -151,6 +153,7 @@ private:
     Sequence m_sequence;
     CommandDispatcher* m_commandDispatcher = nullptr;
     SelectionManager* m_selectionManager = nullptr;
+    ContextMenuManager* m_contextMenuManager = nullptr;
     
     // UI components
     QScrollArea* m_scrollArea = nullptr;

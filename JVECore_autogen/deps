@@ -1023,6 +1023,8 @@ JVECore_autogen/timestamp: \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/persistence/sql_executor.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.h \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/common/context_menu_manager.cpp \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/common/context_menu_manager.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/input/keyboard_shortcuts.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/input/keyboard_shortcuts.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/inspector/inspector_panel.cpp \
@@ -1051,6 +1053,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMimeData \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMutex \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QObject \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QPoint \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QPointF \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QRect \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QSet \
