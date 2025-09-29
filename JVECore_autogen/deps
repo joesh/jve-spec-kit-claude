@@ -1025,6 +1025,8 @@ JVECore_autogen/timestamp: \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/inspector/inspector_panel.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/inspector/inspector_panel.h \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/main/main_window.cpp \
+	/Users/joe/Local/jve-spec-kit-claude/src/ui/main/main_window.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/media/media_browser_panel.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/media/media_browser_panel.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/ui/project/project_panel.cpp \
@@ -1049,6 +1051,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QPointF \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QRect \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QSet \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QSettings \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QSize \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QSizeF \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QString \
@@ -1168,6 +1171,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qscopedpointer.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qscopeguard.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qset.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qsettings.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qshareddata.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qshareddata_impl.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qsharedpointer.h \
@@ -1225,7 +1229,9 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qxptype_traits.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qyieldcpu.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QAction \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QActionGroup \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QBrush \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QCloseEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QColor \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QContextMenuEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QDragEnterEvent \
@@ -1238,9 +1244,11 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QPainter \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QPen \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QPixmap \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QResizeEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QTransform \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/QWheelEvent \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qaction.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qactiongroup.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qbitmap.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qbrush.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qcolor.h \
@@ -1295,6 +1303,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QCheckBox \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QComboBox \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QDateTimeEdit \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QDockWidget \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QDoubleSpinBox \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QFileDialog \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QFormLayout \
@@ -1311,7 +1320,9 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QLineEdit \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QListWidget \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QListWidgetItem \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QMainWindow \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QMenu \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QMenuBar \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QMessageBox \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QProgressBar \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QPushButton \
@@ -1320,10 +1331,12 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QSlider \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QSpinBox \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QSplitter \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QStatusBar \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QTabWidget \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QTableWidget \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QTableWidgetItem \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QTextEdit \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QToolBar \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QTreeWidget \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QTreeWidgetItem \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/QVBoxLayout \
@@ -1340,6 +1353,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qdatetimeedit.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qdialog.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qdialogbuttonbox.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qdockwidget.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qfiledialog.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qformlayout.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qframe.h \
@@ -1355,7 +1369,9 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qlineedit.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qlistview.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qlistwidget.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qmainwindow.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qmenu.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qmenubar.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qmessagebox.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qprogressbar.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qpushbutton.h \
@@ -1365,6 +1381,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qslider.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qspinbox.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qsplitter.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qstatusbar.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qstyle.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qstyleoption.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtabbar.h \
@@ -1372,6 +1389,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtablewidget.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtabwidget.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtextedit.h \
+	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtoolbar.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtreeview.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtreewidget.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtWidgets.framework/Versions/A/Headers/qtreewidgetitemiterator.h \
