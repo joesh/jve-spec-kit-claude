@@ -27,7 +27,7 @@ src/
 bin/
   JVEEditor          - Executable professional video editor
 tests/
-  contract/          - API contract tests (Currently blocked by migration path issues)
+  contract/          - API contract tests (All passing with operational migration system)
 ```
 
 ## Commands
