@@ -32,6 +32,7 @@
 #include "core/commands/command_dispatcher.h"
 #include "ui/selection/selection_manager.h"
 #include "ui/common/ui_command_bridge.h"
+#include "ui/common/selection_visualizer.h"
 
 /**
  * Professional timeline panel for video editing
