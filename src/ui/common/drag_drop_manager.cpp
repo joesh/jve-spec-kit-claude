@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QUrl>
 
 Q_LOGGING_CATEGORY(jveDragDrop, "jve.ui.dragdrop")

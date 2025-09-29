@@ -1,5 +1,6 @@
 #include "command.h"
 #include "../persistence/schema_constants.h"
+#include "../common/uuid_generator.h"
 
 #include <QUuid>
 #include <QJsonDocument>
@@ -15,7 +16,7 @@ Command Command::create(const QString& type, const QString& projectId)
     qCDebug(jveCommand, "Creating command: %s for project: %s", qPrintable(type), qPrintable(projectId));
     
     // Algorithm: Generate ID → Initialize → Set defaults → Return instance
-    QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QString id = UuidGenerator::instance()->generateCommandUuid();
     Command command(id, type, projectId);
     
     command.m_createdAt = QDateTime::currentDateTime();

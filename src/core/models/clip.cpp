@@ -1,5 +1,6 @@
 #include "clip.h"
 #include "media.h"
+#include "../common/uuid_generator.h"
 
 #include <QUuid>
 #include <QSqlQuery>
@@ -15,7 +16,7 @@ Clip Clip::create(const QString& name, const QString& mediaId)
 {
     // Algorithm: Generate UUID → Associate media → Initialize timeline position
     Clip clip;
-    clip.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    clip.m_id = UuidGenerator::instance()->generateMediaUuid();
     clip.m_name = name;
     clip.m_mediaId = mediaId;
     clip.m_createdAt = QDateTime::currentDateTime();
@@ -371,7 +372,7 @@ void Clip::saveProperties(const QSqlDatabase& database) const
     
     for (auto it = m_properties.begin(); it != m_properties.end(); ++it) {
         // Generate UUID for property
-        QString propId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QString propId = UuidGenerator::instance()->generateMediaUuid();
         
         // Determine type based on QVariant
         QString type = "STRING";

@@ -1,4 +1,5 @@
 #include "media.h"
+#include "../common/uuid_generator.h"
 
 #include <QUuid>
 #include <QSqlQuery>
@@ -14,7 +15,7 @@ Media Media::create(const QString& filename, const QString& filepath)
 {
     // Algorithm: Generate UUID → Set file info → Initialize state
     Media media;
-    media.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    media.m_id = UuidGenerator::instance()->generateMediaUuid();
     media.m_filename = filename;
     media.m_filepath = filepath;
     media.m_createdAt = QDateTime::currentDateTime();

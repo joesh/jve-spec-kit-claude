@@ -66,6 +66,8 @@ set(CORE_SOURCES
     src/core/persistence/sql_executor.cpp
     
     src/core/timeline/timeline_manager.cpp
+    
+    src/core/common/uuid_generator.cpp
 )
 
 set(UI_SOURCES

@@ -3,6 +3,7 @@
 #include "../../src/core/models/project.h"
 #include "../../src/core/models/sequence.h"
 #include "../../src/core/persistence/migrations.h"
+#include "../../src/core/common/uuid_generator.h"
 
 #include <QTest>
 #include <QJsonDocument>
@@ -48,6 +49,10 @@ void TestClipSelection::initTestCase()
     TestBase::initTestCase();
     verifyTDDCompliance();
     
+    // Enable deterministic UUID generation for testing
+    UuidGenerator::instance()->setGenerationMode(UuidGenerator::TestingMode);
+    UuidGenerator::instance()->setSeed(12345);
+    
     if (!Migrations::createNewProject(m_testDatabasePath)) {
         QFAIL("Failed to create test project database");
     }
@@ -64,8 +69,11 @@ void TestClipSelection::initTestCase()
     QVERIFY(sequence.save(m_database));
     m_sequenceId = sequence.id();
     
-    // Create test clip IDs
-    m_testClipIds = {"clip-1", "clip-2", "clip-3", "clip-4"};
+    // Create test clip IDs using deterministic generation
+    m_testClipIds.clear();
+    for (int i = 0; i < 4; i++) {
+        m_testClipIds << UuidGenerator::instance()->generateMediaUuid();
+    }
     
     // This will fail until SelectionAPI is implemented (TDD requirement)
     m_selectionManager = new SelectionAPI(this);

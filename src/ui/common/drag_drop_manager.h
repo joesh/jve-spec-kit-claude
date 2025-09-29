@@ -207,6 +207,12 @@ private:
     void drawDropZoneHighlight(QWidget* widget, DropZone zone, bool highlight);
     void drawTimelineDropIndicator(QWidget* timeline, const QString& trackId, qint64 time);
 
+    // Drop handling helpers
+    void handleTimelineDrop(DragType type, const QStringList& itemIds, const QPoint& position);
+    void handleMediaBrowserDrop(DragType type, const QStringList& itemIds, const QPoint& position);
+    void handleProjectPanelDrop(DragType type, const QStringList& itemIds, const QPoint& position);
+    void handleInspectorDrop(DragType type, const QStringList& itemIds, const QPoint& position);
+
     // Cursor management
     void setCursorForOperation(DragType type, DropMode mode, bool isValid);
     QCursor createCustomCursor(const QString& iconName, const QString& text = QString());

@@ -42,3 +42,5 @@ set(__QT_DEPLOY_TARGET_test_timeline_operations_FILE /Users/joe/Local/jve-spec-k
 set(__QT_DEPLOY_TARGET_test_timeline_operations_TYPE EXECUTABLE)
 set(__QT_DEPLOY_TARGET_test_track_entity_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_track_entity)
 set(__QT_DEPLOY_TARGET_test_track_entity_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_test_uuid_determinism_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_uuid_determinism)
+set(__QT_DEPLOY_TARGET_test_uuid_determinism_TYPE EXECUTABLE)

@@ -1,5 +1,6 @@
 #include "sequence.h"
 #include "track.h"
+#include "../common/uuid_generator.h"
 
 #include <QUuid>
 #include <QSqlQuery>
@@ -14,7 +15,7 @@ Sequence Sequence::create(const QString& name, const QString& projectId,
 {
     // Algorithm: Generate UUID → Set canvas properties → Associate with project
     Sequence sequence;
-    sequence.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    sequence.m_id = UuidGenerator::instance()->generateProjectUuid();
     sequence.m_name = name;
     sequence.m_projectId = projectId;
     sequence.m_framerate = framerate;

@@ -1,5 +1,6 @@
 #include "property.h"
 #include "../persistence/schema_constants.h"
+#include "../common/uuid_generator.h"
 
 #include <QUuid>
 #include <QSqlError>
@@ -16,7 +17,7 @@ Property Property::create(const QString& name, const QString& clipId)
     qCDebug(jveProperty, "Creating property: %s for clip: %s", qPrintable(name), qPrintable(clipId));
     
     // Algorithm: Generate ID → Initialize → Set defaults → Return instance
-    QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QString id = UuidGenerator::instance()->generateMediaUuid();
     Property property(id, name, clipId);
     
     // Set default configuration

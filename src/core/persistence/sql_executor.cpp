@@ -1,5 +1,6 @@
 #include "sql_executor.h"
 #include "schema_constants.h"
+#include "../common/uuid_generator.h"
 
 #include <QFile>
 #include <QTextStream>
@@ -260,6 +261,6 @@ QString SqlExecutor::generateConnectionName(const QString& projectPath)
     Q_UNUSED(projectPath)
     // Generate unique connection name to avoid conflicts
     QString baseName = QString(schema::MIGRATION_CONNECTION_PREFIX) + 
-                      QUuid::createUuid().toString(QUuid::WithoutBraces);
+                      UuidGenerator::instance()->generateSystemUuid();
     return baseName;
 }

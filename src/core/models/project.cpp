@@ -1,4 +1,5 @@
 #include "project.h"
+#include "../common/uuid_generator.h"
 
 #include <QUuid>
 #include <QJsonDocument>
@@ -12,7 +13,7 @@ Q_LOGGING_CATEGORY(jveProject, "jve.models.project")
 Project Project::create(const QString& name)
 {
     // Algorithm: Generate UUID → Set creation time → Initialize defaults
-    QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QString id = UuidGenerator::instance()->generateProjectUuid();
     return createWithId(id, name);
 }
 

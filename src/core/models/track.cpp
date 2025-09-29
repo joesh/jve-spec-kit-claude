@@ -1,5 +1,6 @@
 #include "track.h"
 #include "clip.h"
+#include "../common/uuid_generator.h"
 
 #include <QUuid>
 #include <QSqlQuery>
@@ -12,7 +13,7 @@ Track Track::createVideo(const QString& name, const QString& sequenceId)
 {
     // Algorithm: Generate UUID → Set video defaults → Associate with sequence
     Track track;
-    track.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    track.m_id = UuidGenerator::instance()->generateProjectUuid();
     track.m_name = name;
     track.m_sequenceId = sequenceId;
     track.m_type = Video;
@@ -28,7 +29,7 @@ Track Track::createAudio(const QString& name, const QString& sequenceId)
 {
     // Algorithm: Generate UUID → Set audio defaults → Associate with sequence
     Track track;
-    track.m_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    track.m_id = UuidGenerator::instance()->generateProjectUuid();
     track.m_name = name;
     track.m_sequenceId = sequenceId;
     track.m_type = Audio;

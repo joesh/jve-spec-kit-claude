@@ -1,4 +1,5 @@
 #include "command_dispatcher.h"
+#include "core/common/uuid_generator.h"
 #include <QUuid>
 #include <QLoggingCategory>
 #include <QDebug>
@@ -30,7 +31,7 @@ CommandResponse CommandDispatcher::executeCommand(const QJsonObject& request)
     qCDebug(jveCommandDispatcher, "Executing command request");
     
     CommandResponse response;
-    response.commandId = QUuid::createUuid().toString();
+    response.commandId = UuidGenerator::instance()->generateCommandUuid();
     
     if (!m_commandManager) {
         response.success = false;
@@ -160,7 +161,7 @@ CommandResponse CommandDispatcher::undoCommand()
     qCDebug(jveCommandDispatcher, "Executing undo command");
     
     CommandResponse response;
-    response.commandId = QUuid::createUuid().toString();
+    response.commandId = UuidGenerator::instance()->generateCommandUuid();
     
     if (!m_commandManager) {
         response.success = false;
@@ -213,7 +214,7 @@ CommandResponse CommandDispatcher::redoCommand()
     qCDebug(jveCommandDispatcher, "Executing redo command");
     
     CommandResponse response;
-    response.commandId = QUuid::createUuid().toString();
+    response.commandId = UuidGenerator::instance()->generateCommandUuid();
     
     if (!m_commandManager) {
         response.success = false;
