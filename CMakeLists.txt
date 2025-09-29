@@ -55,6 +55,10 @@ set(CORE_SOURCES
     
     src/core/commands/command.cpp
     src/core/commands/command_manager.cpp
+    src/core/commands/command_dispatcher.cpp
+    
+    src/core/api/project_manager.cpp
+    src/core/api/selection_manager.cpp
     
     src/core/persistence/migrations.cpp
     src/core/persistence/project_persistence.cpp
@@ -66,6 +70,10 @@ set(CORE_SOURCES
 
 set(UI_SOURCES
     src/ui/selection/selection_manager.cpp
+    src/ui/timeline/timeline_panel.cpp
+    src/ui/inspector/inspector_panel.cpp
+    src/ui/media/media_browser_panel.cpp
+    src/ui/project/project_panel.cpp
 )
 
 # LUA and CLI sources not yet implemented in M1 Foundation
@@ -83,6 +91,7 @@ set_target_properties(JVECore PROPERTIES
 
 target_link_libraries(JVECore
     Qt6::Core
+    Qt6::Widgets
     Qt6::Sql
     Qt6::Gui
     SQLite::SQLite3
