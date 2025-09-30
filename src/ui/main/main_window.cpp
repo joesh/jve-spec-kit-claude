@@ -277,9 +277,9 @@ void MainWindow::setupKeyboardShortcuts()
     
     // Connect keyboard shortcut signals to main window actions
     connect(m_keyboardShortcuts, &KeyboardShortcuts::playPauseRequested, 
-            this, [this]() { qCDebug(jveMainWindow) << "Play/Pause requested"; });
+            this, [this]() { qCDebug(jveMainWindow, "Play/Pause requested"); });
     connect(m_keyboardShortcuts, &KeyboardShortcuts::stopRequested,
-            this, [this]() { qCDebug(jveMainWindow) << "Stop requested"; });
+            this, [this]() { qCDebug(jveMainWindow, "Stop requested"); });
     connect(m_keyboardShortcuts, &KeyboardShortcuts::playBackwardRequested,
             this, [this]() { qCDebug(jveMainWindow) << "Play backward requested"; });
     connect(m_keyboardShortcuts, &KeyboardShortcuts::playForwardRequested,

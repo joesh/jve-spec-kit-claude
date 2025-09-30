@@ -34,8 +34,9 @@
 #include "ui/common/ui_command_bridge.h"
 #include "ui/common/selection_visualizer.h"
 
-// Forward declaration for custom timeline widget
+// Forward declarations for custom timeline widgets
 class TimelineWidget;
+class TrackHeaderWidget;
 
 /**
  * Professional timeline panel for video editing
@@ -100,6 +101,8 @@ public:
         }
         return m_selectedClips; 
     }
+    qint64 getViewportStartTime() const { return m_viewportStartTime; }
+    qint64 getViewportEndTime() const { return m_viewportEndTime; }
 
 signals:
     void playheadPositionChanged(qint64 timeMs);
@@ -124,6 +127,7 @@ private slots:
     void onTrackHeaderClicked(const QString& trackId);
     void onClipMoved(const QString& clipId, const QString& trackId, qint64 newTime);
     void onPlayheadMoved(qint64 newTime);
+    void onTimelineScrollChanged(int value);
     void updateViewport();
 
 private:
@@ -177,6 +181,9 @@ private:
     QWidget* m_timelineWidget = nullptr;
     QVBoxLayout* m_mainLayout = nullptr;
     QHBoxLayout* m_timelineLayout = nullptr;
+    QHBoxLayout* m_horizontalLayout = nullptr;
+    QScrollBar* m_timelineScrollBar = nullptr;
+    TrackHeaderWidget* m_trackHeaderWidget = nullptr;
     QSplitter* m_splitter = nullptr;
     
     // Timeline state
@@ -185,6 +192,10 @@ private:
     int m_trackHeight = 48;
     int m_trackHeaderWidth = 200;
     int m_rulerHeight = 32;
+    
+    // Timeline viewport (which time range we're viewing)
+    qint64 m_viewportStartTime = 0; // Start time of visible timeline area
+    qint64 m_viewportEndTime = 60000; // End time of visible timeline area (initially 1 minute)
     
     // Selection and interaction
     QStringList m_selectedClips;
@@ -210,7 +221,7 @@ private:
     // Visual constants
     static constexpr int MIN_TRACK_HEIGHT = 24;
     static constexpr int MAX_TRACK_HEIGHT = 200;
-    static constexpr double MIN_ZOOM = 0.1;
+    static constexpr double MIN_ZOOM = 0.00005; // Allow very wide zoom out (e.g., 4+ hours in view)
     static constexpr double MAX_ZOOM = 100.0;
     static constexpr int PLAYHEAD_WIDTH = 2;
     static constexpr int CLIP_MARGIN = 2;
@@ -261,4 +272,25 @@ private:
     bool m_isDragSelecting = false;
     QPoint m_dragStartPos;
     QRect m_dragSelectionRect;
+    
+    // Playhead dragging support
+    bool m_isDraggingPlayhead = false;
+};
+
+/**
+ * Widget that displays track headers (fixed on the left side)
+ */
+class TrackHeaderWidget : public QWidget
+{
+    Q_OBJECT
+    
+public:
+    explicit TrackHeaderWidget(TimelinePanel* parent = nullptr);
+    
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    
+private:
+    TimelinePanel* m_timelinePanel = nullptr;
 };

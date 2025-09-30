@@ -141,25 +141,25 @@ C++ (Qt6) + Lua (LuaJIT) hybrid architecture: Follow standard conventions
   - ✅ Property vs Metadata Separation: Clear distinction between clip properties and organizational metadata
   - ✅ REST API Best Practices: Consistent response structure with success/statusCode/error fields, professional timestamps, HTTP status codes
 
-- 2025-09-30: **TIMELINE INTERACTION MILESTONE** - Professional selection and chrome partially implemented
+- 2025-09-30: **TIMELINE INTERACTION MILESTONE** - Professional timeline architecture with complex scrollbar fixes
   - ✅ **Professional Multi-Selection**: Complete multi-selection system with Cmd+click, drag selection (rubber band), visual orange selection feedback
-  - ✅ **Timeline Chrome**: Time ruler with markers (0:05, 0:10, etc.), track headers with V1 label and controls, red playhead with triangle indicator
-  - ✅ **Visual Rendering**: Clips positioned correctly relative to chrome, playhead drawn in front of clips, professional layout
-  - ✅ **Selection Feedback**: Selected clips turn orange, multiple selection support, click to select/deselect
-  - ✅ **Application Build**: Compiles and runs with all new functionality
+  - ✅ **Timeline Chrome**: Time ruler with markers (0:05, 0:10, etc.), track headers with V1 label and controls, red playhead with triangle indicator  
+  - ✅ **Playhead Scrubbing**: Click-to-position and smooth drag scrubbing functionality working correctly
+  - ✅ **Zoom System**: Professional zoom controls (+/-) with extended range supporting 4+ hour timelines
+  - ✅ **Timeline Architecture**: Complex professional layout with fixed track headers (left) and scrollable content area (right)
+  - ✅ **Application Build**: Compiles and runs with enhanced functionality
   - ⚠️ **CRITICAL ISSUES**:
-    - Playhead scrubbing: Clicks detected but playhead doesn't move
-    - Play functionality: Play button doesn't work
-    - Playhead dragging: Can't drag for smooth scrubbing
-    - Scrollbars: Incorrectly scroll track headers instead of timeline content
-    - Track header clicking: Causes playhead to disappear
+    - Timeline chrome positioning: UI elements not aligned properly with new architecture
+    - Scrollbar behavior: Track header/content separation still has visual artifacts  
+    - Play functionality: Play button doesn't work (deferred until media implementation)
+    - Track header interaction: May cause visual glitches
   - ⚠️ **MISSING FEATURES**:
     - Clips do NOT appear in inspector panel when selected
     - Inspector tabs (Video/Audio/Color/Motion) are non-functional
     - Media does NOT appear in media browser
     - Most keyboard shortcuts are non-functional
     - No real media import (only test clips)
-  - 🔧 **STATUS**: Timeline chrome looks professional but interaction is partially broken
+  - 🔧 **STATUS**: Professional timeline structure implemented but chrome positioning needs refinement
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
