@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-09-29
+Auto-generated from all feature plans. Last updated: 2025-09-30
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture + Qt6 (UI framework), LuaJIT (scripting), SQLite (persistence) (001-editor-project-v1)
@@ -141,21 +141,25 @@ C++ (Qt6) + Lua (LuaJIT) hybrid architecture: Follow standard conventions
   - ✅ Property vs Metadata Separation: Clear distinction between clip properties and organizational metadata
   - ✅ REST API Best Practices: Consistent response structure with success/statusCode/error fields, professional timestamps, HTTP status codes
 
-- 2025-09-29: **BASIC CLIP VISUALIZATION MILESTONE** - Core rendering system working
-  - ✅ **Core Foundation**: Command system, models, persistence working
-  - ✅ **Database Integration**: Project creation, sequences, clips stored properly
-  - ✅ **Signal Pipeline**: UICommandBridge → TimelinePanel communication working
-  - ✅ **Widget Hierarchy Fix**: TimelineWidget created as proper drawing surface inside scroll area
-  - ✅ **Basic Clip Rendering**: Clips appear as blue rectangles in timeline with correct positioning
-  - ✅ **Application Build**: Compiles and runs successfully
-  - ⚠️ **MAJOR LIMITATIONS**:
-    - Clips are NOT interactive (no selection, dragging, or context menus)
-    - Clips do NOT appear in inspector panel
+- 2025-09-30: **TIMELINE INTERACTION MILESTONE** - Professional selection and chrome partially implemented
+  - ✅ **Professional Multi-Selection**: Complete multi-selection system with Cmd+click, drag selection (rubber band), visual orange selection feedback
+  - ✅ **Timeline Chrome**: Time ruler with markers (0:05, 0:10, etc.), track headers with V1 label and controls, red playhead with triangle indicator
+  - ✅ **Visual Rendering**: Clips positioned correctly relative to chrome, playhead drawn in front of clips, professional layout
+  - ✅ **Selection Feedback**: Selected clips turn orange, multiple selection support, click to select/deselect
+  - ✅ **Application Build**: Compiles and runs with all new functionality
+  - ⚠️ **CRITICAL ISSUES**:
+    - Playhead scrubbing: Clicks detected but playhead doesn't move
+    - Play functionality: Play button doesn't work
+    - Playhead dragging: Can't drag for smooth scrubbing
+    - Scrollbars: Incorrectly scroll track headers instead of timeline content
+    - Track header clicking: Causes playhead to disappear
+  - ⚠️ **MISSING FEATURES**:
+    - Clips do NOT appear in inspector panel when selected
+    - Inspector tabs (Video/Audio/Color/Motion) are non-functional
     - Media does NOT appear in media browser
-    - Timeline has NO UI chrome (no rulers, track headers, or playhead)
-    - Most keyboard shortcuts and context menus are non-functional
+    - Most keyboard shortcuts are non-functional
     - No real media import (only test clips)
-  - 🔧 **STATUS**: Basic proof-of-concept with visual clips - not production ready
+  - 🔧 **STATUS**: Timeline chrome looks professional but interaction is partially broken
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

@@ -92,8 +92,14 @@ public:
     void zoomToSelection();
     void frameView();
     
-    // Accessor for clips (needed by TimelineWidget)
+    // Accessors for data (needed by TimelineWidget)
     const QList<Clip>& getClips() const { return m_clips; }
+    QStringList getSelectedClips() const { 
+        if (m_selectionManager) {
+            return m_selectionManager->getSelectedItems();
+        }
+        return m_selectedClips; 
+    }
 
 signals:
     void playheadPositionChanged(qint64 timeMs);
@@ -238,7 +244,21 @@ public:
     
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    
+    // Timeline chrome drawing
+    void drawRuler(QPainter& painter);
+    void drawTrackHeaders(QPainter& painter);
+    void drawPlayhead(QPainter& painter);
     
 private:
     TimelinePanel* m_timelinePanel = nullptr;
+    QStringList m_selectedClipIds; // Direct multi-selection tracking for immediate visual feedback
+    
+    // Drag selection support
+    bool m_isDragSelecting = false;
+    QPoint m_dragStartPos;
+    QRect m_dragSelectionRect;
 };

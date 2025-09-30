@@ -252,11 +252,8 @@ void TimelinePanel::setCommandBridge(UICommandBridge* commandBridge)
                     update(); // Refresh timeline display
                 });
         
-        connect(m_commandBridge, &UICommandBridge::selectionChanged,
-                this, [this](const QStringList& selectedClipIds) {
-                    m_selectedClips = selectedClipIds;
-                    update(); // Refresh timeline display
-                });
+        // Note: Don't connect to UICommandBridge selectionChanged - only listen to SelectionManager
+        // to avoid circular selection loops
     }
     
     qCDebug(jveTimelinePanel, "Command bridge set");
@@ -311,8 +308,12 @@ int TimelinePanel::getTrackHeight() const
 
 void TimelinePanel::selectClip(const QString& clipId)
 {
+    qCDebug(jveTimelinePanel, "TimelinePanel::selectClip called with clipId: %s", qPrintable(clipId));
     if (m_selectionManager) {
+        qCDebug(jveTimelinePanel, "Calling SelectionManager::select");
         m_selectionManager->select(clipId);
+    } else {
+        qCDebug(jveTimelinePanel, "SelectionManager is null!");
     }
 }
 
@@ -893,13 +894,14 @@ void TimelineWidget::paintEvent(QPaintEvent* event)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     
-    // Draw bright red background to verify the drawing widget works
-    painter.fillRect(rect(), Qt::red);
+    // Draw dark background
+    painter.fillRect(rect(), QColor(45, 45, 45));
     
-    // Draw timeline components using TimelinePanel's drawing methods
-    painter.fillRect(rect(), QColor(45, 45, 45)); // Dark background
+    // Draw background chrome first (ruler and track headers)
+    drawRuler(painter);
+    drawTrackHeaders(painter);
     
-    // Call the TimelinePanel's drawing methods with this painter
+    // Draw clips in the middle layer
     const auto& clips = m_timelinePanel->getClips();
     if (clips.size() > 0) {
         qCDebug(jveTimelinePanel, "Drawing %d clips on TimelineWidget", clips.size());
@@ -910,18 +912,340 @@ void TimelineWidget::paintEvent(QPaintEvent* event)
             qint64 startTime = clip.timelineStart();
             qint64 duration = clip.duration();
             
-            // Calculate clip position (simplified version of TimelinePanel's logic)
-            int x = static_cast<int>(startTime * 0.05); // Use the zoom factor
-            int y = 32; // Track position
+            // Calculate clip position accounting for chrome
+            int trackHeaderWidth = 200;
+            int rulerHeight = 32;
+            int x = trackHeaderWidth + static_cast<int>(startTime * 0.05); // Account for track header
+            int y = rulerHeight + 2; // Account for ruler + small margin
             int width = static_cast<int>(duration * 0.05);
             int height = 44;
             
             QRect clipRect(x, y, width, height);
-            painter.fillRect(clipRect, QColor(100, 150, 200)); // Blue clips
+            
+            // Check if this clip is selected (use direct tracking for immediate feedback)
+            bool isSelected = m_selectedClipIds.contains(clip.id());
+            
+            // Use different color for selected clips
+            QColor clipColor = isSelected ? QColor(255, 165, 0) : QColor(100, 150, 200); // Orange for selected, blue for normal
+            painter.fillRect(clipRect, clipColor);
+            
+            // Draw border for selected clips
+            if (isSelected) {
+                painter.setPen(QPen(QColor(255, 200, 50), 2));
+                painter.drawRect(clipRect);
+            }
             
             qCDebug(jveTimelinePanel, "Drew clip at x=%d, y=%d, width=%d, height=%d", 
                     x, y, width, height);
         }
+    }
+    
+    // Draw drag selection rectangle
+    if (m_isDragSelecting) {
+        painter.setPen(QPen(QColor(255, 255, 255, 128), 1, Qt::DashLine));
+        painter.setBrush(QBrush(QColor(255, 255, 255, 32)));
+        painter.drawRect(m_dragSelectionRect);
+    }
+    
+    // Draw playhead on top of everything
+    drawPlayhead(painter);
+}
+
+void TimelineWidget::mousePressEvent(QMouseEvent* event)
+{
+    if (!m_timelinePanel) {
+        return;
+    }
+    
+    QPoint clickPos = event->pos();
+    qCDebug(jveTimelinePanel, "Timeline click at %d, %d", clickPos.x(), clickPos.y());
+    
+    int trackHeaderWidth = 200;
+    int rulerHeight = 32;
+    
+    // Check if clicked in ruler area for playhead scrubbing
+    if (clickPos.y() <= rulerHeight && clickPos.x() >= trackHeaderWidth) {
+        // Convert click position to time and set playhead
+        double zoomFactor = 0.05;
+        qint64 newTime = static_cast<qint64>((clickPos.x() - trackHeaderWidth) / zoomFactor);
+        m_timelinePanel->setPlayheadPosition(newTime);
+        update();
+        return;
+    }
+    
+    // Check for modifier keys
+    bool cmdPressed = (event->modifiers() & Qt::ControlModifier) || (event->modifiers() & Qt::MetaModifier);
+    bool shiftPressed = event->modifiers() & Qt::ShiftModifier;
+    
+    // Find which clip was clicked
+    const auto& clips = m_timelinePanel->getClips();
+    QString clickedClipId;
+    
+    for (const auto& clip : clips) {
+        qint64 startTime = clip.timelineStart();
+        qint64 duration = clip.duration();
+        
+        // Calculate clip rectangle (same logic as in paintEvent)
+        int trackHeaderWidth = 200;
+        int rulerHeight = 32;
+        int x = trackHeaderWidth + static_cast<int>(startTime * 0.05);
+        int y = rulerHeight + 2;
+        int width = static_cast<int>(duration * 0.05);
+        int height = 44;
+        
+        QRect clipRect(x, y, width, height);
+        
+        if (clipRect.contains(clickPos)) {
+            clickedClipId = clip.id();
+            qCDebug(jveTimelinePanel, "Clicked on clip: %s", qPrintable(clickedClipId));
+            break;
+        }
+    }
+    
+    if (!clickedClipId.isEmpty()) {
+        // Handle clip selection with modifiers
+        if (cmdPressed) {
+            // Cmd+click: Add/remove from selection
+            if (m_selectedClipIds.contains(clickedClipId)) {
+                m_selectedClipIds.removeAll(clickedClipId);
+                qCDebug(jveTimelinePanel, "Removed clip from selection: %s", qPrintable(clickedClipId));
+            } else {
+                m_selectedClipIds.append(clickedClipId);
+                qCDebug(jveTimelinePanel, "Added clip to selection: %s", qPrintable(clickedClipId));
+            }
+        } else {
+            // Normal click: Replace selection
+            m_selectedClipIds.clear();
+            m_selectedClipIds.append(clickedClipId);
+            qCDebug(jveTimelinePanel, "Selected clip (replacing): %s", qPrintable(clickedClipId));
+        }
+        
+        update(); // Refresh to show selection
+        
+        // Update the selection manager
+        if (m_timelinePanel) {
+            m_timelinePanel->selectClips(m_selectedClipIds);
+        }
+    } else {
+        // Clicked on empty area
+        if (!cmdPressed) {
+            // Normal click on empty area: Start drag selection
+            m_isDragSelecting = true;
+            m_dragStartPos = clickPos;
+            m_dragSelectionRect = QRect(clickPos, QSize(0, 0));
+            
+            // Clear selection unless Cmd is held
+            m_selectedClipIds.clear();
+            qCDebug(jveTimelinePanel, "Starting drag selection at %d, %d", clickPos.x(), clickPos.y());
+        }
+        
+        update();
+        
+        // Update the selection manager
+        if (m_timelinePanel) {
+            m_timelinePanel->selectClips(m_selectedClipIds);
+        }
+    }
+    
+    QWidget::mousePressEvent(event);
+}
+
+void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
+{
+    if (m_isDragSelecting) {
+        // Update drag selection rectangle
+        QPoint currentPos = event->pos();
+        m_dragSelectionRect = QRect(
+            qMin(m_dragStartPos.x(), currentPos.x()),
+            qMin(m_dragStartPos.y(), currentPos.y()),
+            qAbs(currentPos.x() - m_dragStartPos.x()),
+            qAbs(currentPos.y() - m_dragStartPos.y())
+        );
+        
+        // Find clips that intersect with the drag rectangle
+        if (m_timelinePanel) {
+            const auto& clips = m_timelinePanel->getClips();
+            QStringList dragSelectedClips;
+            
+            for (const auto& clip : clips) {
+                qint64 startTime = clip.timelineStart();
+                qint64 duration = clip.duration();
+                
+                // Calculate clip rectangle
+                int trackHeaderWidth = 200;
+                int rulerHeight = 32;
+                int x = trackHeaderWidth + static_cast<int>(startTime * 0.05);
+                int y = rulerHeight + 2;
+                int width = static_cast<int>(duration * 0.05);
+                int height = 44;
+                
+                QRect clipRect(x, y, width, height);
+                
+                if (m_dragSelectionRect.intersects(clipRect)) {
+                    dragSelectedClips.append(clip.id());
+                }
+            }
+            
+            // Update selection with drag-selected clips
+            m_selectedClipIds = dragSelectedClips;
+        }
+        
+        update(); // Refresh to show selection rectangle and selected clips
+    }
+    
+    QWidget::mouseMoveEvent(event);
+}
+
+void TimelineWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (m_isDragSelecting) {
+        // Finish drag selection
+        m_isDragSelecting = false;
+        qCDebug(jveTimelinePanel, "Finished drag selection, selected %d clips", m_selectedClipIds.size());
+        
+        // Update the selection manager with final selection
+        if (m_timelinePanel) {
+            m_timelinePanel->selectClips(m_selectedClipIds);
+        }
+        
+        update(); // Clear the drag rectangle
+    }
+    
+    QWidget::mouseReleaseEvent(event);
+}
+
+// Timeline chrome drawing methods
+
+void TimelineWidget::drawRuler(QPainter& painter)
+{
+    if (!m_timelinePanel) return;
+    
+    // Ruler area - top 32 pixels
+    int rulerHeight = 32;
+    int trackHeaderWidth = 200;
+    
+    // Draw ruler background
+    QRect rulerRect(trackHeaderWidth, 0, width() - trackHeaderWidth, rulerHeight);
+    painter.fillRect(rulerRect, QColor(80, 80, 80));
+    
+    // Draw time markers
+    painter.setPen(QColor(200, 200, 200));
+    painter.setFont(QFont("Arial", 9));
+    
+    double zoomFactor = 0.05; // Same as clip drawing
+    int timelineStart = -trackHeaderWidth / zoomFactor; // Account for scroll offset
+    int timelineEnd = (width() - trackHeaderWidth) / zoomFactor;
+    
+    // Draw major time markers every 5 seconds (5000ms)
+    for (qint64 time = 0; time <= timelineEnd; time += 5000) {
+        int x = trackHeaderWidth + static_cast<int>(time * zoomFactor);
+        if (x >= trackHeaderWidth && x <= width()) {
+            // Draw tick mark
+            painter.drawLine(x, rulerHeight - 8, x, rulerHeight);
+            
+            // Draw time label
+            int seconds = time / 1000;
+            int minutes = seconds / 60;
+            int remainingSeconds = seconds % 60;
+            QString timeText = QString("%1:%2").arg(minutes).arg(remainingSeconds, 2, 10, QChar('0'));
+            
+            QRect textRect(x - 20, 0, 40, rulerHeight - 8);
+            painter.drawText(textRect, Qt::AlignCenter, timeText);
+        }
+    }
+    
+    // Draw minor time markers every 1 second (1000ms)
+    painter.setPen(QColor(150, 150, 150));
+    for (qint64 time = 0; time <= timelineEnd; time += 1000) {
+        if (time % 5000 != 0) { // Skip major markers
+            int x = trackHeaderWidth + static_cast<int>(time * zoomFactor);
+            if (x >= trackHeaderWidth && x <= width()) {
+                painter.drawLine(x, rulerHeight - 4, x, rulerHeight);
+            }
+        }
+    }
+}
+
+void TimelineWidget::drawTrackHeaders(QPainter& painter)
+{
+    if (!m_timelinePanel) return;
+    
+    int trackHeaderWidth = 200;
+    int rulerHeight = 32;
+    int trackHeight = 48;
+    
+    // Draw track header background
+    QRect headerRect(0, 0, trackHeaderWidth, height());
+    painter.fillRect(headerRect, QColor(60, 60, 60));
+    
+    // Draw ruler corner
+    QRect rulerCorner(0, 0, trackHeaderWidth, rulerHeight);
+    painter.fillRect(rulerCorner, QColor(70, 70, 70));
+    
+    // Draw track header for video track
+    int trackY = rulerHeight;
+    QRect trackHeaderRect(0, trackY, trackHeaderWidth, trackHeight);
+    
+    // Track header background
+    painter.fillRect(trackHeaderRect, QColor(55, 55, 55));
+    
+    // Track header border
+    painter.setPen(QColor(40, 40, 40));
+    painter.drawRect(trackHeaderRect);
+    
+    // Track label
+    painter.setPen(QColor(220, 220, 220));
+    painter.setFont(QFont("Arial", 10, QFont::Bold));
+    painter.drawText(trackHeaderRect.adjusted(8, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, "V1");
+    
+    // Track controls (simplified)
+    int buttonSize = 16;
+    int buttonY = trackY + (trackHeight - buttonSize) / 2;
+    
+    // Visibility toggle (eye icon placeholder)
+    QRect visibilityButton(trackHeaderWidth - 80, buttonY, buttonSize, buttonSize);
+    painter.fillRect(visibilityButton, QColor(100, 150, 200));
+    painter.setPen(QColor(255, 255, 255));
+    painter.setFont(QFont("Arial", 8));
+    painter.drawText(visibilityButton, Qt::AlignCenter, "👁");
+    
+    // Lock toggle (lock icon placeholder)
+    QRect lockButton(trackHeaderWidth - 60, buttonY, buttonSize, buttonSize);
+    painter.fillRect(lockButton, QColor(120, 120, 120));
+    painter.drawText(lockButton, Qt::AlignCenter, "🔒");
+    
+    // Mute toggle (speaker icon placeholder)
+    QRect muteButton(trackHeaderWidth - 40, buttonY, buttonSize, buttonSize);
+    painter.fillRect(muteButton, QColor(200, 100, 100));
+    painter.drawText(muteButton, Qt::AlignCenter, "🔊");
+}
+
+void TimelineWidget::drawPlayhead(QPainter& painter)
+{
+    if (!m_timelinePanel) return;
+    
+    int trackHeaderWidth = 200;
+    qint64 playheadPosition = m_timelinePanel->getPlayheadPosition();
+    double zoomFactor = 0.05;
+    
+    // Calculate playhead X position
+    int playheadX = trackHeaderWidth + static_cast<int>(playheadPosition * zoomFactor);
+    
+    // Only draw if playhead is visible
+    if (playheadX >= trackHeaderWidth && playheadX <= width()) {
+        // Draw playhead line
+        painter.setPen(QPen(QColor(255, 0, 0), 2)); // Red playhead
+        painter.drawLine(playheadX, 0, playheadX, height());
+        
+        // Draw playhead top indicator (triangle)
+        QPolygon playheadTop;
+        playheadTop << QPoint(playheadX - 6, 0)
+                   << QPoint(playheadX + 6, 0)
+                   << QPoint(playheadX, 12);
+        
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(255, 0, 0));
+        painter.drawPolygon(playheadTop);
     }
 }
 
