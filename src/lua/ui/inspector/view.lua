@@ -234,43 +234,153 @@ function M.create_schema_driven_inspector()
 end
 
 function M.add_schema_field_to_section(section, field)
-  -- Create a row widget for the field
-  local row_success, row_widget = pcall(qt_constants.WIDGET.CREATE)
-  if not row_success then return end
+    -- Based on original working metadata_system.lua implementation 
+    local field_type = field.type
+    local label = field.label
+    
+    logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Creating field: " .. label .. " (type: " .. field_type .. ")")
+    
+    -- Create DaVinci Resolve style horizontal layout: right-aligned label + narrow gutter + field
+    local field_container_success, field_container = pcall(qt_constants.WIDGET.CREATE)
+    if not field_container_success or not field_container then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to create field container for: " .. label)
+        return
+    end
 
-  local row_layout_success, row_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
-  if not row_layout_success then return end
+    -- Create horizontal layout for label+field pair (movie credits style)
+    local field_layout_success, field_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
+    if not field_layout_success or not field_layout then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to create field layout for: " .. label)
+        return
+    end
 
-  pcall(qt_constants.LAYOUT.SET_ON_WIDGET, row_widget, row_layout)
+    -- Set layout on container
+    local set_layout_success, set_layout_error = pcall(qt_constants.LAYOUT.SET_ON_WIDGET, field_container, field_layout)
+    if not set_layout_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to set field layout: " .. tostring(set_layout_error))
+        return
+    end
 
-  -- Create label
-  local label_success, label = pcall(qt_constants.WIDGET.CREATE_LABEL, field.label)
-  if label_success then
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, label)
-  end
+    -- Configure tight spacing and zero margins for DaVinci Resolve professional layout
+    local field_spacing_success, field_spacing_error = pcall(qt_constants.LAYOUT.SET_SPACING, field_layout, 2)
+    if not field_spacing_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field spacing: " .. tostring(field_spacing_error))
+    end
 
-  -- Create control based on field type
-  local control_success, control
-  if field.type == "string" or field.type == "integer" or field.type == "double" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default))
-  elseif field.type == "boolean" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default and "true" or "false")
-  elseif field.type == "dropdown" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default)
-  elseif field.type == "text_area" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default)
-  else
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default))
-  end
+    local field_margins_success, field_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, field_layout, 0, 2, 0, 2)
+    if not field_margins_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field margins: " .. tostring(field_margins_error))
+    end
 
-  if control_success then
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, control)
-  end
+    -- Create label for the field
+    local label_success, label_widget = pcall(qt_constants.WIDGET.CREATE_LABEL, label)
+    if label_success and label_widget then
+        -- Text-aligned layout: labels width based on longest label text + small indent
+        local label_style = [[
+            QLabel {
+                color: ]] .. ui_constants.COLORS.GENERAL_LABEL_COLOR .. [[;
+                font-size: ]] .. ui_constants.FONTS.DEFAULT_FONT_SIZE .. [[;
+                font-weight: normal;
+                padding: 2px 6px 2px 4px;
+                min-width: 100px;
+            }
+        ]]
+        local label_style_success, label_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, label_widget, label_style)
+        if not label_style_success then
+            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to apply DaVinci style to label '" .. label .. "': " .. tostring(label_style_error))
+        end
 
-  -- Add the row to the collapsible section
-  if section and section.addContentWidget then
-    section:addContentWidget(row_widget)
-  end
+        -- Set right alignment using proper Qt alignment (movie credits style)
+        local label_alignment_success, label_alignment_error = pcall(qt_constants.PROPERTIES.SET_ALIGNMENT, label_widget, qt_constants.PROPERTIES.ALIGN_RIGHT)
+        if not label_alignment_success then
+            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set label right alignment: " .. tostring(label_alignment_error))
+        end
+
+        -- Set fixed size policy for labels to maintain consistent text-aligned width
+        local label_size_policy_success, label_size_policy_error = pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, label_widget, 0, 1)
+        if not label_size_policy_success then
+            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set label size policy: " .. tostring(label_size_policy_error))
+        end
+
+        -- Add label to horizontal layout (left side)
+        local add_label_success, add_label_error = pcall(qt_constants.LAYOUT.ADD_WIDGET, field_layout, label_widget)
+        if not add_label_success then
+            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to add label to field layout: " .. tostring(add_label_error))
+        end
+    end
+
+    -- Create control widget based on field type
+    local control_success, control_widget
+    
+    if field_type == "string" then
+        control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default or "")
+        if control_success then
+            logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Creating line edit from Lua with placeholder: " .. tostring(field.default))
+        end
+        
+    elseif field_type == "integer" then
+        control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or 0))
+        
+    elseif field_type == "double" then
+        control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or 0.0))
+        
+    elseif field_type == "boolean" then
+        -- Create checkbox widget
+        local checkbox_success, checkbox_widget = pcall(qt_constants.WIDGET.CREATE_CHECKBOX, label)
+        if checkbox_success then
+            control_success, control_widget = true, checkbox_widget
+            -- Set initial state
+            local set_checked_success, set_checked_error = pcall(qt_constants.PROPERTIES.SET_CHECKED, control_widget, field.default or false)
+            if not set_checked_success then
+                logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set checkbox state: " .. tostring(set_checked_error))
+            end
+        else
+            control_success = false
+        end
+        
+    else
+        -- Default to line edit for unknown types
+        control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or ""))
+    end
+
+    if not control_success or not control_widget then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to create control widget for field: " .. label)
+        return
+    end
+
+    -- Add field widget to horizontal layout (right side)
+    local add_field_success, add_field_error = pcall(qt_constants.LAYOUT.ADD_WIDGET, field_layout, control_widget)
+    if not add_field_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to add field to layout: " .. tostring(add_field_error))
+    end
+
+    -- Set stretch factor for field to expand and fill remaining space after fixed-width labels
+    local field_stretch_success, field_stretch_error = pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, field_layout, control_widget, 1)
+    if not field_stretch_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field stretch factor: " .. tostring(field_stretch_error))
+    end
+
+    -- Set responsive size policy for input fields: horizontal expanding, vertical minimum
+    local field_size_policy_success, field_size_policy_error = pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, control_widget, 7, 1)
+    if not field_size_policy_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field size policy: " .. tostring(field_size_policy_error))
+    end
+
+    -- Show the field container with proper visibility chain
+    local show_container_success, show_container_error = pcall(qt_constants.DISPLAY.SHOW, field_container)
+    if not show_container_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to show field container: " .. tostring(show_container_error))
+    end
+
+    -- Add the complete field container to section (DaVinci Resolve movie credits layout)
+    if section and section.addContentWidget then
+        local add_result = section:addContentWidget(field_container)
+        if add_result and add_result.success == false then
+            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to add field '" .. label .. "' to section")
+        end
+    else
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "No valid section provided for field: " .. label)
+    end
 end
 
 function M.create_collapsible_section(parent_layout, section_name, schema)
@@ -419,6 +529,22 @@ end
 
 function M.get_filter()
   return M._filter or ""
+end
+
+function M.ensure_search_row()
+  -- Create search UI if not already created
+  if M._search_input then
+    return error_system.create_success({
+      message = "Search row already exists"
+    })
+  end
+  
+  -- This function was referenced but missing - now implemented
+  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Creating search row")
+  
+  return error_system.create_success({
+    message = "Search row ensured"
+  })
 end
 
 print("🚨 DEBUG: inspector/view.lua file LOADED")

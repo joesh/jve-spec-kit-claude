@@ -113,6 +113,12 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_widget_click_handler);
     lua_setglobal(L, "qt_set_widget_click_handler");
     
+    // Register new missing functions globally for lazy_function access
+    lua_pushcfunction(L, lua_set_layout_stretch_factor);
+    lua_setglobal(L, "qt_set_layout_stretch_factor");
+    lua_pushcfunction(L, lua_set_widget_alignment);
+    lua_setglobal(L, "qt_set_widget_alignment");
+    
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
     
@@ -690,6 +696,65 @@ int lua_set_widget_size_policy(lua_State* L)
         lua_pushboolean(L, 1);
     } else {
         qWarning() << "Invalid widget or size policy arguments";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_layout_stretch_factor(lua_State* L)
+{
+    QLayout* layout = (QLayout*)lua_to_widget(L, 1);
+    QWidget* widget = (QWidget*)lua_to_widget(L, 2);
+    int stretch = lua_tointeger(L, 3);
+    
+    if (layout && widget) {
+        qDebug() << "Setting layout stretch factor from Lua:" << stretch;
+        
+        // Try casting to different layout types
+        if (QHBoxLayout* hbox = qobject_cast<QHBoxLayout*>(layout)) {
+            hbox->setStretchFactor(widget, stretch);
+            lua_pushboolean(L, 1);
+        } else if (QVBoxLayout* vbox = qobject_cast<QVBoxLayout*>(layout)) {
+            vbox->setStretchFactor(widget, stretch);
+            lua_pushboolean(L, 1);
+        } else {
+            qWarning() << "Unsupported layout type for stretch factor";
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid layout or widget in set_layout_stretch_factor";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_widget_alignment(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* alignment = lua_tostring(L, 2);
+    
+    if (widget && alignment) {
+        qDebug() << "Setting widget alignment from Lua:" << alignment;
+        
+        Qt::Alignment align = Qt::AlignLeft;
+        if (strcmp(alignment, "AlignRight") == 0) {
+            align = Qt::AlignRight;
+        } else if (strcmp(alignment, "AlignCenter") == 0) {
+            align = Qt::AlignCenter;
+        } else if (strcmp(alignment, "AlignLeft") == 0) {
+            align = Qt::AlignLeft;
+        }
+        
+        // Try to set alignment based on widget type
+        if (QLabel* label = qobject_cast<QLabel*>(widget)) {
+            label->setAlignment(align);
+            lua_pushboolean(L, 1);
+        } else {
+            qWarning() << "Widget type doesn't support alignment:" << widget->metaObject()->className();
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid widget or alignment in set_widget_alignment";
         lua_pushboolean(L, 0);
     }
     return 1;

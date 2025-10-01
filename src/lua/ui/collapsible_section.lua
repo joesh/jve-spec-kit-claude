@@ -12,10 +12,8 @@ local qt_constants = require("core.qt_constants")
 -- Helper for detailed error logging
 local log_detailed_error = error_system.log_detailed_error
 
--- Initialize logger (skip if init function doesn't exist)
-if logger.init then
-    logger.init()
-end
+-- Initialize logger
+logger.init()
 
 local collapsible_section = {}
 
@@ -23,14 +21,12 @@ local collapsible_section = {}
 local CollapsibleSection = {}
 CollapsibleSection.__index = CollapsibleSection
 
-function CollapsibleSection.new(title)
-    print("🔍 STACK TRACE for CollapsibleSection.new(" .. tostring(title) .. "):")
-    print(debug.traceback())
+function CollapsibleSection.new(title, expanded)
     local self = setmetatable({}, CollapsibleSection)
 
     -- State
     self.title = title
-    self.expanded = true  -- C++ line 168: start expanded
+    self.expanded = expanded ~= nil and expanded or true  -- Default to expanded for now
     self.bypassed = false
     self.section_enabled = true  -- Default to enabled (red dot)
 
@@ -54,8 +50,6 @@ function CollapsibleSection.new(title)
 end
 
 function CollapsibleSection:create()
-    print("🔍 DETAILED DEBUG: Creating collapsible section for: " .. tostring(self.title))
-    
     local operation_context = {
         operation = "create_collapsible_section",
         component = "collapsible_section",
@@ -63,11 +57,8 @@ function CollapsibleSection:create()
     }
 
     -- Step 1: Create main widget container
-    print("🔍 STEP 1: Creating main widget...")
     local main_success, main_widget = pcall(qt_constants.WIDGET.CREATE)
-    print("🔍 Main widget creation - success: " .. tostring(main_success) .. ", widget: " .. tostring(main_widget))
     if not main_success or not main_widget then
-        print("🔍 ERROR: Main widget creation failed")
         return error_system.create_error({
             code = error_system.CODES.QT_WIDGET_CREATION_FAILED,
             category = "qt_widget",
@@ -836,12 +827,6 @@ end
 function collapsible_section.create_section(title)
     local section = CollapsibleSection.new(title)
     local result = section:create()
-    
-    print("🔍 create_section for " .. tostring(title) .. " - success: " .. tostring(error_system.is_success(result)))
-    if not error_system.is_success(result) then
-        print("🔍 ERROR details: " .. tostring(result.message or "no message"))
-        print("🔍 ERROR code: " .. tostring(result.code or "no code"))
-    end
 
     if error_system.is_success(result) then
         result.section = section  -- Return the section object too

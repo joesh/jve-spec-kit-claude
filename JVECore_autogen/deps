@@ -1057,6 +1057,8 @@ JVECore_autogen/timestamp: \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/persistence/schema_validator.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/persistence/sql_executor.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/persistence/sql_executor.h \
+	/Users/joe/Local/jve-spec-kit-claude/src/core/resource_paths.cpp \
+	/Users/joe/Local/jve-spec-kit-claude/src/core/resource_paths.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/timeline/timeline_manager.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings.cpp \

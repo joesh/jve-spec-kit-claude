@@ -10,6 +10,7 @@
 
 #include "lua/simple_lua_engine.h"
 #include "core/persistence/migrations.h"
+#include "core/resource_paths.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
 
@@ -62,20 +63,13 @@ int main(int argc, char *argv[])
     // Create Lua engine for pure Lua UI
     SimpleLuaEngine luaEngine;
     
-    // Execute Lua main window creation
-    QString scriptsDir = QApplication::applicationDirPath() + "/scripts";
-    QString mainWindowScript = scriptsDir + "/ui/correct_layout.lua";
+    // Execute Lua main window creation using ResourcePaths
+    QString scriptsDir = QString::fromStdString(JVE::ResourcePaths::getScriptsDirectory());
+    QString mainWindowScript = QString::fromStdString(JVE::ResourcePaths::getScriptPath("ui/correct_layout.lua"));
     
     qCInfo(jveMain, "Starting pure Lua UI system...");
     qCInfo(jveMain, "Scripts directory: %s", qPrintable(scriptsDir));
     qCInfo(jveMain, "Main window script: %s", qPrintable(mainWindowScript));
-    
-    // Check if scripts exist
-    if (!QDir(scriptsDir).exists()) {
-        qCCritical(jveMain, "Scripts directory not found: %s", qPrintable(scriptsDir));
-        qCCritical(jveMain, "Please ensure scripts/ directory is in the application directory");
-        return -1;
-    }
     
     if (!QFileInfo(mainWindowScript).exists()) {
         qCCritical(jveMain, "Main window script not found: %s", qPrintable(mainWindowScript));

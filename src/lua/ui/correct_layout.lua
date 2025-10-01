@@ -38,44 +38,26 @@ qt_constants.LAYOUT.SET_ON_WIDGET(viewer_panel, viewer_layout)
 -- 3. Inspector (right) - Create container for Lua inspector
 local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
 
--- Initialize the Lua inspector system in the container
-print("🔧 Attempting to initialize Lua inspector system...")
+-- Initialize the Lua inspector content following working reference pattern
+print("🔍 Creating Lua metadata inspector content...")
 
-local success, result = pcall(function()
-    print("🔧 Loading inspector view module...")
-    local view = require("src.lua.ui.inspector.view")
+local view = require("ui.inspector.view")
+
+-- First mount the view on the container
+local mount_result = view.mount(inspector_panel)
+if mount_result and mount_result.success then
+    print("✅ Inspector view mounted")
     
-    print("🔧 Loading inspector adapter module...")
-    local adapter = require("src.lua.ui.inspector.adapter")
+    -- Then create the schema-driven content
+    local inspector_success, inspector_result = pcall(view.create_schema_driven_inspector)
     
-    print("🔧 Mounting view onto container widget...")
-    local mount_result = view.mount(inspector_panel)
-    
-    if mount_result and mount_result.success then
-        print("✅ Lua inspector view mounted successfully")
-        
-        print("🔧 Creating search UI...")
-        local search_result = view.ensure_search_row()
-        
-        if search_result and search_result.success then
-            print("✅ Inspector search row created")
-        else
-            print("⚠️ Inspector search row creation failed: " .. tostring(search_result))
-        end
-        
-        return view
+    if not inspector_success then
+        print("❌ Inspector creation failed: " .. tostring(inspector_result))
     else
-        print("⚠️ Lua inspector mount failed: " .. tostring(mount_result))
-        return nil
+        print("✅ Schema-driven inspector created successfully")
     end
-end)
-
-if not success then
-    print("❌ Failed to initialize Lua inspector system:")
-    print("   Error: " .. tostring(result))
-    print("   This is expected - inspector will show as empty container")
 else
-    print("✅ Lua inspector system initialized successfully")
+    print("❌ Inspector mount failed: " .. tostring(mount_result))
 end
 
 -- Add three panels to top splitter

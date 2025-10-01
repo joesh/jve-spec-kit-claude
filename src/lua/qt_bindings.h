@@ -61,6 +61,8 @@ int lua_set_widget_click_handler(lua_State* L);
 int lua_set_layout_spacing(lua_State* L);
 int lua_set_layout_margins(lua_State* L);
 int lua_set_widget_size_policy(lua_State* L);
+int lua_set_layout_stretch_factor(lua_State* L);
+int lua_set_widget_alignment(lua_State* L);
 
 // Utility functions
 void* lua_to_widget(lua_State* L, int index);

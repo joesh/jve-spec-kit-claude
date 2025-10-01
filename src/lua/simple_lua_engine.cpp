@@ -1,5 +1,6 @@
 #include "simple_lua_engine.h"
 #include "qt_bindings.h"
+#include "core/resource_paths.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -17,6 +18,9 @@ SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
     
     // Load standard libraries
     luaL_openlibs(L);
+    
+    // Setup Lua package paths for module loading
+    JVE::ResourcePaths::setupLuaPackagePaths(L);
     
     // Setup Qt bindings
     setupBindings();
