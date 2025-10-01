@@ -1,5 +1,6 @@
 #include "simple_lua_engine.h"
 #include "qt_bindings.h"
+#include "ui/timeline/scriptable_timeline.h"
 #include "core/resource_paths.h"
 #include <QDebug>
 #include <QDir>
@@ -118,12 +119,15 @@ QWidget* SimpleLuaEngine::getCreatedMainWindow() const
 void SimpleLuaEngine::setupBindings()
 {
     qDebug() << "SimpleLuaEngine: Setting up Qt bindings with LuaJIT";
-    
+
     if (!L) {
         qCritical() << "Cannot setup bindings: Lua state not initialized";
         return;
     }
-    
+
     // Register Qt bindings
     registerQtBindings(L);
+
+    // Register timeline bindings
+    registerTimelineBindings(L);
 }

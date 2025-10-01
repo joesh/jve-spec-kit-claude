@@ -36,7 +36,16 @@ qt_constants.LAYOUT.ADD_WIDGET(viewer_layout, viewer_content)
 qt_constants.LAYOUT.SET_ON_WIDGET(viewer_panel, viewer_layout)
 
 -- 3. Inspector (right) - Create container for Lua inspector
+print("🔍 Step 1: About to create inspector container")
 local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
+print("🔍 Step 2: Inspector container created")
+
+-- 4. Timeline panel (create early, before inspector blocks execution)
+print("📦 Loading timeline_panel module...")
+local timeline_panel_mod = require("ui.timeline.timeline_panel")
+print("📦 Creating timeline panel...")
+local timeline_panel = timeline_panel_mod.create()
+print("✅ Timeline panel created")
 
 -- Initialize the Lua inspector content following working reference pattern
 print("🔍 Creating Lua metadata inspector content...")
@@ -67,9 +76,6 @@ qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
 
 -- Set top splitter proportions (equal thirds)
 qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {533, 533, 534})
-
--- Timeline panel (bottom, full width) - Use C++ ScriptableTimeline for performance
-local timeline_panel = qt_constants.WIDGET.CREATE_TIMELINE()
 
 -- Add top row and timeline to main splitter
 qt_constants.LAYOUT.ADD_WIDGET(main_splitter, top_splitter)

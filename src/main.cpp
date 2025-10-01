@@ -16,10 +16,9 @@ Q_LOGGING_CATEGORY(jveMain, "jve.main")
 
 int main(int argc, char *argv[])
 {
-    // Enable high DPI scaling
-    QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
-    QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
-    
+    // Note: High DPI scaling is enabled by default in Qt 6
+    // Qt::AA_EnableHighDpiScaling and Qt::AA_UseHighDpiPixmaps are deprecated
+
     QApplication app(argc, argv);
     
     // Application metadata
@@ -94,7 +93,7 @@ int main(int argc, char *argv[])
     }
     
     qCInfo(jveMain, "JVE Editor started successfully - Pure Lua UI system ready");
-    qCInfo(jveMain, "Main window: %p", mainWindow);
+    qCInfo(jveMain, "Main window: %p", static_cast<void*>(mainWindow));
     qCInfo(jveMain, "Qt version: %s", QT_VERSION_STR);
     qCInfo(jveMain, "Application directory: %s", qPrintable(QApplication::applicationDirPath()));
     

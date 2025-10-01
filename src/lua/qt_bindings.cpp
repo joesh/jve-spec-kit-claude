@@ -645,25 +645,25 @@ int lua_set_widget_click_handler(lua_State* L)
     }
     
     std::string handler_str = std::string(handler_name);
-    
+
     // Install event filter for mouse clicks on any widget
-    QObject::connect(widget, &QWidget::destroyed, [L, handler_str]() {
+    QObject::connect(widget, &QWidget::destroyed, [handler_str]() {
         // Clean up if widget is destroyed
     });
-    
+
     // Use mouse press event for general widget clicking
     widget->installEventFilter(new QObject());
-    
+
     // For now, use a simple approach - override mousePressEvent
     // Note: This is a simplified approach; a proper implementation would use event filters
     widget->setProperty("lua_click_handler", QString::fromStdString(handler_str));
-    
+
     // Add mouse tracking
     widget->setAttribute(Qt::WA_Hover, true);
     widget->setMouseTracking(true);
-    
+
     // Simple click simulation - connect to a custom signal
-    QObject::connect(widget, &QWidget::destroyed, [L, handler_str]() {
+    QObject::connect(widget, &QWidget::destroyed, [handler_str]() {
         // Widget click simulation - for now just mark as connected
         qDebug() << "Widget click handler connected for:" << handler_str.c_str();
     });

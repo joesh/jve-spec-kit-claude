@@ -100,14 +100,14 @@ void ScriptableTimeline::renderTestTimeline()
     update(); // Trigger repaint
 }
 
-void ScriptableTimeline::paintEvent(QPaintEvent* event)
+void ScriptableTimeline::paintEvent(QPaintEvent* /* event */)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    
+
     // Fill background
     painter.fillRect(rect(), QColor(35, 35, 35));
-    
+
     // Execute all drawing commands from Lua
     executeDrawingCommands(painter);
 }

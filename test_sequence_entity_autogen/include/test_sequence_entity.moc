@@ -1,0 +1,164 @@
+/****************************************************************************
+** Meta object code from reading C++ file 'test_sequence_entity.cpp'
+**
+** Created by: The Qt Meta Object Compiler version 69 (Qt 6.9.1)
+**
+** WARNING! All changes made in this file will be lost!
+*****************************************************************************/
+
+#include <QtCore/qmetatype.h>
+
+#include <QtCore/qtmochelpers.h>
+
+#include <memory>
+
+
+#include <QtCore/qxptype_traits.h>
+#if !defined(Q_MOC_OUTPUT_REVISION)
+#error "The header file 'test_sequence_entity.cpp' doesn't include <QObject>."
+#elif Q_MOC_OUTPUT_REVISION != 69
+#error "This file was generated using the moc from 6.9.1. It"
+#error "cannot be used with the include files from this version of Qt."
+#error "(The moc has changed too much.)"
+#endif
+
+#ifndef Q_CONSTINIT
+#define Q_CONSTINIT
+#endif
+
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
+QT_WARNING_DISABLE_GCC("-Wuseless-cast")
+namespace {
+struct qt_meta_tag_ZN18TestSequenceEntityE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto TestSequenceEntity::qt_create_metaobjectdata<qt_meta_tag_ZN18TestSequenceEntityE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "TestSequenceEntity",
+        "initTestCase",
+        "",
+        "cleanupTestCase",
+        "testSequenceCreation",
+        "testSequencePersistence",
+        "testSequenceLoading",
+        "testSequenceMetadata",
+        "testTimelineProperties",
+        "testFramerateHandling",
+        "testResolutionSettings",
+        "testDurationCalculation",
+        "testProjectSequenceRelationship",
+        "testMultiSequenceSupport",
+        "testSequenceTrackManagement",
+        "testSequenceLoadPerformance",
+        "testTimelineCalculationPerformance"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Slot 'initTestCase'
+        QtMocHelpers::SlotData<void()>(1, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'cleanupTestCase'
+        QtMocHelpers::SlotData<void()>(3, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testSequenceCreation'
+        QtMocHelpers::SlotData<void()>(4, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testSequencePersistence'
+        QtMocHelpers::SlotData<void()>(5, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testSequenceLoading'
+        QtMocHelpers::SlotData<void()>(6, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testSequenceMetadata'
+        QtMocHelpers::SlotData<void()>(7, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTimelineProperties'
+        QtMocHelpers::SlotData<void()>(8, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testFramerateHandling'
+        QtMocHelpers::SlotData<void()>(9, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testResolutionSettings'
+        QtMocHelpers::SlotData<void()>(10, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testDurationCalculation'
+        QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testProjectSequenceRelationship'
+        QtMocHelpers::SlotData<void()>(12, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testMultiSequenceSupport'
+        QtMocHelpers::SlotData<void()>(13, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testSequenceTrackManagement'
+        QtMocHelpers::SlotData<void()>(14, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testSequenceLoadPerformance'
+        QtMocHelpers::SlotData<void()>(15, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'testTimelineCalculationPerformance'
+        QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessPrivate, QMetaType::Void),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<TestSequenceEntity, qt_meta_tag_ZN18TestSequenceEntityE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject TestSequenceEntity::staticMetaObject = { {
+    QMetaObject::SuperData::link<TestBase::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN18TestSequenceEntityE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN18TestSequenceEntityE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN18TestSequenceEntityE_t>.metaTypes,
+    nullptr
+} };
+
+void TestSequenceEntity::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<TestSequenceEntity *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->initTestCase(); break;
+        case 1: _t->cleanupTestCase(); break;
+        case 2: _t->testSequenceCreation(); break;
+        case 3: _t->testSequencePersistence(); break;
+        case 4: _t->testSequenceLoading(); break;
+        case 5: _t->testSequenceMetadata(); break;
+        case 6: _t->testTimelineProperties(); break;
+        case 7: _t->testFramerateHandling(); break;
+        case 8: _t->testResolutionSettings(); break;
+        case 9: _t->testDurationCalculation(); break;
+        case 10: _t->testProjectSequenceRelationship(); break;
+        case 11: _t->testMultiSequenceSupport(); break;
+        case 12: _t->testSequenceTrackManagement(); break;
+        case 13: _t->testSequenceLoadPerformance(); break;
+        case 14: _t->testTimelineCalculationPerformance(); break;
+        default: ;
+        }
+    }
+    (void)_a;
+}
+
+const QMetaObject *TestSequenceEntity::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *TestSequenceEntity::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN18TestSequenceEntityE_t>.strings))
+        return static_cast<void*>(this);
+    return TestBase::qt_metacast(_clname);
+}
+
+int TestSequenceEntity::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = TestBase::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 15)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 15;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 15)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 15;
+    }
+    return _id;
+}
+QT_WARNING_POP
