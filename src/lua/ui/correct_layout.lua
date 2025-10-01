@@ -68,15 +68,8 @@ qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
 -- Set top splitter proportions (equal thirds)
 qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {533, 533, 534})
 
--- Timeline panel (bottom, full width) - Create container widget for Lua timeline
-local timeline_panel = qt_constants.WIDGET.CREATE()
-local timeline_layout = qt_constants.LAYOUT.CREATE_VBOX()
-qt_constants.LAYOUT.SET_ON_WIDGET(timeline_panel, timeline_layout)
-
--- Add placeholder timeline content
-local timeline_label = qt_constants.WIDGET.CREATE_LABEL("Timeline (Lua implementation needed)")
-qt_constants.PROPERTIES.SET_STYLE(timeline_label, "background: #1a1a1a; color: #888; padding: 20px; text-align: center;")
-qt_constants.LAYOUT.ADD_WIDGET(timeline_layout, timeline_label)
+-- Timeline panel (bottom, full width) - Use C++ ScriptableTimeline for performance
+local timeline_panel = qt_constants.WIDGET.CREATE_TIMELINE()
 
 -- Add top row and timeline to main splitter
 qt_constants.LAYOUT.ADD_WIDGET(main_splitter, top_splitter)
