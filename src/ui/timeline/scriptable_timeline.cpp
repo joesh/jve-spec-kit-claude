@@ -1,4 +1,5 @@
 #include "scriptable_timeline.h"
+#include "lua/qt_bindings.h"
 #include <QPaintEvent>
 #include <QDebug>
 
@@ -12,6 +13,9 @@ ScriptableTimeline::ScriptableTimeline(const std::string& widget_id, QWidget* pa
     
     // Enable mouse tracking for interactive features
     setMouseTracking(true);
+    
+    // Set focus policy to receive keyboard events
+    setFocusPolicy(Qt::StrongFocus);
     
     qDebug() << "ScriptableTimeline created with widget_id:" << QString::fromStdString(widget_id);
 }
@@ -132,4 +136,362 @@ void ScriptableTimeline::executeDrawingCommands(QPainter& painter)
     }
 }
 
+void ScriptableTimeline::setPlayheadPosition(qint64 timeMs)
+{
+    playhead_position_ = timeMs;
+    update(); // Redraw to show new playhead position
+}
+
+qint64 ScriptableTimeline::getPlayheadPosition() const
+{
+    return playhead_position_;
+}
+
+void ScriptableTimeline::setMouseEventHandler(const std::string& handler_name)
+{
+    mouse_event_handler_ = handler_name;
+}
+
+void ScriptableTimeline::setKeyEventHandler(const std::string& handler_name)
+{
+    key_event_handler_ = handler_name;
+}
+
+void ScriptableTimeline::mousePressEvent(QMouseEvent* event)
+{
+    if (!mouse_event_handler_.empty() && lua_state_) {
+        lua_getglobal(lua_state_, mouse_event_handler_.c_str());
+        if (lua_isfunction(lua_state_, -1)) {
+            // Create event table
+            lua_newtable(lua_state_);
+            lua_pushstring(lua_state_, "press");
+            lua_setfield(lua_state_, -2, "type");
+            lua_pushnumber(lua_state_, event->position().x());
+            lua_setfield(lua_state_, -2, "x");
+            lua_pushnumber(lua_state_, event->position().y());
+            lua_setfield(lua_state_, -2, "y");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::ControlModifier);
+            lua_setfield(lua_state_, -2, "ctrl");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
+            lua_setfield(lua_state_, -2, "shift");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
+            lua_setfield(lua_state_, -2, "alt");
+            lua_pushinteger(lua_state_, event->button());
+            lua_setfield(lua_state_, -2, "button");
+
+            int result = lua_pcall(lua_state_, 1, 0, 0);
+            if (result != 0) {
+                qWarning() << "Error calling Lua mouse event handler:" << lua_tostring(lua_state_, -1);
+                lua_pop(lua_state_, 1);
+            }
+        } else {
+            qWarning() << "Lua mouse event handler not found:" << mouse_event_handler_.c_str();
+            lua_pop(lua_state_, 1);
+        }
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void ScriptableTimeline::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (!mouse_event_handler_.empty() && lua_state_) {
+        lua_getglobal(lua_state_, mouse_event_handler_.c_str());
+        if (lua_isfunction(lua_state_, -1)) {
+            lua_newtable(lua_state_);
+            lua_pushstring(lua_state_, "release");
+            lua_setfield(lua_state_, -2, "type");
+            lua_pushnumber(lua_state_, event->position().x());
+            lua_setfield(lua_state_, -2, "x");
+            lua_pushnumber(lua_state_, event->position().y());
+            lua_setfield(lua_state_, -2, "y");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::ControlModifier);
+            lua_setfield(lua_state_, -2, "ctrl");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
+            lua_setfield(lua_state_, -2, "shift");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
+            lua_setfield(lua_state_, -2, "alt");
+
+            int result = lua_pcall(lua_state_, 1, 0, 0);
+            if (result != 0) {
+                qWarning() << "Error calling Lua mouse event handler:" << lua_tostring(lua_state_, -1);
+                lua_pop(lua_state_, 1);
+            }
+        } else {
+            lua_pop(lua_state_, 1);
+        }
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void ScriptableTimeline::mouseMoveEvent(QMouseEvent* event)
+{
+    if (!mouse_event_handler_.empty() && lua_state_) {
+        lua_getglobal(lua_state_, mouse_event_handler_.c_str());
+        if (lua_isfunction(lua_state_, -1)) {
+            lua_newtable(lua_state_);
+            lua_pushstring(lua_state_, "move");
+            lua_setfield(lua_state_, -2, "type");
+            lua_pushnumber(lua_state_, event->position().x());
+            lua_setfield(lua_state_, -2, "x");
+            lua_pushnumber(lua_state_, event->position().y());
+            lua_setfield(lua_state_, -2, "y");
+
+            int result = lua_pcall(lua_state_, 1, 0, 0);
+            if (result != 0) {
+                qWarning() << "Error calling Lua mouse event handler:" << lua_tostring(lua_state_, -1);
+                lua_pop(lua_state_, 1);
+            }
+        } else {
+            lua_pop(lua_state_, 1);
+        }
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void ScriptableTimeline::keyPressEvent(QKeyEvent* event)
+{
+    if (!key_event_handler_.empty() && lua_state_) {
+        lua_getglobal(lua_state_, key_event_handler_.c_str());
+        if (lua_isfunction(lua_state_, -1)) {
+            lua_newtable(lua_state_);
+            lua_pushstring(lua_state_, "press");
+            lua_setfield(lua_state_, -2, "type");
+            lua_pushinteger(lua_state_, event->key());
+            lua_setfield(lua_state_, -2, "key");
+            lua_pushstring(lua_state_, event->text().toStdString().c_str());
+            lua_setfield(lua_state_, -2, "text");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::ControlModifier);
+            lua_setfield(lua_state_, -2, "ctrl");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
+            lua_setfield(lua_state_, -2, "shift");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
+            lua_setfield(lua_state_, -2, "alt");
+
+            int result = lua_pcall(lua_state_, 1, 0, 0);
+            if (result != 0) {
+                qWarning() << "Error calling Lua key event handler:" << lua_tostring(lua_state_, -1);
+                lua_pop(lua_state_, 1);
+            }
+        } else {
+            lua_pop(lua_state_, 1);
+        }
+    }
+    QWidget::keyPressEvent(event);
+}
+
 } // namespace JVE
+
+// Lua bindings implementation
+void registerTimelineBindings(lua_State* L)
+{
+    qDebug() << "Registering ScriptableTimeline bindings with Lua";
+
+    // Create timeline namespace
+    lua_newtable(L);
+
+    lua_pushcfunction(L, lua_timeline_clear_commands);
+    lua_setfield(L, -2, "clear_commands");
+
+    lua_pushcfunction(L, lua_timeline_add_rect);
+    lua_setfield(L, -2, "add_rect");
+
+    lua_pushcfunction(L, lua_timeline_add_text);
+    lua_setfield(L, -2, "add_text");
+
+    lua_pushcfunction(L, lua_timeline_add_line);
+    lua_setfield(L, -2, "add_line");
+
+    lua_pushcfunction(L, lua_timeline_get_dimensions);
+    lua_setfield(L, -2, "get_dimensions");
+
+    lua_pushcfunction(L, lua_timeline_set_playhead);
+    lua_setfield(L, -2, "set_playhead");
+
+    lua_pushcfunction(L, lua_timeline_get_playhead);
+    lua_setfield(L, -2, "get_playhead");
+
+    lua_pushcfunction(L, lua_timeline_update);
+    lua_setfield(L, -2, "update");
+
+    lua_pushcfunction(L, lua_timeline_set_mouse_event_handler);
+    lua_setfield(L, -2, "set_mouse_event_handler");
+
+    lua_pushcfunction(L, lua_timeline_set_key_event_handler);
+    lua_setfield(L, -2, "set_key_event_handler");
+
+    lua_pushcfunction(L, lua_timeline_set_lua_state);
+    lua_setfield(L, -2, "set_lua_state");
+
+    lua_setglobal(L, "timeline");
+
+    qDebug() << "ScriptableTimeline bindings registered successfully";
+}
+
+int lua_timeline_clear_commands(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    if (timeline) {
+        timeline->clearCommands();
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline in clear_commands";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_add_rect(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    int x = lua_tointeger(L, 2);
+    int y = lua_tointeger(L, 3);
+    int width = lua_tointeger(L, 4);
+    int height = lua_tointeger(L, 5);
+    const char* color = lua_tostring(L, 6);
+
+    if (timeline && color) {
+        timeline->addRect(x, y, width, height, QString(color));
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline or parameters in add_rect";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_add_text(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    int x = lua_tointeger(L, 2);
+    int y = lua_tointeger(L, 3);
+    const char* text = lua_tostring(L, 4);
+    const char* color = lua_tostring(L, 5);
+
+    if (timeline && text && color) {
+        timeline->addText(x, y, QString(text), QString(color));
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline or parameters in add_text";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_add_line(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    int x1 = lua_tointeger(L, 2);
+    int y1 = lua_tointeger(L, 3);
+    int x2 = lua_tointeger(L, 4);
+    int y2 = lua_tointeger(L, 5);
+    const char* color = lua_tostring(L, 6);
+    int width = lua_tointeger(L, 7);
+
+    if (timeline && color) {
+        timeline->addLine(x1, y1, x2, y2, QString(color), width);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline or parameters in add_line";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_get_dimensions(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    if (timeline) {
+        lua_pushinteger(L, timeline->getWidth());
+        lua_pushinteger(L, timeline->getHeight());
+        return 2;
+    } else {
+        qWarning() << "Invalid timeline in get_dimensions";
+        lua_pushnil(L);
+        lua_pushnil(L);
+        return 2;
+    }
+}
+
+int lua_timeline_set_playhead(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    qint64 timeMs = lua_tointeger(L, 2);
+
+    if (timeline) {
+        timeline->setPlayheadPosition(timeMs);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline in set_playhead";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_get_playhead(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    if (timeline) {
+        lua_pushinteger(L, timeline->getPlayheadPosition());
+    } else {
+        qWarning() << "Invalid timeline in get_playhead";
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+int lua_timeline_update(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    if (timeline) {
+        timeline->requestUpdate();
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline in update";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_set_mouse_event_handler(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    const char* handler = lua_tostring(L, 2);
+
+    if (timeline && handler) {
+        timeline->setMouseEventHandler(std::string(handler));
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline or handler in set_mouse_event_handler";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_set_key_event_handler(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    const char* handler = lua_tostring(L, 2);
+
+    if (timeline && handler) {
+        timeline->setKeyEventHandler(std::string(handler));
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline or handler in set_key_event_handler";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_set_lua_state(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+
+    if (timeline) {
+        timeline->setLuaState(L);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid timeline in set_lua_state";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}

@@ -42,6 +42,7 @@ int lua_set_text(lua_State* L);
 int lua_set_placeholder_text(lua_State* L);
 int lua_set_window_title(lua_State* L);
 int lua_set_size(lua_State* L);
+int lua_set_geometry(lua_State* L);
 int lua_set_style_sheet(lua_State* L);
 
 // Display functions
@@ -60,9 +61,13 @@ int lua_set_widget_click_handler(lua_State* L);
 // Layout styling functions
 int lua_set_layout_spacing(lua_State* L);
 int lua_set_layout_margins(lua_State* L);
+int qt_set_layout_alignment(lua_State* L);
 int lua_set_widget_size_policy(lua_State* L);
 int lua_set_layout_stretch_factor(lua_State* L);
 int lua_set_widget_alignment(lua_State* L);
+
+// Widget relationship functions
+int lua_set_parent(lua_State* L);
 
 // Utility functions
 void* lua_to_widget(lua_State* L, int index);

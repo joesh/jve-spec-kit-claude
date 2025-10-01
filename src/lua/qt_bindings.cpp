@@ -54,6 +54,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "CREATE_TIMELINE");
     lua_pushcfunction(L, lua_create_inspector_panel);
     lua_setfield(L, -2, "CREATE_INSPECTOR");
+    lua_pushcfunction(L, lua_set_parent);
+    lua_setfield(L, -2, "SET_PARENT");
     lua_setfield(L, -2, "WIDGET");
     
     // Create LAYOUT subtable
@@ -84,6 +86,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_TITLE");
     lua_pushcfunction(L, lua_set_size);
     lua_setfield(L, -2, "SET_SIZE");
+    lua_pushcfunction(L, lua_set_geometry);
+    lua_setfield(L, -2, "SET_GEOMETRY");
     lua_pushcfunction(L, lua_set_style_sheet);
     lua_setfield(L, -2, "SET_STYLE");
     lua_setfield(L, -2, "PROPERTIES");
@@ -123,6 +127,10 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_layout_stretch_factor");
     lua_pushcfunction(L, lua_set_widget_alignment);
     lua_setglobal(L, "qt_set_widget_alignment");
+    lua_pushcfunction(L, qt_set_layout_alignment);
+    lua_setglobal(L, "qt_set_layout_alignment");
+    lua_pushcfunction(L, lua_set_parent);
+    lua_setglobal(L, "qt_set_parent");
     
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
@@ -232,12 +240,12 @@ int lua_create_scriptable_timeline(lua_State* L)
 {
     qDebug() << "Creating scriptable timeline from Lua";
     JVE::ScriptableTimeline* timeline = new JVE::ScriptableTimeline("timeline_widget");
-    
+
     // Set size policy to expand and fill available space
     timeline->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     timeline->setMinimumHeight(150);  // Minimum timeline height
-    
-    timeline->renderTestTimeline();  // Show test content
+
+    // Don't call renderTestTimeline() - Lua will handle all rendering
     lua_push_widget(L, timeline);
     return 1;
 }
@@ -453,13 +461,31 @@ int lua_set_size(lua_State* L)
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     int width = lua_tointeger(L, 2);
     int height = lua_tointeger(L, 3);
-    
+
     if (widget && width > 0 && height > 0) {
         qDebug() << "Setting size from Lua:" << width << "x" << height;
         widget->resize(width, height);
         lua_pushboolean(L, 1);
     } else {
         qWarning() << "Invalid widget or size in set_size";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_geometry(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int x = lua_tointeger(L, 2);
+    int y = lua_tointeger(L, 3);
+    int width = lua_tointeger(L, 4);
+    int height = lua_tointeger(L, 5);
+
+    if (widget) {
+        widget->setGeometry(x, y, width, height);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget in set_geometry";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -668,13 +694,47 @@ int lua_set_layout_margins(lua_State* L)
 {
     QLayout* layout = (QLayout*)lua_to_widget(L, 1);
     int margins = lua_tointeger(L, 2);
-    
+
     if (layout) {
         qDebug() << "Setting layout margins from Lua:" << margins;
         layout->setContentsMargins(margins, margins, margins, margins);
         lua_pushboolean(L, 1);
     } else {
         qWarning() << "Invalid layout in set_layout_margins";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int qt_set_layout_alignment(lua_State* L)
+{
+    QLayout* layout = (QLayout*)lua_to_widget(L, 1);
+    const char* alignment_str = lua_tostring(L, 2);
+
+    if (layout && alignment_str) {
+        qDebug() << "Setting layout alignment from Lua:" << alignment_str;
+
+        Qt::Alignment alignment;
+        if (strcmp(alignment_str, "AlignTop") == 0) {
+            alignment = Qt::AlignTop;
+        } else if (strcmp(alignment_str, "AlignBottom") == 0) {
+            alignment = Qt::AlignBottom;
+        } else if (strcmp(alignment_str, "AlignLeft") == 0) {
+            alignment = Qt::AlignLeft;
+        } else if (strcmp(alignment_str, "AlignRight") == 0) {
+            alignment = Qt::AlignRight;
+        } else if (strcmp(alignment_str, "AlignCenter") == 0) {
+            alignment = Qt::AlignCenter;
+        } else {
+            qWarning() << "Invalid alignment:" << alignment_str;
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        layout->setAlignment(alignment);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid layout or alignment in qt_set_layout_alignment";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -743,10 +803,10 @@ int lua_set_widget_alignment(lua_State* L)
 {
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     const char* alignment = lua_tostring(L, 2);
-    
+
     if (widget && alignment) {
         qDebug() << "Setting widget alignment from Lua:" << alignment;
-        
+
         Qt::Alignment align = Qt::AlignLeft;
         if (strcmp(alignment, "AlignRight") == 0) {
             align = Qt::AlignRight;
@@ -755,7 +815,7 @@ int lua_set_widget_alignment(lua_State* L)
         } else if (strcmp(alignment, "AlignLeft") == 0) {
             align = Qt::AlignLeft;
         }
-        
+
         // Try to set alignment based on widget type
         if (QLabel* label = qobject_cast<QLabel*>(widget)) {
             label->setAlignment(align);
@@ -766,6 +826,21 @@ int lua_set_widget_alignment(lua_State* L)
         }
     } else {
         qWarning() << "Invalid widget or alignment in set_widget_alignment";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_parent(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    QWidget* parent = (QWidget*)lua_to_widget(L, 2);
+
+    if (widget && parent) {
+        widget->setParent(parent);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget or parent in set_parent";
         lua_pushboolean(L, 0);
     }
     return 1;

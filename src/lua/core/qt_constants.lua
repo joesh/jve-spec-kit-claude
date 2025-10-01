@@ -27,6 +27,8 @@ if qt_constants then
     qt_constants.LAYOUT.SET_SPACING = qt_constants.LAYOUT.SET_SPACING or qt_constants.CONTROL.SET_LAYOUT_SPACING
     qt_constants.LAYOUT.SET_MARGINS = qt_constants.LAYOUT.SET_MARGINS or qt_constants.CONTROL.SET_LAYOUT_MARGINS
     qt_constants.LAYOUT.SET_STRETCH_FACTOR = qt_constants.LAYOUT.SET_STRETCH_FACTOR or lazy_function("qt_set_layout_stretch_factor")
+    qt_constants.LAYOUT.SET_ALIGNMENT = qt_constants.LAYOUT.SET_ALIGNMENT or lazy_function("qt_set_layout_alignment")
+    qt_constants.LAYOUT.ALIGN_TOP = "AlignTop"
     
     -- Properties Functions - add missing alignment support
     qt_constants.PROPERTIES = qt_constants.PROPERTIES or {}
@@ -34,6 +36,11 @@ if qt_constants then
     qt_constants.PROPERTIES.ALIGN_RIGHT = "AlignRight"
     qt_constants.PROPERTIES.ALIGN_LEFT = "AlignLeft"
     qt_constants.PROPERTIES.ALIGN_CENTER = "AlignCenter"
+    qt_constants.PROPERTIES.ALIGN_TOP = "AlignTop"
+
+    -- Widget Functions - add parent relationship support
+    qt_constants.WIDGET = qt_constants.WIDGET or {}
+    qt_constants.WIDGET.SET_PARENT = qt_constants.WIDGET.SET_PARENT or lazy_function("qt_set_parent")
     
     -- Note: CONTROL section is now provided by the real qt_constants from C++
     -- SET_SCROLL_AREA_WIDGET is implemented as lua_set_scroll_area_widget
