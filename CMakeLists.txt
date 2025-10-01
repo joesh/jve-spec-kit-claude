@@ -32,7 +32,9 @@ find_package(Qt6 REQUIRED COMPONENTS
 # Find SQLite (usually comes with Qt6::Sql)
 find_package(SQLite3 REQUIRED)
 
-# LuaJIT not yet integrated in M1 Foundation
+# LuaJIT for scripting
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LUAJIT REQUIRED luajit)
 
 # Compiler flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
@@ -68,15 +70,19 @@ set(CORE_SOURCES
     src/core/timeline/timeline_manager.cpp
     
     src/core/common/uuid_generator.cpp
+    
+    src/lua/simple_lua_engine.cpp
+    src/lua/qt_bindings.cpp
 )
 
 set(UI_SOURCES
     src/ui/selection/selection_manager.cpp
     src/ui/timeline/timeline_panel.cpp
-    src/ui/inspector/inspector_panel.cpp
-    src/ui/media/media_browser_panel.cpp
-    src/ui/project/project_panel.cpp
-    src/ui/main/main_window.cpp
+    src/ui/timeline/scriptable_timeline.cpp
+    # src/ui/inspector/inspector_panel.cpp  # Deprecated
+    # src/ui/media/media_browser_panel.cpp  # Missing
+    # src/ui/project/project_panel.cpp  # Missing
+    # src/ui/main/main_window.cpp  # Missing
     src/ui/input/keyboard_shortcuts.cpp
     src/ui/common/context_menu_manager.cpp
     src/ui/common/ui_command_bridge.cpp
@@ -87,12 +93,16 @@ set(UI_SOURCES
     src/ui/common/performance_monitor.cpp
 )
 
-# LUA and CLI sources not yet implemented in M1 Foundation
+# LUA sources - timeline FFI implementation (disabled for now)
+# set(LUA_SOURCES
+#     src/lua/timeline_ffi.cpp
+# )
 
 # Core library (for testing and CLI tools)
 add_library(JVECore STATIC 
     ${CORE_SOURCES}
     ${UI_SOURCES}
+    # ${LUA_SOURCES}
 )
 
 # Enable MOC for JVECore library
@@ -106,10 +116,12 @@ target_link_libraries(JVECore
     Qt6::Sql
     Qt6::Gui
     SQLite::SQLite3
+    ${LUAJIT_LIBRARIES}
 )
 
 target_include_directories(JVECore PUBLIC
     ${CMAKE_SOURCE_DIR}/src
+    ${LUAJIT_INCLUDE_DIRS}
 )
 
 # Main application executable
@@ -129,9 +141,36 @@ target_link_libraries(JVEEditor
     Qt6::Sql
     Qt6::Gui
     SQLite::SQLite3
+    ${LUAJIT_LIBRARIES}
 )
 
 target_include_directories(JVEEditor PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${LUAJIT_INCLUDE_DIRS}
+)
+
+target_link_directories(JVEEditor PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+
+# Test for scriptable timeline
+add_executable(test_scriptable_timeline
+    test_scriptable_timeline.cpp
+)
+
+target_link_libraries(test_scriptable_timeline
+    JVECore
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Gui
+)
+
+set_target_properties(test_scriptable_timeline PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+target_include_directories(test_scriptable_timeline PUBLIC
     ${CMAKE_SOURCE_DIR}/src
 )
 

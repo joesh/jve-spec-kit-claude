@@ -33,9 +33,10 @@
 #include "ui/selection/selection_manager.h"
 #include "ui/common/ui_command_bridge.h"
 #include "ui/common/selection_visualizer.h"
+#include "ui/timeline/scriptable_timeline.h"
 
 // Forward declarations for custom timeline widgets
-class TimelineWidget;
+class ScriptableTimelineWidget;
 class TrackHeaderWidget;
 
 /**
@@ -237,34 +238,34 @@ private:
     QFont m_clipFont = QFont("Arial", 9);
     
     // Reference to the actual drawing widget
-    TimelineWidget* m_drawingWidget = nullptr;
+    ScriptableTimelineWidget* m_drawingWidget = nullptr;
 };
 
 /**
- * Custom widget that handles the actual timeline drawing
- * This widget is placed inside the scroll area and handles all painting
+ * Custom widget that handles the actual timeline drawing using command-based rendering
+ * This widget extends ScriptableTimeline and handles all painting via drawing commands
  */
-class TimelineWidget : public QWidget
+class ScriptableTimelineWidget : public JVE::ScriptableTimeline
 {
     Q_OBJECT
     
 public:
-    explicit TimelineWidget(TimelinePanel* parent = nullptr);
+    explicit ScriptableTimelineWidget(TimelinePanel* parent = nullptr);
     
     void setTimelinePanel(TimelinePanel* panel) { m_timelinePanel = panel; }
+    void refreshTimeline(); // Generate new drawing commands based on timeline state
     
 protected:
-    void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     
-    // Timeline chrome drawing
-    void drawRuler(QPainter& painter);
-    void drawTrackHeaders(QPainter& painter);
-    void drawPlayhead(QPainter& painter);
-    
 private:
+    void generateTimelineCommands(); // Generate drawing commands based on timeline data
+    void generateRulerCommands(); // Generate ruler drawing commands
+    void generateClipCommands(); // Generate clip drawing commands
+    void generatePlayheadCommands(); // Generate playhead drawing commands
+    
     TimelinePanel* m_timelinePanel = nullptr;
     QStringList m_selectedClipIds; // Direct multi-selection tracking for immediate visual feedback
     

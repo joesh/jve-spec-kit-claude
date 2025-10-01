@@ -3,8 +3,12 @@
 #include <QDir>
 #include <QStandardPaths>
 #include <QLoggingCategory>
+#include <QWidget>
+#include <QVBoxLayout>
+#include <QLabel>
+#include <QFileInfo>
 
-#include "ui/main/main_window.h"
+#include "lua/simple_lua_engine.h"
 #include "core/persistence/migrations.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
@@ -55,11 +59,48 @@ int main(int argc, char *argv[])
     // Initialize database migrations
     Migrations::initialize();
     
-    // Create and show main window
-    MainWindow window;
-    window.show();
+    // Create Lua engine for pure Lua UI
+    SimpleLuaEngine luaEngine;
     
-    qCInfo(jveMain, "JVE Editor started successfully - Professional video editor interface loaded");
+    // Execute Lua main window creation
+    QString scriptsDir = QApplication::applicationDirPath() + "/scripts";
+    QString mainWindowScript = scriptsDir + "/ui/correct_layout.lua";
+    
+    qCInfo(jveMain, "Starting pure Lua UI system...");
+    qCInfo(jveMain, "Scripts directory: %s", qPrintable(scriptsDir));
+    qCInfo(jveMain, "Main window script: %s", qPrintable(mainWindowScript));
+    
+    // Check if scripts exist
+    if (!QDir(scriptsDir).exists()) {
+        qCCritical(jveMain, "Scripts directory not found: %s", qPrintable(scriptsDir));
+        qCCritical(jveMain, "Please ensure scripts/ directory is in the application directory");
+        return -1;
+    }
+    
+    if (!QFileInfo(mainWindowScript).exists()) {
+        qCCritical(jveMain, "Main window script not found: %s", qPrintable(mainWindowScript));
+        return -1;
+    }
+    
+    // Execute Lua main window creation with real LuaJIT integration
+    qCInfo(jveMain, "Executing Lua main window creation with LuaJIT...");
+    bool luaSuccess = luaEngine.executeFile(mainWindowScript);
+    
+    if (!luaSuccess) {
+        qCCritical(jveMain, "Failed to execute Lua main window script: %s", 
+                   qPrintable(luaEngine.getLastError()));
+        return -1;
+    }
+    
+    // Get the main window created by Lua to keep it alive
+    QWidget* mainWindow = luaEngine.getCreatedMainWindow();
+    if (!mainWindow) {
+        qCCritical(jveMain, "No main window was created by Lua script");
+        return -1;
+    }
+    
+    qCInfo(jveMain, "JVE Editor started successfully - Pure Lua UI system ready");
+    qCInfo(jveMain, "Main window: %p", mainWindow);
     qCInfo(jveMain, "Qt version: %s", QT_VERSION_STR);
     qCInfo(jveMain, "Application directory: %s", qPrintable(QApplication::applicationDirPath()));
     

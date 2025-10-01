@@ -46,7 +46,7 @@ void TimelinePanel::setupUI()
     m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);     // YES vertical scrolling
     
     // Create timeline content widget (handles its own viewport/time scrolling)
-    m_drawingWidget = new TimelineWidget(this);
+    m_drawingWidget = new ScriptableTimelineWidget(this);
     m_drawingWidget->setMinimumHeight(400); // Height grows with tracks
     m_drawingWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_scrollArea->setWidget(m_drawingWidget);
@@ -261,7 +261,7 @@ void TimelinePanel::setCommandBridge(UICommandBridge* commandBridge)
                     
                     // Trigger repaint of the actual drawing widget
                     if (m_drawingWidget) {
-                        m_drawingWidget->update();
+                        m_drawingWidget->refreshTimeline();
                     } else {
                         update(); // Fallback
                     }
@@ -291,7 +291,14 @@ void TimelinePanel::setPlayheadPosition(qint64 timeMs)
 {
     if (m_playheadPosition != timeMs) {
         m_playheadPosition = timeMs;
-        update();
+        
+        // Refresh timeline using command system
+        if (m_drawingWidget) {
+            m_drawingWidget->refreshTimeline();
+        } else {
+            update(); // Fallback
+        }
+        
         emit playheadPositionChanged(timeMs);
     }
 }
@@ -315,7 +322,7 @@ void TimelinePanel::setZoomLevel(double zoomFactor)
         
         // Force complete redraw of all timeline elements
         if (m_drawingWidget) {
-            m_drawingWidget->update();
+            m_drawingWidget->refreshTimeline();
         }
         if (m_timelineWidget) {
             m_timelineWidget->update();
@@ -446,6 +453,14 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     setFocus(); // Ensure we receive keyboard events
     
     m_lastMousePos = event->pos();
+    
+    // Check if the click was on the TimelineWidget (which handles its own events)
+    // If so, don't interfere with the selection
+    if (m_drawingWidget && m_drawingWidget->geometry().contains(event->pos())) {
+        // Let TimelineWidget handle this - don't interfere
+        QWidget::mousePressEvent(event);
+        return;
+    }
     
     if (event->button() == Qt::LeftButton) {
         QString clipId = getClipAtPosition(event->pos());
@@ -731,7 +746,32 @@ int TimelinePanel::getTrackYPosition(const QString& trackId) const
 
 QString TimelinePanel::getClipAtPosition(const QPoint& pos) const
 {
-    // TODO: Implement hit testing for clips
+    // Forward to TimelineWidget which has the actual working hit detection
+    // This method is called by the old TimelinePanel mouse handlers that shouldn't be used
+    // when TimelineWidget is handling mouse events properly
+    
+    // For now, iterate through clips and check collision
+    // (TimelineWidget already has this logic working)
+    for (const auto& clip : m_clips) {
+        qint64 startTime = clip.timelineStart();
+        qint64 duration = clip.duration();
+        
+        // Calculate clip rectangle using same logic as TimelineWidget 
+        int rulerHeight = 32;
+        qint64 viewportStartTime = m_viewportStartTime;
+        qint64 relativeStartTime = startTime - viewportStartTime;
+        int x = static_cast<int>(relativeStartTime * m_zoomFactor);
+        int y = rulerHeight + 2;
+        int width = static_cast<int>(duration * m_zoomFactor);
+        int height = 44;
+        
+        QRect clipRect(x, y, width, height);
+        
+        if (clipRect.contains(pos)) {
+            return clip.id();
+        }
+    }
+    
     return QString();
 }
 
@@ -927,88 +967,133 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
     updateViewport();
 }
 
-// TimelineWidget implementation - handles actual drawing inside scroll area
-TimelineWidget::TimelineWidget(TimelinePanel* parent)
-    : QWidget(parent), m_timelinePanel(parent)
+// ScriptableTimelineWidget implementation - handles drawing via commands
+ScriptableTimelineWidget::ScriptableTimelineWidget(TimelinePanel* parent)
+    : JVE::ScriptableTimeline("timeline_widget", parent), m_timelinePanel(parent)
 {
     setMinimumSize(2000, 400);
     
-    // Enable custom painting
-    setAttribute(Qt::WA_OpaquePaintEvent, false);
-    setAutoFillBackground(false);
+    // Generate initial timeline rendering
+    refreshTimeline();
 }
 
-void TimelineWidget::paintEvent(QPaintEvent* event)
+void ScriptableTimelineWidget::refreshTimeline()
 {
     if (!m_timelinePanel) {
         return;
     }
     
-    qCDebug(jveTimelinePanel, "TimelineWidget paintEvent called, widget size: %dx%d", 
-            width(), height());
+    qCDebug(jveTimelinePanel, "ScriptableTimelineWidget refreshTimeline called");
     
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    // Clear previous commands and regenerate
+    clearCommands();
+    generateTimelineCommands();
     
-    // Draw dark background
-    painter.fillRect(rect(), QColor(45, 45, 45));
-    
-    // Draw background chrome first (ruler and track headers)
-    drawRuler(painter);
-    drawTrackHeaders(painter);
-    
-    // Draw clips in the middle layer
-    const auto& clips = m_timelinePanel->getClips();
-    if (clips.size() > 0) {
-        qCDebug(jveTimelinePanel, "Drawing %d clips on TimelineWidget", clips.size());
-        
-        // Draw clips directly here since we can't call private methods
-        for (const auto& clip : clips) {
-            QString trackId = clip.trackId();
-            qint64 startTime = clip.timelineStart();
-            qint64 duration = clip.duration();
-            
-            // Calculate clip position accounting for viewport (no track header offset in TimelineWidget)
-            int rulerHeight = 32;
-            qint64 viewportStartTime = m_timelinePanel->getViewportStartTime();
-            qint64 relativeStartTime = startTime - viewportStartTime; // Position relative to viewport
-            int x = static_cast<int>(relativeStartTime * m_timelinePanel->getZoomLevel()); // Start at 0, not trackHeaderWidth
-            int y = rulerHeight + 2; // Account for ruler + small margin
-            int width = static_cast<int>(duration * m_timelinePanel->getZoomLevel());
-            int height = 44;
-            
-            QRect clipRect(x, y, width, height);
-            
-            // Check if this clip is selected (use direct tracking for immediate feedback)
-            bool isSelected = m_selectedClipIds.contains(clip.id());
-            
-            // Use different color for selected clips
-            QColor clipColor = isSelected ? QColor(255, 165, 0) : QColor(100, 150, 200); // Orange for selected, blue for normal
-            painter.fillRect(clipRect, clipColor);
-            
-            // Draw border for selected clips
-            if (isSelected) {
-                painter.setPen(QPen(QColor(255, 200, 50), 2));
-                painter.drawRect(clipRect);
-            }
-            
-            qCDebug(jveTimelinePanel, "Drew clip at x=%d, y=%d, width=%d, height=%d", 
-                    x, y, width, height);
-        }
-    }
-    
-    // Draw drag selection rectangle
-    if (m_isDragSelecting) {
-        painter.setPen(QPen(QColor(255, 255, 255, 128), 1, Qt::DashLine));
-        painter.setBrush(QBrush(QColor(255, 255, 255, 32)));
-        painter.drawRect(m_dragSelectionRect);
-    }
-    
-    // Draw playhead on top of everything
-    drawPlayhead(painter);
+    // Trigger repaint using ScriptableTimeline's update()
+    update();
 }
 
-void TimelineWidget::mousePressEvent(QMouseEvent* event)
+void ScriptableTimelineWidget::generateTimelineCommands()
+{
+    // Generate all timeline drawing commands
+    generateRulerCommands();
+    generateClipCommands();
+    generatePlayheadCommands();
+}
+
+void ScriptableTimelineWidget::generateRulerCommands()
+{
+    int rulerHeight = 32;
+    
+    // Draw ruler background
+    addRect(0, 0, width(), rulerHeight, "#505050");
+    
+    // Draw time markers every 5 seconds with zoom
+    qint64 viewportStartTime = m_timelinePanel->getViewportStartTime();
+    qint64 viewportEndTime = m_timelinePanel->getViewportEndTime();
+    double zoomLevel = m_timelinePanel->getZoomLevel();
+    
+    // Calculate marker interval based on zoom level
+    qint64 markerInterval = 5000; // 5 seconds
+    if (zoomLevel < 0.01) markerInterval = 30000;  // 30 seconds for very zoomed out
+    else if (zoomLevel < 0.05) markerInterval = 10000; // 10 seconds for zoomed out
+    
+    qint64 firstMarker = (viewportStartTime / markerInterval) * markerInterval;
+    
+    for (qint64 time = firstMarker; time <= viewportEndTime + markerInterval; time += markerInterval) {
+        if (time < viewportStartTime) continue;
+        
+        qint64 relativeTime = time - viewportStartTime;
+        int x = static_cast<int>(relativeTime * zoomLevel);
+        
+        // Draw marker line
+        addLine(x, 20, x, rulerHeight, "#cccccc", 1);
+        
+        // Draw time text
+        int seconds = time / 1000;
+        int minutes = seconds / 60;
+        seconds %= 60;
+        QString timeStr = QString("%1:%2").arg(minutes).arg(seconds, 2, 10, QChar('0'));
+        addText(x + 2, 15, timeStr, "#cccccc");
+    }
+}
+
+void ScriptableTimelineWidget::generateClipCommands()
+{
+    const auto& clips = m_timelinePanel->getClips();
+    if (clips.isEmpty()) return;
+    
+    qCDebug(jveTimelinePanel, "Drawing %d clips via commands", clips.size());
+    
+    int rulerHeight = 32;
+    qint64 viewportStartTime = m_timelinePanel->getViewportStartTime();
+    double zoomLevel = m_timelinePanel->getZoomLevel();
+    
+    for (const auto& clip : clips) {
+        qint64 startTime = clip.timelineStart();
+        qint64 duration = clip.duration();
+        
+        // Calculate clip position relative to viewport
+        qint64 relativeStartTime = startTime - viewportStartTime;
+        int x = static_cast<int>(relativeStartTime * zoomLevel);
+        int y = rulerHeight + 2;
+        int width = static_cast<int>(duration * zoomLevel);
+        int height = 44;
+        
+        // Check if clip is selected
+        bool isSelected = m_selectedClipIds.contains(clip.id());
+        QString clipColor = isSelected ? "#ffa500" : "#6496c8"; // Orange for selected, blue for normal
+        
+        // Draw clip rectangle
+        addRect(x, y, width, height, clipColor);
+        
+        // Draw clip name if there's space
+        if (width > 50) {
+            addText(x + 4, y + 20, clip.name(), "#ffffff");
+        }
+        
+        qCDebug(jveTimelinePanel, "Generated clip command at x=%d, y=%d, width=%d, height=%d", 
+                x, y, width, height);
+    }
+}
+
+void ScriptableTimelineWidget::generatePlayheadCommands()
+{
+    qint64 playheadTime = m_timelinePanel->getPlayheadPosition();
+    qint64 viewportStartTime = m_timelinePanel->getViewportStartTime();
+    qint64 relativeTime = playheadTime - viewportStartTime;
+    
+    double zoomLevel = m_timelinePanel->getZoomLevel();
+    int x = static_cast<int>(relativeTime * zoomLevel);
+    
+    // Draw playhead line
+    addLine(x, 0, x, height(), "#ff6b6b", 2);
+    
+    // Draw playhead triangle at top
+    addRect(x - 5, 0, 10, 10, "#ff6b6b");
+}
+
+void ScriptableTimelineWidget::mousePressEvent(QMouseEvent* event)
 {
     if (!m_timelinePanel) {
         return;
@@ -1023,13 +1108,11 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         qCDebug(jveTimelinePanel, "Timeline focus set");
     }
     
-    int trackHeaderWidth = 200;
     int rulerHeight = 32;
     
     // Debug the ruler area check
-    qCDebug(jveTimelinePanel, "Ruler check: y=%d <= %d (rulerHeight)? %s, x=%d >= %d (trackHeaderWidth)? %s", 
-            clickPos.y(), rulerHeight, clickPos.y() <= rulerHeight ? "YES" : "NO",
-            clickPos.x(), trackHeaderWidth, clickPos.x() >= trackHeaderWidth ? "YES" : "NO");
+    qCDebug(jveTimelinePanel, "Ruler check: y=%d <= %d (rulerHeight)? %s", 
+            clickPos.y(), rulerHeight, clickPos.y() <= rulerHeight ? "YES" : "NO");
     
     // Check if clicked in ruler area for playhead scrubbing
     if (clickPos.y() <= rulerHeight && clickPos.x() >= 0) {
@@ -1042,7 +1125,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         m_isDraggingPlayhead = true;
         m_dragStartPos = clickPos;
         
-        update();
+        // Note: refreshTimeline() already called by setPlayheadPosition()
         qCDebug(jveTimelinePanel, "After setPlayheadPosition, current position: %lld", m_timelinePanel->getPlayheadPosition());
         return;
     }
@@ -1059,12 +1142,13 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         qint64 startTime = clip.timelineStart();
         qint64 duration = clip.duration();
         
-        // Calculate clip rectangle (same logic as in paintEvent)
-        int trackHeaderWidth = 200;
+        // Calculate clip rectangle (viewport-aware, no track header offset)
         int rulerHeight = 32;
-        int x = trackHeaderWidth + static_cast<int>(startTime * 0.05);
+        qint64 viewportStartTime = m_timelinePanel->getViewportStartTime();
+        qint64 relativeStartTime = startTime - viewportStartTime;
+        int x = static_cast<int>(relativeStartTime * m_timelinePanel->getZoomLevel());
         int y = rulerHeight + 2;
-        int width = static_cast<int>(duration * 0.05);
+        int width = static_cast<int>(duration * m_timelinePanel->getZoomLevel());
         int height = 44;
         
         QRect clipRect(x, y, width, height);
@@ -1124,21 +1208,17 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
     QWidget::mousePressEvent(event);
 }
 
-void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
+void ScriptableTimelineWidget::mouseMoveEvent(QMouseEvent* event)
 {
     if (m_isDraggingPlayhead) {
         // Update playhead position during drag
         QPoint currentPos = event->pos();
-        int trackHeaderWidth = 200;
-        int rulerHeight = 32;
         
-        // Only continue dragging if we're still in the ruler area or close to it
-        if (currentPos.x() >= trackHeaderWidth) {
-            qint64 newTime = static_cast<qint64>((currentPos.x() - trackHeaderWidth) / m_timelinePanel->getZoomLevel());
-            m_timelinePanel->setPlayheadPosition(newTime);
-            update();
-            qCDebug(jveTimelinePanel, "Playhead drag: position %lld", newTime);
-        }
+        // Update playhead position during drag (no track header offset)
+        qint64 newTime = static_cast<qint64>(currentPos.x() / m_timelinePanel->getZoomLevel());
+        m_timelinePanel->setPlayheadPosition(newTime);
+        // Note: refreshTimeline() already called by setPlayheadPosition()
+        qCDebug(jveTimelinePanel, "Playhead drag: position %lld", newTime);
         return;
     }
     
@@ -1161,10 +1241,11 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
                 qint64 startTime = clip.timelineStart();
                 qint64 duration = clip.duration();
                 
-                // Calculate clip rectangle
-                int trackHeaderWidth = 200;
+                // Calculate clip rectangle (viewport-aware, no track header offset)
                 int rulerHeight = 32;
-                int x = trackHeaderWidth + static_cast<int>(startTime * m_timelinePanel->getZoomLevel());
+                qint64 viewportStartTime = m_timelinePanel->getViewportStartTime();
+                qint64 relativeStartTime = startTime - viewportStartTime;
+                int x = static_cast<int>(relativeStartTime * m_timelinePanel->getZoomLevel());
                 int y = rulerHeight + 2;
                 int width = static_cast<int>(duration * m_timelinePanel->getZoomLevel());
                 int height = 44;
@@ -1186,7 +1267,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
     QWidget::mouseMoveEvent(event);
 }
 
-void TimelineWidget::mouseReleaseEvent(QMouseEvent* event)
+void ScriptableTimelineWidget::mouseReleaseEvent(QMouseEvent* event)
 {
     if (m_isDraggingPlayhead) {
         // End playhead dragging
@@ -1213,142 +1294,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent* event)
 
 // Timeline chrome drawing methods
 
-void TimelineWidget::drawRuler(QPainter& painter)
-{
-    if (!m_timelinePanel) return;
-    
-    // Ruler area - top 32 pixels (no track header offset needed)
-    int rulerHeight = 32;
-    
-    // Draw ruler background - full width since track headers are separate
-    QRect rulerRect(0, 0, width(), rulerHeight);
-    painter.fillRect(rulerRect, QColor(120, 80, 80)); // Reddish color to make it obvious
-    
-    // Draw time markers
-    painter.setPen(QColor(200, 200, 200));
-    painter.setFont(QFont("Arial", 9));
-    
-    double zoomFactor = m_timelinePanel->getZoomLevel(); // Use actual zoom level
-    int timelineStart = 0; // Start at beginning of timeline widget
-    int timelineEnd = width() / zoomFactor; // Full width of timeline widget
-    
-    // Draw major time markers every 5 seconds (5000ms) - limit to reasonable range
-    qint64 maxTime = qMin(timelineEnd, static_cast<qint64>(300000)); // Limit to 5 minutes max
-    for (qint64 time = 0; time <= maxTime; time += 5000) {
-        int x = static_cast<int>(time * zoomFactor); // No track header offset
-        if (x >= 0 && x <= width()) {
-            // Draw tick mark
-            painter.drawLine(x, rulerHeight - 8, x, rulerHeight);
-            
-            // Draw time label
-            int seconds = time / 1000;
-            int minutes = seconds / 60;
-            int remainingSeconds = seconds % 60;
-            QString timeText = QString("%1:%2").arg(minutes).arg(remainingSeconds, 2, 10, QChar('0'));
-            
-            QRect textRect(x - 20, 0, 40, rulerHeight - 8);
-            painter.drawText(textRect, Qt::AlignCenter, timeText);
-        }
-    }
-    
-    // Draw minor time markers every 1 second (1000ms) - limit to reasonable range
-    painter.setPen(QColor(150, 150, 150));
-    for (qint64 time = 0; time <= maxTime; time += 1000) {
-        if (time % 5000 != 0) { // Skip major markers
-            int x = static_cast<int>(time * zoomFactor); // No track header offset
-            if (x >= 0 && x <= width()) {
-                painter.drawLine(x, rulerHeight - 4, x, rulerHeight);
-            }
-        }
-    }
-}
-
-void TimelineWidget::drawTrackHeaders(QPainter& painter)
-{
-    if (!m_timelinePanel) return;
-    
-    int trackHeaderWidth = 200;
-    int rulerHeight = 32;
-    int trackHeight = 48;
-    
-    // Draw track header background
-    QRect headerRect(0, 0, trackHeaderWidth, height());
-    painter.fillRect(headerRect, QColor(60, 60, 60));
-    
-    // Draw ruler corner
-    QRect rulerCorner(0, 0, trackHeaderWidth, rulerHeight);
-    painter.fillRect(rulerCorner, QColor(70, 70, 70));
-    
-    // Draw track header for video track
-    int trackY = rulerHeight;
-    QRect trackHeaderRect(0, trackY, trackHeaderWidth, trackHeight);
-    
-    // Track header background
-    painter.fillRect(trackHeaderRect, QColor(55, 55, 55));
-    
-    // Track header border
-    painter.setPen(QColor(40, 40, 40));
-    painter.drawRect(trackHeaderRect);
-    
-    // Track label
-    painter.setPen(QColor(220, 220, 220));
-    painter.setFont(QFont("Arial", 10, QFont::Bold));
-    painter.drawText(trackHeaderRect.adjusted(8, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, "V1");
-    
-    // Track controls (simplified)
-    int buttonSize = 16;
-    int buttonY = trackY + (trackHeight - buttonSize) / 2;
-    
-    // Visibility toggle (eye icon placeholder)
-    QRect visibilityButton(trackHeaderWidth - 80, buttonY, buttonSize, buttonSize);
-    painter.fillRect(visibilityButton, QColor(100, 150, 200));
-    painter.setPen(QColor(255, 255, 255));
-    painter.setFont(QFont("Arial", 8));
-    painter.drawText(visibilityButton, Qt::AlignCenter, "👁");
-    
-    // Lock toggle (lock icon placeholder)
-    QRect lockButton(trackHeaderWidth - 60, buttonY, buttonSize, buttonSize);
-    painter.fillRect(lockButton, QColor(120, 120, 120));
-    painter.drawText(lockButton, Qt::AlignCenter, "🔒");
-    
-    // Mute toggle (speaker icon placeholder)
-    QRect muteButton(trackHeaderWidth - 40, buttonY, buttonSize, buttonSize);
-    painter.fillRect(muteButton, QColor(200, 100, 100));
-    painter.drawText(muteButton, Qt::AlignCenter, "🔊");
-}
-
-void TimelineWidget::drawPlayhead(QPainter& painter)
-{
-    if (!m_timelinePanel) return;
-    
-    int trackHeaderWidth = 200;
-    qint64 playheadPosition = m_timelinePanel->getPlayheadPosition();
-    double zoomFactor = m_timelinePanel->getZoomLevel();
-    
-    // Calculate playhead X position (no track header offset)
-    int playheadX = static_cast<int>(playheadPosition * zoomFactor);
-    
-    qCDebug(jveTimelinePanel, "Drawing playhead: position=%lld, zoomFactor=%f, playheadX=%d, visible=%s", 
-            playheadPosition, zoomFactor, playheadX, 
-            (playheadX >= 0 && playheadX <= width()) ? "YES" : "NO");
-    
-    // Only draw if playhead is visible (no track header constraint)
-    if (playheadX >= 0 && playheadX <= width()) {
-        // Draw playhead line
-        painter.setPen(QPen(QColor(255, 0, 0), 2)); // Red playhead
-        painter.drawLine(playheadX, 0, playheadX, height());
-        
-        // Draw playhead top indicator (triangle)
-        QPolygon playheadTop;
-        playheadTop << QPoint(playheadX - 6, 0)
-                   << QPoint(playheadX + 6, 0)
-                   << QPoint(playheadX, 12);
-        
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(255, 0, 0));
-        painter.drawPolygon(playheadTop);
-    }
-}
+// Old drawing methods removed - now using ScriptableTimeline command system
 
 // TrackHeaderWidget implementation
 TrackHeaderWidget::TrackHeaderWidget(TimelinePanel* parent)

@@ -163,3 +163,6 @@ C++ (Qt6) + Lua (LuaJIT) hybrid architecture: Follow standard conventions
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
+- STOP DECLARING VICTORY! you're like a four year old. as soon as anything starts to work you say ALL DONE! STOP IT.
+- damn you stop using grep and read the FUCKING LOG FILE
+- you're doing it AGAIN. I just ran the app and sent the output to a file. line 40 of that file has DETAILED INFO about WHAT went wrong and the stack trace where it happened. But you insist on ignoring all that and adding print statements to try and find out where things are going wrong. You suck at this.

@@ -1005,6 +1005,7 @@
   /Users/joe/Local/jve-spec-kit-claude/src/ui/media/media_browser_panel.h \
   /Users/joe/Local/jve-spec-kit-claude/src/ui/project/project_panel.h \
   /Users/joe/Local/jve-spec-kit-claude/src/ui/selection/selection_manager.h \
+  /Users/joe/Local/jve-spec-kit-claude/src/ui/timeline/scriptable_timeline.h \
   /Users/joe/Local/jve-spec-kit-claude/src/ui/timeline/timeline_panel.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QDateTime \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QDir \

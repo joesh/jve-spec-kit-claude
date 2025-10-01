@@ -941,6 +941,7 @@
   /Users/joe/Local/jve-spec-kit-claude/src/ui/common/selection_visualizer.h \
   /Users/joe/Local/jve-spec-kit-claude/src/ui/common/ui_command_bridge.h \
   /Users/joe/Local/jve-spec-kit-claude/src/ui/selection/selection_manager.h \
+  /Users/joe/Local/jve-spec-kit-claude/src/ui/timeline/scriptable_timeline.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QDateTime \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QEasingCurve \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QElapsedTimer \
