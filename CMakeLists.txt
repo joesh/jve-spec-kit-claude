@@ -77,21 +77,18 @@ set(CORE_SOURCES
 )
 
 set(UI_SOURCES
-    src/ui/selection/selection_manager.cpp
-    src/ui/timeline/timeline_panel.cpp
     src/ui/timeline/scriptable_timeline.cpp
-    # src/ui/inspector/inspector_panel.cpp  # Deprecated
-    # src/ui/media/media_browser_panel.cpp  # Missing
-    # src/ui/project/project_panel.cpp  # Missing
-    # src/ui/main/main_window.cpp  # Missing
-    src/ui/input/keyboard_shortcuts.cpp
-    src/ui/common/context_menu_manager.cpp
-    src/ui/common/ui_command_bridge.cpp
-    src/ui/common/selection_visualizer.cpp
-    src/ui/common/drag_drop_manager.cpp
-    src/ui/common/ui_state_manager.cpp
-    src/ui/common/theme_manager.cpp
-    src/ui/common/performance_monitor.cpp
+    # Removed C++ UI implementations that violate architecture (should be Lua):
+    # src/ui/selection/selection_manager.cpp
+    # src/ui/timeline/timeline_panel.cpp  
+    # src/ui/input/keyboard_shortcuts.cpp
+    # src/ui/common/context_menu_manager.cpp
+    # src/ui/common/ui_command_bridge.cpp
+    # src/ui/common/selection_visualizer.cpp
+    # src/ui/common/drag_drop_manager.cpp
+    # src/ui/common/ui_state_manager.cpp
+    # src/ui/common/theme_manager.cpp
+    # src/ui/common/performance_monitor.cpp
 )
 
 # LUA sources - timeline FFI implementation (disabled for now)

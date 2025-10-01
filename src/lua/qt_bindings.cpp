@@ -13,7 +13,7 @@
 #include <QDebug>
 
 // Include existing UI components
-#include "ui/timeline/timeline_panel.h"
+// #include "ui/timeline/timeline_panel.h"  // Removed - UI logic moved to Lua
 
 // Widget userdata metatable name
 static const char* WIDGET_METATABLE = "JVE.Widget";
@@ -45,8 +45,7 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "CREATE_BUTTON");
     lua_pushcfunction(L, lua_create_tree_widget);
     lua_setfield(L, -2, "CREATE_TREE");
-    lua_pushcfunction(L, lua_create_timeline_panel);
-    lua_setfield(L, -2, "CREATE_TIMELINE");
+    // lua_create_timeline_panel removed - timeline panel logic moved to Lua
     lua_pushcfunction(L, lua_create_inspector_panel);
     lua_setfield(L, -2, "CREATE_INSPECTOR");
     lua_setfield(L, -2, "WIDGET");
@@ -223,13 +222,7 @@ int lua_create_tree_widget(lua_State* L)
     return 1;
 }
 
-int lua_create_timeline_panel(lua_State* L)
-{
-    qDebug() << "Creating timeline panel from Lua";
-    TimelinePanel* timeline = new TimelinePanel();
-    lua_push_widget(L, timeline);
-    return 1;
-}
+// lua_create_timeline_panel removed - timeline panel logic moved to Lua
 
 int lua_create_inspector_panel(lua_State* L)
 {
