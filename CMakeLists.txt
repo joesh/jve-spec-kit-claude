@@ -151,33 +151,6 @@ target_link_directories(JVEEditor PRIVATE
     ${LUAJIT_LIBRARY_DIRS}
 )
 
-# Test for scriptable timeline
-add_executable(test_scriptable_timeline
-    test_scriptable_timeline.cpp
-)
-
-target_link_libraries(test_scriptable_timeline
-    JVECore
-    Qt6::Core
-    Qt6::Widgets
-    Qt6::Gui
-    ${LUAJIT_LIBRARIES}
-)
-
-set_target_properties(test_scriptable_timeline PROPERTIES
-    AUTOMOC ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-
-target_include_directories(test_scriptable_timeline PUBLIC
-    ${CMAKE_SOURCE_DIR}/src
-    ${LUAJIT_INCLUDE_DIRS}
-)
-
-target_link_directories(test_scriptable_timeline PRIVATE
-    ${LUAJIT_LIBRARY_DIRS}
-)
-
 # Testing
 enable_testing()
 

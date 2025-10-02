@@ -1,23 +1,15 @@
 #include "scriptable_timeline.h"
 #include "lua/qt_bindings.h"
 #include <QPaintEvent>
-#include <QDebug>
 
 namespace JVE {
 
 ScriptableTimeline::ScriptableTimeline(const std::string& widget_id, QWidget* parent)
     : QWidget(parent), widget_id_(widget_id)
 {
-    // Set minimum size for timeline
     setMinimumSize(400, 200);
-    
-    // Enable mouse tracking for interactive features
     setMouseTracking(true);
-    
-    // Set focus policy to receive keyboard events
     setFocusPolicy(Qt::StrongFocus);
-    
-    qDebug() << "ScriptableTimeline created with widget_id:" << QString::fromStdString(widget_id);
 }
 
 void ScriptableTimeline::clearCommands()
@@ -181,11 +173,9 @@ void ScriptableTimeline::mousePressEvent(QMouseEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
-                qWarning() << "Error calling Lua mouse event handler:" << lua_tostring(lua_state_, -1);
                 lua_pop(lua_state_, 1);
             }
         } else {
-            qWarning() << "Lua mouse event handler not found:" << mouse_event_handler_.c_str();
             lua_pop(lua_state_, 1);
         }
     }
@@ -213,7 +203,6 @@ void ScriptableTimeline::mouseReleaseEvent(QMouseEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
-                qWarning() << "Error calling Lua mouse event handler:" << lua_tostring(lua_state_, -1);
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -238,7 +227,6 @@ void ScriptableTimeline::mouseMoveEvent(QMouseEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
-                qWarning() << "Error calling Lua mouse event handler:" << lua_tostring(lua_state_, -1);
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -269,7 +257,6 @@ void ScriptableTimeline::keyPressEvent(QKeyEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
-                qWarning() << "Error calling Lua key event handler:" << lua_tostring(lua_state_, -1);
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -284,7 +271,6 @@ void ScriptableTimeline::keyPressEvent(QKeyEvent* event)
 // Lua bindings implementation
 void registerTimelineBindings(lua_State* L)
 {
-    qDebug() << "Registering ScriptableTimeline bindings with Lua";
 
     // Create timeline namespace
     lua_newtable(L);
@@ -324,7 +310,6 @@ void registerTimelineBindings(lua_State* L)
 
     lua_setglobal(L, "timeline");
 
-    qDebug() << "ScriptableTimeline bindings registered successfully";
 }
 
 int lua_timeline_clear_commands(lua_State* L)
@@ -334,7 +319,6 @@ int lua_timeline_clear_commands(lua_State* L)
         timeline->clearCommands();
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline in clear_commands";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -353,7 +337,6 @@ int lua_timeline_add_rect(lua_State* L)
         timeline->addRect(x, y, width, height, QString(color));
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline or parameters in add_rect";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -371,7 +354,6 @@ int lua_timeline_add_text(lua_State* L)
         timeline->addText(x, y, QString(text), QString(color));
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline or parameters in add_text";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -391,7 +373,6 @@ int lua_timeline_add_line(lua_State* L)
         timeline->addLine(x1, y1, x2, y2, QString(color), width);
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline or parameters in add_line";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -405,7 +386,6 @@ int lua_timeline_get_dimensions(lua_State* L)
         lua_pushinteger(L, timeline->getHeight());
         return 2;
     } else {
-        qWarning() << "Invalid timeline in get_dimensions";
         lua_pushnil(L);
         lua_pushnil(L);
         return 2;
@@ -421,7 +401,6 @@ int lua_timeline_set_playhead(lua_State* L)
         timeline->setPlayheadPosition(timeMs);
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline in set_playhead";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -433,7 +412,6 @@ int lua_timeline_get_playhead(lua_State* L)
     if (timeline) {
         lua_pushinteger(L, timeline->getPlayheadPosition());
     } else {
-        qWarning() << "Invalid timeline in get_playhead";
         lua_pushnil(L);
     }
     return 1;
@@ -446,7 +424,6 @@ int lua_timeline_update(lua_State* L)
         timeline->requestUpdate();
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline in update";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -461,7 +438,6 @@ int lua_timeline_set_mouse_event_handler(lua_State* L)
         timeline->setMouseEventHandler(std::string(handler));
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline or handler in set_mouse_event_handler";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -476,7 +452,6 @@ int lua_timeline_set_key_event_handler(lua_State* L)
         timeline->setKeyEventHandler(std::string(handler));
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline or handler in set_key_event_handler";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -490,7 +465,6 @@ int lua_timeline_set_lua_state(lua_State* L)
         timeline->setLuaState(L);
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid timeline in set_lua_state";
         lua_pushboolean(L, 0);
     }
     return 1;

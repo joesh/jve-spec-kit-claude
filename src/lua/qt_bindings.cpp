@@ -14,7 +14,6 @@
 #include <QDebug>
 
 // Include existing UI components
-// #include "ui/timeline/timeline_panel.h"  // Removed - UI logic moved to Lua
 #include "ui/timeline/scriptable_timeline.h"  // Performance-critical timeline rendering
 
 // Widget userdata metatable name

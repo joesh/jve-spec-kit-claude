@@ -2,8 +2,6 @@ set(__QT_DEPLOY_TARGET_JVECore_FILE /Users/joe/Local/jve-spec-kit-claude/libJVEC
 set(__QT_DEPLOY_TARGET_JVECore_TYPE STATIC_LIBRARY)
 set(__QT_DEPLOY_TARGET_JVEEditor_FILE /Users/joe/Local/jve-spec-kit-claude/bin/JVEEditor)
 set(__QT_DEPLOY_TARGET_JVEEditor_TYPE EXECUTABLE)
-set(__QT_DEPLOY_TARGET_test_scriptable_timeline_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_scriptable_timeline)
-set(__QT_DEPLOY_TARGET_test_scriptable_timeline_TYPE EXECUTABLE)
 set(__QT_DEPLOY_TARGET_test_clip_entity_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_clip_entity)
 set(__QT_DEPLOY_TARGET_test_clip_entity_TYPE EXECUTABLE)
 set(__QT_DEPLOY_TARGET_test_command_entity_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_command_entity)
