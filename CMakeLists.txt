@@ -216,30 +216,57 @@ endforeach()
 # Integration tests (require UI library - not yet available)
 # file(GLOB INTEGRATION_TEST_SOURCES tests/integration/*.cpp)
 
-# Unit tests
-file(GLOB UNIT_TEST_SOURCES tests/unit/*.cpp)
-foreach(test_source ${UNIT_TEST_SOURCES})
-    get_filename_component(test_name ${test_source} NAME_WE)
-    add_executable(${test_name}
-        ${test_source}
-        tests/common/test_base.cpp
-    )
-    target_link_libraries(${test_name}
-        JVECore
-        Qt6::Test
-        Qt6::Core
-        Qt6::Gui
-        ${LUAJIT_LIBRARIES}
-    )
-    target_include_directories(${test_name} PUBLIC
-        ${CMAKE_SOURCE_DIR}
-        ${LUAJIT_INCLUDE_DIRS}
-    )
-    target_link_directories(${test_name} PRIVATE
-        ${LUAJIT_LIBRARY_DIRS}
-    )
-    add_test(NAME ${test_name} COMMAND ${test_name})
-endforeach()
+# Unit tests (no unit tests currently - they would go in tests/unit/)
+# Note: New timeline tests are standalone and defined below
+
+# Standalone timeline widget test (no test_base dependency)
+add_executable(test_scriptable_timeline_widget
+    tests/unit/test_scriptable_timeline_widget.cpp
+)
+target_link_libraries(test_scriptable_timeline_widget
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_scriptable_timeline_widget PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_scriptable_timeline_widget PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_scriptable_timeline_widget PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_scriptable_timeline_widget COMMAND test_scriptable_timeline_widget)
+
+# Standalone Lua timeline logic test (no test_base dependency)
+add_executable(test_timeline_lua_logic
+    tests/unit/test_timeline_lua_logic.cpp
+)
+target_link_libraries(test_timeline_lua_logic
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_timeline_lua_logic PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_timeline_lua_logic PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_timeline_lua_logic PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_timeline_lua_logic COMMAND test_timeline_lua_logic)
 
 # Installation (not applicable for M1 Foundation tests)
 

@@ -36,3 +36,7 @@ set(__QT_DEPLOY_TARGET_test_timeline_operations_FILE /Users/joe/Local/jve-spec-k
 set(__QT_DEPLOY_TARGET_test_timeline_operations_TYPE EXECUTABLE)
 set(__QT_DEPLOY_TARGET_test_track_entity_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_track_entity)
 set(__QT_DEPLOY_TARGET_test_track_entity_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_test_scriptable_timeline_widget_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_scriptable_timeline_widget)
+set(__QT_DEPLOY_TARGET_test_scriptable_timeline_widget_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_test_timeline_lua_logic_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_timeline_lua_logic)
+set(__QT_DEPLOY_TARGET_test_timeline_lua_logic_TYPE EXECUTABLE)
