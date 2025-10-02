@@ -21,6 +21,7 @@ local M = {
   _batch_banner = nil,    -- Qt widget for batch editing banner
   _header_text = "",      -- Stored header text
   _batch_enabled = false, -- Stored batch state
+  _selection_label = nil, -- Label showing current selection
 }
 
 function M.mount(root)
@@ -168,10 +169,20 @@ function M.create_schema_driven_inspector()
     M._search_input = search_input
   end
 
-  -- Create "No clip selected" state
-  local no_selection_success, no_selection_label = pcall(qt_constants.WIDGET.CREATE_LABEL, "No clip selected")
-  if no_selection_success then
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, content_layout, no_selection_label)
+  -- Create selection status label
+  local selection_label_success, selection_label = pcall(qt_constants.WIDGET.CREATE_LABEL, "No clip selected")
+  if selection_label_success then
+    pcall(qt_constants.PROPERTIES.SET_STYLE, selection_label, [[
+      QLabel {
+        background: #3a3a3a;
+        color: white;
+        padding: 10px;
+        font-size: 14px;
+        font-weight: bold;
+      }
+    ]])
+    pcall(qt_constants.LAYOUT.ADD_WIDGET, content_layout, selection_label)
+    M._selection_label = selection_label
   end
 
   -- Create collapsible sections from metadata schemas
@@ -551,18 +562,30 @@ end
 function M.update_selection(selected_clips)
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Selection changed: " .. #selected_clips .. " clips")
 
-  -- For now, just log the selection
-  -- TODO: Actually update the inspector UI with clip properties
-  if #selected_clips == 1 then
-    local clip = selected_clips[1]
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Selected clip: " .. clip.name)
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view]   ID: " .. clip.id)
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view]   Start: " .. clip.start_time .. "ms")
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view]   Duration: " .. clip.duration .. "ms")
-  elseif #selected_clips > 1 then
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Multiple clips selected for batch editing")
+  -- Update the selection label
+  if M._selection_label then
+    local label_text = ""
+    if #selected_clips == 1 then
+      local clip = selected_clips[1]
+      label_text = string.format("Selected: %s\nID: %s\nStart: %dms\nDuration: %dms",
+        clip.name, clip.id, clip.start_time, clip.duration)
+      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Showing clip: " .. clip.name)
+    elseif #selected_clips > 1 then
+      label_text = string.format("%d clips selected", #selected_clips)
+      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Multiple clips selected")
+    else
+      label_text = "No clip selected"
+      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No selection")
+    end
+
+    local set_text_success, set_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, M._selection_label, label_text)
+    if not set_text_success then
+      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Failed to update selection label: " .. tostring(set_text_error))
+    else
+      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Selection label updated successfully")
+    end
   else
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No clips selected")
+    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No selection label widget available!")
   end
 end
 

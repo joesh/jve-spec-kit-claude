@@ -217,8 +217,12 @@ end
 -- Check if clip is selected
 -- Notify selection changed
 local function notify_selection_changed()
+    print("DEBUG: notify_selection_changed called, " .. #interaction.selected_clips .. " clips selected")
     if on_selection_changed_callback then
+        print("DEBUG: Calling selection callback")
         on_selection_changed_callback(interaction.selected_clips)
+    else
+        print("DEBUG: No selection callback registered!")
     end
 end
 
