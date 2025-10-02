@@ -2,6 +2,7 @@
 -- Implements all timeline logic in Lua, using ScriptableTimeline for rendering
 
 local M = {}
+local db = require("core.database")
 
 -- Callbacks
 local on_selection_changed_callback = nil
@@ -69,18 +70,11 @@ function M.init(widget, options)
         state.track_header_width = options.track_header_width
     end
 
-    -- Add some test tracks and clips
-    state.tracks = {
-        {id = "video1", name = "Video 1", type = "video"},
-        {id = "audio1", name = "Audio 1", type = "audio"},
-        {id = "video2", name = "Video 2", type = "video"},
-    }
+    -- Load tracks and clips from database
+    state.tracks = db.load_tracks("default_sequence")
+    state.clips = db.load_clips("default_sequence")
 
-    state.clips = {
-        {id = "clip1", track_id = "video1", start_time = 0, duration = 5000, name = "Beach Scene"},
-        {id = "clip2", track_id = "audio1", start_time = 1000, duration = 8000, name = "Music Track"},
-        {id = "clip3", track_id = "video2", start_time = 3000, duration = 4000, name = "Title Card"},
-    }
+    print(string.format("Loaded %d tracks and %d clips from database", #state.tracks, #state.clips))
 
     -- Set Lua state for callbacks
     timeline.set_lua_state(widget)
@@ -531,6 +525,15 @@ end
 -- Mouse release handler
 function timeline_on_mouse_release(event)
     local x, y = event.x, event.y
+
+    -- Complete clip drag - save clip positions
+    if interaction.dragging_clip then
+        for _, clip in ipairs(interaction.selected_clips) do
+            -- Save clip position to database
+            db.update_clip_position(clip.id, clip.start_time, clip.duration)
+        end
+    end
+
     -- Complete drag-select
     if interaction.drag_selecting then
         -- Find all clips in the selection rectangle
