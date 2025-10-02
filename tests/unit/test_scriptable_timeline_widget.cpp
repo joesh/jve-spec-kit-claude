@@ -50,6 +50,14 @@ private:
             lastMouseEvent.ctrl = lua_toboolean(L, -1);
             lua_pop(L, 1);
 
+            lua_getfield(L, 1, "shift");
+            lastMouseEvent.shift = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+
+            lua_getfield(L, 1, "alt");
+            lastMouseEvent.alt = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+
             lua_getfield(L, 1, "button");
             lastMouseEvent.button = lua_tointeger(L, -1);
             lua_pop(L, 1);
@@ -236,17 +244,38 @@ private slots:
     void testModifierKeys() {
         timeline->setMouseEventHandler("mock_mouse_handler");
 
+        // Reset state
+        lastMouseEvent = EventData();
+
         // Test Shift modifier
         QMouseEvent shiftEvent(QEvent::MouseButtonPress, QPointF(100, 100),
                               Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
         QCoreApplication::sendEvent(timeline, &shiftEvent);
         QVERIFY(lastMouseEvent.shift);
+        QVERIFY(!lastMouseEvent.ctrl);
+        QVERIFY(!lastMouseEvent.alt);
+
+        // Reset state
+        lastMouseEvent = EventData();
 
         // Test Alt modifier
         QMouseEvent altEvent(QEvent::MouseButtonPress, QPointF(100, 100),
                             Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
         QCoreApplication::sendEvent(timeline, &altEvent);
         QVERIFY(lastMouseEvent.alt);
+        QVERIFY(!lastMouseEvent.ctrl);
+        QVERIFY(!lastMouseEvent.shift);
+
+        // Reset state
+        lastMouseEvent = EventData();
+
+        // Test Ctrl modifier
+        QMouseEvent ctrlEvent(QEvent::MouseButtonPress, QPointF(100, 100),
+                             Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        QCoreApplication::sendEvent(timeline, &ctrlEvent);
+        QVERIFY(lastMouseEvent.ctrl);
+        QVERIFY(!lastMouseEvent.shift);
+        QVERIFY(!lastMouseEvent.alt);
     }
 };
 
