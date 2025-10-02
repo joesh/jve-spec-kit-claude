@@ -5,6 +5,13 @@ local timeline = require("ui.timeline.timeline")
 
 local M = {}
 
+-- Store reference to inspector view for selection updates
+local inspector_view = nil
+
+function M.set_inspector(view)
+    inspector_view = view
+end
+
 function M.create()
     local container = qt_constants.WIDGET.CREATE()
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
@@ -61,6 +68,22 @@ function M.create()
     timeline.init(timeline_widget, {
         track_header_width = 0
     })
+
+    -- Wire up selection callback to inspector
+    timeline.set_on_selection_changed(function(selected_clips)
+        if inspector_view and inspector_view.update_selection then
+            inspector_view.update_selection(selected_clips)
+        end
+
+        -- Log selection for debugging
+        if #selected_clips == 1 then
+            print("Selected clip: " .. selected_clips[1].name .. " (" .. selected_clips[1].id .. ")")
+        elseif #selected_clips > 1 then
+            print("Selected " .. #selected_clips .. " clips")
+        else
+            print("No clips selected")
+        end
+    end)
 
     return container
 end

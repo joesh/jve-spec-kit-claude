@@ -538,13 +538,32 @@ function M.ensure_search_row()
       message = "Search row already exists"
     })
   end
-  
+
   -- This function was referenced but missing - now implemented
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Creating search row")
-  
+
   return error_system.create_success({
     message = "Search row ensured"
   })
+end
+
+-- Update inspector when selection changes
+function M.update_selection(selected_clips)
+  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Selection changed: " .. #selected_clips .. " clips")
+
+  -- For now, just log the selection
+  -- TODO: Actually update the inspector UI with clip properties
+  if #selected_clips == 1 then
+    local clip = selected_clips[1]
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Selected clip: " .. clip.name)
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view]   ID: " .. clip.id)
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view]   Start: " .. clip.start_time .. "ms")
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view]   Duration: " .. clip.duration .. "ms")
+  elseif #selected_clips > 1 then
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Multiple clips selected for batch editing")
+  else
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No clips selected")
+  end
 end
 
 print("🚨 DEBUG: inspector/view.lua file LOADED")

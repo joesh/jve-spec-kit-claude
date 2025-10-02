@@ -3,6 +3,14 @@
 
 local M = {}
 
+-- Callbacks
+local on_selection_changed_callback = nil
+
+-- Set callback for selection changes
+function M.set_on_selection_changed(callback)
+    on_selection_changed_callback = callback
+end
+
 -- Timeline dimensions (single source of truth)
 M.dimensions = {
     ruler_height = 32,
@@ -207,6 +215,13 @@ function M.draw_tracks(width, height)
 end
 
 -- Check if clip is selected
+-- Notify selection changed
+local function notify_selection_changed()
+    if on_selection_changed_callback then
+        on_selection_changed_callback(interaction.selected_clips)
+    end
+end
+
 local function is_clip_selected(clip)
     for _, selected in ipairs(interaction.selected_clips) do
         if selected.id == clip.id then
@@ -350,6 +365,7 @@ end
 local function add_to_selection(clip)
     if not is_clip_selected(clip) then
         table.insert(interaction.selected_clips, clip)
+        notify_selection_changed()
     end
 end
 
@@ -358,6 +374,7 @@ local function remove_from_selection(clip)
     for i, selected in ipairs(interaction.selected_clips) do
         if selected.id == clip.id then
             table.remove(interaction.selected_clips, i)
+            notify_selection_changed()
             return
         end
     end
@@ -409,6 +426,7 @@ function timeline_on_mouse_press(event)
             -- Regular click: select only this clip (unless already selected for dragging)
             if not is_clip_selected(clip) then
                 interaction.selected_clips = {clip}
+                notify_selection_changed()
             end
             interaction.dragging_clip = clip
             interaction.drag_start_x = x
@@ -420,6 +438,7 @@ function timeline_on_mouse_press(event)
     -- Otherwise, start drag-select (unless ctrl-clicking or in ruler)
     if not ctrl_pressed then
         interaction.selected_clips = {}
+        notify_selection_changed()
     end
     interaction.drag_selecting = true
     interaction.drag_select_start_x = x
@@ -555,6 +574,7 @@ function timeline_key_event(event)
             for _, clip in ipairs(state.clips) do
                 table.insert(interaction.selected_clips, clip)
             end
+            notify_selection_changed()
             M.render()
             return
         end
@@ -562,6 +582,7 @@ function timeline_key_event(event)
         -- Cmd-Shift-A: Deselect all
         if event.key == Qt_Key.Key_A and event.ctrl and event.shift then
             interaction.selected_clips = {}
+            notify_selection_changed()
             M.render()
             return
         end

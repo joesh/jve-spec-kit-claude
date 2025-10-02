@@ -56,15 +56,19 @@ local view = require("ui.inspector.view")
 local mount_result = view.mount(inspector_panel)
 if mount_result and mount_result.success then
     print("✅ Inspector view mounted")
-    
+
     -- Then create the schema-driven content
     local inspector_success, inspector_result = pcall(view.create_schema_driven_inspector)
-    
+
     if not inspector_success then
         print("❌ Inspector creation failed: " .. tostring(inspector_result))
     else
         print("✅ Schema-driven inspector created successfully")
     end
+
+    -- Wire up timeline to inspector
+    timeline_panel_mod.set_inspector(view)
+    print("✅ Timeline wired to inspector")
 else
     print("❌ Inspector mount failed: " .. tostring(mount_result))
 end
