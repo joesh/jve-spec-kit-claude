@@ -989,13 +989,11 @@
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/16/include/__stdarg_va_list.h \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/16/include/stdarg.h \
   /Users/joe/Local/jve-spec-kit-claude/src/core/commands/command.h \
-  /Users/joe/Local/jve-spec-kit-claude/src/core/commands/command_manager.h \
   /Users/joe/Local/jve-spec-kit-claude/src/core/models/project.h \
   /Users/joe/Local/jve-spec-kit-claude/src/core/persistence/migrations.h \
   /Users/joe/Local/jve-spec-kit-claude/tests/common/test_base.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QDateTime \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QEvent \
-  /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QHash \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QList \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QLoggingCategory \

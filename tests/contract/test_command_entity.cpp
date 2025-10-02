@@ -99,7 +99,7 @@ void TestCommandEntity::testCommandExecution()
     // Create test command
     Command command = Command::create("SetClipProperty", m_projectId);
     command.setParameter("clip_id", "test-clip-id");
-    command.setParameter("property", "opacity");
+    command.setParameter("property_name", "opacity");
     command.setParameter("value", 0.75);
     command.setParameter("previous_value", 1.0); // For undo
     
@@ -168,11 +168,15 @@ void TestCommandEntity::testCommandSequencing()
     
     Command cmd1 = Command::create("CreateSequence", m_projectId);
     cmd1.setParameter("name", "Main Timeline");
+    cmd1.setParameter("project_id", m_projectId);
+    cmd1.setParameter("frame_rate", 30.0);
+    cmd1.setParameter("width", 1920);
+    cmd1.setParameter("height", 1080);
     commands.append(cmd1);
-    
+
     Command cmd2 = Command::create("AddTrack", m_projectId);
     cmd2.setParameter("sequence_id", "seq-1");
-    cmd2.setParameter("type", "video");
+    cmd2.setParameter("track_type", "video");
     commands.append(cmd2);
     
     Command cmd3 = Command::create("AddClip", m_projectId);
@@ -206,7 +210,10 @@ void TestCommandEntity::testCommandReplay()
     
     // Create initial state
     Command setupCmd = Command::create("SetupProject", m_projectId);
-    setupCmd.setParameter("initial_state", true);
+    setupCmd.setParameter("project_id", m_projectId);
+    QJsonObject settings;
+    settings["version"] = "1.0";
+    setupCmd.setParameter("settings", settings);
     ExecutionResult setupResult = manager.execute(setupCmd);
     QVERIFY(setupResult.success);
     
@@ -214,12 +221,16 @@ void TestCommandEntity::testCommandReplay()
     QList<Command> operationSequence;
     
     Command op1 = Command::create("ModifyProperty", m_projectId);
-    op1.setParameter("property", "brightness");
+    op1.setParameter("entity_id", "test-entity-1");
+    op1.setParameter("entity_type", "clip");
+    op1.setParameter("property_name", "brightness");
     op1.setParameter("value", 120);
     operationSequence.append(op1);
-    
+
     Command op2 = Command::create("ModifyProperty", m_projectId);
-    op2.setParameter("property", "contrast");
+    op2.setParameter("entity_id", "test-entity-2");
+    op2.setParameter("entity_type", "clip");
+    op2.setParameter("property_name", "contrast");
     op2.setParameter("value", 1.2);
     operationSequence.append(op2);
     
@@ -263,10 +274,10 @@ void TestCommandEntity::testCommandDeterminism()
     
     // Create identical command sequences
     QList<QPair<QString, QVariantMap>> commandSpecs = {
-        {"CreateClip", {{"name", "Clip1"}, {"position", 1000}}},
-        {"SetProperty", {{"clip_id", "clip1"}, {"property", "opacity"}, {"value", 0.8}}},
-        {"CreateClip", {{"name", "Clip2"}, {"position", 5000}}},
-        {"SetProperty", {{"clip_id", "clip2"}, {"property", "scale"}, {"value", 1.5}}}
+        {"CreateClip", {{"track_id", "track-1"}, {"media_id", "media-1"}, {"start_time", 1000}, {"duration", 5000}}},
+        {"SetProperty", {{"entity_id", "clip-1"}, {"entity_type", "clip"}, {"property_name", "opacity"}, {"value", 0.8}}},
+        {"CreateClip", {{"track_id", "track-2"}, {"media_id", "media-2"}, {"start_time", 5000}, {"duration", 3000}}},
+        {"SetProperty", {{"entity_id", "clip-2"}, {"entity_type", "clip"}, {"property_name", "scale"}, {"value", 1.5}}}
     };
     
     // Execute sequence with manager 1

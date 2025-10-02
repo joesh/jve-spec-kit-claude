@@ -988,22 +988,17 @@
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/16/include/__stdarg_va_copy.h \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/16/include/__stdarg_va_list.h \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/16/include/stdarg.h \
-  /Users/joe/Local/jve-spec-kit-claude/src/core/commands/command.h \
-  /Users/joe/Local/jve-spec-kit-claude/src/core/commands/command_dispatcher.h \
-  /Users/joe/Local/jve-spec-kit-claude/src/core/commands/command_manager.h \
   /Users/joe/Local/jve-spec-kit-claude/src/core/models/project.h \
   /Users/joe/Local/jve-spec-kit-claude/src/core/models/sequence.h \
   /Users/joe/Local/jve-spec-kit-claude/src/core/persistence/migrations.h \
   /Users/joe/Local/jve-spec-kit-claude/tests/common/test_base.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QDateTime \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QEvent \
-  /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QHash \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonArray \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonDocument \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QList \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QLoggingCategory \
-  /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMap \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMargins \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QMetaEnum \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QObject \
@@ -1014,7 +1009,6 @@
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QString \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QTemporaryDir \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QVariant \
-  /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QVariantMap \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/q17memory.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/q20functional.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/q20iterator.h \
@@ -1177,7 +1171,6 @@
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qutf8stringview.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/quuid.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qvariant.h \
-  /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qvariantmap.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qvarlengtharray.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qversiontagging.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/qxpfunctional.h \
@@ -1227,9 +1220,7 @@
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qwindow.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qwindowdefs.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/QSqlDatabase \
-  /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/QSqlQuery \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qsqldatabase.h \
-  /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qsqlquery.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsql-config.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsqlexports.h \
   /opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsqlglobal.h \

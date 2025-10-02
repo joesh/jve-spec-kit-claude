@@ -1031,8 +1031,6 @@ JVECore_autogen/timestamp: \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/api/selection_manager.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/commands/command.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/commands/command.h \
-	/Users/joe/Local/jve-spec-kit-claude/src/core/commands/command_dispatcher.cpp \
-	/Users/joe/Local/jve-spec-kit-claude/src/core/commands/command_dispatcher.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/commands/command_manager.cpp \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/commands/command_manager.h \
 	/Users/joe/Local/jve-spec-kit-claude/src/core/common/uuid_generator.cpp \
@@ -1075,7 +1073,6 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QDateTime \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QElapsedTimer \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QFileInfo \
-	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QHash \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonArray \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QJsonObject \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtCore.framework/Versions/A/Headers/QList \
@@ -1301,9 +1298,7 @@ JVECore_autogen/timestamp: \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qvectornd.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtGui.framework/Versions/A/Headers/qwindowdefs.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/QSqlDatabase \
-	/opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/QSqlQuery \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qsqldatabase.h \
-	/opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qsqlquery.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsql-config.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsqlexports.h \
 	/opt/homebrew/Cellar/qt/6.9.1/lib/QtSql.framework/Versions/A/Headers/qtsqlglobal.h \
