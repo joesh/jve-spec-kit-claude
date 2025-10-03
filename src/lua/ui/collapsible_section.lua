@@ -781,11 +781,8 @@ function CollapsibleSection:addContentWidget(widget)
         })
     end
 
-    -- Update content size (equivalent to C++ updateContentSize() - line 192)
-    local show_success, show_error = pcall(qt_constants.DISPLAY.SHOW, widget, qt_constants.DISPLAY.SHOW_PARENTS)
-    if not show_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Widget added but failed to make visible: " .. log_detailed_error(show_error))
-    end
+    -- Widget visibility is managed by the layout system, no need to explicitly show
+    -- (Removed SHOW_PARENTS call that was causing widgets to appear in separate windows)
 
     return error_system.create_success({
         message = "Widget added to section '" .. self.title .. "'"
