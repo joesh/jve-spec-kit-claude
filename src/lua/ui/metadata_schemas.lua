@@ -17,6 +17,12 @@ metadata_schemas.FIELD_TYPES = {
 }
 
 -- Helper function to create fields
+-- Parameters:
+--   key: unique identifier for the field
+--   label: display name in inspector
+--   field_type: one of metadata_schemas.FIELD_TYPES
+--   default_value: initial value
+--   options: for dropdown fields, array of choices; for numeric fields, table with min/max
 local function create_field(key, label, field_type, default_value, options)
     local default_val
     if default_value ~= nil then
@@ -24,15 +30,28 @@ local function create_field(key, label, field_type, default_value, options)
     else
         default_val = ""
     end
-    
-    
-    return {
+
+    local field = {
         key = key,
         label = label,
         type = field_type or metadata_schemas.FIELD_TYPES.STRING,
-        default = default_val,
-        options = options -- For dropdown fields
+        default = default_val
     }
+
+    -- Handle options parameter
+    if options then
+        if field_type == metadata_schemas.FIELD_TYPES.DROPDOWN then
+            field.options = options -- Array of dropdown choices
+        elseif field_type == metadata_schemas.FIELD_TYPES.DOUBLE or field_type == metadata_schemas.FIELD_TYPES.INTEGER then
+            -- Options for numeric types can be a table with min/max
+            if type(options) == "table" and options.min and options.max then
+                field.min = options.min
+                field.max = options.max
+            end
+        end
+    end
+
+    return field
 end
 
 -- Inspector-relevant schemas (matching C++ Inspector categories)
@@ -119,7 +138,8 @@ metadata_schemas.clip_inspector_schemas = {
         fields = {
             create_field("composite:blend_mode", "Blend Mode", metadata_schemas.FIELD_TYPES.DROPDOWN, "Normal",
                         {"Normal", "Multiply", "Screen", "Overlay", "Soft Light", "Hard Light", "Add", "Subtract"}),
-            create_field("composite:opacity", "Opacity", metadata_schemas.FIELD_TYPES.DOUBLE, 100.0),
+            create_field("composite:opacity", "Opacity", metadata_schemas.FIELD_TYPES.DOUBLE, 100.0,
+                        {min = 0.0, max = 100.0}),
             create_field("composite:drop_shadow", "Drop Shadow", metadata_schemas.FIELD_TYPES.BOOLEAN, false),
             create_field("composite:motion_blur", "Motion Blur", metadata_schemas.FIELD_TYPES.BOOLEAN, false)
         }
