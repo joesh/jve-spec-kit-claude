@@ -502,6 +502,9 @@ function M.add_schema_field_to_section(section, field)
 
                 -- Style slider to match DaVinci Resolve
                 local slider_style =
+                    "QSlider { " ..
+                    "margin-right: 4px; " ..  -- Space between slider and text field
+                    "} " ..
                     "QSlider::groove:horizontal { " ..
                     "background: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
                     "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
@@ -698,6 +701,7 @@ function M.add_schema_field_to_section(section, field)
                 "padding: 2px 6px; " ..
                 "min-width: 50px; " ..
                 "max-width: 80px; " ..
+                "margin-right: 4px; " ..  -- Right margin for symmetry
                 "} " ..
                 "QLineEdit:focus { " ..
                 "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
@@ -706,6 +710,23 @@ function M.add_schema_field_to_section(section, field)
             pcall(qt_constants.PROPERTIES.SET_STYLE, text_widget, text_style)
             pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, text_widget, "Fixed", "Fixed")
             pcall(qt_constants.LAYOUT.ADD_WIDGET, field_layout, text_widget, "AlignBaseline")
+
+            -- Hook up slider to text field: when slider changes, update text
+            local scale = 100
+            local qt_signals = require("core.qt_signals")
+            qt_signals.onSliderValueChanged(control_widget, function(value)
+                local display_value = value / scale
+                pcall(qt_constants.PROPERTIES.SET_TEXT, text_widget, string.format("%.2f", display_value))
+            end)
+
+            -- Hook up text field to slider: when text changes, update slider
+            qt_signals.onTextChanged(text_widget, function(text)
+                local num_value = tonumber(text)
+                if num_value then
+                    local slider_value = math.floor(num_value * scale)
+                    pcall(qt_constants.PROPERTIES.SET_SLIDER_VALUE, control_widget, slider_value)
+                end
+            end)
         end
     end
 

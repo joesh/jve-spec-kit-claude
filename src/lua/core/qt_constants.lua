@@ -41,7 +41,12 @@ if qt_constants then
     -- Widget Functions - add parent relationship support
     qt_constants.WIDGET = qt_constants.WIDGET or {}
     qt_constants.WIDGET.SET_PARENT = qt_constants.WIDGET.SET_PARENT or lazy_function("qt_set_parent")
-    
+
+    -- Control Functions - add click handler support
+    qt_constants.CONTROL = qt_constants.CONTROL or {}
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER = qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER or lazy_function("qt_set_button_click_handler")
+    qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER = qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER or lazy_function("qt_set_widget_click_handler")
+
     -- Note: CONTROL section is now provided by the real qt_constants from C++
     -- SET_SCROLL_AREA_WIDGET is implemented as lua_set_scroll_area_widget
 end

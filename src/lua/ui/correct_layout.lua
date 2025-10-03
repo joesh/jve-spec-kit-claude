@@ -13,15 +13,8 @@ local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
 local top_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
 -- 1. Project Browser (left)
-local project_browser = qt_constants.WIDGET.CREATE()
-local project_layout = qt_constants.LAYOUT.CREATE_VBOX()
-local project_title = qt_constants.WIDGET.CREATE_LABEL("Project Browser")
-qt_constants.PROPERTIES.SET_STYLE(project_title, "background: #3a3a3a; color: white; padding: 4px; font-size: 12px;")
-qt_constants.LAYOUT.ADD_WIDGET(project_layout, project_title)
-
-local project_tree = qt_constants.WIDGET.CREATE_TREE()
-qt_constants.LAYOUT.ADD_WIDGET(project_layout, project_tree)
-qt_constants.LAYOUT.SET_ON_WIDGET(project_browser, project_layout)
+local project_browser_mod = require("ui.project_browser")
+local project_browser = project_browser_mod.create()
 
 -- 2. Src/Timeline Viewer (center)
 local viewer_panel = qt_constants.WIDGET.CREATE()

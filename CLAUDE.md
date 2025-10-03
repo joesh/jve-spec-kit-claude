@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-01 (Code Review)
+Last updated: 2025-10-02 (Tag-based Organization)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -80,19 +80,38 @@ make clean          # Clean build artifacts
 - Timeline chrome positioning misaligned
 
 **FUNCTIONAL GAPS:**
-- No actual property editing in inspector
-- No media import functionality  
+- Inspector UI not connected to data (widgets don't load/save clip properties)
+- No media import functionality
 - Most keyboard shortcuts non-functional
 - Play button doesn't work
 
 ## Previous False Claims (REMOVED)
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
+## Recent Improvements (2025-10-02)
+
+**Tag-Based Media Organization:**
+- Implemented flexible tag system replacing rigid folder hierarchy
+- Media items now support multiple tag namespaces: bin, project, status, location, person, type, mood
+- Hierarchical tags with path structure (e.g., "Footage/Interviews")
+- Backward-compatible: existing UI shows "bin" namespace as traditional folders
+- Foundation for multi-view filtering (can show different tag namespaces)
+- Bins now alphabetically sorted
+
+**Implementation Details:**
+- `database.lua`: Media items have `tags` array with namespace/tag_path structure
+- `load_bins()` extracts bins from "bin" namespace tags dynamically
+- `load_media_tags()` queries tags by namespace
+- `get_tag_namespaces()` lists all available namespaces
+- Project browser updated to use tag-based filtering
+
 ## Next Steps
-1. Remove C++ UI components that violate architecture  
-2. Fix test system build issues
+1. Connect inspector UI to clip data (add data binding)
+2. Remove C++ UI components that violate architecture
+3. Fix test system build issues
 
 ## Commit History
+- 2025-10-02: Implement tag-based media organization with multiple namespaces
 - 2025-10-01: Fix inspector panel initialization timing - now creates content during correct execution phase
 - 2025-10-01: Code review and documentation cleanup - removed false milestone claims
 

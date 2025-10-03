@@ -24,6 +24,9 @@ int lua_create_scroll_area(lua_State* L);
 int lua_create_label(lua_State* L);
 int lua_create_line_edit(lua_State* L);
 int lua_create_button(lua_State* L);
+int lua_create_checkbox(lua_State* L);
+int lua_create_combobox(lua_State* L);
+int lua_create_slider(lua_State* L);
 int lua_create_tree_widget(lua_State* L);
 int lua_create_timeline_panel(lua_State* L);
 int lua_create_inspector_panel(lua_State* L);
@@ -34,11 +37,18 @@ int lua_create_vbox_layout(lua_State* L);
 int lua_create_splitter(lua_State* L);
 int lua_set_layout(lua_State* L);
 int lua_add_widget_to_layout(lua_State* L);
+int lua_add_stretch_to_layout(lua_State* L);
 int lua_set_central_widget(lua_State* L);
 int lua_set_splitter_sizes(lua_State* L);
 
 // Property functions
 int lua_set_text(lua_State* L);
+int lua_get_text(lua_State* L);
+int lua_set_checked(lua_State* L);
+int lua_add_combobox_item(lua_State* L);
+int lua_set_combobox_current_text(lua_State* L);
+int lua_set_slider_range(lua_State* L);
+int lua_set_slider_value(lua_State* L);
 int lua_set_placeholder_text(lua_State* L);
 int lua_set_window_title(lua_State* L);
 int lua_set_size(lua_State* L);
@@ -54,9 +64,20 @@ int lua_activate_window(lua_State* L);
 // Control functions
 int lua_set_scroll_area_widget(lua_State* L);
 
+// Tree widget functions
+int lua_set_tree_headers(lua_State* L);
+int lua_set_tree_column_width(lua_State* L);
+int lua_set_tree_indentation(lua_State* L);
+int lua_add_tree_item(lua_State* L);
+int lua_add_tree_child_item(lua_State* L);
+int lua_get_tree_selected_index(lua_State* L);
+int lua_clear_tree(lua_State* L);
+int lua_set_tree_item_expanded(lua_State* L);
+
 // Signal handling functions
 int lua_set_button_click_handler(lua_State* L);
 int lua_set_widget_click_handler(lua_State* L);
+int lua_set_tree_item_click_handler(lua_State* L);
 
 // Layout styling functions
 int lua_set_layout_spacing(lua_State* L);
@@ -68,6 +89,9 @@ int lua_set_widget_alignment(lua_State* L);
 
 // Widget relationship functions
 int lua_set_parent(lua_State* L);
+
+// Widget attribute functions
+int lua_set_widget_attribute(lua_State* L);
 
 // Utility functions
 void* lua_to_widget(lua_State* L, int index);

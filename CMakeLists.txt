@@ -70,7 +70,7 @@ set(CORE_SOURCES
     
     src/core/common/uuid_generator.cpp
     src/core/resource_paths.cpp
-    
+
     src/lua/simple_lua_engine.cpp
     src/lua/qt_bindings.cpp
 )

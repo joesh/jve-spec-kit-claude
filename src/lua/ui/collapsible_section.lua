@@ -21,7 +21,7 @@ local collapsible_section = {}
 local CollapsibleSection = {}
 CollapsibleSection.__index = CollapsibleSection
 
-function CollapsibleSection.new(title, expanded)
+function CollapsibleSection.new(title, expanded, parent_widget)
     local self = setmetatable({}, CollapsibleSection)
 
     -- State
@@ -38,7 +38,10 @@ function CollapsibleSection.new(title, expanded)
     self.content_frame = nil
     self.content_layout = nil
     self.disclosure_triangle = nil
-    
+
+    -- Parent widget for triggering layout updates
+    self.parent_widget = parent_widget
+
     -- Signal connections for cleanup
     self.connections = {}
 
@@ -139,6 +142,8 @@ function CollapsibleSection:create()
     local main_style = [[
         QWidget {
             background-color: #2b2b2b;
+            margin: 0px;
+            padding: 0px;
         }
     ]]
     
@@ -209,8 +214,8 @@ function CollapsibleSection:create()
         })
     end
 
-    -- Step 8: Set initial expanded state (C++ line 168: start expanded)
-    local expand_result = self:setExpanded(true)
+    -- Step 8: Set initial expanded state (start collapsed)
+    local expand_result = self:setExpanded(false)
     if error_system.is_error(expand_result) then
         return expand_result
     end
@@ -252,6 +257,7 @@ function CollapsibleSection:createHeader(operation_context)
         QWidget {
             background-color: transparent;
             border: none;
+            border-top: 1px solid #000000;
         }
         QWidget:hover {
             background-color: #454545;
@@ -319,10 +325,11 @@ function CollapsibleSection:createHeader(operation_context)
     end
 
     -- Create enabled dot (C++ lines 75-81)
-    local dot_result = self:createEnabledDot(header_layout, operation_context)
-    if error_system.is_error(dot_result) then
-        return dot_result
-    end
+    -- Disabled: orange dot not needed
+    -- local dot_result = self:createEnabledDot(header_layout, operation_context)
+    -- if error_system.is_error(dot_result) then
+    --     return dot_result
+    -- end
 
     -- Create disclosure triangle (C++ lines 83-87)
     local triangle_result = self:createDisclosureTriangle(header_layout, operation_context)
@@ -336,33 +343,30 @@ function CollapsibleSection:createHeader(operation_context)
         return title_result
     end
 
-    -- Add click handler to entire header widget using modern signal system
-    local header_connection_id = qt_signals.onWidgetClick(self.header_widget, function()
-        local result = self:setExpanded(not self.expanded)
+    -- Enable mouse events on header widget so event filter can receive clicks
+    local header_hover_success, header_hover_error = pcall(qt_set_widget_attribute, self.header_widget, "WA_Hover", true)
+    if not header_hover_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to enable hover on header: " .. tostring(header_hover_error))
+    end
+
+    -- Add click handler to entire header widget for expand/collapse
+    local header_callback_name = "CollapsibleSection_header_toggle_" .. self.title:gsub(" ", "_")
+    local header_click_success, header_click_error = pcall(qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER, self.header_widget, header_callback_name)
+    if not header_click_success then
+        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] ERROR: Failed to set header click handler: " .. log_detailed_error(header_click_error))
+    end
+
+    -- Create the header click callback (same functionality as triangle)
+    local section_instance = self
+    _G[header_callback_name] = function()
+        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "🖱️ Header clicked for: " .. self.title)
+        local result = section_instance:setExpanded(not section_instance.expanded)
         if error_system.is_error(result) then
             logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "❌ Header click failed: " .. error_system.format_user_error(result))
             return false
         end
-        
-        -- Emit signal for user extensibility (Emacs-style hook)
-        signals.emit("section:toggled", self.title, self.expanded)
-        
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            "🔄 Section toggled: " .. self.title .. " → " .. (self.expanded and "expanded" or "collapsed"))
-        
         return true
-    end)
-    
-    if error_system.is_error(header_connection_id) then
-        return error_builder.createSignalError("Failed to connect header click signal")
-            :withOperation("createHeader")
-            :withQtWidget(self.header_widget)
-            :addContext("signal_type", "click")
-            :build()
     end
-    
-    -- Track connection for cleanup
-    table.insert(self.connections, header_connection_id)
 
     return error_system.create_success({
         message = "Section header created successfully"
@@ -416,6 +420,12 @@ function CollapsibleSection:createEnabledDot(header_layout, operation_context)
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style enabled dot: " .. log_detailed_error(dot_style_error))
     end
 
+    -- Make dot transparent to mouse events so clicks pass through to header widget
+    local dot_attr_success, dot_attr_error = pcall(qt_set_widget_attribute, self.enabled_dot, "WA_TransparentForMouseEvents", true)
+    if not dot_attr_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set transparent attribute on dot: " .. tostring(dot_attr_error))
+    end
+
     -- Add dot to header layout (C++ line 133)
     local add_dot_success, add_dot_error = pcall(qt_constants.LAYOUT.ADD_WIDGET, header_layout, self.enabled_dot)
     if not add_dot_success then
@@ -440,8 +450,9 @@ function CollapsibleSection:createEnabledDot(header_layout, operation_context)
 end
 
 function CollapsibleSection:createDisclosureTriangle(header_layout, operation_context)
-    -- C++ lines 83-87: Disclosure triangle QPushButton with Unicode triangles ▶/▼
-    local triangle_success, triangle_widget = pcall(qt_constants.WIDGET.CREATE_BUTTON, "▶")
+    -- C++ lines 83-87: Disclosure triangle QLabel with Unicode triangles ▶/▼
+    -- Using QLabel instead of QPushButton so clicks pass through to header widget
+    local triangle_success, triangle_widget = pcall(qt_constants.WIDGET.CREATE_LABEL, "▶")
     if not triangle_success or not triangle_widget then
         return error_system.create_error({
             code = error_system.CODES.QT_WIDGET_CREATION_FAILED,
@@ -465,9 +476,9 @@ function CollapsibleSection:createDisclosureTriangle(header_layout, operation_co
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set triangle text: " .. log_detailed_error(set_text_error))
     end
 
-    -- Style disclosure triangle (C++ line 85: 16x16 fixed size, pointing hand cursor)
+    -- Style disclosure triangle (C++ line 85: 16x16 fixed size)
     local triangle_style_success, triangle_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, self.disclosure_triangle, [[
-        QPushButton {
+        QLabel {
             background: transparent;
             border: none;
             color: ]] .. ui_constants.COLORS.LABEL_TEXT_COLOR .. [[;
@@ -476,42 +487,12 @@ function CollapsibleSection:createDisclosureTriangle(header_layout, operation_co
             max-width: 16px;
             padding: 0px;
         }
-        QPushButton:hover {
-            color: #ffffff;
-            background: rgba(255, 255, 255, 0.1);
-        }
     ]])
     if not triangle_style_success then
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style triangle: " .. log_detailed_error(triangle_style_error))
     end
 
-    -- Connect click handler using modern signal system
-    local triangle_connection_id = qt_signals.onClick(self.disclosure_triangle, function()
-        local result = self:setExpanded(not self.expanded)
-        if error_system.is_error(result) then
-            logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "❌ Disclosure triangle click failed: " .. error_system.format_user_error(result))
-            return false
-        end
-        
-        -- Emit signal for user extensibility (Emacs-style hook)
-        signals.emit("section:toggled", self.title, self.expanded)
-        
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            "🔄 Section toggled: " .. self.title .. " → " .. (self.expanded and "expanded" or "collapsed"))
-        
-        return true
-    end)
-    
-    if error_system.is_error(triangle_connection_id) then
-        return error_builder.createSignalError("Failed to connect triangle click signal")
-            :withOperation("createDisclosureTriangle")
-            :withQtWidget(self.disclosure_triangle)
-            :addContext("signal_type", "clicked")
-            :build()
-    end
-    
-    -- Track connection for cleanup
-    table.insert(self.connections, triangle_connection_id)
+    -- Triangle doesn't need its own click handler - the header widget handles all clicks
 
     -- Add triangle to header layout
     local add_triangle_success, add_triangle_error = pcall(qt_constants.LAYOUT.ADD_WIDGET, header_layout, self.disclosure_triangle)
@@ -572,6 +553,12 @@ function CollapsibleSection:createTitleLabel(header_layout, operation_context)
     ]])
     if not title_style_success then
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style title: " .. log_detailed_error(title_style_error))
+    end
+
+    -- Make title transparent to mouse events so clicks pass through to header widget
+    local attr_success, attr_error = pcall(qt_set_widget_attribute, self.title_label, "WA_TransparentForMouseEvents", true)
+    if not attr_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set transparent attribute on title: " .. tostring(attr_error))
     end
 
     -- Add title to header layout (C++ line 134)
@@ -737,9 +724,19 @@ function CollapsibleSection:setExpanded(expanded)
 
     logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "📋 Section '" .. self.title .. "' " .. (expanded and "expanded" or "collapsed"))
 
-    -- Qt layouts automatically update when widget visibility changes
-    -- No manual layout update needed - Qt handles this internally
-    logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "✅ Section " .. (expanded and "expanded" or "collapsed") .. " - Qt will auto-update layout")
+    -- Force layout recalculation by updating both the section widget and its parent
+    -- Update the section's main widget first
+    if self.main_widget then
+        pcall(qt_update_widget, self.main_widget)
+    end
+
+    -- Then update the parent to recalculate the overall layout
+    if self.parent_widget then
+        pcall(qt_update_widget, self.parent_widget)
+        logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "✅ Section " .. (expanded and "expanded" or "collapsed") .. " - triggered parent layout update")
+    else
+        logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "⚠️ Section " .. (expanded and "expanded" or "collapsed") .. " - no parent widget for layout update")
+    end
 
     return error_system.create_success({
         message = "Section expand state set to " .. tostring(expanded)
@@ -824,8 +821,8 @@ function collapsible_section.onToggle(handler)
 end
 
 -- Factory function
-function collapsible_section.create_section(title)
-    local section = CollapsibleSection.new(title)
+function collapsible_section.create_section(title, parent_widget)
+    local section = CollapsibleSection.new(title, nil, parent_widget)
     local result = section:create()
 
     if error_system.is_success(result) then

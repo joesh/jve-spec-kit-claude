@@ -1,6 +1,5 @@
 #include "qt_controls.h"
-#include "qt_core.h"
-#include "lua_engine.h"
+#include "simple_lua_engine.h"
 #include <QtWidgets>
 #include <QEvent>
 #include <QMouseEvent>
@@ -325,6 +324,32 @@ int qt_set_widget_click_handler(lua_State* L) {
         std::string handler_name;
     };
 
+    // Install event filter to handle mouse clicks on generic widgets
+    class ClickEventFilter : public QObject {
+    public:
+        ClickEventFilter(const std::string& handler, QObject* parent = nullptr)
+            : QObject(parent), handler_name(handler) {}
+
+    protected:
+        bool eventFilter(QObject* obj, QEvent* event) override {
+            if (event->type() == QEvent::MouseButtonPress) {
+                QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+                if (mouseEvent->button() == Qt::LeftButton) {
+                    qDebug() << "ClickEventFilter: MouseButtonPress on" << obj->objectName() << "calling" << QString::fromStdString(handler_name);
+                    if (JVE::g_lua_engine) {
+                        JVE::Parameters empty_params;
+                        JVE::g_lua_engine->call_lua_function(handler_name, empty_params);
+                    }
+                    return true;
+                }
+            }
+            return QObject::eventFilter(obj, event);
+        }
+
+    private:
+        std::string handler_name;
+    };
+
     // Create and install the event filter
     ClickEventFilter* filter = new ClickEventFilter(handler_name, widget);
     widget->installEventFilter(filter);
@@ -370,7 +395,7 @@ void register_bindings(lua_State* L) {
     lua_setglobal(L, JVE::FFIConstants::QT_SET_BUTTON_CLICK_HANDLER);
 
     lua_pushcfunction(L, qt_set_line_edit_text_changed_handler);
-    lua_setglobal(L, JVE::FFIConstants::QT_SET_LINE_EDIT_TEXT_CHANGED_HANDLER);
+    lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
 
     lua_pushcfunction(L, qt_set_widget_click_handler);
     lua_setglobal(L, JVE::FFIConstants::QT_SET_WIDGET_CLICK_HANDLER);
