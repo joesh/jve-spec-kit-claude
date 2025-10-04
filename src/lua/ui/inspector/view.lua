@@ -159,9 +159,8 @@ function M.create_schema_driven_inspector()
     return error_system.create_error({message = "Failed to create content layout"})
   end
 
-  -- Set asymmetric margins on content layout: 0 left, 0 top, 50 right, 0 bottom
-  -- This creates visual balance with the scrollbar
-  pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 50, 0)
+  -- No margins here - right margin will be applied to individual section content layouts
+  pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 0, 0)
 
   -- Set layout on content widget
   pcall(qt_constants.LAYOUT.SET_ON_WIDGET, content_widget, content_layout)

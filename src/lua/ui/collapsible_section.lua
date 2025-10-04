@@ -253,12 +253,12 @@ function CollapsibleSection:createHeader(operation_context)
     self.header_widget = header_widget
 
     -- Style header widget (C++ lines 41-69 with optional debug colors)
-    -- Border will be added via separate element, not widget border
+    -- No padding here - it's applied to content widget only, not separator
+    -- Set overflow:visible to prevent clipping of separator with negative margin
     local header_style = [[
         QWidget {
             background-color: transparent;
             border: none;
-            padding-left: 8px;
         }
         QWidget:hover {
             background-color: #454545;
@@ -325,7 +325,7 @@ function CollapsibleSection:createHeader(operation_context)
                 background-color: #000000;
                 min-height: 1px;
                 max-height: 1px;
-                margin-right: -50px;
+                margin-right: -45px;
             }
         ]])
         pcall(qt_constants.LAYOUT.ADD_WIDGET, header_vbox, separator_widget)
@@ -354,8 +354,8 @@ function CollapsibleSection:createHeader(operation_context)
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header spacing: " .. log_detailed_error(header_spacing_error))
     end
 
-    -- Set zero margins - indent is handled by header widget padding
-    local header_margins_success, header_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, header_layout, 0, 0, 0, 0)
+    -- Set left margin on layout to indent triangle and title
+    local header_margins_success, header_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, header_layout, 8, 0, 0, 0)
     if not header_margins_success then
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header margins: " .. log_detailed_error(header_margins_error))
     end
@@ -747,7 +747,8 @@ function CollapsibleSection:createContentFrame(operation_context)
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set content spacing: " .. log_detailed_error(content_spacing_error))
     end
 
-    local content_margins_success, content_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, self.content_layout, 0, 0, 0, 0)
+    -- Set 45px right margin on section content for visual balance with scrollbar
+    local content_margins_success, content_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, self.content_layout, 0, 0, 45, 0)
     if not content_margins_success then
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set content margins: " .. log_detailed_error(content_margins_error))
     end
