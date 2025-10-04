@@ -135,6 +135,8 @@ void registerQtBindings(lua_State* L)
     lua_newtable(L);
     lua_pushcfunction(L, lua_set_scroll_area_widget);
     lua_setfield(L, -2, "SET_SCROLL_AREA_WIDGET");
+    lua_pushcfunction(L, lua_set_scroll_area_viewport_margins);
+    lua_setfield(L, -2, "SET_SCROLL_AREA_VIEWPORT_MARGINS");
     lua_pushcfunction(L, lua_set_layout_spacing);
     lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins);
@@ -832,7 +834,7 @@ int lua_set_scroll_area_widget(lua_State* L)
 {
     QWidget* scrollArea = (QWidget*)lua_to_widget(L, 1);
     QWidget* contentWidget = (QWidget*)lua_to_widget(L, 2);
-    
+
     if (scrollArea && contentWidget) {
         QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
         if (sa) {
@@ -845,6 +847,38 @@ int lua_set_scroll_area_widget(lua_State* L)
         }
     } else {
         qWarning() << "Invalid widget arguments in set_scroll_area_widget";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_scroll_area_viewport_margins(lua_State* L)
+{
+    QWidget* scrollArea = (QWidget*)lua_to_widget(L, 1);
+    int left = lua_tointeger(L, 2);
+    int top = lua_tointeger(L, 3);
+    int right = lua_tointeger(L, 4);
+    int bottom = lua_tointeger(L, 5);
+
+    if (scrollArea) {
+        QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
+        if (sa) {
+            qDebug() << "Setting scroll area content margins from Lua:" << left << top << right << bottom;
+            // setViewportMargins is protected, so we set margins on the content widget's layout instead
+            QWidget* widget = sa->widget();
+            if (widget && widget->layout()) {
+                widget->layout()->setContentsMargins(left, top, right, bottom);
+                lua_pushboolean(L, 1);
+            } else {
+                qWarning() << "Scroll area has no widget or widget has no layout";
+                lua_pushboolean(L, 0);
+            }
+        } else {
+            qWarning() << "First argument is not a QScrollArea";
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid widget argument in set_scroll_area_viewport_margins";
         lua_pushboolean(L, 0);
     }
     return 1;
@@ -970,16 +1004,35 @@ int lua_set_layout_spacing(lua_State* L)
 int lua_set_layout_margins(lua_State* L)
 {
     QLayout* layout = (QLayout*)lua_to_widget(L, 1);
-    int margins = lua_tointeger(L, 2);
 
-    if (layout) {
-        qDebug() << "Setting layout margins from Lua:" << margins;
-        layout->setContentsMargins(margins, margins, margins, margins);
-        lua_pushboolean(L, 1);
-    } else {
+    if (!layout) {
         qWarning() << "Invalid layout in set_layout_margins";
         lua_pushboolean(L, 0);
+        return 1;
     }
+
+    int num_args = lua_gettop(L);
+
+    if (num_args == 2) {
+        // Uniform margins (all sides equal)
+        int margins = lua_tointeger(L, 2);
+        qDebug() << "Setting layout margins from Lua:" << margins;
+        layout->setContentsMargins(margins, margins, margins, margins);
+    } else if (num_args == 5) {
+        // Asymmetric margins (left, top, right, bottom)
+        int left = lua_tointeger(L, 2);
+        int top = lua_tointeger(L, 3);
+        int right = lua_tointeger(L, 4);
+        int bottom = lua_tointeger(L, 5);
+        qDebug() << "Setting layout margins from Lua (LTRB):" << left << top << right << bottom;
+        layout->setContentsMargins(left, top, right, bottom);
+    } else {
+        qWarning() << "Invalid number of arguments in set_layout_margins (expected 2 or 5, got" << num_args << ")";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    lua_pushboolean(L, 1);
     return 1;
 }
 

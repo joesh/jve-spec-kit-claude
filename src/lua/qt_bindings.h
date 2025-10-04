@@ -63,6 +63,7 @@ int lua_activate_window(lua_State* L);
 
 // Control functions
 int lua_set_scroll_area_widget(lua_State* L);
+int lua_set_scroll_area_viewport_margins(lua_State* L);
 
 // Tree widget functions
 int lua_set_tree_headers(lua_State* L);

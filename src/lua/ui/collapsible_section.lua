@@ -253,11 +253,12 @@ function CollapsibleSection:createHeader(operation_context)
     self.header_widget = header_widget
 
     -- Style header widget (C++ lines 41-69 with optional debug colors)
+    -- Border will be added via separate element, not widget border
     local header_style = [[
         QWidget {
             background-color: transparent;
             border: none;
-            border-top: 1px solid #000000;
+            padding-left: 8px;
         }
         QWidget:hover {
             background-color: #454545;
@@ -278,6 +279,58 @@ function CollapsibleSection:createHeader(operation_context)
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style header: " .. log_detailed_error(header_style_error))
     end
 
+    -- Create vertical layout for header (to stack border line + content)
+    local header_vbox_success, header_vbox = pcall(qt_constants.LAYOUT.CREATE_VBOX)
+    if not header_vbox_success or not header_vbox then
+        return error_system.create_error({
+            code = error_system.CODES.LAYOUT_CREATION_FAILED,
+            category = "qt_widget",
+            message = "Failed to create header vbox layout",
+            operation = "createHeader",
+            component = "collapsible_section",
+            user_message = "Cannot create header vbox layout",
+            technical_details = {
+                error = header_vbox,
+                title = self.title
+            }
+        })
+    end
+
+    pcall(qt_constants.LAYOUT.SET_SPACING, header_vbox, 0)
+    pcall(qt_constants.LAYOUT.SET_MARGINS, header_vbox, 0, 0, 0, 0)
+
+    -- Set vbox layout on header widget
+    local set_vbox_success, set_vbox_error = pcall(qt_constants.LAYOUT.SET_ON_WIDGET, self.header_widget, header_vbox)
+    if not set_vbox_success then
+        return error_system.create_error({
+            code = error_system.CODES.LAYOUT_SET_FAILED,
+            category = "qt_widget",
+            message = "Failed to set header vbox layout",
+            operation = "createHeader",
+            component = "collapsible_section",
+            user_message = "Cannot set header vbox layout",
+            technical_details = {
+                error = set_vbox_error,
+                widget = self.header_widget,
+                layout = header_vbox
+            }
+        })
+    end
+
+    -- Create separator line widget (extends full width with negative margin)
+    local separator_success, separator_widget = pcall(qt_constants.WIDGET.CREATE)
+    if separator_success and separator_widget then
+        pcall(qt_constants.PROPERTIES.SET_STYLE, separator_widget, [[
+            QWidget {
+                background-color: #000000;
+                min-height: 1px;
+                max-height: 1px;
+                margin-right: -50px;
+            }
+        ]])
+        pcall(qt_constants.LAYOUT.ADD_WIDGET, header_vbox, separator_widget)
+    end
+
     -- Create header layout (C++ lines 71-73)
     local header_layout_success, header_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
     if not header_layout_success or not header_layout then
@@ -295,8 +348,43 @@ function CollapsibleSection:createHeader(operation_context)
         })
     end
 
-    -- Set header layout
-    local set_header_layout_success, set_header_layout_error = pcall(qt_constants.LAYOUT.SET_ON_WIDGET, self.header_widget, header_layout)
+    -- Configure header layout margins and spacing (C++ lines 72-73)
+    local header_spacing_success, header_spacing_error = pcall(qt_constants.LAYOUT.SET_SPACING, header_layout, 1)
+    if not header_spacing_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header spacing: " .. log_detailed_error(header_spacing_error))
+    end
+
+    -- Set zero margins - indent is handled by header widget padding
+    local header_margins_success, header_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, header_layout, 0, 0, 0, 0)
+    if not header_margins_success then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header margins: " .. log_detailed_error(header_margins_error))
+    end
+
+    -- Create container widget for header content (triangle + title)
+    local header_content_success, header_content_widget = pcall(qt_constants.WIDGET.CREATE)
+    if not header_content_success or not header_content_widget then
+        return error_system.create_error({
+            code = error_system.CODES.QT_WIDGET_CREATION_FAILED,
+            category = "qt_widget",
+            message = "Failed to create header content widget",
+            operation = "createHeader",
+            component = "collapsible_section",
+            user_message = "Cannot create header content widget",
+            technical_details = {
+                error = header_content_widget,
+                title = self.title
+            }
+        })
+    end
+
+    pcall(qt_constants.PROPERTIES.SET_STYLE, header_content_widget, [[
+        QWidget {
+            background-color: transparent;
+        }
+    ]])
+
+    -- Set header_layout on the content widget
+    local set_header_layout_success, set_header_layout_error = pcall(qt_constants.LAYOUT.SET_ON_WIDGET, header_content_widget, header_layout)
     if not set_header_layout_success then
         return error_system.create_error({
             code = error_system.CODES.LAYOUT_SET_FAILED,
@@ -307,22 +395,14 @@ function CollapsibleSection:createHeader(operation_context)
             user_message = "Cannot set header layout",
             technical_details = {
                 error = set_header_layout_error,
-                widget = self.header_widget,
+                widget = header_content_widget,
                 layout = header_layout
             }
         })
     end
 
-    -- Configure header layout margins and spacing (C++ lines 72-73)
-    local header_spacing_success, header_spacing_error = pcall(qt_constants.LAYOUT.SET_SPACING, header_layout, 1)
-    if not header_spacing_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header spacing: " .. log_detailed_error(header_spacing_error))
-    end
-
-    local header_margins_success, header_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, header_layout, 0, 0, 0, 0)
-    if not header_margins_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header margins: " .. log_detailed_error(header_margins_error))
-    end
+    -- Add content widget to vbox
+    pcall(qt_constants.LAYOUT.ADD_WIDGET, header_vbox, header_content_widget)
 
     -- Create enabled dot (C++ lines 75-81)
     -- Disabled: orange dot not needed

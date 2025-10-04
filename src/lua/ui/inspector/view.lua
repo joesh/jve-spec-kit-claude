@@ -159,15 +159,16 @@ function M.create_schema_driven_inspector()
     return error_system.create_error({message = "Failed to create content layout"})
   end
 
-  -- Add right margin to content layout for visual balance with scrollbar
-  pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 8, 0)
+  -- Set asymmetric margins on content layout: 0 left, 0 top, 50 right, 0 bottom
+  -- This creates visual balance with the scrollbar
+  pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 50, 0)
 
   -- Set layout on content widget
   pcall(qt_constants.LAYOUT.SET_ON_WIDGET, content_widget, content_layout)
-  
+
   -- Set content widget on scroll area
   pcall(qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET, scroll_area, content_widget)
-  
+
   -- Create layout for the container and add scroll area to it
   local container_layout_success, container_layout = pcall(qt_constants.LAYOUT.CREATE_VBOX)
   if container_layout_success then
@@ -309,6 +310,7 @@ function M.add_schema_field_to_section(section, field)
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to create field container for: " .. label)
         return
     end
+
 
     -- Create horizontal layout for label+field pair (movie credits style)
     local field_layout_success, field_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
@@ -705,7 +707,6 @@ function M.add_schema_field_to_section(section, field)
                 "padding: 2px 6px; " ..
                 "min-width: 50px; " ..
                 "max-width: 80px; " ..
-                "margin-right: 4px; " ..  -- Right margin for symmetry
                 "} " ..
                 "QLineEdit:focus { " ..
                 "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
