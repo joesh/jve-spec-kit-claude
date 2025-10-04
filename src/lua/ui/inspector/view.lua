@@ -158,8 +158,11 @@ function M.create_schema_driven_inspector()
   if not content_layout_success then
     return error_system.create_error({message = "Failed to create content layout"})
   end
-  
-  -- Set layout on content widget  
+
+  -- Add right margin to content layout for visual balance with scrollbar
+  pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 8, 0)
+
+  -- Set layout on content widget
   pcall(qt_constants.LAYOUT.SET_ON_WIDGET, content_widget, content_layout)
   
   -- Set content widget on scroll area
@@ -327,7 +330,8 @@ function M.add_schema_field_to_section(section, field)
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field spacing: " .. tostring(field_spacing_error))
     end
 
-    local field_margins_success, field_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, field_layout, 0, 2, 0, 2)
+    -- Add right margin to match left indentation for centered appearance
+    local field_margins_success, field_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, field_layout, 0, 2, 4, 2)
     if not field_margins_success then
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field margins: " .. tostring(field_margins_error))
     end
