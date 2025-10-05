@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-05 (Split/UUID/Debug Fixes)
+Last updated: 2025-10-05 (Track Separation - WIP)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -93,6 +93,23 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-05: Timeline Track Separation (WIP)**
+- Implemented visual track type separation with partitioned rendering
+  - Timeline now partitions tracks into `video_tracks` and `audio_tracks` arrays on initialization
+  - Video tracks (V1, V2, V3) render with blue-tinted headers (#3a3a5a)
+  - Audio tracks (A1, A2, A3) render with green-tinted headers (#3a4a3a)
+  - Visual separator bar drawn between video and audio sections
+- Removed fake Qt label overlay system from timeline_panel.lua
+  - Previous approach created Qt widgets that obscured timeline canvas rendering
+  - Now uses unified drawing system - timeline module handles all visual output
+- Database track loading fixed with correct field naming
+  - Changed `type` field to `track_type` in database.lua for consistency
+- Known limitations:
+  - Track headers currently drawn ON canvas (should be fixed Qt widgets outside scroll area)
+  - Separator is visual only (should be real QSplitter widget)
+  - No independent scrolling for video/audio areas (needs QScrollArea bindings)
+  - Architecture needs QScrollArea + QSplitter for proper FCP7-style layout
 
 **2025-10-05: Split/UUID/Debug Fixes**
 - Fixed critical bug where clip split operations caused clips to disappear

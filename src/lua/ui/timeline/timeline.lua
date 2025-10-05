@@ -5,6 +5,7 @@ local M = {}
 local db = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
+local project_browser = nil  -- Will be set by main layout
 
 -- Callbacks
 local on_selection_changed_callback = nil
@@ -14,11 +15,17 @@ function M.set_on_selection_changed(callback)
     on_selection_changed_callback = callback
 end
 
+-- Set project browser reference for accessing selected media
+function M.set_project_browser(browser)
+    project_browser = browser
+end
+
 -- Timeline dimensions (single source of truth)
 M.dimensions = {
     ruler_height = 32,
     track_height = 50,
     track_header_width = 150,
+    track_area_separator_height = 30,  -- Space between video and audio areas
 }
 
 -- Timeline state
@@ -27,11 +34,14 @@ local state = {
     zoom = 0.1,  -- pixels per millisecond
     scroll_offset = 0,  -- horizontal scroll in pixels
     playhead_time = 0,  -- milliseconds
-    tracks = {},
+    tracks = {},  -- All tracks from database
+    video_tracks = {},  -- Filtered video tracks
+    audio_tracks = {},  -- Filtered audio tracks
     clips = {},
     ruler_height = M.dimensions.ruler_height,
     track_height = M.dimensions.track_height,
     track_header_width = M.dimensions.track_header_width,
+    track_area_separator_height = M.dimensions.track_area_separator_height,
 }
 
 -- Colors
@@ -40,6 +50,9 @@ local colors = {
     ruler = "#2a2a2a",
     track_odd = "#2b2b2b",
     track_even = "#252525",
+    video_track_header = "#3a3a5a",  -- Slightly blue tint for video
+    audio_track_header = "#3a4a3a",  -- Slightly green tint for audio
+    track_area_separator = "#1a1a1a",  -- Dark separator between video/audio
     clip = "#4a90e2",
     clip_selected = "#ff8c42",  -- Orange for selected clips
     playhead = "#ff6b6b",
@@ -60,6 +73,8 @@ local interaction = {
     drag_select_start_y = 0,
     drag_select_end_x = 0,
     drag_select_end_y = 0,
+    dragging_separator = false,
+    video_area_height = nil,  -- Will be calculated dynamically if separator dragged
 }
 
 -- Initialize timeline with widget
@@ -76,7 +91,19 @@ function M.init(widget, options)
     state.tracks = db.load_tracks("default_sequence")
     state.clips = db.load_clips("default_sequence")
 
-    print(string.format("Loaded %d tracks and %d clips from database", #state.tracks, #state.clips))
+    -- Partition tracks by type
+    state.video_tracks = {}
+    state.audio_tracks = {}
+    for _, track in ipairs(state.tracks) do
+        if track.track_type == "VIDEO" then
+            table.insert(state.video_tracks, track)
+        elseif track.track_type == "AUDIO" then
+            table.insert(state.audio_tracks, track)
+        end
+    end
+
+    print(string.format("Loaded %d video tracks, %d audio tracks, %d clips from database",
+        #state.video_tracks, #state.audio_tracks, #state.clips))
 
     -- Set Lua state for callbacks
     timeline.set_lua_state(widget)
@@ -101,9 +128,50 @@ function M.pixel_to_time(pixel)
     return math.floor((pixel + state.scroll_offset) / state.zoom)
 end
 
--- Get track Y position
-function M.get_track_y(track_index)
-    return state.ruler_height + (track_index * state.track_height)
+-- Get current video area height (either custom or calculated)
+local function get_video_area_height()
+    return interaction.video_area_height or (#state.video_tracks * state.track_height)
+end
+
+-- Get track Y position based on track ID and type
+-- Returns the Y position for a track, accounting for separate video/audio areas
+function M.get_track_y_by_id(track_id)
+    -- Search in video tracks first
+    for i, track in ipairs(state.video_tracks) do
+        if track.id == track_id then
+            return state.ruler_height + ((i - 1) * state.track_height)
+        end
+    end
+
+    -- Search in audio tracks
+    for i, track in ipairs(state.audio_tracks) do
+        if track.id == track_id then
+            local video_area_height = get_video_area_height()
+            local separator_y = state.ruler_height + video_area_height
+            return separator_y + state.track_area_separator_height + ((i - 1) * state.track_height)
+        end
+    end
+
+    return 0  -- Track not found
+end
+
+-- Get Y position for a track by index within its type
+-- track_type: "VIDEO" or "AUDIO"
+-- track_index: 0-based index within that type
+function M.get_track_y(track_type, track_index)
+    if track_type == "VIDEO" then
+        return state.ruler_height + (track_index * state.track_height)
+    elseif track_type == "AUDIO" then
+        local video_area_height = get_video_area_height()
+        local separator_y = state.ruler_height + video_area_height
+        return separator_y + state.track_area_separator_height + (track_index * state.track_height)
+    end
+    return 0
+end
+
+-- Get separator Y position
+local function get_separator_y()
+    return state.ruler_height + get_video_area_height()
 end
 
 -- Render timeline
@@ -200,16 +268,56 @@ function M.draw_ruler(width)
     end
 end
 
--- Draw tracks
+-- Draw tracks - separate video and audio areas
 function M.draw_tracks(width, height)
-    for i, track in ipairs(state.tracks) do
-        local y = M.get_track_y(i - 1)  -- Lua is 1-indexed
+    -- Draw video tracks
+    for i, track in ipairs(state.video_tracks) do
+        local y = M.get_track_y("VIDEO", i - 1)
 
         -- Alternate track colors
         local track_color = (i % 2 == 0) and colors.track_even or colors.track_odd
 
-        -- Track header (left side, fixed)
-        timeline.add_rect(state.widget, 0, y, state.track_header_width, state.track_height, "#333333")
+        -- Track header (left side, fixed) with video-specific color
+        timeline.add_rect(state.widget, 0, y, state.track_header_width, state.track_height, colors.video_track_header)
+        timeline.add_text(state.widget, 10, y + 28, track.name, colors.text)
+
+        -- Track content area (right of header)
+        timeline.add_rect(state.widget, state.track_header_width, y, width - state.track_header_width, state.track_height, track_color)
+
+        -- Track separator line
+        timeline.add_line(state.widget, 0, y, width, y, colors.grid_line, 1)
+    end
+
+    -- Draw separator area between video and audio
+    if #state.video_tracks > 0 and #state.audio_tracks > 0 then
+        local separator_y = get_separator_y()
+
+        -- Top border line (marks end of video area)
+        timeline.add_line(state.widget, 0, separator_y, width, separator_y, "#555555", 2)
+
+        -- Draggable separator bar
+        timeline.add_rect(state.widget, 0, separator_y, width, state.track_area_separator_height, colors.track_area_separator)
+
+        -- Bottom border line (marks start of audio area)
+        timeline.add_line(state.widget, 0, separator_y + state.track_area_separator_height, width, separator_y + state.track_area_separator_height, "#555555", 2)
+
+        -- Draw resize handle in the middle with label
+        local handle_width = 80
+        local handle_x = state.track_header_width / 2 - handle_width / 2
+        local handle_y = separator_y + (state.track_area_separator_height - 16) / 2
+        timeline.add_rect(state.widget, handle_x, handle_y, handle_width, 16, "#444444")
+        timeline.add_text(state.widget, handle_x + 18, handle_y + 12, "AUDIO", "#aaaaaa")
+    end
+
+    -- Draw audio tracks
+    for i, track in ipairs(state.audio_tracks) do
+        local y = M.get_track_y("AUDIO", i - 1)
+
+        -- Alternate track colors
+        local track_color = (i % 2 == 0) and colors.track_even or colors.track_odd
+
+        -- Track header (left side, fixed) with audio-specific color
+        timeline.add_rect(state.widget, 0, y, state.track_header_width, state.track_height, colors.audio_track_header)
         timeline.add_text(state.widget, 10, y + 28, track.name, colors.text)
 
         -- Track content area (right of header)
@@ -246,18 +354,12 @@ function M.draw_clips()
     local width, height = timeline.get_dimensions(state.widget)
 
     for _, clip in ipairs(state.clips) do
-        -- Find track index
-        local track_index = nil
-        for i, track in ipairs(state.tracks) do
-            if track.id == clip.track_id then
-                track_index = i - 1  -- Convert to 0-indexed
-                break
-            end
-        end
+        -- Get Y position using track ID (works with separated video/audio areas)
+        local y = M.get_track_y_by_id(clip.track_id)
 
-        if track_index then
+        if y > 0 then
             local x = state.track_header_width + M.time_to_pixel(clip.start_time)
-            local y = M.get_track_y(track_index) + 5
+            y = y + 5  -- Add padding from track top
             local clip_width = math.floor(clip.duration * state.zoom)
             local clip_height = state.track_height - 10
 
@@ -342,6 +444,17 @@ function M.is_near_playhead(x, y)
     return distance < 5  -- 5px tolerance, works anywhere along playhead
 end
 
+-- Check if point is near separator (for dragging)
+local function is_near_separator(x, y)
+    if #state.video_tracks == 0 or #state.audio_tracks == 0 then
+        return false
+    end
+
+    local separator_y = get_separator_y()
+    local distance = math.abs(y - separator_y - state.track_area_separator_height / 2)
+    return distance < 10  -- 10px tolerance for drag handle
+end
+
 -- Find clip at position
 function M.find_clip_at(x, y)
     local width, height = timeline.get_dimensions(state.widget)
@@ -422,6 +535,13 @@ function timeline_on_mouse_press(event)
         return
     end
 
+    -- Check if clicking near separator (to resize video/audio areas)
+    if is_near_separator(x, y) then
+        interaction.dragging_separator = true
+        interaction.drag_start_y = y
+        return
+    end
+
     -- Check if clicking on a clip
     local clip = M.find_clip_at(x, y)
     if clip then
@@ -499,6 +619,14 @@ function timeline_on_mouse_move(event)
         local time_ms = M.pixel_to_time(x - state.track_header_width)
         time_ms = math.max(0, time_ms)
         M.set_playhead(time_ms)
+    elseif interaction.dragging_separator then
+        -- Update video area height based on mouse Y position
+        local new_height = y - state.ruler_height
+        -- Clamp to reasonable bounds (at least 1 track worth of space for each)
+        local min_height = state.track_height
+        local max_height = (#state.video_tracks + #state.audio_tracks - 1) * state.track_height
+        interaction.video_area_height = math.max(min_height, math.min(max_height, new_height))
+        M.render()
     elseif interaction.drag_selecting then
         -- Don't allow drag-select to extend into ruler
         if y >= state.ruler_height then
@@ -561,6 +689,7 @@ function timeline_on_mouse_release(event)
 
     interaction.dragging_playhead = false
     interaction.dragging_clip = nil
+    interaction.dragging_separator = false
 end
 
 -- Qt key codes
@@ -570,11 +699,24 @@ local Qt_Key = {
     Key_Plus = 43,       -- +
     Key_A = 65,
     Key_B = 66,
+    Key_Z = 90,
+    -- F-keys: Qt::Key_F1 starts at 16777264, so F9 = 16777264 + 8 = 16777272
+    Key_F9 = 16777272,   -- F9
+    Key_F10 = 16777273,  -- F10
+    Key_F12 = 16777275,  -- F12
 }
 
 -- Global keyboard event handler
 function timeline_key_event(event)
     if event.type == "press" then
+        print(string.format("⌨️  Key pressed: %d, ctrl=%s, shift=%s", event.key, tostring(event.ctrl), tostring(event.shift)))
+
+        -- Check for F-keys explicitly (F1 = 16777264, so F9 = 16777272)
+        if event.key >= 16777264 and event.key <= 16777275 then
+            local f_num = event.key - 16777264 + 1
+            print(string.format("  🔑 F-key detected: F%d (code %d)", f_num, event.key))
+        end
+
         -- Zoom in: = or +
         if event.key == Qt_Key.Key_Equal or event.key == Qt_Key.Key_Plus then
             M.set_zoom(state.zoom * 1.5)
@@ -609,6 +751,88 @@ function timeline_key_event(event)
         -- Cmd-B: Split clip at playhead
         if event.key == Qt_Key.Key_B and event.ctrl then
             M.split_clips_at_playhead()
+            return
+        end
+
+        -- Cmd-Z: Undo last command
+        print(string.format("  Checking Cmd+Z: key=%d (Z=%d), ctrl=%s, shift=%s",
+            event.key, Qt_Key.Key_Z, tostring(event.ctrl), tostring(event.shift)))
+        if event.key == Qt_Key.Key_Z and event.ctrl and not event.shift then
+            print(string.format("  Matched Cmd+Z! Key_Z=%d, event.key=%d", Qt_Key.Key_Z, event.key))
+
+            local success, err = pcall(function()
+                local project_id = db.get_current_project_id() or "default_project"
+                print(string.format("  Project ID: %s", tostring(project_id)))
+                local last_command = command_manager.get_last_command(project_id)
+                print(string.format("  Last command: %s", tostring(last_command)))
+
+                if last_command then
+                    print(string.format("↶ Undoing last command: %s", last_command.type))
+                    local result = command_manager.execute_undo(last_command)
+
+                    if result.success then
+                        print("  Undo successful!")
+                        -- Reload clips from database
+                        state.clips = db.load_clips("default_sequence")
+
+                        -- Update selection to point to refreshed clip objects
+                        local new_selection = {}
+                        for _, old_clip in ipairs(interaction.selected_clips) do
+                            for _, new_clip in ipairs(state.clips) do
+                                if new_clip.id == old_clip.id then
+                                    table.insert(new_selection, new_clip)
+                                    break
+                                end
+                            end
+                        end
+                        interaction.selected_clips = new_selection
+
+                        -- Refresh timeline display
+                        M.render()
+                    else
+                        print(string.format("  Undo failed: %s", result.error_message or "unknown error"))
+                    end
+                else
+                    print("  No command to undo")
+                end
+            end)
+
+            if not success then
+                print(string.format("  ERROR in undo handler: %s", tostring(err)))
+            end
+            return
+        end
+
+        -- F9: Insert media to VIDEO track at playhead
+        if event.key == Qt_Key.Key_F9 then
+            print("F9 pressed: Insert to video track")
+            M.insert_media_to_timeline("VIDEO")
+            return
+        end
+
+        -- F10: Insert media to AUDIO track at playhead
+        if event.key == Qt_Key.Key_F10 then
+            print("F10 pressed: Insert to audio track")
+            M.insert_media_to_timeline("AUDIO")
+            return
+        end
+
+        -- F12: Insert media to first available track (VIDEO preferred)
+        if event.key == Qt_Key.Key_F12 then
+            print("F12 pressed: Insert to first available track")
+            -- Try video first, then audio
+            if #state.tracks > 0 then
+                for _, track in ipairs(state.tracks) do
+                    if track.track_type == "VIDEO" then
+                        M.insert_media_to_timeline("VIDEO")
+                        return
+                    end
+                end
+                -- No video track, try audio
+                M.insert_media_to_timeline("AUDIO")
+            else
+                print("WARNING: No tracks available")
+            end
             return
         end
     end
@@ -665,6 +889,56 @@ function M.split_clips_at_playhead()
         notify_selection_changed()
 
         M.render()
+    end
+end
+
+-- Insert selected media from project browser to timeline at playhead
+function M.insert_media_to_timeline(track_type)
+    if not project_browser then
+        print("WARNING: Project browser not set")
+        return
+    end
+
+    local selected_media = project_browser.get_selected_media()
+    if not selected_media then
+        print("📎 No media selected in project browser")
+        return
+    end
+
+    print(string.format("📎 Inserting media: %s (duration: %d ms)", selected_media.file_name, selected_media.duration))
+
+    -- Find appropriate track
+    local target_track = nil
+    for _, track in ipairs(state.tracks) do
+        if track.track_type == track_type then
+            target_track = track
+            break
+        end
+    end
+
+    if not target_track then
+        print(string.format("WARNING: No %s track found", track_type))
+        return
+    end
+
+    -- Create InsertClipToTimeline command
+    local project_id = db.get_current_project_id() or "default_project"
+    local insert_command = Command.create("InsertClipToTimeline", project_id)
+    insert_command:set_parameter("media_id", selected_media.id)
+    insert_command:set_parameter("track_id", target_track.id)
+    insert_command:set_parameter("start_time", state.playhead_time)
+    insert_command:set_parameter("media_duration", selected_media.duration)
+
+    -- Execute the command
+    local result = command_manager.execute(insert_command)
+
+    if result.success then
+        print(string.format("✅ Inserted %s to %s track at playhead", selected_media.file_name, track_type))
+        -- Reload clips from database
+        state.clips = db.load_clips("default_sequence")
+        M.render()
+    else
+        print(string.format("WARNING: Failed to insert media: %s", result.error_message or "unknown error"))
     end
 end
 
