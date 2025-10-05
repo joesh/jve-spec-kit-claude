@@ -3,6 +3,8 @@
 
 local M = {}
 local db = require("core.database")
+local command_manager = require("core.command_manager")
+local Command = require("command")
 
 -- Callbacks
 local on_selection_changed_callback = nil
@@ -148,8 +150,18 @@ end
 
 -- Draw time ruler
 function M.draw_ruler(width)
-    -- Calculate extended timeline width for scrolling (show 60 seconds worth)
-    local timeline_duration_ms = 60000  -- 60 seconds
+    -- Calculate extended timeline width based on actual content
+    -- Find the rightmost clip to determine timeline duration
+    local timeline_duration_ms = 60000  -- Default minimum 60 seconds
+    for _, clip in ipairs(state.clips) do
+        local clip_end = clip.start_time + clip.duration
+        if clip_end > timeline_duration_ms then
+            timeline_duration_ms = clip_end
+        end
+    end
+    -- Add 10 seconds of padding after the last clip
+    timeline_duration_ms = timeline_duration_ms + 10000
+
     local timeline_width = math.floor(timeline_duration_ms * state.zoom)
 
     -- Ruler background (extended width)
@@ -211,12 +223,12 @@ end
 -- Check if clip is selected
 -- Notify selection changed
 local function notify_selection_changed()
-    print("DEBUG: notify_selection_changed called, " .. #interaction.selected_clips .. " clips selected")
+    -- print("DEBUG: notify_selection_changed called, " .. #interaction.selected_clips .. " clips selected")
     if on_selection_changed_callback then
-        print("DEBUG: Calling selection callback")
+        -- print("DEBUG: Calling selection callback")
         on_selection_changed_callback(interaction.selected_clips)
     else
-        print("DEBUG: No selection callback registered!")
+        -- print("DEBUG: No selection callback registered!")
     end
 end
 
@@ -604,34 +616,54 @@ end
 
 -- Split selected clips at playhead position
 function M.split_clips_at_playhead()
+    print("🔪 Split clips at playhead called!")
+    print(string.format("  Playhead time: %d", state.playhead_time))
+    print(string.format("  Selected clips: %d", #interaction.selected_clips))
+
     local playhead_time = state.playhead_time
-    local clips_to_add = {}
+    local commands_executed = 0
+
+    -- Get project ID (assuming single project for now)
+    local project_id = db.get_current_project_id() or "default_project"
 
     for _, clip in ipairs(interaction.selected_clips) do
         -- Check if playhead is within this clip
         if playhead_time > clip.start_time and playhead_time < clip.start_time + clip.duration then
-            -- Create new clip for the second half
-            local new_clip = {
-                id = "clip_" .. (#state.clips + #clips_to_add + 1),
-                track_id = clip.track_id,
-                start_time = playhead_time,
-                duration = (clip.start_time + clip.duration) - playhead_time,
-                name = clip.name .. " (2)"
-            }
+            -- Create SplitClip command
+            local split_command = Command.create("SplitClip", project_id)
+            split_command:set_parameter("clip_id", clip.id)
+            split_command:set_parameter("split_time", playhead_time)
 
-            -- Shorten the original clip
-            clip.duration = playhead_time - clip.start_time
+            -- Execute the command
+            local result = command_manager.execute(split_command)
 
-            table.insert(clips_to_add, new_clip)
+            if result.success then
+                print(string.format("Split clip %s at time %d", clip.id, playhead_time))
+                commands_executed = commands_executed + 1
+            else
+                print(string.format("WARNING: Failed to split clip %s: %s", clip.id, result.error_message))
+            end
         end
     end
 
-    -- Add the new clips
-    for _, clip in ipairs(clips_to_add) do
-        table.insert(state.clips, clip)
-    end
+    if commands_executed > 0 then
+        -- Reload clips from database to reflect changes
+        state.clips = db.load_clips("default_sequence")
 
-    if #clips_to_add > 0 then
+        -- Update selection to reference the new clip objects from database
+        -- Map old selection by clip ID to new clip objects
+        local new_selection = {}
+        for _, old_clip in ipairs(interaction.selected_clips) do
+            for _, new_clip in ipairs(state.clips) do
+                if new_clip.id == old_clip.id then
+                    table.insert(new_selection, new_clip)
+                    break
+                end
+            end
+        end
+        interaction.selected_clips = new_selection
+        notify_selection_changed()
+
         M.render()
     end
 end

@@ -32,7 +32,7 @@ int lua_update_widget(lua_State* L);
 
 void registerQtBindings(lua_State* L)
 {
-    qDebug() << "Registering Qt bindings with Lua";
+    // // qDebug() << "Registering Qt bindings with Lua";
     
     // Create widget metatable
     luaL_newmetatable(L, WIDGET_METATABLE);
@@ -186,7 +186,7 @@ void registerQtBindings(lua_State* L)
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
     
-    qDebug() << "Qt bindings registered successfully";
+    // // qDebug() << "Qt bindings registered successfully";
 }
 
 void* lua_to_widget(lua_State* L, int index)
@@ -216,7 +216,7 @@ void lua_push_widget(lua_State* L, void* widget)
 // Widget creation functions
 int lua_create_main_window(lua_State* L)
 {
-    qDebug() << "Creating main window from Lua";
+    // // qDebug() << "Creating main window from Lua";
     QMainWindow* window = new QMainWindow();
     
     // Store reference to prevent destruction
@@ -228,7 +228,7 @@ int lua_create_main_window(lua_State* L)
 
 int lua_create_widget(lua_State* L)
 {
-    qDebug() << "Creating widget from Lua";
+    // // qDebug() << "Creating widget from Lua";
     QWidget* widget = new QWidget();
     lua_push_widget(L, widget);
     return 1;
@@ -236,7 +236,7 @@ int lua_create_widget(lua_State* L)
 
 int lua_create_scroll_area(lua_State* L)
 {
-    qDebug() << "Creating scroll area from Lua";
+    // // qDebug() << "Creating scroll area from Lua";
     QScrollArea* scrollArea = new QScrollArea();
     scrollArea->setWidgetResizable(true);
     lua_push_widget(L, scrollArea);
@@ -246,7 +246,7 @@ int lua_create_scroll_area(lua_State* L)
 int lua_create_label(lua_State* L)
 {
     const char* text = lua_tostring(L, 1);
-    qDebug() << "Creating label from Lua with text:" << (text ? text : "");
+    // // qDebug() << "Creating label from Lua with text:" << (text ? text : "");
     
     QLabel* label = new QLabel(text ? QString::fromUtf8(text) : QString());
     lua_push_widget(L, label);
@@ -256,7 +256,7 @@ int lua_create_label(lua_State* L)
 int lua_create_line_edit(lua_State* L)
 {
     const char* placeholder = lua_tostring(L, 1);
-    qDebug() << "Creating line edit from Lua with placeholder:" << (placeholder ? placeholder : "");
+    // // qDebug() << "Creating line edit from Lua with placeholder:" << (placeholder ? placeholder : "");
     
     QLineEdit* lineEdit = new QLineEdit();
     if (placeholder) {
@@ -269,7 +269,7 @@ int lua_create_line_edit(lua_State* L)
 int lua_create_button(lua_State* L)
 {
     const char* text = lua_tostring(L, 1);
-    qDebug() << "Creating button from Lua with text:" << (text ? text : "");
+    // // qDebug() << "Creating button from Lua with text:" << (text ? text : "");
 
     QPushButton* button = new QPushButton();
     if (text) {
@@ -282,7 +282,7 @@ int lua_create_button(lua_State* L)
 int lua_create_checkbox(lua_State* L)
 {
     const char* text = lua_tostring(L, 1);
-    qDebug() << "Creating checkbox from Lua with text:" << (text ? text : "");
+    // // qDebug() << "Creating checkbox from Lua with text:" << (text ? text : "");
 
     QCheckBox* checkbox = new QCheckBox();
     if (text) {
@@ -294,7 +294,7 @@ int lua_create_checkbox(lua_State* L)
 
 int lua_create_combobox(lua_State* L)
 {
-    qDebug() << "Creating combobox from Lua";
+    // // qDebug() << "Creating combobox from Lua";
 
     QComboBox* combobox = new QComboBox();
     lua_push_widget(L, combobox);
@@ -304,7 +304,7 @@ int lua_create_combobox(lua_State* L)
 int lua_create_slider(lua_State* L)
 {
     const char* orientation = lua_tostring(L, 1);
-    qDebug() << "Creating slider from Lua with orientation:" << (orientation ? orientation : "horizontal");
+    // // qDebug() << "Creating slider from Lua with orientation:" << (orientation ? orientation : "horizontal");
 
     Qt::Orientation orient = Qt::Horizontal;
     if (orientation && strcmp(orientation, "vertical") == 0) {
@@ -318,7 +318,7 @@ int lua_create_slider(lua_State* L)
 
 int lua_create_tree_widget(lua_State* L)
 {
-    qDebug() << "Creating tree widget from Lua";
+    // // qDebug() << "Creating tree widget from Lua";
     QTreeWidget* tree = new QTreeWidget();
     lua_push_widget(L, tree);
     return 1;
@@ -326,7 +326,7 @@ int lua_create_tree_widget(lua_State* L)
 
 int lua_create_scriptable_timeline(lua_State* L)
 {
-    qDebug() << "Creating scriptable timeline from Lua";
+    // // qDebug() << "Creating scriptable timeline from Lua";
     JVE::ScriptableTimeline* timeline = new JVE::ScriptableTimeline("timeline_widget");
 
     // Set size policy to expand and fill available space
@@ -340,7 +340,7 @@ int lua_create_scriptable_timeline(lua_State* L)
 
 int lua_create_inspector_panel(lua_State* L)
 {
-    qDebug() << "Creating Lua inspector container from Lua";
+    // // qDebug() << "Creating Lua inspector container from Lua";
     // Create a simple widget container - the Lua system will add its own scroll area
     QWidget* inspector_container = new QWidget();
     inspector_container->setObjectName("LuaInspectorContainer");
@@ -360,7 +360,7 @@ int lua_create_inspector_panel(lua_State* L)
 // Layout functions
 int lua_create_hbox_layout(lua_State* L)
 {
-    qDebug() << "Creating HBox layout from Lua";
+    // // qDebug() << "Creating HBox layout from Lua";
     QHBoxLayout* layout = new QHBoxLayout();
     lua_push_widget(L, layout);
     return 1;
@@ -368,7 +368,7 @@ int lua_create_hbox_layout(lua_State* L)
 
 int lua_create_vbox_layout(lua_State* L)
 {
-    qDebug() << "Creating VBox layout from Lua";
+    // // qDebug() << "Creating VBox layout from Lua";
     QVBoxLayout* layout = new QVBoxLayout();
     lua_push_widget(L, layout);
     return 1;
@@ -377,7 +377,7 @@ int lua_create_vbox_layout(lua_State* L)
 int lua_create_splitter(lua_State* L)
 {
     const char* direction = lua_tostring(L, 1);
-    qDebug() << "Creating splitter from Lua with direction:" << (direction ? direction : "horizontal");
+    // // qDebug() << "Creating splitter from Lua with direction:" << (direction ? direction : "horizontal");
     
     Qt::Orientation orientation = Qt::Horizontal;
     if (direction && strcmp(direction, "vertical") == 0) {
@@ -395,7 +395,7 @@ int lua_set_layout(lua_State* L)
     QLayout* layout = (QLayout*)lua_to_widget(L, 2);
     
     if (widget && layout) {
-        qDebug() << "Setting layout on widget from Lua";
+        // qDebug() << "Setting layout on widget from Lua";
         widget->setLayout(layout);
         lua_pushboolean(L, 1);
     } else {
@@ -418,7 +418,7 @@ int lua_add_widget_to_layout(lua_State* L)
     
     // Try as QSplitter first
     if (QSplitter* splitter = qobject_cast<QSplitter*>((QWidget*)first)) {
-        qDebug() << "Adding widget to splitter from Lua";
+        // qDebug() << "Adding widget to splitter from Lua";
         splitter->addWidget(widget);
         lua_pushboolean(L, 1);
         return 1;
@@ -443,10 +443,10 @@ int lua_add_widget_to_layout(lua_State* L)
 
         // For QBoxLayout, use addWidget with alignment
         if (QBoxLayout* boxLayout = qobject_cast<QBoxLayout*>(layout)) {
-            qDebug() << "Adding widget to box layout from Lua with alignment";
+            // qDebug() << "Adding widget to box layout from Lua with alignment";
             boxLayout->addWidget(widget, 0, alignment);
         } else {
-            qDebug() << "Adding widget to layout from Lua";
+            // qDebug() << "Adding widget to layout from Lua";
             layout->addWidget(widget);
         }
         lua_pushboolean(L, 1);
@@ -471,7 +471,7 @@ int lua_add_stretch_to_layout(lua_State* L)
 
     // Try as QBoxLayout
     if (QBoxLayout* boxLayout = qobject_cast<QBoxLayout*>((QObject*)layout_ptr)) {
-        qDebug() << "Adding stretch to layout from Lua:" << stretch;
+        // qDebug() << "Adding stretch to layout from Lua:" << stretch;
         boxLayout->addStretch(stretch);
         lua_pushboolean(L, 1);
         return 1;
@@ -488,7 +488,7 @@ int lua_set_central_widget(lua_State* L)
     QWidget* widget = (QWidget*)lua_to_widget(L, 2);
 
     if (window && widget) {
-        qDebug() << "Setting central widget from Lua";
+        // qDebug() << "Setting central widget from Lua";
         window->setCentralWidget(widget);
         lua_pushboolean(L, 1);
     } else {
@@ -524,7 +524,7 @@ int lua_set_splitter_sizes(lua_State* L)
         lua_pop(L, 1);
     }
     
-    qDebug() << "Setting splitter sizes from Lua:" << sizes;
+    // // qDebug() << "Setting splitter sizes from Lua:" << sizes;
     splitter->setSizes(sizes);
     lua_pushboolean(L, 1);
     return 1;
@@ -537,8 +537,6 @@ int lua_set_text(lua_State* L)
     const char* text = lua_tostring(L, 2);
 
     if (widget && text) {
-        qDebug() << "Setting text from Lua:" << text;
-
         if (QLabel* label = qobject_cast<QLabel*>(widget)) {
             label->setText(QString::fromUtf8(text));
         } else if (QLineEdit* lineEdit = qobject_cast<QLineEdit*>(widget)) {
@@ -559,7 +557,7 @@ int lua_set_checked(lua_State* L)
     bool checked = lua_toboolean(L, 2);
 
     if (widget) {
-        qDebug() << "Setting checked state from Lua:" << checked;
+        // qDebug() << "Setting checked state from Lua:" << checked;
 
         if (QCheckBox* checkbox = qobject_cast<QCheckBox*>(widget)) {
             checkbox->setChecked(checked);
@@ -685,10 +683,8 @@ int lua_set_placeholder_text(lua_State* L)
 {
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     const char* text = lua_tostring(L, 2);
-    
+
     if (widget && text) {
-        qDebug() << "Setting placeholder text from Lua:" << text;
-        
         if (QLineEdit* lineEdit = qobject_cast<QLineEdit*>(widget)) {
             lineEdit->setPlaceholderText(QString::fromUtf8(text));
         }
@@ -707,7 +703,7 @@ int lua_set_window_title(lua_State* L)
     const char* title = lua_tostring(L, 2);
     
     if (widget && title) {
-        qDebug() << "Setting window title from Lua:" << title;
+        // qDebug() << "Setting window title from Lua:" << title;
         widget->setWindowTitle(QString::fromUtf8(title));
         lua_pushboolean(L, 1);
     } else {
@@ -724,7 +720,7 @@ int lua_set_size(lua_State* L)
     int height = lua_tointeger(L, 3);
 
     if (widget && width > 0 && height > 0) {
-        qDebug() << "Setting size from Lua:" << width << "x" << height;
+        // qDebug() << "Setting size from Lua:" << width << "x" << height;
         widget->resize(width, height);
         lua_pushboolean(L, 1);
     } else {
@@ -758,7 +754,7 @@ int lua_set_style_sheet(lua_State* L)
     const char* style = lua_tostring(L, 2);
     
     if (widget && style) {
-        qDebug() << "Setting style sheet from Lua:" << style;
+        // qDebug() << "Setting style sheet from Lua:" << style;
         widget->setStyleSheet(QString::fromUtf8(style));
         lua_pushboolean(L, 1);
     } else {
@@ -774,7 +770,7 @@ int lua_show_widget(lua_State* L)
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     
     if (widget) {
-        qDebug() << "Showing widget from Lua";
+        // qDebug() << "Showing widget from Lua";
         widget->show();
         lua_pushboolean(L, 1);
     } else {
@@ -790,7 +786,7 @@ int lua_set_visible(lua_State* L)
     bool visible = lua_toboolean(L, 2);
     
     if (widget) {
-        qDebug() << "Setting widget visibility from Lua:" << visible;
+        // qDebug() << "Setting widget visibility from Lua:" << visible;
         widget->setVisible(visible);
         lua_pushboolean(L, 1);
     } else {
@@ -805,7 +801,7 @@ int lua_raise_widget(lua_State* L)
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     
     if (widget) {
-        qDebug() << "Raising widget from Lua";
+        // qDebug() << "Raising widget from Lua";
         widget->raise();
         lua_pushboolean(L, 1);
     } else {
@@ -820,7 +816,7 @@ int lua_activate_window(lua_State* L)
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     
     if (widget) {
-        qDebug() << "Activating window from Lua";
+        // qDebug() << "Activating window from Lua";
         widget->activateWindow();
         lua_pushboolean(L, 1);
     } else {
@@ -838,7 +834,7 @@ int lua_set_scroll_area_widget(lua_State* L)
     if (scrollArea && contentWidget) {
         QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
         if (sa) {
-            qDebug() << "Setting scroll area widget from Lua";
+            // qDebug() << "Setting scroll area widget from Lua";
             sa->setWidget(contentWidget);
             lua_pushboolean(L, 1);
         } else {
@@ -863,7 +859,7 @@ int lua_set_scroll_area_viewport_margins(lua_State* L)
     if (scrollArea) {
         QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
         if (sa) {
-            qDebug() << "Setting scroll area content margins from Lua:" << left << top << right << bottom;
+            // qDebug() << "Setting scroll area content margins from Lua:" << left << top << right << bottom;
             // setViewportMargins is protected, so we set margins on the content widget's layout instead
             QWidget* widget = sa->widget();
             if (widget && widget->layout()) {
@@ -921,7 +917,7 @@ int lua_set_button_click_handler(lua_State* L)
         }
     });
     
-    qDebug() << "Button click handler connected for:" << handler_name;
+    // // qDebug() << "Button click handler connected for:" << handler_name;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -937,7 +933,7 @@ protected:
         if (event->type() == QEvent::MouseButtonPress) {
             QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::LeftButton) {
-                qDebug() << "ClickEventFilter: MouseButtonPress on" << obj->objectName() << "calling" << QString::fromStdString(handler_name);
+                // qDebug() << "ClickEventFilter: MouseButtonPress on" << obj->objectName() << "calling" << QString::fromStdString(handler_name);
 
                 // Call the Lua handler function
                 lua_getglobal(lua_state, handler_name.c_str());
@@ -979,7 +975,7 @@ int lua_set_widget_click_handler(lua_State* L)
     ClickEventFilter* filter = new ClickEventFilter(handler_str, L, widget);
     widget->installEventFilter(filter);
 
-    qDebug() << "Widget click handler connected for:" << handler_name;
+    // // qDebug() << "Widget click handler connected for:" << handler_name;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -991,7 +987,7 @@ int lua_set_layout_spacing(lua_State* L)
     int spacing = lua_tointeger(L, 2);
     
     if (layout) {
-        qDebug() << "Setting layout spacing from Lua:" << spacing;
+        // qDebug() << "Setting layout spacing from Lua:" << spacing;
         layout->setSpacing(spacing);
         lua_pushboolean(L, 1);
     } else {
@@ -1016,7 +1012,7 @@ int lua_set_layout_margins(lua_State* L)
     if (num_args == 2) {
         // Uniform margins (all sides equal)
         int margins = lua_tointeger(L, 2);
-        qDebug() << "Setting layout margins from Lua:" << margins;
+        // qDebug() << "Setting layout margins from Lua:" << margins;
         layout->setContentsMargins(margins, margins, margins, margins);
     } else if (num_args == 5) {
         // Asymmetric margins (left, top, right, bottom)
@@ -1024,7 +1020,7 @@ int lua_set_layout_margins(lua_State* L)
         int top = lua_tointeger(L, 3);
         int right = lua_tointeger(L, 4);
         int bottom = lua_tointeger(L, 5);
-        qDebug() << "Setting layout margins from Lua (LTRB):" << left << top << right << bottom;
+        // qDebug() << "Setting layout margins from Lua (LTRB):" << left << top << right << bottom;
         layout->setContentsMargins(left, top, right, bottom);
     } else {
         qWarning() << "Invalid number of arguments in set_layout_margins (expected 2 or 5, got" << num_args << ")";
@@ -1042,7 +1038,7 @@ int qt_set_layout_alignment(lua_State* L)
     const char* alignment_str = lua_tostring(L, 2);
 
     if (layout && alignment_str) {
-        qDebug() << "Setting layout alignment from Lua:" << alignment_str;
+        // qDebug() << "Setting layout alignment from Lua:" << alignment_str;
 
         Qt::Alignment alignment;
         if (strcmp(alignment_str, "AlignTop") == 0) {
@@ -1079,8 +1075,8 @@ int lua_set_widget_size_policy(lua_State* L)
     const char* vertical = lua_tostring(L, 3);
     
     if (widget && horizontal && vertical) {
-        qDebug() << "Setting widget size policy from Lua:" << horizontal << vertical;
-        
+        // qDebug() << "Setting widget size policy from Lua:" << horizontal << vertical;
+
         QSizePolicy::Policy hPolicy = QSizePolicy::Preferred;
         QSizePolicy::Policy vPolicy = QSizePolicy::Preferred;
         
@@ -1111,8 +1107,8 @@ int lua_set_layout_stretch_factor(lua_State* L)
     int stretch = lua_tointeger(L, 3);
     
     if (layout && widget) {
-        qDebug() << "Setting layout stretch factor from Lua:" << stretch;
-        
+        // qDebug() << "Setting layout stretch factor from Lua:" << stretch;
+
         // Try casting to different layout types
         if (QHBoxLayout* hbox = qobject_cast<QHBoxLayout*>(layout)) {
             hbox->setStretchFactor(widget, stretch);
@@ -1137,7 +1133,7 @@ int lua_set_widget_alignment(lua_State* L)
     const char* alignment = lua_tostring(L, 2);
 
     if (widget && alignment) {
-        qDebug() << "Setting widget alignment from Lua:" << alignment;
+        // qDebug() << "Setting widget alignment from Lua:" << alignment;
 
         Qt::Alignment align = Qt::AlignLeft;
         if (strcmp(alignment, "AlignRight") == 0) {
@@ -1241,7 +1237,7 @@ int lua_set_tree_headers(lua_State* L)
         lua_pop(L, 1);
     }
 
-    qDebug() << "Setting tree headers from Lua:" << headers;
+    // // qDebug() << "Setting tree headers from Lua:" << headers;
     tree->setColumnCount(headers.size());
     tree->setHeaderLabels(headers);
     lua_pushboolean(L, 1);
@@ -1267,7 +1263,7 @@ int lua_set_tree_column_width(lua_State* L)
         return 1;
     }
 
-    qDebug() << "Setting tree column width from Lua: column" << column << "width" << width;
+    // // qDebug() << "Setting tree column width from Lua: column" << column << "width" << width;
     tree->setColumnWidth(column, width);
     lua_pushboolean(L, 1);
     return 1;
@@ -1291,7 +1287,7 @@ int lua_set_tree_indentation(lua_State* L)
         return 1;
     }
 
-    qDebug() << "Setting tree indentation from Lua:" << indentation;
+    // // qDebug() << "Setting tree indentation from Lua:" << indentation;
     tree->setIndentation(indentation);
     lua_pushboolean(L, 1);
     return 1;
@@ -1332,7 +1328,7 @@ int lua_add_tree_item(lua_State* L)
         lua_pop(L, 1);
     }
 
-    qDebug() << "Adding tree item from Lua:" << values;
+    // // qDebug() << "Adding tree item from Lua:" << values;
     QTreeWidgetItem* item = new QTreeWidgetItem(tree, values);
     tree->addTopLevelItem(item);
 
@@ -1423,7 +1419,7 @@ int lua_add_tree_child_item(lua_State* L)
         lua_pop(L, 1);
     }
 
-    qDebug() << "Adding tree child item from Lua:" << values << "to parent" << parent_id;
+    // // qDebug() << "Adding tree child item from Lua:" << values << "to parent" << parent_id;
     QTreeWidgetItem* child = new QTreeWidgetItem(parent, values);
     parent->addChild(child);
 
@@ -1459,7 +1455,7 @@ int lua_get_tree_selected_index(lua_State* L)
     }
 
     int index = tree->indexOfTopLevelItem(selected.first());
-    qDebug() << "Getting tree selected index from Lua:" << index;
+    // // qDebug() << "Getting tree selected index from Lua:" << index;
     lua_pushinteger(L, index);
     return 1;
 }
@@ -1481,7 +1477,7 @@ int lua_clear_tree(lua_State* L)
         return 1;
     }
 
-    qDebug() << "Clearing tree from Lua";
+    // // qDebug() << "Clearing tree from Lua";
     tree->clear();
     lua_pushboolean(L, 1);
     return 1;
@@ -1551,7 +1547,7 @@ int lua_set_line_edit_text_changed_handler(lua_State* L)
     const char* handler_name = luaL_checkstring(L, 2);
     std::string handler_str(handler_name);
 
-    qDebug() << "Setting text changed handler for QLineEdit:" << handler_str.c_str();
+    // // qDebug() << "Setting text changed handler for QLineEdit:" << handler_str.c_str();
 
     // Connect signal, capturing L state for callback
     QObject::connect(lineEdit, &QLineEdit::textChanged, [L, handler_str](const QString& /*text*/) {

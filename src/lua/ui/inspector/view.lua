@@ -11,6 +11,8 @@ local widget_parenting = require("core.widget_parenting")
 -- Helper for detailed error logging
 local log_detailed_error = error_system.log_detailed_error
 
+local widget_pool = require("ui.inspector.widget_pool")
+
 local M = {
   _panel = nil,
   _filter = "",
@@ -22,13 +24,14 @@ local M = {
   _header_text = "",      -- Stored header text
   _batch_enabled = false, -- Stored batch state
   _selection_label = nil, -- Label showing current selection
-  _field_widgets = {},    -- Map of field names to widget references
+  _field_widgets = {},    -- Map of field names to widget references (now pooled)
   _current_clip = nil,    -- Currently displayed clip data
   _selected_clips = {},   -- All currently selected clips (for multi-edit)
   _apply_button = nil,    -- Apply button for multi-edit
   _multi_edit_mode = false, -- Whether we're in multi-edit mode
   _sections = {},         -- Table of all sections {section_name = {section_obj, widget, fields}}
   _content_widget = nil,  -- The content widget that holds all sections (for redraws)
+  _widgets_initialized = false, -- Track if widgets have been created
 }
 
 function M.mount(root)
@@ -113,10 +116,10 @@ function M.set_batch_enabled(enabled)
 end
 
 function M.create_schema_driven_inspector()
-  print("🚨 DEBUG: create_schema_driven_inspector() function STARTED")
+  -- print("🚨 DEBUG: create_schema_driven_inspector() function STARTED")
   local metadata_schemas = require("ui.metadata_schemas")
   local collapsible_section = require("ui.collapsible_section")
-  print("🚨 DEBUG: modules loaded successfully")
+  -- print("🚨 DEBUG: modules loaded successfully")
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Creating schema-driven inspector")
   local schemas = metadata_schemas.get_clip_inspector_schemas()
   
@@ -300,7 +303,7 @@ function M.add_schema_field_to_section(section, field)
     local field_type = field.type
     local label = field.label
 
-    print("DEBUG FIELD TYPE: label=" .. label .. ", field_type=" .. tostring(field_type) .. ", field.min=" .. tostring(field.min) .. ", field.max=" .. tostring(field.max))
+    -- print("DEBUG FIELD TYPE: label=" .. label .. ", field_type=" .. tostring(field_type) .. ", field.min=" .. tostring(field.min) .. ", field.max=" .. tostring(field.max))
     logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Creating field: " .. label .. " (type: " .. field_type .. ")")
     
     -- Create DaVinci Resolve style horizontal layout: right-aligned label + narrow gutter + field
@@ -378,26 +381,17 @@ function M.add_schema_field_to_section(section, field)
 
     -- Create control widget based on field type
     local control_success, control_widget
-    print("DEBUG: Field type for '" .. label .. "': " .. tostring(field_type) .. ", min=" .. tostring(field.min) .. ", max=" .. tostring(field.max))
+    -- print("DEBUG: Field type for '" .. label .. "': " .. tostring(field_type) .. ", min=" .. tostring(field.min) .. ", max=" .. tostring(field.max))
 
     if field_type == "string" then
-        control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default or "")
+        -- Rent widget from pool instead of creating new one
+        control_widget = widget_pool.rent("line_edit", {
+            text = field.default or "",
+            placeholder = ""
+        })
+        control_success = (control_widget ~= nil)
         if control_success then
-            logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Creating line edit from Lua with placeholder: " .. tostring(field.default))
-            -- Style line edit to match DaVinci Resolve
-            local line_edit_style =
-                "QLineEdit { " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                "border-radius: 3px; " ..
-                "padding: 2px 6px; " ..
-                "} " ..
-                "QLineEdit:focus { " ..
-                "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_FOCUS_BACKGROUND_COLOR .. "; " ..
-                "}"
-            pcall(qt_constants.PROPERTIES.SET_STYLE, control_widget, line_edit_style)
+            logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Rented line edit widget from pool")
         end
 
     elseif field_type == "integer" then
@@ -471,24 +465,11 @@ function M.add_schema_field_to_section(section, field)
                 control_success = false
             end
         else
-            -- No range defined, use simple line edit
-            control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or 0))
-            if control_success then
-                -- Style line edit to match DaVinci Resolve
-                local line_edit_style =
-                    "QLineEdit { " ..
-                    "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                    "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                    "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                    "border-radius: 3px; " ..
-                    "padding: 2px 6px; " ..
-                    "} " ..
-                    "QLineEdit:focus { " ..
-                    "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                    "background-color: " .. ui_constants.COLORS.FIELD_FOCUS_BACKGROUND_COLOR .. "; " ..
-                    "}"
-                pcall(qt_constants.PROPERTIES.SET_STYLE, control_widget, line_edit_style)
-            end
+            -- No range defined, use simple line edit from pool
+            control_widget = widget_pool.rent("line_edit", {
+                text = tostring(field.default or 0)
+            })
+            control_success = (control_widget ~= nil)
         end
 
     elseif field_type == "double" then
@@ -536,24 +517,11 @@ function M.add_schema_field_to_section(section, field)
                 control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or field.min or 0.0))
             end
         else
-            -- No range defined, use simple line edit
-            control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or 0.0))
-            if control_success then
-                -- Style line edit to match DaVinci Resolve
-                local line_edit_style =
-                    "QLineEdit { " ..
-                    "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                    "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                    "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                    "border-radius: 3px; " ..
-                    "padding: 2px 6px; " ..
-                    "} " ..
-                    "QLineEdit:focus { " ..
-                    "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                    "background-color: " .. ui_constants.COLORS.FIELD_FOCUS_BACKGROUND_COLOR .. "; " ..
-                    "}"
-                pcall(qt_constants.PROPERTIES.SET_STYLE, control_widget, line_edit_style)
-            end
+            -- No range defined, use simple line edit from pool
+            control_widget = widget_pool.rent("line_edit", {
+                text = tostring(field.default or 0.0)
+            })
+            control_success = (control_widget ~= nil)
         end
 
     elseif field_type == "dropdown" then
@@ -597,59 +565,19 @@ function M.add_schema_field_to_section(section, field)
         end
 
     elseif field_type == "boolean" then
-        -- Create checkbox widget
-        local checkbox_success, checkbox_widget = pcall(qt_constants.WIDGET.CREATE_CHECKBOX, label)
-        if checkbox_success then
-            control_success, control_widget = true, checkbox_widget
-            -- Set initial state
-            local set_checked_success, set_checked_error = pcall(qt_constants.PROPERTIES.SET_CHECKED, control_widget, field.default or false)
-            if not set_checked_success then
-                logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set checkbox state: " .. tostring(set_checked_error))
-            end
-            -- Style checkbox to match DaVinci Resolve
-            local checkbox_style =
-                "QCheckBox { " ..
-                "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                "spacing: 5px; " ..
-                "} " ..
-                "QCheckBox::indicator { " ..
-                "width: 16px; " ..
-                "height: 16px; " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                "border-radius: 3px; " ..
-                "} " ..
-                "QCheckBox::indicator:checked { " ..
-                "background-color: " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                "} " ..
-                "QCheckBox::indicator:hover { " ..
-                "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                "}"
-            pcall(qt_constants.PROPERTIES.SET_STYLE, control_widget, checkbox_style)
-        else
-            control_success = false
-        end
+        -- Rent checkbox widget from pool
+        control_widget = widget_pool.rent("checkbox", {
+            label = label,
+            checked = field.default or false
+        })
+        control_success = (control_widget ~= nil)
 
     else
-        -- Default to line edit for unknown types
-        control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or ""))
-        if control_success then
-            -- Style line edit to match DaVinci Resolve
-            local line_edit_style =
-                "QLineEdit { " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                "border-radius: 3px; " ..
-                "padding: 2px 6px; " ..
-                "} " ..
-                "QLineEdit:focus { " ..
-                "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_FOCUS_BACKGROUND_COLOR .. "; " ..
-                "}"
-            pcall(qt_constants.PROPERTIES.SET_STYLE, control_widget, line_edit_style)
-        end
+        -- Default to line edit for unknown types, from pool
+        control_widget = widget_pool.rent("line_edit", {
+            text = tostring(field.default or "")
+        })
+        control_success = (control_widget ~= nil)
     end
 
     if not control_success or not control_widget then
@@ -668,9 +596,8 @@ function M.add_schema_field_to_section(section, field)
     -- Skip for double fields with min/max (those use slider+line edit container)
     local is_slider_field = field_type == "double" and field.min and field.max
     if (field_type == "string" or field_type == "integer" or field_type == "double") and not is_slider_field then
-        -- Use qt_signals for textChanged handler
-        local qt_signals = require("core.qt_signals")
-        local connection_result = qt_signals.onTextChanged(control_widget, function(new_text)
+        -- Use widget pool's signal connection tracking
+        widget_pool.connect_signal(control_widget, "textChanged", function(new_text)
             -- Convert text to appropriate type
             local typed_value = new_text
             if field_type == "integer" then
@@ -681,10 +608,6 @@ function M.add_schema_field_to_section(section, field)
 
             M.save_field_value(field_key, typed_value)
         end)
-
-        if error_system.is_error(connection_result) then
-            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Failed to connect text handler for '%s'", field_key))
-        end
     end
 
     -- Add field widget to horizontal layout (right side) with baseline alignment
@@ -1035,23 +958,59 @@ function M.save_all_fields()
   for field_key, field_info in pairs(M._field_widgets) do
     local widget = field_info.widget
     local field_type = field_info.field.type
+    local field = field_info.field
+    local typed_value = nil
 
-    -- Get text from widget
-    local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
-    if get_text_success and text_value then
-      -- Convert to appropriate type
-      local typed_value = text_value
-      if field_type == "integer" then
-        typed_value = tonumber(text_value) or 0
-      elseif field_type == "double" then
-        typed_value = tonumber(text_value) or 0.0
+    -- Get value based on widget type
+    if field_type == "boolean" then
+      -- Checkbox widget
+      local get_checked_success, is_checked = pcall(qt_constants.PROPERTIES.GET_CHECKED, widget)
+      if get_checked_success then
+        typed_value = is_checked
       end
+    elseif field_type == "dropdown" then
+      -- Combobox widget
+      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT, widget)
+      if get_text_success then
+        typed_value = text_value
+      end
+    elseif field_type == "double" and field.min and field.max then
+      -- Slider widget (for ranged doubles)
+      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
+      if get_value_success then
+        -- Convert scaled int back to double
+        typed_value = slider_value / 100.0
+      end
+    elseif field_type == "integer" and field.min and field.max then
+      -- Could be slider or line edit - try both
+      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
+      if get_value_success then
+        typed_value = slider_value
+      else
+        -- Try as line edit
+        local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
+        if get_text_success and text_value then
+          typed_value = tonumber(text_value) or 0
+        end
+      end
+    else
+      -- Line edit widget (string, integer, double without range)
+      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
+      if get_text_success and text_value then
+        if field_type == "integer" then
+          typed_value = tonumber(text_value) or 0
+        elseif field_type == "double" then
+          typed_value = tonumber(text_value) or 0.0
+        else
+          typed_value = text_value
+        end
+      end
+    end
 
-      -- Update clip if value changed
-      if M._current_clip[field_key] ~= typed_value then
-        M._current_clip[field_key] = typed_value
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Updated %s.%s = %s", M._current_clip.id, field_key, tostring(typed_value)))
-      end
+    -- Update clip if value changed and we got a value
+    if typed_value ~= nil and M._current_clip[field_key] ~= typed_value then
+      M._current_clip[field_key] = typed_value
+      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Updated %s.%s = %s", M._current_clip.id, field_key, tostring(typed_value)))
     end
   end
 end
@@ -1145,18 +1104,51 @@ function M.apply_multi_edit()
   for field_key, field_info in pairs(M._field_widgets) do
     local widget = field_info.widget
     local field_type = field_info.field.type
+    local field = field_info.field
+    local typed_value = nil
 
-    local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
-    if get_text_success and text_value and text_value ~= "" then
-      -- Convert to appropriate type
-      local typed_value = text_value
-      if field_type == "integer" then
-        typed_value = tonumber(text_value) or 0
-      elseif field_type == "double" then
-        typed_value = tonumber(text_value) or 0.0
+    -- Get value based on widget type
+    if field_type == "boolean" then
+      local get_checked_success, is_checked = pcall(qt_constants.PROPERTIES.GET_CHECKED, widget)
+      if get_checked_success then
+        typed_value = is_checked
       end
+    elseif field_type == "dropdown" then
+      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT, widget)
+      if get_text_success and text_value ~= "" then
+        typed_value = text_value
+      end
+    elseif field_type == "double" and field.min and field.max then
+      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
+      if get_value_success then
+        typed_value = slider_value / 100.0
+      end
+    elseif field_type == "integer" and field.min and field.max then
+      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
+      if get_value_success then
+        typed_value = slider_value
+      else
+        local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
+        if get_text_success and text_value and text_value ~= "" then
+          typed_value = tonumber(text_value) or 0
+        end
+      end
+    else
+      -- Line edit widget
+      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
+      if get_text_success and text_value and text_value ~= "" then
+        if field_type == "integer" then
+          typed_value = tonumber(text_value) or 0
+        elseif field_type == "double" then
+          typed_value = tonumber(text_value) or 0.0
+        else
+          typed_value = text_value
+        end
+      end
+    end
 
-      -- Apply to all selected clips
+    -- Apply to all selected clips if we got a value
+    if typed_value ~= nil then
       for _, clip in ipairs(M._selected_clips) do
         clip[field_key] = typed_value
         db.update_clip_property(clip.id, field_key, typed_value)
@@ -1215,5 +1207,5 @@ function M.update_selection(selected_clips)
   end
 end
 
-print("🚨 DEBUG: inspector/view.lua file LOADED")
+-- print("🚨 DEBUG: inspector/view.lua file LOADED")
 return M

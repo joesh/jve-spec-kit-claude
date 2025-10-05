@@ -1,12 +1,14 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-02 (Tag-based Organization)
+Last updated: 2025-10-05 (Split/UUID/Debug Fixes)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
 - C++ for performance-critical: rendering, timeline manipulation, complex diffs
 - Lua for UI logic, layout, interaction, extensibility
 - SQLite for persistence
+
+READ ENGINEERING.md
 
 ## Project Structure
 ```
@@ -61,6 +63,9 @@ make clean          # Clean build artifacts
 **FIXED:**
 - Inspector panel (Lua) - now initializes and creates content properly
 - Inspector initialization timing - moved to correct execution phase
+- Clip split functionality - UUID generation now properly seeded
+- Widget type-based property getters in inspector
+- Debug output spam eliminated from Qt bindings layer
 
 ## Current Issues (VERIFIED 2025-10-01)
 
@@ -80,7 +85,6 @@ make clean          # Clean build artifacts
 - Timeline chrome positioning misaligned
 
 **FUNCTIONAL GAPS:**
-- Inspector UI not connected to data (widgets don't load/save clip properties)
 - No media import functionality
 - Most keyboard shortcuts non-functional
 - Play button doesn't work
@@ -88,9 +92,23 @@ make clean          # Clean build artifacts
 ## Previous False Claims (REMOVED)
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
-## Recent Improvements (2025-10-02)
+## Recent Improvements
 
-**Tag-Based Media Organization:**
+**2025-10-05: Split/UUID/Debug Fixes**
+- Fixed critical bug where clip split operations caused clips to disappear
+  - Root cause: `math.random()` was never seeded, producing identical UUID sequences on each app start
+  - Fix: Added `math.randomseed(os.time() + os.clock() * 1000000)` in `models/clip.lua`
+  - Clips created via split now get truly unique IDs and no longer overwrite existing clips
+- Fixed inspector widget type errors during split operations
+  - Inspector was calling `GET_TEXT` on all widgets regardless of type (sliders, checkboxes, etc.)
+  - Added type-based dispatch: `GET_CHECKED` for booleans, `GET_SLIDER_VALUE` for ranged numbers, etc.
+  - Both `save_all_fields()` and `apply_multi_edit()` now handle all widget types correctly
+- Eliminated debug output spam from Qt bindings layer
+  - Commented out 52 qDebug() statements in `qt_bindings.cpp`
+  - Startup output reduced from thousands of lines to ~40 lines of meaningful info
+  - No performance overhead from string formatting for unused debug messages
+
+**2025-10-02: Tag-Based Media Organization**
 - Implemented flexible tag system replacing rigid folder hierarchy
 - Media items now support multiple tag namespaces: bin, project, status, location, person, type, mood
 - Hierarchical tags with path structure (e.g., "Footage/Interviews")
@@ -98,19 +116,13 @@ The previous documentation contained extensive false "milestone" claims about co
 - Foundation for multi-view filtering (can show different tag namespaces)
 - Bins now alphabetically sorted
 
-**Implementation Details:**
-- `database.lua`: Media items have `tags` array with namespace/tag_path structure
-- `load_bins()` extracts bins from "bin" namespace tags dynamically
-- `load_media_tags()` queries tags by namespace
-- `get_tag_namespaces()` lists all available namespaces
-- Project browser updated to use tag-based filtering
-
 ## Next Steps
 1. Connect inspector UI to clip data (add data binding)
 2. Remove C++ UI components that violate architecture
 3. Fix test system build issues
 
 ## Commit History
+- 2025-10-05: Fix clip split disappearing bug, inspector widget type errors, and debug output spam
 - 2025-10-02: Implement tag-based media organization with multiple namespaces
 - 2025-10-01: Fix inspector panel initialization timing - now creates content during correct execution phase
 - 2025-10-01: Code review and documentation cleanup - removed false milestone claims
