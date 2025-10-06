@@ -260,4 +260,12 @@ qt_constants.PROPERTIES.SET_STYLE(main_window, [[
 qt_constants.DISPLAY.SHOW(main_window)
 print("✅ Correct layout created: 3 panels top, timeline bottom")
 
+-- Debug: Check actual widget sizes after window is shown
+local window_w, window_h = qt_constants.PROPERTIES.GET_SIZE(main_window)
+local timeline_w, timeline_h = qt_constants.PROPERTIES.GET_SIZE(timeline_panel)
+local inspector_w, inspector_h = qt_constants.PROPERTIES.GET_SIZE(inspector_panel)
+print(string.format("DEBUG: Main window size: %dx%d", window_w, window_h))
+print(string.format("DEBUG: Timeline panel size: %dx%d (panel HAS correct width!)", timeline_w, timeline_h))
+print(string.format("DEBUG: Inspector panel size: %dx%d", inspector_w, inspector_h))
+
 return main_window

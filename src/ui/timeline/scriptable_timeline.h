@@ -65,6 +65,12 @@ public:
     void setMouseEventHandler(const std::string& handler_name);
     void setKeyEventHandler(const std::string& handler_name);
 
+    // Qt layout system integration
+    QSize sizeHint() const override;
+
+    // Set desired height for layout system (called from Lua)
+    void setDesiredHeight(int height);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -94,6 +100,9 @@ private:
 
     // Essential timeline state
     qint64 playhead_position_ = 0;  // Current playhead position in milliseconds
+
+    // Desired height for layout system (set from Lua)
+    int desired_height_ = 150;
 
     // Lua state for callbacks
     lua_State* lua_state_ = nullptr;

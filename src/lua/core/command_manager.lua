@@ -18,6 +18,9 @@ local current_state_hash = ""
 local state_hash_cache = {}
 local last_error_message = ""
 
+-- Undo tree tracking
+local current_sequence_number = nil  -- Current position in undo tree (nil = at HEAD, latest command)
+
 -- Command type implementations
 local command_executors = {}
 
@@ -29,9 +32,13 @@ function M.init(database)
     local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
     if query and query:exec() and query:next() then
         last_sequence_number = query:value(0) or 0
+        if last_sequence_number > 0 then
+            current_sequence_number = last_sequence_number  -- Start at HEAD
+        end
     end
 
-    print(string.format("CommandManager initialized, last sequence: %d", last_sequence_number))
+    print(string.format("CommandManager initialized, last sequence: %d, current position: %s",
+        last_sequence_number, tostring(current_sequence_number)))
 end
 
 -- Get next sequence number
@@ -42,10 +49,15 @@ end
 
 -- Calculate state hash for a project
 local function calculate_state_hash(project_id)
+    if not db then
+        print("WARNING: No database connection for state hash calculation")
+        return "00000000"
+    end
+
     -- Query all relevant project state data
     local query = db:prepare([[
         SELECT p.name, p.settings,
-               s.name, s.frame_rate, s.duration,
+               s.name, s.frame_rate, s.width, s.height,
                t.track_type, t.track_index, t.enabled,
                c.start_time, c.duration, c.enabled,
                m.file_path, m.duration, m.frame_rate
@@ -58,13 +70,22 @@ local function calculate_state_hash(project_id)
         ORDER BY s.id, t.track_type, t.track_index, c.start_time
     ]])
 
+    if not query then
+        local err = "unknown error"
+        if db.last_error then
+            err = db:last_error()
+        end
+        print("WARNING: Failed to prepare state hash query: " .. err)
+        return "00000000"
+    end
+
     query:bind_value(1, project_id)
 
     local state_string = ""
     if query:exec() then
         while query:next() do
             -- Build deterministic state string
-            for i = 0, query:record():count() - 1 do
+            for i = 0, 13 do  -- We select 14 columns (0-13): p.name, p.settings, s.name, s.frame_rate, s.width, s.height, t.track_type, t.track_index, t.enabled, c.start_time, c.duration, c.enabled, m.file_path, m.duration
                 local value = query:value(i)
                 state_string = state_string .. tostring(value) .. "|"
             end
@@ -72,8 +93,9 @@ local function calculate_state_hash(project_id)
         end
     end
 
-    -- Calculate SHA256 hash (using Qt's QCryptographicHash via binding)
-    local hash = qt.crypto_hash_sha256(state_string)
+    -- Calculate simple hash (TODO: implement proper SHA256 via Qt bindings)
+    -- For now, use Lua's string hash as a simple checksum
+    local hash = string.format("%08x", #state_string)  -- Simple length-based hash
     return hash
 end
 
@@ -125,7 +147,12 @@ local function execute_command_implementation(command)
     local executor = command_executors[command.type]
 
     if executor then
-        return executor(command)
+        local success, result = pcall(executor, command)
+        if not success then
+            print(string.format("ERROR: Executor failed: %s", tostring(result)))
+            return false
+        end
+        return result
     elseif command.type == "FastOperation" or
            command.type == "BatchOperation" or
            command.type == "ComplexOperation" then
@@ -141,8 +168,6 @@ end
 
 -- Main execute function
 function M.execute(command)
-    print(string.format("Executing command: %s", command.type))
-
     local result = {
         success = false,
         error_message = "",
@@ -160,6 +185,9 @@ function M.execute(command)
     -- Assign sequence number
     local sequence_number = get_next_sequence_number()
     command.sequence_number = sequence_number
+
+    -- Set parent_sequence_number for undo tree
+    command.parent_sequence_number = current_sequence_number
 
     -- Update command with state hashes
     update_command_hashes(command, pre_hash)
@@ -180,6 +208,9 @@ function M.execute(command)
             result.success = true
             result.result_data = command:serialize()
             current_state_hash = post_hash
+
+            -- Move to HEAD after executing new command
+            current_sequence_number = sequence_number
         else
             result.error_message = "Failed to save command to database"
         end
@@ -192,12 +223,103 @@ function M.execute(command)
     return result
 end
 
+-- Get last executed command (at current position in undo tree)
+function M.get_last_command(project_id)
+    if not db then
+        print("WARNING: No database connection")
+        return nil
+    end
+
+    -- If current_sequence_number is nil, we're at HEAD (get most recent command)
+    local query
+    if current_sequence_number then
+        query = db:prepare([[
+            SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp
+            FROM commands
+            WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
+        ]])
+        if not query then
+            print("WARNING: Failed to prepare get_last_command query")
+            return nil
+        end
+        query:bind_value(1, current_sequence_number)
+    else
+        query = db:prepare([[
+            SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp
+            FROM commands
+            WHERE command_type NOT LIKE 'Undo%'
+            ORDER BY sequence_number DESC
+            LIMIT 1
+        ]])
+    end
+
+    if not query then
+        print("WARNING: Failed to prepare get_last_command query")
+        return nil
+    end
+
+    if query:exec() and query:next() then
+        -- Manually construct command from query results
+        local command = {
+            id = query:value(0),
+            type = query:value(1),
+            project_id = project_id,
+            sequence_number = query:value(3) or 0,
+            parent_sequence_number = query:value(4),  -- May be nil
+            status = "Executed",
+            parameters = {},
+            pre_hash = query:value(5) or "",
+            post_hash = query:value(6) or "",
+            created_at = query:value(7) or os.time(),
+            executed_at = query:value(7),
+        }
+
+        -- Parse command_args JSON to populate parameters
+        local command_args_json = query:value(2)
+        if command_args_json and command_args_json ~= "" and command_args_json ~= "{}" then
+            local success, params = pcall(qt_json_decode, command_args_json)
+            if success and params then
+                command.parameters = params
+            end
+        end
+
+        local Command = require('command')
+        setmetatable(command, {__index = Command})
+        return command
+    end
+
+    return nil
+end
+
 -- Execute undo
 function M.execute_undo(original_command)
     print(string.format("Executing undo for command: %s", original_command.type))
 
     local undo_command = original_command:create_undo()
-    return M.execute(undo_command)
+
+    -- Execute undo logic without saving to command history
+    -- (we don't want undo commands appearing in the command list)
+    local result = {
+        success = false,
+        error_message = "",
+        result_data = ""
+    }
+
+    -- Execute the undo command logic directly
+    local execution_success = execute_command_implementation(undo_command)
+
+    if execution_success then
+        result.success = true
+        result.result_data = undo_command:serialize()
+
+        -- Move to parent in undo tree
+        current_sequence_number = original_command.parent_sequence_number
+        print(string.format("  Undo successful! Moved to position: %s", tostring(current_sequence_number)))
+    else
+        result.error_message = last_error_message or "Undo execution failed"
+    end
+
+    return result
 end
 
 -- Execute batch
@@ -620,6 +742,72 @@ command_executors["AddClip"] = function(command)
     return command_executors["CreateClip"](command)
 end
 
+-- Insert clip from media browser to timeline at playhead
+command_executors["InsertClipToTimeline"] = function(command)
+    print("Executing InsertClipToTimeline command")
+
+    local media_id = command:get_parameter("media_id")
+    local track_id = command:get_parameter("track_id")
+    local start_time = command:get_parameter("start_time") or 0
+    local media_duration = command:get_parameter("media_duration") or 3000
+
+    if not media_id or media_id == "" then
+        print("WARNING: InsertClipToTimeline: Missing media_id")
+        return false
+    end
+
+    if not track_id or track_id == "" then
+        print("WARNING: InsertClipToTimeline: Missing track_id")
+        return false
+    end
+
+    local Clip = require('models.clip')
+    local clip = Clip.create("Clip", media_id)
+    clip.track_id = track_id
+    clip.start_time = start_time
+    clip.duration = media_duration
+    clip.source_in = 0
+    clip.source_out = media_duration
+
+    command:set_parameter("clip_id", clip.id)
+
+    if clip:save(db) then
+        print(string.format("✅ Inserted clip %s to track %s at time %d", clip.id, track_id, start_time))
+        return true
+    else
+        print("WARNING: Failed to save clip to timeline")
+        return false
+    end
+end
+
+-- Undo for InsertClipToTimeline: remove the clip
+command_executors["UndoInsertClipToTimeline"] = function(command)
+    print("Executing UndoInsertClipToTimeline command")
+
+    local clip_id = command:get_parameter("clip_id")
+
+    if not clip_id or clip_id == "" then
+        print("WARNING: UndoInsertClipToTimeline: Missing clip_id")
+        return false
+    end
+
+    local Clip = require('models.clip')
+    local clip = Clip.load(clip_id, db)
+
+    if not clip then
+        print(string.format("WARNING: UndoInsertClipToTimeline: Clip not found: %s", clip_id))
+        return false
+    end
+
+    if clip:delete(db) then
+        print(string.format("✅ Removed clip %s from timeline", clip_id))
+        return true
+    else
+        print("WARNING: Failed to delete clip from timeline")
+        return false
+    end
+end
+
 command_executors["SetupProject"] = function(command)
     print("Executing SetupProject command")
 
@@ -653,6 +841,135 @@ command_executors["SetupProject"] = function(command)
         print("WARNING: Failed to save project settings")
         return false
     end
+end
+
+command_executors["SplitClip"] = function(command)
+    print("Executing SplitClip command")
+
+    local clip_id = command:get_parameter("clip_id")
+    local split_time = command:get_parameter("split_time")
+
+    print(string.format("  clip_id: %s", tostring(clip_id)))
+    print(string.format("  split_time: %s", tostring(split_time)))
+    print(string.format("  db: %s", tostring(db)))
+
+    if not clip_id or clip_id == "" or not split_time or split_time <= 0 then
+        print("WARNING: SplitClip: Missing required parameters")
+        return false
+    end
+
+    -- Load the original clip
+    local Clip = require('models.clip')
+    local original_clip = Clip.load(clip_id, db)
+    if not original_clip or original_clip.id == "" then
+        print(string.format("WARNING: SplitClip: Clip not found: %s", clip_id))
+        return false
+    end
+
+    -- Validate split_time is within clip bounds
+    if split_time <= original_clip.start_time or split_time >= (original_clip.start_time + original_clip.duration) then
+        print(string.format("WARNING: SplitClip: split_time %d is outside clip bounds [%d, %d]",
+            split_time, original_clip.start_time, original_clip.start_time + original_clip.duration))
+        return false
+    end
+
+    -- Store original state for undo
+    command:set_parameter("original_start_time", original_clip.start_time)
+    command:set_parameter("original_duration", original_clip.duration)
+    command:set_parameter("original_source_in", original_clip.source_in)
+    command:set_parameter("original_source_out", original_clip.source_out)
+
+    -- Calculate new durations and source points
+    local first_duration = split_time - original_clip.start_time
+    local second_duration = original_clip.duration - first_duration
+
+    -- Calculate source points for the split
+    local source_split_point = original_clip.source_in + first_duration
+
+    -- Create second clip (right side of split)
+    local second_clip = Clip.create(original_clip.name .. " (2)", original_clip.media_id)
+    second_clip.track_id = original_clip.track_id
+    second_clip.start_time = split_time
+    second_clip.duration = second_duration
+    second_clip.source_in = source_split_point
+    second_clip.source_out = original_clip.source_out
+    second_clip.enabled = original_clip.enabled
+
+    -- Update original clip (left side of split)
+    original_clip.duration = first_duration
+    original_clip.source_out = source_split_point
+
+    -- Save both clips
+    if not original_clip:save(db) then
+        print("WARNING: SplitClip: Failed to save modified original clip")
+        return false
+    end
+
+    if not second_clip:save(db) then
+        print("WARNING: SplitClip: Failed to save new clip")
+        return false
+    end
+
+    -- Store second clip ID for undo
+    command:set_parameter("second_clip_id", second_clip.id)
+
+    print(string.format("Split clip %s at time %d into clips %s and %s",
+        clip_id, split_time, original_clip.id, second_clip.id))
+    return true
+end
+
+-- Undo SplitClip command
+command_executors["UndoSplitClip"] = function(command)
+    print("Executing UndoSplitClip command")
+
+    local clip_id = command:get_parameter("clip_id")
+    local second_clip_id = command:get_parameter("second_clip_id")
+    local original_start_time = command:get_parameter("original_start_time")
+    local original_duration = command:get_parameter("original_duration")
+    local original_source_in = command:get_parameter("original_source_in")
+    local original_source_out = command:get_parameter("original_source_out")
+
+    if not clip_id or clip_id == "" or not second_clip_id or second_clip_id == "" then
+        print("WARNING: UndoSplitClip: Missing required parameters")
+        return false
+    end
+
+    -- Load the clips
+    local Clip = require('models.clip')
+    local original_clip = Clip.load(clip_id, db)
+    local second_clip = Clip.load(second_clip_id, db)
+
+    if not original_clip then
+        print(string.format("WARNING: UndoSplitClip: Original clip not found: %s", clip_id))
+        return false
+    end
+
+    if not second_clip then
+        print(string.format("WARNING: UndoSplitClip: Second clip not found: %s", second_clip_id))
+        return false
+    end
+
+    -- Restore ALL original clip properties
+    original_clip.start_time = original_start_time
+    original_clip.duration = original_duration
+    original_clip.source_in = original_source_in
+    original_clip.source_out = original_source_out
+
+    -- Save original clip
+    if not original_clip:save(db) then
+        print("WARNING: UndoSplitClip: Failed to save original clip")
+        return false
+    end
+
+    -- Delete second clip
+    if not second_clip:delete(db) then
+        print("WARNING: UndoSplitClip: Failed to delete second clip")
+        return false
+    end
+
+    print(string.format("Undid split: restored clip %s and deleted clip %s",
+        clip_id, second_clip_id))
+    return true
 end
 
 return M

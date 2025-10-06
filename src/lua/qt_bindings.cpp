@@ -18,6 +18,10 @@
 #include <QSet>
 #include <QMap>
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QJsonValue>
 
 // Include existing UI components
 #include "ui/timeline/scriptable_timeline.h"  // Performance-critical timeline rendering
@@ -29,6 +33,176 @@ static const char* WIDGET_METATABLE = "JVE.Widget";
 int lua_create_scriptable_timeline(lua_State* L);
 int lua_set_line_edit_text_changed_handler(lua_State* L);
 int lua_update_widget(lua_State* L);
+int lua_get_widget_size(lua_State* L);
+int lua_set_minimum_width(lua_State* L);
+int lua_set_maximum_width(lua_State* L);
+int lua_set_minimum_height(lua_State* L);
+int lua_set_maximum_height(lua_State* L);
+int lua_get_splitter_sizes(lua_State* L);
+int lua_set_splitter_moved_handler(lua_State* L);
+int lua_set_scroll_area_widget_resizable(lua_State* L);
+int lua_set_splitter_stretch_factor(lua_State* L);
+int lua_get_splitter_handle(lua_State* L);
+
+// Helper function to convert Lua table to QJsonValue
+static QJsonValue luaTableToJsonValue(lua_State* L, int index);
+
+static QJsonValue luaValueToJsonValue(lua_State* L, int index) {
+    int type = lua_type(L, index);
+
+    switch (type) {
+        case LUA_TNIL:
+            return QJsonValue(QJsonValue::Null);
+        case LUA_TBOOLEAN:
+            return QJsonValue(lua_toboolean(L, index) != 0);
+        case LUA_TNUMBER:
+            return QJsonValue(lua_tonumber(L, index));
+        case LUA_TSTRING:
+            return QJsonValue(QString::fromUtf8(lua_tostring(L, index)));
+        case LUA_TTABLE:
+            return luaTableToJsonValue(L, index);
+        default:
+            return QJsonValue(QJsonValue::Null);
+    }
+}
+
+static QJsonValue luaTableToJsonValue(lua_State* L, int index) {
+    // Normalize index to absolute
+    if (index < 0) {
+        index = lua_gettop(L) + index + 1;
+    }
+
+    // Check if it's an array (sequential integer keys starting from 1)
+    bool isArray = true;
+    lua_pushnil(L);
+    while (lua_next(L, index) != 0) {
+        if (lua_type(L, -2) != LUA_TNUMBER) {
+            isArray = false;
+            lua_pop(L, 2);
+            break;
+        }
+        lua_pop(L, 1);
+    }
+
+    if (isArray) {
+        QJsonArray array;
+        int len = lua_objlen(L, index);  // LuaJIT uses lua_objlen instead of lua_rawlen
+        for (int i = 1; i <= len; i++) {
+            lua_rawgeti(L, index, i);
+            array.append(luaValueToJsonValue(L, -1));
+            lua_pop(L, 1);
+        }
+        return array;
+    } else {
+        QJsonObject obj;
+        lua_pushnil(L);
+        while (lua_next(L, index) != 0) {
+            const char* key = lua_tostring(L, -2);
+            if (key) {
+                obj[QString::fromUtf8(key)] = luaValueToJsonValue(L, -1);
+            }
+            lua_pop(L, 1);
+        }
+        return obj;
+    }
+}
+
+// Helper function to push QJsonValue to Lua stack
+static void pushJsonValueToLua(lua_State* L, const QJsonValue& value) {
+    switch (value.type()) {
+        case QJsonValue::Null:
+        case QJsonValue::Undefined:
+            lua_pushnil(L);
+            break;
+        case QJsonValue::Bool:
+            lua_pushboolean(L, value.toBool());
+            break;
+        case QJsonValue::Double:
+            lua_pushnumber(L, value.toDouble());
+            break;
+        case QJsonValue::String:
+            lua_pushstring(L, value.toString().toUtf8().constData());
+            break;
+        case QJsonValue::Array: {
+            QJsonArray arr = value.toArray();
+            lua_newtable(L);
+            for (int i = 0; i < arr.size(); i++) {
+                pushJsonValueToLua(L, arr[i]);
+                lua_rawseti(L, -2, i + 1);
+            }
+            break;
+        }
+        case QJsonValue::Object: {
+            QJsonObject obj = value.toObject();
+            lua_newtable(L);
+            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+                lua_pushstring(L, it.key().toUtf8().constData());
+                pushJsonValueToLua(L, it.value());
+                lua_settable(L, -3);
+            }
+            break;
+        }
+    }
+}
+
+// json.encode(table) -> string
+int lua_json_encode(lua_State* L) {
+    if (lua_gettop(L) < 1) {
+        return luaL_error(L, "json_encode requires 1 argument (table)");
+    }
+
+    if (!lua_istable(L, 1)) {
+        return luaL_error(L, "json_encode argument must be a table");
+    }
+
+    QJsonValue jsonValue = luaTableToJsonValue(L, 1);
+    QJsonDocument doc;
+
+    if (jsonValue.isArray()) {
+        doc.setArray(jsonValue.toArray());
+    } else if (jsonValue.isObject()) {
+        doc.setObject(jsonValue.toObject());
+    } else {
+        return luaL_error(L, "json_encode: table must convert to object or array");
+    }
+
+    QByteArray json = doc.toJson(QJsonDocument::Compact);
+    lua_pushlstring(L, json.constData(), json.size());
+    return 1;
+}
+
+// json.decode(string) -> table
+int lua_json_decode(lua_State* L) {
+    if (lua_gettop(L) < 1) {
+        return luaL_error(L, "json_decode requires 1 argument (string)");
+    }
+
+    if (!lua_isstring(L, 1)) {
+        return luaL_error(L, "json_decode argument must be a string");
+    }
+
+    size_t len;
+    const char* jsonStr = lua_tolstring(L, 1, &len);
+    QByteArray jsonData(jsonStr, len);
+
+    QJsonParseError error;
+    QJsonDocument doc = QJsonDocument::fromJson(jsonData, &error);
+
+    if (error.error != QJsonParseError::NoError) {
+        return luaL_error(L, "json_decode: parse error at offset %d: %s",
+                         error.offset, error.errorString().toUtf8().constData());
+    }
+
+    if (doc.isArray()) {
+        pushJsonValueToLua(L, doc.array());
+    } else if (doc.isObject()) {
+        pushJsonValueToLua(L, doc.object());
+    } else {
+        lua_pushnil(L);
+    }
+
+    return 1;
+}
 
 void registerQtBindings(lua_State* L)
 {
@@ -89,6 +263,10 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_CENTRAL_WIDGET");
     lua_pushcfunction(L, lua_set_splitter_sizes);
     lua_setfield(L, -2, "SET_SPLITTER_SIZES");
+    lua_pushcfunction(L, lua_get_splitter_sizes);
+    lua_setfield(L, -2, "GET_SPLITTER_SIZES");
+    lua_pushcfunction(L, lua_set_splitter_stretch_factor);
+    lua_setfield(L, -2, "SET_SPLITTER_STRETCH_FACTOR");
     lua_setfield(L, -2, "LAYOUT");
     
     // Create PROPERTIES subtable
@@ -113,6 +291,16 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_TITLE");
     lua_pushcfunction(L, lua_set_size);
     lua_setfield(L, -2, "SET_SIZE");
+    lua_pushcfunction(L, lua_get_widget_size);
+    lua_setfield(L, -2, "GET_SIZE");
+    lua_pushcfunction(L, lua_set_minimum_width);
+    lua_setfield(L, -2, "SET_MIN_WIDTH");
+    lua_pushcfunction(L, lua_set_maximum_width);
+    lua_setfield(L, -2, "SET_MAX_WIDTH");
+    lua_pushcfunction(L, lua_set_minimum_height);
+    lua_setfield(L, -2, "SET_MIN_HEIGHT");
+    lua_pushcfunction(L, lua_set_maximum_height);
+    lua_setfield(L, -2, "SET_MAX_HEIGHT");
     lua_pushcfunction(L, lua_set_geometry);
     lua_setfield(L, -2, "SET_GEOMETRY");
     lua_pushcfunction(L, lua_set_style_sheet);
@@ -137,6 +325,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_SCROLL_AREA_WIDGET");
     lua_pushcfunction(L, lua_set_scroll_area_viewport_margins);
     lua_setfield(L, -2, "SET_SCROLL_AREA_VIEWPORT_MARGINS");
+    lua_pushcfunction(L, lua_set_scroll_area_widget_resizable);
+    lua_setfield(L, -2, "SET_SCROLL_AREA_WIDGET_RESIZABLE");
     lua_pushcfunction(L, lua_set_layout_spacing);
     lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins);
@@ -168,8 +358,18 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_widget_click_handler");
     lua_pushcfunction(L, lua_set_line_edit_text_changed_handler);
     lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
+    lua_pushcfunction(L, lua_set_splitter_moved_handler);
+    lua_setglobal(L, "qt_set_splitter_moved_handler");
+    lua_pushcfunction(L, lua_get_splitter_handle);
+    lua_setglobal(L, "qt_get_splitter_handle");
     lua_pushcfunction(L, lua_update_widget);
     lua_setglobal(L, "qt_update_widget");
+
+    // Register JSON functions globally
+    lua_pushcfunction(L, lua_json_encode);
+    lua_setglobal(L, "qt_json_encode");
+    lua_pushcfunction(L, lua_json_decode);
+    lua_setglobal(L, "qt_json_decode");
 
     // Register new missing functions globally for lazy_function access
     lua_pushcfunction(L, lua_set_layout_stretch_factor);
@@ -331,7 +531,7 @@ int lua_create_scriptable_timeline(lua_State* L)
 
     // Set size policy to expand and fill available space
     timeline->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    timeline->setMinimumHeight(150);  // Minimum timeline height
+    timeline->setMinimumHeight(30);  // Small minimum height for flexible track sizing
 
     // Don't call renderTestTimeline() - Lua will handle all rendering
     lua_push_widget(L, timeline);
@@ -501,19 +701,19 @@ int lua_set_central_widget(lua_State* L)
 int lua_set_splitter_sizes(lua_State* L)
 {
     QSplitter* splitter = (QSplitter*)lua_to_widget(L, 1);
-    
+
     if (!splitter) {
         qWarning() << "Invalid splitter in set_splitter_sizes";
         lua_pushboolean(L, 0);
         return 1;
     }
-    
+
     if (!lua_istable(L, 2)) {
         qWarning() << "Expected table for splitter sizes";
         lua_pushboolean(L, 0);
         return 1;
     }
-    
+
     QList<int> sizes;
     int len = lua_objlen(L, 2);
     for (int i = 1; i <= len; i++) {
@@ -523,10 +723,76 @@ int lua_set_splitter_sizes(lua_State* L)
         }
         lua_pop(L, 1);
     }
-    
+
     // // qDebug() << "Setting splitter sizes from Lua:" << sizes;
     splitter->setSizes(sizes);
     lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_get_splitter_sizes(lua_State* L)
+{
+    QSplitter* splitter = (QSplitter*)lua_to_widget(L, 1);
+
+    if (!splitter) {
+        qWarning() << "Invalid splitter in get_splitter_sizes";
+        lua_pushnil(L);
+        return 1;
+    }
+
+    QList<int> sizes = splitter->sizes();
+
+    // Create Lua table
+    lua_newtable(L);
+    for (int i = 0; i < sizes.size(); i++) {
+        lua_pushinteger(L, sizes[i]);
+        lua_rawseti(L, -2, i + 1);  // Lua uses 1-based indexing
+    }
+
+    return 1;
+}
+
+int lua_set_splitter_stretch_factor(lua_State* L)
+{
+    QSplitter* splitter = (QSplitter*)lua_to_widget(L, 1);
+    int index = lua_tointeger(L, 2);
+    int stretch = lua_tointeger(L, 3);
+
+    if (!splitter) {
+        qWarning() << "Invalid splitter in set_splitter_stretch_factor";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Set the stretch factor for the widget at the given index
+    splitter->setStretchFactor(index, stretch);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_get_splitter_handle(lua_State* L)
+{
+    QSplitter* splitter = (QSplitter*)lua_to_widget(L, 1);
+    int index = lua_tointeger(L, 2);
+
+    if (!splitter) {
+        qWarning() << "Invalid splitter in get_splitter_handle";
+        lua_pushnil(L);
+        return 1;
+    }
+
+    qDebug() << "get_splitter_handle: splitter=" << splitter << "index=" << index << "count=" << splitter->count();
+
+    // Get the handle widget at the given index
+    QSplitterHandle* handle = splitter->handle(index);
+    qDebug() << "  -> handle(" << index << ") returned:" << handle;
+
+    if (handle) {
+        lua_push_widget(L, handle);
+    } else {
+        qWarning() << "  -> WARNING: handle is null!";
+        lua_pushnil(L);
+    }
     return 1;
 }
 
@@ -730,6 +996,81 @@ int lua_set_size(lua_State* L)
     return 1;
 }
 
+int lua_get_widget_size(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+
+    if (widget) {
+        lua_pushinteger(L, widget->width());
+        lua_pushinteger(L, widget->height());
+        return 2;
+    } else {
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 2;
+    }
+}
+
+int lua_set_minimum_width(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int width = lua_tointeger(L, 2);
+
+    if (widget) {
+        widget->setMinimumWidth(width);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget in set_minimum_width";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_maximum_width(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int width = lua_tointeger(L, 2);
+
+    if (widget) {
+        widget->setMaximumWidth(width);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget in set_maximum_width";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_minimum_height(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int height = lua_tointeger(L, 2);
+
+    if (widget) {
+        widget->setMinimumHeight(height);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget in set_minimum_height";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_maximum_height(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int height = lua_tointeger(L, 2);
+
+    if (widget) {
+        widget->setMaximumHeight(height);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget in set_maximum_height";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
 int lua_set_geometry(lua_State* L)
 {
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
@@ -880,6 +1221,70 @@ int lua_set_scroll_area_viewport_margins(lua_State* L)
     return 1;
 }
 
+int lua_set_scroll_area_widget_resizable(lua_State* L)
+{
+    QWidget* scrollArea = (QWidget*)lua_to_widget(L, 1);
+    bool resizable = lua_toboolean(L, 2);
+
+    if (scrollArea) {
+        QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
+        if (sa) {
+            sa->setWidgetResizable(resizable);
+            lua_pushboolean(L, 1);
+        } else {
+            qWarning() << "First argument is not a QScrollArea";
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid widget argument in set_scroll_area_widget_resizable";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Splitter moved signal handler
+int lua_set_splitter_moved_handler(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+
+    if (!widget || !handler_name) {
+        qWarning() << "Invalid arguments in set_splitter_moved_handler";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QSplitter* splitter = qobject_cast<QSplitter*>(widget);
+    if (!splitter) {
+        qWarning() << "Widget is not a QSplitter";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    std::string handler_str = std::string(handler_name);
+
+    // Connect Qt splitterMoved signal to Lua function call
+    QObject::connect(splitter, &QSplitter::splitterMoved, [L, handler_str](int pos, int index) {
+        // Call the Lua handler function with position and index
+        lua_getglobal(L, handler_str.c_str());
+        if (lua_isfunction(L, -1)) {
+            lua_pushinteger(L, pos);
+            lua_pushinteger(L, index);
+            int result = lua_pcall(L, 2, 0, 0);
+            if (result != 0) {
+                qWarning() << "Error calling Lua splitter moved handler:" << lua_tostring(L, -1);
+                lua_pop(L, 1);
+            }
+        } else {
+            qWarning() << "Lua splitter moved handler not found:" << handler_str.c_str();
+            lua_pop(L, 1);
+        }
+    });
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 // Signal handling functions
 int lua_set_button_click_handler(lua_State* L)
 {
@@ -930,15 +1335,22 @@ public:
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
-        if (event->type() == QEvent::MouseButtonPress) {
+        if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease) {
             QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::LeftButton) {
-                // qDebug() << "ClickEventFilter: MouseButtonPress on" << obj->objectName() << "calling" << QString::fromStdString(handler_name);
-
-                // Call the Lua handler function
+                // Call the Lua handler function with event type and position
                 lua_getglobal(lua_state, handler_name.c_str());
                 if (lua_isfunction(lua_state, -1)) {
-                    int result = lua_pcall(lua_state, 0, 0, 0);
+                    // Push event type ("press" or "release")
+                    if (event->type() == QEvent::MouseButtonPress) {
+                        lua_pushstring(lua_state, "press");
+                    } else {
+                        lua_pushstring(lua_state, "release");
+                    }
+                    // Push Y position
+                    lua_pushinteger(lua_state, mouseEvent->pos().y());
+
+                    int result = lua_pcall(lua_state, 2, 0, 0);
                     if (result != 0) {
                         qWarning() << "Error calling Lua click handler:" << lua_tostring(lua_state, -1);
                         lua_pop(lua_state, 1);
@@ -947,7 +1359,8 @@ protected:
                     qWarning() << "Lua click handler not found:" << handler_name.c_str();
                     lua_pop(lua_state, 1);
                 }
-                return true;
+                // Don't return true - let the event propagate so splitter can handle the drag
+                return false;
             }
         }
         return QObject::eventFilter(obj, event);
@@ -972,10 +1385,11 @@ int lua_set_widget_click_handler(lua_State* L)
     std::string handler_str = std::string(handler_name);
 
     // Create and install event filter
+    qDebug() << "qt_set_widget_click_handler: widget=" << widget << "handler=" << QString::fromStdString(handler_str);
     ClickEventFilter* filter = new ClickEventFilter(handler_str, L, widget);
     widget->installEventFilter(filter);
+    qDebug() << "  -> Event filter installed on widget" << widget;
 
-    // // qDebug() << "Widget click handler connected for:" << handler_name;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1073,24 +1487,23 @@ int lua_set_widget_size_policy(lua_State* L)
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     const char* horizontal = lua_tostring(L, 2);
     const char* vertical = lua_tostring(L, 3);
-    
-    if (widget && horizontal && vertical) {
-        // qDebug() << "Setting widget size policy from Lua:" << horizontal << vertical;
 
+    if (widget && horizontal && vertical) {
         QSizePolicy::Policy hPolicy = QSizePolicy::Preferred;
         QSizePolicy::Policy vPolicy = QSizePolicy::Preferred;
-        
-        // Convert string to size policy
-        if (strcmp(horizontal, "expanding") == 0) hPolicy = QSizePolicy::Expanding;
-        else if (strcmp(horizontal, "fixed") == 0) hPolicy = QSizePolicy::Fixed;
-        else if (strcmp(horizontal, "minimum") == 0) hPolicy = QSizePolicy::Minimum;
-        else if (strcmp(horizontal, "maximum") == 0) hPolicy = QSizePolicy::Maximum;
-        
-        if (strcmp(vertical, "expanding") == 0) vPolicy = QSizePolicy::Expanding;
-        else if (strcmp(vertical, "fixed") == 0) vPolicy = QSizePolicy::Fixed;
-        else if (strcmp(vertical, "minimum") == 0) vPolicy = QSizePolicy::Minimum;
-        else if (strcmp(vertical, "maximum") == 0) vPolicy = QSizePolicy::Maximum;
-        
+
+        // Convert string to size policy (case-insensitive)
+        if (strcasecmp(horizontal, "expanding") == 0) hPolicy = QSizePolicy::Expanding;
+        else if (strcasecmp(horizontal, "fixed") == 0) hPolicy = QSizePolicy::Fixed;
+        else if (strcasecmp(horizontal, "minimum") == 0) hPolicy = QSizePolicy::Minimum;
+        else if (strcasecmp(horizontal, "maximum") == 0) hPolicy = QSizePolicy::Maximum;
+
+        if (strcasecmp(vertical, "expanding") == 0) vPolicy = QSizePolicy::Expanding;
+        else if (strcasecmp(vertical, "fixed") == 0) vPolicy = QSizePolicy::Fixed;
+        else if (strcasecmp(vertical, "minimum") == 0) vPolicy = QSizePolicy::Minimum;
+        else if (strcasecmp(vertical, "maximum") == 0) vPolicy = QSizePolicy::Maximum;
+
+        // qDebug() << "Setting size policy:" << horizontal << "->" << hPolicy << "," << vertical << "->" << vPolicy << "on widget" << widget;
         widget->setSizePolicy(hPolicy, vPolicy);
         lua_pushboolean(L, 1);
     } else {

@@ -105,15 +105,16 @@ CREATE TABLE IF NOT EXISTS properties (
 CREATE TABLE IF NOT EXISTS commands (
     id TEXT PRIMARY KEY,                    -- UUID
     parent_id TEXT,                         -- For command grouping/batching
+    parent_sequence_number INTEGER,         -- For undo tree: which command this was executed after
     sequence_number INTEGER NOT NULL,       -- Execution order within project
     command_type TEXT NOT NULL,             -- split_clip, ripple_delete, etc.
     command_args TEXT NOT NULL,             -- JSON parameters
     pre_hash TEXT NOT NULL,                 -- State hash before command
     post_hash TEXT NOT NULL,                -- State hash after command
     timestamp INTEGER NOT NULL,             -- Unix timestamp
-    
+
     FOREIGN KEY (parent_id) REFERENCES commands(id) ON DELETE SET NULL,
-    
+
     -- Ensure sequence numbers are unique and incremental per project
     -- (Project association handled through application logic)
     UNIQUE(sequence_number)
@@ -136,6 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_clips_track ON clips(track_id);
 CREATE INDEX IF NOT EXISTS idx_clips_media ON clips(media_id);
 CREATE INDEX IF NOT EXISTS idx_properties_clip ON properties(clip_id);
 CREATE INDEX IF NOT EXISTS idx_commands_sequence ON commands(sequence_number);
+CREATE INDEX IF NOT EXISTS idx_commands_parent_sequence ON commands(parent_sequence_number);
 CREATE INDEX IF NOT EXISTS idx_commands_timestamp ON commands(timestamp);
 CREATE INDEX IF NOT EXISTS idx_snapshots_command ON snapshots(command_id);
 

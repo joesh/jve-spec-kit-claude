@@ -1,4 +1,5 @@
 #include "qt_controls.h"
+#include "qt_bindings.h"
 #include "simple_lua_engine.h"
 #include <QtWidgets>
 #include <QEvent>
@@ -299,32 +300,9 @@ int qt_set_widget_click_handler(lua_State* L) {
     QWidget* widget = *args.widget_ptrs[0];
     std::string handler_name = args.strings[0];
 
-    // Install event filter to handle mouse clicks on generic widgets
-    class ClickEventFilter : public QObject {
-    public:
-        ClickEventFilter(const std::string& handler, QObject* parent = nullptr) 
-            : QObject(parent), handler_name(handler) {}
-        
-    protected:
-        bool eventFilter(QObject* obj, QEvent* event) override {
-            if (event->type() == QEvent::MouseButtonPress) {
-                QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
-                if (mouseEvent->button() == Qt::LeftButton) {
-                    if (JVE::g_lua_engine) {
-                        JVE::Parameters empty_params;
-                        JVE::g_lua_engine->call_lua_function(handler_name, empty_params);
-                    }
-                    return true;
-                }
-            }
-            return QObject::eventFilter(obj, event);
-        }
-        
-    private:
-        std::string handler_name;
-    };
+    qDebug() << "qt_set_widget_click_handler: widget=" << widget << "handler=" << QString::fromStdString(handler_name);
 
-    // Install event filter to handle mouse clicks on generic widgets
+    // Install event filter to handle mouse clicks and releases on generic widgets
     class ClickEventFilter : public QObject {
     public:
         ClickEventFilter(const std::string& handler, QObject* parent = nullptr)
@@ -332,15 +310,20 @@ int qt_set_widget_click_handler(lua_State* L) {
 
     protected:
         bool eventFilter(QObject* obj, QEvent* event) override {
-            if (event->type() == QEvent::MouseButtonPress) {
+            if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease) {
                 QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
                 if (mouseEvent->button() == Qt::LeftButton) {
-                    qDebug() << "ClickEventFilter: MouseButtonPress on" << obj->objectName() << "calling" << QString::fromStdString(handler_name);
+                    qDebug() << "ClickEventFilter: Event" << (event->type() == QEvent::MouseButtonPress ? "press" : "release")
+                             << "at y=" << mouseEvent->pos().y() << "calling" << QString::fromStdString(handler_name);
                     if (JVE::g_lua_engine) {
-                        JVE::Parameters empty_params;
-                        JVE::g_lua_engine->call_lua_function(handler_name, empty_params);
+                        JVE::Parameters params;
+                        // Pass event type ("press" or "release")
+                        params.strings.push_back(event->type() == QEvent::MouseButtonPress ? "press" : "release");
+                        // Pass Y position
+                        params.numbers.push_back(static_cast<double>(mouseEvent->pos().y()));
+                        JVE::g_lua_engine->call_lua_function(handler_name, params);
                     }
-                    return true;
+                    return false;  // Let event propagate so splitter can handle drag
                 }
             }
             return QObject::eventFilter(obj, event);
@@ -353,6 +336,7 @@ int qt_set_widget_click_handler(lua_State* L) {
     // Create and install the event filter
     ClickEventFilter* filter = new ClickEventFilter(handler_name, widget);
     widget->installEventFilter(filter);
+    qDebug() << "  -> Event filter installed on widget" << widget;
 
     return 0;
 }

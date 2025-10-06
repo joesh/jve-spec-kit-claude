@@ -7,9 +7,17 @@ namespace JVE {
 ScriptableTimeline::ScriptableTimeline(const std::string& widget_id, QWidget* parent)
     : QWidget(parent), widget_id_(widget_id)
 {
-    setMinimumSize(400, 200);
+    // No hardcoded minimum size - let layout system and content determine size
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+}
+
+QSize ScriptableTimeline::sizeHint() const
+{
+    // Return QWIDGETSIZE_MAX for width so layout gives us maximum space
+    // Height: 150px default (3 tracks @ 50px each)
+    return QSize(QWIDGETSIZE_MAX, 150);
 }
 
 void ScriptableTimeline::clearCommands()
