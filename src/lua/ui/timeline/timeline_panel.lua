@@ -8,6 +8,9 @@ local timeline_scrollbar = require("ui.timeline.timeline_scrollbar")
 
 local M = {}
 
+-- Constants
+local SPLITTER_HANDLE_HEIGHT = 7  -- Qt default vertical splitter handle height (pixels)
+
 -- Store references
 local state = nil
 local inspector_view = nil
@@ -132,7 +135,8 @@ local function create_video_headers()
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, 0, 1)
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_below, 0)
 
-                    state.set_track_height(captured_track_id, new_height)
+                    -- Add handle height to track height so timeline renders track + handle space
+                    state.set_track_height(captured_track_id, new_height + SPLITTER_HANDLE_HEIGHT)
 
                     -- Update splitter minimum height to accommodate new track sizes
                     local total_height = 0
@@ -177,6 +181,14 @@ local function create_video_headers()
     print("Registering video_splitter_moved handler...")
     qt_set_splitter_moved_handler(video_splitter, "video_splitter_moved")
     print("  Handler registered")
+
+    -- Initialize track heights in state (header height + handle height)
+    for _, track in ipairs(video_tracks) do
+        state.set_track_height(track.id, timeline_state.dimensions.default_track_height + SPLITTER_HANDLE_HEIGHT)
+    end
+
+    -- Hide the handle above V3 (between stretch widget and V3) - handle index 0
+    qt_hide_splitter_handle(video_splitter, 0)
 
     return video_splitter, video_headers
 end
@@ -279,7 +291,8 @@ local function create_audio_headers()
                         qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, i, 0)  -- Tracks fixed
                     end
 
-                    state.set_track_height(captured_track_id, new_height)
+                    -- Add handle height to track height so timeline renders track + handle space
+                    state.set_track_height(captured_track_id, new_height + SPLITTER_HANDLE_HEIGHT)
                 end
             end
             print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
@@ -314,11 +327,31 @@ local function create_audio_headers()
     end
     qt_set_splitter_moved_handler(audio_splitter, "audio_splitter_moved")
 
+    -- Initialize track heights in state (header height + handle height)
+    for _, track in ipairs(audio_tracks) do
+        state.set_track_height(track.id, timeline_state.dimensions.default_track_height + SPLITTER_HANDLE_HEIGHT)
+    end
+
+    -- Hide the handle below A3 (between A3 and stretch widget) - last handle index
+    qt_hide_splitter_handle(audio_splitter, #audio_tracks)
+
     return audio_splitter, audio_headers
 end
 
 -- Helper function to create headers column with video/audio sections
 local function create_headers_column()
+    -- Wrapper VBox to add ruler-height spacer at top
+    local headers_wrapper = qt_constants.WIDGET.CREATE()
+    local headers_wrapper_layout = qt_constants.LAYOUT.CREATE_VBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(headers_wrapper_layout, 0)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(headers_wrapper_layout, 0, 0, 0, 0)
+
+    -- Add 32px spacer at top to match ruler height on timeline side
+    local ruler_spacer = qt_constants.WIDGET.CREATE()
+    qt_constants.PROPERTIES.SET_MIN_HEIGHT(ruler_spacer, timeline_ruler.RULER_HEIGHT)
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(ruler_spacer, timeline_ruler.RULER_HEIGHT)
+    qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, ruler_spacer)
+
     -- Main vertical splitter between video and audio header sections
     local headers_main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
 
@@ -327,6 +360,7 @@ local function create_headers_column()
     local video_splitter, video_headers = create_video_headers()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(video_scroll, video_splitter)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Fixed", "Expanding")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
 
@@ -335,6 +369,7 @@ local function create_headers_column()
     local audio_splitter, audio_headers = create_audio_headers()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(audio_scroll, audio_splitter)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Fixed", "Expanding")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
 
@@ -345,8 +380,15 @@ local function create_headers_column()
     -- Set initial 50/50 split (will be adjusted dynamically by splitterMoved handlers)
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, {1, 1})
 
-    -- Return splitter and scroll areas for synchronization
-    return headers_main_splitter, video_scroll, audio_scroll
+    -- Add splitter to wrapper layout
+    qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, headers_main_splitter)
+    qt_set_layout_stretch_factor(headers_wrapper_layout, headers_main_splitter, 1)
+
+    -- Set layout on wrapper
+    qt_constants.LAYOUT.SET_ON_WIDGET(headers_wrapper, headers_wrapper_layout)
+
+    -- Return wrapper widget, main splitter, and scroll areas for synchronization
+    return headers_wrapper, headers_main_splitter, video_scroll, audio_scroll
 end
 
 function M.create()
@@ -382,7 +424,7 @@ function M.create()
     local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
     -- LEFT SIDE: Headers column (all headers stacked vertically)
-    local headers_column, header_video_scroll, header_audio_scroll = create_headers_column()
+    local headers_column, headers_main_splitter, header_video_scroll, header_audio_scroll = create_headers_column()
 
     -- RIGHT SIDE: Timeline area column
     local timeline_area = qt_constants.WIDGET.CREATE()
@@ -394,6 +436,8 @@ function M.create()
     local ruler_widget = qt_constants.WIDGET.CREATE_TIMELINE()
     local ruler = timeline_ruler.create(ruler_widget, state)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(ruler_widget, "Expanding", "Fixed")
+    qt_constants.PROPERTIES.SET_MIN_HEIGHT(ruler_widget, timeline_ruler.RULER_HEIGHT)  -- Set 32px height
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(ruler_widget, timeline_ruler.RULER_HEIGHT)  -- Lock to 32px
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, ruler_widget)
 
     -- Create video timeline view
@@ -404,6 +448,9 @@ function M.create()
         function(track) return track.track_type == "VIDEO" end,
         { render_bottom_to_top = true }
     )
+
+    -- Make video widget expand to fill available space
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_widget, "Expanding", "Expanding")
 
     -- Video scroll area
     local timeline_video_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
@@ -418,6 +465,9 @@ function M.create()
         function(track) return track.track_type == "AUDIO" end,
         {}
     )
+
+    -- Make audio widget expand to fill available space
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_widget, "Expanding", "Expanding")
 
     -- Audio scroll area
     local timeline_audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
@@ -438,12 +488,6 @@ function M.create()
     -- Set stretch factor so splitter gets all remaining vertical space
     qt_set_layout_stretch_factor(timeline_area_layout, vertical_splitter, 1)
 
-    -- Horizontal scrollbar widget (fixed height)
-    local scrollbar_widget = qt_constants.WIDGET.CREATE_TIMELINE()
-    local scrollbar = timeline_scrollbar.create(scrollbar_widget, state)
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(scrollbar_widget, "Expanding", "Fixed")
-    qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, scrollbar_widget)
-
     -- Set layout on timeline area
     qt_constants.LAYOUT.SET_ON_WIDGET(timeline_area, timeline_area_layout)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_area, "Expanding", "Expanding")
@@ -452,6 +496,16 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(main_splitter, headers_column)
     qt_constants.LAYOUT.ADD_WIDGET(main_splitter, timeline_area)
 
+    -- Add main splitter to main layout (gets all available vertical space)
+    qt_constants.LAYOUT.ADD_WIDGET(main_layout, main_splitter)
+    qt_set_layout_stretch_factor(main_layout, main_splitter, 1)
+
+    -- Scrollbar temporarily removed to test portal height allocation
+    -- local scrollbar_widget = qt_constants.WIDGET.CREATE_TIMELINE()
+    -- local scrollbar = timeline_scrollbar.create(scrollbar_widget, state)
+    -- qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(scrollbar_widget, "Expanding", "Fixed")
+    -- qt_constants.LAYOUT.ADD_WIDGET(main_layout, scrollbar_widget)
+
     -- Synchronize the headers splitter with the timeline splitter
     -- When headers video/audio boundary moves, update timeline
     local syncing = false  -- Prevent infinite loop
@@ -459,14 +513,14 @@ function M.create()
         print(string.format("headers_splitter_moved fired: pos=%d, index=%d", pos, index))
         if not syncing then
             syncing = true
-            local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(headers_column)
+            local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(headers_main_splitter)
             print(string.format("  Syncing to timeline: sizes = {%d, %d}", sizes[1], sizes[2]))
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, sizes)
             syncing = false
         end
     end
     print("Registering headers_splitter_moved handler...")
-    qt_set_splitter_moved_handler(headers_column, "headers_splitter_moved")
+    qt_set_splitter_moved_handler(headers_main_splitter, "headers_splitter_moved")
     print("  Handler registered")
 
     -- When timeline video/audio boundary moves, update headers
@@ -476,7 +530,7 @@ function M.create()
             syncing = true
             local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(vertical_splitter)
             print(string.format("  Syncing to headers: sizes = {%d, %d}", sizes[1], sizes[2]))
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_column, sizes)
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, sizes)
             syncing = false
         end
     end
@@ -519,8 +573,7 @@ function M.create()
     -- Set initial splitter sizes: 150px for headers, rest for timeline area
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {timeline_state.dimensions.track_header_width, 1000})
 
-    -- Add main splitter to container
-    qt_constants.LAYOUT.ADD_WIDGET(main_layout, main_splitter)
+    -- Set layout on container
     qt_constants.LAYOUT.SET_ON_WIDGET(container, main_layout)
 
     -- Make main container expand to fill available space

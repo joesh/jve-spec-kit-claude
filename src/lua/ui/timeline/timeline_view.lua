@@ -304,6 +304,14 @@ function M.create(widget, state_module, track_filter_fn, options)
     end
     timeline.set_mouse_event_handler(widget, handler_name)
 
+    -- Wire up resize event handler to redraw when widget size changes
+    local resize_handler_name = "timeline_view_resize_handler_" .. tostring(widget)
+    _G[resize_handler_name] = function(event)
+        -- print(string.format("Timeline widget resized: %dx%d -> %dx%d", event.old_width, event.old_height, event.width, event.height))
+        render()
+    end
+    timeline.set_resize_event_handler(widget, resize_handler_name)
+
     -- Set expanding size policy so widget fills scroll area viewport
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(widget, "Expanding", "Expanding")
     print(string.format("Timeline view configured for %d tracks (widget: %s)", #view.filtered_tracks, tostring(widget)))

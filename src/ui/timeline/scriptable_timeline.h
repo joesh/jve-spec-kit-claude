@@ -64,6 +64,7 @@ public:
     // Set Lua event handlers (called from Lua)
     void setMouseEventHandler(const std::string& handler_name);
     void setKeyEventHandler(const std::string& handler_name);
+    void setResizeEventHandler(const std::string& handler_name);
 
     // Qt layout system integration
     QSize sizeHint() const override;
@@ -77,6 +78,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     // Drawing command structure
@@ -110,6 +112,7 @@ private:
     // Lua event handlers
     std::string mouse_event_handler_;
     std::string key_event_handler_;
+    std::string resize_event_handler_;
 };
 
 } // namespace JVE
@@ -128,5 +131,6 @@ extern "C" {
     int lua_timeline_update(lua_State* L);
     int lua_timeline_set_mouse_event_handler(lua_State* L);
     int lua_timeline_set_key_event_handler(lua_State* L);
+    int lua_timeline_set_resize_event_handler(lua_State* L);
     int lua_timeline_set_lua_state(lua_State* L);
 }

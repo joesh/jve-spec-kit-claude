@@ -35,6 +35,7 @@ int lua_create_scriptable_timeline(lua_State* L);
 int lua_set_line_edit_text_changed_handler(lua_State* L);
 int lua_update_widget(lua_State* L);
 int lua_get_widget_size(lua_State* L);
+int lua_get_geometry(lua_State* L);
 int lua_set_minimum_width(lua_State* L);
 int lua_set_maximum_width(lua_State* L);
 int lua_set_minimum_height(lua_State* L);
@@ -42,6 +43,8 @@ int lua_set_maximum_height(lua_State* L);
 int lua_get_splitter_sizes(lua_State* L);
 int lua_set_splitter_moved_handler(lua_State* L);
 int lua_set_scroll_area_widget_resizable(lua_State* L);
+int lua_set_scroll_area_h_scrollbar_policy(lua_State* L);
+int lua_hide_splitter_handle(lua_State* L);
 int lua_set_splitter_stretch_factor(lua_State* L);
 int lua_get_splitter_handle(lua_State* L);
 
@@ -380,6 +383,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_MAX_HEIGHT");
     lua_pushcfunction(L, lua_set_geometry);
     lua_setfield(L, -2, "SET_GEOMETRY");
+    lua_pushcfunction(L, lua_get_geometry);
+    lua_setfield(L, -2, "GET_GEOMETRY");
     lua_pushcfunction(L, lua_set_style_sheet);
     lua_setfield(L, -2, "SET_STYLE");
     lua_setfield(L, -2, "PROPERTIES");
@@ -404,6 +409,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_SCROLL_AREA_VIEWPORT_MARGINS");
     lua_pushcfunction(L, lua_set_scroll_area_widget_resizable);
     lua_setfield(L, -2, "SET_SCROLL_AREA_WIDGET_RESIZABLE");
+    lua_pushcfunction(L, lua_set_scroll_area_h_scrollbar_policy);
+    lua_setfield(L, -2, "SET_SCROLL_AREA_H_SCROLLBAR_POLICY");
     lua_pushcfunction(L, lua_set_layout_spacing);
     lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins);
@@ -435,6 +442,8 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_widget_click_handler");
     lua_pushcfunction(L, lua_set_line_edit_text_changed_handler);
     lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
+    lua_pushcfunction(L, lua_hide_splitter_handle);
+    lua_setglobal(L, "qt_hide_splitter_handle");
     lua_pushcfunction(L, lua_set_splitter_moved_handler);
     lua_setglobal(L, "qt_set_splitter_moved_handler");
     lua_pushcfunction(L, lua_get_splitter_handle);
@@ -1096,6 +1105,26 @@ int lua_get_widget_size(lua_State* L)
     }
 }
 
+int lua_get_geometry(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+
+    if (widget) {
+        QRect geom = widget->geometry();
+        lua_pushinteger(L, geom.x());
+        lua_pushinteger(L, geom.y());
+        lua_pushinteger(L, geom.width());
+        lua_pushinteger(L, geom.height());
+        return 4;
+    } else {
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 4;
+    }
+}
+
 int lua_set_minimum_width(lua_State* L)
 {
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
@@ -1322,6 +1351,64 @@ int lua_set_scroll_area_widget_resizable(lua_State* L)
         }
     } else {
         qWarning() << "Invalid widget argument in set_scroll_area_widget_resizable";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_scroll_area_h_scrollbar_policy(lua_State* L)
+{
+    QWidget* scrollArea = (QWidget*)lua_to_widget(L, 1);
+    const char* policy = luaL_checkstring(L, 2);
+
+    if (scrollArea) {
+        QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
+        if (sa) {
+            if (strcmp(policy, "AlwaysOff") == 0) {
+                sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            } else if (strcmp(policy, "AlwaysOn") == 0) {
+                sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+            } else if (strcmp(policy, "AsNeeded") == 0) {
+                sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            }
+            lua_pushboolean(L, 1);
+        } else {
+            qWarning() << "First argument is not a QScrollArea";
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid widget argument in set_scroll_area_h_scrollbar_policy";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Hide a splitter handle at a specific index
+int lua_hide_splitter_handle(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int index = luaL_checkinteger(L, 2);
+
+    if (!widget) {
+        qWarning() << "Invalid widget in hide_splitter_handle";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QSplitter* splitter = qobject_cast<QSplitter*>(widget);
+    if (!splitter) {
+        qWarning() << "Widget is not a QSplitter";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QSplitterHandle* handle = splitter->handle(index);
+    if (handle) {
+        handle->setEnabled(false);
+        handle->setVisible(false);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Splitter handle at index" << index << "not found";
         lua_pushboolean(L, 0);
     }
     return 1;

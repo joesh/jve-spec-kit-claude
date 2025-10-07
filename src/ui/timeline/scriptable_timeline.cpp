@@ -1,6 +1,7 @@
 #include "scriptable_timeline.h"
 #include "lua/qt_bindings.h"
 #include <QPaintEvent>
+#include <QResizeEvent>
 
 namespace JVE {
 
@@ -157,6 +158,11 @@ void ScriptableTimeline::setKeyEventHandler(const std::string& handler_name)
     key_event_handler_ = handler_name;
 }
 
+void ScriptableTimeline::setResizeEventHandler(const std::string& handler_name)
+{
+    resize_event_handler_ = handler_name;
+}
+
 void ScriptableTimeline::mousePressEvent(QMouseEvent* event)
 {
     if (!mouse_event_handler_.empty() && lua_state_) {
@@ -274,6 +280,32 @@ void ScriptableTimeline::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 
+void ScriptableTimeline::resizeEvent(QResizeEvent* event)
+{
+    if (!resize_event_handler_.empty() && lua_state_) {
+        lua_getglobal(lua_state_, resize_event_handler_.c_str());
+        if (lua_isfunction(lua_state_, -1)) {
+            lua_newtable(lua_state_);
+            lua_pushnumber(lua_state_, event->size().width());
+            lua_setfield(lua_state_, -2, "width");
+            lua_pushnumber(lua_state_, event->size().height());
+            lua_setfield(lua_state_, -2, "height");
+            lua_pushnumber(lua_state_, event->oldSize().width());
+            lua_setfield(lua_state_, -2, "old_width");
+            lua_pushnumber(lua_state_, event->oldSize().height());
+            lua_setfield(lua_state_, -2, "old_height");
+
+            int result = lua_pcall(lua_state_, 1, 0, 0);
+            if (result != 0) {
+                lua_pop(lua_state_, 1);
+            }
+        } else {
+            lua_pop(lua_state_, 1);
+        }
+    }
+    QWidget::resizeEvent(event);
+}
+
 } // namespace JVE
 
 // Lua bindings implementation
@@ -312,6 +344,9 @@ void registerTimelineBindings(lua_State* L)
 
     lua_pushcfunction(L, lua_timeline_set_key_event_handler);
     lua_setfield(L, -2, "set_key_event_handler");
+
+    lua_pushcfunction(L, lua_timeline_set_resize_event_handler);
+    lua_setfield(L, -2, "set_resize_event_handler");
 
     lua_pushcfunction(L, lua_timeline_set_lua_state);
     lua_setfield(L, -2, "set_lua_state");
@@ -458,6 +493,20 @@ int lua_timeline_set_key_event_handler(lua_State* L)
 
     if (timeline && handler) {
         timeline->setKeyEventHandler(std::string(handler));
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_set_resize_event_handler(lua_State* L)
+{
+    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    const char* handler = lua_tostring(L, 2);
+
+    if (timeline && handler) {
+        timeline->setResizeEventHandler(std::string(handler));
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);
