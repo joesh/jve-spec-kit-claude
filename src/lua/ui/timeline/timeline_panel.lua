@@ -95,8 +95,9 @@ local function create_video_headers()
             local track_name = video_tracks[track_num].name
 
             -- Qt positions: Stretch=0, V3=1, V2=2, V1=3
-            local qt_pos_above = qt_handle_index      -- Widget above the handle
-            local qt_pos_below = qt_handle_index + 1  -- Widget below the handle (what we want to resize)
+            -- Handle N is between widget (N-1) and widget N
+            local qt_pos_above = qt_handle_index - 1  -- Widget above the handle
+            local qt_pos_below = qt_handle_index      -- Widget below the handle (what we want to resize)
 
             print(string.format("    Installing: qt_handle %d → Handle %d → resizes %s (qt_pos %d)",
                 qt_handle_index, handle_num, track_name, qt_pos_below))
@@ -116,16 +117,15 @@ local function create_video_headers()
                 print(string.format("Handler %s called: event_type=%s", this_handler_name, event_type))
                 if event_type == "press" then
                     print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], 0)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], 20)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], 16777215)
-                    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_above, 0)
-                    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_below, 1)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(video_splitter)
                     local new_height = sizes[captured_qt_pos_below + 1]  -- Lua arrays are 1-indexed
 
                     print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
+                    -- Lock at exact height to prevent unwanted resizing during main boundary drag
                     qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], new_height)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], new_height)
                     -- Reset: stretch widget absorbs space, tracks fixed
@@ -238,16 +238,7 @@ local function create_audio_headers()
             _G[this_handler_name] = function(event_type, y)
                 if event_type == "press" then
                     print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
-                    -- Get current height before unlocking
-                    local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(audio_splitter)
-                    local current_height = sizes[captured_qt_pos_to_resize + 1]
-
-                    -- Unlock with current height as both min and max temporarily
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], current_height)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], current_height)
-
-                    -- Now fully unlock
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], 0)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], 20)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], 16777215)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(audio_splitter)
@@ -255,6 +246,7 @@ local function create_audio_headers()
 
                     print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
+                    -- Lock at exact height to prevent unwanted resizing during main boundary drag
                     qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], new_height)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], new_height)
                     -- Reset stretch factors: stretch widget absorbs, tracks fixed
