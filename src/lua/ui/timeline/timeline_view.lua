@@ -9,7 +9,7 @@ local M = {}
 --   widget: ScriptableTimeline Qt widget
 --   state: Reference to timeline_state module
 --   track_filter_fn: function(track) -> boolean (which tracks to show)
---   options: { vertical_scroll_offset = 0 }
+--   options: { vertical_scroll_offset = 0, render_bottom_to_top = false }
 function M.create(widget, state_module, track_filter_fn, options)
     options = options or {}
 
@@ -18,6 +18,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         state = state_module,
         track_filter = track_filter_fn,
         vertical_scroll_offset = options.vertical_scroll_offset or 0,
+        render_bottom_to_top = options.render_bottom_to_top or false,
         filtered_tracks = {},  -- Cached filtered track list
     }
 
@@ -32,16 +33,51 @@ function M.create(widget, state_module, track_filter_fn, options)
         print(string.format("Timeline view filtered %d tracks (widget: %s)", #view.filtered_tracks, tostring(widget)))
     end
 
+    -- Calculate and set widget height based on track heights
+    local function update_widget_height()
+        local total_height = 0
+        for _, track in ipairs(view.filtered_tracks) do
+            local track_height = state_module.get_track_height(track.id)
+            total_height = total_height + track_height
+        end
+
+        -- Set the widget's minimum height to accommodate all tracks
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(widget, total_height)
+        print(string.format("Timeline widget height set to %dpx for %d tracks", total_height, #view.filtered_tracks))
+    end
+
     -- Get Y position for a track within this view
-    local function get_track_y(track_index)
-        return track_index * state_module.dimensions.track_height - view.vertical_scroll_offset
+    -- Calculates cumulative Y position based on actual track heights
+    local function get_track_y(track_index, widget_height)
+        if view.render_bottom_to_top then
+            -- For video tracks: render from bottom up (track 0 at bottom)
+            -- Calculate Y by subtracting cumulative heights from widget height
+            local y = widget_height
+            for i = 0, track_index do
+                if view.filtered_tracks[i + 1] then
+                    local track_height = state_module.get_track_height(view.filtered_tracks[i + 1].id)
+                    y = y - track_height
+                end
+            end
+            return y - view.vertical_scroll_offset
+        else
+            -- For audio tracks: render from top down (original behavior)
+            local y = 0
+            for i = 0, track_index - 1 do
+                if view.filtered_tracks[i + 1] then
+                    local track_height = state_module.get_track_height(view.filtered_tracks[i + 1].id)
+                    y = y + track_height
+                end
+            end
+            return y - view.vertical_scroll_offset
+        end
     end
 
     -- Get Y position by track ID
-    local function get_track_y_by_id(track_id)
+    local function get_track_y_by_id(track_id, widget_height)
         for i, track in ipairs(view.filtered_tracks) do
             if track.id == track_id then
-                return get_track_y(i - 1)  -- 0-based index
+                return get_track_y(i - 1, widget_height)  -- 0-based index
             end
         end
         return -1  -- Track not in this view
@@ -67,16 +103,17 @@ function M.create(widget, state_module, track_filter_fn, options)
         -- Draw tracks
         -- print(string.format("Rendering %d tracks (widget height: %d, viewport height: %d)", #view.filtered_tracks, height, height))
         for i, track in ipairs(view.filtered_tracks) do
-            local y = get_track_y(i - 1)
-            -- print(string.format("  Track %d (%s): y=%d", i, track.name, y))
+            local y = get_track_y(i - 1, height)
+            local track_height = state_module.get_track_height(track.id)
+            -- print(string.format("  Track %d (%s): y=%d height=%d", i, track.name, y, track_height))
 
             -- Only draw if visible
-            if y + state_module.dimensions.track_height > 0 and y < height then
+            if y + track_height > 0 and y < height then
                 -- Alternate track colors
                 local track_color = (i % 2 == 0) and state_module.colors.track_even or state_module.colors.track_odd
 
                 -- Track background
-                timeline.add_rect(view.widget, 0, y, width, state_module.dimensions.track_height, track_color)
+                timeline.add_rect(view.widget, 0, y, width, track_height, track_color)
 
                 -- Track separator line
                 timeline.add_line(view.widget, 0, y, width, y, state_module.colors.grid_line, 1)
@@ -91,13 +128,16 @@ function M.create(widget, state_module, track_filter_fn, options)
         local selected_clips = state_module.get_selected_clips()
 
         for _, clip in ipairs(clips) do
-            local y = get_track_y_by_id(clip.track_id)
+            local y = get_track_y_by_id(clip.track_id, height)
 
             if y >= 0 then  -- Clip is on a track in this view
+                -- Get actual track height for this clip's track
+                local track_height = state_module.get_track_height(clip.track_id)
+
                 local x = state_module.time_to_pixel(clip.start_time, width)
                 y = y + 5  -- Add padding from track top
                 local clip_width = math.floor((clip.duration / viewport_duration) * width)
-                local clip_height = state_module.dimensions.track_height - 10
+                local clip_height = track_height - 10  -- Use actual track height
 
                 -- Only draw if visible
                 if x + clip_width >= 0 and x <= width and
@@ -139,8 +179,8 @@ function M.create(widget, state_module, track_filter_fn, options)
             local x2 = state_module.time_to_pixel(bounds.end_time, width)
 
             -- Calculate Y positions for tracks in this view
-            local y1 = get_track_y(bounds.start_track)
-            local y2 = get_track_y(bounds.end_track)
+            local y1 = get_track_y(bounds.start_track, height)
+            local y2 = get_track_y(bounds.end_track, height)
 
             if y1 >= 0 or y2 >= 0 then  -- At least part of selection is in this view
                 local x = math.min(x1, x2)
@@ -180,11 +220,12 @@ function M.create(widget, state_module, track_filter_fn, options)
             -- Check if clicking on clip
             local clicked_clip = nil
             for _, clip in ipairs(state_module.get_clips()) do
-                local clip_y = get_track_y_by_id(clip.track_id)
+                local clip_y = get_track_y_by_id(clip.track_id, height)
                 if clip_y >= 0 then
+                    local track_height = state_module.get_track_height(clip.track_id)
                     local clip_x = state_module.time_to_pixel(clip.start_time, width)
                     local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width)
-                    local clip_height = state_module.dimensions.track_height - 10
+                    local clip_height = track_height - 10
 
                     if x >= clip_x and x <= clip_x + clip_width and
                        y >= clip_y + 5 and y <= clip_y + 5 + clip_height then
@@ -198,9 +239,18 @@ function M.create(widget, state_module, track_filter_fn, options)
                 -- TODO: Handle clip selection and dragging
                 state_module.set_selection({clicked_clip})
             else
-                -- Start drag selection
+                -- Start drag selection - determine which track was clicked
                 local time = state_module.pixel_to_time(x, width)
-                local track_index = math.floor(y / state_module.dimensions.track_height)
+                local track_index = 0
+                local cumulative_y = 0
+                for i, track in ipairs(view.filtered_tracks) do
+                    local track_height = state_module.get_track_height(track.id)
+                    if y >= cumulative_y and y < cumulative_y + track_height then
+                        track_index = i - 1
+                        break
+                    end
+                    cumulative_y = cumulative_y + track_height
+                end
 
                 state_module.set_drag_selecting(true)
                 state_module.set_drag_selection_bounds(time, time, track_index, track_index)
@@ -213,7 +263,17 @@ function M.create(widget, state_module, track_filter_fn, options)
 
             elseif state_module.is_drag_selecting() then
                 local time = state_module.pixel_to_time(x, width)
-                local track_index = math.floor(y / state_module.dimensions.track_height)
+                -- Determine which track is at this Y position
+                local track_index = 0
+                local cumulative_y = 0
+                for i, track in ipairs(view.filtered_tracks) do
+                    local track_height = state_module.get_track_height(track.id)
+                    if y >= cumulative_y and y < cumulative_y + track_height then
+                        track_index = i - 1
+                        break
+                    end
+                    cumulative_y = cumulative_y + track_height
+                end
 
                 local bounds = state_module.get_drag_selection_bounds()
                 state_module.set_drag_selection_bounds(bounds.start_time, time, bounds.start_track, track_index)
@@ -232,6 +292,7 @@ function M.create(widget, state_module, track_filter_fn, options)
 
     -- Initialize
     update_filtered_tracks()
+    update_widget_height()
 
     -- Set up event handlers
     timeline.set_lua_state(widget)
@@ -250,6 +311,7 @@ function M.create(widget, state_module, track_filter_fn, options)
     -- Listen to state changes
     state_module.add_listener(function()
         update_filtered_tracks()
+        update_widget_height()
         render()
     end)
 

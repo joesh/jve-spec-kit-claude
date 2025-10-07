@@ -133,6 +133,14 @@ local function create_video_headers()
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_below, 0)
 
                     state.set_track_height(captured_track_id, new_height)
+
+                    -- Update splitter minimum height to accommodate new track sizes
+                    local total_height = 0
+                    for _, track in ipairs(state.get_video_tracks()) do
+                        total_height = total_height + state.get_track_height(track.id)
+                    end
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_splitter, total_height)
+                    print(string.format("  Updated video_splitter min height to %dpx", total_height))
                 end
             end
             print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
@@ -153,6 +161,22 @@ local function create_video_headers()
     for i = 1, #video_tracks do
         qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, i, 0)  -- Tracks stay fixed
     end
+
+    -- Register splitterMoved handler to update minimum height dynamically
+    _G["video_splitter_moved"] = function(pos, index)
+        print(string.format("video_splitter_moved fired: pos=%d, index=%d", pos, index))
+        -- Calculate total height needed for all video tracks
+        local total_height = 0
+        for _, track in ipairs(state.get_video_tracks()) do
+            total_height = total_height + state.get_track_height(track.id)
+        end
+        print(string.format("  Setting video_splitter min height to %dpx", total_height))
+        -- Set splitter minimum height to accommodate all tracks
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_splitter, total_height)
+    end
+    print("Registering video_splitter_moved handler...")
+    qt_set_splitter_moved_handler(video_splitter, "video_splitter_moved")
+    print("  Handler registered")
 
     return video_splitter, video_headers
 end
@@ -278,6 +302,18 @@ local function create_audio_headers()
     end
     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, #audio_tracks, 1)  -- Stretch widget
 
+    -- Register splitterMoved handler to update minimum height dynamically
+    _G["audio_splitter_moved"] = function(pos, index)
+        -- Calculate total height needed for all audio tracks
+        local total_height = 0
+        for _, track in ipairs(state.get_audio_tracks()) do
+            total_height = total_height + state.get_track_height(track.id)
+        end
+        -- Set splitter minimum height to accommodate all tracks
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_splitter, total_height)
+    end
+    qt_set_splitter_moved_handler(audio_splitter, "audio_splitter_moved")
+
     return audio_splitter, audio_headers
 end
 
@@ -306,12 +342,8 @@ local function create_headers_column()
     qt_constants.LAYOUT.ADD_WIDGET(headers_main_splitter, video_scroll)
     qt_constants.LAYOUT.ADD_WIDGET(headers_main_splitter, audio_scroll)
 
-    -- Set initial sizes based on track counts
-    local video_tracks = state.get_video_tracks()
-    local audio_tracks = state.get_audio_tracks()
-    local video_height = #video_tracks * timeline_state.dimensions.default_track_height
-    local audio_height = #audio_tracks * timeline_state.dimensions.default_track_height
-    qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, {video_height, audio_height})
+    -- Set initial 50/50 split (will be adjusted dynamically by splitterMoved handlers)
+    qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, {1, 1})
 
     -- Return splitter and scroll areas for synchronization
     return headers_main_splitter, video_scroll, audio_scroll
@@ -370,7 +402,7 @@ function M.create()
         video_widget,
         state,
         function(track) return track.track_type == "VIDEO" end,
-        {}
+        { render_bottom_to_top = true }
     )
 
     -- Video scroll area
@@ -397,12 +429,8 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, timeline_video_scroll)
     qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, timeline_audio_scroll)
 
-    -- Set initial splitter sizes based on track counts
-    local video_tracks = state.get_video_tracks()
-    local audio_tracks = state.get_audio_tracks()
-    local video_height = #video_tracks * timeline_state.dimensions.default_track_height
-    local audio_height = #audio_tracks * timeline_state.dimensions.default_track_height
-    qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, {video_height, audio_height})
+    -- Set initial 50/50 split (will be synchronized with headers_main_splitter)
+    qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, {1, 1})
 
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(vertical_splitter, "Expanding", "Expanding")
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, vertical_splitter)
@@ -428,51 +456,65 @@ function M.create()
     -- When headers video/audio boundary moves, update timeline
     local syncing = false  -- Prevent infinite loop
     _G["headers_splitter_moved"] = function(pos, index)
+        print(string.format("headers_splitter_moved fired: pos=%d, index=%d", pos, index))
         if not syncing then
             syncing = true
             local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(headers_column)
+            print(string.format("  Syncing to timeline: sizes = {%d, %d}", sizes[1], sizes[2]))
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, sizes)
             syncing = false
         end
     end
+    print("Registering headers_splitter_moved handler...")
     qt_set_splitter_moved_handler(headers_column, "headers_splitter_moved")
+    print("  Handler registered")
 
     -- When timeline video/audio boundary moves, update headers
     _G["timeline_splitter_moved"] = function(pos, index)
+        print(string.format("timeline_splitter_moved fired: pos=%d, index=%d", pos, index))
         if not syncing then
             syncing = true
             local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(vertical_splitter)
+            print(string.format("  Syncing to headers: sizes = {%d, %d}", sizes[1], sizes[2]))
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_column, sizes)
             syncing = false
         end
     end
+    print("Registering timeline_splitter_moved handler...")
     qt_set_splitter_moved_handler(vertical_splitter, "timeline_splitter_moved")
+    print("  Handler registered")
 
-    -- Synchronize vertical scrolling across all scroll areas
-    local scroll_syncing = false  -- Prevent infinite loop
-    local all_scroll_areas = {
-        header_video_scroll,
-        header_audio_scroll,
-        timeline_video_scroll,
-        timeline_audio_scroll
-    }
+    -- Synchronize vertical scrolling in pairs (video ↔ video, audio ↔ audio)
+    local video_scroll_syncing = false  -- Prevent infinite loop
+    local audio_scroll_syncing = false
 
-    -- Create a global handler that propagates scroll to all areas
-    _G["timeline_scroll_sync_handler"] = function(new_position)
-        if not scroll_syncing then
-            scroll_syncing = true
-            -- Set the same scroll position on all scroll areas
-            for _, scroll_area in ipairs(all_scroll_areas) do
-                qt_set_scroll_position(scroll_area, new_position)
-            end
-            scroll_syncing = false
+    -- Video scroll sync: header_video_scroll ↔ timeline_video_scroll
+    _G["video_scroll_sync_handler"] = function(new_position)
+        if not video_scroll_syncing then
+            video_scroll_syncing = true
+            qt_set_scroll_position(header_video_scroll, new_position)
+            qt_set_scroll_position(timeline_video_scroll, new_position)
+            video_scroll_syncing = false
         end
     end
 
-    -- Connect all scroll areas to the sync handler
-    for _, scroll_area in ipairs(all_scroll_areas) do
-        qt_set_scroll_area_scroll_handler(scroll_area, "timeline_scroll_sync_handler")
+    -- Audio scroll sync: header_audio_scroll ↔ timeline_audio_scroll
+    _G["audio_scroll_sync_handler"] = function(new_position)
+        if not audio_scroll_syncing then
+            audio_scroll_syncing = true
+            qt_set_scroll_position(header_audio_scroll, new_position)
+            qt_set_scroll_position(timeline_audio_scroll, new_position)
+            audio_scroll_syncing = false
+        end
     end
+
+    -- Connect video scroll areas to video sync handler
+    qt_set_scroll_area_scroll_handler(header_video_scroll, "video_scroll_sync_handler")
+    qt_set_scroll_area_scroll_handler(timeline_video_scroll, "video_scroll_sync_handler")
+
+    -- Connect audio scroll areas to audio sync handler
+    qt_set_scroll_area_scroll_handler(header_audio_scroll, "audio_scroll_sync_handler")
+    qt_set_scroll_area_scroll_handler(timeline_audio_scroll, "audio_scroll_sync_handler")
 
     -- Set initial splitter sizes: 150px for headers, rest for timeline area
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {timeline_state.dimensions.track_header_width, 1000})

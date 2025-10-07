@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QPushButton>
 #include <QSizePolicy>
 #include <QSet>
@@ -204,6 +205,82 @@ int lua_json_decode(lua_State* L) {
     return 1;
 }
 
+// Scroll position functions
+int lua_get_scroll_position(lua_State* L) {
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+
+    if (!widget) {
+        qWarning() << "Invalid widget in lua_get_scroll_position";
+        return 0;
+    }
+
+    QScrollArea* scrollArea = qobject_cast<QScrollArea*>(widget);
+    if (!scrollArea) {
+        qWarning() << "Widget is not a QScrollArea in lua_get_scroll_position";
+        return 0;
+    }
+
+    int position = scrollArea->verticalScrollBar()->value();
+    lua_pushinteger(L, position);
+    return 1;
+}
+
+int lua_set_scroll_position(lua_State* L) {
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int position = luaL_checkinteger(L, 2);
+
+    if (!widget) {
+        qWarning() << "Invalid widget in lua_set_scroll_position";
+        return 0;
+    }
+
+    QScrollArea* scrollArea = qobject_cast<QScrollArea*>(widget);
+    if (!scrollArea) {
+        qWarning() << "Widget is not a QScrollArea in lua_set_scroll_position";
+        return 0;
+    }
+
+    scrollArea->verticalScrollBar()->setValue(position);
+    return 0;
+}
+
+int lua_set_scroll_area_scroll_handler(lua_State* L) {
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+
+    if (!widget) {
+        qWarning() << "Invalid widget in lua_set_scroll_area_scroll_handler";
+        return 0;
+    }
+
+    QScrollArea* scrollArea = qobject_cast<QScrollArea*>(widget);
+    if (!scrollArea) {
+        qWarning() << "Widget is not a QScrollArea in lua_set_scroll_area_scroll_handler";
+        return 0;
+    }
+
+    std::string handler_str(handler_name);
+    QScrollBar* vScrollBar = scrollArea->verticalScrollBar();
+
+    if (vScrollBar) {
+        QObject::connect(vScrollBar, &QScrollBar::valueChanged, [L, handler_str](int value) {
+            lua_getglobal(L, handler_str.c_str());
+            if (lua_isfunction(L, -1)) {
+                lua_pushinteger(L, value);
+                if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                    qWarning() << "Error calling" << QString::fromStdString(handler_str)
+                              << ":" << lua_tostring(L, -1);
+                    lua_pop(L, 1);
+                }
+            } else {
+                lua_pop(L, 1);
+            }
+        });
+    }
+
+    return 0;
+}
+
 void registerQtBindings(lua_State* L)
 {
     // // qDebug() << "Registering Qt bindings with Lua";
@@ -364,6 +441,14 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_get_splitter_handle");
     lua_pushcfunction(L, lua_update_widget);
     lua_setglobal(L, "qt_update_widget");
+
+    // Register scroll functions globally
+    lua_pushcfunction(L, lua_get_scroll_position);
+    lua_setglobal(L, "qt_get_scroll_position");
+    lua_pushcfunction(L, lua_set_scroll_position);
+    lua_setglobal(L, "qt_set_scroll_position");
+    lua_pushcfunction(L, lua_set_scroll_area_scroll_handler);
+    lua_setglobal(L, "qt_set_scroll_area_scroll_handler");
 
     // Register JSON functions globally
     lua_pushcfunction(L, lua_json_encode);
@@ -781,11 +866,11 @@ int lua_get_splitter_handle(lua_State* L)
         return 1;
     }
 
-    qDebug() << "get_splitter_handle: splitter=" << splitter << "index=" << index << "count=" << splitter->count();
+    // qDebug() << "get_splitter_handle: splitter=" << splitter << "index=" << index << "count=" << splitter->count();
 
     // Get the handle widget at the given index
     QSplitterHandle* handle = splitter->handle(index);
-    qDebug() << "  -> handle(" << index << ") returned:" << handle;
+    // qDebug() << "  -> handle(" << index << ") returned:" << handle;
 
     if (handle) {
         lua_push_widget(L, handle);
@@ -1335,9 +1420,20 @@ public:
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
+        // Log first 20 events for each filter to debug handle 0
+        static QMap<QString, int> event_counts;
+        QString key = QString::fromStdString(handler_name);
+        if (!event_counts.contains(key)) event_counts[key] = 0;
+
+        // if (event_counts[key] < 20) {
+        //     qDebug() << "ClickEventFilter[" << key << "]: event" << event->type() << "obj=" << obj << "count=" << event_counts[key]++;
+        // }
+
         if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease) {
             QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::LeftButton) {
+                // qDebug() << "ClickEventFilter[" << key << "]: Mouse" << (event->type() == QEvent::MouseButtonPress ? "PRESS" : "RELEASE") << "at y=" << mouseEvent->pos().y();
+
                 // Call the Lua handler function with event type and position
                 lua_getglobal(lua_state, handler_name.c_str());
                 if (lua_isfunction(lua_state, -1)) {
@@ -1385,10 +1481,11 @@ int lua_set_widget_click_handler(lua_State* L)
     std::string handler_str = std::string(handler_name);
 
     // Create and install event filter
-    qDebug() << "qt_set_widget_click_handler: widget=" << widget << "handler=" << QString::fromStdString(handler_str);
+    // qDebug() << "qt_set_widget_click_handler: widget=" << widget << "handler=" << QString::fromStdString(handler_str);
+    // qDebug() << "  -> geometry=" << widget->geometry() << "visible=" << widget->isVisible() << "enabled=" << widget->isEnabled();
     ClickEventFilter* filter = new ClickEventFilter(handler_str, L, widget);
     widget->installEventFilter(filter);
-    qDebug() << "  -> Event filter installed on widget" << widget;
+    // qDebug() << "  -> Event filter installed on widget" << widget;
 
     lua_pushboolean(L, 1);
     return 1;

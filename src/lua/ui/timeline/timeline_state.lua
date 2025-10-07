@@ -18,7 +18,7 @@ local on_selection_changed_callback = nil
 
 -- Dimensions (shared across all views)
 M.dimensions = {
-    track_height = 50,
+    default_track_height = 50,  -- Default height for new tracks
     track_header_width = 150,
 }
 
@@ -77,6 +77,11 @@ function M.init(sequence_id)
     -- Load data from database
     state.tracks = db.load_tracks(sequence_id)
     state.clips = db.load_clips(sequence_id)
+
+    -- Initialize track heights to default
+    for _, track in ipairs(state.tracks) do
+        track.height = M.dimensions.default_track_height
+    end
 
     print(string.format("Timeline state initialized: %d tracks, %d clips",
         #state.tracks, #state.clips))
@@ -289,6 +294,28 @@ function M.get_track_index(track_id)
         end
     end
     return -1
+end
+
+-- Get track height by track ID
+function M.get_track_height(track_id)
+    for _, track in ipairs(state.tracks) do
+        if track.id == track_id then
+            return track.height or M.dimensions.default_track_height
+        end
+    end
+    return M.dimensions.default_track_height
+end
+
+-- Set track height by track ID
+function M.set_track_height(track_id, height)
+    for _, track in ipairs(state.tracks) do
+        if track.id == track_id then
+            track.height = height
+            notify_listeners()
+            return true
+        end
+    end
+    return false
 end
 
 -- Interaction state management
