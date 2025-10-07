@@ -27,21 +27,21 @@ local function create_video_headers()
     local video_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
     local video_tracks = state.get_video_tracks()
 
-    print("DEBUG: Video tracks from state:")
-    for i, track in ipairs(video_tracks) do
-        print(string.format("  video_tracks[%d] = %s (id=%s)", i, track.name, track.id))
-    end
-
-    -- Add stretchable spacer at TOP (far from anchor) so video tracks anchor to bottom
-    local top_spacer = qt_constants.WIDGET.CREATE()
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(top_spacer, "Expanding", "Expanding")
-    qt_constants.LAYOUT.ADD_WIDGET(video_splitter, top_spacer)
+    -- Debug: Video tracks from state
+    -- for i, track in ipairs(video_tracks) do
+    --     print(string.format("  video_tracks[%d] = %s (id=%s)", i, track.name, track.id))
+    -- end
 
     local video_headers = {}
     local current_track = nil
     local handler_name = "video_splitter_event_" .. tostring(video_splitter):gsub("[^%w]", "_")
 
-    -- Add tracks in REVERSE order so V1 is at bottom (nearest anchor)
+    -- Add stretch widget at top to push tracks down (V1 is anchor at bottom)
+    local stretch_widget = qt_constants.WIDGET.CREATE()
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(stretch_widget, "Expanding", "Expanding")
+    qt_constants.LAYOUT.ADD_WIDGET(video_splitter, stretch_widget)
+
+    -- Add tracks in REVERSE order (V3, V2, V1)
     for i = #video_tracks, 1, -1 do
         local track = video_tracks[i]
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
@@ -50,61 +50,108 @@ local function create_video_headers()
                 background: #3a3a5a;
                 color: #cccccc;
                 padding-left: 10px;
-                border: 1px solid #222222;
+                border: 1px solid #222232;
             }
         ]])
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
-        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.track_height)
-        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.track_height)
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
+        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.default_track_height)
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
         video_headers[i] = header
     end
 
-    -- NOW install all event handlers AFTER all widgets have been added
-    -- Video splitter layout (top to bottom): spacer, V3, V2, V1
-    -- Handle 0: between spacer and V3 → controls V3
-    -- Handle 1: between V3 and V2 → controls V2
-    -- Handle 2: between V2 and V1 → controls V1
-    for handle_index = 0, #video_tracks - 1 do
-        local handle = qt_get_splitter_handle(video_splitter, handle_index)
-        print(string.format("DEBUG: Video handle %d = %s", handle_index, tostring(handle)))
+    -- Install handlers: Handle N resizes Track N
+    -- Physical layout (top to bottom): Stretch → V3 → V2 → V1 → [MIDLINE ANCHOR]
+    -- Tracks grow upward from midline anchor
+    --
+    -- CRITICAL DISCOVERY: Qt splitter handle indices don't start at 0!
+    -- Working indices are 1, 2, 3 (empirically discovered by trying handle 0 which didn't fire)
+    --
+    -- Qt handle mapping (empirically discovered):
+    --   qt_handle 1: between V3 and V2 → Handle 3 → resizes V3 (track 3)
+    --   qt_handle 2: between V2 and V1 → Handle 2 → resizes V2 (track 2)
+    --   qt_handle 3: below V1 → Handle 1 → resizes V1 (track 1)
+    --
+    -- We renumber from bottom to top: handle_num = (#video_tracks + 1) - qt_handle_index
+    print(string.format("Installing video handles for %d tracks", #video_tracks))
+    print(string.format("Checking which Qt handles exist..."))
+    for test_index = 0, #video_tracks + 1 do
+        local test_handle = qt_get_splitter_handle(video_splitter, test_index)
+        print(string.format("  qt_handle %d: %s", test_index, test_handle and "EXISTS" or "nil"))
+    end
+
+    for qt_handle_index = 1, #video_tracks do
+        local handle = qt_get_splitter_handle(video_splitter, qt_handle_index)
+        print(string.format("  qt_handle %d: got handle = %s", qt_handle_index, tostring(handle)))
         if handle then
-            local track_num = #video_tracks - handle_index  -- handle 0→V3, handle 1→V2, handle 2→V1
-            local captured_handle_index = handle_index  -- Capture by value, not reference
-            local this_handler_name = handler_name .. "_handle_" .. handle_index
+            -- Renumber from bottom to top: qt_handle 1→Handle 3, qt_handle 2→Handle 2, qt_handle 3→Handle 1
+            local handle_num = (#video_tracks + 1) - qt_handle_index
+
+            -- Handle N resizes track N
+            local track_num = handle_num
+            local track_id = video_tracks[track_num].id
+            local track_name = video_tracks[track_num].name
+
+            -- Qt positions: Stretch=0, V3=1, V2=2, V1=3
+            local qt_pos_above = qt_handle_index      -- Widget above the handle
+            local qt_pos_below = qt_handle_index + 1  -- Widget below the handle (what we want to resize)
+
+            print(string.format("    Installing: qt_handle %d → Handle %d → resizes %s (qt_pos %d)",
+                qt_handle_index, handle_num, track_name, qt_pos_below))
+
+            local this_handler_name = handler_name .. "_handle_" .. qt_handle_index
+            print(string.format("    Handler name: %s", this_handler_name))
+
+            -- Create local copies for the closure to capture
+            local captured_handle_num = handle_num
+            local captured_track_num = track_num
+            local captured_track_id = track_id
+            local captured_track_name = track_name
+            local captured_qt_pos_above = qt_pos_above
+            local captured_qt_pos_below = qt_pos_below
+
             _G[this_handler_name] = function(event_type, y)
+                print(string.format("Handler %s called: event_type=%s", this_handler_name, event_type))
                 if event_type == "press" then
-                    current_track = track_num
-                    print(string.format("Video handle_index=%d track_num=%d press: unlocking V%d", captured_handle_index, track_num, track_num))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[track_num], 0)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[track_num], 16777215)
-                elseif event_type == "release" and current_track then
+                    print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], 0)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], 16777215)
+                    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_above, 0)
+                    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_below, 1)
+                elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(video_splitter)
-                    local size_index = #video_tracks - track_num + 2
-                    local new_height = sizes[size_index]
-                    print(string.format("Video handle_index=%d track_num=%d release: locking V%d at %dpx", captured_handle_index, track_num, track_num, new_height))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[track_num], new_height)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[track_num], new_height)
-                    current_track = nil
+                    local new_height = sizes[captured_qt_pos_below + 1]  -- Lua arrays are 1-indexed
+
+                    print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
+
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], new_height)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], new_height)
+                    -- Reset: stretch widget absorbs space, tracks fixed
+                    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, 0, 1)
+                    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_below, 0)
+
+                    state.set_track_height(captured_track_id, new_height)
                 end
             end
+            print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
             qt_set_widget_click_handler(handle, this_handler_name)
+            print(string.format("    Handler installed successfully"))
         end
     end
 
-    -- Set initial sizes: spacer gets 100px (for testing handle visibility), tracks get their natural height
-    local initial_sizes = {100}  -- Spacer at start (increased from 1 to make handle 0 clickable)
+    -- Set initial sizes: stretch widget gets 0, tracks get their natural height
+    local initial_sizes = {0}  -- Stretch widget starts at 0
     for i = 1, #video_tracks do
-        table.insert(initial_sizes, timeline_state.dimensions.track_height)
+        table.insert(initial_sizes, timeline_state.dimensions.default_track_height)
     end
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(video_splitter, initial_sizes)
 
-    -- Set stretch factors: ONLY spacer stretches, all tracks stay fixed during main boundary drag
-    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, 0, 1)  -- Spacer stretches
+    -- Set stretch factors: stretch widget absorbs space, tracks stay fixed
+    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, 0, 1)  -- Stretch widget
     for i = 1, #video_tracks do
-        qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, i, 0)  -- All tracks: no stretch
+        qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, i, 0)  -- Tracks stay fixed
     end
 
     return video_splitter, video_headers
@@ -119,6 +166,7 @@ local function create_audio_headers()
     local current_track = nil
     local handler_name = "audio_splitter_event_" .. tostring(audio_splitter):gsub("[^%w]", "_")
 
+    -- Add tracks in normal order (A1, A2, A3)
     for i, track in ipairs(audio_tracks) do
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
         qt_constants.PROPERTIES.SET_STYLE(header, [[
@@ -131,62 +179,112 @@ local function create_audio_headers()
         ]])
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
-        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.track_height)
-        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.track_height)
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
+        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.default_track_height)
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
         audio_headers[i] = header
     end
 
-    -- Add stretchable spacer at bottom so audio tracks anchor to top
-    local bottom_spacer = qt_constants.WIDGET.CREATE()
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(bottom_spacer, "Expanding", "Expanding")
-    qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, bottom_spacer)
+    -- Add stretch widget at bottom to push tracks up (A1 is anchor at top)
+    local stretch_widget = qt_constants.WIDGET.CREATE()
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(stretch_widget, "Expanding", "Expanding")
+    qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, stretch_widget)
 
-    -- NOW install all event handlers AFTER all widgets have been added
-    -- Audio layout: A1(0), A2(1), A3(2), spacer(3)
-    -- handle 0: between A1 and A2 -> controls A1
-    -- handle 1: between A2 and A3 -> controls A2
-    -- handle 2: between A3 and spacer -> controls A3
-    for handle_index = 0, #audio_tracks - 1 do
-        local handle = qt_get_splitter_handle(audio_splitter, handle_index)
-        print(string.format("DEBUG: Audio handle %d = %s", handle_index, tostring(handle)))
+    -- Install handlers: Handle N resizes Track N
+    -- Physical layout (top to bottom): A1 → A2 → A3 → Stretch
+    -- A1 is anchor at top, tracks grow downward
+    --
+    -- CRITICAL DISCOVERY: Qt splitter handle indices don't start at 0!
+    -- Working indices are 1, 2, 3 (just like video tracks)
+    --
+    -- Qt handle mapping - NO RENUMBERING NEEDED (both go 1-3 top to bottom):
+    --   qt_handle 1: between A1 and A2 → Handle 1 → resizes A1 (track 1)
+    --   qt_handle 2: between A2 and A3 → Handle 2 → resizes A2 (track 2)
+    --   qt_handle 3: between A3 and Stretch → Handle 3 → resizes A3 (track 3)
+    print(string.format("Installing audio handles for %d tracks", #audio_tracks))
+    print(string.format("Checking which Qt handles exist..."))
+    for test_index = 0, #audio_tracks + 1 do
+        local test_handle = qt_get_splitter_handle(audio_splitter, test_index)
+        print(string.format("  qt_handle %d: %s", test_index, test_handle and "EXISTS" or "nil"))
+    end
+
+    for qt_handle_index = 1, #audio_tracks do
+        local handle = qt_get_splitter_handle(audio_splitter, qt_handle_index)
+        print(string.format("  qt_handle %d: got handle = %s", qt_handle_index, tostring(handle)))
         if handle then
-            local track_num = handle_index + 1  -- handle 0 -> A1, handle 1 -> A2, etc.
-            local captured_handle_index = handle_index  -- Capture by value, not reference
-            local this_handler_name = handler_name .. "_handle_" .. handle_index
+            -- Direct mapping: qt_handle N → Handle N → resizes Track N (no renumbering!)
+            local handle_num = qt_handle_index
+            local track_num = qt_handle_index  -- Direct 1:1 mapping
+            local track_id = audio_tracks[track_num].id
+            local track_name = audio_tracks[track_num].name
+
+            -- Qt positions: A1=0, A2=1, A3=2, Stretch=3
+            -- Each handle resizes the widget ABOVE it
+            local qt_pos_to_resize = qt_handle_index - 1
+
+            print(string.format("    Installing: qt_handle %d → Handle %d → resizes %s (qt_pos %d)",
+                qt_handle_index, handle_num, track_name, qt_pos_to_resize))
+
+            local this_handler_name = handler_name .. "_handle_" .. qt_handle_index
+
+            -- Create local copies for the closure to capture
+            local captured_handle_num = handle_num
+            local captured_track_num = track_num
+            local captured_track_id = track_id
+            local captured_track_name = track_name
+            local captured_qt_pos_to_resize = qt_pos_to_resize
+
             _G[this_handler_name] = function(event_type, y)
                 if event_type == "press" then
-                    current_track = track_num
-                    print(string.format("Audio handle_index=%d track_num=%d press: unlocking A%d", captured_handle_index, track_num, track_num))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[track_num], 0)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[track_num], 16777215)
-                elseif event_type == "release" and current_track then
+                    print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
+                    -- Get current height before unlocking
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(audio_splitter)
-                    local new_height = sizes[track_num]
-                    print(string.format("Audio handle_index=%d track_num=%d release: locking A%d at %dpx", captured_handle_index, track_num, track_num, new_height))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[track_num], new_height)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[track_num], new_height)
-                    current_track = nil
+                    local current_height = sizes[captured_qt_pos_to_resize + 1]
+
+                    -- Unlock with current height as both min and max temporarily
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], current_height)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], current_height)
+
+                    -- Now fully unlock
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], 0)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], 16777215)
+                elseif event_type == "release" then
+                    local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(audio_splitter)
+                    local new_height = sizes[captured_qt_pos_to_resize + 1]  -- Lua arrays are 1-indexed
+
+                    print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
+
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], new_height)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], new_height)
+                    -- Reset stretch factors: stretch widget absorbs, tracks fixed
+                    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, #audio_tracks, 1)  -- Stretch widget
+                    for i = 0, #audio_tracks - 1 do
+                        qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, i, 0)  -- Tracks fixed
+                    end
+
+                    state.set_track_height(captured_track_id, new_height)
                 end
             end
+            print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
             qt_set_widget_click_handler(handle, this_handler_name)
+            print(string.format("    Handler installed successfully"))
         end
     end
 
-    -- Set initial sizes: tracks get their natural height, spacer gets 100px (for testing handle visibility)
+    -- Set initial sizes: tracks get their natural height, stretch widget gets 0
     local initial_sizes = {}
     for i = 1, #audio_tracks do
-        table.insert(initial_sizes, timeline_state.dimensions.track_height)
+        table.insert(initial_sizes, timeline_state.dimensions.default_track_height)
     end
-    table.insert(initial_sizes, 100)  -- Spacer starts at 100px (increased from 1 to make handle 2 clickable)
+    table.insert(initial_sizes, 0)  -- Stretch widget starts at 0
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(audio_splitter, initial_sizes)
 
-    -- Set stretch factors: ONLY spacer stretches, all tracks stay fixed during main boundary drag
+    -- Set stretch factors: stretch widget absorbs space, tracks stay fixed
     for i = 0, #audio_tracks - 1 do
-        qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, i, 0)  -- All tracks: no stretch
+        qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, i, 0)  -- Tracks stay fixed
     end
-    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, #audio_tracks, 1)  -- Spacer stretches
+    qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, #audio_tracks, 1)  -- Stretch widget
 
     return audio_splitter, audio_headers
 end
@@ -201,12 +299,16 @@ local function create_headers_column()
     local video_splitter, video_headers = create_video_headers()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(video_scroll, video_splitter)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Fixed", "Expanding")
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
 
     -- Audio headers section with scroll area
     local audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     local audio_splitter, audio_headers = create_audio_headers()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(audio_scroll, audio_splitter)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Fixed", "Expanding")
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
 
     -- Add both sections to main splitter
     qt_constants.LAYOUT.ADD_WIDGET(headers_main_splitter, video_scroll)
@@ -215,11 +317,12 @@ local function create_headers_column()
     -- Set initial sizes based on track counts
     local video_tracks = state.get_video_tracks()
     local audio_tracks = state.get_audio_tracks()
-    local video_height = #video_tracks * timeline_state.dimensions.track_height
-    local audio_height = #audio_tracks * timeline_state.dimensions.track_height
+    local video_height = #video_tracks * timeline_state.dimensions.default_track_height
+    local audio_height = #audio_tracks * timeline_state.dimensions.default_track_height
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, {video_height, audio_height})
 
-    return headers_main_splitter
+    -- Return splitter and scroll areas for synchronization
+    return headers_main_splitter, video_scroll, audio_scroll
 end
 
 function M.create()
@@ -236,13 +339,13 @@ function M.create()
         end
 
         -- Log selection for debugging
-        if #selected_clips == 1 then
-            print("Selected clip: " .. selected_clips[1].name .. " (" .. selected_clips[1].id .. ")")
-        elseif #selected_clips > 1 then
-            print("Selected " .. #selected_clips .. " clips")
-        else
-            print("No clips selected")
-        end
+        -- if #selected_clips == 1 then
+        --     print("Selected clip: " .. selected_clips[1].name .. " (" .. selected_clips[1].id .. ")")
+        -- elseif #selected_clips > 1 then
+        --     print("Selected " .. #selected_clips .. " clips")
+        -- else
+        --     print("No clips selected")
+        -- end
     end)
 
     -- Main container
@@ -255,7 +358,7 @@ function M.create()
     local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
     -- LEFT SIDE: Headers column (all headers stacked vertically)
-    local headers_column = create_headers_column()
+    local headers_column, header_video_scroll, header_audio_scroll = create_headers_column()
 
     -- RIGHT SIDE: Timeline area column
     local timeline_area = qt_constants.WIDGET.CREATE()
@@ -279,9 +382,9 @@ function M.create()
     )
 
     -- Video scroll area
-    local video_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
-    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(video_scroll, video_widget)
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Expanding", "Expanding")
+    local timeline_video_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
+    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_video_scroll, video_widget)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_video_scroll, "Expanding", "Expanding")
 
     -- Create audio timeline view
     local audio_widget = qt_constants.WIDGET.CREATE_TIMELINE()
@@ -293,20 +396,20 @@ function M.create()
     )
 
     -- Audio scroll area
-    local audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
-    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(audio_scroll, audio_widget)
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Expanding", "Expanding")
+    local timeline_audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
+    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_audio_scroll, audio_widget)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_audio_scroll, "Expanding", "Expanding")
 
     -- Vertical splitter between video and audio scroll areas
     local vertical_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
-    qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, video_scroll)
-    qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, audio_scroll)
+    qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, timeline_video_scroll)
+    qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, timeline_audio_scroll)
 
     -- Set initial splitter sizes based on track counts
     local video_tracks = state.get_video_tracks()
     local audio_tracks = state.get_audio_tracks()
-    local video_height = #video_tracks * timeline_state.dimensions.track_height
-    local audio_height = #audio_tracks * timeline_state.dimensions.track_height
+    local video_height = #video_tracks * timeline_state.dimensions.default_track_height
+    local audio_height = #audio_tracks * timeline_state.dimensions.default_track_height
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, {video_height, audio_height})
 
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(vertical_splitter, "Expanding", "Expanding")
@@ -352,6 +455,32 @@ function M.create()
         end
     end
     qt_set_splitter_moved_handler(vertical_splitter, "timeline_splitter_moved")
+
+    -- Synchronize vertical scrolling across all scroll areas
+    local scroll_syncing = false  -- Prevent infinite loop
+    local all_scroll_areas = {
+        header_video_scroll,
+        header_audio_scroll,
+        timeline_video_scroll,
+        timeline_audio_scroll
+    }
+
+    -- Create a global handler that propagates scroll to all areas
+    _G["timeline_scroll_sync_handler"] = function(new_position)
+        if not scroll_syncing then
+            scroll_syncing = true
+            -- Set the same scroll position on all scroll areas
+            for _, scroll_area in ipairs(all_scroll_areas) do
+                qt_set_scroll_position(scroll_area, new_position)
+            end
+            scroll_syncing = false
+        end
+    end
+
+    -- Connect all scroll areas to the sync handler
+    for _, scroll_area in ipairs(all_scroll_areas) do
+        qt_set_scroll_area_scroll_handler(scroll_area, "timeline_scroll_sync_handler")
+    end
 
     -- Set initial splitter sizes: 150px for headers, rest for timeline area
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {timeline_state.dimensions.track_header_width, 1000})
