@@ -62,6 +62,8 @@ int lua_set_widget_stylesheet(lua_State* L);
 int lua_create_single_shot_timer(lua_State* L);
 int lua_set_scroll_area_alignment(lua_State* L);
 int lua_set_scroll_area_anchor_bottom(lua_State* L);
+int lua_set_focus_policy(lua_State* L);
+int lua_set_global_key_handler(lua_State* L);
 
 // Helper function to convert Lua table to QJsonValue
 static QJsonValue luaTableToJsonValue(lua_State* L, int index);
@@ -515,6 +517,10 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_scroll_area_alignment");
     lua_pushcfunction(L, lua_set_scroll_area_anchor_bottom);
     lua_setglobal(L, "qt_set_scroll_area_anchor_bottom");
+    lua_pushcfunction(L, lua_set_focus_policy);
+    lua_setglobal(L, "qt_set_focus_policy");
+    lua_pushcfunction(L, lua_set_global_key_handler);
+    lua_setglobal(L, "qt_set_global_key_handler");
 
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
@@ -1698,6 +1704,99 @@ int lua_set_scroll_area_anchor_bottom(lua_State* L)
         }
     } else {
         qWarning() << "Invalid widget argument in set_scroll_area_anchor_bottom";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_focus_policy(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* policy = luaL_checkstring(L, 2);
+
+    if (widget) {
+        Qt::FocusPolicy fp = Qt::NoFocus;
+        if (strcmp(policy, "StrongFocus") == 0) {
+            fp = Qt::StrongFocus;
+        } else if (strcmp(policy, "ClickFocus") == 0) {
+            fp = Qt::ClickFocus;
+        } else if (strcmp(policy, "TabFocus") == 0) {
+            fp = Qt::TabFocus;
+        } else if (strcmp(policy, "WheelFocus") == 0) {
+            fp = Qt::WheelFocus;
+        } else if (strcmp(policy, "NoFocus") == 0) {
+            fp = Qt::NoFocus;
+        }
+        widget->setFocusPolicy(fp);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget argument in set_focus_policy";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Global key event filter class
+class GlobalKeyFilter : public QObject
+{
+public:
+    GlobalKeyFilter(lua_State* L, const std::string& handler)
+        : QObject(), lua_state(L), handler_name(handler) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() == QEvent::KeyPress && lua_state) {
+            QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+
+            lua_getglobal(lua_state, handler_name.c_str());
+            if (lua_isfunction(lua_state, -1)) {
+                lua_newtable(lua_state);
+
+                lua_pushstring(lua_state, "key");
+                lua_pushinteger(lua_state, keyEvent->key());
+                lua_settable(lua_state, -3);
+
+                lua_pushstring(lua_state, "text");
+                lua_pushstring(lua_state, keyEvent->text().toUtf8().constData());
+                lua_settable(lua_state, -3);
+
+                lua_pushstring(lua_state, "modifiers");
+                lua_pushinteger(lua_state, (int)keyEvent->modifiers());
+                lua_settable(lua_state, -3);
+
+                if (lua_pcall(lua_state, 1, 1, 0) == LUA_OK) {
+                    bool handled = lua_toboolean(lua_state, -1);
+                    lua_pop(lua_state, 1);
+                    if (handled) {
+                        return true;  // Event consumed
+                    }
+                } else {
+                    qWarning() << "Error in global key handler:" << lua_tostring(lua_state, -1);
+                    lua_pop(lua_state, 1);
+                }
+            } else {
+                lua_pop(lua_state, 1);
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    lua_State* lua_state;
+    std::string handler_name;
+};
+
+int lua_set_global_key_handler(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+
+    if (widget) {
+        GlobalKeyFilter* filter = new GlobalKeyFilter(L, handler_name);
+        widget->installEventFilter(filter);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget argument in set_global_key_handler";
         lua_pushboolean(L, 0);
     }
     return 1;

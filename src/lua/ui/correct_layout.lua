@@ -205,6 +205,10 @@ local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
 local timeline_panel_mod = require("ui.timeline.timeline_panel")
 local timeline_panel = timeline_panel_mod.create()
 
+-- 5. Initialize keyboard shortcuts
+local keyboard_shortcuts = require("core.keyboard_shortcuts")
+keyboard_shortcuts.init(require("ui.timeline.timeline_state"), command_manager)
+
 -- Initialize the Lua inspector content following working reference pattern
 local view = require("ui.inspector.view")
 
@@ -255,6 +259,13 @@ qt_constants.PROPERTIES.SET_STYLE(main_window, [[
     QTreeWidget { background: #353535; color: white; border: 1px solid #555; }
     QLineEdit { background: #353535; color: white; border: 1px solid #555; padding: 4px; }
 ]])
+
+-- Install global keyboard shortcut handler
+_G.global_key_handler = function(event)
+    return keyboard_shortcuts.handle_key(event)
+end
+qt_set_global_key_handler(main_window, "global_key_handler")
+print("✅ Keyboard shortcuts installed")
 
 -- Show window
 qt_constants.DISPLAY.SHOW(main_window)
