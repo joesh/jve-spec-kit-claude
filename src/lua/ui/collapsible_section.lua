@@ -437,8 +437,14 @@ function CollapsibleSection:createHeader(operation_context)
     end
 
     -- Create the header click callback (same functionality as triangle)
+    -- Only toggle on release to avoid double-toggle (press + release both call this)
     local section_instance = self
-    _G[header_callback_name] = function()
+    _G[header_callback_name] = function(event_type, y_pos)
+        -- Only handle release events to prevent double-toggle
+        if event_type ~= "release" then
+            return true
+        end
+
         logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "🖱️ Header clicked for: " .. self.title)
         local result = section_instance:setExpanded(not section_instance.expanded)
         if error_system.is_error(result) then
