@@ -452,7 +452,8 @@ function M.create()
     -- Map widget to its scroll area (will be populated after scroll areas are created)
     local widget_to_scroll_area = {}
 
-    -- Forward declaration - will be set after splitter creation
+    -- Forward declarations - will be set after splitter creation
+    local vertical_splitter  -- Needed by on_drag_start for coordinate conversion
     local on_drag_move, on_drag_end
 
     -- Callback for views to notify panel when drag starts in empty space
@@ -524,7 +525,7 @@ function M.create()
     widget_to_scroll_area[audio_widget] = timeline_audio_scroll
 
     -- Vertical splitter between video and audio scroll areas
-    local vertical_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
+    vertical_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
     qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, timeline_video_scroll)
     qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, timeline_audio_scroll)
 
