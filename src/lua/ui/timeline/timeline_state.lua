@@ -13,6 +13,9 @@ local listeners = {}
 -- Project browser reference (for media insertion)
 local project_browser = nil
 
+-- Rubber band reference (for drag selection UI)
+local rubber_band = nil
+
 -- Callbacks
 local on_selection_changed_callback = nil
 
@@ -213,6 +216,15 @@ end
 
 function M.get_project_browser()
     return project_browser
+end
+
+-- Rubber band reference (for drag selection UI)
+function M.set_rubber_band(band)
+    rubber_band = band
+end
+
+function M.get_rubber_band()
+    return rubber_band
 end
 
 -- Coordinate conversion helpers

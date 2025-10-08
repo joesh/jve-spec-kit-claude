@@ -440,13 +440,54 @@ function M.create()
     qt_constants.PROPERTIES.SET_MAX_HEIGHT(ruler_widget, timeline_ruler.RULER_HEIGHT)  -- Lock to 32px
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, ruler_widget)
 
+    -- Drag selection coordination state (panel-level, not view-level)
+    local drag_state = {
+        dragging = false,
+        start_widget = nil,       -- Which widget the drag started in
+        start_scroll_area = nil,  -- The scroll area containing that widget
+        start_x = 0,              -- Start position in that widget's coords
+        start_y = 0,
+    }
+
+    -- Map widget to its scroll area (will be populated after scroll areas are created)
+    local widget_to_scroll_area = {}
+
+    -- Forward declaration - will be set after splitter creation
+    local on_drag_move, on_drag_end
+
+    -- Callback for views to notify panel when drag starts in empty space
+    local function on_drag_start(source_widget, x, y)
+        drag_state.dragging = true
+        drag_state.start_widget = source_widget
+        drag_state.start_scroll_area = widget_to_scroll_area[source_widget]
+        drag_state.start_x = x
+        drag_state.start_y = y
+
+        -- Convert start position to splitter coordinates immediately (not lazily)
+        -- This ensures on_drag_end works even if there's no move event
+        local global_x, global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(source_widget, x, y)
+        local start_x_splitter, start_y_splitter = qt_constants.WIDGET.MAP_FROM_GLOBAL(
+            vertical_splitter,
+            global_x,
+            global_y
+        )
+        drag_state.splitter_start_x = start_x_splitter
+        drag_state.splitter_start_y = start_y_splitter
+
+        -- Return callbacks for view to use during drag
+        return on_drag_move, on_drag_end
+    end
+
     -- Create video timeline view
     local video_widget = qt_constants.WIDGET.CREATE_TIMELINE()
     local video_view = timeline_view.create(
         video_widget,
         state,
         function(track) return track.track_type == "VIDEO" end,
-        { render_bottom_to_top = true }
+        {
+            render_bottom_to_top = true,
+            on_drag_start = on_drag_start,
+        }
     )
 
     -- Make video widget expand to fill available space
@@ -457,13 +498,18 @@ function M.create()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_video_scroll, video_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_video_scroll, "Expanding", "Expanding")
 
+    -- Register video widget → scroll area mapping for coordinate conversion
+    widget_to_scroll_area[video_widget] = timeline_video_scroll
+
     -- Create audio timeline view
     local audio_widget = qt_constants.WIDGET.CREATE_TIMELINE()
     local audio_view = timeline_view.create(
         audio_widget,
         state,
         function(track) return track.track_type == "AUDIO" end,
-        {}
+        {
+            on_drag_start = on_drag_start,
+        }
     )
 
     -- Make audio widget expand to fill available space
@@ -474,6 +520,9 @@ function M.create()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_audio_scroll, audio_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_audio_scroll, "Expanding", "Expanding")
 
+    -- Register audio widget → scroll area mapping for coordinate conversion
+    widget_to_scroll_area[audio_widget] = timeline_audio_scroll
+
     -- Vertical splitter between video and audio scroll areas
     local vertical_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
     qt_constants.LAYOUT.ADD_WIDGET(vertical_splitter, timeline_video_scroll)
@@ -481,6 +530,166 @@ function M.create()
 
     -- Set initial 50/50 split (will be synchronized with headers_main_splitter)
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, {1, 1})
+
+    -- Create rubber band for drag selection (parented to splitter so it can span both views)
+    -- Note: rubber band starts hidden (QRubberBand::hide() called in C++)
+    local rubber_band = qt_constants.WIDGET.CREATE_RUBBER_BAND(vertical_splitter)
+    state.set_rubber_band(rubber_band)  -- Store in state for access from timeline views
+
+    -- Panel drag coordination callbacks
+    -- Called by view during drag to update rubber band geometry
+    -- View passes its local coordinates, panel converts to splitter coords
+
+    -- Show rubber band on first move
+    local rubber_band_visible = false
+    local function show_rubber_band_if_needed()
+        if not rubber_band_visible then
+            qt_constants.WIDGET.SET_RUBBER_BAND_GEOMETRY(
+                rubber_band,
+                drag_state.splitter_start_x,
+                drag_state.splitter_start_y,
+                0, 0
+            )
+            qt_constants.DISPLAY.SET_VISIBLE(rubber_band, true)
+            rubber_band_visible = true
+        end
+    end
+
+    on_drag_move = function(source_widget, x, y)
+        if not drag_state.dragging then return end
+
+        -- Show rubber band on first move
+        show_rubber_band_if_needed()
+
+        -- Convert via global coordinates (always works regardless of hierarchy)
+        -- Step 1: Widget-local → Global screen coords
+        local global_x, global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(source_widget, x, y)
+
+        -- Step 2: Global screen coords → Splitter-local coords
+        local current_x_splitter, current_y_splitter = qt_constants.WIDGET.MAP_FROM_GLOBAL(
+            vertical_splitter,
+            global_x,
+            global_y
+        )
+
+        -- Calculate rubber band rectangle in splitter coords
+        local rect_x = math.min(drag_state.splitter_start_x, current_x_splitter)
+        local rect_y = math.min(drag_state.splitter_start_y, current_y_splitter)
+        local rect_width = math.abs(current_x_splitter - drag_state.splitter_start_x)
+        local rect_height = math.abs(current_y_splitter - drag_state.splitter_start_y)
+
+        -- Update rubber band geometry
+        qt_constants.WIDGET.SET_RUBBER_BAND_GEOMETRY(rubber_band, rect_x, rect_y, rect_width, rect_height)
+
+        -- TODO: Query views for clips in rectangle and update visual feedback
+    end
+
+    on_drag_end = function(source_widget, x, y)
+        if not drag_state.dragging then return end
+
+        -- Hide rubber band
+        qt_constants.DISPLAY.SET_VISIBLE(rubber_band, false)
+
+        -- Convert current mouse position to splitter coordinates
+        local global_x, global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(source_widget, x, y)
+        local end_x_splitter, end_y_splitter = qt_constants.WIDGET.MAP_FROM_GLOBAL(vertical_splitter, global_x, global_y)
+
+        -- Calculate selection rectangle in splitter coordinates
+        local rect_x = math.min(drag_state.splitter_start_x, end_x_splitter)
+        local rect_y = math.min(drag_state.splitter_start_y, end_y_splitter)
+        local rect_width = math.abs(end_x_splitter - drag_state.splitter_start_x)
+        local rect_height = math.abs(end_y_splitter - drag_state.splitter_start_y)
+
+        -- Convert splitter rectangle to time range
+        -- We need to map to a timeline view widget to get proper width for time conversion
+        local viewport_width, _ = timeline.get_dimensions(video_widget)
+        local start_time = state.pixel_to_time(rect_x, viewport_width)
+        local end_time = state.pixel_to_time(rect_x + rect_width, viewport_width)
+
+        -- Find all clips that intersect with the selection rectangle
+        local selected_clips = {}
+        for _, clip in ipairs(state.get_clips()) do
+            -- Check time overlap
+            local clip_end_time = clip.start_time + clip.duration
+            local time_overlaps = not (clip_end_time < start_time or clip.start_time > end_time)
+
+            if time_overlaps then
+
+                -- Determine which view this clip is in
+                local track = state.get_track_by_id(clip.track_id)
+                if track then
+                    local is_video = track.track_type == "VIDEO"
+                    local view_widget = is_video and video_widget or audio_widget
+
+                    -- Get widget height for bottom-to-top calculation
+                    local widget_width, widget_height = timeline.get_dimensions(view_widget)
+
+                    -- Calculate track Y position using SAME logic as timeline_view.lua rendering
+                    local track_y_widget = 0
+                    local tracks = is_video and state.get_video_tracks() or state.get_audio_tracks()
+
+                    if is_video then
+                        -- Video tracks: render bottom-to-top (same as timeline_view.lua)
+                        -- Find track index
+                        local track_index = -1
+                        for i, t in ipairs(tracks) do
+                            if t.id == clip.track_id then
+                                track_index = i - 1  -- 0-based
+                                break
+                            end
+                        end
+
+                        -- Calculate Y from bottom upward (matches get_track_y in timeline_view.lua)
+                        track_y_widget = widget_height
+                        for i = 0, track_index do
+                            if tracks[i + 1] then
+                                local h = state.get_track_height(tracks[i + 1].id)
+                                track_y_widget = track_y_widget - h
+                            end
+                        end
+                    else
+                        -- Audio tracks: render top-to-bottom (same as timeline_view.lua)
+                        for _, t in ipairs(tracks) do
+                            if t.id == clip.track_id then
+                                break
+                            end
+                            track_y_widget = track_y_widget + state.get_track_height(t.id)
+                        end
+                    end
+
+                    local track_height = state.get_track_height(clip.track_id)
+
+                    -- Convert selection rectangle from splitter coordinates to widget coordinates
+                    -- Splitter → global → widget
+                    local sel_global_x, sel_global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(vertical_splitter, rect_x, rect_y)
+                    local sel_widget_x, sel_widget_y = qt_constants.WIDGET.MAP_FROM_GLOBAL(view_widget, sel_global_x, sel_global_y)
+
+                    local sel_bottom_global_x, sel_bottom_global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(vertical_splitter, rect_x + rect_width, rect_y + rect_height)
+                    local sel_bottom_widget_x, sel_bottom_widget_y = qt_constants.WIDGET.MAP_FROM_GLOBAL(view_widget, sel_bottom_global_x, sel_bottom_global_y)
+
+                    -- Check if selection rectangle (in widget coords) overlaps with track (also in widget coords)
+                    local track_bottom = track_y_widget + track_height
+                    local y_overlaps = not (track_bottom < sel_widget_y or track_y_widget > sel_bottom_widget_y)
+
+                    if y_overlaps then
+                        table.insert(selected_clips, clip)
+                    end
+                end
+            end
+        end
+
+        -- Update selection state
+        state.set_selection(selected_clips)
+
+        -- Reset drag state
+        drag_state.dragging = false
+        drag_state.start_widget = nil
+        drag_state.start_x = 0
+        drag_state.start_y = 0
+        drag_state.splitter_start_x = nil
+        drag_state.splitter_start_y = nil
+        rubber_band_visible = false
+    end
 
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(vertical_splitter, "Expanding", "Expanding")
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, vertical_splitter)

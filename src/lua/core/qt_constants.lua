@@ -41,6 +41,12 @@ if qt_constants then
     -- Widget Functions - add parent relationship support
     qt_constants.WIDGET = qt_constants.WIDGET or {}
     qt_constants.WIDGET.SET_PARENT = qt_constants.WIDGET.SET_PARENT or lazy_function("qt_set_parent")
+    qt_constants.WIDGET.CREATE_RUBBER_BAND = qt_constants.WIDGET.CREATE_RUBBER_BAND or lazy_function("qt_create_rubber_band")
+    qt_constants.WIDGET.SET_RUBBER_BAND_GEOMETRY = qt_constants.WIDGET.SET_RUBBER_BAND_GEOMETRY or lazy_function("qt_set_rubber_band_geometry")
+    qt_constants.WIDGET.GRAB_MOUSE = qt_constants.WIDGET.GRAB_MOUSE or lazy_function("qt_grab_mouse")
+    qt_constants.WIDGET.RELEASE_MOUSE = qt_constants.WIDGET.RELEASE_MOUSE or lazy_function("qt_release_mouse")
+    qt_constants.WIDGET.MAP_POINT_FROM = qt_constants.WIDGET.MAP_POINT_FROM or lazy_function("qt_map_point_from")
+    qt_constants.WIDGET.MAP_RECT_FROM = qt_constants.WIDGET.MAP_RECT_FROM or lazy_function("qt_map_rect_from")
 
     -- Control Functions - add click handler support
     qt_constants.CONTROL = qt_constants.CONTROL or {}

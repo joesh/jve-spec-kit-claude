@@ -15,6 +15,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QPushButton>
+#include <QRubberBand>
 #include <QSizePolicy>
 #include <QSet>
 #include <QMap>
@@ -47,6 +48,15 @@ int lua_set_scroll_area_h_scrollbar_policy(lua_State* L);
 int lua_hide_splitter_handle(lua_State* L);
 int lua_set_splitter_stretch_factor(lua_State* L);
 int lua_get_splitter_handle(lua_State* L);
+int lua_create_rubber_band(lua_State* L);
+int lua_set_rubber_band_geometry(lua_State* L);
+int lua_grab_mouse(lua_State* L);
+int lua_release_mouse(lua_State* L);
+int lua_map_point_from(lua_State* L);
+int lua_map_rect_from(lua_State* L);
+int lua_map_to_global(lua_State* L);
+int lua_map_from_global(lua_State* L);
+int lua_set_widget_stylesheet(lua_State* L);
 
 // Helper function to convert Lua table to QJsonValue
 static QJsonValue luaTableToJsonValue(lua_State* L, int index);
@@ -321,6 +331,22 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "CREATE_TIMELINE");
     lua_pushcfunction(L, lua_create_inspector_panel);
     lua_setfield(L, -2, "CREATE_INSPECTOR");
+    lua_pushcfunction(L, lua_create_rubber_band);
+    lua_setfield(L, -2, "CREATE_RUBBER_BAND");
+    lua_pushcfunction(L, lua_set_rubber_band_geometry);
+    lua_setfield(L, -2, "SET_RUBBER_BAND_GEOMETRY");
+    lua_pushcfunction(L, lua_grab_mouse);
+    lua_setfield(L, -2, "GRAB_MOUSE");
+    lua_pushcfunction(L, lua_release_mouse);
+    lua_setfield(L, -2, "RELEASE_MOUSE");
+    lua_pushcfunction(L, lua_map_point_from);
+    lua_setfield(L, -2, "MAP_POINT_FROM");
+    lua_pushcfunction(L, lua_map_rect_from);
+    lua_setfield(L, -2, "MAP_RECT_FROM");
+    lua_pushcfunction(L, lua_map_to_global);
+    lua_setfield(L, -2, "MAP_TO_GLOBAL");
+    lua_pushcfunction(L, lua_map_from_global);
+    lua_setfield(L, -2, "MAP_FROM_GLOBAL");
     lua_pushcfunction(L, lua_set_parent);
     lua_setfield(L, -2, "SET_PARENT");
     lua_setfield(L, -2, "WIDGET");
@@ -649,6 +675,162 @@ int lua_create_inspector_panel(lua_State* L)
     
     lua_push_widget(L, inspector_container);
     return 1;
+}
+
+// QRubberBand functions
+int lua_create_rubber_band(lua_State* L)
+{
+    QWidget* parent = (QWidget*)lua_to_widget(L, 1);
+    if (!parent) {
+        return luaL_error(L, "qt_create_rubber_band: parent widget required");
+    }
+
+    QRubberBand* band = new QRubberBand(QRubberBand::Rectangle, parent);
+    band->hide();  // Start hidden
+    lua_push_widget(L, band);
+    return 1;
+}
+
+int lua_set_rubber_band_geometry(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    if (!widget) {
+        return luaL_error(L, "qt_set_rubber_band_geometry: widget required");
+    }
+
+    int x = luaL_checkint(L, 2);
+    int y = luaL_checkint(L, 3);
+    int width = luaL_checkint(L, 4);
+    int height = luaL_checkint(L, 5);
+
+    widget->setGeometry(x, y, width, height);
+    return 0;
+}
+
+int lua_grab_mouse(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    if (!widget) {
+        return luaL_error(L, "qt_grab_mouse: widget required");
+    }
+
+    widget->grabMouse();
+    return 0;
+}
+
+int lua_release_mouse(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    if (!widget) {
+        return luaL_error(L, "qt_release_mouse: widget required");
+    }
+
+    widget->releaseMouse();
+    return 0;
+}
+
+// Coordinate mapping functions
+int lua_map_point_from(lua_State* L)
+{
+    QWidget* target_widget = (QWidget*)lua_to_widget(L, 1);
+    QWidget* source_widget = (QWidget*)lua_to_widget(L, 2);
+    int x = luaL_checkint(L, 3);
+    int y = luaL_checkint(L, 4);
+
+    if (!target_widget || !source_widget) {
+        return luaL_error(L, "qt_map_point_from: both widgets required");
+    }
+
+    QPoint point(x, y);
+    QPoint mapped = target_widget->mapFrom(source_widget, point);
+
+    lua_pushinteger(L, mapped.x());
+    lua_pushinteger(L, mapped.y());
+    return 2;
+}
+
+int lua_map_rect_from(lua_State* L)
+{
+    QWidget* target_widget = (QWidget*)lua_to_widget(L, 1);
+    QWidget* source_widget = (QWidget*)lua_to_widget(L, 2);
+    int x = luaL_checkint(L, 3);
+    int y = luaL_checkint(L, 4);
+    int width = luaL_checkint(L, 5);
+    int height = luaL_checkint(L, 6);
+
+    if (!target_widget || !source_widget) {
+        return luaL_error(L, "qt_map_rect_from: both widgets required");
+    }
+
+    // Map top-left and bottom-right corners
+    QPoint top_left(x, y);
+    QPoint bottom_right(x + width, y + height);
+
+    QPoint mapped_tl = target_widget->mapFrom(source_widget, top_left);
+    QPoint mapped_br = target_widget->mapFrom(source_widget, bottom_right);
+
+    // Calculate mapped rect
+    int mapped_x = mapped_tl.x();
+    int mapped_y = mapped_tl.y();
+    int mapped_width = mapped_br.x() - mapped_tl.x();
+    int mapped_height = mapped_br.y() - mapped_tl.y();
+
+    lua_pushinteger(L, mapped_x);
+    lua_pushinteger(L, mapped_y);
+    lua_pushinteger(L, mapped_width);
+    lua_pushinteger(L, mapped_height);
+    return 4;
+}
+
+// Widget styling
+int lua_set_widget_stylesheet(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* stylesheet = luaL_checkstring(L, 2);
+
+    if (!widget) {
+        return luaL_error(L, "qt_set_widget_stylesheet: widget required");
+    }
+
+    widget->setStyleSheet(QString::fromUtf8(stylesheet));
+    return 0;
+}
+
+// Global coordinate mapping functions
+int lua_map_to_global(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int x = luaL_checkint(L, 2);
+    int y = luaL_checkint(L, 3);
+
+    if (!widget) {
+        return luaL_error(L, "qt_map_to_global: widget required");
+    }
+
+    QPoint local(x, y);
+    QPoint global = widget->mapToGlobal(local);
+
+    lua_pushinteger(L, global.x());
+    lua_pushinteger(L, global.y());
+    return 2;
+}
+
+int lua_map_from_global(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    int x = luaL_checkint(L, 2);
+    int y = luaL_checkint(L, 3);
+
+    if (!widget) {
+        return luaL_error(L, "qt_map_from_global: widget required");
+    }
+
+    QPoint global(x, y);
+    QPoint local = widget->mapFromGlobal(global);
+
+    lua_pushinteger(L, local.x());
+    lua_pushinteger(L, local.y());
+    return 2;
 }
 
 // Layout functions

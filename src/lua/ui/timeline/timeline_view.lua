@@ -9,7 +9,11 @@ local M = {}
 --   widget: ScriptableTimeline Qt widget
 --   state: Reference to timeline_state module
 --   track_filter_fn: function(track) -> boolean (which tracks to show)
---   options: { vertical_scroll_offset = 0, render_bottom_to_top = false }
+--   options: {
+--     vertical_scroll_offset = 0,
+--     render_bottom_to_top = false,
+--     on_drag_start = function(view_widget, x, y) -- Called when drag starts in empty space
+--   }
 function M.create(widget, state_module, track_filter_fn, options)
     options = options or {}
 
@@ -19,6 +23,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         track_filter = track_filter_fn,
         vertical_scroll_offset = options.vertical_scroll_offset or 0,
         render_bottom_to_top = options.render_bottom_to_top or false,
+        on_drag_start = options.on_drag_start,  -- Panel callback for drag coordination
         filtered_tracks = {},  -- Cached filtered track list
     }
 
@@ -81,6 +86,29 @@ function M.create(widget, state_module, track_filter_fn, options)
             end
         end
         return -1  -- Track not in this view
+    end
+
+    -- Convert local track index to global track index
+    local function local_to_global_track_index(local_index)
+        if local_index >= 0 and local_index < #view.filtered_tracks then
+            local track = view.filtered_tracks[local_index + 1]  -- Lua 1-based
+            return state_module.get_track_index(track.id)
+        end
+        return -1
+    end
+
+    -- Convert global track index to local track index (returns -1 if not in this view)
+    local function global_to_local_track_index(global_index)
+        local all_tracks = state_module.get_all_tracks()
+        if global_index >= 0 and global_index < #all_tracks then
+            local track_id = all_tracks[global_index + 1].id
+            for i, track in ipairs(view.filtered_tracks) do
+                if track.id == track_id then
+                    return i - 1  -- 0-based local index
+                end
+            end
+        end
+        return -1  -- Not in this view
     end
 
     -- Render this view
@@ -172,33 +200,7 @@ function M.create(widget, state_module, track_filter_fn, options)
             timeline.add_line(view.widget, playhead_x, 0, playhead_x, height, state_module.colors.playhead, 2)
         end
 
-        -- Draw drag selection box if active
-        if state_module.is_drag_selecting() then
-            local bounds = state_module.get_drag_selection_bounds()
-            local x1 = state_module.time_to_pixel(bounds.start_time, width)
-            local x2 = state_module.time_to_pixel(bounds.end_time, width)
-
-            -- Calculate Y positions for tracks in this view
-            local y1 = get_track_y(bounds.start_track, height)
-            local y2 = get_track_y(bounds.end_track, height)
-
-            if y1 >= 0 or y2 >= 0 then  -- At least part of selection is in this view
-                local x = math.min(x1, x2)
-                local y = math.min(y1, y2)
-                local w = math.abs(x2 - x1)
-                local h = math.abs(y2 - y1)
-
-                -- Clamp to visible area
-                y = math.max(0, y)
-                h = math.min(height - y, h)
-
-                -- Draw selection rectangle border
-                timeline.add_line(view.widget, x, y, x + w, y, state_module.colors.selection_box, 2)
-                timeline.add_line(view.widget, x + w, y, x + w, y + h, state_module.colors.selection_box, 2)
-                timeline.add_line(view.widget, x + w, y + h, x, y + h, state_module.colors.selection_box, 2)
-                timeline.add_line(view.widget, x, y + h, x, y, state_module.colors.selection_box, 2)
-            end
-        end
+        -- NOTE: Selection box drawing removed - now handled by overlay widget in timeline_panel
 
         -- Trigger Qt repaint
         timeline.update(view.widget)
@@ -239,52 +241,33 @@ function M.create(widget, state_module, track_filter_fn, options)
                 -- TODO: Handle clip selection and dragging
                 state_module.set_selection({clicked_clip})
             else
-                -- Start drag selection - determine which track was clicked
-                local time = state_module.pixel_to_time(x, width)
-                local track_index = 0
-                local cumulative_y = 0
-                for i, track in ipairs(view.filtered_tracks) do
-                    local track_height = state_module.get_track_height(track.id)
-                    if y >= cumulative_y and y < cumulative_y + track_height then
-                        track_index = i - 1
-                        break
-                    end
-                    cumulative_y = cumulative_y + track_height
-                end
+                -- Clear selection when clicking in empty space
+                state_module.set_selection({})
 
-                state_module.set_drag_selecting(true)
-                state_module.set_drag_selection_bounds(time, time, track_index, track_index)
+                -- Notify panel that drag is starting in empty space (panel coordinates drag)
+                if view.on_drag_start then
+                    -- Panel returns callbacks for us to use during drag
+                    view.panel_drag_move, view.panel_drag_end = view.on_drag_start(view.widget, x, y)
+                end
             end
 
         elseif event_type == "move" then
             if state_module.is_dragging_playhead() then
                 local time = state_module.pixel_to_time(x, width)
                 state_module.set_playhead_time(time)
-
-            elseif state_module.is_drag_selecting() then
-                local time = state_module.pixel_to_time(x, width)
-                -- Determine which track is at this Y position
-                local track_index = 0
-                local cumulative_y = 0
-                for i, track in ipairs(view.filtered_tracks) do
-                    local track_height = state_module.get_track_height(track.id)
-                    if y >= cumulative_y and y < cumulative_y + track_height then
-                        track_index = i - 1
-                        break
-                    end
-                    cumulative_y = cumulative_y + track_height
-                end
-
-                local bounds = state_module.get_drag_selection_bounds()
-                state_module.set_drag_selection_bounds(bounds.start_time, time, bounds.start_track, track_index)
-
-                -- Update selection based on current drag box
-                -- TODO: Implement multi-select logic
+            elseif view.panel_drag_move then
+                -- Forward move events to panel during drag selection
+                view.panel_drag_move(view.widget, x, y)
             end
 
         elseif event_type == "release" then
+            if view.panel_drag_end then
+                -- Finalize drag selection via panel
+                view.panel_drag_end(view.widget, x, y)
+                view.panel_drag_move = nil
+                view.panel_drag_end = nil
+            end
             state_module.set_dragging_playhead(false)
-            state_module.set_drag_selecting(false)
         end
 
         render()
