@@ -19,6 +19,7 @@
 #include <QSizePolicy>
 #include <QSet>
 #include <QMap>
+#include <QTimer>
 #include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -57,6 +58,7 @@ int lua_map_rect_from(lua_State* L);
 int lua_map_to_global(lua_State* L);
 int lua_map_from_global(lua_State* L);
 int lua_set_widget_stylesheet(lua_State* L);
+int lua_create_single_shot_timer(lua_State* L);
 
 // Helper function to convert Lua table to QJsonValue
 static QJsonValue luaTableToJsonValue(lua_State* L, int index);
@@ -502,6 +504,8 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_parent");
     lua_pushcfunction(L, lua_set_widget_attribute);
     lua_setglobal(L, "qt_set_widget_attribute");
+    lua_pushcfunction(L, lua_create_single_shot_timer);
+    lua_setglobal(L, "qt_create_single_shot_timer");
 
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
@@ -2360,4 +2364,46 @@ int lua_update_widget(lua_State* L)
     widget->update();
 
     return 0;
+}
+
+// QTimer single-shot function
+int lua_create_single_shot_timer(lua_State* L)
+{
+    int interval_ms = luaL_checkint(L, 1);
+
+    if (!lua_isfunction(L, 2)) {
+        return luaL_error(L, "qt_create_single_shot_timer: second argument must be a function");
+    }
+
+    // Store callback function in registry
+    lua_pushvalue(L, 2);  // Push function to top of stack
+    int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);  // Pop and store in registry
+
+    // Create timer (will be deleted automatically after firing)
+    QTimer* timer = new QTimer();
+    timer->setSingleShot(true);
+
+    // Connect timer to lambda that calls Lua callback
+    QObject::connect(timer, &QTimer::timeout, [L, callback_ref, timer]() {
+        // Retrieve callback from registry
+        lua_rawgeti(L, LUA_REGISTRYINDEX, callback_ref);
+
+        // Call the Lua function
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            const char* error = lua_tostring(L, -1);
+            qDebug() << "Error in timer callback:" << error;
+            lua_pop(L, 1);
+        }
+
+        // Clean up
+        luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+        timer->deleteLater();
+    });
+
+    // Start timer
+    timer->start(interval_ms);
+
+    // Return timer object (for potential cancellation)
+    lua_push_widget(L, timer);
+    return 1;
 }

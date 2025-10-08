@@ -10,6 +10,11 @@ local Command = require("command")
 -- State listeners (views register here for notifications)
 local listeners = {}
 
+-- Debouncing configuration
+-- Batches rapid state changes to prevent excessive redraws
+local notify_timer = nil
+local NOTIFY_DEBOUNCE_MS = 16  -- ~60fps (one frame)
+
 -- Project browser reference (for media insertion)
 local project_browser = nil
 
@@ -67,10 +72,22 @@ M.colors = {
 }
 
 -- Listener notification helper (defined early so M.init can use it)
+-- Batches rapid state changes to prevent excessive redraws (60fps throttle)
 local function notify_listeners()
-    for _, listener in ipairs(listeners) do
-        listener()
+    if notify_timer then
+        -- Timer already scheduled, will notify soon
+        return
     end
+
+    -- Create Qt timer to batch notifications
+    notify_timer = qt_create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
+        notify_timer = nil
+
+        -- Call all listeners
+        for _, listener in ipairs(listeners) do
+            listener()
+        end
+    end)
 end
 
 -- Initialize state from database
