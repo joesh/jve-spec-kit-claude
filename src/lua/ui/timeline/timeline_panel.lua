@@ -361,8 +361,10 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(video_scroll, video_splitter)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Fixed", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
+    qt_set_scroll_area_anchor_bottom(video_scroll, true)  -- V1 stays visible when shrinking
 
     -- Audio headers section with scroll area
     local audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
@@ -370,6 +372,7 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(audio_scroll, audio_splitter)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Fixed", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
 
@@ -386,6 +389,11 @@ local function create_headers_column()
 
     -- Set layout on wrapper
     qt_constants.LAYOUT.SET_ON_WIDGET(headers_wrapper, headers_wrapper_layout)
+
+    -- Constrain wrapper width to match scroll area widths
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(headers_wrapper, "Fixed", "Expanding")
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(headers_wrapper, timeline_state.dimensions.track_header_width)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(headers_wrapper, timeline_state.dimensions.track_header_width)
 
     -- Return wrapper widget, main splitter, and scroll areas for synchronization
     return headers_wrapper, headers_main_splitter, video_scroll, audio_scroll
@@ -498,6 +506,7 @@ function M.create()
     local timeline_video_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_video_scroll, video_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_video_scroll, "Expanding", "Expanding")
+    qt_set_scroll_area_anchor_bottom(timeline_video_scroll, true)  -- V1 stays visible when shrinking
 
     -- Register video widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[video_widget] = timeline_video_scroll

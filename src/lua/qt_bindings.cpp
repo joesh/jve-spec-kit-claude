@@ -46,6 +46,7 @@ int lua_get_splitter_sizes(lua_State* L);
 int lua_set_splitter_moved_handler(lua_State* L);
 int lua_set_scroll_area_widget_resizable(lua_State* L);
 int lua_set_scroll_area_h_scrollbar_policy(lua_State* L);
+int lua_set_scroll_area_v_scrollbar_policy(lua_State* L);
 int lua_hide_splitter_handle(lua_State* L);
 int lua_set_splitter_stretch_factor(lua_State* L);
 int lua_get_splitter_handle(lua_State* L);
@@ -59,6 +60,8 @@ int lua_map_to_global(lua_State* L);
 int lua_map_from_global(lua_State* L);
 int lua_set_widget_stylesheet(lua_State* L);
 int lua_create_single_shot_timer(lua_State* L);
+int lua_set_scroll_area_alignment(lua_State* L);
+int lua_set_scroll_area_anchor_bottom(lua_State* L);
 
 // Helper function to convert Lua table to QJsonValue
 static QJsonValue luaTableToJsonValue(lua_State* L, int index);
@@ -439,6 +442,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_SCROLL_AREA_WIDGET_RESIZABLE");
     lua_pushcfunction(L, lua_set_scroll_area_h_scrollbar_policy);
     lua_setfield(L, -2, "SET_SCROLL_AREA_H_SCROLLBAR_POLICY");
+    lua_pushcfunction(L, lua_set_scroll_area_v_scrollbar_policy);
+    lua_setfield(L, -2, "SET_SCROLL_AREA_V_SCROLLBAR_POLICY");
     lua_pushcfunction(L, lua_set_layout_spacing);
     lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins);
@@ -506,6 +511,10 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_widget_attribute");
     lua_pushcfunction(L, lua_create_single_shot_timer);
     lua_setglobal(L, "qt_create_single_shot_timer");
+    lua_pushcfunction(L, lua_set_scroll_area_alignment);
+    lua_setglobal(L, "qt_set_scroll_area_alignment");
+    lua_pushcfunction(L, lua_set_scroll_area_anchor_bottom);
+    lua_setglobal(L, "qt_set_scroll_area_anchor_bottom");
 
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
@@ -1564,6 +1573,131 @@ int lua_set_scroll_area_h_scrollbar_policy(lua_State* L)
         }
     } else {
         qWarning() << "Invalid widget argument in set_scroll_area_h_scrollbar_policy";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_scroll_area_v_scrollbar_policy(lua_State* L)
+{
+    QWidget* scrollArea = (QWidget*)lua_to_widget(L, 1);
+    const char* policy = luaL_checkstring(L, 2);
+
+    if (scrollArea) {
+        QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
+        if (sa) {
+            if (strcmp(policy, "AlwaysOff") == 0) {
+                sa->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            } else if (strcmp(policy, "AlwaysOn") == 0) {
+                sa->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+            } else if (strcmp(policy, "AsNeeded") == 0) {
+                sa->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            }
+            lua_pushboolean(L, 1);
+        } else {
+            qWarning() << "First argument is not a QScrollArea";
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid widget argument in set_scroll_area_v_scrollbar_policy";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_scroll_area_alignment(lua_State* L)
+{
+    QWidget* scrollArea = (QWidget*)lua_to_widget(L, 1);
+    const char* alignment_str = luaL_checkstring(L, 2);
+
+    if (scrollArea) {
+        QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
+        if (sa) {
+            Qt::Alignment alignment = Qt::AlignLeft | Qt::AlignTop;  // Default
+            if (strcmp(alignment_str, "AlignBottom") == 0) {
+                alignment = Qt::AlignLeft | Qt::AlignBottom;
+            } else if (strcmp(alignment_str, "AlignTop") == 0) {
+                alignment = Qt::AlignLeft | Qt::AlignTop;
+            } else if (strcmp(alignment_str, "AlignVCenter") == 0) {
+                alignment = Qt::AlignLeft | Qt::AlignVCenter;
+            }
+            sa->setAlignment(alignment);
+            lua_pushboolean(L, 1);
+        } else {
+            qWarning() << "First argument is not a QScrollArea";
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid widget argument in set_scroll_area_alignment";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Event filter class to maintain bottom-anchored scrolling
+class BottomAnchorFilter : public QObject
+{
+public:
+    BottomAnchorFilter(QScrollArea* sa) : QObject(sa), scrollArea(sa), distanceFromBottom(0) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override
+    {
+        if (scrollArea && scrollArea->widget()) {
+            QScrollBar* vbar = scrollArea->verticalScrollBar();
+            if (vbar) {
+                if (event->type() == QEvent::Resize) {
+                    // Before resize completes, calculate distance from bottom
+                    int oldMax = vbar->maximum();
+                    int oldValue = vbar->value();
+                    distanceFromBottom = oldMax - oldValue;
+
+                    // After resize, restore distance from bottom
+                    QTimer::singleShot(0, [this, vbar]() {
+                        int newMax = vbar->maximum();
+                        int newValue = newMax - distanceFromBottom;
+                        vbar->setValue(qMax(0, newValue));
+                    });
+                } else if (event->type() == QEvent::Wheel || event->type() == QEvent::MouseButtonPress) {
+                    // User is scrolling - update our tracking
+                    QTimer::singleShot(0, [this, vbar]() {
+                        distanceFromBottom = vbar->maximum() - vbar->value();
+                    });
+                }
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    QScrollArea* scrollArea;
+    int distanceFromBottom;
+};
+
+int lua_set_scroll_area_anchor_bottom(lua_State* L)
+{
+    QWidget* scrollArea = (QWidget*)lua_to_widget(L, 1);
+    bool enable = lua_toboolean(L, 2);
+
+    if (scrollArea) {
+        QScrollArea* sa = qobject_cast<QScrollArea*>(scrollArea);
+        if (sa) {
+            if (enable) {
+                BottomAnchorFilter* filter = new BottomAnchorFilter(sa);
+                sa->viewport()->installEventFilter(filter);
+                // Set initial scroll position to bottom
+                QScrollBar* vbar = sa->verticalScrollBar();
+                if (vbar) {
+                    vbar->setValue(vbar->maximum());
+                }
+            }
+            lua_pushboolean(L, 1);
+        } else {
+            qWarning() << "First argument is not a QScrollArea";
+            lua_pushboolean(L, 0);
+        }
+    } else {
+        qWarning() << "Invalid widget argument in set_scroll_area_anchor_bottom";
         lua_pushboolean(L, 0);
     }
     return 1;
