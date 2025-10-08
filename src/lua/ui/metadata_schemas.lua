@@ -56,15 +56,6 @@ end
 
 -- Inspector-relevant schemas (matching C++ Inspector categories)
 metadata_schemas.clip_inspector_schemas = {
-    
-    ["Search"] = {
-        description = "Search and filter clips",
-        fields = {
-            create_field("search_query", "Search", metadata_schemas.FIELD_TYPES.STRING, ""),
-            create_field("search_type", "Search In", metadata_schemas.FIELD_TYPES.DROPDOWN, "All Fields", 
-                        {"All Fields", "Name", "Description", "Keywords", "Scene", "Take"})
-        }
-    },
 
     ["Camera"] = {
         description = "Camera and lens technical information",
