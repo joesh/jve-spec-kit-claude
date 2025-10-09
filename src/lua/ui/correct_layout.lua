@@ -26,6 +26,9 @@ print("💾 Project file: " .. db_path)
 -- Create projects directory if it doesn't exist
 os.execute('mkdir -p "' .. projects_dir .. '"')
 
+-- Initialize command_manager module reference (will be initialized later)
+local command_manager = require("core.command_manager")
+
 -- Open database connection
 local db_success = db_module.set_path(db_path)
 if not db_success then
@@ -83,7 +86,6 @@ else
     end
 
     -- Initialize CommandManager with database
-    local command_manager = require("core.command_manager")
     command_manager.init(db_module.get_connection())
     print("✅ CommandManager initialized with database")
 
@@ -205,9 +207,11 @@ local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
 local timeline_panel_mod = require("ui.timeline.timeline_panel")
 local timeline_panel = timeline_panel_mod.create()
 
--- 5. Initialize keyboard shortcuts
+-- 5. Initialize keyboard shortcuts with the SAME timeline_state instance that timeline_panel uses
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
-keyboard_shortcuts.init(require("ui.timeline.timeline_state"), command_manager)
+local timeline_state_from_panel = timeline_panel_mod.get_state()
+print(string.format("DEBUG: timeline_state from panel = %s", tostring(timeline_state_from_panel)))
+keyboard_shortcuts.init(timeline_state_from_panel, command_manager)
 
 -- Initialize the Lua inspector content following working reference pattern
 local view = require("ui.inspector.view")

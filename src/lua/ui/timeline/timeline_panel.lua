@@ -25,6 +25,10 @@ function M.set_project_browser(browser)
     end
 end
 
+function M.get_state()
+    return timeline_state  -- Return the module, not the local state variable
+end
+
 -- Helper function to create video headers with splitters
 local function create_video_headers()
     local video_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")

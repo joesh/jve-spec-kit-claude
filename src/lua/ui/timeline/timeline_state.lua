@@ -93,6 +93,7 @@ end
 -- Initialize state from database
 function M.init(sequence_id)
     sequence_id = sequence_id or "default_sequence"
+    state.sequence_id = sequence_id  -- Store for reload
 
     -- Load data from database
     state.tracks = db.load_tracks(sequence_id)
@@ -120,6 +121,14 @@ function M.init(sequence_id)
 
     notify_listeners()
     return true
+end
+
+-- Reload clips from database (for after commands that modify database)
+function M.reload_clips()
+    local sequence_id = state.sequence_id or "default_sequence"
+    state.clips = db.load_clips(sequence_id)
+    print(string.format("Reloaded %d clips from database", #state.clips))
+    notify_listeners()
 end
 
 -- Listener management
@@ -178,6 +187,7 @@ function M.get_viewport_end_time()
 end
 
 function M.get_playhead_time()
+    print(string.format("DEBUG get_playhead_time: state=%s, state.playhead_time=%s", tostring(state), tostring(state.playhead_time)))
     return state.playhead_time
 end
 
