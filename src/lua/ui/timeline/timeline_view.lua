@@ -194,6 +194,80 @@ function M.create(widget, state_module, track_filter_fn, options)
             end
         end
 
+        -- Draw selected edge highlights as bracket indicators (for trimming operations)
+        local selected_edges = state_module.get_selected_edges()
+        for _, edge in ipairs(selected_edges) do
+            -- Find the clip for this edge
+            local edge_clip = nil
+            for _, clip in ipairs(clips) do
+                if clip.id == edge.clip_id then
+                    edge_clip = clip
+                    break
+                end
+            end
+
+            if edge_clip then
+                local clip_y = get_track_y_by_id(edge_clip.track_id, height)
+
+                if clip_y >= 0 then  -- Clip is on a track in this view
+                    local track_height = state_module.get_track_height(edge_clip.track_id)
+                    local clip_x = state_module.time_to_pixel(edge_clip.start_time, width)
+                    local clip_width = math.floor((edge_clip.duration / viewport_duration) * width)
+                    local clip_height = track_height - 10
+
+                    -- Determine edge position and bracket orientation
+                    local edge_x = 0
+                    local has_available_media = false
+                    local bracket_width = 8  -- Width of bracket indicator
+                    local bracket_thickness = 2
+
+                    if edge.edge_type == "in" then
+                        edge_x = clip_x
+                        -- Check if there's media before the in point (can trim left)
+                        has_available_media = edge_clip.source_in > 0
+                    else  -- "out"
+                        edge_x = clip_x + clip_width
+                        -- Check if there's media after the out point (can trim right)
+                        -- Note: We'd need media duration from the media table for a real check
+                        -- For now, assume there's available media (will improve later)
+                        has_available_media = true
+                    end
+
+                    -- Choose color based on media availability
+                    local edge_color = has_available_media
+                        and state_module.colors.edge_selected_available
+                        or state_module.colors.edge_selected_limit
+
+                    -- Draw bracket indicator: [ for in point, ] for out point
+                    local bracket_y = clip_y + 5
+
+                    if edge.edge_type == "in" then
+                        -- Draw [ bracket (opening bracket on left edge)
+                        -- Vertical line
+                        timeline.add_rect(view.widget, edge_x, bracket_y,
+                                        bracket_thickness, clip_height, edge_color)
+                        -- Top horizontal
+                        timeline.add_rect(view.widget, edge_x, bracket_y,
+                                        bracket_width, bracket_thickness, edge_color)
+                        -- Bottom horizontal
+                        timeline.add_rect(view.widget, edge_x, bracket_y + clip_height - bracket_thickness,
+                                        bracket_width, bracket_thickness, edge_color)
+                    else  -- "out"
+                        -- Draw ] bracket (closing bracket on right edge)
+                        -- Vertical line
+                        timeline.add_rect(view.widget, edge_x - bracket_thickness, bracket_y,
+                                        bracket_thickness, clip_height, edge_color)
+                        -- Top horizontal
+                        timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y,
+                                        bracket_width, bracket_thickness, edge_color)
+                        -- Bottom horizontal
+                        timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y + clip_height - bracket_thickness,
+                                        bracket_width, bracket_thickness, edge_color)
+                    end
+                end
+            end
+        end
+
         -- Draw playhead line (vertical line only, triangle is in ruler)
         if playhead_time >= viewport_start and playhead_time <= viewport_start + viewport_duration then
             local playhead_x = state_module.time_to_pixel(playhead_time, width)
@@ -219,36 +293,80 @@ function M.create(widget, state_module, track_filter_fn, options)
                 return
             end
 
-            -- Check if clicking on clip
-            local clicked_clip = nil
+            -- Check if clicking on a clip edge (for trimming)
+            -- Four cases:
+            --   1. Click near left edge ONLY (not near another clip's right) → select [ (in-point)
+            --   2. Click near right edge ONLY (not near another clip's left) → select ] (out-point)
+            --   3. Click between two adjacent clips → select ][ (edit point: right clip's out + left clip's in)
+            --   4. Click in middle of clip → no edge selection (future: select clip body for dragging)
+
+            local EDGE_ZONE = 8  -- Pixels from edge to detect interaction
+            local clips_at_position = {}
+
+            -- First pass: find all clips at this Y position and their edge proximity
             for _, clip in ipairs(state_module.get_clips()) do
                 local clip_y = get_track_y_by_id(clip.track_id, height)
                 if clip_y >= 0 then
                     local track_height = state_module.get_track_height(clip.track_id)
-                    local clip_x = state_module.time_to_pixel(clip.start_time, width)
-                    local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width)
                     local clip_height = track_height - 10
 
-                    if x >= clip_x and x <= clip_x + clip_width and
-                       y >= clip_y + 5 and y <= clip_y + 5 + clip_height then
-                        clicked_clip = clip
-                        break
+                    -- Check if Y is within clip bounds
+                    if y >= clip_y + 5 and y <= clip_y + 5 + clip_height then
+                        local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                        local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width)
+
+                        local dist_from_left = math.abs(x - clip_x)
+                        local dist_from_right = math.abs(x - (clip_x + clip_width))
+
+                        -- Track clips with edges near click position
+                        if dist_from_left <= EDGE_ZONE then
+                            table.insert(clips_at_position, {
+                                clip = clip,
+                                edge = "in",
+                                distance = dist_from_left
+                            })
+                        end
+                        if dist_from_right <= EDGE_ZONE then
+                            table.insert(clips_at_position, {
+                                clip = clip,
+                                edge = "out",
+                                distance = dist_from_right
+                            })
+                        end
                     end
                 end
             end
 
-            if clicked_clip then
-                -- TODO: Handle clip selection and dragging
-                state_module.set_selection({clicked_clip})
-            else
-                -- Clear selection when clicking in empty space
+            -- Second pass: determine what to select based on detected edges
+            if #clips_at_position > 0 then
+                if not (modifiers and modifiers.command) then
+                    -- Without Cmd key, clear previous edge selection
+                    state_module.clear_edge_selection()
+                end
+
+                -- If we detected edges from multiple clips, it's an edit point (][ case)
+                -- Otherwise it's a single edge ([ or ] case)
+                for _, edge_info in ipairs(clips_at_position) do
+                    state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, "ripple")
+                end
+
+                -- Clear clip selection when selecting edges (can't have both)
                 state_module.set_selection({})
 
-                -- Notify panel that drag is starting in empty space (panel coordinates drag)
-                if view.on_drag_start then
-                    -- Panel returns callbacks for us to use during drag
-                    view.panel_drag_move, view.panel_drag_end = view.on_drag_start(view.widget, x, y)
-                end
+                render()
+                return
+            end
+
+            -- If no edge was clicked, check if clicking in empty space
+            -- (Note: Middle-of-clip clicks are now treated as edge selection above)
+            -- Clear both selections when clicking in empty space
+            state_module.clear_edge_selection()
+            state_module.set_selection({})
+
+            -- Notify panel that drag is starting in empty space (panel coordinates drag)
+            if view.on_drag_start then
+                -- Panel returns callbacks for us to use during drag
+                view.panel_drag_move, view.panel_drag_end = view.on_drag_start(view.widget, x, y)
             end
 
         elseif event_type == "move" then

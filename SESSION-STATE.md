@@ -1,12 +1,81 @@
-# Session State - 2025-10-02 Timeline UI Implementation
+# Session State - 2025-10-09 Event Sourcing & Edge Selection
 
 ## CRITICAL SESSION CONTEXT
-**Completed timeline UI implementation in Lua with full interaction support, following C++/Lua architecture principles.**
+**Implemented undo position persistence, inspector startup notification, enforced event sourcing discipline, and built edge selection foundation for professional trimming workflows.**
 
-**Date**: October 2, 2025
-**Session Focus**: Timeline UI interactions, Lua event system, playhead controls, multi-selection
+**Date**: October 9, 2025
+**Session Focus**: Event sourcing discipline, session state persistence, edge selection infrastructure
 
-## What Was Actually Accomplished
+---
+
+## Session Accomplishments (2025-10-09)
+
+### 1. Fixed Panel Focus Visual Indicators (COMPLETED)
+- **ISSUE**: Focus manager's Qt stylesheets were cascading to child widgets, breaking timeline canvas and tree widget rendering
+- **ROOT CAUSE**: Qt stylesheets inherit to all descendants unless prevented
+- **FIX**: Simplified `update_panel_visual()` to only style header widgets, avoiding main panel widgets entirely
+- **RESULT**: Focus indicators work without breaking panel internals
+- **FILES**: `src/lua/ui/focus_manager.lua:107-123`
+
+### 2. Undo Position Persistence Across Sessions (COMPLETED)
+- **ISSUE**: After undo operations, quitting and restarting app lost undo position - redo didn't work
+- **ROOT CAUSE**: `current_sequence_number` only stored in memory, not persisted to database
+- **FIX**:
+  - Added `current_sequence_number INTEGER` field to sequences table schema
+  - Modified `command_manager.init()` to load saved position from database
+  - Added `save_undo_position()` helper function
+  - Called `save_undo_position()` after execute, undo, and redo operations
+- **RESULT**: Full undo/redo state survives app restarts (better than FCP7!)
+- **FILES**:
+  - `src/core/persistence/schema.sql:39` (database schema)
+  - `src/lua/core/command_manager.lua` (init, save_undo_position, execute/undo/redo calls)
+
+### 3. Inspector Notification on Startup (COMPLETED)
+- **ISSUE**: When app restarted with saved clip selection, inspector panel didn't display selected clip properties
+- **ROOT CAUSE**: Timeline initialization restored selection before inspector callback was registered
+- **FIX**: Modified `timeline_panel.set_inspector()` to check for existing selection when wired up and notify immediately
+- **RESULT**: Inspector shows correct properties for restored selections on startup
+- **FILES**: `src/lua/ui/timeline/timeline_panel.lua:set_inspector()`
+
+### 4. Enforced Event Sourcing Discipline (COMPLETED)
+- **ISSUE**: Nudge operation directly modified clip positions, bypassing command system and breaking undo/redo
+- **ROOT CAUSE**: `timeline_state.update_clip()` allowed direct database modifications without logging to event log
+- **FIX**: Disabled `update_clip()` entirely - now throws error with clear message directing developers to use command_manager
+- **RESULT**: Architectural constraint enforced - all state modifications must go through command system for deterministic replay
+- **FILES**: `src/lua/ui/timeline/timeline_state.lua:430-434`
+
+### 5. Edge Selection Infrastructure (IN PROGRESS)
+- **GOAL**: Foundation for professional NLE trimming workflows (ripple, roll, asymmetrical edits)
+- **RESEARCH**: Studied FCP7, Premiere, and Resolve edge selection patterns
+- **IMPLEMENTED**:
+  - State management: `selected_edges` array in timeline_state
+  - Selection functions: `get_selected_edges()`, `set_edge_selection()`, `toggle_edge_selection()`, `clear_edge_selection()`
+  - Edge detection: `detect_edge_at_position()` with 8px tolerance zone for ripple detection
+  - Roll detection: `detect_roll_between_clips()` with 16px gap tolerance for edit point detection
+  - Visual colors: Green (#66ff66) for available media, Red (#ff6666) for media limit
+  - Edge data structure: `{clip_id, edge_type ("in"/"out"), trim_type ("ripple"/"roll")}`
+- **STILL NEEDED**:
+  - Visual rendering of selected edges in timeline_view
+  - Mouse interaction to select/toggle edges
+  - Cursor changes to indicate edge hover
+  - Actual trim operations (ripple/roll commands)
+- **FILES**: `src/lua/ui/timeline/timeline_state.lua:48-49,74-75,279-396`
+
+### Key Concepts from This Session
+
+**Event Sourcing Discipline**: All state changes must flow through the command log for deterministic replay and proper undo/redo. Direct database modifications create "phantom changes" that break the event log integrity.
+
+**Session State Persistence**: Critical application state (undo position, selection) must survive app restarts. This requires coordinated persistence of position markers to database, not just event log replay.
+
+**Late-Binding Observers**: When listeners register after state initialization, they need immediate notification of current state. Dual notification pattern: notify on state change AND notify when observer is wired up.
+
+**Professional Edge Selection**: NLE edge selection is a multi-layered system enabling:
+- Ripple edits (A-side or B-side) - trim one clip edge, shift everything downstream
+- Roll edits (both sides) - move edit point between clips without changing total duration
+- Asymmetrical edits - multiple edges selected with different trim types on different tracks
+- Visual feedback - green for available media, red for media limit
+
+## What Was Actually Accomplished (Previous Sessions)
 
 ### 1. Timeline Track Header Alignment (COMPLETED)
 - **ISSUE**: Track headers (labels) were 5-10 pixels misaligned with timeline tracks
@@ -239,14 +308,54 @@ Drag selection rectangle doesn't span across the video/audio boundary - it's con
 - `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/timeline_panel.lua`
   - Needs overlay widget added (if that's the approach)
 
-## Todo List Status
+## Todo List Status (Updated 2025-10-09)
 - [COMPLETED] Fix drag selection functionality (2025-10-08 - rubber band working)
 - [PENDING] Add bottom scrollbar to timeline
 - [PENDING] Hook up keyboard shortcuts again
-- [PENDING] Implement clicking off a clip to clear selection
-- [PENDING] Remove vertical scrollbars from header panels
+- [COMPLETED] Implement clicking off a clip to clear selection (2025-10-09)
+- [COMPLETED] Remove vertical scrollbars from header panels (2025-10-09)
 - [PENDING] Implement drag-and-drop from project browser to timeline
-- [PENDING] Implement clip edge selection (in/out points)
-- [PENDING] Implement roll edits
-- [PENDING] Implement ripple edits
+- [IN PROGRESS] **Implement clip edge selection for trimming** (2025-10-09 - state & detection done, rendering needed)
+- [PENDING] Implement roll edits (blocked on edge selection completion)
+- [PENDING] Implement ripple edits (blocked on edge selection completion)
+- [PENDING] Implement NudgeClip command (currently blocked with helpful error)
+- [PENDING] Fix test system build issues (21 tests missing executables)
+
+## Current State of Edge Selection (2025-10-09)
+
+**Foundation Complete** ✅:
+- State management infrastructure in `timeline_state.lua`
+- Edge detection algorithms with proper tolerance zones
+- Edge data structure design
+- Visual color scheme defined
+
+**Next Implementation Steps** 📋:
+1. Visual rendering in `timeline_view.lua`:
+   - Draw edge highlights when edges are selected
+   - Use green/red colors based on available media vs limit
+   - Render on top of clip rectangles
+2. Mouse interaction in `timeline_view.lua`:
+   - Detect edge hover in mouse move handler
+   - Handle click to select/toggle edges (Cmd-click for multi-select)
+   - Update cursor to indicate edge selection mode
+3. Trim operations (separate tasks):
+   - Implement RippleEdit command (#8 on todo list)
+   - Implement RollEdit command (#7 on todo list)
+   - Wire up edge selection to trim commands
+
+## Files Modified This Session (2025-10-09)
+1. `src/lua/ui/focus_manager.lua` - Simplified panel visual indicators to avoid stylesheet cascade
+2. `src/core/persistence/schema.sql` - Added current_sequence_number field for undo position persistence
+3. `src/lua/core/command_manager.lua` - Load/save undo position, restore on init
+4. `src/lua/ui/timeline/timeline_panel.lua` - Inspector notification on wiring
+5. `src/lua/ui/timeline/timeline_state.lua` - Blocked direct modifications, added edge selection infrastructure
+6. `CLAUDE.md` - Documented session improvements
+7. `SESSION-STATE.md` - This file (comprehensive session documentation)
+
+## Commit History This Session
+- **76cb91c**: "Persist undo position across sessions and enforce event sourcing discipline"
+  - Undo/redo state survives app restarts
+  - Inspector notified on startup with restored selection
+  - Direct clip modifications blocked with architectural guidance
+  - Focus manager visual indicators fixed
 

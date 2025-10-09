@@ -63,7 +63,9 @@ int lua_create_single_shot_timer(lua_State* L);
 int lua_set_scroll_area_alignment(lua_State* L);
 int lua_set_scroll_area_anchor_bottom(lua_State* L);
 int lua_set_focus_policy(lua_State* L);
+int lua_set_focus(lua_State* L);
 int lua_set_global_key_handler(lua_State* L);
+int lua_set_focus_handler(lua_State* L);
 
 // Helper function to convert Lua table to QJsonValue
 static QJsonValue luaTableToJsonValue(lua_State* L, int index);
@@ -511,6 +513,8 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_parent");
     lua_pushcfunction(L, lua_set_widget_attribute);
     lua_setglobal(L, "qt_set_widget_attribute");
+    lua_pushcfunction(L, lua_set_widget_stylesheet);
+    lua_setglobal(L, "qt_set_widget_stylesheet");
     lua_pushcfunction(L, lua_create_single_shot_timer);
     lua_setglobal(L, "qt_create_single_shot_timer");
     lua_pushcfunction(L, lua_set_scroll_area_alignment);
@@ -519,8 +523,12 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_scroll_area_anchor_bottom");
     lua_pushcfunction(L, lua_set_focus_policy);
     lua_setglobal(L, "qt_set_focus_policy");
+    lua_pushcfunction(L, lua_set_focus);
+    lua_setglobal(L, "qt_set_focus");
     lua_pushcfunction(L, lua_set_global_key_handler);
     lua_setglobal(L, "qt_set_global_key_handler");
+    lua_pushcfunction(L, lua_set_focus_handler);
+    lua_setglobal(L, "qt_set_focus_handler");
 
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
@@ -1736,6 +1744,21 @@ int lua_set_focus_policy(lua_State* L)
     return 1;
 }
 
+// Set keyboard focus to a widget
+int lua_set_focus(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+
+    if (widget) {
+        widget->setFocus(Qt::OtherFocusReason);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget argument in set_focus";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
 // Global key event filter class
 class GlobalKeyFilter : public QObject
 {
@@ -1786,17 +1809,83 @@ private:
     std::string handler_name;
 };
 
+// Focus event filter for tracking widget focus changes
+class FocusEventFilter : public QObject
+{
+public:
+    FocusEventFilter(lua_State* L, const std::string& handler, void* widget)
+        : QObject(), lua_state(L), handler_name(handler), tracked_widget(widget) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if ((event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut) && lua_state) {
+            bool focus_in = (event->type() == QEvent::FocusIn);
+
+            lua_getglobal(lua_state, handler_name.c_str());
+            if (lua_isfunction(lua_state, -1)) {
+                lua_newtable(lua_state);
+
+                lua_pushstring(lua_state, "focus_in");
+                lua_pushboolean(lua_state, focus_in);
+                lua_settable(lua_state, -3);
+
+                lua_pushstring(lua_state, "widget");
+                lua_push_widget(lua_state, tracked_widget);
+                lua_settable(lua_state, -3);
+
+                if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
+                    qWarning() << "Error in focus event handler:" << lua_tostring(lua_state, -1);
+                    lua_pop(lua_state, 1);
+                }
+            } else {
+                lua_pop(lua_state, 1);
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    lua_State* lua_state;
+    std::string handler_name;
+    void* tracked_widget;
+};
+
 int lua_set_global_key_handler(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);  // Still passed but not used for filter installation
+    const char* handler_name = luaL_checkstring(L, 2);
+
+    if (widget) {
+        GlobalKeyFilter* filter = new GlobalKeyFilter(L, handler_name);
+        // Install filter on QApplication to intercept ALL key events globally
+        // This ensures shortcuts work regardless of which widget has focus
+        QCoreApplication::instance()->installEventFilter(filter);
+        lua_pushboolean(L, 1);
+    } else {
+        qWarning() << "Invalid widget argument in set_global_key_handler";
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Install focus event filter on a widget
+// Args: widget, handler_name (Lua function name in global scope)
+// Handler receives: {focus_in: bool, widget: userdata}
+int lua_set_focus_handler(lua_State* L)
 {
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
     const char* handler_name = luaL_checkstring(L, 2);
 
     if (widget) {
-        GlobalKeyFilter* filter = new GlobalKeyFilter(L, handler_name);
+        FocusEventFilter* filter = new FocusEventFilter(L, handler_name, widget);
         widget->installEventFilter(filter);
+
+        // Make sure widget can receive focus
+        widget->setFocusPolicy(Qt::StrongFocus);
+
         lua_pushboolean(L, 1);
     } else {
-        qWarning() << "Invalid widget argument in set_global_key_handler";
+        qWarning() << "Invalid widget argument in set_focus_handler";
         lua_pushboolean(L, 0);
     }
     return 1;

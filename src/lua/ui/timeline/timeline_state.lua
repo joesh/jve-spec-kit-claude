@@ -45,6 +45,8 @@ local state = {
 
     -- Selection
     selected_clips = {},  -- Array of selected clip objects
+    selected_edges = {},  -- Array of selected edge objects for trimming
+                          -- Each edge: {clip_id, edge_type ("in"/"out"), trim_type ("ripple"/"roll")}
 
     -- Interaction state (for cross-view operations)
     dragging_playhead = false,
@@ -69,6 +71,8 @@ M.colors = {
     text = "#cccccc",
     grid_line = "#3a3a3a",
     selection_box = "#ff8c42",
+    edge_selected_available = "#66ff66",  -- Green for selected edge with available media
+    edge_selected_limit = "#ff6666",      -- Red for selected edge at media limit
 }
 
 -- Listener notification helper (defined early so M.init can use it)
@@ -272,6 +276,44 @@ function M.set_selection(clips)
     end
 end
 
+-- Edge selection functions (for trimming)
+function M.get_selected_edges()
+    return state.selected_edges
+end
+
+function M.set_edge_selection(edges)
+    state.selected_edges = edges or {}
+    notify_listeners()
+end
+
+function M.toggle_edge_selection(clip_id, edge_type, trim_type)
+    -- Check if this edge is already selected
+    for i, edge in ipairs(state.selected_edges) do
+        if edge.clip_id == clip_id and edge.edge_type == edge_type then
+            -- Remove it
+            table.remove(state.selected_edges, i)
+            notify_listeners()
+            return false  -- Deselected
+        end
+    end
+
+    -- Add new edge
+    table.insert(state.selected_edges, {
+        clip_id = clip_id,
+        edge_type = edge_type,
+        trim_type = trim_type
+    })
+    notify_listeners()
+    return true  -- Selected
+end
+
+function M.clear_edge_selection()
+    if #state.selected_edges > 0 then
+        state.selected_edges = {}
+        notify_listeners()
+    end
+end
+
 -- Selection callback (for inspector integration)
 function M.set_on_selection_changed(callback)
     on_selection_changed_callback = callback
@@ -311,6 +353,46 @@ end
 function M.pixel_to_time(pixel, viewport_width)
     local pixels_per_ms = viewport_width / state.viewport_duration
     return math.floor(state.viewport_start_time + (pixel / pixels_per_ms))
+end
+
+-- Edge detection helper for trimming
+-- Returns: edge_type ("in"/"out"), trim_type ("ripple"/"roll"), or nil if not near edge
+function M.detect_edge_at_position(clip, click_x, viewport_width)
+    local EDGE_ZONE_PX = 8  -- Pixels from edge to detect ripple
+
+    local clip_start_x = M.time_to_pixel(clip.start_time, viewport_width)
+    local clip_end_x = M.time_to_pixel(clip.start_time + clip.duration, viewport_width)
+
+    -- Check left edge (in point)
+    if math.abs(click_x - clip_start_x) <= EDGE_ZONE_PX then
+        return "in", "ripple"
+    end
+
+    -- Check right edge (out point)
+    if math.abs(click_x - clip_end_x) <= EDGE_ZONE_PX then
+        return "out", "ripple"
+    end
+
+    return nil, nil
+end
+
+-- Check if click is between two adjacent clips (for roll edit)
+function M.detect_roll_between_clips(clip1, clip2, click_x, viewport_width)
+    if not clip1 or not clip2 then return false end
+
+    local ROLL_ZONE_PX = 16
+    local gap_start_x = M.time_to_pixel(clip1.start_time + clip1.duration, viewport_width)
+    local gap_end_x = M.time_to_pixel(clip2.start_time, viewport_width)
+
+    -- If clips are adjacent or close enough, check if click is near the edit point
+    if gap_end_x - gap_start_x < ROLL_ZONE_PX then
+        local edit_point_x = (gap_start_x + gap_end_x) / 2
+        if math.abs(click_x - edit_point_x) <= ROLL_ZONE_PX / 2 then
+            return true
+        end
+    end
+
+    return false
 end
 
 -- Clip management

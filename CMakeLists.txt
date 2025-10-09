@@ -185,8 +185,31 @@ foreach(test_source ${CONTRACT_TEST_SOURCES})
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
-# Integration tests (require UI library - not yet available)
-# file(GLOB INTEGRATION_TEST_SOURCES tests/integration/*.cpp)
+# Integration tests - Command replay invariant test
+add_executable(test_command_replay_invariant
+    tests/integration/test_command_replay_invariant.cpp
+)
+target_link_libraries(test_command_replay_invariant
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Sql
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_command_replay_invariant PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_command_replay_invariant PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_command_replay_invariant PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_command_replay_invariant COMMAND test_command_replay_invariant)
 
 # Unit tests (no unit tests currently - they would go in tests/unit/)
 # Note: New timeline tests are standalone and defined below

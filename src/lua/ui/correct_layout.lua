@@ -17,14 +17,20 @@ print("🎬 Creating correct layout...")
 print("💾 Initializing database...")
 local db_module = require("core.database")
 
--- Determine database path - single .jvp file is the project file
-local home = os.getenv("HOME")
-local projects_dir = home .. "/Documents/JVE Projects"
-local db_path = projects_dir .. "/Untitled Project.jvp"
-print("💾 Project file: " .. db_path)
+-- Determine database path - check for test environment variable first
+local db_path = os.getenv("JVE_TEST_DATABASE")
+if db_path then
+    print("💾 Using test database: " .. db_path)
+else
+    -- Normal production path - single .jvp file is the project file
+    local home = os.getenv("HOME")
+    local projects_dir = home .. "/Documents/JVE Projects"
+    db_path = projects_dir .. "/Untitled Project.jvp"
+    print("💾 Project file: " .. db_path)
 
--- Create projects directory if it doesn't exist
-os.execute('mkdir -p "' .. projects_dir .. '"')
+    -- Create projects directory if it doesn't exist
+    os.execute('mkdir -p "' .. projects_dir .. '"')
+end
 
 -- Initialize command_manager module reference (will be initialized later)
 local command_manager = require("core.command_manager")
@@ -155,18 +161,8 @@ else
             ]])
             if insert_media then insert_media:exec() end
 
-            -- Insert test clips
-            local insert_clip1 = db_conn:prepare([[
-                INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-                VALUES ('clip1', 'video1', 'media1', 0, 5000, 0, 5000, 1)
-            ]])
-            if insert_clip1 then insert_clip1:exec() end
-
-            local insert_clip2 = db_conn:prepare([[
-                INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-                VALUES ('clip2', 'video1', 'media1', 6000, 4000, 0, 4000, 1)
-            ]])
-            if insert_clip2 then insert_clip2:exec() end
+            -- Note: Test clips are now added via commands after timeline initialization
+            -- This ensures they're part of the event stream for proper undo/redo
 
             print("✅ Test project data created")
         end
@@ -208,10 +204,14 @@ local timeline_panel_mod = require("ui.timeline.timeline_panel")
 local timeline_panel = timeline_panel_mod.create()
 
 -- 5. Initialize keyboard shortcuts with the SAME timeline_state instance that timeline_panel uses
+-- Note: Use F9 and F10 to add test clips via commands
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state_from_panel = timeline_panel_mod.get_state()
 print(string.format("DEBUG: timeline_state from panel = %s", tostring(timeline_state_from_panel)))
 keyboard_shortcuts.init(timeline_state_from_panel, command_manager)
+
+-- 6. Initialize focus manager for visual panel indicators
+local focus_manager = require("ui.focus_manager")
 
 -- Initialize the Lua inspector content following working reference pattern
 local view = require("ui.inspector.view")
@@ -234,6 +234,15 @@ if mount_result and mount_result.success then
 else
     print("ERROR: Inspector mount failed: " .. tostring(mount_result))
 end
+
+-- Register all panels with focus manager for visual indicators
+focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser")
+focus_manager.register_panel("viewer", viewer_panel, viewer_title, "Viewer")
+focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector")
+focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline")
+
+-- Initialize all panels to unfocused state
+focus_manager.initialize_all_panels()
 
 -- Add three panels to top splitter
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
@@ -264,12 +273,17 @@ qt_constants.PROPERTIES.SET_STYLE(main_window, [[
     QLineEdit { background: #353535; color: white; border: 1px solid #555; padding: 4px; }
 ]])
 
--- Install global keyboard shortcut handler
-_G.global_key_handler = function(event)
-    return keyboard_shortcuts.handle_key(event)
+-- Install global keyboard shortcut handler (skip in test mode to avoid crashes)
+local is_test_mode = os.getenv("JVE_TEST_DATABASE") ~= nil
+if not is_test_mode then
+    _G.global_key_handler = function(event)
+        return keyboard_shortcuts.handle_key(event)
+    end
+    qt_set_global_key_handler(main_window, "global_key_handler")
+    print("✅ Keyboard shortcuts installed")
+else
+    print("⚠️  Keyboard shortcuts disabled in test mode")
 end
-qt_set_global_key_handler(main_window, "global_key_handler")
-print("✅ Keyboard shortcuts installed")
 
 -- Show window
 qt_constants.DISPLAY.SHOW(main_window)

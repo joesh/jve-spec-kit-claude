@@ -30,6 +30,8 @@ local KEY = {
     E = 69,
     R = 82,
     T = 84,
+    F9 = 16777272,   -- 0x01000038
+    F10 = 16777273,  -- 0x01000039
 }
 
 -- Qt modifier constants (from Qt::KeyboardModifier enum)
@@ -63,27 +65,26 @@ function keyboard_shortcuts.handle_key(event)
     local modifiers = event.modifiers
     local text = event.text
 
-    -- Debug output
-    print(string.format("Key pressed: key=%d, modifiers=%d, text='%s'", key, modifiers, text))
-
-    -- Direct test for B key
-    if key == 66 then
-        print(string.format("RAW B DETECTED! KEY.B=%d, match=%s", KEY.B, tostring(key == KEY.B)))
-    end
-
     -- Cmd/Ctrl + Z: Undo
+    -- Cmd/Ctrl + Shift + Z: Redo
     if key == KEY.Z and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
         if has_modifier(modifiers, MOD.Shift) then
-            -- Cmd/Ctrl + Shift + Z: Redo
+            -- Redo
             if command_manager then
-                command_manager.redo()
-                print("Redo")
+                local result = command_manager.redo()
+                if result.success and timeline_state then
+                    timeline_state.reload_clips()
+                    print("Redo complete")
+                end
             end
         else
-            -- Cmd/Ctrl + Z: Undo
+            -- Undo
             if command_manager then
-                command_manager.undo()
-                print("Undo")
+                local result = command_manager.undo()
+                if result.success and timeline_state then
+                    timeline_state.reload_clips()
+                    print("Undo complete")
+                end
             end
         end
         return true  -- Event handled
@@ -126,9 +127,9 @@ function keyboard_shortcuts.handle_key(event)
 
             for _, clip in ipairs(selected_clips) do
                 local new_start_time = math.max(0, clip.start_time + nudge_amount)
+                -- Update clip in timeline_state (updates database automatically)
                 timeline_state.update_clip(clip.id, {start_time = new_start_time})
             end
-            timeline_state.notify_state_changed()
             print(string.format("Nudged %d clips by %dms", #selected_clips, nudge_amount))
             return true
         end
@@ -221,6 +222,54 @@ function keyboard_shortcuts.handle_key(event)
     end
     if key == KEY.T then
         print("Roll tool (not implemented yet)")
+        return true
+    end
+
+    -- F9: INSERT at playhead (ripple subsequent clips forward)
+    if key == KEY.F9 then
+        if command_manager and timeline_state then
+            local Command = require("command")
+            local playhead_time = timeline_state.get_playhead_time()
+            local insert_cmd = Command.create("Insert", "default_project")
+            insert_cmd:set_parameter("media_id", "media1")
+            insert_cmd:set_parameter("track_id", "video1")
+            insert_cmd:set_parameter("insert_time", playhead_time)
+            insert_cmd:set_parameter("duration", 3000)  -- 3 second clip
+            insert_cmd:set_parameter("source_in", 0)
+            insert_cmd:set_parameter("source_out", 3000)
+            insert_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
+            local result = command_manager.execute(insert_cmd)
+            if result.success then
+                timeline_state.reload_clips()
+                print(string.format("✅ INSERT: Added 3s clip at %dms, rippled subsequent clips", playhead_time))
+            else
+                print("❌ INSERT failed: " .. (result.error_message or "unknown error"))
+            end
+        end
+        return true
+    end
+
+    -- F10: OVERWRITE at playhead (trim/replace existing clips)
+    if key == KEY.F10 then
+        if command_manager and timeline_state then
+            local Command = require("command")
+            local playhead_time = timeline_state.get_playhead_time()
+            local overwrite_cmd = Command.create("Overwrite", "default_project")
+            overwrite_cmd:set_parameter("media_id", "media1")
+            overwrite_cmd:set_parameter("track_id", "video1")
+            overwrite_cmd:set_parameter("overwrite_time", playhead_time)
+            overwrite_cmd:set_parameter("duration", 3000)  -- 3 second clip
+            overwrite_cmd:set_parameter("source_in", 0)
+            overwrite_cmd:set_parameter("source_out", 3000)
+            overwrite_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
+            local result = command_manager.execute(overwrite_cmd)
+            if result.success then
+                timeline_state.reload_clips()
+                print(string.format("✅ OVERWRITE: Added 3s clip at %dms, trimmed overlapping clips", playhead_time))
+            else
+                print("❌ OVERWRITE failed: " .. (result.error_message or "unknown error"))
+            end
+        end
         return true
     end
 
