@@ -20,6 +20,7 @@ local last_error_message = ""
 
 -- Undo tree tracking
 local current_sequence_number = nil  -- Current position in undo tree (nil = at HEAD, latest command)
+local current_branch_path = {}  -- Sequence of command IDs from root to current position (for tree navigation)
 
 -- Command type implementations
 local command_executors = {}
@@ -187,10 +188,24 @@ function M.execute(command)
     command.sequence_number = sequence_number
 
     -- Set parent_sequence_number for undo tree
+    -- This creates branches when executing after undo
     command.parent_sequence_number = current_sequence_number
 
     -- Update command with state hashes
     update_command_hashes(command, pre_hash)
+
+    -- Capture playhead and selection state BEFORE command execution (pre-state model)
+    local timeline_state = require('ui.timeline.timeline_state')
+    command.playhead_time = timeline_state.get_playhead_time()
+
+    -- Serialize selected clip IDs to JSON
+    local selected_clips = timeline_state.get_selected_clips()
+    local selected_ids = {}
+    for _, clip in ipairs(selected_clips) do
+        table.insert(selected_ids, clip.id)
+    end
+    local success, json_str = pcall(qt_json_encode, selected_ids)
+    command.selected_clip_ids = success and json_str or "[]"
 
     -- Execute the actual command logic
     local execution_success = execute_command_implementation(command)
@@ -211,6 +226,14 @@ function M.execute(command)
 
             -- Move to HEAD after executing new command
             current_sequence_number = sequence_number
+
+            -- Create snapshot every N commands for fast event replay
+            local snapshot_mgr = require('core.snapshot_manager')
+            if snapshot_mgr.should_snapshot(sequence_number) then
+                local db_module = require('core.database')
+                local clips = db_module.load_clips("default_sequence")
+                snapshot_mgr.create_snapshot(db, "default_sequence", sequence_number, clips)
+            end
         else
             result.error_message = "Failed to save command to database"
         end
@@ -230,33 +253,22 @@ function M.get_last_command(project_id)
         return nil
     end
 
-    -- If current_sequence_number is nil, we're at HEAD (get most recent command)
-    local query
-    if current_sequence_number then
-        query = db:prepare([[
-            SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp
-            FROM commands
-            WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
-        ]])
-        if not query then
-            print("WARNING: Failed to prepare get_last_command query")
-            return nil
-        end
-        query:bind_value(1, current_sequence_number)
-    else
-        query = db:prepare([[
-            SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp
-            FROM commands
-            WHERE command_type NOT LIKE 'Undo%'
-            ORDER BY sequence_number DESC
-            LIMIT 1
-        ]])
+    -- If current_sequence_number is nil, we're before all commands (fully undone)
+    if not current_sequence_number then
+        return nil  -- Nothing to undo
     end
 
+    -- Get command at current position
+    local query = db:prepare([[
+        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp
+        FROM commands
+        WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
+    ]])
     if not query then
         print("WARNING: Failed to prepare get_last_command query")
         return nil
     end
+    query:bind_value(1, current_sequence_number)
 
     if query:exec() and query:next() then
         -- Manually construct command from query results
@@ -684,19 +696,35 @@ command_executors["CreateClip"] = function(command)
 
     local track_id = command:get_parameter("track_id")
     local media_id = command:get_parameter("media_id")
+    local start_time = command:get_parameter("start_time") or 0
+    local duration = command:get_parameter("duration")
+    local source_in = command:get_parameter("source_in") or 0
+    local source_out = command:get_parameter("source_out")
 
     if not track_id or track_id == "" or not media_id or media_id == "" then
         print("WARNING: CreateClip: Missing required parameters")
         return false
     end
 
+    if not duration or not source_out then
+        print("WARNING: CreateClip: Missing duration or source_out")
+        return false
+    end
+
     local Clip = require('models.clip')
     local clip = Clip.create("Timeline Clip", media_id)
+
+    -- Set all clip parameters from command
+    clip.track_id = track_id
+    clip.start_time = start_time
+    clip.duration = duration
+    clip.source_in = source_in
+    clip.source_out = source_out
 
     command:set_parameter("clip_id", clip.id)
 
     if clip:save(db) then
-        print(string.format("Created clip with ID: %s", clip.id))
+        print(string.format("Created clip with ID: %s on track %s at %dms", clip.id, track_id, start_time))
         return true
     else
         print("WARNING: Failed to save clip")
@@ -874,6 +902,7 @@ command_executors["SplitClip"] = function(command)
     end
 
     -- Store original state for undo
+    command:set_parameter("track_id", original_clip.track_id)
     command:set_parameter("original_start_time", original_clip.start_time)
     command:set_parameter("original_duration", original_clip.duration)
     command:set_parameter("original_source_in", original_clip.source_in)
@@ -923,29 +952,54 @@ command_executors["UndoSplitClip"] = function(command)
     print("Executing UndoSplitClip command")
 
     local clip_id = command:get_parameter("clip_id")
-    local second_clip_id = command:get_parameter("second_clip_id")
+    local track_id = command:get_parameter("track_id")
+    local split_time = command:get_parameter("split_time")
     local original_start_time = command:get_parameter("original_start_time")
     local original_duration = command:get_parameter("original_duration")
     local original_source_in = command:get_parameter("original_source_in")
     local original_source_out = command:get_parameter("original_source_out")
 
-    if not clip_id or clip_id == "" or not second_clip_id or second_clip_id == "" then
+    if not clip_id or clip_id == "" or not track_id or not split_time then
         print("WARNING: UndoSplitClip: Missing required parameters")
         return false
     end
 
-    -- Load the clips
+    -- Load the original clip (left side of split)
     local Clip = require('models.clip')
     local original_clip = Clip.load(clip_id, db)
-    local second_clip = Clip.load(second_clip_id, db)
 
     if not original_clip then
         print(string.format("WARNING: UndoSplitClip: Original clip not found: %s", clip_id))
         return false
     end
 
+    -- Find the second clip (right side) by position: on same track, starts at split_time
+    -- Use direct SQL query since Clip model doesn't have a "find by position" method
+    local query = db:prepare([[
+        SELECT id FROM clips
+        WHERE track_id = ? AND start_time = ? AND id != ?
+        LIMIT 1
+    ]])
+
+    if not query then
+        print("WARNING: UndoSplitClip: Failed to prepare second clip query")
+        return false
+    end
+
+    query:bind_value(1, track_id)
+    query:bind_value(2, split_time)
+    query:bind_value(3, clip_id)  -- Exclude the original clip itself
+
+    local second_clip = nil
+    local second_clip_id = nil
+    if query:exec() and query:next() then
+        second_clip_id = query:value(0)
+        second_clip = Clip.load(second_clip_id, db)
+    end
+
     if not second_clip then
-        print(string.format("WARNING: UndoSplitClip: Second clip not found: %s", second_clip_id))
+        print(string.format("WARNING: UndoSplitClip: Second clip not found at track=%s, time=%d",
+            track_id, split_time))
         return false
     end
 
@@ -970,6 +1024,545 @@ command_executors["UndoSplitClip"] = function(command)
     print(string.format("Undid split: restored clip %s and deleted clip %s",
         clip_id, second_clip_id))
     return true
+end
+
+-- INSERT: Add clip at playhead, rippling all subsequent clips forward
+command_executors["Insert"] = function(command)
+    print("Executing Insert command")
+
+    local media_id = command:get_parameter("media_id")
+    local track_id = command:get_parameter("track_id")
+    local insert_time = command:get_parameter("insert_time")
+    local duration = command:get_parameter("duration")
+    local source_in = command:get_parameter("source_in") or 0
+    local source_out = command:get_parameter("source_out")
+
+    if not media_id or media_id == "" or not track_id or track_id == "" then
+        print("WARNING: Insert: Missing media_id or track_id")
+        return false
+    end
+
+    if not insert_time or not duration or not source_out then
+        print("WARNING: Insert: Missing insert_time, duration, or source_out")
+        return false
+    end
+
+    -- Step 1: Ripple all clips on this track that start at or after insert_time
+    local db_module = require('core.database')
+    local sequence_id = command:get_parameter("sequence_id") or "default_sequence"
+
+    -- Load all clips on this track
+    local query = db:prepare([[
+        SELECT id, start_time FROM clips
+        WHERE track_id = ?
+        ORDER BY start_time ASC
+    ]])
+
+    if not query then
+        print("WARNING: Insert: Failed to prepare query")
+        return false
+    end
+
+    query:bind_value(1, track_id)
+
+    local clips_to_ripple = {}
+    if query:exec() then
+        while query:next() do
+            local clip_id = query:value(0)
+            local start_time = query:value(1)
+            -- Ripple clips that start AFTER insert_time (not AT insert_time)
+            if start_time > insert_time then
+                table.insert(clips_to_ripple, {id = clip_id, old_start = start_time})
+            end
+        end
+    end
+
+    -- Ripple clips forward
+    local Clip = require('models.clip')
+    for _, clip_info in ipairs(clips_to_ripple) do
+        local clip = Clip.load(clip_info.id, db)
+        if clip then
+            clip.start_time = clip_info.old_start + duration
+            if not clip:save(db) then
+                print(string.format("WARNING: Insert: Failed to ripple clip %s", clip_info.id))
+                return false
+            end
+        end
+    end
+
+    -- Store ripple info for undo
+    command:set_parameter("rippled_clips", clips_to_ripple)
+
+    -- Step 2: Create the new clip at insert_time
+    -- Reuse clip_id if this is a replay (to preserve selection references)
+    local existing_clip_id = command:get_parameter("clip_id")
+    local clip = Clip.create("Inserted Clip", media_id)
+    if existing_clip_id then
+        clip.id = existing_clip_id  -- Reuse existing ID for replay
+    end
+    clip.track_id = track_id
+    clip.start_time = insert_time
+    clip.duration = duration
+    clip.source_in = source_in
+    clip.source_out = source_out
+
+    command:set_parameter("clip_id", clip.id)
+
+    if clip:save(db) then
+        -- Advance playhead to end of inserted clip (if requested)
+        local advance_playhead = command:get_parameter("advance_playhead")
+        if advance_playhead then
+            local timeline_state = require('ui.timeline.timeline_state')
+            timeline_state.set_playhead_time(insert_time + duration)
+        end
+
+        print(string.format("✅ Inserted clip at %dms, rippled %d clips forward by %dms",
+            insert_time, #clips_to_ripple, duration))
+        return true
+    else
+        print("WARNING: Insert: Failed to save clip")
+        return false
+    end
+end
+
+-- OVERWRITE: Add clip at playhead, trimming/replacing existing clips
+command_executors["Overwrite"] = function(command)
+    print("Executing Overwrite command")
+
+    local media_id = command:get_parameter("media_id")
+    local track_id = command:get_parameter("track_id")
+    local overwrite_time = command:get_parameter("overwrite_time")
+    local duration = command:get_parameter("duration")
+    local source_in = command:get_parameter("source_in") or 0
+    local source_out = command:get_parameter("source_out")
+
+    if not media_id or media_id == "" or not track_id or track_id == "" then
+        print("WARNING: Overwrite: Missing media_id or track_id")
+        return false
+    end
+
+    if not overwrite_time or not duration or not source_out then
+        print("WARNING: Overwrite: Missing overwrite_time, duration, or source_out")
+        return false
+    end
+
+    local overwrite_end = overwrite_time + duration
+
+    -- Step 1: Find all clips that overlap the overwrite range [overwrite_time, overwrite_end)
+    local query = db:prepare([[
+        SELECT id, start_time, duration FROM clips
+        WHERE track_id = ?
+        ORDER BY start_time ASC
+    ]])
+
+    if not query then
+        print("WARNING: Overwrite: Failed to prepare query")
+        return false
+    end
+
+    query:bind_value(1, track_id)
+
+    local affected_clips = {}
+    if query:exec() then
+        while query:next() do
+            local clip_id = query:value(0)
+            local clip_start = query:value(1)
+            local clip_duration = query:value(2)
+            local clip_end = clip_start + clip_duration
+
+            -- Check if clip overlaps [overwrite_time, overwrite_end)
+            if clip_start < overwrite_end and clip_end > overwrite_time then
+                table.insert(affected_clips, {
+                    id = clip_id,
+                    start_time = clip_start,
+                    duration = clip_duration
+                })
+            end
+        end
+    end
+
+    -- Step 2: Handle affected clips (trim or delete)
+    local Clip = require('models.clip')
+    local modified_clips = {}
+
+    for _, clip_info in ipairs(affected_clips) do
+        local clip = Clip.load(clip_info.id, db)
+        if clip then
+            local clip_start = clip_info.start_time
+            local clip_end = clip_start + clip_info.duration
+
+            -- Save original state for undo
+            table.insert(modified_clips, {
+                id = clip.id,
+                start_time = clip.start_time,
+                duration = clip.duration,
+                source_in = clip.source_in,
+                source_out = clip.source_out
+            })
+
+            -- Completely covered - delete
+            if clip_start >= overwrite_time and clip_end <= overwrite_end then
+                if not clip:delete(db) then
+                    print(string.format("WARNING: Overwrite: Failed to delete clip %s", clip.id))
+                    return false
+                end
+            -- Partially covered from left - trim left side
+            elseif clip_start < overwrite_time and clip_end > overwrite_time and clip_end <= overwrite_end then
+                local trim_amount = clip_end - overwrite_time
+                clip.duration = clip.duration - trim_amount
+                clip.source_out = clip.source_out - trim_amount
+                if not clip:save(db) then
+                    print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
+                    return false
+                end
+            -- Partially covered from right - trim right side and move
+            elseif clip_start >= overwrite_time and clip_start < overwrite_end and clip_end > overwrite_end then
+                local trim_amount = overwrite_end - clip_start
+                clip.start_time = overwrite_end
+                clip.duration = clip.duration - trim_amount
+                clip.source_in = clip.source_in + trim_amount
+                if not clip:save(db) then
+                    print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
+                    return false
+                end
+            -- Spans entire overwrite range - split into two
+            elseif clip_start < overwrite_time and clip_end > overwrite_end then
+                -- Trim left part
+                local left_duration = overwrite_time - clip_start
+                clip.duration = left_duration
+                clip.source_out = clip.source_in + left_duration
+
+                -- Create right part
+                local right_clip = Clip.create("Split Clip", clip.media_id)
+                right_clip.track_id = clip.track_id
+                right_clip.start_time = overwrite_end
+                right_clip.duration = clip_end - overwrite_end
+                right_clip.source_in = clip.source_in + (overwrite_time - clip_start) + duration
+                right_clip.source_out = clip_info.source_out
+
+                if not clip:save(db) or not right_clip:save(db) then
+                    print("WARNING: Overwrite: Failed to split clip")
+                    return false
+                end
+            end
+        end
+    end
+
+    -- Store modified clips for undo
+    command:set_parameter("modified_clips", modified_clips)
+
+    -- Step 3: Create the new clip at overwrite_time
+    local clip = Clip.create("Overwrite Clip", media_id)
+    clip.track_id = track_id
+    clip.start_time = overwrite_time
+    clip.duration = duration
+    clip.source_in = source_in
+    clip.source_out = source_out
+
+    command:set_parameter("clip_id", clip.id)
+
+    if clip:save(db) then
+        -- Advance playhead to end of overwritten clip (if requested)
+        local advance_playhead = command:get_parameter("advance_playhead")
+        if advance_playhead then
+            local timeline_state = require('ui.timeline.timeline_state')
+            timeline_state.set_playhead_time(overwrite_time + duration)
+        end
+
+        print(string.format("✅ Overwrote at %dms, affected %d clips", overwrite_time, #affected_clips))
+        return true
+    else
+        print("WARNING: Overwrite: Failed to save clip")
+        return false
+    end
+end
+
+-- Event Replay: Reconstruct state by replaying commands from scratch
+-- This is the core of event sourcing - state is derived from events, not stored directly
+-- Parameters:
+--   sequence_id: Which sequence to reconstruct (e.g., "default_sequence")
+--   target_sequence_number: Replay up to and including this command number
+-- Returns: true if successful, false otherwise
+function M.replay_events(sequence_id, target_sequence_number)
+    if not db then
+        print("WARNING: replay_events: No database connection")
+        return false
+    end
+
+    print(string.format("Replaying events for sequence '%s' up to command %d",
+        sequence_id, target_sequence_number))
+
+    -- Step 1: Load snapshot if available
+    local snapshot_mgr = require('core.snapshot_manager')
+    local snapshot = snapshot_mgr.load_snapshot(db, sequence_id)
+
+    local start_sequence = 0
+    local clips = {}
+
+    if snapshot and snapshot.sequence_number <= target_sequence_number then
+        -- Start from snapshot
+        start_sequence = snapshot.sequence_number
+        clips = snapshot.clips
+        print(string.format("Starting from snapshot at sequence %d with %d clips",
+            start_sequence, #clips))
+    else
+        -- No snapshot or snapshot is ahead of target, start from beginning
+        print("No snapshot available, replaying from beginning")
+        start_sequence = 0
+        clips = {}
+    end
+
+    -- Step 2: Determine which clips to preserve (initial state before any commands)
+    -- If we have a snapshot, use it. Otherwise, start from EMPTY state.
+    local initial_clips = {}
+
+    if snapshot and #clips > 0 then
+        -- We have a snapshot - use it as the base state
+        initial_clips = clips
+        print(string.format("Using snapshot with %d clips as initial state", #initial_clips))
+    else
+        -- No snapshot - start from EMPTY state (commands will build up from nothing)
+        initial_clips = {}
+        print("Starting from empty initial state (no snapshot)")
+    end
+
+    -- Step 3: Clear ALL clips (we'll restore initial state + replay commands)
+    local delete_query = db:prepare("DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)")
+    if delete_query then
+        delete_query:bind_value(1, sequence_id)
+        delete_query:exec()
+        print("Cleared all clips from database")
+    end
+
+    -- Step 4: Restore initial state clips
+    if #initial_clips > 0 then
+        local Clip = require('models.clip')
+        for _, clip in ipairs(initial_clips) do
+            -- Recreate clip in database
+            local restored_clip = Clip.create(clip.name or "", clip.media_id)
+            restored_clip.id = clip.id  -- Preserve original ID
+            restored_clip.track_id = clip.track_id
+            restored_clip.start_time = clip.start_time
+            restored_clip.duration = clip.duration
+            restored_clip.source_in = clip.source_in
+            restored_clip.source_out = clip.source_out
+            restored_clip.enabled = clip.enabled
+            restored_clip:save(db)
+        end
+        print(string.format("Restored %d clips as initial state", #initial_clips))
+    end
+
+    -- Step 5: Replay commands from start_sequence + 1 to target_sequence_number
+    -- IMPORTANT: Follow the parent_sequence_number chain to only replay commands on the active branch
+    if target_sequence_number > start_sequence then
+        -- Build the command chain by walking backwards from target to start
+        local command_chain = {}
+        local current_seq = target_sequence_number
+
+        while current_seq > start_sequence do
+            local find_query = db:prepare([[
+                SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids
+                FROM commands
+                WHERE sequence_number = ?
+            ]])
+
+            if not find_query then
+                print("WARNING: Failed to prepare find command query")
+                break
+            end
+
+            find_query:bind_value(1, current_seq)
+
+            if find_query:exec() and find_query:next() then
+                -- Store this command
+                table.insert(command_chain, 1, {  -- Insert at beginning to reverse order
+                    id = find_query:value(0),
+                    command_type = find_query:value(1),
+                    command_args = find_query:value(2),
+                    sequence_number = find_query:value(3),
+                    parent_sequence_number = find_query:value(4),
+                    pre_hash = find_query:value(5),
+                    post_hash = find_query:value(6),
+                    timestamp = find_query:value(7),
+                    playhead_time = find_query:value(8),
+                    selected_clip_ids = find_query:value(9)
+                })
+
+                -- Move to parent
+                local parent = find_query:value(4)
+                current_seq = parent or 0
+            else
+                print(string.format("WARNING: Could not find command with sequence %d", current_seq))
+                break
+            end
+        end
+
+        print(string.format("Replaying %d commands on active branch to sequence %d", #command_chain, target_sequence_number))
+
+        local Command = require("command")
+        local commands_replayed = 0
+        local final_playhead_time = 0
+        local final_selected_clip_ids = "[]"
+
+        for _, cmd_data in ipairs(command_chain) do
+            -- Create command object from stored data
+            local command = Command.create(cmd_data.command_type, "default_project")
+            command.id = cmd_data.id
+            command.sequence_number = cmd_data.sequence_number
+            command.parent_sequence_number = cmd_data.parent_sequence_number
+            command.pre_hash = cmd_data.pre_hash
+            command.post_hash = cmd_data.post_hash
+            command.timestamp = cmd_data.timestamp
+
+            -- Decode parameters from JSON
+            if cmd_data.command_args and cmd_data.command_args ~= "" then
+                local success, params = pcall(qt_json_decode, cmd_data.command_args)
+                if success then
+                    command.parameters = params
+                end
+            end
+
+            -- Restore playhead BEFORE executing command
+            local timeline_state = require('ui.timeline.timeline_state')
+            timeline_state.set_playhead_time(cmd_data.playhead_time or 0)
+
+            -- Execute the command (but don't save it again - it's already in commands table)
+            -- Note: We don't restore selection here - it's user state, not command state
+            local execution_success = execute_command_implementation(command)
+
+            if execution_success then
+                commands_replayed = commands_replayed + 1
+            else
+                print(string.format("WARNING: Failed to replay command %d (%s)",
+                    command.sequence_number, command.type))
+                return false
+            end
+        end
+
+        print(string.format("✅ Replayed %d commands successfully", commands_replayed))
+    else
+        -- No commands to replay - reset to initial state
+        local timeline_state = require('ui.timeline.timeline_state')
+        timeline_state.set_playhead_time(0)
+        timeline_state.set_selection({})
+        print("No commands to replay - reset playhead and selection to initial state")
+    end
+
+    return true
+end
+
+-- Undo: Move back one command in the undo tree using event replay
+-- Track selection across undo/redo
+local saved_selection_on_undo = nil
+
+function M.undo()
+    -- Get the command at current position
+    local current_command = M.get_last_command("default_project")
+
+    if not current_command then
+        print("Nothing to undo")
+        return {success = false, error_message = "Nothing to undo"}
+    end
+
+    print(string.format("Undoing command: %s (seq %d)", current_command.type, current_command.sequence_number))
+
+    -- Save current selection before undo (user state between commands)
+    local timeline_state = require('ui.timeline.timeline_state')
+    saved_selection_on_undo = timeline_state.get_selected_clips()
+
+    -- Calculate target sequence (parent of current command for branching support)
+    -- In a branching history, undo follows the parent link, not sequence_number - 1
+    local target_sequence = current_command.parent_sequence_number or 0
+
+    -- Replay events up to target (or clear all if target is 0)
+    local replay_success = true
+    if target_sequence > 0 then
+        replay_success = M.replay_events("default_sequence", target_sequence)
+    else
+        -- Undo all - clear the clips table and reset playhead/selection
+        local delete_query = db:prepare("DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)")
+        if delete_query then
+            delete_query:bind_value(1, "default_sequence")
+            delete_query:exec()
+            print("Cleared all clips (undo to beginning)")
+        end
+
+        -- Reset playhead and selection to initial state
+        local timeline_state = require('ui.timeline.timeline_state')
+        timeline_state.set_playhead_time(0)
+        timeline_state.set_selection({})
+        print("Reset playhead and selection to initial state")
+    end
+
+    if replay_success then
+        -- Move current_sequence_number back
+        current_sequence_number = target_sequence > 0 and target_sequence or nil
+        print(string.format("Undo complete - moved to position %s", tostring(current_sequence_number)))
+        return {success = true}
+    else
+        return {success = false, error_message = "Undo replay failed"}
+    end
+end
+
+-- Redo: Move forward one command in the undo tree using event replay
+function M.redo()
+    if not db then
+        print("No database connection")
+        return {success = false, error_message = "No database connection"}
+    end
+
+    -- Get the next command in the active branch
+    -- In a branching history, redo follows the most recently created child
+    -- (highest sequence_number with parent = current_sequence_number)
+    local current_pos = current_sequence_number or 0
+
+    -- Find all children of current position and pick the most recent one
+    local query = db:prepare([[
+        SELECT sequence_number, command_type
+        FROM commands
+        WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
+        ORDER BY sequence_number DESC
+        LIMIT 1
+    ]])
+
+    if not query then
+        print("Failed to prepare redo query")
+        return {success = false, error_message = "Failed to prepare redo query"}
+    end
+
+    query:bind_value(1, current_pos)
+    query:bind_value(2, current_pos)
+
+    if not query:exec() or not query:next() then
+        print("Nothing to redo")
+        return {success = false, error_message = "Nothing to redo"}
+    end
+
+    local target_sequence = query:value(0)
+    local command_type = query:value(1)
+    print(string.format("Redoing command: %s (seq %d)", command_type, target_sequence))
+
+    -- Replay events up to target sequence
+    local replay_success = M.replay_events("default_sequence", target_sequence)
+
+    if replay_success then
+        -- Move current_sequence_number forward
+        current_sequence_number = target_sequence
+
+        -- Restore selection that was saved during undo
+        if saved_selection_on_undo then
+            local timeline_state = require('ui.timeline.timeline_state')
+            timeline_state.set_selection(saved_selection_on_undo)
+            print(string.format("Redo complete - moved to position %d, restored %d selected clips",
+                  current_sequence_number, #saved_selection_on_undo))
+        else
+            print(string.format("Redo complete - moved to position %d", current_sequence_number))
+        end
+
+        return {success = true}
+    else
+        return {success = false, error_message = "Redo replay failed"}
+    end
 end
 
 return M

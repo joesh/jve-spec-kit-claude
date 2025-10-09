@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-05 (Track Separation - WIP)
+Last updated: 2025-10-09 (Tree-Based Undo/Redo)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -66,6 +66,8 @@ make clean          # Clean build artifacts
 - Clip split functionality - UUID generation now properly seeded
 - Widget type-based property getters in inspector
 - Debug output spam eliminated from Qt bindings layer
+- Tree-based undo/redo - follows parent links instead of linear sequence
+- Selection preservation across undo/redo operations
 
 ## Current Issues (VERIFIED 2025-10-01)
 
@@ -93,6 +95,17 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-09: Tree-Based Undo/Redo with Selection Preservation**
+- Implemented proper tree-based undo/redo navigation for branching command history
+  - Undo now follows `parent_sequence_number` links instead of decrementing sequence numbers
+  - Redo queries for children and picks most recent (highest sequence_number) when multiple branches exist
+  - Fixes bug where undoing from a new branch replayed wrong commands (command_manager.lua:1475)
+- Selection preservation across undo/redo operations
+  - Added `saved_selection_on_undo` pattern: save selection when undo pressed, restore on redo
+  - Selection is user state (actions between commands), not command state
+  - Simplified replay logic to only restore playhead, not selection (command_manager.lua:1427)
+- Test scenario verified: F9 → select clip → F9 → undo → redo now preserves selection correctly
 
 **2025-10-05: Timeline Track Separation (WIP)**
 - Implemented visual track type separation with partitioned rendering
@@ -139,6 +152,7 @@ The previous documentation contained extensive false "milestone" claims about co
 3. Fix test system build issues
 
 ## Commit History
+- 2025-10-09: Implement tree-based undo/redo with selection preservation for branching command history
 - 2025-10-05: Fix clip split disappearing bug, inspector widget type errors, and debug output spam
 - 2025-10-02: Implement tag-based media organization with multiple namespaces
 - 2025-10-01: Fix inspector panel initialization timing - now creates content during correct execution phase
