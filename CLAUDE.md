@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-09 (Session State Persistence & Event Sourcing Enforcement)
+Last updated: 2025-10-09 (Professional Edge Selection for NLE Trimming)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -71,6 +71,7 @@ make clean          # Clean build artifacts
 - Undo position persistence across app sessions (command_manager.lua, schema.sql)
 - Inspector notification on startup with restored selection (timeline_panel.lua)
 - Direct clip modifications now blocked to enforce event sourcing (timeline_state.lua)
+- Edge selection system with bracket indicators `[` `]` `][` for trimming operations
 
 ## Current Issues (VERIFIED 2025-10-01)
 
@@ -98,6 +99,21 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-09: Professional Edge Selection for NLE Trimming**
+- Implemented complete edge selection system following FCP7/Premiere/Resolve patterns
+  - Bracket-style visual indicators: `[` for in-points, `]` for out-points, `][` for edit points
+  - Color-coded availability: green (#66ff66) for trimmable edges, red (#ff6666) for media limits
+  - 8px tolerance zone for precise edge detection
+- Edit point semantics: `][` represents selecting the boundary between adjacent clips
+  - Out-point of left clip `]` + in-point of right clip `[` selected simultaneously
+  - Enables roll edits (moving edit point without changing total duration)
+- Single edge selection: Click within 8px of isolated edge selects `[` or `]` only
+  - Enables ripple edits (trim edge with downstream timeline shift)
+- Cmd-click multi-select for asymmetrical trimming across multiple clips
+- Two-pass detection algorithm: find all edges near click, select all detected
+- Foundation complete for implementing actual trim commands (roll/ripple edits)
+- Files: src/lua/ui/timeline/timeline_state.lua, src/lua/ui/timeline/timeline_view.lua
 
 **2025-10-09: Session State Persistence & Event Sourcing Enforcement**
 - Undo position now persists across app sessions
@@ -171,6 +187,7 @@ The previous documentation contained extensive false "milestone" claims about co
 3. Fix test system build issues
 
 ## Commit History
+- 2025-10-09: Implement professional edge selection system for NLE trimming operations
 - 2025-10-09: Persist undo position across sessions and enforce event sourcing discipline
 - 2025-10-09: Implement tree-based undo/redo with selection preservation for branching command history
 - 2025-10-05: Fix clip split disappearing bug, inspector widget type errors, and debug output spam
