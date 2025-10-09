@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS sequences (
     width INTEGER NOT NULL CHECK(width > 0),
     height INTEGER NOT NULL CHECK(height > 0),
     timecode_start INTEGER NOT NULL DEFAULT 0 CHECK(timecode_start >= 0),
-    
+    playhead_time INTEGER NOT NULL DEFAULT 0 CHECK(playhead_time >= 0),  -- Current playhead position in ms
+    selected_clip_ids TEXT,                                                -- JSON array of selected clip IDs
+    current_sequence_number INTEGER,                                       -- Current position in undo tree (NULL = at HEAD)
+
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -112,6 +115,8 @@ CREATE TABLE IF NOT EXISTS commands (
     pre_hash TEXT NOT NULL,                 -- State hash before command
     post_hash TEXT NOT NULL,                -- State hash after command
     timestamp INTEGER NOT NULL,             -- Unix timestamp
+    playhead_time INTEGER NOT NULL DEFAULT 0,  -- Playhead position after this command (for undo/redo)
+    selected_clip_ids TEXT,                     -- JSON array of selected clip IDs after this command
 
     FOREIGN KEY (parent_id) REFERENCES commands(id) ON DELETE SET NULL,
 
@@ -120,14 +125,18 @@ CREATE TABLE IF NOT EXISTS commands (
     UNIQUE(sequence_number)
 );
 
--- Snapshots table: Periodic state checkpoints for fast project loading
+-- Snapshots table: Periodic state checkpoints for fast project loading and event replay
 CREATE TABLE IF NOT EXISTS snapshots (
     id TEXT PRIMARY KEY,                    -- UUID
-    command_id TEXT,                        -- Last command included in snapshot
-    snapshot_data BLOB NOT NULL,           -- Compressed state data
-    created_at INTEGER NOT NULL,           -- Unix timestamp
-    
-    FOREIGN KEY (command_id) REFERENCES commands(id) ON DELETE SET NULL
+    sequence_id TEXT NOT NULL,              -- Which sequence this snapshot belongs to
+    sequence_number INTEGER NOT NULL,       -- Last command sequence number included in this snapshot
+    clips_state TEXT NOT NULL,              -- JSON array of all clips at this point in time
+    created_at INTEGER NOT NULL,            -- Unix timestamp
+
+    FOREIGN KEY (sequence_id) REFERENCES sequences(id) ON DELETE CASCADE,
+
+    -- Only keep one snapshot per sequence (latest wins)
+    UNIQUE(sequence_id)
 );
 
 -- Indices for performance optimization
@@ -139,7 +148,8 @@ CREATE INDEX IF NOT EXISTS idx_properties_clip ON properties(clip_id);
 CREATE INDEX IF NOT EXISTS idx_commands_sequence ON commands(sequence_number);
 CREATE INDEX IF NOT EXISTS idx_commands_parent_sequence ON commands(parent_sequence_number);
 CREATE INDEX IF NOT EXISTS idx_commands_timestamp ON commands(timestamp);
-CREATE INDEX IF NOT EXISTS idx_snapshots_command ON snapshots(command_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_sequence ON snapshots(sequence_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_sequence_number ON snapshots(sequence_number);
 
 -- Triggers for maintaining data integrity and timestamps
 

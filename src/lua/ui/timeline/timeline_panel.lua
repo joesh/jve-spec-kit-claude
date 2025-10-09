@@ -17,6 +17,16 @@ local inspector_view = nil
 
 function M.set_inspector(view)
     inspector_view = view
+
+    -- If there's already a selection when inspector is wired up, notify it immediately
+    -- This handles the case where selection is restored from database before inspector is ready
+    if state and view and view.update_selection then
+        local selected_clips = state.get_selected_clips()
+        if #selected_clips > 0 then
+            print(string.format("Notifying newly-wired inspector of %d selected clips", #selected_clips))
+            view.update_selection(selected_clips)
+        end
+    end
 end
 
 function M.set_project_browser(browser)

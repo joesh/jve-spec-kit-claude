@@ -99,6 +99,42 @@ function M.init(sequence_id)
     state.tracks = db.load_tracks(sequence_id)
     state.clips = db.load_clips(sequence_id)
 
+    -- Load playhead and selection state from sequence
+    local db_conn = db.get_connection()
+    if db_conn then
+        local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids FROM sequences WHERE id = ?")
+        if query then
+            query:bind_value(1, sequence_id)
+            if query:exec() and query:next() then
+                -- Restore playhead position
+                local saved_playhead = query:value(0)
+                if saved_playhead then
+                    state.playhead_time = saved_playhead
+                end
+
+                -- Restore selection
+                local saved_selection_json = query:value(1)
+                if saved_selection_json and saved_selection_json ~= "" then
+                    local success, selected_ids = pcall(qt_json_decode, saved_selection_json)
+                    if success and type(selected_ids) == "table" then
+                        -- Load clip objects for saved IDs
+                        state.selected_clips = {}
+                        for _, clip_id in ipairs(selected_ids) do
+                            for _, clip in ipairs(state.clips) do
+                                if clip.id == clip_id then
+                                    table.insert(state.selected_clips, clip)
+                                    break
+                                end
+                            end
+                        end
+                        print(string.format("Restored playhead to %dms, selection: %d clips",
+                            state.playhead_time, #state.selected_clips))
+                    end
+                end
+            end
+        end
+    end
+
     -- Initialize track heights to default
     for _, track in ipairs(state.tracks) do
         track.height = M.dimensions.default_track_height
@@ -187,7 +223,6 @@ function M.get_viewport_end_time()
 end
 
 function M.get_playhead_time()
-    print(string.format("DEBUG get_playhead_time: state=%s, state.playhead_time=%s", tostring(state), tostring(state.playhead_time)))
     return state.playhead_time
 end
 
@@ -215,6 +250,9 @@ function M.set_playhead_time(time_ms)
         state.playhead_time = math.max(0, time_ms)
         notify_listeners()
 
+        -- Persist playhead position to database
+        M.persist_state_to_db()
+
         -- Also notify selection callback if registered
         if on_selection_changed_callback then
             on_selection_changed_callback(state.selected_clips)
@@ -226,6 +264,9 @@ function M.set_selection(clips)
     state.selected_clips = clips or {}
     notify_listeners()
 
+    -- Persist selection to database
+    M.persist_state_to_db()
+
     if on_selection_changed_callback then
         on_selection_changed_callback(state.selected_clips)
     end
@@ -234,6 +275,12 @@ end
 -- Selection callback (for inspector integration)
 function M.set_on_selection_changed(callback)
     on_selection_changed_callback = callback
+
+    -- Immediately notify the new callback of current selection state
+    -- This ensures listeners that register after init() still get the current state
+    if callback and #state.selected_clips > 0 then
+        callback(state.selected_clips)
+    end
 end
 
 -- Project browser reference
@@ -299,20 +346,9 @@ function M.remove_clip(clip_id)
 end
 
 function M.update_clip(clip_id, updates)
-    for i, clip in ipairs(state.clips) do
-        if clip.id == clip_id then
-            -- Apply updates
-            for key, value in pairs(updates) do
-                clip[key] = value
-            end
-
-            -- Save to database
-            db.update_clip(clip)
-
-            notify_listeners()
-            return clip
-        end
-    end
+    -- DISABLED: Direct clip modifications bypass the command system and break undo/redo
+    -- All clip modifications must go through the command_manager to be logged in the event log
+    error("Direct clip modification is not allowed. Use command_manager to execute a command instead.")
 end
 
 -- Find track by ID
@@ -397,6 +433,41 @@ function M.set_drag_selection_bounds(start_time, end_time, start_track, end_trac
     state.drag_select_start_track_index = start_track
     state.drag_select_end_track_index = end_track
     notify_listeners()
+end
+
+--- Persist playhead and selection state to sequences table (for session restoration)
+function M.persist_state_to_db()
+    local db_conn = db.get_connection()
+    if not db_conn then
+        return
+    end
+
+    local sequence_id = state.sequence_id or "default_sequence"
+
+    -- Serialize selected clip IDs to JSON
+    local selected_ids = {}
+    for _, clip in ipairs(state.selected_clips) do
+        table.insert(selected_ids, clip.id)
+    end
+
+    local success, json_str = pcall(qt_json_encode, selected_ids)
+    if not success then
+        json_str = "[]"
+    end
+
+    -- Update sequences table with current state
+    local query = db_conn:prepare([[
+        UPDATE sequences
+        SET playhead_time = ?, selected_clip_ids = ?
+        WHERE id = ?
+    ]])
+
+    if query then
+        query:bind_value(1, state.playhead_time)
+        query:bind_value(2, json_str)
+        query:bind_value(3, sequence_id)
+        query:exec()
+    end
 end
 
 return M

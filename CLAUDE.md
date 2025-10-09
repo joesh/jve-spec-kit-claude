@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-09 (Tree-Based Undo/Redo)
+Last updated: 2025-10-09 (Session State Persistence & Event Sourcing Enforcement)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -68,6 +68,9 @@ make clean          # Clean build artifacts
 - Debug output spam eliminated from Qt bindings layer
 - Tree-based undo/redo - follows parent links instead of linear sequence
 - Selection preservation across undo/redo operations
+- Undo position persistence across app sessions (command_manager.lua, schema.sql)
+- Inspector notification on startup with restored selection (timeline_panel.lua)
+- Direct clip modifications now blocked to enforce event sourcing (timeline_state.lua)
 
 ## Current Issues (VERIFIED 2025-10-01)
 
@@ -95,6 +98,22 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-09: Session State Persistence & Event Sourcing Enforcement**
+- Undo position now persists across app sessions
+  - Added `current_sequence_number` field to sequences table (schema.sql)
+  - command_manager.lua init() loads saved undo position from database
+  - save_undo_position() called after execute, undo, redo operations
+  - Fixes bug where redo didn't work after restarting app from undone state
+- Inspector now notified of restored selection on startup
+  - timeline_panel.set_inspector() checks for existing selection and notifies immediately
+  - Handles initialization order issue where selection restored before inspector wired up
+  - Inspector now displays selected clip properties immediately on app restart
+- Direct clip modifications now blocked to enforce event sourcing discipline
+  - timeline_state.update_clip() now throws error instead of modifying state
+  - Prevents "phantom changes" that exist in database but not in event log
+  - All state modifications must go through command_manager for proper undo/redo
+  - Clear error message guides developers to use command system instead
 
 **2025-10-09: Tree-Based Undo/Redo with Selection Preservation**
 - Implemented proper tree-based undo/redo navigation for branching command history
@@ -152,6 +171,7 @@ The previous documentation contained extensive false "milestone" claims about co
 3. Fix test system build issues
 
 ## Commit History
+- 2025-10-09: Persist undo position across sessions and enforce event sourcing discipline
 - 2025-10-09: Implement tree-based undo/redo with selection preservation for branching command history
 - 2025-10-05: Fix clip split disappearing bug, inspector widget type errors, and debug output spam
 - 2025-10-02: Implement tag-based media organization with multiple namespaces

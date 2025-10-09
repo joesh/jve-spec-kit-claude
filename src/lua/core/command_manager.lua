@@ -33,8 +33,22 @@ function M.init(database)
     local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
     if query and query:exec() and query:next() then
         last_sequence_number = query:value(0) or 0
+    end
+
+    -- Load current undo position from sequences table (persisted across sessions)
+    local pos_query = db:prepare("SELECT current_sequence_number FROM sequences WHERE id = 'default_sequence'")
+    if pos_query and pos_query:exec() and pos_query:next() then
+        local saved_position = pos_query:value(0)
+        if saved_position and saved_position > 0 then
+            current_sequence_number = saved_position
+        else
+            -- NULL or 0 means at HEAD (fully undone or all commands redone)
+            current_sequence_number = saved_position  -- Could be nil or 0
+        end
+    else
+        -- If no saved position, default to HEAD if we have commands
         if last_sequence_number > 0 then
-            current_sequence_number = last_sequence_number  -- Start at HEAD
+            current_sequence_number = last_sequence_number
         end
     end
 
@@ -46,6 +60,34 @@ end
 local function get_next_sequence_number()
     last_sequence_number = last_sequence_number + 1
     return last_sequence_number
+end
+
+-- Save current undo position to database (persists across sessions)
+local function save_undo_position()
+    if not db then
+        return false
+    end
+
+    local update = db:prepare([[
+        UPDATE sequences
+        SET current_sequence_number = ?
+        WHERE id = 'default_sequence'
+    ]])
+
+    if not update then
+        print("WARNING: Failed to prepare undo position update")
+        return false
+    end
+
+    update:bind_value(1, current_sequence_number)
+    local success = update:exec()
+
+    if not success then
+        print("WARNING: Failed to save undo position to database")
+        return false
+    end
+
+    return true
 end
 
 -- Calculate state hash for a project
@@ -226,6 +268,9 @@ function M.execute(command)
 
             -- Move to HEAD after executing new command
             current_sequence_number = sequence_number
+
+            -- Save undo position to database (persists across sessions)
+            save_undo_position()
 
             -- Create snapshot every N commands for fast event replay
             local snapshot_mgr = require('core.snapshot_manager')
@@ -916,7 +961,12 @@ command_executors["SplitClip"] = function(command)
     local source_split_point = original_clip.source_in + first_duration
 
     -- Create second clip (right side of split)
+    -- IMPORTANT: Reuse second_clip_id if this is a replay (deterministic replay for event sourcing)
+    local existing_second_clip_id = command:get_parameter("second_clip_id")
     local second_clip = Clip.create(original_clip.name .. " (2)", original_clip.media_id)
+    if existing_second_clip_id then
+        second_clip.id = existing_second_clip_id  -- Reuse ID from original execution
+    end
     second_clip.track_id = original_clip.track_id
     second_clip.start_time = split_time
     second_clip.duration = second_duration
@@ -1497,6 +1547,10 @@ function M.undo()
     if replay_success then
         -- Move current_sequence_number back
         current_sequence_number = target_sequence > 0 and target_sequence or nil
+
+        -- Save undo position to database (persists across sessions)
+        save_undo_position()
+
         print(string.format("Undo complete - moved to position %s", tostring(current_sequence_number)))
         return {success = true}
     else
@@ -1548,6 +1602,9 @@ function M.redo()
     if replay_success then
         -- Move current_sequence_number forward
         current_sequence_number = target_sequence
+
+        -- Save undo position to database (persists across sessions)
+        save_undo_position()
 
         -- Restore selection that was saved during undo
         if saved_selection_on_undo then
