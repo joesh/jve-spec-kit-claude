@@ -176,12 +176,25 @@ void ScriptableTimeline::mousePressEvent(QMouseEvent* event)
             lua_setfield(lua_state_, -2, "x");
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
-            lua_pushboolean(lua_state_, event->modifiers() & Qt::ControlModifier);
+
+            // On macOS, Cmd key is Qt::ControlModifier (not MetaModifier)
+            // On other platforms, Ctrl is ControlModifier and Meta is MetaModifier
+            #ifdef Q_OS_MAC
+                bool is_command = event->modifiers() & Qt::ControlModifier;
+                bool is_ctrl = event->modifiers() & Qt::MetaModifier;
+            #else
+                bool is_command = event->modifiers() & Qt::MetaModifier;
+                bool is_ctrl = event->modifiers() & Qt::ControlModifier;
+            #endif
+
+            lua_pushboolean(lua_state_, is_ctrl);
             lua_setfield(lua_state_, -2, "ctrl");
             lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
             lua_setfield(lua_state_, -2, "shift");
             lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
             lua_setfield(lua_state_, -2, "alt");
+            lua_pushboolean(lua_state_, is_command);
+            lua_setfield(lua_state_, -2, "command");
             lua_pushinteger(lua_state_, event->button());
             lua_setfield(lua_state_, -2, "button");
 
@@ -208,12 +221,24 @@ void ScriptableTimeline::mouseReleaseEvent(QMouseEvent* event)
             lua_setfield(lua_state_, -2, "x");
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
-            lua_pushboolean(lua_state_, event->modifiers() & Qt::ControlModifier);
+
+            // On macOS, Cmd key is Qt::ControlModifier (not MetaModifier)
+            #ifdef Q_OS_MAC
+                bool is_command_rel = event->modifiers() & Qt::ControlModifier;
+                bool is_ctrl_rel = event->modifiers() & Qt::MetaModifier;
+            #else
+                bool is_command_rel = event->modifiers() & Qt::MetaModifier;
+                bool is_ctrl_rel = event->modifiers() & Qt::ControlModifier;
+            #endif
+
+            lua_pushboolean(lua_state_, is_ctrl_rel);
             lua_setfield(lua_state_, -2, "ctrl");
             lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
             lua_setfield(lua_state_, -2, "shift");
             lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
             lua_setfield(lua_state_, -2, "alt");
+            lua_pushboolean(lua_state_, is_command_rel);
+            lua_setfield(lua_state_, -2, "command");
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
@@ -238,6 +263,24 @@ void ScriptableTimeline::mouseMoveEvent(QMouseEvent* event)
             lua_setfield(lua_state_, -2, "x");
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
+
+            // On macOS, Cmd key is Qt::ControlModifier (not MetaModifier)
+            #ifdef Q_OS_MAC
+                bool is_command_move = event->modifiers() & Qt::ControlModifier;
+                bool is_ctrl_move = event->modifiers() & Qt::MetaModifier;
+            #else
+                bool is_command_move = event->modifiers() & Qt::MetaModifier;
+                bool is_ctrl_move = event->modifiers() & Qt::ControlModifier;
+            #endif
+
+            lua_pushboolean(lua_state_, is_ctrl_move);
+            lua_setfield(lua_state_, -2, "ctrl");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
+            lua_setfield(lua_state_, -2, "shift");
+            lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
+            lua_setfield(lua_state_, -2, "alt");
+            lua_pushboolean(lua_state_, is_command_move);
+            lua_setfield(lua_state_, -2, "command");
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {

@@ -41,12 +41,19 @@ function M.init(database)
         local saved_position = pos_query:value(0)
         if saved_position and saved_position > 0 then
             current_sequence_number = saved_position
+        elseif saved_position == 0 then
+            -- 0 means at beginning (all commands undone)
+            current_sequence_number = 0
         else
-            -- NULL or 0 means at HEAD (fully undone or all commands redone)
-            current_sequence_number = saved_position  -- Could be nil or 0
+            -- NULL means no position saved yet - default to HEAD
+            if last_sequence_number > 0 then
+                current_sequence_number = last_sequence_number
+            else
+                current_sequence_number = nil  -- No commands exist yet
+            end
         end
     else
-        -- If no saved position, default to HEAD if we have commands
+        -- If no saved position row exists, default to HEAD if we have commands
         if last_sequence_number > 0 then
             current_sequence_number = last_sequence_number
         end
@@ -232,6 +239,16 @@ function M.execute(command)
     -- Set parent_sequence_number for undo tree
     -- This creates branches when executing after undo
     command.parent_sequence_number = current_sequence_number
+
+    -- VALIDATION: parent_sequence_number should never be NULL after first command
+    -- NULL parent is only valid for the very first command (sequence 1)
+    if not command.parent_sequence_number and sequence_number > 1 then
+        print(string.format("ERROR: Command %d has NULL parent but is not the first command!", sequence_number))
+        print(string.format("ERROR: current_sequence_number = %s, last_sequence_number = %d",
+            tostring(current_sequence_number), last_sequence_number))
+        print("ERROR: This indicates a bug in undo position tracking!")
+        error("FATAL: Cannot execute command with NULL parent (would break undo tree)")
+    end
 
     -- Update command with state hashes
     update_command_hashes(command, pre_hash)
@@ -515,6 +532,10 @@ function M.repair_sequence_numbers()
     print("Repairing command sequence numbers")
 
     local select_query = db:prepare("SELECT id FROM commands ORDER BY timestamp")
+    if not select_query then
+        print("ERROR: resequence_commands: Failed to prepare SELECT query")
+        return
+    end
 
     if select_query:exec() then
         local new_sequence = 1
@@ -522,14 +543,25 @@ function M.repair_sequence_numbers()
             local command_id = select_query:value(0)
 
             local update_query = db:prepare("UPDATE commands SET sequence_number = ? WHERE id = ?")
+            if not update_query then
+                print(string.format("ERROR: resequence_commands: Failed to prepare UPDATE query for command %s", command_id))
+                goto continue
+            end
+
             update_query:bind_value(1, new_sequence)
             update_query:bind_value(2, command_id)
-            update_query:exec()
 
+            if not update_query:exec() then
+                print(string.format("ERROR: resequence_commands: Failed to update sequence for command %s", command_id))
+            end
+
+            ::continue::
             new_sequence = new_sequence + 1
         end
 
         last_sequence_number = new_sequence - 1
+    else
+        print("ERROR: resequence_commands: Failed to execute SELECT query")
     end
 end
 
@@ -1302,7 +1334,12 @@ command_executors["Overwrite"] = function(command)
     command:set_parameter("modified_clips", modified_clips)
 
     -- Step 3: Create the new clip at overwrite_time
+    -- Reuse clip_id if this is a replay (to preserve UUID references)
+    local existing_clip_id = command:get_parameter("clip_id")
     local clip = Clip.create("Overwrite Clip", media_id)
+    if existing_clip_id then
+        clip.id = existing_clip_id  -- Reuse existing ID for replay
+    end
     clip.track_id = track_id
     clip.start_time = overwrite_time
     clip.duration = duration
@@ -1325,6 +1362,499 @@ command_executors["Overwrite"] = function(command)
         print("WARNING: Overwrite: Failed to save clip")
         return false
     end
+end
+
+-- MOVE CLIP TO TRACK: Move a clip from one track to another (same timeline position)
+command_executors["MoveClipToTrack"] = function(command)
+    print("Executing MoveClipToTrack command")
+
+    local clip_id = command:get_parameter("clip_id")
+    local target_track_id = command:get_parameter("target_track_id")
+
+    if not clip_id or clip_id == "" then
+        print("WARNING: MoveClipToTrack: Missing clip_id")
+        return false
+    end
+
+    if not target_track_id or target_track_id == "" then
+        print("WARNING: MoveClipToTrack: Missing target_track_id")
+        return false
+    end
+
+    -- Load the clip
+    local Clip = require('models.clip')
+    local clip = Clip.load(clip_id, db)
+
+    if not clip then
+        print(string.format("WARNING: MoveClipToTrack: Clip %s not found", clip_id))
+        return false
+    end
+
+    -- Save original track for undo (store as parameter)
+    command:set_parameter("original_track_id", clip.track_id)
+
+    -- Update clip's track
+    clip.track_id = target_track_id
+
+    if not clip:save(db) then
+        print(string.format("WARNING: MoveClipToTrack: Failed to save clip %s", clip_id))
+        return false
+    end
+
+    print(string.format("✅ Moved clip %s to track %s", clip_id, target_track_id))
+    return true
+end
+
+-- Undo for MoveClipToTrack: move clip back to original track
+command_executors["UndoMoveClipToTrack"] = function(command)
+    print("Executing UndoMoveClipToTrack command")
+
+    local clip_id = command:get_parameter("clip_id")
+    local original_track_id = command:get_parameter("original_track_id")
+
+    if not clip_id or clip_id == "" then
+        print("WARNING: UndoMoveClipToTrack: Missing clip_id")
+        return false
+    end
+
+    if not original_track_id or original_track_id == "" then
+        print("WARNING: UndoMoveClipToTrack: Missing original_track_id parameter")
+        return false
+    end
+
+    -- Load the clip
+    local Clip = require('models.clip')
+    local clip = Clip.load(clip_id, db)
+
+    if not clip then
+        print(string.format("WARNING: UndoMoveClipToTrack: Clip %s not found", clip_id))
+        return false
+    end
+
+    -- Restore original track
+    clip.track_id = original_track_id
+
+    if not clip:save(db) then
+        print(string.format("WARNING: UndoMoveClipToTrack: Failed to save clip %s", clip_id))
+        return false
+    end
+
+    print(string.format("✅ Restored clip %s to original track %s", clip_id, original_track_id))
+    return true
+end
+
+-- NUDGE: Move clips or trim edges by a time offset (frame-accurate)
+-- Inspects selection to determine whether to nudge clips (move) or edges (trim)
+command_executors["Nudge"] = function(command)
+    print("Executing Nudge command")
+
+    local nudge_amount_ms = command:get_parameter("nudge_amount_ms")  -- Can be negative
+    local selected_clip_ids = command:get_parameter("selected_clip_ids")
+    local selected_edges = command:get_parameter("selected_edges")  -- Array of {clip_id, edge_type}
+
+    -- Determine what we're nudging
+    local nudge_type = "none"
+
+    if selected_edges and #selected_edges > 0 then
+        nudge_type = "edges"
+        -- Nudge edges (trim clips)
+        for _, edge_info in ipairs(selected_edges) do
+            local Clip = require('models.clip')
+            local clip = Clip.load(edge_info.clip_id, db)
+
+            if not clip then
+                print(string.format("WARNING: Nudge: Clip %s not found", edge_info.clip_id:sub(1,8)))
+                goto continue
+            end
+
+            if edge_info.edge_type == "in" or edge_info.edge_type == "gap_before" then
+                -- Trim in-point: adjust start_time and duration
+                clip.start_time = math.max(0, clip.start_time + nudge_amount_ms)
+                clip.duration = math.max(1, clip.duration - nudge_amount_ms)
+                clip.source_in = clip.source_in + nudge_amount_ms
+            elseif edge_info.edge_type == "out" or edge_info.edge_type == "gap_after" then
+                -- Trim out-point: adjust duration only
+                clip.duration = math.max(1, clip.duration + nudge_amount_ms)
+                clip.source_out = clip.source_in + clip.duration
+            end
+
+            if not clip:save(db) then
+                print(string.format("ERROR: Nudge: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
+                return false
+            end
+
+            ::continue::
+        end
+        print(string.format("✅ Nudged %d edge(s) by %dms", #selected_edges, nudge_amount_ms))
+    elseif selected_clip_ids and #selected_clip_ids > 0 then
+        nudge_type = "clips"
+        -- Nudge clips (move)
+        for _, clip_id in ipairs(selected_clip_ids) do
+            local Clip = require('models.clip')
+            local clip = Clip.load(clip_id, db)
+
+            if not clip then
+                print(string.format("WARNING: Nudge: Clip %s not found", clip_id:sub(1,8)))
+                goto continue_clip
+            end
+
+            clip.start_time = math.max(0, clip.start_time + nudge_amount_ms)
+
+            if not clip:save(db) then
+                print(string.format("ERROR: Nudge: Failed to save clip %s", clip_id:sub(1,8)))
+                return false
+            end
+
+            ::continue_clip::
+        end
+        print(string.format("✅ Nudged %d clip(s) by %dms", #selected_clip_ids, nudge_amount_ms))
+    else
+        print("WARNING: Nudge: Nothing selected")
+        return false
+    end
+
+    -- Store what we nudged for undo
+    command:set_parameter("nudge_type", nudge_type)
+
+    return true
+end
+
+-- Undo for Nudge: reverse the nudge by applying negative offset
+command_executors["UndoNudge"] = function(command)
+    print("Executing UndoNudge command")
+
+    -- Just re-run nudge with inverted amount
+    local nudge_amount_ms = command:get_parameter("nudge_amount_ms")
+    command:set_parameter("nudge_amount_ms", -nudge_amount_ms)
+
+    local result = command_executors["Nudge"](command)
+
+    -- Restore original amount for redo
+    command:set_parameter("nudge_amount_ms", -nudge_amount_ms)
+
+    return result
+end
+
+-- Helper: Apply ripple edit to a single edge
+-- Returns: ripple_time, success
+local function apply_edge_ripple(clip, edge_type, delta_ms)
+    local ripple_time = nil
+
+    if edge_type == "in" then
+        -- Trimming clip's in-point: adjust source and duration
+        ripple_time = clip.start_time + delta_ms
+        clip.start_time = ripple_time
+        clip.duration = math.max(1, clip.duration - delta_ms)
+
+        -- Check media limits before trimming source
+        local new_source_in = clip.source_in + delta_ms
+        if new_source_in < 0 then
+            -- Hit media boundary - normal limit, not an error
+            return nil, false
+        end
+        clip.source_in = new_source_in
+
+    elseif edge_type == "gap_before" then
+        -- Adjusting gap before clip: move clip without changing media content
+        ripple_time = clip.start_time
+        clip.start_time = clip.start_time + delta_ms
+        -- source_in, duration, source_out remain unchanged
+
+    elseif edge_type == "out" then
+        -- Trimming clip's out-point: adjust duration
+        ripple_time = clip.start_time + clip.duration
+        clip.duration = math.max(1, clip.duration + delta_ms)
+        clip.source_out = clip.source_in + clip.duration
+        -- TODO: Check against media duration limit (need media_duration field)
+
+    elseif edge_type == "gap_after" then
+        -- Adjusting gap after clip: ripple point is at clip's end
+        ripple_time = clip.start_time + clip.duration
+        -- Clip itself doesn't change at all
+    end
+
+    return ripple_time, true
+end
+
+-- RippleEdit: Trim an edge and shift all downstream clips to close/open the gap
+-- This is the standard NLE ripple edit - affects the timeline duration
+command_executors["RippleEdit"] = function(command)
+    print("Executing RippleEdit command")
+
+    local edge_info = command:get_parameter("edge_info")  -- {clip_id, edge_type, track_id}
+    local delta_ms = command:get_parameter("delta_ms")    -- Positive = extend, negative = trim
+
+    if not edge_info or not delta_ms then
+        print("ERROR: RippleEdit missing parameters")
+        return false
+    end
+
+    local Clip = require('models.clip')
+    local clip = Clip.load(edge_info.clip_id, db)
+    if not clip then
+        print("ERROR: RippleEdit: Clip not found")
+        return false
+    end
+
+    -- Save original state for undo
+    local original_clip_state = {
+        start_time = clip.start_time,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out
+    }
+
+    -- Apply edge ripple using shared helper
+    local ripple_time, success = apply_edge_ripple(clip, edge_info.edge_type, delta_ms)
+    if not success then
+        return false
+    end
+
+    if not clip:save(db) then
+        print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
+        return false
+    end
+
+    -- Find all clips on ALL tracks that start after the ripple point
+    -- Ripple affects the entire timeline to maintain sync across all tracks
+    local clips_to_shift = {}
+    local database = require('core.database')
+    local all_clips = database.load_clips(command:get_parameter("sequence_id") or "default_sequence")
+
+    for _, other_clip in ipairs(all_clips) do
+        if other_clip.id ~= edge_info.clip_id and
+           other_clip.start_time >= ripple_time then
+            table.insert(clips_to_shift, other_clip)
+        end
+    end
+
+    -- Shift all downstream clips
+    for _, downstream_clip in ipairs(clips_to_shift) do
+        local shift_clip = Clip.load(downstream_clip.id, db)
+        if not shift_clip then
+            print(string.format("WARNING: RippleEdit: Failed to load downstream clip %s", downstream_clip.id:sub(1,8)))
+            goto continue_shift
+        end
+
+        shift_clip.start_time = shift_clip.start_time + delta_ms
+
+        if not shift_clip:save(db) then
+            print(string.format("ERROR: RippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
+            return false
+        end
+
+        ::continue_shift::
+    end
+
+    -- Store state for undo
+    command:set_parameter("original_clip_state", original_clip_state)
+    command:set_parameter("shifted_clip_ids", (function()
+        local ids = {}
+        for _, c in ipairs(clips_to_shift) do table.insert(ids, c.id) end
+        return ids
+    end)())
+
+    print(string.format("✅ Ripple edit: trimmed %s edge by %dms, shifted %d downstream clips",
+        edge_info.edge_type, delta_ms, #clips_to_shift))
+
+    return true
+end
+
+-- BatchRippleEdit: Trim multiple edges simultaneously with single timeline shift
+-- Prevents cascading shifts when multiple edges are selected
+command_executors["BatchRippleEdit"] = function(command)
+    print("Executing BatchRippleEdit command")
+
+    local edge_infos = command:get_parameter("edge_infos")  -- Array of {clip_id, edge_type, track_id}
+    local delta_ms = command:get_parameter("delta_ms")
+    local sequence_id = command:get_parameter("sequence_id") or "default_sequence"
+
+    if not edge_infos or not delta_ms or #edge_infos == 0 then
+        print("ERROR: BatchRippleEdit missing parameters")
+        return false
+    end
+
+    local Clip = require('models.clip')
+    local original_states = {}
+    local latest_ripple_time = 0
+
+    -- Phase 1: Trim all edges and find latest ripple point
+    -- All edges must succeed or none - preserves relative timing
+    for _, edge_info in ipairs(edge_infos) do
+        local clip = Clip.load(edge_info.clip_id, db)
+        if not clip then
+            print(string.format("WARNING: BatchRippleEdit: Clip %s not found", edge_info.clip_id:sub(1,8)))
+            return false
+        end
+
+        -- Save original state
+        original_states[edge_info.clip_id] = {
+            start_time = clip.start_time,
+            duration = clip.duration,
+            source_in = clip.source_in,
+            source_out = clip.source_out
+        }
+
+        -- Apply edge ripple using shared helper
+        local ripple_time, success = apply_edge_ripple(clip, edge_info.edge_type, delta_ms)
+        if not success then
+            print(string.format("Ripple blocked: clip %s at media boundary (preserving relative timing)", clip.id:sub(1,8)))
+            return false
+        end
+
+        if not clip:save(db) then
+            print(string.format("ERROR: BatchRippleEdit: Failed to save clip %s", clip.id:sub(1,8)))
+            return false
+        end
+
+        -- Track latest ripple point
+        if ripple_time and ripple_time > latest_ripple_time then
+            latest_ripple_time = ripple_time
+        end
+    end
+
+    -- Phase 2: Single timeline shift at latest ripple point
+    local edited_clip_ids = {}
+    for _, edge_info in ipairs(edge_infos) do
+        table.insert(edited_clip_ids, edge_info.clip_id)
+    end
+
+    local database = require('core.database')
+    local all_clips = database.load_clips(sequence_id)
+    local clips_to_shift = {}
+
+    for _, other_clip in ipairs(all_clips) do
+        -- Don't shift clips we just edited
+        local is_edited = false
+        for _, edited_id in ipairs(edited_clip_ids) do
+            if other_clip.id == edited_id then
+                is_edited = true
+                break
+            end
+        end
+
+        if not is_edited and other_clip.start_time >= latest_ripple_time then
+            table.insert(clips_to_shift, other_clip)
+        end
+    end
+
+    -- Shift all downstream clips once
+    for _, downstream_clip in ipairs(clips_to_shift) do
+        local shift_clip = Clip.load(downstream_clip.id, db)
+        if not shift_clip then
+            print(string.format("WARNING: BatchRippleEdit: Failed to load downstream clip %s", downstream_clip.id:sub(1,8)))
+            goto continue_batch_shift
+        end
+
+        shift_clip.start_time = shift_clip.start_time + delta_ms
+
+        if not shift_clip:save(db) then
+            print(string.format("ERROR: BatchRippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
+            return false
+        end
+
+        ::continue_batch_shift::
+    end
+
+    -- Store for undo
+    command:set_parameter("original_states", original_states)
+    command:set_parameter("shifted_clip_ids", (function()
+        local ids = {}
+        for _, c in ipairs(clips_to_shift) do table.insert(ids, c.id) end
+        return ids
+    end)())
+
+    print(string.format("✅ Batch ripple: trimmed %d edges by %dms, shifted %d downstream clips",
+        #edge_infos, delta_ms, #clips_to_shift))
+
+    return true
+end
+
+-- Undo for BatchRippleEdit
+command_executors["UndoBatchRippleEdit"] = function(command)
+    print("Executing UndoBatchRippleEdit command")
+
+    local original_states = command:get_parameter("original_states")
+    local delta_ms = command:get_parameter("delta_ms")
+    local shifted_clip_ids = command:get_parameter("shifted_clip_ids")
+
+    local Clip = require('models.clip')
+
+    -- Restore all edited clips
+    for clip_id, state in pairs(original_states) do
+        local clip = Clip.load(clip_id, db)
+        if not clip then
+            print(string.format("WARNING: UndoBatchRippleEdit: Clip %s not found", clip_id:sub(1,8)))
+            goto continue_restore
+        end
+
+        clip.start_time = state.start_time
+        clip.duration = state.duration
+        clip.source_in = state.source_in
+        clip.source_out = state.source_out
+
+        if not clip:save(db) then
+            print(string.format("ERROR: UndoBatchRippleEdit: Failed to save clip %s", clip_id:sub(1,8)))
+            return false
+        end
+
+        ::continue_restore::
+    end
+
+    -- Shift all affected clips back
+    for _, clip_id in ipairs(shifted_clip_ids) do
+        local shift_clip = Clip.load(clip_id, db)
+        if not shift_clip then
+            print(string.format("WARNING: UndoBatchRippleEdit: Shifted clip %s not found", clip_id:sub(1,8)))
+            goto continue_unshift
+        end
+
+        shift_clip.start_time = shift_clip.start_time - delta_ms
+
+        if not shift_clip:save(db) then
+            print(string.format("ERROR: UndoBatchRippleEdit: Failed to save shifted clip %s", clip_id:sub(1,8)))
+            return false
+        end
+
+        ::continue_unshift::
+    end
+
+    print(string.format("✅ Undone batch ripple: restored %d clips, shifted %d clips back",
+        table.getn(original_states), #shifted_clip_ids))
+    return true
+end
+
+-- Undo for RippleEdit: restore original clip state and shift downstream clips back
+command_executors["UndoRippleEdit"] = function(command)
+    print("Executing UndoRippleEdit command")
+
+    local edge_info = command:get_parameter("edge_info")
+    local delta_ms = command:get_parameter("delta_ms")
+    local original_clip_state = command:get_parameter("original_clip_state")
+    local shifted_clip_ids = command:get_parameter("shifted_clip_ids")
+
+    -- Restore original clip
+    local Clip = require('models.clip')
+    local clip = Clip.load(edge_info.clip_id, db)
+    if clip then
+        clip.start_time = original_clip_state.start_time
+        clip.duration = original_clip_state.duration
+        clip.source_in = original_clip_state.source_in
+        clip.source_out = original_clip_state.source_out
+        clip:save(db)
+    end
+
+    -- Shift all affected clips back
+    for _, clip_id in ipairs(shifted_clip_ids) do
+        local shift_clip = Clip.load(clip_id, db)
+        if shift_clip then
+            shift_clip.start_time = shift_clip.start_time - delta_ms
+            shift_clip:save(db)
+        end
+    end
+
+    print(string.format("✅ Undone ripple edit: restored clip and shifted %d clips back", #shifted_clip_ids))
+    return true
 end
 
 -- Event Replay: Reconstruct state by replaying commands from scratch
@@ -1483,8 +2013,12 @@ function M.replay_events(sequence_id, target_sequence_number)
             if execution_success then
                 commands_replayed = commands_replayed + 1
             else
-                print(string.format("WARNING: Failed to replay command %d (%s)",
+                print(string.format("ERROR: Failed to replay command %d (%s)",
                     command.sequence_number, command.type))
+                print("ERROR: Event log is incomplete or corrupted")
+                print("ERROR: Some clips in the database were not created via logged commands")
+                print("HINT: This usually happens when clips are created directly in the database")
+                print("HINT: instead of going through the command system")
                 return false
             end
         end
@@ -1554,7 +2088,12 @@ function M.undo()
         print(string.format("Undo complete - moved to position %s", tostring(current_sequence_number)))
         return {success = true}
     else
-        return {success = false, error_message = "Undo replay failed"}
+        local error_msg = string.format(
+            "Cannot replay to sequence %d. Event log is corrupted - clips exist that were never created via commands. " ..
+            "Consider deleting orphaned clips or rebuilding event log.",
+            target_sequence
+        )
+        return {success = false, error_message = error_msg}
     end
 end
 

@@ -266,6 +266,10 @@ end
 
 function M.set_selection(clips)
     state.selected_clips = clips or {}
+
+    -- Clear edge selection (clips and edges are mutually exclusive)
+    state.selected_edges = {}
+
     notify_listeners()
 
     -- Persist selection to database
@@ -283,6 +287,10 @@ end
 
 function M.set_edge_selection(edges)
     state.selected_edges = edges or {}
+
+    -- Clear clip selection (clips and edges are mutually exclusive)
+    state.selected_clips = {}
+
     notify_listeners()
 end
 
@@ -295,6 +303,11 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
             notify_listeners()
             return false  -- Deselected
         end
+    end
+
+    -- Clear clip selection when selecting first edge (clips and edges are mutually exclusive)
+    if #state.selected_edges == 0 then
+        state.selected_clips = {}
     end
 
     -- Add new edge

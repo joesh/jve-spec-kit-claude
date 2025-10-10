@@ -479,12 +479,13 @@ function M.create()
     local on_drag_move, on_drag_end
 
     -- Callback for views to notify panel when drag starts in empty space
-    local function on_drag_start(source_widget, x, y)
+    local function on_drag_start(source_widget, x, y, modifiers)
         drag_state.dragging = true
         drag_state.start_widget = source_widget
         drag_state.start_scroll_area = widget_to_scroll_area[source_widget]
         drag_state.start_x = x
         drag_state.start_y = y
+        drag_state.modifiers = modifiers  -- Store for use in drag_end
 
         -- Convert start position to splitter coordinates immediately (not lazily)
         -- This ensures on_drag_end works even if there's no move event
@@ -703,7 +704,33 @@ function M.create()
         end
 
         -- Update selection state
-        state.set_selection(selected_clips)
+        -- If Cmd was held during drag, toggle clips in/out of selection instead of replacing
+        if drag_state.modifiers and drag_state.modifiers.command then
+            local current_selection = state.get_selected_clips()
+
+            -- Toggle: add clips that aren't selected, remove clips that are selected
+            for _, dragged_clip in ipairs(selected_clips) do
+                local found_index = nil
+                for i, existing_clip in ipairs(current_selection) do
+                    if existing_clip.id == dragged_clip.id then
+                        found_index = i
+                        break
+                    end
+                end
+
+                if found_index then
+                    -- Already selected - remove it (toggle off)
+                    table.remove(current_selection, found_index)
+                else
+                    -- Not selected - add it (toggle on)
+                    table.insert(current_selection, dragged_clip)
+                end
+            end
+
+            state.set_selection(current_selection)
+        else
+            state.set_selection(selected_clips)
+        end
 
         -- Reset drag state
         drag_state.dragging = false

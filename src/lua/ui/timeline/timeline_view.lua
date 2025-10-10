@@ -164,7 +164,7 @@ function M.create(widget, state_module, track_filter_fn, options)
 
                 local x = state_module.time_to_pixel(clip.start_time, width)
                 y = y + 5  -- Add padding from track top
-                local clip_width = math.floor((clip.duration / viewport_duration) * width)
+                local clip_width = math.floor((clip.duration / viewport_duration) * width) - 1  -- 1px gap between clips
                 local clip_height = track_height - 10  -- Use actual track height
 
                 -- Only draw if visible
@@ -196,6 +196,7 @@ function M.create(widget, state_module, track_filter_fn, options)
 
         -- Draw selected edge highlights as bracket indicators (for trimming operations)
         local selected_edges = state_module.get_selected_edges()
+        print(string.format("DEBUG RENDER: Drawing %d selected edges", #selected_edges))
         for _, edge in ipairs(selected_edges) do
             -- Find the clip for this edge
             local edge_clip = nil
@@ -208,11 +209,13 @@ function M.create(widget, state_module, track_filter_fn, options)
 
             if edge_clip then
                 local clip_y = get_track_y_by_id(edge_clip.track_id, height)
+                print(string.format("  Drawing edge for clip %s, edge_type=%s, clip_y=%d",
+                    edge_clip.id:sub(1,8), edge.edge_type, clip_y))
 
                 if clip_y >= 0 then  -- Clip is on a track in this view
                     local track_height = state_module.get_track_height(edge_clip.track_id)
                     local clip_x = state_module.time_to_pixel(edge_clip.start_time, width)
-                    local clip_width = math.floor((edge_clip.duration / viewport_duration) * width)
+                    local clip_width = math.floor((edge_clip.duration / viewport_duration) * width) - 1  -- Match rendering gap
                     local clip_height = track_height - 10
 
                     -- Determine edge position and bracket orientation
@@ -220,17 +223,28 @@ function M.create(widget, state_module, track_filter_fn, options)
                     local has_available_media = false
                     local bracket_width = 8  -- Width of bracket indicator
                     local bracket_thickness = 2
+                    local bracket_type = "in"  -- "in" for [, "out" for ]
 
                     if edge.edge_type == "in" then
+                        -- Clip's in-point: [ facing right
                         edge_x = clip_x
-                        -- Check if there's media before the in point (can trim left)
+                        bracket_type = "in"
                         has_available_media = edge_clip.source_in > 0
-                    else  -- "out"
+                    elseif edge.edge_type == "out" then
+                        -- Clip's out-point: ] facing left
                         edge_x = clip_x + clip_width
-                        -- Check if there's media after the out point (can trim right)
-                        -- Note: We'd need media duration from the media table for a real check
-                        -- For now, assume there's available media (will improve later)
+                        bracket_type = "out"
                         has_available_media = true
+                    elseif edge.edge_type == "gap_before" then
+                        -- Gap's edge before clip: ] facing right (closing towards clip)
+                        edge_x = clip_x
+                        bracket_type = "out"
+                        has_available_media = true  -- Gap always has "space" available
+                    elseif edge.edge_type == "gap_after" then
+                        -- Gap's edge after clip: [ facing left (opening into gap)
+                        edge_x = clip_x + clip_width
+                        bracket_type = "in"
+                        has_available_media = true  -- Gap always has "space" available
                     end
 
                     -- Choose color based on media availability
@@ -241,8 +255,9 @@ function M.create(widget, state_module, track_filter_fn, options)
                     -- Draw bracket indicator: [ for in point, ] for out point
                     local bracket_y = clip_y + 5
 
-                    if edge.edge_type == "in" then
-                        -- Draw [ bracket (opening bracket on left edge)
+                    if bracket_type == "in" then
+                        -- Draw [ bracket (opening bracket)
+                        print(string.format("    Drawing [ bracket at x=%d, y=%d, type=%s", edge_x, bracket_y, edge.edge_type))
                         -- Vertical line
                         timeline.add_rect(view.widget, edge_x, bracket_y,
                                         bracket_thickness, clip_height, edge_color)
@@ -253,7 +268,8 @@ function M.create(widget, state_module, track_filter_fn, options)
                         timeline.add_rect(view.widget, edge_x, bracket_y + clip_height - bracket_thickness,
                                         bracket_width, bracket_thickness, edge_color)
                     else  -- "out"
-                        -- Draw ] bracket (closing bracket on right edge)
+                        -- Draw ] bracket (closing bracket)
+                        print(string.format("    Drawing ] bracket at x=%d, y=%d, type=%s", edge_x, bracket_y, edge.edge_type))
                         -- Vertical line
                         timeline.add_rect(view.widget, edge_x - bracket_thickness, bracket_y,
                                         bracket_thickness, clip_height, edge_color)
@@ -300,7 +316,8 @@ function M.create(widget, state_module, track_filter_fn, options)
             --   3. Click between two adjacent clips → select ][ (edit point: right clip's out + left clip's in)
             --   4. Click in middle of clip → no edge selection (future: select clip body for dragging)
 
-            local EDGE_ZONE = 8  -- Pixels from edge to detect interaction
+            local EDGE_ZONE = 8  -- Pixels from edge to detect single edge
+            local EDIT_POINT_ZONE = 4  -- Pixels - must be close to center for edit point
             local clips_at_position = {}
 
             -- First pass: find all clips at this Y position and their edge proximity
@@ -310,31 +327,42 @@ function M.create(widget, state_module, track_filter_fn, options)
                     local track_height = state_module.get_track_height(clip.track_id)
                     local clip_height = track_height - 10
 
-                    -- Check if Y is within clip bounds
-                    if y >= clip_y + 5 and y <= clip_y + 5 + clip_height then
+                    -- Check if Y is within track bounds (full track, not just clip height)
+                    if y >= clip_y and y <= clip_y + track_height then
                         local clip_x = state_module.time_to_pixel(clip.start_time, width)
-                        local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width)
+                        local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
+                        local clip_end_x = clip_x + clip_width
 
+                        -- Left edge: distinguish between clip's in-point and gap's out-point
                         local dist_from_left = math.abs(x - clip_x)
-                        local dist_from_right = math.abs(x - (clip_x + clip_width))
-
-                        -- Track clips with edges near click position
                         if dist_from_left <= EDGE_ZONE then
+                            local inside_clip = x >= clip_x
                             table.insert(clips_at_position, {
                                 clip = clip,
-                                edge = "in",
+                                edge = inside_clip and "in" or "gap_before",  -- in=] from clip side, gap_before=[ from gap side
                                 distance = dist_from_left
                             })
                         end
+
+                        -- Right edge: distinguish between clip's out-point and gap's in-point
+                        local dist_from_right = math.abs(x - clip_end_x)
                         if dist_from_right <= EDGE_ZONE then
+                            local inside_clip = x <= clip_end_x
                             table.insert(clips_at_position, {
                                 clip = clip,
-                                edge = "out",
+                                edge = inside_clip and "out" or "gap_after",  -- out=] from clip side, gap_after=[ from gap side
                                 distance = dist_from_right
                             })
                         end
                     end
                 end
+            end
+
+            -- DEBUG: Print what was detected
+            print(string.format("DEBUG: Click at x=%d, y=%d, detected %d edges:", x, y, #clips_at_position))
+            for i, edge_info in ipairs(clips_at_position) do
+                print(string.format("  %d: clip=%s, edge=%s, distance=%d, from_gap=%s",
+                    i, edge_info.clip.id:sub(1,8), edge_info.edge, edge_info.distance, tostring(edge_info.from_gap or false)))
             end
 
             -- Second pass: determine what to select based on detected edges
@@ -344,29 +372,31 @@ function M.create(widget, state_module, track_filter_fn, options)
                     state_module.clear_edge_selection()
                 end
 
-                -- If we detected edges from multiple clips, it's an edit point (][ case)
-                -- Otherwise it's a single edge ([ or ] case)
+                -- Select all edges within the detection zone
+                -- If edges are from different clips and very close together (edit point),
+                -- both will be selected. Otherwise each edge is independently selectable.
                 for _, edge_info in ipairs(clips_at_position) do
                     state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, "ripple")
                 end
 
-                -- Clear clip selection when selecting edges (can't have both)
-                state_module.set_selection({})
+                -- Note: toggle_edge_selection() already clears clip selection (mutual exclusion)
 
                 render()
                 return
             end
 
-            -- If no edge was clicked, check if clicking in empty space
-            -- (Note: Middle-of-clip clicks are now treated as edge selection above)
-            -- Clear both selections when clicking in empty space
-            state_module.clear_edge_selection()
-            state_module.set_selection({})
+            -- If no edge was clicked, starting drag selection for clips
+            -- Clear selections unless Cmd is held (for multi-select)
+            if not (modifiers and modifiers.command) then
+                state_module.clear_edge_selection()
+                state_module.set_selection({})
+            end
 
-            -- Notify panel that drag is starting in empty space (panel coordinates drag)
+            -- Notify panel that drag is starting (panel coordinates drag selection)
             if view.on_drag_start then
                 -- Panel returns callbacks for us to use during drag
-                view.panel_drag_move, view.panel_drag_end = view.on_drag_start(view.widget, x, y)
+                -- Pass modifiers so panel knows about Cmd+drag for multi-select
+                view.panel_drag_move, view.panel_drag_end = view.on_drag_start(view.widget, x, y, modifiers)
             end
 
         elseif event_type == "move" then
@@ -376,6 +406,64 @@ function M.create(widget, state_module, track_filter_fn, options)
             elseif view.panel_drag_move then
                 -- Forward move events to panel during drag selection
                 view.panel_drag_move(view.widget, x, y)
+            else
+                -- Update cursor based on what's under the mouse
+                local EDGE_ZONE = 8
+                local EDIT_POINT_ZONE = 4
+                local cursor_type = "arrow"  -- Default
+                local clips_at_position = {}
+
+                -- Find all edges near mouse position (same logic as click detection)
+                for _, clip in ipairs(state_module.get_clips()) do
+                    local clip_y = get_track_y_by_id(clip.track_id, height)
+                    if clip_y >= 0 then
+                        local track_height = state_module.get_track_height(clip.track_id)
+                        local clip_height = track_height - 10
+
+                        if y >= clip_y + 5 and y <= clip_y + 5 + clip_height then
+                            local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                            local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
+
+                            local dist_from_left = math.abs(x - clip_x)
+                            local dist_from_right = math.abs(x - (clip_x + clip_width))
+
+                            if dist_from_left <= EDGE_ZONE then
+                                table.insert(clips_at_position, {
+                                    edge = "in",
+                                    distance = dist_from_left
+                                })
+                            end
+                            if dist_from_right <= EDGE_ZONE then
+                                table.insert(clips_at_position, {
+                                    edge = "out",
+                                    distance = dist_from_right
+                                })
+                            end
+                        end
+                    end
+                end
+
+                -- Determine cursor based on edge proximity
+                if #clips_at_position == 2 then
+                    -- Two edges detected - check if it's an edit point
+                    local max_distance = math.max(clips_at_position[1].distance, clips_at_position[2].distance)
+                    if max_distance <= EDIT_POINT_ZONE then
+                        cursor_type = "split_h"  -- Edit point: ][ uses split cursor
+                    else
+                        -- Select closest edge only
+                        local closest = clips_at_position[1]
+                        if clips_at_position[2].distance < closest.distance then
+                            closest = clips_at_position[2]
+                        end
+                        -- Single edge cursor
+                        cursor_type = "size_horz"
+                    end
+                elseif #clips_at_position == 1 then
+                    -- Single edge - show resize cursor for [ or ]
+                    cursor_type = "size_horz"
+                end
+
+                qt_set_widget_cursor(view.widget, cursor_type)
             end
 
         elseif event_type == "release" then
