@@ -61,6 +61,75 @@ function M.init(database)
 
     print(string.format("CommandManager initialized, last sequence: %d, current position: %s",
         last_sequence_number, tostring(current_sequence_number)))
+
+    -- Validate and repair broken parent chains (defensive data integrity check)
+    -- DISABLED: repair_broken_parent_chains()
+    -- TODO: Enable after verifying all bugs are fixed and understanding root causes
+end
+
+-- Repair commands with NULL parent_sequence_number (except the first command)
+-- This fixes data corruption from earlier bugs where init() mishandled NULL positions
+local function repair_broken_parent_chains()
+    if not db then
+        return
+    end
+
+    -- Find all commands with NULL parent except sequence 1
+    local find_query = db:prepare([[
+        SELECT sequence_number
+        FROM commands
+        WHERE parent_sequence_number IS NULL
+        AND sequence_number > 1
+        ORDER BY sequence_number
+    ]])
+
+    if not find_query or not find_query:exec() then
+        return
+    end
+
+    local broken_commands = {}
+    while find_query:next() do
+        table.insert(broken_commands, find_query:value(0))
+    end
+
+    if #broken_commands == 0 then
+        return  -- No repairs needed
+    end
+
+    print(string.format("⚠️  Found %d command(s) with NULL parent - repairing command chain...", #broken_commands))
+
+    -- For each broken command, set parent to sequence_number - 1
+    for _, seq_num in ipairs(broken_commands) do
+        local expected_parent = seq_num - 1
+
+        -- Verify the expected parent exists
+        local verify_query = db:prepare("SELECT 1 FROM commands WHERE sequence_number = ?")
+        if verify_query then
+            verify_query:bind_value(1, expected_parent)
+            if verify_query:exec() and verify_query:next() then
+                -- Parent exists, repair the link
+                local update_query = db:prepare([[
+                    UPDATE commands
+                    SET parent_sequence_number = ?
+                    WHERE sequence_number = ?
+                ]])
+
+                if update_query then
+                    update_query:bind_value(1, expected_parent)
+                    update_query:bind_value(2, seq_num)
+                    if update_query:exec() then
+                        print(string.format("  ✅ Repaired command %d: set parent to %d", seq_num, expected_parent))
+                    else
+                        print(string.format("  ❌ Failed to repair command %d", seq_num))
+                    end
+                end
+            else
+                print(string.format("  ⚠️  Command %d has no predecessor - cannot repair", seq_num))
+            end
+        end
+    end
+
+    print("✅ Command chain repair complete")
 end
 
 -- Get next sequence number
@@ -247,7 +316,26 @@ function M.execute(command)
         print(string.format("ERROR: current_sequence_number = %s, last_sequence_number = %d",
             tostring(current_sequence_number), last_sequence_number))
         print("ERROR: This indicates a bug in undo position tracking!")
+        print("HINT: Check if undo was called without proper replay, or if init() failed to load position")
+        print("HINT: Database integrity check (repair_broken_parent_chains) runs on startup")
         error("FATAL: Cannot execute command with NULL parent (would break undo tree)")
+    end
+
+    -- VALIDATION: If parent exists, verify it actually exists in database
+    if command.parent_sequence_number then
+        local verify_parent = db:prepare("SELECT 1 FROM commands WHERE sequence_number = ?")
+        if verify_parent then
+            verify_parent:bind_value(1, command.parent_sequence_number)
+            if not (verify_parent:exec() and verify_parent:next()) then
+                print(string.format("ERROR: Command %d references non-existent parent %d!",
+                    sequence_number, command.parent_sequence_number))
+                print("ERROR: Parent command was deleted or never existed - broken referential integrity")
+                print("HINT: This usually indicates manual database modification or a critical bug")
+                print(string.format("HINT: current_sequence_number = %s, last_sequence_number = %d",
+                    tostring(current_sequence_number), last_sequence_number))
+                error("FATAL: Cannot execute command with non-existent parent (would break undo tree)")
+            end
+        end
     end
 
     -- Update command with state hashes
@@ -1970,6 +2058,14 @@ function M.replay_events(sequence_id, target_sequence_number)
 
                 -- Move to parent
                 local parent = find_query:value(4)
+                if not parent and current_seq > start_sequence then
+                    -- Found NULL parent in middle of chain - data corruption!
+                    print(string.format("ERROR: Command %d has NULL parent - broken command chain detected!", current_seq))
+                    print(string.format("ERROR: This breaks event sourcing - cannot replay past this point"))
+                    print(string.format("HINT: Run repair_broken_parent_chains() to fix database integrity"))
+                    print(string.format("HINT: This bug was caused by executing commands when current_sequence_number was incorrectly nil"))
+                    break
+                end
                 current_seq = parent or 0
             else
                 print(string.format("WARNING: Could not find command with sequence %d", current_seq))
@@ -2048,7 +2144,10 @@ function M.undo()
         return {success = false, error_message = "Nothing to undo"}
     end
 
-    print(string.format("Undoing command: %s (seq %d)", current_command.type, current_command.sequence_number))
+    print(string.format("Undoing command: %s (seq %d, parent %s)",
+        current_command.type,
+        current_command.sequence_number,
+        tostring(current_command.parent_sequence_number)))
 
     -- Save current selection before undo (user state between commands)
     local timeline_state = require('ui.timeline.timeline_state')
@@ -2057,6 +2156,8 @@ function M.undo()
     -- Calculate target sequence (parent of current command for branching support)
     -- In a branching history, undo follows the parent link, not sequence_number - 1
     local target_sequence = current_command.parent_sequence_number or 0
+
+    print(string.format("  Will replay from 0 to %d", target_sequence))
 
     -- Replay events up to target (or clear all if target is 0)
     local replay_success = true

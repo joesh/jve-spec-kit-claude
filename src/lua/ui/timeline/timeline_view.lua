@@ -155,6 +155,16 @@ function M.create(widget, state_module, track_filter_fn, options)
         local clips = state_module.get_clips()
         local selected_clips = state_module.get_selected_clips()
 
+        -- Calculate drag offset if dragging clips
+        local drag_offset_ms = 0
+        local dragging_clip_ids = {}
+        if view.drag_state and view.drag_state.type == "clips" then
+            drag_offset_ms = view.drag_state.delta_ms or 0
+            for _, clip in ipairs(view.drag_state.clips) do
+                dragging_clip_ids[clip.id] = true
+            end
+        end
+
         for _, clip in ipairs(clips) do
             local y = get_track_y_by_id(clip.track_id, height)
 
@@ -162,7 +172,13 @@ function M.create(widget, state_module, track_filter_fn, options)
                 -- Get actual track height for this clip's track
                 local track_height = state_module.get_track_height(clip.track_id)
 
-                local x = state_module.time_to_pixel(clip.start_time, width)
+                -- Apply drag offset if this clip is being dragged
+                local clip_start = clip.start_time
+                if dragging_clip_ids[clip.id] then
+                    clip_start = clip_start + drag_offset_ms
+                end
+
+                local x = state_module.time_to_pixel(clip_start, width)
                 y = y + 5  -- Add padding from track top
                 local clip_width = math.floor((clip.duration / viewport_duration) * width) - 1  -- 1px gap between clips
                 local clip_height = track_height - 10  -- Use actual track height
@@ -180,8 +196,12 @@ function M.create(widget, state_module, track_filter_fn, options)
                         end
                     end
 
-                    -- Clip color
+                    -- Clip color (semi-transparent if being dragged)
                     local clip_color = is_selected and state_module.colors.clip_selected or state_module.colors.clip
+                    if dragging_clip_ids[clip.id] then
+                        -- Make dragged clips bright and semi-transparent for preview
+                        clip_color = 0xCCCCCCAA  -- Bright semi-transparent white/gray
+                    end
 
                     -- Clip rectangle
                     timeline.add_rect(view.widget, x, y, clip_width, clip_height, clip_color)
@@ -197,6 +217,18 @@ function M.create(widget, state_module, track_filter_fn, options)
         -- Draw selected edge highlights as bracket indicators (for trimming operations)
         local selected_edges = state_module.get_selected_edges()
         print(string.format("DEBUG RENDER: Drawing %d selected edges", #selected_edges))
+
+        -- Calculate drag offset if dragging edges
+        local edge_drag_offset_ms = 0
+        local dragging_edge_ids = {}
+        if view.drag_state and view.drag_state.type == "edges" then
+            edge_drag_offset_ms = view.drag_state.delta_ms or 0
+            for _, edge in ipairs(view.drag_state.edges) do
+                local key = edge.clip_id .. ":" .. edge.edge_type
+                dragging_edge_ids[key] = true
+            end
+        end
+
         for _, edge in ipairs(selected_edges) do
             -- Find the clip for this edge
             local edge_clip = nil
@@ -214,8 +246,26 @@ function M.create(widget, state_module, track_filter_fn, options)
 
                 if clip_y >= 0 then  -- Clip is on a track in this view
                     local track_height = state_module.get_track_height(edge_clip.track_id)
-                    local clip_x = state_module.time_to_pixel(edge_clip.start_time, width)
-                    local clip_width = math.floor((edge_clip.duration / viewport_duration) * width) - 1  -- Match rendering gap
+
+                    -- Apply drag offset to clip boundaries if this edge is being dragged
+                    local edge_key = edge.clip_id .. ":" .. edge.edge_type
+                    local is_dragging = dragging_edge_ids[edge_key]
+
+                    local clip_start = edge_clip.start_time
+                    local clip_duration = edge_clip.duration
+
+                    if is_dragging then
+                        -- Adjust clip boundaries based on which edge is being dragged
+                        if edge.edge_type == "in" or edge.edge_type == "gap_before" then
+                            clip_start = clip_start + edge_drag_offset_ms
+                            clip_duration = clip_duration - edge_drag_offset_ms
+                        elseif edge.edge_type == "out" or edge.edge_type == "gap_after" then
+                            clip_duration = clip_duration + edge_drag_offset_ms
+                        end
+                    end
+
+                    local clip_x = state_module.time_to_pixel(clip_start, width)
+                    local clip_width = math.floor((clip_duration / viewport_duration) * width) - 1  -- Match rendering gap
                     local clip_height = track_height - 10
 
                     -- Determine edge position and bracket orientation
@@ -247,10 +297,15 @@ function M.create(widget, state_module, track_filter_fn, options)
                         has_available_media = true  -- Gap always has "space" available
                     end
 
-                    -- Choose color based on media availability
-                    local edge_color = has_available_media
-                        and state_module.colors.edge_selected_available
-                        or state_module.colors.edge_selected_limit
+                    -- Choose color based on media availability (white if dragging for visibility)
+                    local edge_color
+                    if is_dragging then
+                        edge_color = 0xFFFFFFFF  -- Bright white for drag preview
+                    else
+                        edge_color = has_available_media
+                            and state_module.colors.edge_selected_available
+                            or state_module.colors.edge_selected_limit
+                    end
 
                     -- Draw bracket indicator: [ for in point, ] for out point
                     local bracket_y = clip_y + 5
@@ -365,27 +420,121 @@ function M.create(widget, state_module, track_filter_fn, options)
                     i, edge_info.clip.id:sub(1,8), edge_info.edge, edge_info.distance, tostring(edge_info.from_gap or false)))
             end
 
-            -- Second pass: determine what to select based on detected edges
+            -- Second pass: determine what to select or drag based on detected edges
             if #clips_at_position > 0 then
-                if not (modifiers and modifiers.command) then
-                    -- Without Cmd key, clear previous edge selection
-                    state_module.clear_edge_selection()
-                end
-
-                -- Select all edges within the detection zone
-                -- If edges are from different clips and very close together (edit point),
-                -- both will be selected. Otherwise each edge is independently selectable.
+                -- Check if any detected edge is already selected
+                local selected_edges = state_module.get_selected_edges()
+                local clicking_selected_edge = false
                 for _, edge_info in ipairs(clips_at_position) do
-                    state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, "ripple")
+                    for _, selected in ipairs(selected_edges) do
+                        if selected.clip_id == edge_info.clip.id and selected.edge_type == edge_info.edge then
+                            clicking_selected_edge = true
+                            break
+                        end
+                    end
+                    if clicking_selected_edge then break end
                 end
 
-                -- Note: toggle_edge_selection() already clears clip selection (mutual exclusion)
+                if clicking_selected_edge then
+                    -- Clicking selected edge - start dragging
+                    view.drag_state = {
+                        type = "edges",
+                        start_x = x,
+                        start_time = state_module.pixel_to_time(x, width),
+                        edges = selected_edges
+                    }
+                    print(string.format("Start dragging %d edge(s)", #selected_edges))
+                    return
+                else
+                    -- Clicking unselected edge - select it and start dragging
+                    if not (modifiers and modifiers.command) then
+                        -- Without Cmd key, clear previous edge selection
+                        state_module.clear_edge_selection()
+                    end
 
-                render()
-                return
+                    -- Select all edges within the detection zone
+                    for _, edge_info in ipairs(clips_at_position) do
+                        state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, "ripple")
+                    end
+
+                    -- Note: toggle_edge_selection() already clears clip selection (mutual exclusion)
+
+                    -- Start dragging immediately
+                    view.drag_state = {
+                        type = "edges",
+                        start_x = x,
+                        start_time = state_module.pixel_to_time(x, width),
+                        edges = state_module.get_selected_edges()
+                    }
+                    print(string.format("Start dragging %d edge(s)", #view.drag_state.edges))
+                    render()
+                    return
+                end
             end
 
-            -- If no edge was clicked, starting drag selection for clips
+            -- No edge clicked - check if clicking on selected clip body for dragging
+            local selected_clips = state_module.get_selected_clips()
+            local clicked_clip = nil
+            for _, clip in ipairs(state_module.get_clips()) do
+                local clip_y = get_track_y_by_id(clip.track_id, height)
+                if clip_y >= 0 then
+                    local track_height = state_module.get_track_height(clip.track_id)
+                    local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                    local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
+
+                    if x >= clip_x and x <= clip_x + clip_width and
+                       y >= clip_y and y <= clip_y + track_height then
+                        clicked_clip = clip
+                        break
+                    end
+                end
+            end
+
+            if clicked_clip then
+                -- Check if this clip is in the selection
+                local is_selected = false
+                for _, sel in ipairs(selected_clips) do
+                    if sel.id == clicked_clip.id then
+                        is_selected = true
+                        break
+                    end
+                end
+
+                if is_selected then
+                    -- Clicking on selected clip - start dragging
+                    view.drag_state = {
+                        type = "clips",
+                        start_x = x,
+                        start_time = state_module.pixel_to_time(x, width),
+                        clips = selected_clips
+                    }
+                    print(string.format("Start dragging %d clip(s)", #selected_clips))
+                    return
+                else
+                    -- Clicking on unselected clip - select it and start dragging
+                    if not (modifiers and modifiers.command) then
+                        -- Without Cmd, replace selection with this clip
+                        state_module.clear_edge_selection()
+                        state_module.set_selection({clicked_clip})
+                    else
+                        -- With Cmd, add to selection
+                        state_module.toggle_clip_selection(clicked_clip.id)
+                    end
+
+                    -- Start dragging immediately
+                    view.drag_state = {
+                        type = "clips",
+                        start_x = x,
+                        start_time = state_module.pixel_to_time(x, width),
+                        clips = state_module.get_selected_clips()
+                    }
+                    print(string.format("Start dragging %d clip(s)", #view.drag_state.clips))
+                    render()
+                    return
+                end
+            end
+
+            -- Not clicking on clip or edge - starting drag selection
             -- Clear selections unless Cmd is held (for multi-select)
             if not (modifiers and modifiers.command) then
                 state_module.clear_edge_selection()
@@ -400,7 +549,14 @@ function M.create(widget, state_module, track_filter_fn, options)
             end
 
         elseif event_type == "move" then
-            if state_module.is_dragging_playhead() then
+            if view.drag_state then
+                -- Dragging clips or edges - show visual feedback
+                local current_time = state_module.pixel_to_time(x, width)
+                view.drag_state.current_x = x
+                view.drag_state.current_time = current_time
+                view.drag_state.delta_ms = math.floor(current_time - view.drag_state.start_time)
+                render()  -- Show drag preview
+            elseif state_module.is_dragging_playhead() then
                 local time = state_module.pixel_to_time(x, width)
                 state_module.set_playhead_time(time)
             elseif view.panel_drag_move then
@@ -467,7 +623,85 @@ function M.create(widget, state_module, track_filter_fn, options)
             end
 
         elseif event_type == "release" then
-            if view.panel_drag_end then
+            if view.drag_state then
+                -- Finalize drag operation - execute command
+                local delta_ms = view.drag_state.delta_ms or 0
+
+                if delta_ms ~= 0 then  -- Only execute if actually moved
+                    local Command = require("command")
+                    local command_manager = require("core.command_manager")
+
+                    if view.drag_state.type == "clips" then
+                        -- Nudge clips by delta
+                        local clip_ids = {}
+                        for _, clip in ipairs(view.drag_state.clips) do
+                            table.insert(clip_ids, clip.id)
+                        end
+
+                        local nudge_cmd = Command.create("Nudge", "default_project")
+                        nudge_cmd:set_parameter("nudge_amount_ms", delta_ms)
+                        nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
+
+                        local result = command_manager.execute(nudge_cmd)
+                        if result.success then
+                            state_module.reload_clips()
+                            print(string.format("Dragged %d clip(s) by %dms", #clip_ids, delta_ms))
+                        else
+                            print("ERROR: Drag failed: " .. (result.error_message or "unknown error"))
+                        end
+
+                    elseif view.drag_state.type == "edges" then
+                        -- Ripple edit edges by delta
+                        local edge_infos = {}
+                        local all_clips = state_module.get_clips()
+
+                        for _, edge in ipairs(view.drag_state.edges) do
+                            -- Find track_id for each edge
+                            local clip = nil
+                            for _, c in ipairs(all_clips) do
+                                if c.id == edge.clip_id then
+                                    clip = c
+                                    break
+                                end
+                            end
+                            if clip then
+                                table.insert(edge_infos, {
+                                    clip_id = edge.clip_id,
+                                    edge_type = edge.edge_type,
+                                    track_id = clip.track_id
+                                })
+                            end
+                        end
+
+                        local result
+                        if #edge_infos > 1 then
+                            local batch_cmd = Command.create("BatchRippleEdit", "default_project")
+                            batch_cmd:set_parameter("edge_infos", edge_infos)
+                            batch_cmd:set_parameter("delta_ms", delta_ms)
+                            batch_cmd:set_parameter("sequence_id", "default_sequence")
+                            result = command_manager.execute(batch_cmd)
+                        elseif #edge_infos == 1 then
+                            local ripple_cmd = Command.create("RippleEdit", "default_project")
+                            ripple_cmd:set_parameter("edge_info", edge_infos[1])
+                            ripple_cmd:set_parameter("delta_ms", delta_ms)
+                            ripple_cmd:set_parameter("sequence_id", "default_sequence")
+                            result = command_manager.execute(ripple_cmd)
+                        end
+
+                        if result and result.success then
+                            state_module.reload_clips()
+                            print(string.format("Dragged %d edge(s) by %dms", #edge_infos, delta_ms))
+                        else
+                            print("ERROR: Drag failed")
+                        end
+                    end
+                end
+
+                -- Clear drag state
+                view.drag_state = nil
+                render()
+
+            elseif view.panel_drag_end then
                 -- Finalize drag selection via panel
                 view.panel_drag_end(view.widget, x, y)
                 view.panel_drag_move = nil
