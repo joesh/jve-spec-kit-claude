@@ -24,6 +24,7 @@ local current_branch_path = {}  -- Sequence of command IDs from root to current 
 
 -- Command type implementations
 local command_executors = {}
+local command_undoers = {}
 
 -- Initialize CommandManager with database connection
 function M.init(database)
@@ -135,6 +136,8 @@ end
 -- Get next sequence number
 local function get_next_sequence_number()
     last_sequence_number = last_sequence_number + 1
+    print(string.format("DEBUG: Assigned sequence number %d (current=%s)",
+        last_sequence_number, tostring(current_sequence_number)))
     return last_sequence_number
 end
 
@@ -1037,14 +1040,19 @@ command_executors["SetupProject"] = function(command)
 end
 
 command_executors["SplitClip"] = function(command)
-    print("Executing SplitClip command")
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing SplitClip command")
+    end
 
     local clip_id = command:get_parameter("clip_id")
     local split_time = command:get_parameter("split_time")
 
-    print(string.format("  clip_id: %s", tostring(clip_id)))
-    print(string.format("  split_time: %s", tostring(split_time)))
-    print(string.format("  db: %s", tostring(db)))
+    if not dry_run then
+        print(string.format("  clip_id: %s", tostring(clip_id)))
+        print(string.format("  split_time: %s", tostring(split_time)))
+        print(string.format("  db: %s", tostring(db)))
+    end
 
     if not clip_id or clip_id == "" or not split_time or split_time <= 0 then
         print("WARNING: SplitClip: Missing required parameters")
@@ -1094,11 +1102,30 @@ command_executors["SplitClip"] = function(command)
     second_clip.source_out = original_clip.source_out
     second_clip.enabled = original_clip.enabled
 
+    -- DRY RUN: Return preview data without executing
+    if dry_run then
+        return true, {
+            first_clip = {
+                clip_id = original_clip.id,
+                new_duration = first_duration,
+                new_source_out = source_split_point
+            },
+            second_clip = {
+                clip_id = second_clip.id,
+                track_id = second_clip.track_id,
+                start_time = second_clip.start_time,
+                duration = second_clip.duration,
+                source_in = second_clip.source_in,
+                source_out = second_clip.source_out
+            }
+        }
+    end
+
     -- Update original clip (left side of split)
     original_clip.duration = first_duration
     original_clip.source_out = source_split_point
 
-    -- Save both clips
+    -- EXECUTE: Save both clips
     if not original_clip:save(db) then
         print("WARNING: SplitClip: Failed to save modified original clip")
         return false
@@ -1198,7 +1225,10 @@ end
 
 -- INSERT: Add clip at playhead, rippling all subsequent clips forward
 command_executors["Insert"] = function(command)
-    print("Executing Insert command")
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing Insert command")
+    end
 
     local media_id = command:get_parameter("media_id")
     local track_id = command:get_parameter("track_id")
@@ -1215,6 +1245,18 @@ command_executors["Insert"] = function(command)
     if not insert_time or not duration or not source_out then
         print("WARNING: Insert: Missing insert_time, duration, or source_out")
         return false
+    end
+
+    -- FRAME ALIGNMENT: Snap all parameters to frame boundaries
+    local frame_utils = require('core.frame_utils')
+    local frame_rate = 30.0  -- TODO: load from sequence metadata
+    insert_time = frame_utils.snap_to_frame(insert_time, frame_rate)
+    duration = frame_utils.snap_to_frame(duration, frame_rate)
+    source_in = frame_utils.snap_to_frame(source_in, frame_rate)
+    source_out = frame_utils.snap_to_frame(source_out, frame_rate)
+
+    if not dry_run then
+        print(string.format("Insert: Snapped parameters to frame boundaries (%.2f fps)", frame_rate))
     end
 
     -- Step 1: Ripple all clips on this track that start at or after insert_time
@@ -1247,7 +1289,34 @@ command_executors["Insert"] = function(command)
         end
     end
 
-    -- Ripple clips forward
+    -- DRY RUN: Return preview data without executing
+    if dry_run then
+        local preview_rippled_clips = {}
+        for _, clip_info in ipairs(clips_to_ripple) do
+            table.insert(preview_rippled_clips, {
+                clip_id = clip_info.id,
+                new_start_time = clip_info.old_start + duration
+            })
+        end
+
+        local existing_clip_id = command:get_parameter("clip_id")
+        local Clip = require('models.clip')
+        local new_clip_id = existing_clip_id or Clip.generate_id()
+
+        return true, {
+            new_clip = {
+                clip_id = new_clip_id,
+                track_id = track_id,
+                start_time = insert_time,
+                duration = duration,
+                source_in = source_in,
+                source_out = source_out
+            },
+            rippled_clips = preview_rippled_clips
+        }
+    end
+
+    -- EXECUTE: Ripple clips forward
     local Clip = require('models.clip')
     for _, clip_info in ipairs(clips_to_ripple) do
         local clip = Clip.load(clip_info.id, db)
@@ -1297,7 +1366,10 @@ end
 
 -- OVERWRITE: Add clip at playhead, trimming/replacing existing clips
 command_executors["Overwrite"] = function(command)
-    print("Executing Overwrite command")
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing Overwrite command")
+    end
 
     local media_id = command:get_parameter("media_id")
     local track_id = command:get_parameter("track_id")
@@ -1354,6 +1426,7 @@ command_executors["Overwrite"] = function(command)
     -- Step 2: Handle affected clips (trim or delete)
     local Clip = require('models.clip')
     local modified_clips = {}
+    local preview_affected_clips = {}
 
     for _, clip_info in ipairs(affected_clips) do
         local clip = Clip.load(clip_info.id, db)
@@ -1372,50 +1445,112 @@ command_executors["Overwrite"] = function(command)
 
             -- Completely covered - delete
             if clip_start >= overwrite_time and clip_end <= overwrite_end then
-                if not clip:delete(db) then
-                    print(string.format("WARNING: Overwrite: Failed to delete clip %s", clip.id))
-                    return false
+                if dry_run then
+                    table.insert(preview_affected_clips, {
+                        clip_id = clip.id,
+                        action = "delete"
+                    })
+                else
+                    if not clip:delete(db) then
+                        print(string.format("WARNING: Overwrite: Failed to delete clip %s", clip.id))
+                        return false
+                    end
                 end
             -- Partially covered from left - trim left side
             elseif clip_start < overwrite_time and clip_end > overwrite_time and clip_end <= overwrite_end then
                 local trim_amount = clip_end - overwrite_time
-                clip.duration = clip.duration - trim_amount
-                clip.source_out = clip.source_out - trim_amount
-                if not clip:save(db) then
-                    print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
-                    return false
+                if dry_run then
+                    table.insert(preview_affected_clips, {
+                        clip_id = clip.id,
+                        action = "trim_left",
+                        new_duration = clip.duration - trim_amount,
+                        new_source_out = clip.source_out - trim_amount
+                    })
+                else
+                    clip.duration = clip.duration - trim_amount
+                    clip.source_out = clip.source_out - trim_amount
+                    if not clip:save(db) then
+                        print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
+                        return false
+                    end
                 end
             -- Partially covered from right - trim right side and move
             elseif clip_start >= overwrite_time and clip_start < overwrite_end and clip_end > overwrite_end then
                 local trim_amount = overwrite_end - clip_start
-                clip.start_time = overwrite_end
-                clip.duration = clip.duration - trim_amount
-                clip.source_in = clip.source_in + trim_amount
-                if not clip:save(db) then
-                    print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
-                    return false
+                if dry_run then
+                    table.insert(preview_affected_clips, {
+                        clip_id = clip.id,
+                        action = "trim_right",
+                        new_start_time = overwrite_end,
+                        new_duration = clip.duration - trim_amount,
+                        new_source_in = clip.source_in + trim_amount
+                    })
+                else
+                    clip.start_time = overwrite_end
+                    clip.duration = clip.duration - trim_amount
+                    clip.source_in = clip.source_in + trim_amount
+                    if not clip:save(db) then
+                        print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
+                        return false
+                    end
                 end
             -- Spans entire overwrite range - split into two
             elseif clip_start < overwrite_time and clip_end > overwrite_end then
                 -- Trim left part
                 local left_duration = overwrite_time - clip_start
-                clip.duration = left_duration
-                clip.source_out = clip.source_in + left_duration
 
-                -- Create right part
-                local right_clip = Clip.create("Split Clip", clip.media_id)
-                right_clip.track_id = clip.track_id
-                right_clip.start_time = overwrite_end
-                right_clip.duration = clip_end - overwrite_end
-                right_clip.source_in = clip.source_in + (overwrite_time - clip_start) + duration
-                right_clip.source_out = clip_info.source_out
+                if dry_run then
+                    local right_clip = Clip.create("Split Clip", clip.media_id)
+                    table.insert(preview_affected_clips, {
+                        clip_id = clip.id,
+                        action = "split",
+                        new_duration = left_duration,
+                        new_source_out = clip.source_in + left_duration,
+                        right_clip = {
+                            clip_id = right_clip.id,
+                            start_time = overwrite_end,
+                            duration = clip_end - overwrite_end,
+                            source_in = clip.source_in + (overwrite_time - clip_start) + duration,
+                            source_out = clip_info.source_out
+                        }
+                    })
+                else
+                    clip.duration = left_duration
+                    clip.source_out = clip.source_in + left_duration
 
-                if not clip:save(db) or not right_clip:save(db) then
-                    print("WARNING: Overwrite: Failed to split clip")
-                    return false
+                    -- Create right part
+                    local right_clip = Clip.create("Split Clip", clip.media_id)
+                    right_clip.track_id = clip.track_id
+                    right_clip.start_time = overwrite_end
+                    right_clip.duration = clip_end - overwrite_end
+                    right_clip.source_in = clip.source_in + (overwrite_time - clip_start) + duration
+                    right_clip.source_out = clip_info.source_out
+
+                    if not clip:save(db) or not right_clip:save(db) then
+                        print("WARNING: Overwrite: Failed to split clip")
+                        return false
+                    end
                 end
             end
         end
+    end
+
+    -- DRY RUN: Return preview data without executing
+    if dry_run then
+        local existing_clip_id = command:get_parameter("clip_id")
+        local new_clip_id = existing_clip_id or Clip.generate_id()
+
+        return true, {
+            new_clip = {
+                clip_id = new_clip_id,
+                track_id = track_id,
+                start_time = overwrite_time,
+                duration = duration,
+                source_in = source_in,
+                source_out = source_out
+            },
+            affected_clips = preview_affected_clips
+        }
     end
 
     -- Store modified clips for undo
@@ -1454,7 +1589,10 @@ end
 
 -- MOVE CLIP TO TRACK: Move a clip from one track to another (same timeline position)
 command_executors["MoveClipToTrack"] = function(command)
-    print("Executing MoveClipToTrack command")
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing MoveClipToTrack command")
+    end
 
     local clip_id = command:get_parameter("clip_id")
     local target_track_id = command:get_parameter("target_track_id")
@@ -1481,7 +1619,16 @@ command_executors["MoveClipToTrack"] = function(command)
     -- Save original track for undo (store as parameter)
     command:set_parameter("original_track_id", clip.track_id)
 
-    -- Update clip's track
+    -- DRY RUN: Return preview data without executing
+    if dry_run then
+        return true, {
+            clip_id = clip_id,
+            original_track_id = clip.track_id,
+            new_track_id = target_track_id
+        }
+    end
+
+    -- EXECUTE: Update clip's track
     clip.track_id = target_track_id
 
     if not clip:save(db) then
@@ -1534,7 +1681,10 @@ end
 -- NUDGE: Move clips or trim edges by a time offset (frame-accurate)
 -- Inspects selection to determine whether to nudge clips (move) or edges (trim)
 command_executors["Nudge"] = function(command)
-    print("Executing Nudge command")
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing Nudge command")
+    end
 
     local nudge_amount_ms = command:get_parameter("nudge_amount_ms")  -- Can be negative
     local selected_clip_ids = command:get_parameter("selected_clip_ids")
@@ -1545,6 +1695,8 @@ command_executors["Nudge"] = function(command)
 
     if selected_edges and #selected_edges > 0 then
         nudge_type = "edges"
+        local preview_clips = {}
+
         -- Nudge edges (trim clips)
         for _, edge_info in ipairs(selected_edges) do
             local Clip = require('models.clip')
@@ -1566,18 +1718,63 @@ command_executors["Nudge"] = function(command)
                 clip.source_out = clip.source_in + clip.duration
             end
 
-            if not clip:save(db) then
-                print(string.format("ERROR: Nudge: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
-                return false
+            -- DRY RUN: Collect preview data
+            if dry_run then
+                table.insert(preview_clips, {
+                    clip_id = clip.id,
+                    new_start_time = clip.start_time,
+                    new_duration = clip.duration,
+                    edge_type = edge_info.edge_type
+                })
+            else
+                -- EXECUTE: Save changes
+                if not clip:save(db) then
+                    print(string.format("ERROR: Nudge: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
+                    return false
+                end
             end
 
             ::continue::
         end
+
+        -- DRY RUN: Return preview data without executing
+        if dry_run then
+            return true, {
+                nudge_type = "edges",
+                affected_clips = preview_clips
+            }
+        end
+
         print(string.format("✅ Nudged %d edge(s) by %dms", #selected_edges, nudge_amount_ms))
     elseif selected_clip_ids and #selected_clip_ids > 0 then
         nudge_type = "clips"
-        -- Nudge clips (move)
+        local preview_clips = {}
+
+        -- Expand selection to include linked clips
+        local clip_links = require('core.clip_links')
+        local clips_to_move = {}  -- Set of clip IDs to move (avoid duplicates)
+        local processed_groups = {}  -- Track processed link groups
+
         for _, clip_id in ipairs(selected_clip_ids) do
+            clips_to_move[clip_id] = true
+
+            -- Find linked clips
+            local link_group = clip_links.get_link_group(clip_id, db)
+            if link_group then
+                local link_group_id = clip_links.get_link_group_id(clip_id, db)
+                if link_group_id and not processed_groups[link_group_id] then
+                    processed_groups[link_group_id] = true
+                    for _, link_info in ipairs(link_group) do
+                        if link_info.enabled then
+                            clips_to_move[link_info.clip_id] = true
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Nudge clips (move)
+        for clip_id, _ in pairs(clips_to_move) do
             local Clip = require('models.clip')
             local clip = Clip.load(clip_id, db)
 
@@ -1588,14 +1785,45 @@ command_executors["Nudge"] = function(command)
 
             clip.start_time = math.max(0, clip.start_time + nudge_amount_ms)
 
-            if not clip:save(db) then
-                print(string.format("ERROR: Nudge: Failed to save clip %s", clip_id:sub(1,8)))
-                return false
+            -- DRY RUN: Collect preview data
+            if dry_run then
+                table.insert(preview_clips, {
+                    clip_id = clip.id,
+                    new_start_time = clip.start_time,
+                    new_duration = clip.duration
+                })
+            else
+                -- EXECUTE: Save changes
+                if not clip:save(db) then
+                    print(string.format("ERROR: Nudge: Failed to save clip %s", clip_id:sub(1,8)))
+                    return false
+                end
             end
 
             ::continue_clip::
         end
-        print(string.format("✅ Nudged %d clip(s) by %dms", #selected_clip_ids, nudge_amount_ms))
+
+        -- DRY RUN: Return preview data without executing
+        if dry_run then
+            return true, {
+                nudge_type = "clips",
+                affected_clips = preview_clips
+            }
+        end
+
+        -- Count total clips moved
+        local total_moved = 0
+        for _ in pairs(clips_to_move) do
+            total_moved = total_moved + 1
+        end
+
+        local linked_count = total_moved - #selected_clip_ids
+        if linked_count > 0 then
+            print(string.format("✅ Nudged %d clip(s) + %d linked clip(s) by %dms",
+                #selected_clip_ids, linked_count, nudge_amount_ms))
+        else
+            print(string.format("✅ Nudged %d clip(s) by %dms", #selected_clip_ids, nudge_amount_ms))
+        end
     else
         print("WARNING: Nudge: Nothing selected")
         return false
@@ -1626,39 +1854,43 @@ end
 -- Helper: Apply ripple edit to a single edge
 -- Returns: ripple_time, success
 local function apply_edge_ripple(clip, edge_type, delta_ms)
-    local ripple_time = nil
+    -- GAP CLIPS ARE MATERIALIZED BEFORE CALLING THIS FUNCTION
+    -- So edge_type is always "in" or "out", never "gap_after" or "gap_before"
+
+    local ripple_time
+    local has_source_media = (clip.source_in ~= nil)
 
     if edge_type == "in" then
-        -- Trimming clip's in-point: adjust source and duration
-        ripple_time = clip.start_time + delta_ms
-        clip.start_time = ripple_time
-        clip.duration = math.max(1, clip.duration - delta_ms)
+        -- Trim left edge (in-point): ripple at original START
+        ripple_time = clip.start_time
 
-        -- Check media limits before trimming source
-        local new_source_in = clip.source_in + delta_ms
-        if new_source_in < 0 then
-            -- Hit media boundary - normal limit, not an error
+        local new_duration = clip.duration - delta_ms
+        if new_duration < 1 then
             return nil, false
         end
-        clip.source_in = new_source_in
 
-    elseif edge_type == "gap_before" then
-        -- Adjusting gap before clip: move clip without changing media content
-        ripple_time = clip.start_time
         clip.start_time = clip.start_time + delta_ms
-        -- source_in, duration, source_out remain unchanged
+        clip.duration = new_duration
+
+        if has_source_media then
+            -- Real clip: also adjust source_in to reveal more/less media
+            local new_source_in = clip.source_in + delta_ms
+            if new_source_in < 0 then
+                return nil, false  -- Hit media boundary
+            end
+            clip.source_in = new_source_in
+        end
 
     elseif edge_type == "out" then
-        -- Trimming clip's out-point: adjust duration
+        -- Trim right edge (out-point): ripple at original END
         ripple_time = clip.start_time + clip.duration
-        clip.duration = math.max(1, clip.duration + delta_ms)
-        clip.source_out = clip.source_in + clip.duration
-        -- TODO: Check against media duration limit (need media_duration field)
 
-    elseif edge_type == "gap_after" then
-        -- Adjusting gap after clip: ripple point is at clip's end
-        ripple_time = clip.start_time + clip.duration
-        -- Clip itself doesn't change at all
+        clip.duration = math.max(1, clip.duration + delta_ms)
+
+        if has_source_media then
+            clip.source_out = clip.source_in + clip.duration
+            -- TODO: Check against media duration limit
+        end
     end
 
     return ripple_time, true
@@ -1666,41 +1898,269 @@ end
 
 -- RippleEdit: Trim an edge and shift all downstream clips to close/open the gap
 -- This is the standard NLE ripple edit - affects the timeline duration
+-- Supports dry_run mode for preview without executing
 command_executors["RippleEdit"] = function(command)
-    print("Executing RippleEdit command")
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing RippleEdit command")
+    end
 
     local edge_info = command:get_parameter("edge_info")  -- {clip_id, edge_type, track_id}
     local delta_ms = command:get_parameter("delta_ms")    -- Positive = extend, negative = trim
 
     if not edge_info or not delta_ms then
         print("ERROR: RippleEdit missing parameters")
-        return false
+        return {success = false, error_message = "RippleEdit missing parameters"}
     end
 
     local Clip = require('models.clip')
-    local clip = Clip.load(edge_info.clip_id, db)
-    if not clip then
-        print("ERROR: RippleEdit: Clip not found")
-        return false
+    local database = require('core.database')
+    local all_clips = database.load_clips(command:get_parameter("sequence_id") or "default_sequence")
+
+    -- MATERIALIZE GAP CLIPS: Convert gap edges to temporary gap clip objects
+    local clip, edge_type, is_gap_clip
+    if edge_info.edge_type == "gap_after" or edge_info.edge_type == "gap_before" then
+        -- Find the real clip that defines this gap
+        local reference_clip = Clip.load(edge_info.clip_id, db)
+        if not reference_clip then
+            print("ERROR: RippleEdit: Reference clip not found")
+            return {success = false, error_message = "Reference clip not found"}
+        end
+
+        -- Use stored gap boundaries if available (for deterministic replay)
+        -- Otherwise calculate dynamically from adjacent clips
+        local gap_start, gap_duration
+        if command:get_parameter("gap_start_time") and command:get_parameter("gap_duration") then
+            gap_start = command:get_parameter("gap_start_time")
+            gap_duration = command:get_parameter("gap_duration")
+        else
+            -- Calculate gap boundaries from adjacent clips
+            local gap_end
+            if edge_info.edge_type == "gap_after" then
+                gap_start = reference_clip.start_time + reference_clip.duration
+                -- Find next clip on same track to determine gap end
+                gap_end = math.huge
+                for _, c in ipairs(all_clips) do
+                    if c.track_id == reference_clip.track_id and c.start_time > gap_start then
+                        gap_end = math.min(gap_end, c.start_time)
+                    end
+                end
+            else  -- gap_before
+                gap_end = reference_clip.start_time
+                -- Find previous clip on same track to determine gap start
+                gap_start = 0
+                for _, c in ipairs(all_clips) do
+                    if c.track_id == reference_clip.track_id and c.start_time + c.duration < gap_end then
+                        gap_start = math.max(gap_start, c.start_time + c.duration)
+                    end
+                end
+            end
+            gap_duration = gap_end - gap_start
+
+            -- Store gap boundaries for deterministic replay
+            if not dry_run then
+                command:set_parameter("gap_start_time", gap_start)
+                command:set_parameter("gap_duration", gap_duration)
+            end
+        end
+
+        -- Create temporary gap clip object (not saved to database)
+        clip = {
+            id = "temp_gap_" .. edge_info.clip_id,
+            track_id = reference_clip.track_id,
+            start_time = gap_start,
+            duration = gap_duration,
+            source_in = 0,
+            source_out = gap_duration
+        }
+        edge_type = edge_info.edge_type == "gap_after" and "in" or "out"  -- gap_after→in, gap_before→out
+        is_gap_clip = true
+    else
+        clip = Clip.load(edge_info.clip_id, db)
+        if not clip then
+            print("ERROR: RippleEdit: Clip not found")
+            return {success = false, error_message = "Clip not found"}
+        end
+        edge_type = edge_info.edge_type
+        is_gap_clip = false
     end
 
-    -- Save original state for undo
-    local original_clip_state = {
-        start_time = clip.start_time,
-        duration = clip.duration,
-        source_in = clip.source_in,
-        source_out = clip.source_out
-    }
+    -- CONSTRAINT CHECK: Clamp delta to valid range and snap to frame boundaries
+    local constraints = require('core.timeline_constraints')
+    local frame_utils = require('core.frame_utils')
 
-    -- Apply edge ripple using shared helper
-    local ripple_time, success = apply_edge_ripple(clip, edge_info.edge_type, delta_ms)
+    -- Get frame rate (TODO: load from sequence metadata, for now use default 30fps)
+    local frame_rate = 30.0
+
+    -- For deterministic replay: use stored clamped_delta if available, otherwise calculate
+    local clamped_delta = command:get_parameter("clamped_delta_ms")
+    if not clamped_delta then
+        -- For gap edits: use special ripple constraint logic
+        -- For regular edits: use normal trim constraints
+        if is_gap_clip then
+            -- Calculate ripple point for gap clips
+            -- Gap clips represent empty space, so semantics are different:
+            -- - gap_before: gap from timeline start (or previous clip) to clip start
+            --   - edge_type = "out" (right edge of gap = left edge of clip)
+            --   - ripple point = start + duration (right edge of gap)
+            -- - gap_after: gap from clip end to next clip (or timeline end)
+            --   - edge_type = "in" (left edge of gap = right edge of clip)
+            --   - ripple point = start (left edge of gap)
+            local ripple_time
+            if edge_type == "in" then
+                -- gap_after: ripple point at left edge of gap (right edge of reference clip)
+                ripple_time = clip.start_time
+            else  -- edge_type == "out"
+                -- gap_before: ripple point at right edge of gap (left edge of reference clip)
+                ripple_time = clip.start_time + clip.duration
+            end
+
+            print(string.format("DEBUG GAP CONSTRAINT: ripple_time=%dms, delta_ms=%dms", ripple_time, delta_ms))
+
+            -- Find clips that will shift (everything after ripple point)
+            -- and clips that are stationary (everything before ripple point)
+            local stationary_clips = {}
+            for _, c in ipairs(all_clips) do
+                if c.start_time < ripple_time then
+                    table.insert(stationary_clips, c)
+                    print(string.format("  Stationary: %s at %d-%dms on %s", c.id:sub(1,8), c.start_time, c.start_time + c.duration, c.track_id))
+                end
+            end
+
+            -- Calculate max shift: how far can we shift before any shifted clip hits a stationary clip?
+            local max_shift = math.huge
+            local min_shift = -math.huge
+
+            for _, shifting_clip in ipairs(all_clips) do
+                if shifting_clip.start_time >= ripple_time then
+                    print(string.format("  Shifting: %s at %dms on %s", shifting_clip.id:sub(1,8), shifting_clip.start_time, shifting_clip.track_id))
+                    -- This clip will shift - check against all stationary clips on all tracks
+                    for _, stationary in ipairs(stationary_clips) do
+                        if shifting_clip.track_id == stationary.track_id then
+                            -- Same track - check collision in both directions
+                            local gap_between = shifting_clip.start_time - (stationary.start_time + stationary.duration)
+                            print(string.format("    vs stationary %s: gap=%dms", stationary.id:sub(1,8), gap_between))
+
+                            if gap_between >= 0 then
+                                -- No overlap: clips are separated or touching
+                                -- Shifting RIGHT moves away from stationary clip (no constraint)
+                                -- Shifting LEFT moves toward stationary clip (limited by gap)
+                                if -gap_between > min_shift then
+                                    min_shift = -gap_between
+                                    print(string.format("      min_shift = %dms (can't shift left into stationary clip)", min_shift))
+                                end
+                                -- No max_shift constraint from this stationary clip (we're moving away)
+                            else
+                                -- Overlap exists (gap_between < 0)
+                                -- Shifting right reduces overlap (allowed, no limit from this clip)
+                                -- Shifting left increases overlap (blocked entirely)
+                                print(string.format("      OVERLAP by %dms - blocking left shift", -gap_between))
+                                -- Can't shift left at all when overlap exists
+                                if 0 > min_shift then
+                                    min_shift = 0
+                                    print(string.format("      min_shift = 0 (blocking left due to overlap)"))
+                                end
+                                -- No limit on right shift from this overlapping clip
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- CONSTRAINT: Minimum gap duration (can't close gap completely - must leave >=1ms)
+            -- For in-point (gap_after): closing gap = positive delta = negative shift
+            -- For out-point (gap_before): closing gap = negative delta = negative shift
+            -- Maximum closure = clip.duration - 1
+            local max_closure_shift = -(clip.duration - 1)
+            if max_closure_shift > min_shift then
+                min_shift = max_closure_shift
+                print(string.format("  Gap duration constraint: min_shift = %dms (can't close gap beyond 1ms)", min_shift))
+            end
+
+            print(string.format("  Final constraints: min_shift=%s, max_shift=%s", tostring(min_shift), tostring(max_shift)))
+
+            -- Convert shift constraints to delta constraints
+            -- For in-point (gap_after): shift = -delta, so flip signs
+            -- For out-point (gap_before): shift = +delta, so keep signs
+            local min_delta, max_delta
+            if edge_type == "in" then
+                -- Flip signs: min_shift → max_delta, max_shift → min_delta
+                min_delta = -max_shift
+                max_delta = -min_shift
+            else
+                -- Keep signs: min_shift → min_delta, max_shift → max_delta
+                min_delta = min_shift
+                max_delta = max_shift
+            end
+            print(string.format("  Converted to delta constraints: min_delta=%s, max_delta=%s", tostring(min_delta), tostring(max_delta)))
+
+            -- Clamp delta and snap to frames
+            clamped_delta = math.max(min_delta, math.min(max_delta, delta_ms))
+            print(string.format("  Before snap: clamped_delta=%dms", clamped_delta))
+            clamped_delta = frame_utils.snap_delta_to_frame(clamped_delta, frame_rate)
+            -- Re-clamp after snapping to ensure we don't exceed constraints
+            clamped_delta = math.max(min_delta, math.min(max_delta, clamped_delta))
+            print(string.format("  After snap: clamped_delta=%dms", clamped_delta))
+        else
+            -- Regular clip trim: use normal constraint logic
+            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, frame_rate, true)
+        end
+
+        if clamped_delta ~= delta_ms then
+            if not dry_run then
+                local reason = ""
+                if math.abs(clamped_delta) < math.abs(delta_ms) then
+                    reason = " (collision)"
+                else
+                    local frame_snapped = frame_utils.snap_delta_to_frame(delta_ms, frame_rate)
+                    if frame_snapped ~= delta_ms then
+                        reason = " (frame snap)"
+                    end
+                end
+                print(string.format("⚠️  Trim adjusted: %dms → %dms%s", delta_ms, clamped_delta, reason))
+            end
+        end
+
+        -- Store clamped delta for deterministic replay
+        command:set_parameter("clamped_delta_ms", clamped_delta)
+    end
+
+    delta_ms = clamped_delta
+
+    -- Save original state for undo (not needed for dry-run or gap clips)
+    local original_clip_state = nil
+    if not dry_run and not is_gap_clip then
+        original_clip_state = {
+            start_time = clip.start_time,
+            duration = clip.duration,
+            source_in = clip.source_in,
+            source_out = clip.source_out
+        }
+    end
+
+    -- Save original state BEFORE modifying clip
+    local original_duration = clip.duration
+    local original_start_time = clip.start_time
+
+    -- Calculate ripple point and new clip dimensions (no mutation yet)
+    local ripple_time, success = apply_edge_ripple(clip, edge_type, delta_ms)
     if not success then
-        return false
+        return {success = false, error_message = "Ripple operation would violate clip or media constraints"}
     end
 
-    if not clip:save(db) then
-        print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
-        return false
+    -- Calculate actual shift amount for downstream clips
+    -- In-point edit: shift = -delta (opposite direction)
+    -- Out-point edit: shift = +delta (same direction)
+    local shift_amount
+    if edge_type == "in" then
+        shift_amount = -delta_ms  -- Drag right → clip shorter → shift left
+    else  -- edge_type == "out"
+        shift_amount = delta_ms   -- Drag right → clip longer → shift right
+    end
+
+    if not dry_run then
+        print(string.format("RippleEdit: original_edge=%s, normalized_edge=%s, delta_ms=%d, shift_amount=%d, ripple_time=%d",
+            edge_info.edge_type, edge_type, delta_ms, shift_amount, ripple_time))
     end
 
     -- Find all clips on ALL tracks that start after the ripple point
@@ -1710,9 +2170,49 @@ command_executors["RippleEdit"] = function(command)
     local all_clips = database.load_clips(command:get_parameter("sequence_id") or "default_sequence")
 
     for _, other_clip in ipairs(all_clips) do
-        if other_clip.id ~= edge_info.clip_id and
-           other_clip.start_time >= ripple_time then
+        -- Include clips at or after ripple point (use > ripple_time - 1 to catch adjacent clips)
+        -- This handles floating point rounding and clips that are within 1ms of the ripple point
+        -- For gap edits: clip.id is "temp_gap_*" so we never exclude real clips (correct!)
+        -- For regular edits: clip.id is the actual clip being edited, so we exclude it (correct!)
+        if other_clip.id ~= clip.id and
+           other_clip.start_time > ripple_time - 1 then
             table.insert(clips_to_shift, other_clip)
+            if not dry_run then
+                print(string.format("  Will shift clip %s from %d to %d", other_clip.id:sub(1,8), other_clip.start_time, other_clip.start_time + shift_amount))
+            end
+        end
+    end
+
+    if not dry_run then
+        print(string.format("RippleEdit: Found %d clips to shift", #clips_to_shift))
+    end
+
+    -- DRY RUN: Return preview data without executing
+    if dry_run then
+        return true, {
+            affected_clip = {
+                clip_id = clip.id,
+                new_start_time = clip.start_time,
+                new_duration = clip.duration
+            },
+            shifted_clips = (function()
+                local shifts = {}
+                for _, downstream_clip in ipairs(clips_to_shift) do
+                    table.insert(shifts, {
+                        clip_id = downstream_clip.id,
+                        new_start_time = downstream_clip.start_time + shift_amount
+                    })
+                end
+                return shifts
+            end)()
+        }
+    end
+
+    -- EXECUTE: Actually save changes (skip for gap clips - they're not persisted)
+    if not is_gap_clip then
+        if not clip:save(db) then
+            print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
+            return {success = false, error_message = "Failed to save clip"}
         end
     end
 
@@ -1724,11 +2224,11 @@ command_executors["RippleEdit"] = function(command)
             goto continue_shift
         end
 
-        shift_clip.start_time = shift_clip.start_time + delta_ms
+        shift_clip.start_time = shift_clip.start_time + shift_amount
 
         if not shift_clip:save(db) then
             print(string.format("ERROR: RippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
-            return false
+            return {success = false, error_message = "Failed to save downstream clip"}
         end
 
         ::continue_shift::
@@ -1742,6 +2242,12 @@ command_executors["RippleEdit"] = function(command)
         return ids
     end)())
 
+    -- For gap clips, store the calculated boundaries for deterministic replay
+    if is_gap_clip then
+        command:set_parameter("gap_start_time", original_start_time)
+        command:set_parameter("gap_duration", original_duration)
+    end
+
     print(string.format("✅ Ripple edit: trimmed %s edge by %dms, shifted %d downstream clips",
         edge_info.edge_type, delta_ms, #clips_to_shift))
 
@@ -1751,7 +2257,10 @@ end
 -- BatchRippleEdit: Trim multiple edges simultaneously with single timeline shift
 -- Prevents cascading shifts when multiple edges are selected
 command_executors["BatchRippleEdit"] = function(command)
-    print("Executing BatchRippleEdit command")
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing BatchRippleEdit command")
+    end
 
     local edge_infos = command:get_parameter("edge_infos")  -- Array of {clip_id, edge_type, track_id}
     local delta_ms = command:get_parameter("delta_ms")
@@ -1765,6 +2274,7 @@ command_executors["BatchRippleEdit"] = function(command)
     local Clip = require('models.clip')
     local original_states = {}
     local latest_ripple_time = 0
+    local preview_affected_clips = {}
 
     -- Phase 1: Trim all edges and find latest ripple point
     -- All edges must succeed or none - preserves relative timing
@@ -1790,9 +2300,20 @@ command_executors["BatchRippleEdit"] = function(command)
             return false
         end
 
-        if not clip:save(db) then
-            print(string.format("ERROR: BatchRippleEdit: Failed to save clip %s", clip.id:sub(1,8)))
-            return false
+        -- DRY RUN: Collect preview data
+        if dry_run then
+            table.insert(preview_affected_clips, {
+                clip_id = clip.id,
+                new_start_time = clip.start_time,
+                new_duration = clip.duration,
+                edge_type = edge_info.edge_type
+            })
+        else
+            -- EXECUTE: Save changes
+            if not clip:save(db) then
+                print(string.format("ERROR: BatchRippleEdit: Failed to save clip %s", clip.id:sub(1,8)))
+                return false
+            end
         end
 
         -- Track latest ripple point
@@ -1826,7 +2347,22 @@ command_executors["BatchRippleEdit"] = function(command)
         end
     end
 
-    -- Shift all downstream clips once
+    -- DRY RUN: Return preview data without executing
+    if dry_run then
+        local preview_shifted_clips = {}
+        for _, downstream_clip in ipairs(clips_to_shift) do
+            table.insert(preview_shifted_clips, {
+                clip_id = downstream_clip.id,
+                new_start_time = downstream_clip.start_time + delta_ms
+            })
+        end
+        return true, {
+            affected_clips = preview_affected_clips,
+            shifted_clips = preview_shifted_clips
+        }
+    end
+
+    -- EXECUTE: Shift all downstream clips once
     for _, downstream_clip in ipairs(clips_to_shift) do
         local shift_clip = Clip.load(downstream_clip.id, db)
         if not shift_clip then
@@ -2058,15 +2594,24 @@ function M.replay_events(sequence_id, target_sequence_number)
 
                 -- Move to parent
                 local parent = find_query:value(4)
-                if not parent and current_seq > start_sequence then
-                    -- Found NULL parent in middle of chain - data corruption!
-                    print(string.format("ERROR: Command %d has NULL parent - broken command chain detected!", current_seq))
-                    print(string.format("ERROR: This breaks event sourcing - cannot replay past this point"))
-                    print(string.format("HINT: Run repair_broken_parent_chains() to fix database integrity"))
-                    print(string.format("HINT: This bug was caused by executing commands when current_sequence_number was incorrectly nil"))
-                    break
+                -- Check for NULL parent (only error if not the first command)
+                if not parent then
+                    if current_seq == 1 then
+                        -- First command with NULL parent is valid
+                        current_seq = 0
+                    elseif current_seq > start_sequence then
+                        -- Found NULL parent in middle of chain - data corruption!
+                        print(string.format("ERROR: Command %d has NULL parent - broken command chain detected!", current_seq))
+                        print(string.format("ERROR: This breaks event sourcing - cannot replay past this point"))
+                        print(string.format("HINT: Run repair_broken_parent_chains() to fix database integrity"))
+                        print(string.format("HINT: This bug was caused by executing commands when current_sequence_number was incorrectly nil"))
+                        break
+                    else
+                        current_seq = 0
+                    end
+                else
+                    current_seq = parent
                 end
-                current_seq = parent or 0
             else
                 print(string.format("WARNING: Could not find command with sequence %d", current_seq))
                 break
@@ -2260,6 +2805,266 @@ function M.redo()
     else
         return {success = false, error_message = "Redo replay failed"}
     end
+end
+
+-- LinkClips: Create A/V sync relationship between clips
+-- clips parameter: array of {clip_id, role, time_offset?}
+command_executors["LinkClips"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing LinkClips command")
+    end
+
+    local clips_to_link = command:get_parameter("clips")
+
+    if not clips_to_link or #clips_to_link < 2 then
+        print("ERROR: LinkClips requires at least 2 clips")
+        return false
+    end
+
+    if dry_run then
+        return true  -- Preview is valid
+    end
+
+    local clip_links = require('core.clip_links')
+    local link_group_id, error_msg = clip_links.create_link_group(clips_to_link, db)
+
+    if not link_group_id then
+        print(string.format("ERROR: LinkClips failed: %s", error_msg or "unknown error"))
+        return false
+    end
+
+    -- Store link group ID for undo
+    command:set_parameter("link_group_id", link_group_id)
+
+    print(string.format("✅ Linked %d clips (group %s)", #clips_to_link, link_group_id:sub(1,8)))
+    return true
+end
+
+command_undoers["LinkClips"] = function(command)
+    local link_group_id = command:get_parameter("link_group_id")
+
+    if not link_group_id then
+        return false
+    end
+
+    -- Delete the entire link group
+    local query = db:prepare([[
+        DELETE FROM clip_links WHERE link_group_id = ?
+    ]])
+
+    if not query then
+        return false
+    end
+
+    query:bind_value(1, link_group_id)
+    local result = query:exec()
+    query:finalize()
+
+    return result
+end
+
+-- UnlinkClip: Remove a clip from its link group
+command_executors["UnlinkClip"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing UnlinkClip command")
+    end
+
+    local clip_id = command:get_parameter("clip_id")
+
+    if not clip_id then
+        print("ERROR: UnlinkClip missing clip_id")
+        return false
+    end
+
+    if dry_run then
+        return true
+    end
+
+    local clip_links = require('core.clip_links')
+
+    -- Save original link info for undo
+    local link_group = clip_links.get_link_group(clip_id, db)
+    if link_group then
+        command:set_parameter("original_link_group", link_group)
+
+        -- Find this clip's info in the group
+        for _, link_info in ipairs(link_group) do
+            if link_info.clip_id == clip_id then
+                command:set_parameter("original_role", link_info.role)
+                command:set_parameter("original_time_offset", link_info.time_offset)
+                break
+            end
+        end
+    end
+
+    local success = clip_links.unlink_clip(clip_id, db)
+
+    if success then
+        print(string.format("✅ Unlinked clip %s", clip_id:sub(1,8)))
+    else
+        print(string.format("ERROR: Failed to unlink clip %s", clip_id:sub(1,8)))
+    end
+
+    return success
+end
+
+command_undoers["UnlinkClip"] = function(command)
+    local clip_id = command:get_parameter("clip_id")
+    local original_link_group = command:get_parameter("original_link_group")
+
+    if not clip_id or not original_link_group or #original_link_group == 0 then
+        return true  -- Clip was not linked, nothing to restore
+    end
+
+    -- Restore the link
+    local link_group_id = nil
+    for _, link_info in ipairs(original_link_group) do
+        if link_info.clip_id ~= clip_id then
+            -- Find the existing link group ID from another clip
+            local query = db:prepare([[
+                SELECT link_group_id FROM clip_links WHERE clip_id = ? LIMIT 1
+            ]])
+            if query then
+                query:bind_value(1, link_info.clip_id)
+                if query:exec() and query:next() then
+                    link_group_id = query:value(0)
+                end
+                query:finalize()
+                if link_group_id then
+                    break
+                end
+            end
+        end
+    end
+
+    if not link_group_id then
+        -- The entire link group was deleted, recreate it
+        local uuid = require('uuid')
+        link_group_id = uuid.generate()
+    end
+
+    -- Re-insert this clip into the link group
+    local role = command:get_parameter("original_role")
+    local time_offset = command:get_parameter("original_time_offset") or 0
+
+    local insert_query = db:prepare([[
+        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+        VALUES (?, ?, ?, ?, 1)
+    ]])
+
+    if not insert_query then
+        return false
+    end
+
+    insert_query:bind_value(1, link_group_id)
+    insert_query:bind_value(2, clip_id)
+    insert_query:bind_value(3, role)
+    insert_query:bind_value(4, time_offset)
+
+    local result = insert_query:exec()
+    insert_query:finalize()
+
+    return result
+end
+
+-- ImportFCP7XML: Import Final Cut Pro 7 XML sequence
+command_executors["ImportFCP7XML"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing ImportFCP7XML command")
+    end
+
+    local xml_path = command:get_parameter("xml_path")
+    local project_id = command:get_parameter("project_id") or "default_project"
+
+    if not xml_path then
+        print("ERROR: ImportFCP7XML missing xml_path")
+        return false
+    end
+
+    if dry_run then
+        return true  -- Validation would happen here
+    end
+
+    local fcp7_importer = require('importers.fcp7_xml_importer')
+
+    -- Parse XML
+    print(string.format("Parsing FCP7 XML: %s", xml_path))
+    local parse_result = fcp7_importer.import_xml(xml_path, project_id)
+
+    if not parse_result.success then
+        for _, error_msg in ipairs(parse_result.errors) do
+            print(string.format("ERROR: %s", error_msg))
+        end
+        return false
+    end
+
+    print(string.format("Found %d sequence(s)", #parse_result.sequences))
+
+    -- Create entities in database
+    local create_result = fcp7_importer.create_entities(parse_result, db, project_id)
+
+    if not create_result.success then
+        print(string.format("ERROR: %s", create_result.error or "Failed to create entities"))
+        return false
+    end
+
+    -- Store created IDs for undo
+    command:set_parameter("created_sequence_ids", create_result.sequence_ids)
+    command:set_parameter("created_track_ids", create_result.track_ids)
+    command:set_parameter("created_clip_ids", create_result.clip_ids)
+
+    print(string.format("✅ Imported %d sequence(s), %d track(s), %d clip(s)",
+        #create_result.sequence_ids,
+        #create_result.track_ids,
+        #create_result.clip_ids))
+
+    return true
+end
+
+command_undoers["ImportFCP7XML"] = function(command)
+    -- Delete all created entities
+    local sequence_ids = command:get_parameter("created_sequence_ids") or {}
+    local track_ids = command:get_parameter("created_track_ids") or {}
+    local clip_ids = command:get_parameter("created_clip_ids") or {}
+
+    -- Delete in reverse order (clips, tracks, sequences)
+    for _, clip_id in ipairs(clip_ids) do
+        local delete_query = db:prepare("DELETE FROM clips WHERE id = ?")
+        if delete_query then
+            delete_query:bind_value(1, clip_id)
+            delete_query:exec()
+            delete_query:finalize()
+        end
+    end
+
+    for _, track_id in ipairs(track_ids) do
+        local delete_query = db:prepare("DELETE FROM tracks WHERE id = ?")
+        if delete_query then
+            delete_query:bind_value(1, track_id)
+            delete_query:exec()
+            delete_query:finalize()
+        end
+    end
+
+    for _, sequence_id in ipairs(sequence_ids) do
+        local delete_query = db:prepare("DELETE FROM sequences WHERE id = ?")
+        if delete_query then
+            delete_query:bind_value(1, sequence_id)
+            delete_query:exec()
+            delete_query:finalize()
+        end
+    end
+
+    print("✅ Import undone - deleted all imported entities")
+    return true
+end
+
+-- Get the executor function for a command type (used for dry-run preview)
+function M.get_executor(command_type)
+    return command_executors[command_type]
 end
 
 return M

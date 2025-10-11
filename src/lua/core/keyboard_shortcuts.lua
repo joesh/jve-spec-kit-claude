@@ -428,6 +428,25 @@ function keyboard_shortcuts.handle_key(event)
         if timeline_state and command_manager then
             local selected_clips = timeline_state.get_selected_clips()
             if #selected_clips > 0 then
+                -- Check if all clips are on the same track
+                local first_track_id = selected_clips[1].track_id
+                local all_same_track = true
+                print(string.format("DEBUG: Alt+Up - checking %d clips, first on track %s",
+                    #selected_clips, first_track_id))
+                for i, clip in ipairs(selected_clips) do
+                    print(string.format("  Clip %d: %s on track %s",
+                        i, clip.id:sub(1,8), clip.track_id))
+                    if clip.track_id ~= first_track_id then
+                        all_same_track = false
+                        break
+                    end
+                end
+
+                if not all_same_track then
+                    print("Cannot move clips: selection spans multiple tracks")
+                    return true
+                end
+
                 -- Store clip IDs before moving (clip objects will become stale)
                 local clip_ids = {}
                 for _, clip in ipairs(selected_clips) do
@@ -518,6 +537,25 @@ function keyboard_shortcuts.handle_key(event)
         if timeline_state and command_manager then
             local selected_clips = timeline_state.get_selected_clips()
             if #selected_clips > 0 then
+                -- Check if all clips are on the same track
+                local first_track_id = selected_clips[1].track_id
+                local all_same_track = true
+                print(string.format("DEBUG: Alt+Down - checking %d clips, first on track %s",
+                    #selected_clips, first_track_id))
+                for i, clip in ipairs(selected_clips) do
+                    print(string.format("  Clip %d: %s on track %s",
+                        i, clip.id:sub(1,8), clip.track_id))
+                    if clip.track_id ~= first_track_id then
+                        all_same_track = false
+                        break
+                    end
+                end
+
+                if not all_same_track then
+                    print("Cannot move clips: selection spans multiple tracks")
+                    return true
+                end
+
                 -- Store clip IDs before moving (clip objects will become stale)
                 local clip_ids = {}
                 for _, clip in ipairs(selected_clips) do

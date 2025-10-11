@@ -66,6 +66,7 @@ int lua_set_focus_policy(lua_State* L);
 int lua_set_focus(lua_State* L);
 int lua_set_global_key_handler(lua_State* L);
 int lua_set_focus_handler(lua_State* L);
+int lua_set_widget_cursor(lua_State* L);
 
 // Helper function to convert Lua table to QJsonValue
 static QJsonValue luaTableToJsonValue(lua_State* L, int index);
@@ -515,6 +516,8 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_widget_attribute");
     lua_pushcfunction(L, lua_set_widget_stylesheet);
     lua_setglobal(L, "qt_set_widget_stylesheet");
+    lua_pushcfunction(L, lua_set_widget_cursor);
+    lua_setglobal(L, "qt_set_widget_cursor");
     lua_pushcfunction(L, lua_create_single_shot_timer);
     lua_setglobal(L, "qt_create_single_shot_timer");
     lua_pushcfunction(L, lua_set_scroll_area_alignment);
@@ -820,6 +823,43 @@ int lua_set_widget_stylesheet(lua_State* L)
     }
 
     widget->setStyleSheet(QString::fromUtf8(stylesheet));
+    return 0;
+}
+
+// Set widget cursor
+// Parameters: widget, cursor_type (string: "arrow", "hand", "size_horz", "size_vert", "cross")
+int lua_set_widget_cursor(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* cursor_type = luaL_checkstring(L, 2);
+
+    if (!widget) {
+        return luaL_error(L, "qt_set_widget_cursor: widget required");
+    }
+
+    Qt::CursorShape shape = Qt::ArrowCursor;  // Default
+
+    if (strcmp(cursor_type, "arrow") == 0) {
+        shape = Qt::ArrowCursor;
+    } else if (strcmp(cursor_type, "hand") == 0) {
+        shape = Qt::PointingHandCursor;
+    } else if (strcmp(cursor_type, "size_horz") == 0) {
+        shape = Qt::SizeHorCursor;
+    } else if (strcmp(cursor_type, "size_vert") == 0) {
+        shape = Qt::SizeVerCursor;
+    } else if (strcmp(cursor_type, "split_h") == 0) {
+        shape = Qt::SplitHCursor;  // Horizontal splitter cursor (for edit points)
+    } else if (strcmp(cursor_type, "split_v") == 0) {
+        shape = Qt::SplitVCursor;
+    } else if (strcmp(cursor_type, "cross") == 0) {
+        shape = Qt::CrossCursor;
+    } else if (strcmp(cursor_type, "ibeam") == 0) {
+        shape = Qt::IBeamCursor;
+    } else {
+        return luaL_error(L, "qt_set_widget_cursor: unknown cursor type '%s'", cursor_type);
+    }
+
+    widget->setCursor(QCursor(shape));
     return 0;
 }
 

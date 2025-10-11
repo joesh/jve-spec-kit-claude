@@ -97,12 +97,30 @@ CREATE TABLE IF NOT EXISTS properties (
     property_value TEXT NOT NULL,           -- JSON value
     property_type TEXT NOT NULL CHECK(property_type IN ('STRING', 'NUMBER', 'BOOLEAN', 'COLOR', 'ENUM')),
     default_value TEXT NOT NULL,            -- JSON default value
-    
+
     FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE CASCADE,
-    
+
     -- One property value per clip per property name
     UNIQUE(clip_id, property_name)
 );
+
+-- Clip Links table: A/V sync relationships between clips
+-- A link group represents clips that move/trim together (e.g., 1 video + 2 audio channels)
+CREATE TABLE IF NOT EXISTS clip_links (
+    link_group_id TEXT NOT NULL,            -- Shared ID for all clips in the link group
+    clip_id TEXT NOT NULL,                  -- Clip that is part of this link group
+    role TEXT NOT NULL CHECK(role IN ('VIDEO', 'AUDIO_LEFT', 'AUDIO_RIGHT', 'AUDIO_MONO', 'AUDIO_CUSTOM')),
+    time_offset INTEGER NOT NULL DEFAULT 0, -- Time offset from link anchor point (for dual-system sound)
+    enabled BOOLEAN NOT NULL DEFAULT 1,     -- Temporarily disable link without breaking it
+
+    PRIMARY KEY (link_group_id, clip_id),
+    FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE CASCADE
+);
+
+-- Index for finding all clips in a link group
+CREATE INDEX IF NOT EXISTS idx_clip_links_group ON clip_links(link_group_id);
+-- Index for finding the link group of a specific clip
+CREATE INDEX IF NOT EXISTS idx_clip_links_clip ON clip_links(clip_id);
 
 -- Commands table: Logged editing operations for deterministic replay
 CREATE TABLE IF NOT EXISTS commands (

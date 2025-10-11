@@ -30,6 +30,10 @@ M.dimensions = {
     track_header_width = 150,
 }
 
+-- Version tracking for stale data detection
+-- Incremented whenever clips or tracks are reloaded from database
+local state_version = 0
+
 -- Centralized state
 local state = {
     -- Data
@@ -167,7 +171,14 @@ end
 function M.reload_clips()
     local sequence_id = state.sequence_id or "default_sequence"
     state.clips = db.load_clips(sequence_id)
-    print(string.format("Reloaded %d clips from database", #state.clips))
+
+    -- Increment version and stamp all clips
+    state_version = state_version + 1
+    for _, clip in ipairs(state.clips) do
+        clip._version = state_version
+    end
+
+    print(string.format("Reloaded %d clips from database (version %d)", #state.clips, state_version))
     notify_listeners()
 end
 
@@ -210,8 +221,40 @@ function M.get_audio_tracks()
     return audio_tracks
 end
 
+-- Get all clips (WARNING: returned objects become stale after next reload_clips())
 function M.get_clips()
     return state.clips
+end
+
+-- Get clip by ID (always returns fresh data from current state)
+function M.get_clip_by_id(clip_id)
+    for _, clip in ipairs(state.clips) do
+        if clip.id == clip_id then
+            return clip
+        end
+    end
+    return nil
+end
+
+-- Validate that a clip object is still fresh (not stale)
+-- Returns: success (bool), error_message (string or nil)
+function M.validate_clip_fresh(clip)
+    if not clip then
+        return false, "Clip is nil"
+    end
+    if not clip._version then
+        return false, "Clip has no version stamp (created before versioning enabled)"
+    end
+    if clip._version ~= state_version then
+        return false, string.format("Stale clip data (clip version %d, current state version %d)",
+            clip._version, state_version)
+    end
+    return true
+end
+
+-- Get current state version (for debugging)
+function M.get_state_version()
+    return state_version
 end
 
 function M.get_viewport_start_time()
