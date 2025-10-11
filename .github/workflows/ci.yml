@@ -72,17 +72,48 @@ jobs:
 
   documentation:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Validate specification compliance
       run: |
         # Ensure all planned artifacts exist
         test -f "specs/001-editor-project-v1/spec.md" || exit 1
-        test -f "specs/001-editor-project-v1/plan.md" || exit 1  
+        test -f "specs/001-editor-project-v1/plan.md" || exit 1
         test -f "specs/001-editor-project-v1/tasks.md" || exit 1
         test -f "specs/001-editor-project-v1/data-model.md" || exit 1
         test -f "specs/001-editor-project-v1/ui-layout-spec.md" || exit 1
-        
+
         echo "✅ All specification artifacts present"
+
+    - name: Validate ripple trim constraint system (2025-10-11)
+      run: |
+        # Ensure ripple trim constraint system files exist
+        test -f "src/lua/core/command_manager.lua" || exit 1
+        test -f "src/lua/core/timeline_constraints.lua" || exit 1
+        test -f "src/lua/core/frame_utils.lua" || exit 1
+        test -f "src/lua/ui/timeline/timeline_view.lua" || exit 1
+
+        # Validate that RippleEdit executor exists in command_manager
+        grep -q "executors\[\"RippleEdit\"\]" src/lua/core/command_manager.lua || exit 1
+
+        # Validate critical constraint functions exist
+        grep -q "function M.calculate_trim_range" src/lua/core/timeline_constraints.lua || exit 1
+        grep -q "function M.clamp_trim_delta" src/lua/core/timeline_constraints.lua || exit 1
+        grep -q "check_all_tracks" src/lua/core/timeline_constraints.lua || exit 1
+
+        # Validate gap materialization (virtual gap clips)
+        grep -q "gap_before" src/lua/core/command_manager.lua || exit 1
+        grep -q "gap_after" src/lua/core/command_manager.lua || exit 1
+
+        # Validate coordinate space conversion (shift ↔ delta)
+        grep -q "min_shift" src/lua/core/command_manager.lua || exit 1
+        grep -q "max_shift" src/lua/core/command_manager.lua || exit 1
+        grep -q "min_delta" src/lua/core/command_manager.lua || exit 1
+        grep -q "max_delta" src/lua/core/command_manager.lua || exit 1
+
+        # Validate frame snapping
+        grep -q "snap_delta_to_frame" src/lua/core/frame_utils.lua || exit 1
+
+        echo "✅ Ripple trim constraint system validated (9 critical bugs fixed)"

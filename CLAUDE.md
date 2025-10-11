@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-09 (Professional Edge Selection for NLE Trimming)
+Last updated: 2025-10-11 (Ripple Trim Constraint System)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -72,6 +72,7 @@ make clean          # Clean build artifacts
 - Inspector notification on startup with restored selection (timeline_panel.lua)
 - Direct clip modifications now blocked to enforce event sourcing (timeline_state.lua)
 - Edge selection system with bracket indicators `[` `]` `][` for trimming operations
+- Ripple trim constraint system - 9 critical bugs fixed for proper gap/overlap handling
 
 ## Current Issues (VERIFIED 2025-10-01)
 
@@ -99,6 +100,183 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-10: FCP7 XML Import System**
+- Implemented complete Final Cut Pro 7 (XMEML) import capability
+  - Industry-standard interchange format for timeline migration
+  - Parses sequences, tracks, clips, and media references
+  - Handles rational time notation (900/30 frames) with frame-accurate conversion
+  - Supports both NTSC (29.97fps) and integer frame rates
+- FCP7 XML parser (fcp7_xml_importer.lua)
+  - `parse_time()`: Converts FCP7 rational notation to milliseconds
+  - `extract_frame_rate()`: Handles timebase with NTSC flag detection
+  - `parse_file()`: Extracts media references with pathurl decoding
+  - `parse_clipitem()`: Maps clip in/out points and timeline positions
+  - `parse_track()`: Processes video/audio tracks with enabled/locked states
+  - `parse_sequence()`: Complete sequence hierarchy parsing
+- Data model mapping
+  - FCP7 `<clipitem>` → JVE Clip with start_time, duration, source_in/out
+  - FCP7 `<track>` → JVE Track with VIDEO/AUDIO type and index
+  - FCP7 `<sequence>` → JVE Sequence with frame rate, dimensions
+  - URL decoding: `file://localhost/path%20with%20spaces.mov` → `/path with spaces.mov`
+- Command integration
+  - **ImportFCP7XML** command with full undo/redo
+  - Creates sequences, tracks, clips in database
+  - Stores created entity IDs for rollback
+  - Undo deletes all imported entities in correct order
+- Format support
+  - Root `<xmeml>` validation
+  - Direct sequence import
+  - Project container with nested sequences
+  - Video and audio track separation
+  - Clip enable/disable state preservation
+- Files: src/lua/importers/fcp7_xml_importer.lua, src/lua/core/command_manager.lua
+
+**2025-10-10: Premiere-Style Keyboard Customization Dialog**
+- Implemented complete keyboard shortcut customization system matching Adobe Premiere Pro's design
+  - Two-pane layout: searchable command tree (left) + shortcut editor (right)
+  - Live search filtering with category expansion
+  - Multiple shortcuts per command (professional feature)
+  - Conflict detection with red warning labels
+  - Preset management (save/load/share custom configurations)
+- Keyboard shortcut registry (keyboard_shortcut_registry.lua)
+  - Central command registry with categories, descriptions, default shortcuts
+  - Platform-agnostic shortcut notation ("Cmd+Z" → Meta on Mac, Ctrl on Windows)
+  - `register_command()`: Add commands to registry
+  - `assign_shortcut()`: Map key combos to commands with conflict checking
+  - `find_conflict()`: Detect duplicate assignments
+  - `save/load_preset()`: Manage custom shortcut sets
+  - `format_shortcut()`: Human-readable display (Cmd+Shift+Z)
+- Pure Lua dialog implementation (keyboard_customization_dialog.lua) ✅ **ARCHITECTURE COMPLIANT**
+  - Uses existing Qt bindings (CREATE_TREE, CREATE_BUTTON, CREATE_LAYOUT, etc.)
+  - No C++ required - fully customizable by users without recompiling
+  - Two-pane splitter layout with command tree and shortcuts panel
+  - Live search filtering (when Qt binding available)
+  - Command tree with category grouping and expansion
+  - Shortcuts list showing all assigned shortcuts per command
+  - Preset combo box with Default, Premiere Pro, Final Cut Pro presets
+  - Add/Remove/Clear buttons for shortcut management
+  - Apply/Cancel/OK buttons with unsaved changes tracking
+- Features
+  - Search commands in real-time (filters tree as you type)
+  - Assign multiple shortcuts to one command
+  - Remove/clear shortcuts individually or all at once
+  - Save custom presets with names
+  - Reset to defaults with confirmation
+  - Platform-aware modifier display (Cmd on Mac, Ctrl on Windows/Linux)
+- **Architectural win**: Refactored from C++ to pure Lua following project principles
+  - Users can now customize dialog layout/behavior in `src/lua/ui/keyboard_customization_dialog.lua`
+  - No recompilation needed for UI changes
+  - Follows same pattern as timeline (C++ bindings + Lua UI)
+- Files: src/lua/core/keyboard_shortcut_registry.lua, src/lua/ui/keyboard_customization_dialog.lua
+
+**2025-10-10: Linked Clips and A/V Sync System**
+- Implemented complete linked clip system for A/V synchronization
+  - New `clip_links` table stores link group relationships
+  - Link groups support multiple clips (1 video + N audio channels)
+  - Role-based linking: VIDEO, AUDIO_LEFT, AUDIO_RIGHT, AUDIO_MONO, AUDIO_CUSTOM
+  - Time offset support for dual-system sound workflows
+  - Temporary enable/disable without breaking links
+- Link management module (clip_links.lua)
+  - `get_link_group()`: Find all clips in same link group
+  - `create_link_group()`: Establish A/V sync relationships
+  - `unlink_clip()`: Remove clip from group (auto-cleanup if ≤1 clips remain)
+  - `enable/disable_link()`: Temporarily suspend link behavior
+  - `calculate_anchor_time()`: Find reference point for maintaining sync
+- Command system integration
+  - **LinkClips** command: Create link groups with full undo/redo
+  - **UnlinkClip** command: Break links with restoration support
+  - **Nudge** command: Automatically moves linked clips together
+    - Expands selection to include all clips in link groups
+    - Shows count: "Nudged 1 clip(s) + 2 linked clip(s) by 33ms"
+- Database schema updates
+  - `clip_links` table with composite primary key (link_group_id, clip_id)
+  - Indexed for fast group lookups and reverse lookups
+  - Foreign key cascade delete maintains referential integrity
+- Files: schema.sql, src/lua/core/clip_links.lua, src/lua/core/command_manager.lua
+
+**2025-10-10: Timeline Constraints and Frame-Accurate Editing**
+- Implemented comprehensive collision detection system (timeline_constraints.lua)
+  - `calculate_trim_range()`: Determines min/max delta for edge trims based on adjacent clips, media boundaries, minimum duration
+  - `calculate_move_range()`: Determines valid time range for clip moves
+  - `clamp_trim_delta()`: Automatically constrains and snaps trim operations to valid range
+  - `check_*_collision()`: Validates operations before execution
+- Frame boundary enforcement (frame_utils.lua)
+  - All video editing operations now snap to frame boundaries (33.33ms at 30fps)
+  - `snap_to_frame()`: Rounds absolute times to nearest frame
+  - `snap_delta_to_frame()`: Rounds relative changes to frame multiples
+  - `format_timecode()` / `parse_timecode()`: Professional timecode string handling
+  - `validate_clip_alignment()`: Checks clip parameters are frame-aligned
+- Constraint types enforced:
+  - ✅ Adjacent clips: Cannot trim/move into another clip
+  - ✅ Minimum duration: Clips must be ≥1ms
+  - ✅ Timeline boundaries: Clips cannot start before t=0
+  - ✅ Media boundaries: Cannot trim beyond source_in=0
+  - ✅ Frame alignment: All operations snap to frame boundaries
+- RippleEdit command now clamps and snaps delta before execution
+- Insert command snaps all parameters (insert_time, duration, source_in/out) to frames
+- Warning messages indicate reason for adjustment (collision vs frame snap)
+- Files: src/lua/core/timeline_constraints.lua, src/lua/core/frame_utils.lua, src/lua/core/command_manager.lua
+
+**2025-10-11: Ripple Trim Constraint System - Complete Fix**
+- Fixed 9 critical bugs in ripple edit constraint calculation (RippleEdit executor in command_manager.lua)
+
+**Bug 1: Gap Ripple Point Calculation**
+  - Problem: Gap_before used left edge instead of right edge for ripple point
+  - Impact: All clips marked as "shifting" with no stationary clips → infinite constraints
+  - Fix: gap_after uses clip.start_time (left edge), gap_before uses clip.start_time + clip.duration (right edge)
+
+**Bug 2: Stationary Clip Detection**
+  - Problem: Used `c.start_time + c.duration <= ripple_time` instead of checking where clip starts
+  - Impact: Clips extending past ripple point weren't considered stationary
+  - Fix: Changed to `c.start_time < ripple_time` - clips are stationary if they start before ripple point
+
+**Bug 3: Cross-Track Collision Detection**
+  - Problem: Constraint check was `other.track_id == clip.track_id`, but ripple affects ALL tracks
+  - Impact: Clips on different tracks allowed to overlap during ripple operations
+  - Fix: Added `check_all_tracks` parameter to timeline_constraints.lua, passed as `true` for ripple operations
+
+**Bug 4: Overlapping Clip Constraints**
+  - Problem: Normal constraint logic doesn't handle negative gaps (overlaps)
+  - Impact: Contradictory constraints (min_shift = 567, max_shift = -567) when clips already overlapped
+  - Fix: Added overlap handling - blocks LEFT shift (increases overlap), allows RIGHT shift (fixes overlap)
+
+**Bug 5: Touching Clips Blocked Rightward Movement**
+  - Problem: When clips touched (gap=0), constraint set max_shift = 0, preventing separation
+  - Impact: Couldn't create space between touching clips
+  - Fix: Removed max_shift constraint from stationary clips - only min_shift (leftward) is constrained
+
+**Bug 6: Command Return Value Type Mismatch**
+  - Problem: Error cases returned `false` instead of `{success = false, error_message = "..."}`
+  - Impact: Drag operation failed entirely, rubber band disappeared instead of constraining to limit
+  - Fix: Changed all 6 error returns (lines 1913, 1927, 1982, 2121, 2188, 2204) to return proper result tables
+
+**Bug 7: Coordinate Space Mismatch (Shift vs Delta)**
+  - Problem: Constraint code calculated limits in shift space but applied them in delta space
+  - Impact: For in-point edits where shift = -delta, constraints didn't limit drag correctly
+  - Fix: Added conversion logic - for in-point, flip signs (min_shift → max_delta, max_shift → min_delta)
+
+**Bug 8: Frame Snapping Exceeded Constraints**
+  - Problem: Clamp to 1366ms, then snap to 1367ms, exceeding constraint limit
+  - Impact: Operation failed because snapped value created invalid clip duration
+  - Fix: Added re-clamping after snapping to ensure frame-snapped value doesn't exceed constraints
+
+**Bug 9: Missing Gap Duration Constraint**
+  - Problem: Gap constraint checked collisions but not gap's own minimum duration (must be ≥1ms)
+  - Impact: A 1366ms gap allowed delta=1366ms which would make duration=0ms (invalid)
+  - Fix: Added `max_closure_shift = -(clip.duration - 1)` constraint before delta conversion
+
+**Technical Concepts Implemented:**
+  - Gap Materialization: Virtual "gap clip" objects for constraint calculations on empty timeline spaces
+  - Deterministic Replay: Clamped_delta_ms and gap boundaries stored for exact replay
+  - Multi-Track Ripple: All downstream clips shift together across all tracks
+  - Coordinate Space Conversion: Shift space (clip movement) ↔ Delta space (edge drag amount)
+  - Constraint Composition: Adjacent clips, duration limits, media boundaries, timeline boundaries
+
+**Files Modified:**
+  - src/lua/core/command_manager.lua (RippleEdit executor with 9 constraint fixes)
+  - src/lua/core/timeline_constraints.lua (added check_all_tracks parameter)
+  - src/lua/ui/timeline/timeline_view.lua (improved error logging)
 
 **2025-10-09: Professional Edge Selection for NLE Trimming**
 - Implemented complete edge selection system following FCP7/Premiere/Resolve patterns
@@ -187,6 +365,7 @@ The previous documentation contained extensive false "milestone" claims about co
 3. Fix test system build issues
 
 ## Commit History
+- 2025-10-11: Fix 9 critical ripple trim constraint bugs - gap calculation, cross-track collisions, overlap handling
 - 2025-10-09: Implement professional edge selection system for NLE trimming operations
 - 2025-10-09: Persist undo position across sessions and enforce event sourcing discipline
 - 2025-10-09: Implement tree-based undo/redo with selection preservation for branching command history
