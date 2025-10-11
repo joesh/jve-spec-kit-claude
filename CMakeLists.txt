@@ -78,8 +78,9 @@ set(CORE_SOURCES
 set(UI_SOURCES
     src/ui/timeline/scriptable_timeline.cpp
     # Removed C++ UI implementations that violate architecture (should be Lua):
+    # src/ui/keyboard_customization_dialog.cpp  (MOVED TO LUA - src/lua/ui/)
     # src/ui/selection/selection_manager.cpp
-    # src/ui/timeline/timeline_panel.cpp  
+    # src/ui/timeline/timeline_panel.cpp
     # src/ui/input/keyboard_shortcuts.cpp
     # src/ui/common/context_menu_manager.cpp
     # src/ui/common/ui_command_bridge.cpp
