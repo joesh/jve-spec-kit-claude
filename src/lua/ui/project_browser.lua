@@ -92,11 +92,14 @@ function M.create()
         }
     ]])
 
-    -- Set tree columns (Resolve style: Clip Name, Date Created, Date Modified)
-    qt_constants.CONTROL.SET_TREE_HEADERS(tree, {"Clip Name", "Date Created", "Date Modified"})
-    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 0, 150)
-    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 1, 85)
-    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 2, 85)
+    -- Set tree columns (Professional NLE style: Name, Duration, Resolution, FPS, Codec, Date Modified)
+    qt_constants.CONTROL.SET_TREE_HEADERS(tree, {"Clip Name", "Duration", "Resolution", "FPS", "Codec", "Date Modified"})
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 0, 180)  -- Clip Name
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 1, 80)   -- Duration
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 2, 80)   -- Resolution
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 3, 50)   -- FPS
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 4, 60)   -- Codec
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 5, 100)  -- Date Modified
 
     -- Set minimal indentation like Premiere (just enough for nested items)
     qt_constants.CONTROL.SET_TREE_INDENTATION(tree, 12)
@@ -121,17 +124,43 @@ function M.create()
     -- Build a map of bin_id -> tree_index for hierarchy
     local bin_tree_map = {}
 
+    -- Helper to format duration for display (ms → HH:MM:SS or MM:SS)
+    local function format_duration(duration_ms)
+        if not duration_ms or duration_ms == 0 then
+            return "--:--"
+        end
+
+        local total_seconds = math.floor(duration_ms / 1000)
+        local hours = math.floor(total_seconds / 3600)
+        local minutes = math.floor((total_seconds % 3600) / 60)
+        local seconds = total_seconds % 60
+
+        if hours > 0 then
+            return string.format("%d:%02d:%02d", hours, minutes, seconds)
+        else
+            return string.format("%d:%02d", minutes, seconds)
+        end
+    end
+
+    -- Helper to format timestamp for display
+    local function format_date(timestamp)
+        if not timestamp or timestamp == 0 then
+            return ""
+        end
+        return os.date("%b %d %Y", timestamp)
+    end
+
     -- Helper function to add bins recursively
     local function add_bin_to_tree(bin, parent_tree_idx)
         local display_name = "▶ " .. bin.name
         local tree_idx
 
         if parent_tree_idx then
-            -- Add as child of parent bin
-            tree_idx = qt_constants.CONTROL.ADD_TREE_CHILD_ITEM(tree, parent_tree_idx, {display_name, "", ""})
+            -- Add as child of parent bin (bins don't have metadata columns)
+            tree_idx = qt_constants.CONTROL.ADD_TREE_CHILD_ITEM(tree, parent_tree_idx, {display_name, "", "", "", "", ""})
         else
             -- Add as root level bin
-            tree_idx = qt_constants.CONTROL.ADD_TREE_ITEM(tree, {display_name, "", ""})
+            tree_idx = qt_constants.CONTROL.ADD_TREE_ITEM(tree, {display_name, "", "", "", "", ""})
         end
 
         bin_tree_map[bin.id] = tree_idx
@@ -156,10 +185,23 @@ function M.create()
     for _, media in ipairs(media_items) do
         local bin_tag = get_bin_tag(media)
         if not bin_tag then
-            local date_str = "Mon Aug 22"  -- TODO: Get actual file date
+            -- Extract real metadata from Media model
+            local duration_str = format_duration(media.duration)
+            local resolution_str = (media.width and media.height and media.width > 0)
+                and string.format("%dx%d", media.width, media.height)
+                or ""
+            local fps_str = (media.frame_rate and media.frame_rate > 0)
+                and string.format("%.2f", media.frame_rate)
+                or ""
+            local codec_str = media.codec or ""
+            local date_str = format_date(media.modified_at or media.created_at)
+
             qt_constants.CONTROL.ADD_TREE_ITEM(tree, {
-                media.file_name,
-                date_str,
+                media.name or media.file_name,
+                duration_str,
+                resolution_str,
+                fps_str,
+                codec_str,
                 date_str
             })
         end
@@ -191,10 +233,23 @@ function M.create()
                 local bin_path = table.concat(bin_path_parts, "/")
 
                 if bin_path == bin_tag and bin_tree_map[bin.id] then
-                    local date_str = "Mon Aug 22"  -- TODO: Get actual file date
+                    -- Extract real metadata from Media model
+                    local duration_str = format_duration(media.duration)
+                    local resolution_str = (media.width and media.height and media.width > 0)
+                        and string.format("%dx%d", media.width, media.height)
+                        or ""
+                    local fps_str = (media.frame_rate and media.frame_rate > 0)
+                        and string.format("%.2f", media.frame_rate)
+                        or ""
+                    local codec_str = media.codec or ""
+                    local date_str = format_date(media.modified_at or media.created_at)
+
                     qt_constants.CONTROL.ADD_TREE_CHILD_ITEM(tree, bin_tree_map[bin.id], {
-                        media.file_name,
-                        date_str,
+                        media.name or media.file_name,
+                        duration_str,
+                        resolution_str,
+                        fps_str,
+                        codec_str,
                         date_str
                     })
                     break

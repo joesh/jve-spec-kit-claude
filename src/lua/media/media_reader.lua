@@ -190,6 +190,14 @@ function M.import_media(file_path, db, project_id)
     -- Extract filename from path
     local filename = file_path:match("([^/\\]+)$") or file_path
 
+    -- Determine primary codec (video codec if present, otherwise audio codec)
+    local primary_codec = ""
+    if metadata.video and metadata.video.codec then
+        primary_codec = metadata.video.codec
+    elseif metadata.audio and metadata.audio.codec then
+        primary_codec = metadata.audio.codec
+    end
+
     -- Create Media record
     local Media = require("models.media")
     local media = Media.create({
@@ -202,6 +210,7 @@ function M.import_media(file_path, db, project_id)
         width = metadata.video and metadata.video.width or 0,
         height = metadata.video and metadata.video.height or 0,
         audio_channels = metadata.audio and metadata.audio.channels or 0,
+        codec = primary_codec,
         created_at = os.time(),
         modified_at = os.time()
     })

@@ -64,14 +64,22 @@ CREATE TABLE IF NOT EXISTS tracks (
 -- Media table: Source media file references and metadata
 CREATE TABLE IF NOT EXISTS media (
     id TEXT PRIMARY KEY,                    -- UUID
+    project_id TEXT NOT NULL,               -- Project ownership
+    name TEXT NOT NULL,                     -- Display name (can be renamed)
     file_path TEXT NOT NULL,                -- Absolute path to source file
-    file_name TEXT NOT NULL,                -- Original filename
-    duration INTEGER NOT NULL CHECK(duration > 0),
-    frame_rate REAL NOT NULL CHECK(frame_rate > 0),
-    metadata TEXT DEFAULT '{}',             -- JSON technical metadata (codec, resolution, etc.)
-    
+    duration INTEGER NOT NULL CHECK(duration > 0),  -- Duration in milliseconds
+    frame_rate REAL NOT NULL CHECK(frame_rate >= 0),  -- 0 for audio-only files
+    width INTEGER DEFAULT 0,                -- Video width (0 for audio-only)
+    height INTEGER DEFAULT 0,               -- Video height (0 for audio-only)
+    audio_channels INTEGER DEFAULT 0,       -- Number of audio channels (0 for video-only)
+    codec TEXT DEFAULT '',                  -- Primary codec (e.g., "h264", "aac")
+    created_at INTEGER NOT NULL,            -- Unix timestamp
+    modified_at INTEGER NOT NULL,           -- Unix timestamp
+    metadata TEXT DEFAULT '{}',             -- Additional JSON metadata (bitrate, color space, etc.)
+
     -- File path should be unique per project (handled at application level)
-    UNIQUE(file_path)
+    UNIQUE(file_path),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
 -- Clips table: Media references with timeline position and properties
