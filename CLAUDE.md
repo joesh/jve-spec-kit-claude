@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-12 (Media Reading, Stub Removal, Gap Materialization)
+Last updated: 2025-10-12 (BatchCommand Atomic Undo Integration)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -100,6 +100,26 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-12: BatchCommand Atomic Undo System**
+- Implemented BatchCommand wrapper for multi-clip operations
+  - Single undo entry for editing N clips (professional NLE behavior)
+  - JSON-based command spec format for flexibility
+  - Automatic rollback if any command fails
+  - Undoer reverses commands in correct order
+- Inspector multi-edit integration
+  - Editing 10 clips now produces 1 undo entry instead of 10
+  - Message: "Batch updated N clips: property = value"
+  - Cleaner undo history for professional workflow
+- Delete key shortcut integration
+  - Deleting N clips produces single undo entry
+  - Message: "Deleted N clips (single undo)"
+  - Undo restores all clips at once
+- CI validation added for BatchCommand system
+  - Verifies executor/undoer exist
+  - Checks JSON parsing and rollback mechanism
+  - Confirms inspector and Delete key integration
+- Files: src/lua/core/command_manager.lua, src/lua/ui/inspector/view.lua, src/lua/core/keyboard_shortcuts.lua
 
 **2025-10-12: Media Reading System & Architectural Cleanup**
 - **FFprobe Integration with Proper JSON Parsing**
