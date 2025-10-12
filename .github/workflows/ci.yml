@@ -117,3 +117,55 @@ jobs:
         grep -q "snap_delta_to_frame" src/lua/core/frame_utils.lua || exit 1
 
         echo "✅ Ripple trim constraint system validated (9 critical bugs fixed)"
+
+    - name: Run ripple operations test suite (2025-10-12)
+      run: |
+        # Ensure test file exists
+        test -f "test_ripple_operations.lua" || exit 1
+
+        # Install LuaJIT
+        sudo apt-get update
+        sudo apt-get install -y luajit
+
+        # Run test suite
+        cd ${{ github.workspace }}
+        luajit test_ripple_operations.lua | tee test_output.log
+
+        # Verify all 63 tests pass
+        if ! grep -q "Total Tests:  63" test_output.log; then
+          echo "❌ Expected 63 tests"
+          exit 1
+        fi
+
+        if ! grep -q "Passed:       63 (100.0%)" test_output.log; then
+          echo "❌ Not all tests passing"
+          exit 1
+        fi
+
+        if ! grep -q "Failed:       0 (0.0%)" test_output.log; then
+          echo "❌ Some tests failed"
+          exit 1
+        fi
+
+        echo "✅ All 63 ripple operation tests pass (including gap materialization)"
+
+    - name: Validate gap materialization implementation (2025-10-12)
+      run: |
+        # Validate BatchRippleEdit has correct gap materialization
+        grep -q "Create temporary gap clip object" src/lua/core/command_manager.lua || exit 1
+        grep -q "temp_gap_" src/lua/core/command_manager.lua || exit 1
+        grep -q "is_gap_clip = true" src/lua/core/command_manager.lua || exit 1
+
+        # Ensure gap clips calculate their own boundaries
+        grep -q "gap_start = reference_clip.start_time + reference_clip.duration" src/lua/core/command_manager.lua || exit 1
+        grep -q "gap_end = math.min(gap_end, c.start_time)" src/lua/core/command_manager.lua || exit 1
+
+        # Verify gap clips aren't saved to database
+        grep -q "if not is_gap_clip then" src/lua/core/command_manager.lua || exit 1
+
+        # Ensure documentation exists
+        test -f "docs/gap-materialization.md" || exit 1
+        test -f "docs/batch-ripple-bugs.md" || exit 1
+        test -f "docs/batch-ripple-fixes-summary.md" || exit 1
+
+        echo "✅ Gap materialization implementation validated (Bug #3 fixed)"

@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-11 (Ripple Trim Constraint System)
+Last updated: 2025-10-12 (BatchRippleEdit Bug Fixes & Comprehensive Test Suite)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -100,6 +100,55 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-12: BatchRippleEdit Bug Fixes & Gap Materialization**
+- Fixed 3 critical bugs in multi-edge asymmetric ripple operations
+  - **Bug #1**: Delta negation (line 2394) - Code incorrectly negated delta for edges differing from "reference edge"
+    - **Impact**: Edges moved in wrong direction (extend instead of trim)
+    - **Fix**: Removed negation entirely - pass same `delta_ms` to all edges
+    - **Root cause**: Misunderstood that `apply_edge_ripple()` already handles asymmetry internally
+  - **Bug #2**: Downstream shift calculation (lines 2466, 2483, 2547) - Used raw `delta_ms` instead of edge-type-based shift
+    - **Impact**: Incorrect timeline shifts with asymmetric selection (out-point + in-point)
+    - **Fix**: Calculate shift from rightmost edge's type (in-point = -delta, out-point = +delta)
+    - **Root cause**: Failed to account for different shift directions based on edge type
+  - **Bug #3**: Gap edge materialization (lines 2351-2403) - Tried to modify adjacent clips instead of materializing virtual gap clips
+    - **Impact**: Media boundary errors when trimming gaps (tried to set clip.source_in < 0)
+    - **Fix**: Copy gap materialization from RippleEdit - create temporary gap clip objects
+    - **Root cause**: Gap edges represented empty space but code treated them as clip edges
+    - **Key insight**: Gaps are virtual filler clips, not references to adjacent clips
+- Created comprehensive regression test suite with 63 test cases
+  - Single-edge ripple: in-point left/right, out-point left/right
+  - Asymmetric multi-edge: balanced edits (out + in), unbalanced edits
+  - Symmetric multi-edge: multiple out-points, multiple in-points
+  - Complex scenarios: 3+ mixed edges with position-sensitive shift calculation
+  - Media boundary validation: source_in < 0, source_out > media.duration
+  - **Gap edge tests**: gap_after + clip out-point (both directions) - Tests 11 & 12
+  - Test framework: Mock database, deterministic assertions, clear failure messages
+  - **Result**: All 63 tests pass ✅
+- Documentation artifacts created
+  - `docs/batch-ripple-bugs.md`: Detailed bug analysis with test cases
+  - `docs/batch-ripple-fixes-summary.md`: Before/after code comparison
+  - `test_ripple_operations.lua`: 680-line automated test suite
+- Key insights:
+  - **Asymmetry emerges from edge type semantics**, not manual delta negation
+  - **Gaps are virtual clips** with their own start_time/duration, not references to adjacent clips
+  - **No special cases needed** when gaps are materialized as temporary clip objects
+- Files: src/lua/core/command_manager.lua (BatchRippleEdit, UndoBatchRippleEdit), test_ripple_operations.lua, docs/batch-ripple-*.md
+
+**2025-10-11: Media Model and Ripple Trim Boundary Validation**
+- Created complete `models/media.lua` module following established architecture patterns
+  - `Media.create()`: Create new media items with validation
+  - `Media.load()`: Load media from database with proper error handling
+  - `Media:save()`: Persist media with UPSERT semantics
+  - Matches `models/clip.lua` pattern for consistency
+- Fixed ripple trim out-point validation to use Media model instead of direct SQL
+  - Replaced ad-hoc `db:prepare("SELECT duration...")` with `Media.load(clip.media_id, db)`
+  - Proper separation of concerns: command layer uses model layer for data access
+  - Enables future caching, validation, and computed properties without touching commands
+- Out-point ripple trims now correctly prevented when extending beyond media file duration
+  - Validates `source_in + new_duration ≤ media.duration` before applying
+  - Prevents corrupted clips with source_out exceeding actual media length
+- Files: src/lua/models/media.lua, src/lua/core/command_manager.lua:1907-1919
 
 **2025-10-10: FCP7 XML Import System**
 - Implemented complete Final Cut Pro 7 (XMEML) import capability
