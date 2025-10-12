@@ -927,18 +927,25 @@ function M.save_field_value(field_key, value)
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Saving field '%s' = '%s' to clip %s", field_key, tostring(value), M._current_clip.id))
 
-  -- Update clip data in memory (this modifies the timeline's clip object since Lua passes tables by reference)
-  M._current_clip[field_key] = value
+  -- Update via command system for proper undo/redo and persistence
+  local Command = require("command")
+  local command_manager = require("core.command_manager")
 
-  -- Property changes should go through command system for undo/redo
-  -- For now, just update in-memory state (commands will handle persistence)
-  -- TODO: Integrate with SetClipProperty command
-  local success = true  -- In-memory update always succeeds
+  local cmd = Command.create("SetClipProperty", "default_project")
+  cmd:set_parameter("clip_id", M._current_clip.id)
+  cmd:set_parameter("property_name", field_key)
+  cmd:set_parameter("value", value)
 
-  if success then
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] ✅ Saved field '%s' to clip %s", field_key, M._current_clip.id))
+  local result = command_manager.execute(cmd)
+
+  if result.success then
+    -- Update local reference (command already updated database)
+    M._current_clip[field_key] = value
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      string.format("[inspector][view] ✅ Saved field '%s' to clip %s", field_key, M._current_clip.id))
   else
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] ❌ Failed to save field '%s'", field_key))
+    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      string.format("[inspector][view] ❌ Failed to save field '%s': %s", field_key, result.error_message or "unknown error"))
   end
 end
 
@@ -1148,14 +1155,29 @@ function M.apply_multi_edit()
       end
     end
 
-    -- Apply to all selected clips if we got a value
+    -- Apply to all selected clips via command system
     if typed_value ~= nil then
+      local Command = require("command")
+      local command_manager = require("core.command_manager")
+
       for _, clip in ipairs(M._selected_clips) do
-        clip[field_key] = typed_value
-        -- TODO: Integrate with SetClipProperty command for persistence
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            string.format("[inspector][view] Updated %s.%s = %s",
-                clip.id, field_key, tostring(typed_value)))
+        local cmd = Command.create("SetClipProperty", "default_project")
+        cmd:set_parameter("clip_id", clip.id)
+        cmd:set_parameter("property_name", field_key)
+        cmd:set_parameter("value", typed_value)
+
+        local result = command_manager.execute(cmd)
+
+        if result.success then
+          -- Update local reference
+          clip[field_key] = typed_value
+          logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+              string.format("[inspector][view] Updated %s.%s = %s", clip.id, field_key, tostring(typed_value)))
+        else
+          logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+              string.format("[inspector][view] Failed to update %s.%s: %s",
+                clip.id, field_key, result.error_message or "unknown error"))
+        end
       end
     end
   end
