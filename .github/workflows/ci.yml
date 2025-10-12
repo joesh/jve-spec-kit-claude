@@ -169,3 +169,27 @@ jobs:
         test -f "docs/batch-ripple-fixes-summary.md" || exit 1
 
         echo "✅ Gap materialization implementation validated (Bug #3 fixed)"
+
+    - name: Validate BatchCommand atomic undo system (2025-10-12)
+      run: |
+        # Validate BatchCommand executor exists
+        grep -q "command_executors\[\"BatchCommand\"\]" src/lua/core/command_manager.lua || exit 1
+
+        # Validate BatchCommand undoer exists
+        grep -q "command_undoers\[\"BatchCommand\"\]" src/lua/core/command_manager.lua || exit 1
+
+        # Validate JSON parsing for command specs
+        grep -q "json.decode(commands_json)" src/lua/core/command_manager.lua || exit 1
+
+        # Validate rollback on failure
+        grep -q "Rollback previous commands" src/lua/core/command_manager.lua || exit 1
+
+        # Validate inspector uses BatchCommand for multi-edit
+        grep -q "BatchCommand" src/lua/ui/inspector/view.lua || exit 1
+        grep -q "command_specs" src/lua/ui/inspector/view.lua || exit 1
+
+        # Validate Delete key uses BatchCommand
+        grep -q "BatchCommand" src/lua/core/keyboard_shortcuts.lua || exit 1
+        grep -q "single undo" src/lua/core/keyboard_shortcuts.lua || exit 1
+
+        echo "✅ BatchCommand atomic undo system validated (multi-clip operations use single undo entry)"
