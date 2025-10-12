@@ -739,19 +739,47 @@ command_executors["ImportMedia"] = function(command)
         return false
     end
 
-    -- Extract filename from file path
-    local file_name = file_path:match("([^/]+)$")
+    -- Use MediaReader to probe file and extract metadata
+    local MediaReader = require("media.media_reader")
+    local media_id, err = MediaReader.import_media(file_path, db, project_id)
 
-    local Media = require('models.media')
-    local media = Media.create(file_name, file_path)
+    if not media_id then
+        print(string.format("ERROR: ImportMedia: Failed to import %s: %s", file_path, err or "unknown error"))
+        return false
+    end
 
-    command:set_parameter("media_id", media.id)
+    -- Store media_id for undo/redo
+    command:set_parameter("media_id", media_id)
 
-    if media:save(db) then
-        print(string.format("Imported media: %s with ID: %s", file_path, media.id))
+    print(string.format("Imported media: %s with ID: %s", file_path, media_id))
+    return true
+end
+
+command_undoers["ImportMedia"] = function(command)
+    print("Undoing ImportMedia command")
+
+    local media_id = command:get_parameter("media_id")
+
+    if not media_id or media_id == "" then
+        print("WARNING: ImportMedia undo: No media_id found in command parameters")
+        return false
+    end
+
+    -- Delete media from database
+    local stmt = db:prepare("DELETE FROM media WHERE id = ?")
+    if not stmt then
+        print("ERROR: ImportMedia undo: Failed to prepare DELETE statement")
+        return false
+    end
+
+    stmt:bind(1, media_id)
+    local success = stmt:exec()
+
+    if success then
+        print(string.format("Deleted imported media: %s", media_id))
         return true
     else
-        print(string.format("Failed to save media: %s", file_path))
+        print(string.format("ERROR: ImportMedia undo: Failed to delete media: %s", media_id))
         return false
     end
 end

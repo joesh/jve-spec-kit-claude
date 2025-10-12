@@ -4,28 +4,34 @@
 
 local M = {}
 
+-- Load JSON library (dkjson - pure Lua, no C dependencies)
+local json = require("dkjson")
+
 -- ============================================================================
 -- FFprobe Integration
 -- ============================================================================
 
---- Execute ffprobe and parse key=value output
+--- Execute ffprobe and parse JSON output
 -- @param file_path string Absolute path to media file
 -- @return table|nil Parsed data from ffprobe, or nil on error
 -- @return string|nil Error message if probe failed
+--
+-- Architecture: Uses proper JSON parsing instead of fragile pattern matching
+-- - FFprobe's JSON output is the canonical, stable format
+-- - dkjson library handles all edge cases (escaping, Unicode, nested structures)
+-- - No manual parser maintenance required
+-- - Extensible: easy to add new metadata fields without parser changes
 local function run_ffprobe(file_path)
     -- Escape file path for shell (handle spaces, special chars)
     local escaped_path = string.format('"%s"', file_path:gsub('"', '\\"'))
 
-    -- FFprobe command with flat key=value output (easier to parse than JSON)
-    -- -v error: Only show errors
-    -- -show_entries: Specific fields we need
-    -- -of default=noprint_wrappers=1: Simple key=value format
+    -- FFprobe command with JSON output (canonical format)
+    -- -v error: Only show errors (suppress banner)
+    -- -print_format json: Machine-readable structured output
+    -- -show_format: Container-level metadata (duration, bitrate, size)
+    -- -show_streams: Per-stream metadata (codec, dimensions, fps, channels)
     local cmd = string.format(
-        'ffprobe -v error ' ..
-        '-show_entries stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels ' ..
-        '-show_entries format=duration,filename ' ..
-        '-of default=noprint_wrappers=1 ' ..
-        '%s 2>&1',
+        'ffprobe -v error -print_format json -show_format -show_streams %s 2>&1',
         escaped_path
     )
 
@@ -41,83 +47,29 @@ local function run_ffprobe(file_path)
         return nil, "FFprobe execution failed - file may not exist or be readable"
     end
 
-    -- Parse key=value output
-    -- Format: key=value per line, with [STREAM] and [FORMAT] section headers
-    local data = {
-        format = {},
-        streams = {}
-    }
+    -- Parse JSON using dkjson library
+    local data, parse_err = json.decode(output)
+    if not data then
+        return nil, "Failed to parse FFprobe JSON output: " .. (parse_err or "unknown error")
+    end
 
-    local current_stream = nil
-    local in_format = false
+    -- Validate expected structure
+    if not data.format or not data.format.duration then
+        return nil, "Invalid FFprobe output - missing required fields"
+    end
 
-    for line in output:gmatch("[^\r\n]+") do
-        -- Section headers
-        if line:match("^%[STREAM%]") then
-            if current_stream then
-                table.insert(data.streams, current_stream)
-            end
-            current_stream = {}
-            in_format = false
-        elseif line:match("^%[FORMAT%]") then
-            if current_stream then
-                table.insert(data.streams, current_stream)
-                current_stream = nil
-            end
-            in_format = true
-        elseif line:match("^%[/STREAM%]") then
-            if current_stream then
-                table.insert(data.streams, current_stream)
-                current_stream = nil
-            end
-        elseif line:match("^%[/FORMAT%]") then
-            in_format = false
-        else
-            -- Parse key=value
-            local key, value = line:match("^([^=]+)=(.*)$")
-            if key and value then
-                if current_stream then
-                    -- Stream field
-                    if key == "codec_type" then
-                        current_stream.codec_type = value
-                    elseif key == "codec_name" then
-                        current_stream.codec_name = value
-                    elseif key == "width" then
-                        current_stream.width = tonumber(value)
-                    elseif key == "height" then
-                        current_stream.height = tonumber(value)
-                    elseif key == "r_frame_rate" then
-                        -- Parse rational frame rate (e.g., "30000/1001" for 29.97)
-                        local num, den = value:match("(%d+)/(%d+)")
-                        if num and den and tonumber(den) ~= 0 then
-                            current_stream.frame_rate = tonumber(num) / tonumber(den)
-                        else
-                            current_stream.frame_rate = tonumber(value) or 0
-                        end
-                    elseif key == "sample_rate" then
-                        current_stream.sample_rate = tonumber(value)
-                    elseif key == "channels" then
-                        current_stream.channels = tonumber(value)
-                    end
-                elseif in_format then
-                    -- Format field
-                    if key == "duration" then
-                        data.format.duration = tonumber(value)
-                    elseif key == "filename" then
-                        data.format.filename = value
-                    end
+    -- Post-process: parse rational frame rates (stored as strings like "30/1")
+    if data.streams then
+        for _, stream in ipairs(data.streams) do
+            if stream.r_frame_rate then
+                local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
+                if num and den and tonumber(den) ~= 0 then
+                    stream.frame_rate = tonumber(num) / tonumber(den)
+                else
+                    stream.frame_rate = tonumber(stream.r_frame_rate) or 0
                 end
             end
         end
-    end
-
-    -- Add last stream if exists
-    if current_stream then
-        table.insert(data.streams, current_stream)
-    end
-
-    if not data.format.duration then
-        return nil, "Failed to extract media metadata from ffprobe output"
     end
 
     return data, nil

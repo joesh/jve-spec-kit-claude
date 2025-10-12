@@ -109,7 +109,8 @@ else
 
     if metadata.audio then
         assert_eq(metadata.audio.channels, 1, "Audio channels (mono)")
-        assert_eq(metadata.audio.sample_rate, 44100, "Audio sample rate 44.1kHz")
+        -- FFprobe returns sample_rate as string, need to convert
+        assert_eq(tonumber(metadata.audio.sample_rate), 44100, "Audio sample rate 44.1kHz")
         assert_eq(metadata.audio.codec, "aac", "Audio codec is AAC")
     end
 end
