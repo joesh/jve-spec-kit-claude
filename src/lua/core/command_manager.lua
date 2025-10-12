@@ -728,6 +728,117 @@ command_executors["CreateSequence"] = function(command)
     end
 end
 
+-- BatchCommand: Execute multiple commands as a single undo unit
+-- Wraps N commands into one transaction for atomic undo/redo
+command_executors["BatchCommand"] = function(command)
+    print("Executing BatchCommand")
+
+    local commands_json = command:get_parameter("commands")
+    if not commands_json or commands_json == "" then
+        print("ERROR: BatchCommand: No commands provided")
+        return false
+    end
+
+    -- Parse JSON array of command specs
+    local json = require("dkjson")
+    local command_specs, parse_err = json.decode(commands_json)
+    if not command_specs then
+        print(string.format("ERROR: BatchCommand: Failed to parse commands JSON: %s", parse_err or "unknown"))
+        return false
+    end
+
+    -- Execute each command in sequence
+    local Command = require("command")
+    local executed_commands = {}
+
+    for i, spec in ipairs(command_specs) do
+        local cmd = Command.create(spec.command_type, spec.project_id or "default_project")
+
+        -- Set parameters from spec
+        if spec.parameters then
+            for key, value in pairs(spec.parameters) do
+                cmd:set_parameter(key, value)
+            end
+        end
+
+        -- Execute command (don't add to command log - batch is the log entry)
+        local executor = command_executors[spec.command_type]
+        if not executor then
+            print(string.format("ERROR: BatchCommand: Unknown command type '%s'", spec.command_type))
+            -- Rollback previous commands
+            for j = #executed_commands, 1, -1 do
+                local undo_cmd = executed_commands[j]
+                local undoer = command_undoers[undo_cmd.command_type]
+                if undoer then
+                    undoer(undo_cmd)
+                end
+            end
+            return false
+        end
+
+        local success = executor(cmd)
+        if not success then
+            print(string.format("ERROR: BatchCommand: Command %d (%s) failed", i, spec.command_type))
+            -- Rollback previous commands
+            for j = #executed_commands, 1, -1 do
+                local undo_cmd = executed_commands[j]
+                local undoer = command_undoers[undo_cmd.command_type]
+                if undoer then
+                    undoer(undo_cmd)
+                end
+            end
+            return false
+        end
+
+        table.insert(executed_commands, cmd)
+    end
+
+    -- Store executed commands for undo
+    command:set_parameter("executed_commands_json", json.encode(command_specs))
+
+    print(string.format("BatchCommand: Executed %d commands successfully", #executed_commands))
+    return true
+end
+
+command_undoers["BatchCommand"] = function(command)
+    print("Undoing BatchCommand")
+
+    local commands_json = command:get_parameter("executed_commands_json")
+    if not commands_json then
+        print("ERROR: BatchCommand undo: No executed commands found")
+        return false
+    end
+
+    -- Parse and undo in reverse order
+    local json = require("dkjson")
+    local command_specs = json.decode(commands_json)
+
+    local Command = require("command")
+    for i = #command_specs, 1, -1 do
+        local spec = command_specs[i]
+        local cmd = Command.create(spec.command_type, spec.project_id or "default_project")
+
+        -- Restore parameters
+        if spec.parameters then
+            for key, value in pairs(spec.parameters) do
+                cmd:set_parameter(key, value)
+            end
+        end
+
+        -- Execute undo
+        local undoer = command_undoers[spec.command_type]
+        if undoer then
+            local success = undoer(cmd)
+            if not success then
+                print(string.format("WARNING: BatchCommand undo: Failed to undo command %d (%s)", i, spec.command_type))
+            end
+        end
+    end
+
+    print(string.format("BatchCommand: Undid %d commands", #command_specs))
+    return true
+end
+
 command_executors["ImportMedia"] = function(command)
     print("Executing ImportMedia command")
 

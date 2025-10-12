@@ -107,19 +107,31 @@ function keyboard_shortcuts.handle_key(event)
         local selected_clips = timeline_state.get_selected_clips()
         if #selected_clips > 0 then
             local Command = require("command")
+            local json = require("dkjson")
 
+            -- Build array of delete command specs for batch operation
+            local command_specs = {}
             for _, clip in ipairs(selected_clips) do
-                local cmd = Command.create("DeleteClip", "default_project")
-                cmd:set_parameter("clip_id", clip.id)
-
-                local result = command_manager.execute(cmd)
-                if not result.success then
-                    print(string.format("Failed to delete clip %s: %s", clip.id, result.error_message or "unknown error"))
-                end
+                table.insert(command_specs, {
+                    command_type = "DeleteClip",
+                    parameters = {
+                        clip_id = clip.id
+                    }
+                })
             end
 
-            timeline_state.set_selection({})
-            print(string.format("Deleted %d clips (with undo support)", #selected_clips))
+            -- Execute as single batch command (single undo entry)
+            local commands_json = json.encode(command_specs)
+            local batch_cmd = Command.create("BatchCommand", "default_project")
+            batch_cmd:set_parameter("commands_json", commands_json)
+
+            local result = command_manager.execute(batch_cmd)
+            if result.success then
+                timeline_state.set_selection({})
+                print(string.format("Deleted %d clips (single undo)", #selected_clips))
+            else
+                print(string.format("Failed to delete clips: %s", result.error_message or "unknown error"))
+            end
             return true
         end
     end

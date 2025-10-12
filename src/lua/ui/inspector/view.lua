@@ -1159,25 +1159,40 @@ function M.apply_multi_edit()
     if typed_value ~= nil then
       local Command = require("command")
       local command_manager = require("core.command_manager")
+      local json = require("dkjson")
 
+      -- Build array of command specs for batch operation
+      local command_specs = {}
       for _, clip in ipairs(M._selected_clips) do
-        local cmd = Command.create("SetClipProperty", "default_project")
-        cmd:set_parameter("clip_id", clip.id)
-        cmd:set_parameter("property_name", field_key)
-        cmd:set_parameter("value", typed_value)
+        table.insert(command_specs, {
+          command_type = "SetClipProperty",
+          parameters = {
+            clip_id = clip.id,
+            property_name = field_key,
+            value = typed_value
+          }
+        })
+      end
 
-        local result = command_manager.execute(cmd)
+      -- Execute as single batch command (single undo entry)
+      local commands_json = json.encode(command_specs)
+      local batch_cmd = Command.create("BatchCommand", "default_project")
+      batch_cmd:set_parameter("commands_json", commands_json)
 
-        if result.success then
-          -- Update local reference
+      local result = command_manager.execute(batch_cmd)
+
+      if result.success then
+        -- Update local references for all clips
+        for _, clip in ipairs(M._selected_clips) do
           clip[field_key] = typed_value
-          logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-              string.format("[inspector][view] Updated %s.%s = %s", clip.id, field_key, tostring(typed_value)))
-        else
-          logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-              string.format("[inspector][view] Failed to update %s.%s: %s",
-                clip.id, field_key, result.error_message or "unknown error"))
         end
+        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+            string.format("[inspector][view] Batch updated %d clips: %s = %s",
+              #M._selected_clips, field_key, tostring(typed_value)))
+      else
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+            string.format("[inspector][view] Batch update failed: %s",
+              result.error_message or "unknown error"))
       end
     end
   end
