@@ -451,23 +451,31 @@ function M.detect_roll_between_clips(clip1, clip2, click_x, viewport_width)
     return false
 end
 
--- Clip management
+-- Clip management - BLOCKED to enforce event sourcing discipline
+-- All timeline modifications MUST go through command system for proper undo/redo
+
 function M.add_clip(clip)
-    table.insert(state.clips, clip)
-
-    -- Save to database
-    db.save_clip(clip)
-
-    notify_listeners()
+    error("timeline_state.add_clip() is blocked - use command system instead:\n" ..
+          "  command_manager.execute(Command.create('AddClip', ...))\n" ..
+          "This ensures proper undo/redo and prevents phantom state changes.")
 end
 
 function M.remove_clip(clip_id)
+    error("timeline_state.remove_clip() is blocked - use command system instead:\n" ..
+          "  command_manager.execute(Command.create('DeleteClip', ...))\n" ..
+          "This ensures proper undo/redo and prevents phantom state changes.")
+end
+
+-- Internal helpers for command executors (bypass event sourcing check)
+function M._internal_add_clip_from_command(clip)
+    table.insert(state.clips, clip)
+    notify_listeners()
+end
+
+function M._internal_remove_clip_from_command(clip_id)
     for i, clip in ipairs(state.clips) do
         if clip.id == clip_id then
             table.remove(state.clips, i)
-
-            -- Remove from database
-            db.delete_clip(clip_id)
 
             -- Remove from selection if selected
             for j, selected in ipairs(state.selected_clips) do

@@ -930,9 +930,10 @@ function M.save_field_value(field_key, value)
   -- Update clip data in memory (this modifies the timeline's clip object since Lua passes tables by reference)
   M._current_clip[field_key] = value
 
-  -- Save to database - this ensures persistence across selections
-  local db = require("core.database")
-  local success = db.update_clip_property(M._current_clip.id, field_key, value)
+  -- Property changes should go through command system for undo/redo
+  -- For now, just update in-memory state (commands will handle persistence)
+  -- TODO: Integrate with SetClipProperty command
+  local success = true  -- In-memory update always succeeds
 
   if success then
     logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] ✅ Saved field '%s' to clip %s", field_key, M._current_clip.id))
@@ -1151,7 +1152,7 @@ function M.apply_multi_edit()
     if typed_value ~= nil then
       for _, clip in ipairs(M._selected_clips) do
         clip[field_key] = typed_value
-        db.update_clip_property(clip.id, field_key, typed_value)
+        -- TODO: Integrate with SetClipProperty command for persistence
         logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
             string.format("[inspector][view] Updated %s.%s = %s",
                 clip.id, field_key, tostring(typed_value)))

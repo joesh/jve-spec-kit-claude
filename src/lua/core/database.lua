@@ -130,15 +130,10 @@ function M.load_clips(sequence_id)
     return clips
 end
 
--- Save a clip
-function M.save_clip(clip)
-    print(string.format("Saving clip: %s (start=%d, duration=%d)",
-        clip.name or clip.id, clip.start_time, clip.duration))
-    -- TODO: Implement actual SQLite insert/update via C++ bindings
-    return true
-end
+-- REMOVED: save_clip() - Stub implementation violated event sourcing
+-- Use command system instead: Command.create("AddClip", ...)
 
--- Update clip position
+-- Update clip position - PRESERVED (has real SQL implementation)
 function M.update_clip_position(clip_id, start_time, duration)
     if not db_connection then
         print("WARNING: update_clip_position: No database connection")
@@ -169,21 +164,11 @@ function M.update_clip_position(clip_id, start_time, duration)
     return true
 end
 
--- Update a single clip property
-function M.update_clip_property(clip_id, property_name, value)
-    print(string.format("Updating clip %s property '%s' = '%s'",
-        clip_id, property_name, tostring(value)))
-    -- TODO: Implement actual SQLite update via C++ bindings
-    -- For now, just return success since we're using mock data
-    return true
-end
+-- REMOVED: update_clip_property() - Stub that returned false success
+-- Use command system instead: Command.create("SetClipProperty", ...)
 
--- Delete a clip
-function M.delete_clip(clip_id)
-    print("Deleting clip: " .. clip_id)
-    -- TODO: Implement actual SQLite delete via C++ bindings
-    return true
-end
+-- REMOVED: delete_clip() - Stub that returned false success
+-- Use command system instead: Command.create("DeleteClip", ...)
 
 -- Load all media with tag associations
 function M.load_media()
