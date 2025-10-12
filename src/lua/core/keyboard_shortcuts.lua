@@ -102,15 +102,24 @@ function keyboard_shortcuts.handle_key(event)
         return true  -- Event handled
     end
 
-    -- Delete/Backspace: Delete selected clips
-    if (key == KEY.Delete or key == KEY.Backspace) and timeline_state then
+    -- Delete/Backspace: Delete selected clips via command system
+    if (key == KEY.Delete or key == KEY.Backspace) and timeline_state and command_manager then
         local selected_clips = timeline_state.get_selected_clips()
         if #selected_clips > 0 then
+            local Command = require("command")
+
             for _, clip in ipairs(selected_clips) do
-                timeline_state.remove_clip(clip.id)
+                local cmd = Command.create("DeleteClip", "default_project")
+                cmd:set_parameter("clip_id", clip.id)
+
+                local result = command_manager.execute(cmd)
+                if not result.success then
+                    print(string.format("Failed to delete clip %s: %s", clip.id, result.error_message or "unknown error"))
+                end
             end
+
             timeline_state.set_selection({})
-            print(string.format("Deleted %d clips", #selected_clips))
+            print(string.format("Deleted %d clips (with undo support)", #selected_clips))
             return true
         end
     end
