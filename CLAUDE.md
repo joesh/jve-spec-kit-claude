@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-12 (BatchRippleEdit Bug Fixes & Comprehensive Test Suite)
+Last updated: 2025-10-12 (Media Reading, Stub Removal, Gap Materialization)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -100,6 +100,45 @@ make clean          # Clean build artifacts
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-12: Media Reading System & Architectural Cleanup**
+- **FFprobe Integration with Proper JSON Parsing**
+  - Replaced 110 lines of fragile pattern matching with dkjson library (15 lines)
+  - FFprobe JSON output is canonical, handles all edge cases automatically
+  - Extracts: duration, dimensions, frame rate, video codec, audio codec, channels
+  - Rational frame rate parsing (e.g., "30000/1001" → 29.97fps)
+  - 29 automated tests, 100% pass rate
+- **MediaReader Module** (src/lua/media/media_reader.lua)
+  - `probe_file()`: Extract metadata from any video/audio file
+  - `import_media()`: Create Media record with full metadata
+  - `batch_import_media()`: Import multiple files with success/failure tracking
+- **ImportMedia Command Integration**
+  - Updated to use MediaReader for metadata extraction
+  - Undo handler deletes media from database
+  - Full undo/redo support for media import operations
+- **Media Browser Enhanced**
+  - **6 columns**: Clip Name, Duration, Resolution, FPS, Codec, Date Modified
+  - Real metadata from Media model instead of hardcoded placeholders
+  - Professional formatting: "5:23" duration, "1920x1080" resolution, "29.97" fps
+  - Date formatting: Unix timestamps → "Oct 12 2025"
+- **Database Schema Evolution**
+  - Extended media table: project_id, name, width, height, audio_channels, codec, timestamps
+  - Foreign key: media → projects (CASCADE delete)
+  - Renamed field: file_name → name (allows renaming independent of file path)
+  - Backward compatible: kept metadata JSON field for extensibility
+- **Stub Implementation Removal (Architectural Enforcement)**
+  - **Removed lying stubs** that returned success without working:
+    - `database.save_clip()` - Printed "Saving" but did nothing ❌
+    - `database.update_clip_property()` - Printed "Updating" but did nothing ❌
+    - `database.delete_clip()` - Printed "Deleting" but did nothing ❌
+  - **Blocked direct mutations** to enforce event sourcing:
+    - `timeline_state.add_clip()` - Now throws error directing to command system
+    - `timeline_state.remove_clip()` - Now throws error directing to command system
+  - **Added internal helpers** for command executors:
+    - `_internal_add_clip_from_command()` - Bypasses event sourcing check
+    - `_internal_remove_clip_from_command()` - Bypasses event sourcing check
+  - **Key principle**: Functions either work or don't exist - no false success returns
+- **Files**: src/lua/media/media_reader.lua, src/lua/dkjson.lua, src/lua/ui/project_browser.lua, src/core/persistence/schema.sql, src/lua/core/database.lua, src/lua/ui/timeline/timeline_state.lua, test_media_reader.lua
 
 **2025-10-12: BatchRippleEdit Bug Fixes & Gap Materialization**
 - Fixed 3 critical bugs in multi-edge asymmetric ripple operations
