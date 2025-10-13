@@ -31,6 +31,7 @@ Testing/
 *.dylib
 *.a
 *.lib
+bin/
 
 # IDE files
 .vscode/
@@ -46,7 +47,9 @@ Thumbs.db
 # Logs
 *.log
 
-# Test databases
+# Project and database files
+*.db
+*.jvp
 *.test.db
 test_*.jve
 

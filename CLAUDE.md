@@ -1,6 +1,6 @@
 # jve-spec-kit-claude Development Status
 
-Last updated: 2025-10-12 (BatchCommand Atomic Undo Integration)
+Last updated: 2025-10-13 (BatchCommand Parameter Fix)
 
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
@@ -64,7 +64,7 @@ make clean          # Clean build artifacts
 - Inspector panel (Lua) - now initializes and creates content properly
 - Inspector initialization timing - moved to correct execution phase
 - Clip split functionality - UUID generation now properly seeded
-- Widget type-based property getters in inspector
+- Widget type-based property getters in inspector (Qt C++ bindings for GET_CHECKED, GET_SLIDER_VALUE, GET_COMBOBOX_CURRENT_TEXT)
 - Debug output spam eliminated from Qt bindings layer
 - Tree-based undo/redo - follows parent links instead of linear sequence
 - Selection preservation across undo/redo operations
@@ -73,16 +73,20 @@ make clean          # Clean build artifacts
 - Direct clip modifications now blocked to enforce event sourcing (timeline_state.lua)
 - Edge selection system with bracket indicators `[` `]` `][` for trimming operations
 - Ripple trim constraint system - 9 critical bugs fixed for proper gap/overlap handling
+- BatchCommand drag operations - parameter name mismatch fixed (commands_json vs commands)
+- Undo/replay media constraint violations - media table now cleared before replay
+- Timecode ruler ambiguity - always shows full HH:MM:SS:FF format
+- Undo playhead positioning - correctly restores to pre-command position
+- Warning message suppression - consecutive duplicates only, not session-wide
 
-## Current Issues (VERIFIED 2025-10-01)
+## Current Issues (VERIFIED 2025-10-13)
 
 **ARCHITECTURE VIOLATIONS:**
 - UI components implemented in C++ (src/ui/) when they should be Lua
 - Duplicate implementations: both C++ and Lua UI systems exist
-- Inspector panel Lua implementation fails to initialize properly
 
 **BUILD SYSTEM:**
-- LuaJIT linking failure for test_scriptable_timeline  
+- LuaJIT linking failure for test_scriptable_timeline
 - Multiple compiler warnings (unused lambda captures, missing Q_OBJECT)
 - Test system completely broken: 21 test sources exist but 0 executables build
 
@@ -92,14 +96,67 @@ make clean          # Clean build artifacts
 - Timeline chrome positioning misaligned
 
 **FUNCTIONAL GAPS:**
-- No media import functionality
 - Most keyboard shortcuts non-functional
 - Play button doesn't work
+- No audio playback system
+
+## Pending Tasks
+
+**ROBUSTNESS:**
+- [ ] Harden database to be less fragile without masking bugs
+  - Add command schema versioning (store executor version with each command)
+  - Implement parameter validation with detailed error messages
+  - Add migration detection (warn when loading commands from older versions)
+  - Enable graceful degradation (skip/warn on incompatible commands vs corrupting state)
+  - Improve diagnostics to distinguish "schema mismatch" from "actual bug"
+
+**ARCHITECTURE:**
+- [ ] Implement nested timeline system for grouped media
+  - Every grouped set of media can be viewed as a nested timeline
+  - Video file = group of streams (1 video + 0 or more audio tracks)
+  - Clips can be "opened" in timeline view for internal editing
+  - Enable sync offset adjustments between streams
+  - Enable per-track level tweaking
+  - Enable per-track muting within a clip
+  - This creates a recursive timeline structure (timelines contain clips which contain timelines)
+
+**TESTING:**
+- [ ] Test Resolve .drp importer (user can provide .drp file)
+- [ ] Test Resolve SQLite database importer
+- [ ] Test media relinking system with timecode/reel matching dialog
+- [ ] Test FCP7 XML import
+- [ ] Test media import with A7S III footage (path already in tests)
 
 ## Previous False Claims (REMOVED)
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
 ## Recent Improvements
+
+**2025-10-13: BatchCommand Parameter Name Fix & Qt Property Getters**
+- Fixed BatchCommand drag operations failing with "No commands provided" error
+  - Root cause: Parameter name mismatch between caller (`commands_json`) and executor (`commands`)
+  - Changed BatchCommand executor to use `commands_json` (command_manager.lua:741)
+  - Drag operations (track move + time nudge) now require only 1 undo (professional NLE behavior)
+- Added missing Qt property getter functions for inspector
+  - `lua_get_checked()` for QCheckBox state
+  - `lua_get_slider_value()` for QSlider current value
+  - `lua_get_combobox_current_text()` for QComboBox selection
+  - Fixed inspector crash when saving clip properties after split operations
+- Fixed undo/replay system clearing media table
+  - Replay now deletes media before replaying ImportMedia commands
+  - Prevents "UNIQUE constraint failed: media.file_path" errors during undo
+- Fixed timecode ruler showing ambiguous formats
+  - Always displays full HH:MM:SS:FF format (professional NLE standard)
+  - Prevents confusion between MM:SS:FF and HH:MM:SS
+- Fixed undo playhead positioning
+  - Playhead now correctly restores to position BEFORE undone command
+  - get_last_command() loads playhead_time from database
+  - Explicit restoration after replay completes
+- Improved warning message suppression strategy
+  - Changed from session-wide to consecutive-duplicate suppression
+  - Tracks last warning message, only suppresses identical consecutive warnings
+  - Different warnings reset suppression, allowing earlier warnings to reappear
+- Files: src/lua/core/command_manager.lua, src/lua/qt_bindings.cpp, src/lua/qt_bindings.h, src/lua/core/timecode.lua, src/lua/command.lua
 
 **2025-10-12: BatchCommand Atomic Undo System**
 - Implemented BatchCommand wrapper for multi-clip operations

@@ -25,6 +25,10 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonValue>
+#include <QMenuBar>
+#include <QMenu>
+#include <QAction>
+#include <QFileDialog>
 
 // Include existing UI components
 #include "ui/timeline/scriptable_timeline.h"  // Performance-critical timeline rendering
@@ -304,6 +308,321 @@ int lua_set_scroll_area_scroll_handler(lua_State* L) {
     return 0;
 }
 
+// ============================================================================
+// Menu System Bindings
+// ============================================================================
+
+// Get menu bar from main window
+int lua_get_menu_bar(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    QMainWindow* main_window = qobject_cast<QMainWindow*>(widget);
+
+    if (!main_window) {
+        return luaL_error(L, "GET_MENU_BAR: widget is not a QMainWindow");
+    }
+
+    QMenuBar* menu_bar = main_window->menuBar();
+    lua_push_widget(L, menu_bar);
+    return 1;
+}
+
+// Create menu (can be attached to menu bar or parent menu)
+int lua_create_menu(lua_State* L)
+{
+    QWidget* parent = (QWidget*)lua_to_widget(L, 1);
+    const char* title = luaL_checkstring(L, 2);
+
+    QMenu* menu = nullptr;
+
+    // Check if parent is QMenuBar or QMenu
+    QMenuBar* menu_bar = qobject_cast<QMenuBar*>(parent);
+    QMenu* parent_menu = qobject_cast<QMenu*>(parent);
+
+    if (menu_bar) {
+        menu = new QMenu(QString::fromUtf8(title), menu_bar);
+    } else if (parent_menu) {
+        menu = new QMenu(QString::fromUtf8(title), parent_menu);
+    } else {
+        return luaL_error(L, "CREATE_MENU: parent must be QMenuBar or QMenu");
+    }
+
+    lua_push_widget(L, menu);
+    return 1;
+}
+
+// Add menu to menu bar
+int lua_add_menu_to_bar(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    QWidget* menu_widget = (QWidget*)lua_to_widget(L, 2);
+
+    QMenuBar* menu_bar = qobject_cast<QMenuBar*>(widget);
+    QMenu* menu = qobject_cast<QMenu*>(menu_widget);
+
+    if (!menu_bar) {
+        return luaL_error(L, "ADD_MENU_TO_BAR: first argument must be QMenuBar");
+    }
+
+    if (!menu) {
+        return luaL_error(L, "ADD_MENU_TO_BAR: second argument must be QMenu");
+    }
+
+    menu_bar->addMenu(menu);
+    return 0;
+}
+
+// Add submenu to menu
+int lua_add_submenu(lua_State* L)
+{
+    QWidget* parent_widget = (QWidget*)lua_to_widget(L, 1);
+    QWidget* submenu_widget = (QWidget*)lua_to_widget(L, 2);
+
+    QMenu* parent_menu = qobject_cast<QMenu*>(parent_widget);
+    QMenu* submenu = qobject_cast<QMenu*>(submenu_widget);
+
+    if (!parent_menu) {
+        return luaL_error(L, "ADD_SUBMENU: first argument must be QMenu");
+    }
+
+    if (!submenu) {
+        return luaL_error(L, "ADD_SUBMENU: second argument must be QMenu");
+    }
+
+    parent_menu->addMenu(submenu);
+    return 0;
+}
+
+// Create menu action
+int lua_create_menu_action(lua_State* L)
+{
+    QWidget* menu_widget = (QWidget*)lua_to_widget(L, 1);
+    const char* text = luaL_checkstring(L, 2);
+    const char* shortcut = luaL_optstring(L, 3, "");
+    bool checkable = lua_toboolean(L, 4);
+
+    QMenu* menu = qobject_cast<QMenu*>(menu_widget);
+
+    if (!menu) {
+        return luaL_error(L, "CREATE_MENU_ACTION: first argument must be QMenu");
+    }
+
+    QAction* action = new QAction(QString::fromUtf8(text), menu);
+
+    if (shortcut && strlen(shortcut) > 0) {
+        action->setShortcut(QKeySequence(QString::fromUtf8(shortcut)));
+    }
+
+    if (checkable) {
+        action->setCheckable(true);
+    }
+
+    menu->addAction(action);
+
+    lua_push_widget(L, action);
+    return 1;
+}
+
+// Connect menu action to callback
+int lua_connect_menu_action(lua_State* L)
+{
+    QObject* obj = (QObject*)lua_to_widget(L, 1);
+
+    if (!lua_isfunction(L, 2)) {
+        return luaL_error(L, "CONNECT_MENU_ACTION: second argument must be a function");
+    }
+
+    QAction* action = qobject_cast<QAction*>(obj);
+
+    if (!action) {
+        return luaL_error(L, "CONNECT_MENU_ACTION: first argument must be QAction");
+    }
+
+    // Store callback in registry
+    lua_pushvalue(L, 2);
+    int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    // Connect action to callback
+    QObject::connect(action, &QAction::triggered, [L, callback_ref]() {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, callback_ref);
+
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            const char* error = lua_tostring(L, -1);
+            qDebug() << "Error in menu action callback:" << error;
+            lua_pop(L, 1);
+        }
+    });
+
+    return 0;
+}
+
+// Add separator to menu
+int lua_add_menu_separator(lua_State* L)
+{
+    QWidget* menu_widget = (QWidget*)lua_to_widget(L, 1);
+
+    QMenu* menu = qobject_cast<QMenu*>(menu_widget);
+
+    if (!menu) {
+        return luaL_error(L, "ADD_MENU_SEPARATOR: argument must be QMenu");
+    }
+
+    menu->addSeparator();
+    return 0;
+}
+
+// Set action enabled state
+int lua_set_action_enabled(lua_State* L)
+{
+    QObject* obj = (QObject*)lua_to_widget(L, 1);
+    bool enabled = lua_toboolean(L, 2);
+
+    QAction* action = qobject_cast<QAction*>(obj);
+
+    if (!action) {
+        return luaL_error(L, "SET_ACTION_ENABLED: argument must be QAction");
+    }
+
+    action->setEnabled(enabled);
+    return 0;
+}
+
+// Set action checked state
+int lua_set_action_checked(lua_State* L)
+{
+    QObject* obj = (QObject*)lua_to_widget(L, 1);
+    bool checked = lua_toboolean(L, 2);
+
+    QAction* action = qobject_cast<QAction*>(obj);
+
+    if (!action) {
+        return luaL_error(L, "SET_ACTION_CHECKED: argument must be QAction");
+    }
+
+    action->setChecked(checked);
+    return 0;
+}
+
+// ============================================================================
+// File Dialog Bindings
+// ============================================================================
+
+// Show file open dialog
+// Returns: selected file path (string) or nil if cancelled
+int lua_file_dialog_open(lua_State* L)
+{
+    QWidget* parent = nullptr;
+    const char* title = "Open File";
+    const char* filter = "All Files (*)";
+    const char* dir = "";
+
+    // Optional arguments
+    if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+        parent = (QWidget*)lua_to_widget(L, 1);
+    }
+    if (lua_gettop(L) >= 2 && lua_isstring(L, 2)) {
+        title = lua_tostring(L, 2);
+    }
+    if (lua_gettop(L) >= 3 && lua_isstring(L, 3)) {
+        filter = lua_tostring(L, 3);
+    }
+    if (lua_gettop(L) >= 4 && lua_isstring(L, 4)) {
+        dir = lua_tostring(L, 4);
+    }
+
+    QString filename = QFileDialog::getOpenFileName(
+        parent,
+        QString::fromUtf8(title),
+        QString::fromUtf8(dir),
+        QString::fromUtf8(filter)
+    );
+
+    if (filename.isEmpty()) {
+        lua_pushnil(L);
+    } else {
+        lua_pushstring(L, filename.toUtf8().constData());
+    }
+
+    return 1;
+}
+
+// Show multiple file open dialog
+// Returns: array of selected file paths or nil if cancelled
+int lua_file_dialog_open_multiple(lua_State* L)
+{
+    QWidget* parent = nullptr;
+    const char* title = "Open Files";
+    const char* filter = "All Files (*)";
+    const char* dir = "";
+
+    // Optional arguments
+    if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+        parent = (QWidget*)lua_to_widget(L, 1);
+    }
+    if (lua_gettop(L) >= 2 && lua_isstring(L, 2)) {
+        title = lua_tostring(L, 2);
+    }
+    if (lua_gettop(L) >= 3 && lua_isstring(L, 3)) {
+        filter = lua_tostring(L, 3);
+    }
+    if (lua_gettop(L) >= 4 && lua_isstring(L, 4)) {
+        dir = lua_tostring(L, 4);
+    }
+
+    QStringList filenames = QFileDialog::getOpenFileNames(
+        parent,
+        QString::fromUtf8(title),
+        QString::fromUtf8(dir),
+        QString::fromUtf8(filter)
+    );
+
+    if (filenames.isEmpty()) {
+        lua_pushnil(L);
+    } else {
+        lua_newtable(L);
+        for (int i = 0; i < filenames.size(); ++i) {
+            lua_pushstring(L, filenames[i].toUtf8().constData());
+            lua_rawseti(L, -2, i + 1);
+        }
+    }
+
+    return 1;
+}
+
+// Show directory selection dialog
+// Returns: selected directory path (string) or nil if cancelled
+int lua_file_dialog_directory(lua_State* L)
+{
+    QWidget* parent = nullptr;
+    const char* title = "Select Directory";
+    const char* dir = "";
+
+    // Optional arguments
+    if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+        parent = (QWidget*)lua_to_widget(L, 1);
+    }
+    if (lua_gettop(L) >= 2 && lua_isstring(L, 2)) {
+        title = lua_tostring(L, 2);
+    }
+    if (lua_gettop(L) >= 3 && lua_isstring(L, 3)) {
+        dir = lua_tostring(L, 3);
+    }
+
+    QString dirname = QFileDialog::getExistingDirectory(
+        parent,
+        QString::fromUtf8(title),
+        QString::fromUtf8(dir)
+    );
+
+    if (dirname.isEmpty()) {
+        lua_pushnil(L);
+    } else {
+        lua_pushstring(L, dirname.toUtf8().constData());
+    }
+
+    return 1;
+}
+
 void registerQtBindings(lua_State* L)
 {
     // // qDebug() << "Registering Qt bindings with Lua";
@@ -393,14 +712,20 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "GET_TEXT");
     lua_pushcfunction(L, lua_set_checked);
     lua_setfield(L, -2, "SET_CHECKED");
+    lua_pushcfunction(L, lua_get_checked);
+    lua_setfield(L, -2, "GET_CHECKED");
     lua_pushcfunction(L, lua_add_combobox_item);
     lua_setfield(L, -2, "ADD_COMBOBOX_ITEM");
     lua_pushcfunction(L, lua_set_combobox_current_text);
     lua_setfield(L, -2, "SET_COMBOBOX_CURRENT_TEXT");
+    lua_pushcfunction(L, lua_get_combobox_current_text);
+    lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_TEXT");
     lua_pushcfunction(L, lua_set_slider_range);
     lua_setfield(L, -2, "SET_SLIDER_RANGE");
     lua_pushcfunction(L, lua_set_slider_value);
     lua_setfield(L, -2, "SET_SLIDER_VALUE");
+    lua_pushcfunction(L, lua_get_slider_value);
+    lua_setfield(L, -2, "GET_SLIDER_VALUE");
     lua_pushcfunction(L, lua_set_placeholder_text);
     lua_setfield(L, -2, "SET_PLACEHOLDER_TEXT");
     lua_pushcfunction(L, lua_set_window_title);
@@ -532,6 +857,38 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_global_key_handler");
     lua_pushcfunction(L, lua_set_focus_handler);
     lua_setglobal(L, "qt_set_focus_handler");
+
+    // Create MENU subtable
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_get_menu_bar);
+    lua_setfield(L, -2, "GET_MENU_BAR");
+    lua_pushcfunction(L, lua_create_menu);
+    lua_setfield(L, -2, "CREATE_MENU");
+    lua_pushcfunction(L, lua_add_menu_to_bar);
+    lua_setfield(L, -2, "ADD_MENU_TO_BAR");
+    lua_pushcfunction(L, lua_add_submenu);
+    lua_setfield(L, -2, "ADD_SUBMENU");
+    lua_pushcfunction(L, lua_create_menu_action);
+    lua_setfield(L, -2, "CREATE_MENU_ACTION");
+    lua_pushcfunction(L, lua_connect_menu_action);
+    lua_setfield(L, -2, "CONNECT_MENU_ACTION");
+    lua_pushcfunction(L, lua_add_menu_separator);
+    lua_setfield(L, -2, "ADD_MENU_SEPARATOR");
+    lua_pushcfunction(L, lua_set_action_enabled);
+    lua_setfield(L, -2, "SET_ACTION_ENABLED");
+    lua_pushcfunction(L, lua_set_action_checked);
+    lua_setfield(L, -2, "SET_ACTION_CHECKED");
+    lua_setfield(L, -2, "MENU");
+
+    // Create FILE_DIALOG subtable
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_file_dialog_open);
+    lua_setfield(L, -2, "OPEN_FILE");
+    lua_pushcfunction(L, lua_file_dialog_open_multiple);
+    lua_setfield(L, -2, "OPEN_FILES");
+    lua_pushcfunction(L, lua_file_dialog_directory);
+    lua_setfield(L, -2, "OPEN_DIRECTORY");
+    lua_setfield(L, -2, "FILE_DIALOG");
 
     // Set the qt_constants global
     lua_setglobal(L, "qt_constants");
@@ -1283,6 +1640,64 @@ int lua_get_text(lua_State* L)
         lua_pushstring(L, text.toUtf8().constData());
     } else {
         qWarning() << "Invalid widget in get_text";
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+int lua_get_checked(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+
+    if (widget) {
+        if (QCheckBox* checkbox = qobject_cast<QCheckBox*>(widget)) {
+            lua_pushboolean(L, checkbox->isChecked());
+        } else {
+            qWarning() << "Invalid widget type in get_checked (expected QCheckBox)";
+            lua_pushnil(L);
+            return 1;
+        }
+    } else {
+        qWarning() << "Invalid widget in get_checked";
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+int lua_get_slider_value(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+
+    if (widget) {
+        if (QSlider* slider = qobject_cast<QSlider*>(widget)) {
+            lua_pushinteger(L, slider->value());
+        } else {
+            qWarning() << "Invalid widget type in get_slider_value (expected QSlider)";
+            lua_pushnil(L);
+            return 1;
+        }
+    } else {
+        qWarning() << "Invalid widget in get_slider_value";
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+int lua_get_combobox_current_text(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+
+    if (widget) {
+        if (QComboBox* combobox = qobject_cast<QComboBox*>(widget)) {
+            QString text = combobox->currentText();
+            lua_pushstring(L, text.toUtf8().constData());
+        } else {
+            qWarning() << "Invalid widget type in get_combobox_current_text (expected QComboBox)";
+            lua_pushnil(L);
+            return 1;
+        }
+    } else {
+        qWarning() << "Invalid widget in get_combobox_current_text";
         lua_pushnil(L);
     }
     return 1;

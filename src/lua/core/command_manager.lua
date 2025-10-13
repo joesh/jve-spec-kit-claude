@@ -387,6 +387,10 @@ function M.execute(command)
                 local clips = db_module.load_clips("default_sequence")
                 snapshot_mgr.create_snapshot(db, "default_sequence", sequence_number, clips)
             end
+
+            -- Reload timeline state to pick up database changes
+            -- This triggers listener notifications → automatic view redraws
+            timeline_state.reload_clips()
         else
             result.error_message = "Failed to save command to database"
         end
@@ -413,7 +417,7 @@ function M.get_last_command(project_id)
 
     -- Get command at current position
     local query = db:prepare([[
-        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp
+        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time
         FROM commands
         WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
     ]])
@@ -437,6 +441,7 @@ function M.get_last_command(project_id)
             post_hash = query:value(6) or "",
             created_at = query:value(7) or os.time(),
             executed_at = query:value(7),
+            playhead_time = query:value(8) or 0,  -- Playhead position BEFORE this command
         }
 
         -- Parse command_args JSON to populate parameters
@@ -733,7 +738,7 @@ end
 command_executors["BatchCommand"] = function(command)
     print("Executing BatchCommand")
 
-    local commands_json = command:get_parameter("commands")
+    local commands_json = command:get_parameter("commands_json")
     if not commands_json or commands_json == "" then
         print("ERROR: BatchCommand: No commands provided")
         return false
@@ -1421,8 +1426,8 @@ command_executors["Insert"] = function(command)
         while query:next() do
             local clip_id = query:value(0)
             local start_time = query:value(1)
-            -- Ripple clips that start AFTER insert_time (not AT insert_time)
-            if start_time > insert_time then
+            -- Ripple clips that start at or after insert_time to prevent overlap
+            if start_time >= insert_time then
                 table.insert(clips_to_ripple, {id = clip_id, old_start = start_time})
             end
         end
@@ -2811,12 +2816,30 @@ function M.replay_events(sequence_id, target_sequence_number)
         print("Starting from empty initial state (no snapshot)")
     end
 
-    -- Step 3: Clear ALL clips (we'll restore initial state + replay commands)
-    local delete_query = db:prepare("DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)")
-    if delete_query then
-        delete_query:bind_value(1, sequence_id)
-        delete_query:exec()
+    -- Step 3: Clear ALL clips and media (we'll restore initial state + replay commands)
+    local delete_clips_query = db:prepare("DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)")
+    if delete_clips_query then
+        delete_clips_query:bind_value(1, sequence_id)
+        delete_clips_query:exec()
         print("Cleared all clips from database")
+    end
+
+    -- Also clear all media for the project (ImportMedia commands will recreate them)
+    -- Get project_id from sequence
+    local project_id = "default_project"
+    local project_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+    if project_query then
+        project_query:bind_value(1, sequence_id)
+        if project_query:exec() and project_query:next() then
+            project_id = project_query:value(0)
+        end
+    end
+
+    local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")
+    if delete_media_query then
+        delete_media_query:bind_value(1, project_id)
+        delete_media_query:exec()
+        print(string.format("Cleared all media for project '%s' from database for replay", project_id))
     end
 
     -- Step 4: Restore initial state clips
@@ -2881,11 +2904,13 @@ function M.replay_events(sequence_id, target_sequence_number)
                         -- First command with NULL parent is valid
                         current_seq = 0
                     elseif current_seq > start_sequence then
-                        -- Found NULL parent in middle of chain - data corruption!
-                        print(string.format("ERROR: Command %d has NULL parent - broken command chain detected!", current_seq))
-                        print(string.format("ERROR: This breaks event sourcing - cannot replay past this point"))
-                        print(string.format("HINT: Run repair_broken_parent_chains() to fix database integrity"))
-                        print(string.format("HINT: This bug was caused by executing commands when current_sequence_number was incorrectly nil"))
+                        -- Found NULL parent in middle of chain - treating as root command
+                        local warning_key = "orphaned_cmd_" .. current_seq
+                        if last_warning_message ~= warning_key then
+                            print(string.format("⚠️  Note: Command %d has no parent (orphaned from previous session)", current_seq))
+                            print(string.format("    Replay will start from command %d instead of the beginning", current_seq))
+                            last_warning_message = warning_key
+                        end
                         break
                     else
                         current_seq = 0
@@ -2961,6 +2986,9 @@ end
 -- Track selection across undo/redo
 local saved_selection_on_undo = nil
 
+-- Track last warning message to suppress consecutive duplicates
+local last_warning_message = nil
+
 function M.undo()
     -- Get the command at current position
     local current_command = M.get_last_command("default_project")
@@ -3006,11 +3034,22 @@ function M.undo()
     end
 
     if replay_success then
+        -- Restore playhead to position BEFORE the undone command (i.e., AFTER the last valid command)
+        -- This is stored in current_command.playhead_time
+        if target_sequence > 0 and current_command.playhead_time then
+            timeline_state.set_playhead_time(current_command.playhead_time)
+            print(string.format("Restored playhead to %dms", current_command.playhead_time))
+        end
+
         -- Move current_sequence_number back
         current_sequence_number = target_sequence > 0 and target_sequence or nil
 
         -- Save undo position to database (persists across sessions)
         save_undo_position()
+
+        -- Reload timeline state to pick up database changes
+        -- This triggers listener notifications → automatic view redraws
+        timeline_state.reload_clips()
 
         print(string.format("Undo complete - moved to position %s", tostring(current_sequence_number)))
         return {success = true}
@@ -3072,9 +3111,13 @@ function M.redo()
         -- Save undo position to database (persists across sessions)
         save_undo_position()
 
+        -- Reload timeline state to pick up database changes
+        -- This triggers listener notifications → automatic view redraws
+        local timeline_state = require('ui.timeline.timeline_state')
+        timeline_state.reload_clips()
+
         -- Restore selection that was saved during undo
         if saved_selection_on_undo then
-            local timeline_state = require('ui.timeline.timeline_state')
             timeline_state.set_selection(saved_selection_on_undo)
             print(string.format("Redo complete - moved to position %d, restored %d selected clips",
                   current_sequence_number, #saved_selection_on_undo))
@@ -3343,9 +3386,602 @@ command_undoers["ImportFCP7XML"] = function(command)
     return true
 end
 
+-- ============================================================================
+-- RelinkMedia Command
+-- ============================================================================
+-- Updates media file_path to point to a new location
+-- Used by media relinking system when files have been moved/renamed
+--
+-- Parameters:
+--   - media_id: ID of media record to relink
+--   - new_file_path: New absolute path to media file
+--
+-- Stored state (for undo):
+--   - old_file_path: Previous file path before relinking
+
+command_executors.RelinkMedia = function(cmd, params)
+    local media_id = params.media_id
+    local new_file_path = params.new_file_path
+
+    if not media_id or not new_file_path then
+        return {success = false, error_message = "RelinkMedia requires media_id and new_file_path"}
+    end
+
+    -- Load media record
+    local Media = require("models.media")
+    local media = Media.load(media_id, db)
+
+    if not media then
+        return {success = false, error_message = "Media not found: " .. media_id}
+    end
+
+    -- Store old path for undo
+    local old_file_path = media.file_path
+
+    -- Update file path
+    media.file_path = new_file_path
+
+    -- Save to database
+    if not media:save(db) then
+        return {success = false, error_message = "Failed to save relinked media"}
+    end
+
+    print(string.format("Relinked media '%s': %s → %s", media.name, old_file_path, new_file_path))
+
+    return {
+        success = true,
+        old_file_path = old_file_path  -- Store for undo
+    }
+end
+
+command_undoers.RelinkMedia = function(cmd)
+    local media_id = cmd.parameters.media_id
+    local old_file_path = cmd.result.old_file_path
+
+    if not media_id or not old_file_path then
+        print("ERROR: Cannot undo RelinkMedia - missing stored state")
+        return false
+    end
+
+    -- Load media and restore old path
+    local Media = require("models.media")
+    local media = Media.load(media_id, db)
+
+    if not media then
+        print("ERROR: Cannot undo RelinkMedia - media not found: " .. media_id)
+        return false
+    end
+
+    media.file_path = old_file_path
+
+    if not media:save(db) then
+        print("ERROR: Failed to restore old media path")
+        return false
+    end
+
+    print(string.format("Restored media '%s' to original path: %s", media.name, old_file_path))
+    return true
+end
+
+-- ============================================================================
+-- BatchRelinkMedia Command
+-- ============================================================================
+-- Relinks multiple media files in a single undo-able operation
+--
+-- Parameters:
+--   - relink_map: table mapping media_id → new_file_path
+--
+-- Stored state (for undo):
+--   - old_paths: table mapping media_id → old_file_path
+
+command_executors.BatchRelinkMedia = function(cmd, params)
+    local relink_map = params.relink_map
+
+    if not relink_map or type(relink_map) ~= "table" then
+        return {success = false, error_message = "BatchRelinkMedia requires relink_map table"}
+    end
+
+    local Media = require("models.media")
+    local old_paths = {}
+    local relinked_count = 0
+
+    -- Relink each media file
+    for media_id, new_file_path in pairs(relink_map) do
+        local media = Media.load(media_id, db)
+
+        if media then
+            -- Store old path for undo
+            old_paths[media_id] = media.file_path
+
+            -- Update path
+            media.file_path = new_file_path
+
+            if media:save(db) then
+                relinked_count = relinked_count + 1
+            else
+                print(string.format("WARNING: Failed to relink media %s", media_id))
+            end
+        else
+            print(string.format("WARNING: Media not found: %s", media_id))
+        end
+    end
+
+    print(string.format("Batch relinked %d media file(s)", relinked_count))
+
+    return {
+        success = true,
+        old_paths = old_paths,
+        relinked_count = relinked_count
+    }
+end
+
+command_undoers.BatchRelinkMedia = function(cmd)
+    local relink_map = cmd.parameters.relink_map
+    local old_paths = cmd.result.old_paths
+
+    if not old_paths then
+        print("ERROR: Cannot undo BatchRelinkMedia - missing stored state")
+        return false
+    end
+
+    local Media = require("models.media")
+    local restored_count = 0
+
+    -- Restore each media file to old path
+    for media_id, old_file_path in pairs(old_paths) do
+        local media = Media.load(media_id, db)
+
+        if media then
+            media.file_path = old_file_path
+
+            if media:save(db) then
+                restored_count = restored_count + 1
+            else
+                print(string.format("WARNING: Failed to restore media %s", media_id))
+            end
+        else
+            print(string.format("WARNING: Media not found during undo: %s", media_id))
+        end
+    end
+
+    print(string.format("Batch undo: restored %d media file path(s)", restored_count))
+    return true
+end
+
 -- Get the executor function for a command type (used for dry-run preview)
 function M.get_executor(command_type)
     return command_executors[command_type]
+end
+
+-- ============================================================================
+-- ImportResolveProject Command
+-- ============================================================================
+-- Imports DaVinci Resolve .drp project file into JVE
+-- Creates: project record, media items, timelines, tracks, clips
+-- Full undo support: deletes all created entities
+
+command_executors.ImportResolveProject = function(cmd, params)
+    local drp_path = params.drp_path
+
+    if not drp_path or drp_path == "" then
+        return {success = false, error_message = "No .drp file path provided"}
+    end
+
+    -- Parse .drp file
+    local drp_importer = require("importers.drp_importer")
+    local parse_result = drp_importer.parse_drp_file(drp_path)
+
+    if not parse_result.success then
+        return {success = false, error_message = parse_result.error}
+    end
+
+    local Project = require("models.project")
+    local Media = require("models.media")
+    local Clip = require("models.clip")
+
+    -- Create project record
+    local project = Project.create({
+        name = parse_result.project.name,
+        frame_rate = parse_result.project.settings.frame_rate,
+        width = parse_result.project.settings.width,
+        height = parse_result.project.settings.height
+    })
+
+    if not project:save(db) then
+        return {success = false, error_message = "Failed to create project"}
+    end
+
+    print(string.format("Created project: %s (%dx%d @ %.2ffps)",
+        project.name, project.width, project.height, project.frame_rate))
+
+    -- Track created entities for undo
+    local created_media_ids = {}
+    local created_timeline_ids = {}
+    local created_track_ids = {}
+    local created_clip_ids = {}
+
+    -- Import media items
+    local media_id_map = {}  -- resolve_id -> jve_media_id
+    for _, media_item in ipairs(parse_result.media_items) do
+        local media = Media.create({
+            project_id = project.id,
+            name = media_item.name,
+            file_path = media_item.file_path,
+            duration = media_item.duration,
+            width = parse_result.project.settings.width,
+            height = parse_result.project.settings.height
+        })
+
+        if media:save(db) then
+            table.insert(created_media_ids, media.id)
+            if media_item.resolve_id then
+                media_id_map[media_item.resolve_id] = media.id
+            end
+            print(string.format("  Imported media: %s", media.name))
+        else
+            print(string.format("WARNING: Failed to import media: %s", media_item.name))
+        end
+    end
+
+    -- Import timelines
+    for _, timeline_data in ipairs(parse_result.timelines) do
+        -- Create sequence (timeline) record
+        local stmt = db:prepare([[
+            INSERT INTO sequences (id, project_id, name, duration, frame_rate)
+            VALUES (?, ?, ?, ?, ?)
+        ]])
+
+        local timeline_id = require("models.clip").generate_uuid()  -- Reuse UUID generator
+        stmt:bind_values(
+            timeline_id,
+            project.id,
+            timeline_data.name,
+            timeline_data.duration,
+            parse_result.project.settings.frame_rate
+        )
+
+        if stmt:step() == sqlite3.DONE then
+            table.insert(created_timeline_ids, timeline_id)
+            print(string.format("  Imported timeline: %s", timeline_data.name))
+
+            -- Import tracks
+            for _, track_data in ipairs(timeline_data.tracks) do
+                local track_stmt = db:prepare([[
+                    INSERT INTO tracks (id, sequence_id, track_type, track_index)
+                    VALUES (?, ?, ?, ?)
+                ]])
+
+                local track_id = require("models.clip").generate_uuid()
+                track_stmt:bind_values(
+                    track_id,
+                    timeline_id,
+                    track_data.type,
+                    track_data.index
+                )
+
+                if track_stmt:step() == sqlite3.DONE then
+                    table.insert(created_track_ids, track_id)
+                    print(string.format("    Created track: %s%d", track_data.type, track_data.index))
+
+                    -- Import clips
+                    for _, clip_data in ipairs(track_data.clips) do
+                        -- Find matching media_id (if file_path available)
+                        local media_id = nil
+                        if clip_data.file_path then
+                            for _, media in ipairs(created_media_ids) do
+                                local m = Media.load(media, db)
+                                if m and m.file_path == clip_data.file_path then
+                                    media_id = m.id
+                                    break
+                                end
+                            end
+                        end
+
+                        local clip = Clip.create({
+                            track_id = track_id,
+                            media_id = media_id,
+                            start_time = clip_data.start_time,
+                            duration = clip_data.duration,
+                            source_in = clip_data.source_in,
+                            source_out = clip_data.source_out
+                        })
+
+                        if clip:save(db) then
+                            table.insert(created_clip_ids, clip.id)
+                        else
+                            print(string.format("WARNING: Failed to import clip: %s", clip_data.name))
+                        end
+                    end
+                else
+                    print(string.format("WARNING: Failed to create track: %s%d", track_data.type, track_data.index))
+                end
+
+                track_stmt:finalize()
+            end
+        else
+            print(string.format("WARNING: Failed to create timeline: %s", timeline_data.name))
+        end
+
+        stmt:finalize()
+    end
+
+    print(string.format("Imported Resolve project: %d media, %d timelines, %d tracks, %d clips",
+        #created_media_ids, #created_timeline_ids, #created_track_ids, #created_clip_ids))
+
+    return {
+        success = true,
+        project_id = project.id,
+        created_media_ids = created_media_ids,
+        created_timeline_ids = created_timeline_ids,
+        created_track_ids = created_track_ids,
+        created_clip_ids = created_clip_ids
+    }
+end
+
+command_undoers.ImportResolveProject = function(cmd)
+    local result = cmd.result
+
+    if not result or not result.success then
+        print("ERROR: Cannot undo ImportResolveProject - command failed")
+        return false
+    end
+
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    -- Delete clips
+    for _, clip_id in ipairs(result.created_clip_ids or {}) do
+        local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+        stmt:bind_values(clip_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete tracks
+    for _, track_id in ipairs(result.created_track_ids or {}) do
+        local stmt = db:prepare("DELETE FROM tracks WHERE id = ?")
+        stmt:bind_values(track_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete timelines
+    for _, timeline_id in ipairs(result.created_timeline_ids or {}) do
+        local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
+        stmt:bind_values(timeline_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete media
+    for _, media_id in ipairs(result.created_media_ids or {}) do
+        local stmt = db:prepare("DELETE FROM media WHERE id = ?")
+        stmt:bind_values(media_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete project
+    if result.project_id then
+        local stmt = db:prepare("DELETE FROM projects WHERE id = ?")
+        stmt:bind_values(result.project_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    print("Undo: Deleted imported Resolve project and all associated data")
+    return true
+end
+
+-- ============================================================================
+-- ImportResolveDatabase Command
+-- ============================================================================
+-- Imports DaVinci Resolve project from SQLite disk database
+-- Creates: project record, media items, timelines, tracks, clips
+-- Full undo support: deletes all created entities
+
+command_executors.ImportResolveDatabase = function(cmd, params)
+    local db_path = params.db_path
+
+    if not db_path or db_path == "" then
+        return {success = false, error_message = "No database path provided"}
+    end
+
+    -- Import from Resolve database
+    local resolve_db_importer = require("importers.resolve_database_importer")
+    local import_result = resolve_db_importer.import_from_database(db_path)
+
+    if not import_result.success then
+        return {success = false, error_message = import_result.error}
+    end
+
+    local Project = require("models.project")
+    local Media = require("models.media")
+    local Clip = require("models.clip")
+
+    -- Create project record
+    local project = Project.create({
+        name = import_result.project.name,
+        frame_rate = import_result.project.frame_rate,
+        width = import_result.project.width,
+        height = import_result.project.height
+    })
+
+    if not project:save(db) then
+        return {success = false, error_message = "Failed to create project"}
+    end
+
+    print(string.format("Created project from Resolve DB: %s (%dx%d @ %.2ffps)",
+        project.name, project.width, project.height, project.frame_rate))
+
+    -- Track created entities for undo
+    local created_media_ids = {}
+    local created_timeline_ids = {}
+    local created_track_ids = {}
+    local created_clip_ids = {}
+
+    -- Import media items
+    local media_id_map = {}  -- resolve_id -> jve_media_id
+    for _, media_item in ipairs(import_result.media_items) do
+        local media = Media.create({
+            project_id = project.id,
+            name = media_item.name,
+            file_path = media_item.file_path,
+            duration = media_item.duration,
+            width = import_result.project.width,
+            height = import_result.project.height
+        })
+
+        if media:save(db) then
+            table.insert(created_media_ids, media.id)
+            if media_item.resolve_id then
+                media_id_map[media_item.resolve_id] = media.id
+            end
+            print(string.format("  Imported media: %s", media.name))
+        else
+            print(string.format("WARNING: Failed to import media: %s", media_item.name))
+        end
+    end
+
+    -- Import timelines
+    for _, timeline_data in ipairs(import_result.timelines) do
+        -- Create sequence (timeline) record
+        local stmt = db:prepare([[
+            INSERT INTO sequences (id, project_id, name, duration, frame_rate)
+            VALUES (?, ?, ?, ?, ?)
+        ]])
+
+        local timeline_id = require("models.clip").generate_uuid()
+        stmt:bind_values(
+            timeline_id,
+            project.id,
+            timeline_data.name,
+            timeline_data.duration,
+            timeline_data.frame_rate
+        )
+
+        if stmt:step() == sqlite3.DONE then
+            table.insert(created_timeline_ids, timeline_id)
+            print(string.format("  Imported timeline: %s", timeline_data.name))
+
+            -- Import tracks
+            for _, track_data in ipairs(timeline_data.tracks) do
+                local track_stmt = db:prepare([[
+                    INSERT INTO tracks (id, sequence_id, track_type, track_index)
+                    VALUES (?, ?, ?, ?)
+                ]])
+
+                local track_id = require("models.clip").generate_uuid()
+                track_stmt:bind_values(
+                    track_id,
+                    timeline_id,
+                    track_data.type,
+                    track_data.index
+                )
+
+                if track_stmt:step() == sqlite3.DONE then
+                    table.insert(created_track_ids, track_id)
+                    print(string.format("    Created track: %s%d", track_data.type, track_data.index))
+
+                    -- Import clips
+                    for _, clip_data in ipairs(track_data.clips) do
+                        -- Find matching media_id using resolve_media_id
+                        local media_id = media_id_map[clip_data.resolve_media_id]
+
+                        local clip = Clip.create({
+                            track_id = track_id,
+                            media_id = media_id,
+                            start_time = clip_data.start_time,
+                            duration = clip_data.duration,
+                            source_in = clip_data.source_in,
+                            source_out = clip_data.source_out
+                        })
+
+                        if clip:save(db) then
+                            table.insert(created_clip_ids, clip.id)
+                        else
+                            print(string.format("WARNING: Failed to import clip: %s", clip_data.name))
+                        end
+                    end
+                else
+                    print(string.format("WARNING: Failed to create track: %s%d", track_data.type, track_data.index))
+                end
+
+                track_stmt:finalize()
+            end
+        else
+            print(string.format("WARNING: Failed to create timeline: %s", timeline_data.name))
+        end
+
+        stmt:finalize()
+    end
+
+    print(string.format("Imported Resolve database: %d media, %d timelines, %d tracks, %d clips",
+        #created_media_ids, #created_timeline_ids, #created_track_ids, #created_clip_ids))
+
+    return {
+        success = true,
+        project_id = project.id,
+        created_media_ids = created_media_ids,
+        created_timeline_ids = created_timeline_ids,
+        created_track_ids = created_track_ids,
+        created_clip_ids = created_clip_ids
+    }
+end
+
+command_undoers.ImportResolveDatabase = function(cmd)
+    local result = cmd.result
+
+    if not result or not result.success then
+        print("ERROR: Cannot undo ImportResolveDatabase - command failed")
+        return false
+    end
+
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    -- Delete clips
+    for _, clip_id in ipairs(result.created_clip_ids or {}) do
+        local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+        stmt:bind_values(clip_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete tracks
+    for _, track_id in ipairs(result.created_track_ids or {}) do
+        local stmt = db:prepare("DELETE FROM tracks WHERE id = ?")
+        stmt:bind_values(track_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete timelines
+    for _, timeline_id in ipairs(result.created_timeline_ids or {}) do
+        local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
+        stmt:bind_values(timeline_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete media
+    for _, media_id in ipairs(result.created_media_ids or {}) do
+        local stmt = db:prepare("DELETE FROM media WHERE id = ?")
+        stmt:bind_values(media_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    -- Delete project
+    if result.project_id then
+        local stmt = db:prepare("DELETE FROM projects WHERE id = ?")
+        stmt:bind_values(result.project_id)
+        stmt:step()
+        stmt:finalize()
+    end
+
+    print("Undo: Deleted imported Resolve database project and all associated data")
+    return true
 end
 
 return M
