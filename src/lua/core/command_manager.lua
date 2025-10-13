@@ -2590,7 +2590,6 @@ command_executors["BatchRippleEdit"] = function(command)
             constraint_clip,
             actual_edge_type,
             all_clips,
-            30.0,  -- frame_rate (TODO: get from sequence)
             true   -- check_all_tracks for ripple
         )
 
