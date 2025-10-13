@@ -172,107 +172,50 @@ end
 
 -- Load all media with tag associations
 function M.load_media()
-    print("Loading media library")
-    -- Returns media with tags across multiple namespaces
-    return {
-        -- Root level media (no bin tag)
-        {
-            id = "media1",
-            file_name = "intro.mp4",
-            file_path = "/path/to/intro.mp4",
-            duration = 5000,
-            tags = {
-                {namespace = "bin", tag_path = nil},  -- Root level
-                {namespace = "project", tag_path = "Corporate"},
-                {namespace = "status", tag_path = "Approved"}
-            }
-        },
-        {
-            id = "media2",
-            file_name = "logo.png",
-            file_path = "/path/to/logo.png",
-            duration = 3000,
-            tags = {
-                {namespace = "bin", tag_path = nil},  -- Root level
-                {namespace = "type", tag_path = "Graphics"},
-                {namespace = "project", tag_path = "Corporate"}
-            }
-        },
+    print("Loading media library from database")
 
-        -- Media in Footage bin
-        {
-            id = "media3",
-            file_name = "beach.mp4",
-            file_path = "/path/to/beach.mp4",
-            duration = 10000,
-            tags = {
-                {namespace = "bin", tag_path = "Footage"},
-                {namespace = "location", tag_path = "Beach"},
-                {namespace = "status", tag_path = "Raw"}
-            }
-        },
-        {
-            id = "media4",
-            file_name = "sunset.mp4",
-            file_path = "/path/to/sunset.mp4",
-            duration = 8000,
-            tags = {
-                {namespace = "bin", tag_path = "Footage"},
-                {namespace = "location", tag_path = "Beach"},
-                {namespace = "status", tag_path = "Raw"}
-            }
-        },
+    if not db_connection then
+        print("WARNING: No database connection")
+        return {}
+    end
 
-        -- Media in Graphics bin
-        {
-            id = "media5",
-            file_name = "title.png",
-            file_path = "/path/to/title.png",
-            duration = 5000,
-            tags = {
-                {namespace = "bin", tag_path = "Graphics"},
-                {namespace = "type", tag_path = "Graphics/Title"},
-                {namespace = "project", tag_path = "Documentary"}
-            }
-        },
+    local query = db_connection:prepare([[
+        SELECT id, project_id, name, file_path, duration, frame_rate,
+               width, height, audio_channels, codec, created_at, modified_at, metadata
+        FROM media
+        ORDER BY created_at DESC
+    ]])
 
-        -- Media in nested Interviews bin
-        {
-            id = "media6",
-            file_name = "interview1.mp4",
-            file_path = "/path/to/interview1.mp4",
-            duration = 120000,
-            tags = {
-                {namespace = "bin", tag_path = "Footage/Interviews"},
-                {namespace = "person", tag_path = "Expert/John Smith"},
-                {namespace = "status", tag_path = "Transcribed"}
-            }
-        },
-        {
-            id = "media7",
-            file_name = "interview2.mp4",
-            file_path = "/path/to/interview2.mp4",
-            duration = 150000,
-            tags = {
-                {namespace = "bin", tag_path = "Footage/Interviews"},
-                {namespace = "person", tag_path = "Expert/Jane Doe"},
-                {namespace = "status", tag_path = "Transcribed"}
-            }
-        },
+    if not query then
+        print("WARNING: Failed to prepare media query")
+        return {}
+    end
 
-        -- More media in Footage bin
-        {
-            id = "media8",
-            file_name = "music.mp3",
-            file_path = "/path/to/music.mp3",
-            duration = 180000,
-            tags = {
-                {namespace = "bin", tag_path = "Footage"},
-                {namespace = "type", tag_path = "Audio/Music"},
-                {namespace = "mood", tag_path = "Ambient"}
-            }
-        },
-    }
+    local media_items = {}
+    if query:exec() then
+        while query:next() do
+            table.insert(media_items, {
+                id = query:value(0),
+                project_id = query:value(1),
+                name = query:value(2),
+                file_name = query:value(2),  -- Alias for backward compatibility
+                file_path = query:value(3),
+                duration = query:value(4),
+                frame_rate = query:value(5),
+                width = query:value(6),
+                height = query:value(7),
+                audio_channels = query:value(8),
+                codec = query:value(9),
+                created_at = query:value(10),
+                modified_at = query:value(11),
+                metadata = query:value(12),
+                tags = {}  -- TODO: Load tags from media_tags table when implemented
+            })
+        end
+    end
+
+    print(string.format("Loaded %d media items from database", #media_items))
+    return media_items
 end
 
 -- Load all tags for a specific namespace (or all namespaces if nil)

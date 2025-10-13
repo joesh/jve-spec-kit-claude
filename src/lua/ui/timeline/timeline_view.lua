@@ -1039,52 +1039,75 @@ function M.create(widget, state_module, track_filter_fn, options)
                         end
                     end
 
-                    -- Execute track changes
+                    -- Build command list for BatchCommand (single undo for entire drag)
+                    local command_specs = {}
+
+                    -- Add track changes
                     if #clips_to_move > 0 then
                         for _, move_info in ipairs(clips_to_move) do
-                            local move_cmd = Command.create("MoveClipToTrack", "default_project")
-                            move_cmd:set_parameter("clip_id", move_info.clip.id)
-                            move_cmd:set_parameter("target_track_id", move_info.target_track_id)
-
-                            local result = command_manager.execute(move_cmd)
-                            if not result.success then
-                                print(string.format("ERROR: Failed to move clip %s to track %s",
-                                    move_info.clip.id:sub(1,8), move_info.target_track_id))
-                            end
+                            table.insert(command_specs, {
+                                command_type = "MoveClipToTrack",
+                                parameters = {
+                                    clip_id = move_info.clip.id,
+                                    target_track_id = move_info.target_track_id
+                                }
+                            })
                         end
-                        -- Reload clips after track changes
-                        state_module.reload_clips()
                     end
 
-                    -- Execute time nudge (if moved horizontally)
+                    -- Add time nudge (if moved horizontally)
                     if delta_ms ~= 0 then
                         local clip_ids = {}
                         for _, clip in ipairs(drag_clips) do
                             table.insert(clip_ids, clip.id)
                         end
 
-                        local nudge_cmd = Command.create("Nudge", "default_project")
-                        nudge_cmd:set_parameter("nudge_amount_ms", delta_ms)
-                        nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
+                        table.insert(command_specs, {
+                            command_type = "Nudge",
+                            parameters = {
+                                nudge_amount_ms = delta_ms,
+                                selected_clip_ids = clip_ids
+                            }
+                        })
+                    end
 
-                        local result = command_manager.execute(nudge_cmd)
-                        if result.success then
-                            state_module.reload_clips()
+                    -- Execute all as single batch command (single undo entry)
+                    if #command_specs > 0 then
+                        if #command_specs == 1 then
+                            -- Only one operation - execute directly (no batch overhead)
+                            local spec = command_specs[1]
+                            local cmd = Command.create(spec.command_type, "default_project")
+                            for key, value in pairs(spec.parameters) do
+                                cmd:set_parameter(key, value)
+                            end
+                            local result = command_manager.execute(cmd)
+                            if not result.success then
+                                print(string.format("ERROR: %s failed: %s", spec.command_type, result.error_message or "unknown"))
+                            end
                         else
-                            print("ERROR: Nudge failed: " .. (result.error_message or "unknown error"))
+                            -- Multiple operations - use BatchCommand for single undo
+                            local json = require("dkjson")
+                            local commands_json = json.encode(command_specs)
+                            local batch_cmd = Command.create("BatchCommand", "default_project")
+                            batch_cmd:set_parameter("commands_json", commands_json)
+
+                            local result = command_manager.execute(batch_cmd)
+                            if not result.success then
+                                print(string.format("ERROR: Batch drag failed: %s", result.error_message or "unknown"))
+                            end
                         end
                     end
 
                     -- Summary message
-                    local moved_count = #clips_changed_track
+                    local moved_count = #clips_to_move
                     local nudged_count = delta_ms ~= 0 and #drag_clips or 0
                     if moved_count > 0 and nudged_count > 0 then
-                        print(string.format("Moved %d clip(s) to track %s and nudged by %dms",
-                            moved_count, target_track_id, delta_ms))
+                        print(string.format("✅ Drag: Moved %d clip(s) + nudged by %dms (single undo)",
+                            moved_count, delta_ms))
                     elseif moved_count > 0 then
-                        print(string.format("Moved %d clip(s) to track %s", moved_count, target_track_id))
+                        print(string.format("✅ Moved %d clip(s) to different track", moved_count))
                     elseif nudged_count > 0 then
-                        print(string.format("Nudged %d clip(s) by %dms", nudged_count, delta_ms))
+                        print(string.format("✅ Nudged %d clip(s) by %dms", nudged_count, delta_ms))
                     end
 
                 elseif drag_type == "edges" then
@@ -1126,7 +1149,6 @@ function M.create(widget, state_module, track_filter_fn, options)
                     end
 
                     if result and result.success then
-                        state_module.reload_clips()
                         print(string.format("Dragged %d edge(s) by %dms", #edge_infos, delta_ms))
                     else
                         print(string.format("ERROR: Drag failed - result=%s, error=%s",

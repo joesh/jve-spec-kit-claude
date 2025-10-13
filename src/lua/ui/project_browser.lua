@@ -42,6 +42,26 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(header_layout, project_tab)
 
     qt_constants.LAYOUT.ADD_STRETCH(header_layout, 1)
+
+    -- Add "Insert to Timeline" button
+    local insert_btn = qt_constants.WIDGET.CREATE_BUTTON("Insert to Timeline")
+    qt_constants.PROPERTIES.SET_STYLE(insert_btn, [[
+        QPushButton {
+            background: #4a4a4a;
+            color: white;
+            border: 1px solid #555;
+            padding: 4px 8px;
+            font-size: 11px;
+        }
+        QPushButton:hover {
+            background: #5a5a5a;
+        }
+        QPushButton:pressed {
+            background: #3a3a3a;
+        }
+    ]])
+    qt_constants.LAYOUT.ADD_WIDGET(header_layout, insert_btn)
+
     qt_constants.LAYOUT.ADD_WIDGET(layout, header)
 
     -- Create tree widget for media library (Resolve style)
@@ -266,10 +286,81 @@ function M.create()
     -- Store references for later access
     M.tree = tree
     M.media_items = media_items
+    M.insert_button = insert_btn
+    M.container = container
 
     print("✅ Project browser created with " .. #media_items .. " media items")
 
     return container
+end
+
+-- Set timeline panel reference (called by correct_layout after both are created)
+function M.set_timeline_panel(timeline_panel_mod)
+    M.timeline_panel = timeline_panel_mod
+
+    -- Connect insert button now that we have timeline reference
+    if M.insert_button then
+        -- Store callback globally for Qt signal system
+        _G.project_browser_insert_handler = function()
+            local selected_index = qt_constants.CONTROL.GET_TREE_SELECTED_INDEX(M.tree)
+            if selected_index < 0 or selected_index >= #M.media_items then
+                print("⚠️  No media item selected")
+                return
+            end
+
+            local media = M.media_items[selected_index + 1]  -- Lua 1-indexed
+            print(string.format("📥 Inserting media to timeline: %s", media.name))
+
+            -- Use command system to insert media as clip
+            local command_manager = require("core.command_manager")
+            local Command = require("command")
+
+            -- Find first video track
+            local tracks = require("core.database").load_tracks("default_sequence")
+            local target_track = nil
+            for _, track in ipairs(tracks) do
+                if track.track_type == "VIDEO" then
+                    target_track = track
+                    break
+                end
+            end
+
+            if not target_track then
+                print("❌ No video track found")
+                return
+            end
+
+            -- Get timeline state to find insert position (use playhead or end of timeline)
+            local timeline_state = M.timeline_panel.get_state()
+            local insert_time = timeline_state.playhead_time or 0
+
+            -- Create Insert command with full media duration
+            local source_in = 0
+            local source_out = media.duration
+            local duration = source_out - source_in
+
+            local cmd = Command.create("Insert", "default_project")
+            cmd:set_parameter("track_id", target_track.id)
+            cmd:set_parameter("media_id", media.id)
+            cmd:set_parameter("insert_time", insert_time)
+            cmd:set_parameter("duration", duration)
+            cmd:set_parameter("source_in", source_in)
+            cmd:set_parameter("source_out", source_out)
+
+            local success, result = pcall(function()
+                return command_manager.execute(cmd)
+            end)
+
+            if success and result and result.success then
+                print("✅ Media inserted to timeline")
+            else
+                print(string.format("❌ Failed to insert: %s", result and result.error_message or "unknown"))
+            end
+        end
+
+        -- Register the handler with Qt
+        qt_set_button_click_handler(M.insert_button, "project_browser_insert_handler")
+    end
 end
 
 -- Get selected media item

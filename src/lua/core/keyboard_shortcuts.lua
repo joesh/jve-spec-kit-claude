@@ -51,11 +51,13 @@ local MOD = {
 -- References to timeline state and other modules
 local timeline_state = nil
 local command_manager = nil
+local project_browser = nil
 
 -- Initialize with references to other modules
-function keyboard_shortcuts.init(state, cmd_mgr)
+function keyboard_shortcuts.init(state, cmd_mgr, proj_browser)
     timeline_state = state
     command_manager = cmd_mgr
+    project_browser = proj_browser
 end
 
 -- Check if a modifier is active (LuaJIT compatible bitwise AND)
@@ -77,8 +79,7 @@ function keyboard_shortcuts.handle_key(event)
             -- Redo
             if command_manager then
                 local result = command_manager.redo()
-                if result.success and timeline_state then
-                    timeline_state.reload_clips()
+                if result.success then
                     print("Redo complete")
                 end
             end
@@ -86,8 +87,7 @@ function keyboard_shortcuts.handle_key(event)
             -- Undo
             if command_manager then
                 local result = command_manager.undo()
-                if result.success and timeline_state then
-                    timeline_state.reload_clips()
+                if result.success then
                     print("Undo complete")
                 else
                     -- Provide clear feedback on why undo failed
@@ -222,7 +222,6 @@ function keyboard_shortcuts.handle_key(event)
                 end
 
                 if result and result.success then
-                    timeline_state.reload_clips()
                     print(string.format("Ripple edited %d edge(s) by %d frames (%dms)", #edge_infos, nudge_frames, nudge_ms))
                 else
                     print("ERROR: Ripple edit failed")
@@ -240,7 +239,6 @@ function keyboard_shortcuts.handle_key(event)
 
                 local result = command_manager.execute(nudge_cmd)
                 if result.success then
-                    timeline_state.reload_clips()
                     print(string.format("Nudged %d clips by %d frames (%dms)", #selected_clips, nudge_frames, nudge_ms))
                 else
                     print("ERROR: Nudge failed: " .. (result.error_message or "unknown error"))
@@ -289,8 +287,6 @@ function keyboard_shortcuts.handle_key(event)
 
                     local result = command_manager.execute(split_command)
                     if result.success then
-                        -- Reload clips from database to pick up the split
-                        timeline_state.reload_clips()
                         print(string.format("Split clip at playhead %dms", playhead_time))
                     else
                         print(string.format("Failed to split clip: %s", result.error_message))
@@ -345,21 +341,27 @@ function keyboard_shortcuts.handle_key(event)
 
     -- F9: INSERT at playhead (ripple subsequent clips forward)
     if key == KEY.F9 then
-        if command_manager and timeline_state then
+        if command_manager and timeline_state and project_browser then
+            -- Get selected media from project browser
+            local selected_media = project_browser.get_selected_media()
+            if not selected_media then
+                print("❌ INSERT: No media selected in project browser")
+                return true
+            end
+
             local Command = require("command")
             local playhead_time = timeline_state.get_playhead_time()
             local insert_cmd = Command.create("Insert", "default_project")
-            insert_cmd:set_parameter("media_id", "media1")
+            insert_cmd:set_parameter("media_id", selected_media.id)
             insert_cmd:set_parameter("track_id", "video1")
             insert_cmd:set_parameter("insert_time", playhead_time)
-            insert_cmd:set_parameter("duration", 3000)  -- 3 second clip
+            insert_cmd:set_parameter("duration", selected_media.duration)
             insert_cmd:set_parameter("source_in", 0)
-            insert_cmd:set_parameter("source_out", 3000)
+            insert_cmd:set_parameter("source_out", selected_media.duration)
             insert_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
             local result = command_manager.execute(insert_cmd)
             if result.success then
-                timeline_state.reload_clips()
-                print(string.format("✅ INSERT: Added 3s clip at %dms, rippled subsequent clips", playhead_time))
+                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_media.name, playhead_time))
             else
                 print("❌ INSERT failed: " .. (result.error_message or "unknown error"))
             end
@@ -369,21 +371,27 @@ function keyboard_shortcuts.handle_key(event)
 
     -- F10: OVERWRITE at playhead (trim/replace existing clips)
     if key == KEY.F10 then
-        if command_manager and timeline_state then
+        if command_manager and timeline_state and project_browser then
+            -- Get selected media from project browser
+            local selected_media = project_browser.get_selected_media()
+            if not selected_media then
+                print("❌ OVERWRITE: No media selected in project browser")
+                return true
+            end
+
             local Command = require("command")
             local playhead_time = timeline_state.get_playhead_time()
             local overwrite_cmd = Command.create("Overwrite", "default_project")
-            overwrite_cmd:set_parameter("media_id", "media1")
+            overwrite_cmd:set_parameter("media_id", selected_media.id)
             overwrite_cmd:set_parameter("track_id", "video1")
             overwrite_cmd:set_parameter("overwrite_time", playhead_time)
-            overwrite_cmd:set_parameter("duration", 3000)  -- 3 second clip
+            overwrite_cmd:set_parameter("duration", selected_media.duration)
             overwrite_cmd:set_parameter("source_in", 0)
-            overwrite_cmd:set_parameter("source_out", 3000)
+            overwrite_cmd:set_parameter("source_out", selected_media.duration)
             overwrite_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
             local result = command_manager.execute(overwrite_cmd)
             if result.success then
-                timeline_state.reload_clips()
-                print(string.format("✅ OVERWRITE: Added 3s clip at %dms, trimmed overlapping clips", playhead_time))
+                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_media.name, playhead_time))
             else
                 print("❌ OVERWRITE failed: " .. (result.error_message or "unknown error"))
             end
@@ -528,8 +536,6 @@ function keyboard_shortcuts.handle_key(event)
 
                                 local result = command_manager.execute(move_cmd)
                                 if result.success then
-                                    -- Reload clips immediately so next iteration has fresh data
-                                    timeline_state.reload_clips()
                                     moved_count = moved_count + 1
                                 end
                             end
@@ -636,8 +642,6 @@ function keyboard_shortcuts.handle_key(event)
 
                                 local result = command_manager.execute(move_cmd)
                                 if result.success then
-                                    -- Reload clips immediately so next iteration has fresh data
-                                    timeline_state.reload_clips()
                                     moved_count = moved_count + 1
                                 end
                             end

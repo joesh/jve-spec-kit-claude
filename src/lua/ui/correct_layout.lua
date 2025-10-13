@@ -1,5 +1,10 @@
 -- Correct layout: 3 panels across top, timeline across bottom
 
+-- Add luarocks path for C modules (like lxp.so)
+package.cpath = package.cpath .. ';' .. os.getenv('HOME') .. '/.luarocks/lib/lua/5.1/?.so'
+package.path = package.path .. ';' .. os.getenv('HOME') .. '/.luarocks/share/lua/5.1/?.lua'
+package.path = package.path .. ';' .. os.getenv('HOME') .. '/.luarocks/share/lua/5.1/?/init.lua'
+
 -- Enable strict nil error handling - calling nil will raise an error with proper stack trace
 debug.setmetatable(nil, {
   __call = function()
@@ -180,9 +185,22 @@ local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
 -- Top row: Horizontal splitter (Project Browser | Viewer | Inspector)
 local top_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
--- 1. Project Browser (left)
+-- 1. Project Browser (left) - create EARLY so menu system can reference it
 local project_browser_mod = require("ui.project_browser")
 local project_browser = project_browser_mod.create()
+
+-- Initialize menu system AFTER project browser exists
+print("📋 Initializing menu system...")
+local menu_system = require("core.menu_system")
+menu_system.init(main_window, command_manager, project_browser_mod)
+
+-- Load menus from XML
+local menu_success, menu_error = menu_system.load_from_file("menus.xml")
+if menu_success then
+    print("✅ Menu system loaded successfully")
+else
+    print("❌ Failed to load menu system: " .. tostring(menu_error))
+end
 
 -- 2. Src/Timeline Viewer (center)
 local viewer_panel = qt_constants.WIDGET.CREATE()
@@ -208,7 +226,7 @@ local timeline_panel = timeline_panel_mod.create()
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state_from_panel = timeline_panel_mod.get_state()
 print(string.format("DEBUG: timeline_state from panel = %s", tostring(timeline_state_from_panel)))
-keyboard_shortcuts.init(timeline_state_from_panel, command_manager)
+keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod)
 
 -- 6. Initialize focus manager for visual panel indicators
 local focus_manager = require("ui.focus_manager")
@@ -231,6 +249,12 @@ if mount_result and mount_result.success then
 
     -- Wire up timeline to project browser for media insertion
     timeline_panel_mod.set_project_browser(project_browser_mod)
+
+    -- Wire up project browser to timeline for insert button
+    project_browser_mod.set_timeline_panel(timeline_panel_mod)
+
+    -- Wire up menu system to timeline for Split command
+    menu_system.set_timeline_panel(timeline_panel_mod)
 else
     print("ERROR: Inspector mount failed: " .. tostring(mount_result))
 end
