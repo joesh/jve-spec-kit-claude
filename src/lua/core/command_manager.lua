@@ -2503,8 +2503,132 @@ command_executors["BatchRippleEdit"] = function(command)
         print(string.format("  Edge %d: clip=%s, edge_type=%s", i, edge_info.clip_id:sub(1,8), edge_info.edge_type))
     end
 
-    -- Phase 1: Trim all edges and find latest ripple point
-    -- All edges must succeed or none - preserves relative timing
+    -- Phase 0: Calculate constraints for ALL edges BEFORE any modifications
+    -- Find the most restrictive constraint to ensure all edges can move together
+    local max_allowed_delta = delta_ms
+    local min_allowed_delta = delta_ms
+
+    print("DEBUG: Phase 0 - Calculating constraints for all edges")
+    for _, edge_info in ipairs(edge_infos) do
+        -- Materialize clip (gap or real)
+        local clip, actual_edge_type, is_gap_clip
+
+        if edge_info.edge_type == "gap_after" or edge_info.edge_type == "gap_before" then
+            local reference_clip = Clip.load(edge_info.clip_id, db)
+            if not reference_clip then
+                print(string.format("WARNING: Gap reference clip %s not found", edge_info.clip_id:sub(1,8)))
+                return false
+            end
+
+            -- Calculate gap boundaries
+            local gap_start, gap_end
+            if edge_info.edge_type == "gap_after" then
+                gap_start = reference_clip.start_time + reference_clip.duration
+                gap_end = math.huge
+                for _, c in ipairs(all_clips) do
+                    if c.track_id == reference_clip.track_id and c.start_time > gap_start then
+                        gap_end = math.min(gap_end, c.start_time)
+                    end
+                end
+            else  -- gap_before
+                gap_end = reference_clip.start_time
+                gap_start = 0
+                for _, c in ipairs(all_clips) do
+                    if c.track_id == reference_clip.track_id and c.start_time + c.duration < gap_end then
+                        gap_start = math.max(gap_start, c.start_time + c.duration)
+                    end
+                end
+            end
+
+            clip = {
+                id = "temp_gap_" .. edge_info.clip_id,
+                track_id = reference_clip.track_id,
+                start_time = gap_start,
+                duration = gap_end - gap_start,
+                source_in = 0,
+                source_out = gap_end - gap_start
+            }
+            actual_edge_type = edge_info.edge_type == "gap_after" and "in" or "out"
+            is_gap_clip = true
+        else
+            clip = Clip.load(edge_info.clip_id, db)
+            if not clip then
+                print(string.format("WARNING: Clip %s not found", edge_info.clip_id:sub(1,8)))
+                return false
+            end
+            actual_edge_type = edge_info.edge_type
+            is_gap_clip = false
+        end
+
+        -- Calculate constraint for this edge using apply_edge_ripple's dry-run mode
+        -- Create a temporary command for constraint calculation
+        local temp_cmd = {
+            project_id = command.project_id,
+            parameters = {dry_run = true, sequence_id = sequence_id}
+        }
+        function temp_cmd:get_parameter(key)
+            return self.parameters[key]
+        end
+        function temp_cmd:set_parameter(key, val)
+            self.parameters[key] = val
+        end
+
+        -- Try the requested delta - if it fails, find the maximum safe delta
+        local constraint_clip = {
+            id = clip.id,
+            track_id = clip.track_id,
+            start_time = clip.start_time,
+            duration = clip.duration,
+            source_in = clip.source_in,
+            source_out = clip.source_out,
+            media_id = clip.media_id
+        }
+
+        -- Calculate constraints using the same logic as RippleEdit
+        local constraints = require('core.timeline_constraints')
+        local min_delta, max_delta = constraints.calculate_trim_range(
+            constraint_clip,
+            actual_edge_type,
+            all_clips,
+            30.0,  -- frame_rate (TODO: get from sequence)
+            true   -- check_all_tracks for ripple
+        )
+
+        print(string.format("  Edge %s %s: constraint range [%d, %d]",
+            clip.id:sub(1,8), actual_edge_type, min_delta, max_delta))
+
+        -- Clamp the allowed delta to this edge's constraints
+        if delta_ms > 0 then
+            -- Moving right - constrained by max_delta
+            max_allowed_delta = math.min(max_allowed_delta, max_delta)
+        else
+            -- Moving left - constrained by min_delta
+            min_allowed_delta = math.max(min_allowed_delta, min_delta)
+        end
+    end
+
+    -- Clamp delta_ms to the most restrictive constraint
+    local original_delta = delta_ms
+    if delta_ms > 0 then
+        delta_ms = math.min(delta_ms, max_allowed_delta)
+    else
+        delta_ms = math.max(delta_ms, min_allowed_delta)
+    end
+
+    if delta_ms ~= original_delta then
+        print(string.format("DEBUG: Clamped delta from %d to %d (most restrictive constraint)",
+            original_delta, delta_ms))
+        -- Store clamped delta for deterministic replay
+        command:set_parameter("clamped_delta_ms", delta_ms)
+    end
+
+    if delta_ms == 0 then
+        print("WARNING: All edges blocked - no movement possible")
+        return false
+    end
+
+    -- Phase 1: Trim all edges with the clamped delta
+    -- All edges now guaranteed to succeed - preserves relative timing
     for _, edge_info in ipairs(edge_infos) do
         -- MATERIALIZE GAP CLIPS: Create virtual clip objects for gaps
         -- This removes all special cases - gaps behave exactly like clips
@@ -2572,14 +2696,16 @@ command_executors["BatchRippleEdit"] = function(command)
         }
 
         -- Apply edge ripple using shared helper
-        -- BUG FIX: Pass same delta_ms to ALL edges - asymmetry comes from edge type, not negation
-        -- apply_edge_ripple already handles in-point vs out-point semantics correctly
-        local edge_delta = delta_ms  -- Same delta for all edges!
+        -- Phase 0 already ensured this will succeed by clamping delta_ms
+        -- Pass same clamped delta_ms to ALL edges - asymmetry comes from edge type, not negation
+        local edge_delta = delta_ms  -- Same clamped delta for all edges!
         print(string.format("  Processing: clip=%s, actual_edge=%s, edge_delta=%d",
             clip.id:sub(1,8), actual_edge_type, edge_delta))
         local ripple_time, success = apply_edge_ripple(clip, actual_edge_type, edge_delta)
         if not success then
-            print(string.format("Ripple blocked: clip %s at media boundary (preserving relative timing)", clip.id:sub(1,8)))
+            -- This should never happen after Phase 0 constraint calculation
+            print(string.format("ERROR: Ripple failed for clip %s despite constraint pre-calculation!", clip.id:sub(1,8)))
+            print(string.format("       This indicates a bug in constraint calculation - please report"))
             return false
         end
 

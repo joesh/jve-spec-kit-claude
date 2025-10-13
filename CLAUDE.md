@@ -132,6 +132,20 @@ The previous documentation contained extensive false "milestone" claims about co
 
 ## Recent Improvements
 
+**2025-10-13: Fix BatchRippleEdit Asymmetric Edge Misalignment**
+- Fixed critical bug where asymmetric ripple with gap edges caused misalignment
+  - Root cause: Sequential edge processing - if edge 2 hit constraint after edge 1 saved, misalignment occurred
+  - Added Phase 0 constraint pre-calculation for ALL edges before any modifications
+  - Finds most restrictive constraint across all edges, clamps delta_ms to that limit
+  - All edges now move by same (clamped) amount, preserving relative timing
+- Constraint calculation uses timeline_constraints.calculate_trim_range() for each edge
+  - Handles gap edges, clip edges, media boundaries, timeline boundaries
+  - Calculates min_delta and max_delta for each edge type
+  - Chooses most restrictive limit (min for leftward drag, max for rightward drag)
+- Changed Phase 1 failure check to assertion (should never fail after Phase 0)
+  - If failure occurs, indicates bug in constraint calculation (log error and request report)
+- Files: src/lua/core/command_manager.lua (BatchRippleEdit lines 2506-2710)
+
 **2025-10-13: Code Review Fixes & Database Hardening**
 - Improved BatchCommand transaction safety
   - Replaced manual rollback loops with SQLite BEGIN/COMMIT/ROLLBACK transactions
