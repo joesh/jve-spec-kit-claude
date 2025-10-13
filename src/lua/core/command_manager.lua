@@ -2585,13 +2585,16 @@ command_executors["BatchRippleEdit"] = function(command)
         }
 
         -- Calculate constraints using the same logic as RippleEdit
-        local constraints = require('core.timeline_constraints')
-        local min_delta, max_delta = constraints.calculate_trim_range(
+        local constraints_module = require('core.timeline_constraints')
+        local constraint_result = constraints_module.calculate_trim_range(
             constraint_clip,
             actual_edge_type,
             all_clips,
             true   -- check_all_tracks for ripple
         )
+
+        local min_delta = constraint_result.min_delta
+        local max_delta = constraint_result.max_delta
 
         print(string.format("  Edge %s %s: constraint range [%d, %d]",
             clip.id:sub(1,8), actual_edge_type, min_delta, max_delta))
