@@ -752,9 +752,20 @@ command_executors["BatchCommand"] = function(command)
         return false
     end
 
-    -- Execute each command in sequence
+    -- Execute each command in sequence within a transaction
+    -- This ensures atomic rollback if any command fails
     local Command = require("command")
     local executed_commands = {}
+
+    -- Begin transaction for atomic batch execution
+    local begin_tx = db:prepare("BEGIN TRANSACTION")
+    if not begin_tx or not begin_tx:exec() then
+        print("ERROR: BatchCommand: Failed to begin transaction")
+        return false
+    end
+
+    local rollback_needed = false
+    local error_message = nil
 
     for i, spec in ipairs(command_specs) do
         local cmd = Command.create(spec.command_type, spec.project_id or "default_project")
@@ -769,33 +780,39 @@ command_executors["BatchCommand"] = function(command)
         -- Execute command (don't add to command log - batch is the log entry)
         local executor = command_executors[spec.command_type]
         if not executor then
-            print(string.format("ERROR: BatchCommand: Unknown command type '%s'", spec.command_type))
-            -- Rollback previous commands
-            for j = #executed_commands, 1, -1 do
-                local undo_cmd = executed_commands[j]
-                local undoer = command_undoers[undo_cmd.command_type]
-                if undoer then
-                    undoer(undo_cmd)
-                end
-            end
-            return false
+            error_message = string.format("Unknown command type '%s'", spec.command_type)
+            rollback_needed = true
+            break
         end
 
         local success = executor(cmd)
         if not success then
-            print(string.format("ERROR: BatchCommand: Command %d (%s) failed", i, spec.command_type))
-            -- Rollback previous commands
-            for j = #executed_commands, 1, -1 do
-                local undo_cmd = executed_commands[j]
-                local undoer = command_undoers[undo_cmd.command_type]
-                if undoer then
-                    undoer(undo_cmd)
-                end
-            end
-            return false
+            error_message = string.format("Command %d (%s) failed", i, spec.command_type)
+            rollback_needed = true
+            break
         end
 
         table.insert(executed_commands, cmd)
+    end
+
+    -- Commit or rollback transaction based on success
+    if rollback_needed then
+        local rollback_tx = db:prepare("ROLLBACK")
+        if rollback_tx then
+            rollback_tx:exec()
+        end
+        print(string.format("ERROR: BatchCommand: %s (transaction rolled back)", error_message))
+        return false
+    end
+
+    local commit_tx = db:prepare("COMMIT")
+    if not commit_tx or not commit_tx:exec() then
+        print("ERROR: BatchCommand: Failed to commit transaction")
+        local rollback_tx = db:prepare("ROLLBACK")
+        if rollback_tx then
+            rollback_tx:exec()
+        end
+        return false
     end
 
     -- Store executed commands for undo
@@ -2826,13 +2843,17 @@ function M.replay_events(sequence_id, target_sequence_number)
 
     -- Also clear all media for the project (ImportMedia commands will recreate them)
     -- Get project_id from sequence
-    local project_id = "default_project"
+    local project_id = nil
     local project_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
     if project_query then
         project_query:bind_value(1, sequence_id)
         if project_query:exec() and project_query:next() then
             project_id = project_query:value(0)
         end
+    end
+
+    if not project_id then
+        error(string.format("FATAL: Cannot determine project_id for sequence '%s' - cannot safely clear media table", sequence_id))
     end
 
     local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")

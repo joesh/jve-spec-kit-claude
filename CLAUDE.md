@@ -132,6 +132,22 @@ The previous documentation contained extensive false "milestone" claims about co
 
 ## Recent Improvements
 
+**2025-10-13: Code Review Fixes & Database Hardening**
+- Improved BatchCommand transaction safety
+  - Replaced manual rollback loops with SQLite BEGIN/COMMIT/ROLLBACK transactions
+  - Database automatically returns to pre-batch state if any command fails
+  - More robust than calling undoers manually (prevents partial rollback failures)
+- Fixed project_id null-check in replay system
+  - Changed from "default_project" fallback to throwing FATAL error
+  - Prevents accidentally clearing wrong project's media table
+  - Fail-safe approach: better to stop than guess incorrectly
+- Added automated regression tests
+  - test_batch_command_contract.lua: Parameter name validation, transaction rollback
+  - test_undo_media_cleanup.lua: Media table cleanup during undo/replay
+  - test_playhead_restoration.lua: Playhead position restoration across undo/redo
+  - Tests prevent regressions of critical bug fixes
+- Files: src/lua/core/command_manager.lua, tests/*.lua
+
 **2025-10-13: BatchCommand Parameter Name Fix & Qt Property Getters**
 - Fixed BatchCommand drag operations failing with "No commands provided" error
   - Root cause: Parameter name mismatch between caller (`commands_json`) and executor (`commands`)
