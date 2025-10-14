@@ -61,8 +61,9 @@ end
 -- Calculate the valid range for trimming an edge
 -- edge_type: "in" or "out"
 -- check_all_tracks: if true, check collisions on all tracks (for ripple edits)
+-- skip_adjacent_check: if true, skip adjacent clip constraints (for ripple edits where clips move downstream)
 -- Returns: {min_delta, max_delta, limit_reason}
-function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks)
+function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, skip_adjacent_check)
     local min_delta = -math.huge
     local max_delta = math.huge
     local limit_left = nil  -- What's limiting us on the left
@@ -80,7 +81,8 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks)
     end
 
     -- CONSTRAINT 2: Media boundaries (can't trim beyond available media)
-    if clip.source_in ~= nil then  -- Real clip with media
+    -- Gap clips have no media_id - they represent empty timeline space
+    if clip.media_id ~= nil then  -- Real clip with media
         if edge_type == "in" then
             -- Can't drag left beyond source_in = 0
             local media_min = -clip.source_in
@@ -99,30 +101,33 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks)
     end
 
     -- CONSTRAINT 3: Adjacent clips (can't trim into another clip)
-    for _, other in ipairs(all_clips) do
-        -- For ripple edits: check all tracks. For regular trims: only same track
-        local should_check = (check_all_tracks or other.track_id == clip.track_id)
-        if other.id ~= clip.id and should_check then
-            if edge_type == "in" then
-                -- Trimming in-point: check for clip to the left
-                local other_end = other.start_time + other.duration
-                if other_end <= clip.start_time then
-                    -- Clip is to our left
-                    local max_drag_left = clip.start_time - other_end
-                    if -max_drag_left > min_delta then
-                        min_delta = -max_drag_left
-                        limit_left = other
+    -- Skip this for ripple edits where adjacent clips move downstream
+    if not skip_adjacent_check then
+        for _, other in ipairs(all_clips) do
+            -- For ripple edits: check all tracks. For regular trims: only same track
+            local should_check = (check_all_tracks or other.track_id == clip.track_id)
+            if other.id ~= clip.id and should_check then
+                if edge_type == "in" then
+                    -- Trimming in-point: check for clip to the left
+                    local other_end = other.start_time + other.duration
+                    if other_end <= clip.start_time then
+                        -- Clip is to our left
+                        local max_drag_left = clip.start_time - other_end
+                        if -max_drag_left > min_delta then
+                            min_delta = -max_drag_left
+                            limit_left = other
+                        end
                     end
-                end
-            else  -- edge_type == "out"
-                -- Trimming out-point: check for clip to the right
-                local clip_end = clip.start_time + clip.duration
-                if other.start_time >= clip_end then
-                    -- Clip is to our right
-                    local max_drag_right = other.start_time - clip_end
-                    if max_drag_right < max_delta then
-                        max_delta = max_drag_right
-                        limit_right = other
+                else  -- edge_type == "out"
+                    -- Trimming out-point: check for clip to the right
+                    local clip_end = clip.start_time + clip.duration
+                    if other.start_time >= clip_end then
+                        -- Clip is to our right
+                        local max_drag_right = other.start_time - clip_end
+                        if max_drag_right < max_delta then
+                            max_delta = max_drag_right
+                            limit_right = other
+                        end
                     end
                 end
             end

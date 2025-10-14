@@ -112,7 +112,8 @@ function M.load(media_id, db)
     end
 
     if not query:next() then
-        print(string.format("WARNING: Media.load: Media not found: %s", media_id))
+        -- Media not found - this is expected for orphaned clips (after undo/replay)
+        -- Calling code handles nil media gracefully by skipping boundary checks
         return nil
     end
 

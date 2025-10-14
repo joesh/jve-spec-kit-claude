@@ -97,6 +97,13 @@ function M:save(db)
         return false
     end
 
+    -- Validate required fields to prevent NULL constraint violations
+    if self.start_time == nil then
+        print(string.format("ERROR: Clip.save: Clip %s has nil start_time - cannot save", self.id:sub(1,8)))
+        print(string.format("  track_id=%s, duration=%s", tostring(self.track_id), tostring(self.duration)))
+        return false
+    end
+
     -- Check if clip exists
     local exists_query = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
     exists_query:bind_value(1, self.id)

@@ -301,6 +301,14 @@ function M.execute(command)
         return result
     end
 
+    -- BEGIN TRANSACTION: All database changes (command save + state changes) are atomic
+    -- If anything fails, everything rolls back automatically
+    local begin_tx = db:prepare("BEGIN TRANSACTION")
+    if not (begin_tx and begin_tx:exec()) then
+        result.error_message = "Failed to begin transaction"
+        return result
+    end
+
     -- Calculate pre-execution state hash
     local pre_hash = calculate_state_hash(command.project_id)
 
@@ -319,9 +327,11 @@ function M.execute(command)
         print(string.format("ERROR: current_sequence_number = %s, last_sequence_number = %d",
             tostring(current_sequence_number), last_sequence_number))
         print("ERROR: This indicates a bug in undo position tracking!")
-        print("HINT: Check if undo was called without proper replay, or if init() failed to load position")
-        print("HINT: Database integrity check (repair_broken_parent_chains) runs on startup")
-        error("FATAL: Cannot execute command with NULL parent (would break undo tree)")
+        local rollback_tx = db:prepare("ROLLBACK")
+        if rollback_tx then rollback_tx:exec() end
+        last_sequence_number = last_sequence_number - 1
+        result.error_message = "FATAL: Cannot execute command with NULL parent (would break undo tree)"
+        return result
     end
 
     -- VALIDATION: If parent exists, verify it actually exists in database
@@ -333,10 +343,11 @@ function M.execute(command)
                 print(string.format("ERROR: Command %d references non-existent parent %d!",
                     sequence_number, command.parent_sequence_number))
                 print("ERROR: Parent command was deleted or never existed - broken referential integrity")
-                print("HINT: This usually indicates manual database modification or a critical bug")
-                print(string.format("HINT: current_sequence_number = %s, last_sequence_number = %d",
-                    tostring(current_sequence_number), last_sequence_number))
-                error("FATAL: Cannot execute command with non-existent parent (would break undo tree)")
+                local rollback_tx = db:prepare("ROLLBACK")
+                if rollback_tx then rollback_tx:exec() end
+                last_sequence_number = last_sequence_number - 1
+                result.error_message = "FATAL: Cannot execute command with non-existent parent (would break undo tree)"
+                return result
             end
         end
     end
@@ -388,16 +399,28 @@ function M.execute(command)
                 snapshot_mgr.create_snapshot(db, "default_sequence", sequence_number, clips)
             end
 
+            -- COMMIT TRANSACTION: Everything succeeded
+            local commit_tx = db:prepare("COMMIT")
+            if commit_tx then commit_tx:exec() end
+
             -- Reload timeline state to pick up database changes
             -- This triggers listener notifications → automatic view redraws
             timeline_state.reload_clips()
         else
             result.error_message = "Failed to save command to database"
+            -- ROLLBACK: Command execution succeeded but save failed
+            local rollback_tx = db:prepare("ROLLBACK")
+            if rollback_tx then rollback_tx:exec() end
+            last_sequence_number = last_sequence_number - 1  -- Revert sequence number
         end
     else
         command.status = "Failed"
         result.error_message = last_error_message ~= "" and last_error_message or "Command execution failed"
         last_error_message = ""
+        -- ROLLBACK: Command execution failed
+        local rollback_tx = db:prepare("ROLLBACK")
+        if rollback_tx then rollback_tx:exec() end
+        last_sequence_number = last_sequence_number - 1  -- Revert sequence number
     end
 
     return result
@@ -752,20 +775,10 @@ command_executors["BatchCommand"] = function(command)
         return false
     end
 
-    -- Execute each command in sequence within a transaction
-    -- This ensures atomic rollback if any command fails
+    -- Execute each command in sequence
+    -- Outer execute() provides transaction safety - no nested transactions needed
     local Command = require("command")
     local executed_commands = {}
-
-    -- Begin transaction for atomic batch execution
-    local begin_tx = db:prepare("BEGIN TRANSACTION")
-    if not begin_tx or not begin_tx:exec() then
-        print("ERROR: BatchCommand: Failed to begin transaction")
-        return false
-    end
-
-    local rollback_needed = false
-    local error_message = nil
 
     for i, spec in ipairs(command_specs) do
         local cmd = Command.create(spec.command_type, spec.project_id or "default_project")
@@ -780,39 +793,17 @@ command_executors["BatchCommand"] = function(command)
         -- Execute command (don't add to command log - batch is the log entry)
         local executor = command_executors[spec.command_type]
         if not executor then
-            error_message = string.format("Unknown command type '%s'", spec.command_type)
-            rollback_needed = true
-            break
+            print(string.format("ERROR: BatchCommand: Unknown command type '%s'", spec.command_type))
+            return false
         end
 
         local success = executor(cmd)
         if not success then
-            error_message = string.format("Command %d (%s) failed", i, spec.command_type)
-            rollback_needed = true
-            break
+            print(string.format("ERROR: BatchCommand: Command %d (%s) failed", i, spec.command_type))
+            return false
         end
 
         table.insert(executed_commands, cmd)
-    end
-
-    -- Commit or rollback transaction based on success
-    if rollback_needed then
-        local rollback_tx = db:prepare("ROLLBACK")
-        if rollback_tx then
-            rollback_tx:exec()
-        end
-        print(string.format("ERROR: BatchCommand: %s (transaction rolled back)", error_message))
-        return false
-    end
-
-    local commit_tx = db:prepare("COMMIT")
-    if not commit_tx or not commit_tx:exec() then
-        print("ERROR: BatchCommand: Failed to commit transaction")
-        local rollback_tx = db:prepare("ROLLBACK")
-        if rollback_tx then
-            rollback_tx:exec()
-        end
-        return false
     end
 
     -- Store executed commands for undo
@@ -2023,7 +2014,9 @@ local function apply_edge_ripple(clip, edge_type, delta_ms)
     -- See docs/ripple-trim-semantics.md for detailed examples.
 
     local ripple_time
-    local has_source_media = (clip.source_in ~= nil)
+    -- Gap clips have no media_id - they represent empty timeline space
+    -- Skip media boundary checks for gaps (allow source_in/out to be anything)
+    local has_source_media = (clip.media_id ~= nil)
 
     if edge_type == "in" then
         -- Ripple in-point trim
@@ -2044,9 +2037,6 @@ local function apply_edge_ripple(clip, edge_type, delta_ms)
         if has_source_media then
             -- Advance source to reveal less of the beginning
             local new_source_in = clip.source_in + delta_ms  -- 0 + 500 = 500
-
-            print(string.format("DEBUG in-point: clip=%s, source_in=%d, source_out=%d, delta=%d, new_source_in=%d",
-                clip.id:sub(1,8), clip.source_in, clip.source_out or 0, delta_ms, new_source_in))
 
             if new_source_in < 0 then
                 print(string.format("  BLOCKED: new_source_in=%d < 0 (can't rewind past start of media)", new_source_in))
@@ -2084,9 +2074,6 @@ local function apply_edge_ripple(clip, edge_type, delta_ms)
             if clip.media_id then
                 media = Media.load(clip.media_id, db)
             end
-
-            print(string.format("DEBUG out-point: clip=%s, source_in=%d, source_out=%d, delta=%d, new_duration=%d, new_source_out=%d, media_duration=%d",
-                clip.id:sub(1,8), clip.source_in, clip.source_out or 0, delta_ms, new_duration, new_source_out, media and media.duration or 0))
 
             if media and new_source_out > media.duration then
                 -- Hit media boundary - can't extend beyond source file duration
@@ -2231,7 +2218,7 @@ command_executors["RippleEdit"] = function(command)
                 ripple_time = clip.start_time + clip.duration
             end
 
-            print(string.format("DEBUG GAP CONSTRAINT: ripple_time=%dms, delta_ms=%dms", ripple_time, delta_ms))
+            --  print(string.format("DEBUG GAP CONSTRAINT: ripple_time=%dms, delta_ms=%dms", ripple_time, delta_ms))
 
             -- Find clips that will shift (everything after ripple point)
             -- and clips that are stationary (everything before ripple point)
@@ -2239,7 +2226,7 @@ command_executors["RippleEdit"] = function(command)
             for _, c in ipairs(all_clips) do
                 if c.start_time < ripple_time then
                     table.insert(stationary_clips, c)
-                    print(string.format("  Stationary: %s at %d-%dms on %s", c.id:sub(1,8), c.start_time, c.start_time + c.duration, c.track_id))
+                    -- print(string.format("  Stationary: %s at %d-%dms on %s", c.id:sub(1,8), c.start_time, c.start_time + c.duration, c.track_id))
                 end
             end
 
@@ -2249,13 +2236,13 @@ command_executors["RippleEdit"] = function(command)
 
             for _, shifting_clip in ipairs(all_clips) do
                 if shifting_clip.start_time >= ripple_time then
-                    print(string.format("  Shifting: %s at %dms on %s", shifting_clip.id:sub(1,8), shifting_clip.start_time, shifting_clip.track_id))
+                    -- print(string.format("  Shifting: %s at %dms on %s", shifting_clip.id:sub(1,8), shifting_clip.start_time, shifting_clip.track_id))
                     -- This clip will shift - check against all stationary clips on all tracks
                     for _, stationary in ipairs(stationary_clips) do
                         if shifting_clip.track_id == stationary.track_id then
                             -- Same track - check collision in both directions
                             local gap_between = shifting_clip.start_time - (stationary.start_time + stationary.duration)
-                            print(string.format("    vs stationary %s: gap=%dms", stationary.id:sub(1,8), gap_between))
+                            -- print(string.format("    vs stationary %s: gap=%dms", stationary.id:sub(1,8), gap_between))
 
                             if gap_between >= 0 then
                                 -- No overlap: clips are separated or touching
@@ -2263,18 +2250,18 @@ command_executors["RippleEdit"] = function(command)
                                 -- Shifting LEFT moves toward stationary clip (limited by gap)
                                 if -gap_between > min_shift then
                                     min_shift = -gap_between
-                                    print(string.format("      min_shift = %dms (can't shift left into stationary clip)", min_shift))
+                                    -- print(string.format("      min_shift = %dms (can't shift left into stationary clip)", min_shift))
                                 end
                                 -- No max_shift constraint from this stationary clip (we're moving away)
                             else
                                 -- Overlap exists (gap_between < 0)
                                 -- Shifting right reduces overlap (allowed, no limit from this clip)
                                 -- Shifting left increases overlap (blocked entirely)
-                                print(string.format("      OVERLAP by %dms - blocking left shift", -gap_between))
+                                -- print(string.format("      OVERLAP by %dms - blocking left shift", -gap_between))
                                 -- Can't shift left at all when overlap exists
                                 if 0 > min_shift then
                                     min_shift = 0
-                                    print(string.format("      min_shift = 0 (blocking left due to overlap)"))
+                                    -- print(string.format("      min_shift = 0 (blocking left due to overlap)"))
                                 end
                                 -- No limit on right shift from this overlapping clip
                             end
@@ -2290,10 +2277,10 @@ command_executors["RippleEdit"] = function(command)
             local max_closure_shift = -(clip.duration - 1)
             if max_closure_shift > min_shift then
                 min_shift = max_closure_shift
-                print(string.format("  Gap duration constraint: min_shift = %dms (can't close gap beyond 1ms)", min_shift))
+                -- print(string.format("  Gap duration constraint: min_shift = %dms (can't close gap beyond 1ms)", min_shift))
             end
 
-            print(string.format("  Final constraints: min_shift=%s, max_shift=%s", tostring(min_shift), tostring(max_shift)))
+            -- print(string.format("  Final constraints: min_shift=%s, max_shift=%s", tostring(min_shift), tostring(max_shift)))
 
             -- Convert shift constraints to delta constraints
             -- For in-point (gap_after): shift = -delta, so flip signs
@@ -2308,15 +2295,15 @@ command_executors["RippleEdit"] = function(command)
                 min_delta = min_shift
                 max_delta = max_shift
             end
-            print(string.format("  Converted to delta constraints: min_delta=%s, max_delta=%s", tostring(min_delta), tostring(max_delta)))
+            -- print(string.format("  Converted to delta constraints: min_delta=%s, max_delta=%s", tostring(min_delta), tostring(max_delta)))
 
             -- Clamp delta and snap to frames
             clamped_delta = math.max(min_delta, math.min(max_delta, delta_ms))
-            print(string.format("  Before snap: clamped_delta=%dms", clamped_delta))
+            -- print(string.format("  Before snap: clamped_delta=%dms", clamped_delta))
             clamped_delta = frame_utils.snap_delta_to_frame(clamped_delta, frame_rate)
             -- Re-clamp after snapping to ensure we don't exceed constraints
             clamped_delta = math.max(min_delta, math.min(max_delta, clamped_delta))
-            print(string.format("  After snap: clamped_delta=%dms", clamped_delta))
+            -- print(string.format("  After snap: clamped_delta=%dms", clamped_delta))
         else
             -- Regular clip trim: use normal constraint logic
             clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, frame_rate, true)
@@ -2490,25 +2477,21 @@ command_executors["BatchRippleEdit"] = function(command)
     local Clip = require('models.clip')
     local database = require('core.database')
     local original_states = {}
-    local latest_ripple_time = 0
-    local latest_shift_amount = 0  -- Track shift for downstream clips
+    local earliest_ripple_time = math.huge  -- Track leftmost ripple point (determines which clips shift)
+    local downstream_shift_amount = nil  -- Timeline length change (NOT summed across tracks)
     local preview_affected_clips = {}
 
     -- Load all clips once for gap materialization
     local all_clips = database.load_clips(sequence_id)
-
-    print(string.format("DEBUG BatchRippleEdit: %d edges, delta_ms=%d",
-        #edge_infos, delta_ms))
-    for i, edge_info in ipairs(edge_infos) do
-        print(string.format("  Edge %d: clip=%s, edge_type=%s", i, edge_info.clip_id:sub(1,8), edge_info.edge_type))
-    end
 
     -- Phase 0: Calculate constraints for ALL edges BEFORE any modifications
     -- Find the most restrictive constraint to ensure all edges can move together
     local max_allowed_delta = delta_ms
     local min_allowed_delta = delta_ms
 
-    print("DEBUG: Phase 0 - Calculating constraints for all edges")
+    -- Determine reference bracket type from first edge
+    -- Bracket mapping: in/gap_after → [, out/gap_before → ]
+    local reference_bracket = (edge_infos[1].edge_type == "in" or edge_infos[1].edge_type == "gap_after") and "[" or "]"
     for _, edge_info in ipairs(edge_infos) do
         -- Materialize clip (gap or real)
         local clip, actual_edge_type, is_gap_clip
@@ -2560,52 +2543,60 @@ command_executors["BatchRippleEdit"] = function(command)
             is_gap_clip = false
         end
 
-        -- Calculate constraint for this edge using apply_edge_ripple's dry-run mode
-        -- Create a temporary command for constraint calculation
-        local temp_cmd = {
-            project_id = command.project_id,
-            parameters = {dry_run = true, sequence_id = sequence_id}
-        }
-        function temp_cmd:get_parameter(key)
-            return self.parameters[key]
-        end
-        function temp_cmd:set_parameter(key, val)
-            self.parameters[key] = val
-        end
+        -- ASYMMETRIC FIX: Negate delta for opposite BRACKET types
+        -- Bracket mapping: in/gap_after → [, out/gap_before → ]
+        -- If dragging [ edge: all ] edges get negated delta
+        -- If dragging ] edge: all [ edges get negated delta
+        local edge_bracket = (edge_info.edge_type == "in" or edge_info.edge_type == "gap_after") and "[" or "]"
+        local edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
 
-        -- Try the requested delta - if it fails, find the maximum safe delta
-        local constraint_clip = {
-            id = clip.id,
-            track_id = clip.track_id,
-            start_time = clip.start_time,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out,
-            media_id = clip.media_id
-        }
-
-        -- Calculate constraints using the same logic as RippleEdit
+        -- Calculate constraints using timeline_constraints module
+        -- For ripple edits, skip adjacent clip checks since they move downstream
         local constraints_module = require('core.timeline_constraints')
         local constraint_result = constraints_module.calculate_trim_range(
-            constraint_clip,
+            clip,
             actual_edge_type,
             all_clips,
-            true   -- check_all_tracks for ripple
+            false,  -- check_all_tracks: not needed since we skip adjacent checks anyway
+            true    -- skip_adjacent_check: ripple edits move downstream clips
         )
-
         local min_delta = constraint_result.min_delta
         local max_delta = constraint_result.max_delta
 
-        print(string.format("  Edge %s %s: constraint range [%d, %d]",
-            clip.id:sub(1,8), actual_edge_type, min_delta, max_delta))
+        if not dry_run then
+            print(string.format("  Edge %s (%s) %s: edge_delta=%d, constraint=[%d, %d]",
+                clip.id:sub(1,8),
+                is_gap_clip and "gap" or "clip",
+                actual_edge_type,
+                edge_delta,
+                min_delta,
+                max_delta == math.huge and 999999999 or max_delta))
+        end
 
-        -- Clamp the allowed delta to this edge's constraints
-        if delta_ms > 0 then
-            -- Moving right - constrained by max_delta
-            max_allowed_delta = math.min(max_allowed_delta, max_delta)
+        -- Accumulate constraints in delta_ms space (not edge_delta space)
+        -- Constraints are on edge_delta, but we accumulate constraints on delta_ms
+        -- Check if edge_delta and delta_ms have opposite signs (happens when bracket negation occurs)
+        local opposite_signs = (edge_delta * delta_ms < 0)
+
+        if opposite_signs then
+            -- edge_delta = -delta_ms, so constraints need to be inverted
+            -- edge_delta in [min_delta, max_delta] means -delta_ms in [min_delta, max_delta]
+            -- So delta_ms in [-max_delta, -min_delta]
+            local delta_min = -max_delta
+            local delta_max = -min_delta
+
+            if delta_ms > 0 then
+                max_allowed_delta = math.min(max_allowed_delta, delta_max)
+            else
+                min_allowed_delta = math.max(min_allowed_delta, delta_min)
+            end
         else
-            -- Moving left - constrained by min_delta
-            min_allowed_delta = math.max(min_allowed_delta, min_delta)
+            -- edge_delta and delta_ms have same sign, no inversion needed
+            if delta_ms > 0 then
+                max_allowed_delta = math.min(max_allowed_delta, max_delta)
+            else
+                min_allowed_delta = math.max(min_allowed_delta, min_delta)
+            end
         end
     end
 
@@ -2618,19 +2609,23 @@ command_executors["BatchRippleEdit"] = function(command)
     end
 
     if delta_ms ~= original_delta then
-        print(string.format("DEBUG: Clamped delta from %d to %d (most restrictive constraint)",
-            original_delta, delta_ms))
+        if not dry_run then
+            print(string.format("Clamped delta: %d → %d", original_delta, delta_ms))
+        end
         -- Store clamped delta for deterministic replay
         command:set_parameter("clamped_delta_ms", delta_ms)
     end
 
     if delta_ms == 0 then
-        print("WARNING: All edges blocked - no movement possible")
+        if not dry_run then
+            print("WARNING: All edges blocked - no movement possible")
+        end
         return false
     end
 
     -- Phase 1: Trim all edges with the clamped delta
     -- All edges now guaranteed to succeed - preserves relative timing
+    local edited_clip_ids = {}  -- Track clip IDs that were edited (real or temporary gap clips)
     for _, edge_info in ipairs(edge_infos) do
         -- MATERIALIZE GAP CLIPS: Create virtual clip objects for gaps
         -- This removes all special cases - gaps behave exactly like clips
@@ -2689,7 +2684,8 @@ command_executors["BatchRippleEdit"] = function(command)
             is_gap_clip = false
         end
 
-        -- Save original state
+        -- Save original state (before trim)
+        local original_duration = clip.duration
         original_states[edge_info.clip_id] = {
             start_time = clip.start_time,
             duration = clip.duration,
@@ -2697,12 +2693,23 @@ command_executors["BatchRippleEdit"] = function(command)
             source_out = clip.source_out
         }
 
+        if not dry_run and is_gap_clip then
+            print(string.format("  Gap materialized: duration=%s (infinite=%s)",
+                tostring(clip.duration),
+                tostring(clip.duration == math.huge)))
+        end
+
+        -- Track this clip as edited (use materialized clip.id, not edge_info.clip_id)
+        -- For real clips: clip.id == edge_info.clip_id
+        -- For gaps: clip.id == "temp_gap_..." (won't match any DB clip, so won't exclude reference clip)
+        table.insert(edited_clip_ids, clip.id)
+
         -- Apply edge ripple using shared helper
         -- Phase 0 already ensured this will succeed by clamping delta_ms
-        -- Pass same clamped delta_ms to ALL edges - asymmetry comes from edge type, not negation
-        local edge_delta = delta_ms  -- Same clamped delta for all edges!
-        print(string.format("  Processing: clip=%s, actual_edge=%s, edge_delta=%d",
-            clip.id:sub(1,8), actual_edge_type, edge_delta))
+        -- ASYMMETRIC FIX: Negate delta for opposite BRACKET types (not in/out types!)
+        -- Bracket mapping: in/gap_after → [, out/gap_before → ]
+        local edge_bracket = (edge_info.edge_type == "in" or edge_info.edge_type == "gap_after") and "[" or "]"
+        local edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
         local ripple_time, success = apply_edge_ripple(clip, actual_edge_type, edge_delta)
         if not success then
             -- This should never happen after Phase 0 constraint calculation
@@ -2729,38 +2736,55 @@ command_executors["BatchRippleEdit"] = function(command)
             end
         end
 
-        -- Track latest ripple point and its shift amount
-        -- BUG FIX: Calculate shift based on edge type, not raw delta
-        -- In-point trim: shift opposite direction (drag right = shrink = shift left)
-        -- Out-point trim: shift same direction (drag right = grow = shift right)
+        -- Calculate downstream shift from timeline length change
+        -- Tracks are PARALLEL, so use first edge's duration change (not summed)
         if ripple_time then
-            local shift_for_this_edge
-            if actual_edge_type == "in" then
-                shift_for_this_edge = -edge_delta  -- Opposite direction
-            else  -- "out"
-                shift_for_this_edge = edge_delta   -- Same direction
+            local duration_change = clip.duration - original_duration
+
+            -- Skip infinite gaps (extend to end of timeline) - they produce NaN
+            -- math.huge - math.huge = nan, which corrupts downstream clip positions
+            local is_infinite_gap = (original_duration == math.huge or clip.duration == math.huge)
+
+            if not dry_run then
+                print(string.format("  Duration change: %s - %s = %s (infinite=%s)",
+                    tostring(clip.duration), tostring(original_duration),
+                    tostring(duration_change), tostring(is_infinite_gap)))
             end
 
-            -- Use the rightmost ripple point's shift
-            if ripple_time > latest_ripple_time then
-                latest_ripple_time = ripple_time
-                latest_shift_amount = shift_for_this_edge
-                print(string.format("  New latest ripple: time=%dms, shift=%dms (edge_type=%s)",
-                    latest_ripple_time, latest_shift_amount, actual_edge_type))
+            if downstream_shift_amount == nil and not is_infinite_gap then
+                downstream_shift_amount = duration_change
+                if not dry_run then
+                    print(string.format("  Set downstream_shift_amount = %s", tostring(downstream_shift_amount)))
+                end
+            elseif not dry_run and is_infinite_gap then
+                print(string.format("  Skipped infinite gap - not setting downstream_shift_amount"))
+            end
+
+            -- Track leftmost ripple point (determines which clips shift)
+            -- With asymmetric edits, use EARLIEST ripple time so all downstream clips shift
+            if ripple_time < earliest_ripple_time then
+                earliest_ripple_time = ripple_time
             end
         end
     end
 
-    -- Phase 2: Single timeline shift at latest ripple point
-    local edited_clip_ids = {}
-    for _, edge_info in ipairs(edge_infos) do
-        -- Track edited clips to exclude from downstream shift
-        table.insert(edited_clip_ids, edge_info.clip_id)
+    -- If all edges were infinite gaps, default to zero shift
+    -- This prevents nil downstream_shift_amount from corrupting clip positions
+    if downstream_shift_amount == nil then
+        downstream_shift_amount = 0
     end
 
+    -- Phase 2: Single timeline shift at earliest ripple point
+    -- edited_clip_ids contains materialized clip IDs (real clips + temp gap clips)
+    -- Temp gap IDs won't match any DB clips, so reference clips naturally aren't excluded
     local database = require('core.database')
     local all_clips = database.load_clips(sequence_id)
     local clips_to_shift = {}
+
+    if not dry_run then
+        print(string.format("DOWNSTREAM SHIFT: earliest_ripple_time=%dms, edited_clip_ids=%s",
+            earliest_ripple_time, table.concat(edited_clip_ids, ",")))
+    end
 
     for _, other_clip in ipairs(all_clips) do
         -- Don't shift clips we just edited
@@ -2772,8 +2796,14 @@ command_executors["BatchRippleEdit"] = function(command)
             end
         end
 
-        if not is_edited and other_clip.start_time >= latest_ripple_time then
+        if not is_edited and other_clip.start_time >= earliest_ripple_time then
             table.insert(clips_to_shift, other_clip)
+            if not dry_run then
+                print(string.format("  Will shift: %s at %dms on %s", other_clip.id:sub(1,8), other_clip.start_time, other_clip.track_id))
+            end
+        elseif not dry_run then
+            print(string.format("  Skip: %s at %dms (edited=%s, >= ripple_time=%s)",
+                other_clip.id:sub(1,8), other_clip.start_time, tostring(is_edited), tostring(other_clip.start_time >= earliest_ripple_time)))
         end
     end
 
@@ -2783,7 +2813,7 @@ command_executors["BatchRippleEdit"] = function(command)
         for _, downstream_clip in ipairs(clips_to_shift) do
             table.insert(preview_shifted_clips, {
                 clip_id = downstream_clip.id,
-                new_start_time = downstream_clip.start_time + latest_shift_amount  -- BUG FIX: Use calculated shift
+                new_start_time = downstream_clip.start_time + (downstream_shift_amount or 0)
             })
         end
         return true, {
@@ -2793,6 +2823,10 @@ command_executors["BatchRippleEdit"] = function(command)
     end
 
     -- EXECUTE: Shift all downstream clips once
+    if not dry_run and #clips_to_shift > 0 then
+        print(string.format("DEBUG: downstream_shift_amount=%s", tostring(downstream_shift_amount)))
+    end
+
     for _, downstream_clip in ipairs(clips_to_shift) do
         local shift_clip = Clip.load(downstream_clip.id, db)
         if not shift_clip then
@@ -2800,7 +2834,15 @@ command_executors["BatchRippleEdit"] = function(command)
             goto continue_batch_shift
         end
 
-        shift_clip.start_time = shift_clip.start_time + latest_shift_amount  -- BUG FIX: Use calculated shift
+        if not dry_run then
+            print(string.format("  Before: clip %s start_time=%s", shift_clip.id:sub(1,8), tostring(shift_clip.start_time)))
+        end
+
+        shift_clip.start_time = shift_clip.start_time + (downstream_shift_amount or 0)
+
+        if not dry_run then
+            print(string.format("  After:  clip %s start_time=%s", shift_clip.id:sub(1,8), tostring(shift_clip.start_time)))
+        end
 
         if not shift_clip:save(db) then
             print(string.format("ERROR: BatchRippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
@@ -2817,10 +2859,10 @@ command_executors["BatchRippleEdit"] = function(command)
         for _, c in ipairs(clips_to_shift) do table.insert(ids, c.id) end
         return ids
     end)())
-    command:set_parameter("shift_amount", latest_shift_amount)  -- Store calculated shift for undo
+    command:set_parameter("shift_amount", downstream_shift_amount or 0)  -- Store shift for undo
 
-    print(string.format("✅ Batch ripple: trimmed %d edges by %dms, shifted %d downstream clips by %dms",
-        #edge_infos, delta_ms, #clips_to_shift, latest_shift_amount))
+    print(string.format("✅ Batch ripple: trimmed %d edges, shifted %d downstream clips by %dms",
+        #edge_infos, #clips_to_shift, downstream_shift_amount or 0))
 
     return true
 end

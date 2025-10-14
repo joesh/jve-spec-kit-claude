@@ -157,7 +157,8 @@ package.loaded['command'] = Command
 -- Load apply_edge_ripple helper (lines 1854-1952 from command_manager.lua)
 local function apply_edge_ripple(clip, edge_type, delta_ms)
     local ripple_time
-    local has_source_media = (clip.source_in ~= nil)
+    -- Gap clips have no media_id - they represent empty timeline space
+    local has_source_media = (clip.media_id ~= nil)
 
     if edge_type == "in" then
         ripple_time = clip.start_time
