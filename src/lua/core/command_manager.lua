@@ -1399,17 +1399,8 @@ command_executors["Insert"] = function(command)
         return false
     end
 
-    -- FRAME ALIGNMENT: Snap all parameters to frame boundaries
-    local frame_utils = require('core.frame_utils')
-    local frame_rate = 30.0  -- TODO: load from sequence metadata
-    insert_time = frame_utils.snap_to_frame(insert_time, frame_rate)
-    duration = frame_utils.snap_to_frame(duration, frame_rate)
-    source_in = frame_utils.snap_to_frame(source_in, frame_rate)
-    source_out = frame_utils.snap_to_frame(source_out, frame_rate)
-
-    if not dry_run then
-        print(string.format("Insert: Snapped parameters to frame boundaries (%.2f fps)", frame_rate))
-    end
+    -- Frame alignment now automatic in Clip:save() for video tracks
+    -- Audio tracks preserve sample-accurate precision
 
     -- Step 1: Ripple all clips on this track that start at or after insert_time
     local db_module = require('core.database')
@@ -2188,12 +2179,9 @@ command_executors["RippleEdit"] = function(command)
         is_gap_clip = false
     end
 
-    -- CONSTRAINT CHECK: Clamp delta to valid range and snap to frame boundaries
+    -- CONSTRAINT CHECK: Clamp delta to valid range
+    -- Frame alignment now automatic in Clip:save() for video tracks
     local constraints = require('core.timeline_constraints')
-    local frame_utils = require('core.frame_utils')
-
-    -- Get frame rate (TODO: load from sequence metadata, for now use default 30fps)
-    local frame_rate = 30.0
 
     -- For deterministic replay: use stored clamped_delta if available, otherwise calculate
     local clamped_delta = command:get_parameter("clamped_delta_ms")
@@ -2297,31 +2285,15 @@ command_executors["RippleEdit"] = function(command)
             end
             -- print(string.format("  Converted to delta constraints: min_delta=%s, max_delta=%s", tostring(min_delta), tostring(max_delta)))
 
-            -- Clamp delta and snap to frames
+            -- Clamp delta to constraint range
             clamped_delta = math.max(min_delta, math.min(max_delta, delta_ms))
-            -- print(string.format("  Before snap: clamped_delta=%dms", clamped_delta))
-            clamped_delta = frame_utils.snap_delta_to_frame(clamped_delta, frame_rate)
-            -- Re-clamp after snapping to ensure we don't exceed constraints
-            clamped_delta = math.max(min_delta, math.min(max_delta, clamped_delta))
-            -- print(string.format("  After snap: clamped_delta=%dms", clamped_delta))
         else
-            -- Regular clip trim: use normal constraint logic
-            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, frame_rate, true)
+            -- Regular clip trim: use normal constraint logic (no frame snapping)
+            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, nil, true)
         end
 
-        if clamped_delta ~= delta_ms then
-            if not dry_run then
-                local reason = ""
-                if math.abs(clamped_delta) < math.abs(delta_ms) then
-                    reason = " (collision)"
-                else
-                    local frame_snapped = frame_utils.snap_delta_to_frame(delta_ms, frame_rate)
-                    if frame_snapped ~= delta_ms then
-                        reason = " (frame snap)"
-                    end
-                end
-                print(string.format("⚠️  Trim adjusted: %dms → %dms%s", delta_ms, clamped_delta, reason))
-            end
+        if clamped_delta ~= delta_ms and not dry_run then
+            print(string.format("⚠️  Trim adjusted: %dms → %dms (collision)", delta_ms, clamped_delta))
         end
 
         -- Store clamped delta for deterministic replay

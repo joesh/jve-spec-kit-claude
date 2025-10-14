@@ -104,6 +104,45 @@ function M:save(db)
         return false
     end
 
+    -- FRAME ALIGNMENT ENFORCEMENT (VIDEO ONLY)
+    -- Video clips must align to frame boundaries for proper playback
+    -- Audio clips preserve sample-accurate precision
+    if self.track_id then
+        -- Query track to get type and sequence
+        local track_query = db:prepare("SELECT track_type, sequence_id FROM tracks WHERE id = ?")
+        if track_query then
+            track_query:bind_value(1, self.track_id)
+            if track_query:exec() and track_query:next() then
+                local track_type = track_query:value(0)
+                local sequence_id = track_query:value(1)
+
+                -- Only snap video clips to frame boundaries
+                if track_type == "VIDEO" and sequence_id then
+                    -- Get sequence frame rate
+                    local seq_query = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+                    if seq_query then
+                        seq_query:bind_value(1, sequence_id)
+                        if seq_query:exec() and seq_query:next() then
+                            local frame_rate = seq_query:value(0)
+
+                            -- Snap all time values to frame boundaries
+                            local frame_utils = require('core.frame_utils')
+                            self.start_time = frame_utils.snap_to_frame(self.start_time, frame_rate)
+                            self.duration = frame_utils.snap_to_frame(self.duration, frame_rate)
+                            if self.source_in then
+                                self.source_in = frame_utils.snap_to_frame(self.source_in, frame_rate)
+                            end
+                            if self.source_out then
+                                self.source_out = frame_utils.snap_to_frame(self.source_out, frame_rate)
+                            end
+                        end
+                    end
+                end
+                -- Audio clips: no snapping, preserve sample-accurate precision
+            end
+        end
+    end
+
     -- Check if clip exists
     local exists_query = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
     exists_query:bind_value(1, self.id)
