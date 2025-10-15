@@ -30,6 +30,8 @@ set(__QT_DEPLOY_TARGET_test_track_entity_FILE /Users/joe/Local/jve-spec-kit-clau
 set(__QT_DEPLOY_TARGET_test_track_entity_TYPE EXECUTABLE)
 set(__QT_DEPLOY_TARGET_test_command_replay_invariant_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_command_replay_invariant)
 set(__QT_DEPLOY_TARGET_test_command_replay_invariant_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_test_batch_ripple_gap_drag_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_batch_ripple_gap_drag)
+set(__QT_DEPLOY_TARGET_test_batch_ripple_gap_drag_TYPE EXECUTABLE)
 set(__QT_DEPLOY_TARGET_test_scriptable_timeline_widget_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_scriptable_timeline_widget)
 set(__QT_DEPLOY_TARGET_test_scriptable_timeline_widget_TYPE EXECUTABLE)
 set(__QT_DEPLOY_TARGET_test_timeline_lua_logic_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_timeline_lua_logic)

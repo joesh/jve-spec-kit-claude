@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QFileInfo>
+#include <QProcessEnvironment>
 
 #include "lua/simple_lua_engine.h"
 #include "core/persistence/migrations.h"
@@ -56,6 +57,37 @@ int main(int argc, char *argv[])
         return -1;
     }
     
+    // Determine project path (.jvp file)
+    QString projectPath;
+    if (argc > 1) {
+        projectPath = QString::fromLocal8Bit(argv[1]);
+        if (!projectPath.endsWith(".jvp", Qt::CaseInsensitive)) {
+            projectPath += ".jvp";
+        }
+
+        QFileInfo projectInfo(projectPath);
+        if (projectInfo.isRelative()) {
+            projectInfo.setFile(QDir::current(), projectPath);
+        }
+        projectPath = projectInfo.absoluteFilePath();
+
+        QDir projectDir = projectInfo.dir();
+        if (!projectDir.exists()) {
+            projectDir.mkpath(".");
+        }
+
+        qputenv("JVE_PROJECT_PATH", projectPath.toUtf8());
+        qputenv("JVE_TEST_DATABASE", projectPath.toUtf8());  // Legacy env for Lua/testing
+        qCInfo(jveMain, "Opening project from CLI argument: %s", qPrintable(projectPath));
+    } else {
+        const QString defaultDir = QDir(QDir::homePath()).filePath("Documents/JVE Projects");
+        QDir().mkpath(defaultDir);
+        projectPath = QDir(defaultDir).filePath("Untitled Project.jvp");
+        qputenv("JVE_PROJECT_PATH", projectPath.toUtf8());
+        qputenv("JVE_TEST_DATABASE", projectPath.toUtf8());
+        qCInfo(jveMain, "Opening default project: %s", qPrintable(projectPath));
+    }
+
     // Initialize database migrations
     Migrations::initialize();
     

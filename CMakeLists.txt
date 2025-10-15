@@ -212,6 +212,32 @@ set_target_properties(test_command_replay_invariant PROPERTIES
 )
 add_test(NAME test_command_replay_invariant COMMAND test_command_replay_invariant)
 
+# Integration test - Canonical batch ripple drag regression
+add_executable(test_batch_ripple_gap_drag
+    tests/integration/test_batch_ripple_gap_drag.cpp
+)
+target_link_libraries(test_batch_ripple_gap_drag
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Sql
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_batch_ripple_gap_drag PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_batch_ripple_gap_drag PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_batch_ripple_gap_drag PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_batch_ripple_gap_drag COMMAND test_batch_ripple_gap_drag)
+
 # Unit tests (no unit tests currently - they would go in tests/unit/)
 # Note: New timeline tests are standalone and defined below
 

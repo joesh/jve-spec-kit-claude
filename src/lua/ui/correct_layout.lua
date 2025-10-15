@@ -23,7 +23,7 @@ print("💾 Initializing database...")
 local db_module = require("core.database")
 
 -- Determine database path - check for test environment variable first
-local db_path = os.getenv("JVE_TEST_DATABASE")
+local db_path = os.getenv("JVE_PROJECT_PATH") or os.getenv("JVE_TEST_DATABASE")
 if db_path then
     print("💾 Using test database: " .. db_path)
 else
@@ -226,7 +226,7 @@ local timeline_panel = timeline_panel_mod.create()
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state_from_panel = timeline_panel_mod.get_state()
 print(string.format("DEBUG: timeline_state from panel = %s", tostring(timeline_state_from_panel)))
-keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod)
+keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod, timeline_panel_mod)
 
 -- 6. Initialize focus manager for visual panel indicators
 local focus_manager = require("ui.focus_manager")

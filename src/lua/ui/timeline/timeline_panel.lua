@@ -14,6 +14,8 @@ local SPLITTER_HANDLE_HEIGHT = 7  -- Qt default vertical splitter handle height 
 -- Store references
 local state = nil
 local inspector_view = nil
+local video_view_ref = nil
+local audio_view_ref = nil
 
 function M.set_inspector(view)
     inspector_view = view
@@ -511,8 +513,10 @@ function M.create()
         {
             render_bottom_to_top = true,
             on_drag_start = on_drag_start,
+            debug_id = "video",
         }
     )
+    video_view_ref = video_view  -- Store reference for drag detection
 
     -- Make video widget expand to fill available space
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_widget, "Expanding", "Expanding")
@@ -534,8 +538,10 @@ function M.create()
         function(track) return track.track_type == "AUDIO" end,
         {
             on_drag_start = on_drag_start,
+            debug_id = "audio",
         }
     )
+    audio_view_ref = audio_view  -- Store reference for drag detection
 
     -- Make audio widget expand to fill available space
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_widget, "Expanding", "Expanding")
@@ -842,6 +848,13 @@ function M.create()
     print("Multi-view timeline panel created successfully")
 
     return container
+end
+
+-- Check if timeline is currently dragging clips or edges
+function M.is_dragging()
+    local video_dragging = video_view_ref and video_view_ref.drag_state ~= nil
+    local audio_dragging = audio_view_ref and audio_view_ref.drag_state ~= nil
+    return video_dragging or audio_dragging
 end
 
 return M

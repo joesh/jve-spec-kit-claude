@@ -84,8 +84,6 @@ end
 
 -- Load all clips for a sequence
 function M.load_clips(sequence_id)
-    print("Loading clips for sequence: " .. (sequence_id or "default"))
-
     if not db_connection then
         print("WARNING: No database connection")
         return {}
@@ -122,11 +120,9 @@ function M.load_clips(sequence_id)
                 name = "Clip " .. query:value(0):sub(1, 8)  -- TODO: Get from media table
             }
             table.insert(clips, clip)
-            print(string.format("  Loaded clip: %s at position %d, duration %d", clip.id, clip.start_time, clip.duration))
         end
     end
 
-    print(string.format("Loaded %d clips from database", #clips))
     return clips
 end
 

@@ -62,6 +62,9 @@ local state = {
     drag_select_end_track_index = 0,
 }
 
+-- Debug layout capture (populated by views when rendering)
+local debug_layouts = {}
+
 -- Colors (shared visual style)
 M.colors = {
     background = "#232323",
@@ -409,6 +412,67 @@ end
 function M.pixel_to_time(pixel, viewport_width)
     local pixels_per_ms = viewport_width / state.viewport_duration
     return math.floor(state.viewport_start_time + (pixel / pixels_per_ms))
+end
+
+-- Debug helpers for tests to query the most recent layout geometry
+function M.debug_begin_layout_capture(view_id, viewport_width, viewport_height)
+    if not view_id then
+        return
+    end
+
+    debug_layouts[view_id] = {
+        widget_width = viewport_width,
+        widget_height = viewport_height,
+        tracks = {},
+        clips = {}
+    }
+end
+
+function M.debug_record_track_layout(view_id, track_id, y, height)
+    local layout = debug_layouts[view_id]
+    if not layout then
+        return
+    end
+
+    layout.tracks[track_id] = {
+        y = y,
+        height = height
+    }
+end
+
+function M.debug_record_clip_layout(view_id, clip_id, track_id, x, y, width, height)
+    local layout = debug_layouts[view_id]
+    if not layout then
+        return
+    end
+
+    layout.clips[clip_id] = {
+        track_id = track_id,
+        x = x,
+        y = y,
+        width = width,
+        height = height
+    }
+end
+
+function M.debug_get_clip_layout(view_id, clip_id)
+    local layout = debug_layouts[view_id]
+    if layout then
+        return layout.clips[clip_id]
+    end
+    return nil
+end
+
+function M.debug_get_track_layout(view_id, track_id)
+    local layout = debug_layouts[view_id]
+    if layout then
+        return layout.tracks[track_id]
+    end
+    return nil
+end
+
+function M.debug_get_layout_metrics(view_id)
+    return debug_layouts[view_id]
 end
 
 -- Edge detection helper for trimming

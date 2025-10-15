@@ -16,6 +16,7 @@ local KEY = {
     End = 16777233,
     A = 65,
     C = 67,
+    N = 78,
     V = 86,
     X = 88,
     Z = 90,
@@ -52,12 +53,54 @@ local MOD = {
 local timeline_state = nil
 local command_manager = nil
 local project_browser = nil
+local timeline_panel = nil
+
+-- MAGNETIC SNAPPING STATE
+-- Baseline preference (persists across drags)
+local baseline_snapping_enabled = true  -- Default ON
+-- Per-drag inversion (resets when drag ends)
+local drag_snapping_inverted = false
 
 -- Initialize with references to other modules
-function keyboard_shortcuts.init(state, cmd_mgr, proj_browser)
+function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     timeline_state = state
     command_manager = cmd_mgr
     project_browser = proj_browser
+    timeline_panel = panel
+end
+
+-- Get effective snapping state (baseline XOR drag_inverted)
+function keyboard_shortcuts.is_snapping_enabled()
+    local effective = baseline_snapping_enabled
+    if drag_snapping_inverted then
+        effective = not effective
+    end
+    return effective
+end
+
+-- Toggle baseline snapping preference
+function keyboard_shortcuts.toggle_baseline_snapping()
+    baseline_snapping_enabled = not baseline_snapping_enabled
+    print(string.format("Snapping %s", baseline_snapping_enabled and "ON" or "OFF"))
+end
+
+-- Invert snapping for current drag only
+function keyboard_shortcuts.invert_drag_snapping()
+    drag_snapping_inverted = not drag_snapping_inverted
+    print(string.format("Snapping temporarily %s for this drag", keyboard_shortcuts.is_snapping_enabled() and "ON" or "OFF"))
+end
+
+-- Reset drag inversion (call when drag ends)
+function keyboard_shortcuts.reset_drag_snapping()
+    drag_snapping_inverted = false
+end
+
+-- Check if timeline is currently dragging clips or edges
+function keyboard_shortcuts.is_dragging()
+    if timeline_panel then
+        return timeline_panel.is_dragging and timeline_panel.is_dragging() or false
+    end
+    return false
 end
 
 -- Check if a modifier is active (LuaJIT compatible bitwise AND)
@@ -659,6 +702,19 @@ function keyboard_shortcuts.handle_key(event)
             else
                 print("No clips selected to move")
             end
+        end
+        return true
+    end
+
+    -- N: Toggle magnetic snapping (context-aware)
+    if key == KEY.N and not has_modifier(modifiers, MOD.Shift) and
+       not has_modifier(modifiers, MOD.Control) and not has_modifier(modifiers, MOD.Meta) then
+        if keyboard_shortcuts.is_dragging() then
+            -- During drag: invert snapping for this drag only
+            keyboard_shortcuts.invert_drag_snapping()
+        else
+            -- At rest: toggle baseline preference
+            keyboard_shortcuts.toggle_baseline_snapping()
         end
         return true
     end

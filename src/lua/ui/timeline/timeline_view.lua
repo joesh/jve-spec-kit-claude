@@ -26,6 +26,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         on_drag_start = options.on_drag_start,  -- Panel callback for drag coordination
         filtered_tracks = {},  -- Cached filtered track list
         potential_drag = nil,  -- Stores info about a click that might become a drag
+        debug_id = options.debug_id or tostring(widget),
     }
 
     local DRAG_THRESHOLD = 5  -- Pixels of movement before starting drag
@@ -38,7 +39,6 @@ function M.create(widget, state_module, track_filter_fn, options)
                 table.insert(view.filtered_tracks, track)
             end
         end
-        print(string.format("Timeline view filtered %d tracks (widget: %s)", #view.filtered_tracks, tostring(widget)))
     end
 
     -- Calculate and set widget height based on track heights
@@ -51,7 +51,6 @@ function M.create(widget, state_module, track_filter_fn, options)
 
         -- Set the widget's minimum height to accommodate all tracks
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(widget, total_height)
-        print(string.format("Timeline widget height set to %dpx for %d tracks", total_height, #view.filtered_tracks))
     end
 
     -- Get Y position for a track within this view
@@ -135,6 +134,8 @@ function M.create(widget, state_module, track_filter_fn, options)
         -- Get widget dimensions
         local width, height = timeline.get_dimensions(view.widget)
 
+        state_module.debug_begin_layout_capture(view.debug_id, width, height)
+
         -- Clear previous drawing commands
         timeline.clear_commands(view.widget)
 
@@ -148,6 +149,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         for i, track in ipairs(view.filtered_tracks) do
             local y = get_track_y(i - 1, height)
             local track_height = state_module.get_track_height(track.id)
+            state_module.debug_record_track_layout(view.debug_id, track.id, y, track_height)
             -- print(string.format("  Track %d (%s): y=%d height=%d", i, track.name, y, track_height))
 
             -- Only draw if visible
@@ -197,6 +199,10 @@ function M.create(widget, state_module, track_filter_fn, options)
                     -- Only draw if visible
                     if x + clip_width >= 0 and x <= width and
                        y + clip_height > 0 and y < height then
+
+                        if not outline_only and time_offset_ms == 0 and target_track_id == nil then
+                            state_module.debug_record_clip_layout(view.debug_id, clip.id, clip.track_id, x, y, clip_width, clip_height)
+                        end
 
                         -- Check if selected
                         local is_selected = false
@@ -570,6 +576,26 @@ function M.create(widget, state_module, track_filter_fn, options)
             timeline.add_line(view.widget, playhead_x, 0, playhead_x, height, state_module.colors.playhead, 2)
         end
 
+        -- Draw snap indicator when snapping is active during drag
+        if view.drag_state and view.drag_state.snap_info and view.drag_state.snap_info.snapped then
+            local snap_point = view.drag_state.snap_info.snap_point
+            local snap_time = snap_point.time
+
+            -- Only draw if snap point is visible in viewport
+            if snap_time >= viewport_start and snap_time <= viewport_start + viewport_duration then
+                local snap_x = state_module.time_to_pixel(snap_time, width)
+
+                -- Draw bright cyan vertical line to indicate snap point
+                local snap_color = 0x00FFFF  -- Cyan: highly visible against dark timeline
+                timeline.add_line(view.widget, snap_x, 0, snap_x, height, snap_color, 2)
+
+                -- Optional: Draw label showing what we're snapping to
+                -- (Commented out for now to avoid clutter, but can be enabled if desired)
+                -- local label = snap_point.type == "playhead" and "Playhead" or "Clip Edge"
+                -- timeline.add_text(view.widget, snap_x + 5, 15, label, snap_color)
+            end
+        end
+
         -- NOTE: Selection box drawing removed - now handled by overlay widget in timeline_panel
 
         -- Trigger Qt repaint
@@ -676,15 +702,40 @@ function M.create(widget, state_module, track_filter_fn, options)
                         return
                     else
                         -- Regular click on selected edge - prepare for potential drag
+                        -- Find the specific edge that was clicked (closest one)
+                        local dragged_edge = clips_at_position[1]
+                        for _, edge_info in ipairs(clips_at_position) do
+                            if edge_info.distance < dragged_edge.distance then
+                                dragged_edge = edge_info
+                            end
+                        end
+
+                        -- Reorder edges to put dragged edge first
+                        local reordered_edges = {}
+                        -- Add dragged edge first
+                        for _, selected in ipairs(selected_edges) do
+                            if selected.clip_id == dragged_edge.clip.id and selected.edge_type == dragged_edge.edge then
+                                table.insert(reordered_edges, selected)
+                                break
+                            end
+                        end
+                        -- Add remaining edges
+                        for _, selected in ipairs(selected_edges) do
+                            if selected.clip_id ~= dragged_edge.clip.id or selected.edge_type ~= dragged_edge.edge then
+                                table.insert(reordered_edges, selected)
+                            end
+                        end
+
                         view.potential_drag = {
                             type = "edges",
                             start_x = x,
                             start_y = y,
                             start_time = state_module.pixel_to_time(x, width),
-                            edges = selected_edges,
+                            edges = reordered_edges,  -- Dragged edge is first
                             modifiers = modifiers
                         }
-                        print(string.format("Clicked %d selected edge(s)", #selected_edges))
+                        print(string.format("Clicked %d selected edge(s), dragging: %s %s",
+                            #reordered_edges, dragged_edge.clip.id:sub(1,8), dragged_edge.edge))
                         return
                     end
                 else
@@ -860,6 +911,34 @@ function M.create(widget, state_module, track_filter_fn, options)
                     }
                     view.drag_state.delta_ms = math.floor(view.drag_state.current_time - view.drag_state.start_time)
 
+                    -- For edge drags, augment each edge with its original_time for snapping calculations
+                    if view.drag_state.type == "edges" and view.drag_state.edges then
+                        for _, edge in ipairs(view.drag_state.edges) do
+                            -- Find the clip this edge belongs to
+                            local clips = state_module.get_clips()
+                            for _, clip in ipairs(clips) do
+                                if clip.id == edge.clip_id then
+                                    -- Calculate original time based on edge type
+                                    -- No special cases - "in" is always left edge, "out" is always right edge
+                                    if edge.edge_type == "in" then
+                                        edge.original_time = clip.start_time
+                                    elseif edge.edge_type == "out" then
+                                        edge.original_time = clip.start_time + clip.duration
+                                    elseif edge.edge_type == "gap_before" then
+                                        -- Gap before clip shares the clip's start time
+                                        edge.original_time = clip.start_time
+                                    elseif edge.edge_type == "gap_after" then
+                                        -- Gap after clip starts where the clip ends
+                                        edge.original_time = clip.start_time + clip.duration
+                                    else
+                                        error("Unknown edge type: " .. tostring(edge.edge_type))
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                    end
+
                     local item_count = view.drag_state.clips and #view.drag_state.clips or #view.drag_state.edges
                     local item_type = view.drag_state.type == "clips" and "clip(s)" or "edge(s)"
                     print(string.format("Start dragging %d %s (threshold exceeded)", item_count, item_type))
@@ -870,6 +949,99 @@ function M.create(widget, state_module, track_filter_fn, options)
             elseif view.drag_state then
                 -- Dragging clips or edges - show visual feedback
                 local current_time = state_module.pixel_to_time(x, width)
+
+                -- Apply magnetic snapping if enabled
+                local keyboard_shortcuts = require("core.keyboard_shortcuts")
+                local magnetic_snapping = require("core.magnetic_snapping")
+
+                local snap_enabled = keyboard_shortcuts.is_snapping_enabled()
+
+                if snap_enabled then
+                    -- Calculate snap tolerance based on current zoom level
+                    local tolerance_ms = magnetic_snapping.calculate_tolerance(
+                        state_module.get_viewport_duration(),
+                        width
+                    )
+
+                    -- Build exclusion lists (don't snap to edges we're dragging)
+                    local excluded_clip_ids = {}
+                    local excluded_edge_specs = {}
+
+                    if view.drag_state.type == "clips" then
+                        -- For clip drags: snap CLIP EDGES, not mouse position
+                        -- Calculate where clip edges will be after this drag
+                        local delta_ms = current_time - view.drag_state.start_time
+                        local best_snap = nil
+                        local best_snap_distance = math.huge
+
+                        for _, clip in ipairs(view.drag_state.clips) do
+                            -- Check both edges of this clip
+                            local new_in_point = clip.start_time + delta_ms
+                            local new_out_point = new_in_point + clip.duration
+
+                            -- Try snapping in-point (exclude only THIS edge from snapping to itself)
+                            local exclude_in = {{clip_id = clip.id, edge_type = "in"}}
+                            local snapped_in, snap_info_in = magnetic_snapping.apply_snap(
+                                state_module, new_in_point, true, {}, exclude_in, tolerance_ms
+                            )
+                            if snap_info_in.snapped and snap_info_in.distance < best_snap_distance then
+                                best_snap = {time = snapped_in, edge = "in", original = new_in_point}
+                                best_snap_distance = snap_info_in.distance
+                            end
+
+                            -- Try snapping out-point (exclude only THIS edge from snapping to itself)
+                            local exclude_out = {{clip_id = clip.id, edge_type = "out"}}
+                            local snapped_out, snap_info_out = magnetic_snapping.apply_snap(
+                                state_module, new_out_point, true, {}, exclude_out, tolerance_ms
+                            )
+                            if snap_info_out.snapped and snap_info_out.distance < best_snap_distance then
+                                best_snap = {time = snapped_out, edge = "out", original = new_out_point}
+                                best_snap_distance = snap_info_out.distance
+                            end
+                        end
+
+                        -- If we found a snap, adjust current_time to make that edge snap
+                        if best_snap then
+                            local snap_delta = best_snap.time - best_snap.original
+                            current_time = current_time + snap_delta
+                        end
+
+                    elseif view.drag_state.type == "edges" then
+                        -- For edge drags: check if edges would snap at their new positions
+                        -- Calculate where edges will be AFTER this drag, then check for snaps
+                        local delta_ms = current_time - view.drag_state.start_time
+                        local best_snap = nil
+                        local best_snap_distance = math.huge
+
+                        for _, edge in ipairs(view.drag_state.edges) do
+                            -- Calculate new edge position (all edge types use original_time + delta)
+                            local edge_time = edge.original_time + delta_ms
+
+                            -- Try snapping this edge's new position (exclude only THIS edge from snapping to itself)
+                            local exclude_this_edge = {{clip_id = edge.clip_id, edge_type = edge.edge_type}}
+                            local snapped_edge, snap_info = magnetic_snapping.apply_snap(
+                                state_module,
+                                edge_time,
+                                true,
+                                {},
+                                exclude_this_edge,
+                                tolerance_ms
+                            )
+
+                            if snap_info.snapped and snap_info.distance < best_snap_distance then
+                                best_snap = {time = snapped_edge, original = edge_time}
+                                best_snap_distance = snap_info.distance
+                            end
+                        end
+
+                        -- If we found a snap, adjust current_time to make that edge snap
+                        if best_snap then
+                            local snap_delta = best_snap.time - best_snap.original
+                            current_time = current_time + snap_delta
+                        end
+                    end
+                end
+
                 view.drag_state.current_x = x
                 view.drag_state.current_y = y
                 view.drag_state.current_time = current_time
@@ -969,6 +1141,10 @@ function M.create(widget, state_module, track_filter_fn, options)
                 -- (reload_clips triggers listeners which call render)
                 view.drag_state = nil
                 view.potential_drag = nil
+
+                -- Reset drag snapping inversion (N-key during drag)
+                local keyboard_shortcuts = require("core.keyboard_shortcuts")
+                keyboard_shortcuts.reset_drag_snapping()
 
                 local Command = require("command")
                 local command_manager = require("core.command_manager")
@@ -1116,7 +1292,6 @@ function M.create(widget, state_module, track_filter_fn, options)
                     local all_clips = state_module.get_clips()
 
                     for _, edge in ipairs(drag_edges) do
-                        -- Find track_id for each edge
                         local clip = nil
                         for _, c in ipairs(all_clips) do
                             if c.id == edge.clip_id then
@@ -1124,12 +1299,16 @@ function M.create(widget, state_module, track_filter_fn, options)
                                 break
                             end
                         end
+
                         if clip then
                             table.insert(edge_infos, {
                                 clip_id = edge.clip_id,
                                 edge_type = edge.edge_type,
                                 track_id = clip.track_id
                             })
+                        else
+                            print(string.format("WARNING: Drag release - clip %s not found for edge %s",
+                                tostring(edge.clip_id), tostring(edge.edge_type)))
                         end
                     end
 
