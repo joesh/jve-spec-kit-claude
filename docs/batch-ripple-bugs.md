@@ -313,7 +313,7 @@ for downstream clips:
 
 2. **Lines 2459, 2476**: Uses `delta_ms` for downstream shift
    - **Impact**: Incorrect timeline shift with asymmetric selection
-   - **Fix**: Calculate shift from rightmost edge's type (`-delta_ms` for in, `+delta_ms` for out)
+   - **Fix (final)**: Aggregate every ripple point, sort by time, and apply the cumulative shift for each downstream clip. The "rightmost wins" intuition was a useful debugging step, but the production fix accumulates all prior events.
 
 **Why these bugs exist:**
 - Misunderstanding of how `apply_edge_ripple` handles edge types

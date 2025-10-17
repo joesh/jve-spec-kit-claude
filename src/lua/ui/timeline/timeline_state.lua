@@ -27,7 +27,9 @@ local on_selection_changed_callback = nil
 -- Dimensions (shared across all views)
 M.dimensions = {
     default_track_height = 50,  -- Default height for new tracks
+    track_height = 50,          -- Legacy field for unit tests expecting track_height
     track_header_width = 150,
+    ruler_height = 32,          -- Height of the timeline ruler in pixels
 }
 
 -- Version tracking for stale data detection

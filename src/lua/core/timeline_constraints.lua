@@ -3,6 +3,9 @@
 
 local M = {}
 
+local Media = require('models.media')
+local database_module = require('core.database')
+
 -- Calculate the valid range for moving a clip
 -- Returns: {min_time, max_time, blocking_clips_left, blocking_clips_right}
 function M.calculate_move_range(clip_id, track_id, all_clips)
@@ -90,13 +93,38 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
                 min_delta = media_min
                 limit_left = "media_start"
             end
-            -- Can't drag right beyond source media end
-            -- (This would require knowing media duration - TODO)
         else  -- edge_type == "out"
-            -- Can't drag left to reveal media before source_in
-            -- (Already constrained by duration minimum)
             -- Can't drag right beyond source media end
-            -- (This would require knowing media duration - TODO)
+            local media_record = nil
+            local db_connection = nil
+            if database_module and database_module.get_connection then
+                db_connection = database_module.get_connection()
+            end
+            if not db_connection then
+                db_connection = rawget(_G, "db")
+            end
+
+            if Media and Media.load and db_connection then
+                local ok, result = pcall(Media.load, clip.media_id, db_connection)
+                if ok then
+                    media_record = result
+                end
+            end
+
+            local media_duration = media_record and media_record.duration or nil
+            local current_source_out = clip.source_out or (clip.source_in + clip.duration)
+
+            if media_duration then
+                local available_tail = media_duration - current_source_out
+                if available_tail < 0 then
+                    available_tail = 0
+                end
+
+                if available_tail < max_delta then
+                    max_delta = available_tail
+                    limit_right = "media_end"
+                end
+            end
         end
     end
 

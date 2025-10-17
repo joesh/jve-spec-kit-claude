@@ -127,6 +127,9 @@ make clean          # Clean build artifacts
 - [ ] Test FCP7 XML import
 - [ ] Test media import with A7S III footage (path already in tests)
 
+**DIAGNOSTICS:**
+- [ ] Build rich timeline visual diff tooling to compare timelines across projects and revision history
+
 ## Previous False Claims (REMOVED)
 The previous documentation contained extensive false "milestone" claims about completed features. All systems described as "complete" or "operational" were either broken, partially implemented, or non-functional. This violated ENGINEERING.md Rule 0.1 (Documentation Honesty).
 
@@ -568,4 +571,3 @@ The previous documentation contained extensive false "milestone" claims about co
 - 2025-10-02: Implement tag-based media organization with multiple namespaces
 - 2025-10-01: Fix inspector panel initialization timing - now creates content during correct execution phase
 - 2025-10-01: Code review and documentation cleanup - removed false milestone claims
-

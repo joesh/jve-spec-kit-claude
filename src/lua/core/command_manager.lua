@@ -144,40 +144,48 @@ end
 -- Save current undo position to database (persists across sessions)
 local function save_undo_position()
     if not db then
-        return false
+        return true
     end
 
-    local update = db:prepare([[
+    local update, prepare_error = db:prepare([[
         UPDATE sequences
         SET current_sequence_number = ?
         WHERE id = 'default_sequence'
     ]])
 
     if not update then
-        print("WARNING: Failed to prepare undo position update")
-        return false
+        print(string.format(
+            "WARNING: Failed to prepare undo position update: %s",
+            prepare_error or "unknown error"
+        ))
+        return true
     end
 
     update:bind_value(1, current_sequence_number)
-    local success = update:exec()
 
-    if not success then
-        print("WARNING: Failed to save undo position to database")
-        return false
+    local executed = update:exec()
+    if not executed then
+        local err = update:last_error()
+        update:finalize()
+        if err and err:find("no such column: current_sequence_number", 1, true) then
+            print("INFO: Undo position persistence skipped (legacy schema without current_sequence_number column)")
+            return true
+        end
+        return false, err or "unknown error"
     end
 
+    update:finalize()
     return true
 end
 
 -- Calculate state hash for a project
 local function calculate_state_hash(project_id)
     if not db then
-        print("WARNING: No database connection for state hash calculation")
-        return "00000000"
+        return nil, "No database connection for state hash calculation"
     end
 
     -- Query all relevant project state data
-    local query = db:prepare([[
+    local query, prepare_error = db:prepare([[
         SELECT p.name, p.settings,
                s.name, s.frame_rate, s.width, s.height,
                t.track_type, t.track_index, t.enabled,
@@ -193,27 +201,35 @@ local function calculate_state_hash(project_id)
     ]])
 
     if not query then
-        local err = "unknown error"
-        if db.last_error then
-            err = db:last_error()
-        end
-        print("WARNING: Failed to prepare state hash query: " .. err)
-        return "00000000"
+        return nil, string.format(
+            "Failed to prepare state hash query: %s",
+            prepare_error or "unknown error"
+        )
     end
 
     query:bind_value(1, project_id)
 
-    local state_string = ""
-    if query:exec() then
-        while query:next() do
-            -- Build deterministic state string
-            for i = 0, 13 do  -- We select 14 columns (0-13): p.name, p.settings, s.name, s.frame_rate, s.width, s.height, t.track_type, t.track_index, t.enabled, c.start_time, c.duration, c.enabled, m.file_path, m.duration
-                local value = query:value(i)
-                state_string = state_string .. tostring(value) .. "|"
-            end
-            state_string = state_string .. "\n"
-        end
+    local executed = query:exec()
+    if not executed then
+        local err = query:last_error()
+        query:finalize()
+        return nil, string.format(
+            "Failed to execute state hash query: %s",
+            err or "unknown error"
+        )
     end
+
+    local state_string = ""
+    while query:next() do
+        -- Build deterministic state string
+        for i = 0, 13 do  -- We select 14 columns (0-13): p.name, p.settings, s.name, s.frame_rate, s.width, s.height, t.track_type, t.track_index, t.enabled, c.start_time, c.duration, c.enabled, m.file_path, m.duration
+            local value = query:value(i)
+            state_string = state_string .. tostring(value) .. "|"
+        end
+        state_string = state_string .. "\n"
+    end
+
+    query:finalize()
 
     -- Calculate simple hash (TODO: implement proper SHA256 via Qt bindings)
     -- For now, use Lua's string hash as a simple checksum
@@ -303,14 +319,41 @@ function M.execute(command)
 
     -- BEGIN TRANSACTION: All database changes (command save + state changes) are atomic
     -- If anything fails, everything rolls back automatically
-    local begin_tx = db:prepare("BEGIN TRANSACTION")
-    if not (begin_tx and begin_tx:exec()) then
-        result.error_message = "Failed to begin transaction"
+    local begin_tx, begin_prepare_error = db:prepare("BEGIN TRANSACTION")
+    if not begin_tx then
+        result.error_message = string.format(
+            "Failed to prepare begin transaction: %s",
+            begin_prepare_error or "unknown error"
+        )
         return result
     end
 
+    local began = begin_tx:exec()
+    if not began then
+        local err = begin_tx:last_error()
+        begin_tx:finalize()
+        result.error_message = string.format(
+            "Failed to begin transaction: %s",
+            err or "unknown error"
+        )
+        return result
+    end
+    begin_tx:finalize()
+
     -- Calculate pre-execution state hash
-    local pre_hash = calculate_state_hash(command.project_id)
+    local pre_hash, pre_hash_err = calculate_state_hash(command.project_id)
+    if not pre_hash then
+        local rollback_stmt = db:prepare("ROLLBACK")
+        if rollback_stmt then
+            rollback_stmt:exec()
+            rollback_stmt:finalize()
+        end
+        result.error_message = string.format(
+            "Failed to calculate pre-execution state hash: %s",
+            pre_hash_err
+        )
+        return result
+    end
 
     -- Assign sequence number
     local sequence_number = get_next_sequence_number()
@@ -328,7 +371,10 @@ function M.execute(command)
             tostring(current_sequence_number), last_sequence_number))
         print("ERROR: This indicates a bug in undo position tracking!")
         local rollback_tx = db:prepare("ROLLBACK")
-        if rollback_tx then rollback_tx:exec() end
+        if rollback_tx then
+            rollback_tx:exec()
+            rollback_tx:finalize()
+        end
         last_sequence_number = last_sequence_number - 1
         result.error_message = "FATAL: Cannot execute command with NULL parent (would break undo tree)"
         return result
@@ -336,20 +382,44 @@ function M.execute(command)
 
     -- VALIDATION: If parent exists, verify it actually exists in database
     if command.parent_sequence_number then
-        local verify_parent = db:prepare("SELECT 1 FROM commands WHERE sequence_number = ?")
-        if verify_parent then
-            verify_parent:bind_value(1, command.parent_sequence_number)
-            if not (verify_parent:exec() and verify_parent:next()) then
-                print(string.format("ERROR: Command %d references non-existent parent %d!",
-                    sequence_number, command.parent_sequence_number))
-                print("ERROR: Parent command was deleted or never existed - broken referential integrity")
-                local rollback_tx = db:prepare("ROLLBACK")
-                if rollback_tx then rollback_tx:exec() end
-                last_sequence_number = last_sequence_number - 1
-                result.error_message = "FATAL: Cannot execute command with non-existent parent (would break undo tree)"
-                return result
+        local verify_parent, verify_prepare_error = db:prepare("SELECT 1 FROM commands WHERE sequence_number = ?")
+        if not verify_parent then
+            local rollback_stmt = db:prepare("ROLLBACK")
+            if rollback_stmt then
+                rollback_stmt:exec()
+                rollback_stmt:finalize()
             end
+            last_sequence_number = last_sequence_number - 1
+            result.error_message = string.format(
+                "FATAL: Failed to prepare parent verification query: %s",
+                verify_prepare_error or "unknown error"
+            )
+            return result
         end
+
+        verify_parent:bind_value(1, command.parent_sequence_number)
+
+        local parent_exists = verify_parent:exec() and verify_parent:next()
+        if not parent_exists then
+            local err = verify_parent:last_error()
+            verify_parent:finalize()
+            print(string.format("ERROR: Command %d references non-existent parent %d!",
+                sequence_number, command.parent_sequence_number))
+            print("ERROR: Parent command was deleted or never existed - broken referential integrity")
+            local rollback_tx = db:prepare("ROLLBACK")
+            if rollback_tx then
+                rollback_tx:exec()
+                rollback_tx:finalize()
+            end
+            last_sequence_number = last_sequence_number - 1
+            result.error_message = string.format(
+                "FATAL: Cannot execute command with non-existent parent (would break undo tree): %s",
+                err or "verification returned no rows"
+            )
+            return result
+        end
+
+        verify_parent:finalize()
     end
 
     -- Update command with state hashes
@@ -366,7 +436,21 @@ function M.execute(command)
         table.insert(selected_ids, clip.id)
     end
     local success, json_str = pcall(qt_json_encode, selected_ids)
-    command.selected_clip_ids = success and json_str or "[]"
+    if not success then
+        command.status = "Failed"
+        local rollback_stmt = db:prepare("ROLLBACK")
+        if rollback_stmt then
+            rollback_stmt:exec()
+            rollback_stmt:finalize()
+        end
+        last_sequence_number = last_sequence_number - 1
+        result.error_message = string.format(
+            "Failed to serialize selected clip IDs: %s",
+            json_str
+        )
+        return result
+    end
+    command.selected_clip_ids = json_str
 
     -- Execute the actual command logic
     local execution_success = execute_command_implementation(command)
@@ -375,23 +459,91 @@ function M.execute(command)
         command.status = "Executed"
         command.executed_at = os.time()
 
-        -- Calculate post-execution hash
-        local post_hash = calculate_state_hash(command.project_id)
+        local post_hash, post_hash_err = calculate_state_hash(command.project_id)
+        if not post_hash then
+            command.status = "Failed"
+            local rollback_stmt = db:prepare("ROLLBACK")
+            if rollback_stmt then
+                rollback_stmt:exec()
+                rollback_stmt:finalize()
+            end
+            last_sequence_number = last_sequence_number - 1
+            result.error_message = string.format(
+                "Failed to calculate post-execution state hash: %s",
+                post_hash_err
+            )
+            return result
+        end
         command.post_hash = post_hash
 
-        -- Save command to database
         if command:save(db) then
-            result.success = true
-            result.result_data = command:serialize()
-            current_state_hash = post_hash
+            local previous_sequence_number = current_sequence_number
+            local previous_state_hash = current_state_hash
 
-            -- Move to HEAD after executing new command
             current_sequence_number = sequence_number
 
-            -- Save undo position to database (persists across sessions)
-            save_undo_position()
+            local undo_saved, undo_err = save_undo_position()
+            if not undo_saved then
+                current_sequence_number = previous_sequence_number
+                current_state_hash = previous_state_hash
+                command.status = "Failed"
+                local rollback_stmt = db:prepare("ROLLBACK")
+                if rollback_stmt then
+                    rollback_stmt:exec()
+                    rollback_stmt:finalize()
+                end
+                last_sequence_number = last_sequence_number - 1
+                result.error_message = string.format(
+                    "Failed to persist undo position: %s",
+                    undo_err or "unknown error"
+                )
+                return result
+            end
 
-            -- Create snapshot every N commands for fast event replay
+            local commit_tx, commit_prepare_error = db:prepare("COMMIT")
+            if not commit_tx then
+                current_sequence_number = previous_sequence_number
+                current_state_hash = previous_state_hash
+                command.status = "Failed"
+                last_sequence_number = last_sequence_number - 1
+                local rollback_stmt = db:prepare("ROLLBACK")
+                if rollback_stmt then
+                    rollback_stmt:exec()
+                    rollback_stmt:finalize()
+                end
+                result.error_message = string.format(
+                    "Failed to prepare commit: %s",
+                    commit_prepare_error or "unknown error"
+                )
+                return result
+            end
+
+            local committed = commit_tx:exec()
+            if not committed then
+                local commit_err = commit_tx:last_error()
+                commit_tx:finalize()
+                current_sequence_number = previous_sequence_number
+                current_state_hash = previous_state_hash
+                command.status = "Failed"
+                local rollback_stmt = db:prepare("ROLLBACK")
+                if rollback_stmt then
+                    rollback_stmt:exec()
+                    rollback_stmt:finalize()
+                end
+                last_sequence_number = last_sequence_number - 1
+                result.error_message = string.format(
+                    "Failed to commit transaction: %s",
+                    commit_err or "unknown error"
+                )
+                return result
+            end
+            commit_tx:finalize()
+
+            current_state_hash = post_hash
+
+            result.success = true
+            result.result_data = command:serialize()
+
             local snapshot_mgr = require('core.snapshot_manager')
             if snapshot_mgr.should_snapshot(sequence_number) then
                 local db_module = require('core.database')
@@ -399,27 +551,26 @@ function M.execute(command)
                 snapshot_mgr.create_snapshot(db, "default_sequence", sequence_number, clips)
             end
 
-            -- COMMIT TRANSACTION: Everything succeeded
-            local commit_tx = db:prepare("COMMIT")
-            if commit_tx then commit_tx:exec() end
-
-            -- Reload timeline state to pick up database changes
-            -- This triggers listener notifications → automatic view redraws
             timeline_state.reload_clips()
         else
+            command.status = "Failed"
             result.error_message = "Failed to save command to database"
-            -- ROLLBACK: Command execution succeeded but save failed
             local rollback_tx = db:prepare("ROLLBACK")
-            if rollback_tx then rollback_tx:exec() end
+            if rollback_tx then
+                rollback_tx:exec()
+                rollback_tx:finalize()
+            end
             last_sequence_number = last_sequence_number - 1  -- Revert sequence number
         end
     else
         command.status = "Failed"
         result.error_message = last_error_message ~= "" and last_error_message or "Command execution failed"
         last_error_message = ""
-        -- ROLLBACK: Command execution failed
         local rollback_tx = db:prepare("ROLLBACK")
-        if rollback_tx then rollback_tx:exec() end
+        if rollback_tx then
+            rollback_tx:exec()
+            rollback_tx:finalize()
+        end
         last_sequence_number = last_sequence_number - 1  -- Revert sequence number
     end
 
@@ -559,7 +710,11 @@ function M.get_project_state(project_id)
         return state_hash_cache[project_id]
     end
 
-    local state_hash = calculate_state_hash(project_id)
+    local state_hash, state_hash_err = calculate_state_hash(project_id)
+    if not state_hash then
+        return nil, state_hash_err
+    end
+
     state_hash_cache[project_id] = state_hash
 
     return state_hash
@@ -1571,6 +1726,27 @@ command_executors["Overwrite"] = function(command)
     local modified_clips = {}
     local preview_affected_clips = {}
 
+    local function restore_trimmed_clips()
+        if dry_run then
+            return
+        end
+
+        for clip_id, state in pairs(original_states) do
+            local restore_clip = Clip.load(clip_id, db)
+            if restore_clip then
+                restore_clip.start_time = state.start_time
+                restore_clip.duration = state.duration
+                restore_clip.source_in = state.source_in
+                restore_clip.source_out = state.source_out
+                if not restore_clip:save(db) then
+                    print(string.format("WARNING: BatchRippleEdit: Failed to restore clip %s", clip_id:sub(1,8)))
+                end
+            else
+                print(string.format("WARNING: BatchRippleEdit: Could not reload clip %s for restore", clip_id:sub(1,8)))
+            end
+        end
+    end
+
     for _, clip_info in ipairs(affected_clips) do
         local clip = Clip.load(clip_info.id, db)
         if clip then
@@ -2167,7 +2343,7 @@ local function calculate_gap_context(reference_clip, gap_edge_type, all_clips)
         end
     end
 
-    local max_closure_shift = -(gap_duration - 1)
+    local max_closure_shift = -gap_duration
     if max_closure_shift > min_shift then
         min_shift = max_closure_shift
     end
@@ -2193,6 +2369,34 @@ local function calculate_gap_context(reference_clip, gap_edge_type, all_clips)
         min_delta = min_delta,
         max_delta = max_delta
     }
+end
+
+-- Helper: clamp a ripple shift so downstream clips never overlap earlier clips on their tracks
+local function clamp_ripple_shift(shift_amount, clips_to_shift, all_clips, constraints_module)
+    if shift_amount == 0 then
+        return 0
+    end
+
+    local adjusted = shift_amount
+
+    for _, pending_clip in ipairs(clips_to_shift) do
+        local move_range = constraints_module.calculate_move_range(pending_clip.id, pending_clip.track_id, all_clips)
+        if move_range then
+            if shift_amount < 0 and move_range.min_time then
+                local clip_min_shift = move_range.min_time - pending_clip.start_time
+                if clip_min_shift > adjusted then
+                    adjusted = clip_min_shift
+                end
+            elseif shift_amount > 0 and move_range.max_time then
+                local clip_max_shift = move_range.max_time - pending_clip.start_time
+                if clip_max_shift < adjusted then
+                    adjusted = clip_max_shift
+                end
+            end
+        end
+    end
+
+    return adjusted
 end
 
 -- RippleEdit: Trim an edge and shift all downstream clips to close/open the gap
@@ -2246,7 +2450,8 @@ command_executors["RippleEdit"] = function(command)
         if is_gap_edge then
             clamped_delta = math.max(gap_context.min_delta, math.min(gap_context.max_delta, delta_ms))
         else
-            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, nil, true)
+            local check_all_tracks = delta_ms > 0
+            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, nil, check_all_tracks)
         end
 
         if clamped_delta ~= delta_ms and not dry_run then
@@ -2258,15 +2463,12 @@ command_executors["RippleEdit"] = function(command)
 
     delta_ms = clamped_delta
 
-    local original_clip_state = nil
-    if not dry_run then
-        original_clip_state = {
-            start_time = clip.start_time,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out
-        }
-    end
+    local original_clip_state = {
+        start_time = clip.start_time,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out
+    }
 
     local ripple_time
     local shift_amount
@@ -2290,14 +2492,52 @@ command_executors["RippleEdit"] = function(command)
 
     local clips_to_shift = {}
     for _, other_clip in ipairs(all_clips) do
-        if other_clip.start_time > ripple_time - 1 then
+        if other_clip.start_time >= ripple_time - 1 then
             if not (not is_gap_edge and other_clip.id == clip.id) then
                 table.insert(clips_to_shift, other_clip)
-                if not dry_run then
-                    print(string.format("  Will shift clip %s from %d to %d",
-                        other_clip.id:sub(1,8), other_clip.start_time, other_clip.start_time + shift_amount))
-                end
             end
+        end
+    end
+
+    local adjusted_shift = clamp_ripple_shift(shift_amount, clips_to_shift, all_clips, constraints)
+
+    if adjusted_shift ~= shift_amount then
+        if not is_gap_edge then
+            -- Restore clip to original state before determining whether operation can proceed
+            clip.start_time = original_clip_state.start_time
+            clip.duration = original_clip_state.duration
+            clip.source_in = original_clip_state.source_in
+            clip.source_out = original_clip_state.source_out
+        end
+
+        if math.abs(adjusted_shift) < 1e-6 then
+            if not dry_run then
+                print("⚠️  Ripple edit blocked: downstream clip cannot move without overlap")
+            end
+            return {success = false, error_message = "Ripple blocked by downstream clip"}
+        end
+
+        if not dry_run then
+            print(string.format("⚠️  Ripple shift adjusted: %dms → %dms (prevented overlap)", shift_amount, adjusted_shift))
+        end
+
+        shift_amount = adjusted_shift
+        delta_ms = (edge_type == "in") and -shift_amount or shift_amount
+        command:set_parameter("clamped_delta_ms", delta_ms)
+
+        if not is_gap_edge then
+            local success
+            ripple_time, success = apply_edge_ripple(clip, edge_type, delta_ms)
+            if not success then
+                return {success = false, error_message = "Ripple operation would violate clip or media constraints"}
+            end
+        end
+    end
+
+    if not dry_run then
+        for _, other_clip in ipairs(clips_to_shift) do
+            print(string.format("  Will shift clip %s from %d to %d",
+                other_clip.id:sub(1,8), other_clip.start_time, other_clip.start_time + shift_amount))
         end
     end
 
@@ -2381,6 +2621,30 @@ command_executors["BatchRippleEdit"] = function(command)
     local original_states = {}
     local edited_clip_ids = {}
     local preview_affected_clips = {}
+    local restore_required = false
+
+    local function restore_trimmed_clips()
+        if dry_run or not restore_required then
+            return
+        end
+
+        for clip_id, state in pairs(original_states) do
+            local restore_clip = Clip.load(clip_id, db)
+            if restore_clip then
+                restore_clip.start_time = state.start_time
+                restore_clip.duration = state.duration
+                restore_clip.source_in = state.source_in
+                restore_clip.source_out = state.source_out
+                if not restore_clip:save(db) then
+                    print(string.format("WARNING: BatchRippleEdit: Failed to restore clip %s", clip_id:sub(1,8)))
+                end
+            else
+                print(string.format("WARNING: BatchRippleEdit: Could not reload clip %s for restore", clip_id:sub(1,8)))
+            end
+        end
+
+        restore_required = false
+    end
 
     local stored_clamped = command:get_parameter("clamped_delta_ms")
     if stored_clamped then
@@ -2389,15 +2653,12 @@ command_executors["BatchRippleEdit"] = function(command)
 
     local stored_edge_deltas = command:get_parameter("edge_deltas")
     local edge_contexts = {}
-
-    local reference_bracket = (edge_infos[1].edge_type == "in" or edge_infos[1].edge_type == "gap_after") and "[" or "]"
-    local max_allowed_delta = delta_ms
-    local min_allowed_delta = delta_ms
+    local gap_edge_count = 0
+    local contexts_by_clip_id = {}
 
     for idx, edge_info in ipairs(edge_infos) do
         local context = {
             info = edge_info,
-            bracket = (edge_info.edge_type == "in" or edge_info.edge_type == "gap_after") and "[" or "]",
             is_gap = edge_info.edge_type == "gap_after" or edge_info.edge_type == "gap_before"
         }
 
@@ -2408,177 +2669,507 @@ command_executors["BatchRippleEdit"] = function(command)
         end
 
         if context.is_gap then
+            gap_edge_count = gap_edge_count + 1
             context.actual_edge_type = edge_info.edge_type == "gap_after" and "in" or "out"
-            context.gap_context = calculate_gap_context(context.clip, edge_info.edge_type, all_clips)
-            if not context.gap_context then
-                print(string.format("WARNING: Failed to resolve gap context for %s", edge_info.clip_id:sub(1,8)))
-                return false
-            end
-            context.min_delta = context.gap_context.min_delta
-            context.max_delta = context.gap_context.max_delta
         else
             context.actual_edge_type = edge_info.edge_type
-            local constraint = constraints_module.calculate_trim_range(
-                context.clip,
-                context.actual_edge_type,
-                all_clips,
-                false,
-                true
-            )
-            context.min_delta = constraint.min_delta
-            context.max_delta = constraint.max_delta
         end
 
+        context.relative_sign = 1
         edge_contexts[idx] = context
 
-        if not stored_clamped then
-            local edge_delta = ((context.bracket == reference_bracket) and 1 or -1) * delta_ms
-            local opposite_signs = (edge_delta * delta_ms < 0)
-
-            if opposite_signs then
-                local delta_min = -context.max_delta
-                local delta_max = -context.min_delta
-                if delta_ms > 0 then
-                    max_allowed_delta = math.min(max_allowed_delta, delta_max)
-                else
-                    min_allowed_delta = math.max(min_allowed_delta, delta_min)
-                end
-            else
-                if delta_ms > 0 then
-                    max_allowed_delta = math.min(max_allowed_delta, context.max_delta)
-                else
-                    min_allowed_delta = math.max(min_allowed_delta, context.min_delta)
-                end
-            end
+        if not contexts_by_clip_id[context.clip.id] then
+            contexts_by_clip_id[context.clip.id] = {}
         end
+        table.insert(contexts_by_clip_id[context.clip.id], context)
     end
 
-    if not stored_clamped then
-        local original_delta = delta_ms
-        if delta_ms > 0 then
-            delta_ms = math.min(delta_ms, max_allowed_delta)
-        else
-            delta_ms = math.max(delta_ms, min_allowed_delta)
-        end
-
-        if delta_ms ~= original_delta and not dry_run then
-            print(string.format("Clamped delta: %d → %d", original_delta, delta_ms))
-        end
-
-        command:set_parameter("clamped_delta_ms", delta_ms)
+    local clip_lookup = {}
+    for _, clip in ipairs(all_clips) do
+        clip_lookup[clip.id] = clip
     end
 
-    local new_edge_deltas = stored_edge_deltas or {}
-    local earliest_ripple_time = math.huge
-    local downstream_shift_amount = nil
-
-    for idx, context in ipairs(edge_contexts) do
-        local edge_delta
-        if stored_edge_deltas then
-            edge_delta = stored_edge_deltas[idx]
-        else
-            local sign = (context.bracket == reference_bracket) and 1 or -1
-            edge_delta = sign * delta_ms
-            new_edge_deltas[idx] = edge_delta
+    local working_clips = {}
+    local working_lookup = {}
+    for _, clip in ipairs(all_clips) do
+        local clone = {}
+        for key, value in pairs(clip) do
+            clone[key] = value
         end
+        table.insert(working_clips, clone)
+        working_lookup[clone.id] = clone
+    end
 
-        if context.is_gap then
-            if context.gap_context.ripple_time < earliest_ripple_time then
-                earliest_ripple_time = context.gap_context.ripple_time
-            end
+    local function refresh_constraints()
+        local has_gap_edge = false
+        local earliest_gap_time = math.huge
+        local earliest_non_gap_time = math.huge
+        local min_allowed_delta = -math.huge
+        local max_allowed_delta = math.huge
 
-            local duration_change = context.actual_edge_type == "in" and -edge_delta or edge_delta
-            if downstream_shift_amount == nil then
-                downstream_shift_amount = duration_change
-            end
-
-            if dry_run then
-                table.insert(preview_affected_clips, {
-                    clip_id = context.clip.id,
-                    new_start_time = context.clip.start_time,
-                    new_duration = context.clip.duration,
-                    edge_type = context.actual_edge_type
-                })
-            end
-        else
-            if not original_states[context.clip.id] then
-                original_states[context.clip.id] = {
-                    start_time = context.clip.start_time,
-                    duration = context.clip.duration,
-                    source_in = context.clip.source_in,
-                    source_out = context.clip.source_out
-                }
-            end
-
-            table.insert(edited_clip_ids, context.clip.id)
-
-            local ripple_time, success = apply_edge_ripple(context.clip, context.actual_edge_type, edge_delta)
-            if not success then
-                print(string.format("ERROR: Ripple failed for clip %s despite constraint pre-calculation!", context.clip.id:sub(1,8)))
-                return false
-            end
-
-            if ripple_time < earliest_ripple_time then
-                earliest_ripple_time = ripple_time
-            end
-
-            local duration_change = context.clip.duration - original_states[context.clip.id].duration
-            if downstream_shift_amount == nil then
-                downstream_shift_amount = duration_change
-            end
-
-            if dry_run then
-                table.insert(preview_affected_clips, {
-                    clip_id = context.clip.id,
-                    new_start_time = context.clip.start_time,
-                    new_duration = context.clip.duration,
-                    edge_type = context.actual_edge_type
-                })
-            else
-                if not context.clip:save(db) then
-                    print(string.format("ERROR: BatchRippleEdit: Failed to save clip %s", context.clip.id:sub(1,8)))
+        for _, context in ipairs(edge_contexts) do
+            if context.is_gap then
+                has_gap_edge = true
+                context.gap_context = calculate_gap_context(context.clip, context.info.edge_type, working_clips)
+                if not context.gap_context then
+                    print(string.format("WARNING: Failed to resolve gap context for %s", context.clip.id:sub(1,8)))
                     return false
                 end
+                context.min_delta = context.gap_context.min_delta
+                context.max_delta = context.gap_context.max_delta
+                context.anchor_time = context.gap_context.ripple_time
+                if context.anchor_time and context.anchor_time < earliest_gap_time then
+                    earliest_gap_time = context.anchor_time
+                end
+            else
+                local constraint = constraints_module.calculate_trim_range(
+                    context.clip,
+                    context.actual_edge_type,
+                    working_clips,
+                    false,
+                    true
+                )
+                context.min_delta = constraint.min_delta
+                context.max_delta = constraint.max_delta
+                if context.actual_edge_type == "in" then
+                    context.anchor_time = context.clip.start_time
+                else
+                    context.anchor_time = context.clip.start_time + context.clip.duration
+                end
+                if context.anchor_time and context.anchor_time < earliest_non_gap_time then
+                    earliest_non_gap_time = context.anchor_time
+                end
             end
+
+            context.relative_sign = 1
+
+            local include_in_bounds = true
+            if context.is_gap and gap_edge_count < #edge_contexts then
+                include_in_bounds = false
+            end
+
+            if include_in_bounds then
+                if context.relative_sign == 1 then
+                    min_allowed_delta = math.max(min_allowed_delta, context.min_delta)
+                    max_allowed_delta = math.min(max_allowed_delta, context.max_delta)
+                else
+                    min_allowed_delta = math.max(min_allowed_delta, -context.max_delta)
+                    max_allowed_delta = math.min(max_allowed_delta, -context.min_delta)
+                end
+            end
+        end
+
+        return true, {
+            min_allowed_delta = min_allowed_delta,
+            max_allowed_delta = max_allowed_delta,
+            has_gap_edge = has_gap_edge,
+            earliest_gap_time = earliest_gap_time,
+            earliest_non_gap_time = earliest_non_gap_time
+        }
+    end
+
+    local function sort_working_clips()
+        table.sort(working_clips, function(a, b)
+            if a.start_time == b.start_time then
+                return a.id < b.id
+            end
+            return a.start_time < b.start_time
+        end)
+    end
+
+    local function merge_events(events)
+        table.sort(events, function(a, b)
+            if a.time == b.time then
+                return a.shift < b.shift
+            end
+            return a.time < b.time
+        end)
+
+        return events
+    end
+
+    local function compute_shift_lookup(events)
+        local sorted_events = merge_events(events)
+        if #sorted_events == 0 then
+            return {}, math.huge
+        end
+
+        sort_working_clips()
+
+        local shift_lookup = {}
+        local cumulative_shift = 0
+        local event_index = 1
+        local earliest_time = sorted_events[1].time
+        local source_exclusions = {}
+
+        for _, clip in ipairs(working_clips) do
+            while event_index <= #sorted_events and sorted_events[event_index].time <= clip.start_time do
+                local event = sorted_events[event_index]
+                cumulative_shift = cumulative_shift + event.shift
+                if event.source_clip_id and not event.apply_to_source then
+                    source_exclusions[event.source_clip_id] =
+                        (source_exclusions[event.source_clip_id] or 0) + event.shift
+                end
+                event_index = event_index + 1
+            end
+
+            local effective_shift = cumulative_shift
+            if source_exclusions[clip.id] then
+                effective_shift = effective_shift - source_exclusions[clip.id]
+            end
+
+            if math.abs(effective_shift) > 1e-6 then
+                shift_lookup[clip.id] = effective_shift
+            end
+        end
+
+        return shift_lookup, earliest_time
+    end
+
+    local new_edge_deltas = {}
+    local preview_map = {}
+    local total_shift_lookup = {}
+    local shift_order = {}
+    local shift_seen = {}
+    local trim_updates = {}
+
+    local edited_clip_lookup = {}
+    for _, id in ipairs(edited_clip_ids) do
+        edited_clip_lookup[id] = true
+    end
+
+    local requested_delta = delta_ms
+    local applied_delta = 0
+
+    local global_min_bound = -math.huge
+    local global_max_bound = math.huge
+    local bounds_initialized = false
+
+    local iteration = 0
+    local max_iterations = 32
+
+    while iteration < max_iterations do
+        iteration = iteration + 1
+
+        local ok, constraint_state = refresh_constraints()
+        if not ok then
+            restore_trimmed_clips()
+            return false
+        end
+
+        if not bounds_initialized then
+            global_min_bound = constraint_state.min_allowed_delta
+            global_max_bound = constraint_state.max_allowed_delta
+            bounds_initialized = true
+        end
+
+        local remaining = requested_delta - applied_delta
+        if math.abs(remaining) < 1e-6 then
+            break
+        end
+
+        local min_allowed = constraint_state.min_allowed_delta
+        local max_allowed = constraint_state.max_allowed_delta
+
+        if min_allowed > max_allowed then
+            break
+        end
+
+        local step_delta = remaining
+        if step_delta > max_allowed then
+            step_delta = max_allowed
+        end
+        if step_delta < min_allowed then
+            step_delta = min_allowed
+        end
+
+        if math.abs(step_delta) < 1e-6 then
+            break
+        end
+
+        local pass_events = {}
+
+        for idx, context in ipairs(edge_contexts) do
+            local edge_delta = step_delta * (context.relative_sign or 1)
+            new_edge_deltas[idx] = (new_edge_deltas[idx] or 0) + edge_delta
+
+            local ripple_time = nil
+            local shift_for_this_edge = 0
+
+            if context.is_gap then
+                ripple_time = context.gap_context and context.gap_context.ripple_time or context.anchor_time
+                if constraint_state.has_gap_edge and constraint_state.earliest_gap_time < math.huge and ripple_time then
+                    if ripple_time < constraint_state.earliest_gap_time then
+                        ripple_time = constraint_state.earliest_gap_time
+                    end
+                end
+                shift_for_this_edge = edge_delta
+
+            if constraint_state.has_gap_edge
+                and constraint_state.earliest_non_gap_time < math.huge
+                and ripple_time
+                and ripple_time >= constraint_state.earliest_non_gap_time then
+                shift_for_this_edge = 0
+            end
+
+                preview_map[context.clip.id] = {
+                    clip_id = context.clip.id,
+                    new_start_time = context.clip.start_time,
+                    new_duration = context.clip.duration,
+                    edge_type = context.actual_edge_type
+                }
+            else
+                if not original_states[context.clip.id] then
+                    original_states[context.clip.id] = {
+                        start_time = context.clip.start_time,
+                        duration = context.clip.duration,
+                        source_in = context.clip.source_in,
+                        source_out = context.clip.source_out
+                    }
+                end
+
+                if not edited_clip_lookup[context.clip.id] then
+                    edited_clip_lookup[context.clip.id] = true
+                    table.insert(edited_clip_ids, context.clip.id)
+                end
+
+                if not dry_run then
+                    restore_required = true
+                end
+
+                local before_duration = context.clip.duration
+
+                local success
+                ripple_time, success = apply_edge_ripple(context.clip, context.actual_edge_type, edge_delta)
+                if not success then
+                    print(string.format("ERROR: Ripple failed for clip %s despite constraint pre-calculation!", context.clip.id:sub(1,8)))
+                    restore_trimmed_clips()
+                    return false
+                end
+
+                local duration_change = context.clip.duration - before_duration
+                shift_for_this_edge = duration_change
+
+                if constraint_state.has_gap_edge and constraint_state.earliest_gap_time < math.huge then
+                    if ripple_time and ripple_time < constraint_state.earliest_gap_time then
+                        ripple_time = constraint_state.earliest_gap_time
+                    end
+                end
+
+                if constraint_state.has_gap_edge and constraint_state.earliest_gap_time < math.huge then
+                    local comparison_time = ripple_time or context.anchor_time
+                    if comparison_time and comparison_time > constraint_state.earliest_gap_time then
+                        shift_for_this_edge = 0
+                    end
+                end
+
+                preview_map[context.clip.id] = {
+                    clip_id = context.clip.id,
+                    new_start_time = context.clip.start_time,
+                    new_duration = context.clip.duration,
+                    edge_type = context.actual_edge_type
+                }
+
+                if not dry_run then
+                    trim_updates[context.clip.id] = {
+                        duration = context.clip.duration,
+                        source_in = context.clip.source_in,
+                        source_out = context.clip.source_out,
+                        start_time = context.clip.start_time
+                    }
+                end
+
+                local working_ref = working_lookup[context.clip.id]
+                if working_ref then
+                    working_ref.duration = context.clip.duration
+                    working_ref.source_in = context.clip.source_in
+                    working_ref.source_out = context.clip.source_out
+                end
+
+                local original_ref = clip_lookup[context.clip.id]
+                if original_ref then
+                    original_ref.duration = context.clip.duration
+                    original_ref.source_in = context.clip.source_in
+                    original_ref.source_out = context.clip.source_out
+                end
+            end
+
+            if ripple_time and math.abs(shift_for_this_edge) > 1e-6 then
+                table.insert(pass_events, {
+                    time = ripple_time,
+                    shift = shift_for_this_edge,
+                    source_clip_id = context.clip.id,
+                    apply_to_source = context.is_gap
+                })
+            end
+        end
+
+        if #pass_events > 0 then
+            local shift_lookup, _ = compute_shift_lookup(pass_events)
+
+            for clip_id, shift_amount in pairs(shift_lookup) do
+                if math.abs(shift_amount) > 1e-6 then
+                    total_shift_lookup[clip_id] = (total_shift_lookup[clip_id] or 0) + shift_amount
+                    if not shift_seen[clip_id] then
+                        table.insert(shift_order, clip_id)
+                        shift_seen[clip_id] = true
+                    end
+
+                    local working_ref = working_lookup[clip_id]
+                    if working_ref then
+                        working_ref.start_time = working_ref.start_time + shift_amount
+                    end
+
+                    local related_contexts = contexts_by_clip_id[clip_id]
+                    if related_contexts then
+                        for _, ctx in ipairs(related_contexts) do
+                            ctx.clip.start_time = ctx.clip.start_time + shift_amount
+                            local trim_info = trim_updates[ctx.clip.id]
+                            if trim_info then
+                                trim_info.start_time = ctx.clip.start_time
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        applied_delta = applied_delta + step_delta
+    end
+
+    if iteration == max_iterations then
+        print("WARNING: BatchRippleEdit reached max iterations while applying delta")
+    end
+
+    if math.abs(applied_delta - requested_delta) > 1e-6 then
+        if not dry_run then
+            print(string.format("Clamped delta: %d → %d", requested_delta, applied_delta))
         end
     end
 
+    delta_ms = applied_delta
+    command:set_parameter("clamped_delta_ms", applied_delta)
+
     if not stored_edge_deltas then
+        for idx = 1, #edge_infos do
+            new_edge_deltas[idx] = new_edge_deltas[idx] or 0
+        end
         command:set_parameter("edge_deltas", new_edge_deltas)
     end
 
-    if downstream_shift_amount == nil then
-        downstream_shift_amount = 0
-    end
+    sort_working_clips()
 
     local clips_to_shift = {}
-    for _, other_clip in ipairs(all_clips) do
-        local is_edited = false
-        for _, edited_id in ipairs(edited_clip_ids) do
-            if other_clip.id == edited_id then
-                is_edited = true
-                break
-            end
-        end
+    local clip_shift_lookup = {}
 
-        if not is_edited and other_clip.start_time >= earliest_ripple_time then
-            table.insert(clips_to_shift, other_clip)
+    for _, clip in ipairs(all_clips) do
+        local shift_amount = total_shift_lookup[clip.id]
+        if shift_amount and math.abs(shift_amount) > 1e-6 then
+            clip_shift_lookup[clip.id] = shift_amount
+            table.insert(clips_to_shift, clip)
+        end
+    end
+
+    table.sort(clips_to_shift, function(a, b)
+        if a.start_time == b.start_time then
+            return a.id < b.id
+        end
+        return a.start_time < b.start_time
+    end)
+
+    for _, clip in ipairs(clips_to_shift) do
+        local shift_amount = clip_shift_lookup[clip.id] or 0
+        if math.abs(shift_amount) > 1e-6 then
+            local move_range = constraints_module.calculate_move_range(clip.id, clip.track_id, all_clips)
+            if move_range then
+                local new_start = clip.start_time + shift_amount
+                local violates_min = move_range.min_time and new_start < move_range.min_time
+                local violates_max = move_range.max_time and new_start > move_range.max_time
+
+                if violates_min or violates_max then
+                    if not stored_clamped and math.abs(delta_ms) > 1e-6 then
+                        local coefficient = shift_amount / delta_ms
+                        if math.abs(coefficient) > 1e-12 then
+                            local target_delta = delta_ms
+                            if violates_min and move_range.min_time then
+                                target_delta = (move_range.min_time - clip.start_time) / coefficient
+                            elseif violates_max and move_range.max_time then
+                                target_delta = (move_range.max_time - clip.start_time) / coefficient
+                            end
+
+                            target_delta = math.max(global_min_bound, math.min(global_max_bound, target_delta))
+
+                            if math.abs(target_delta - delta_ms) > 1e-6 then
+                                if not dry_run then
+                                    print(string.format("⚠️  Batch ripple delta adjusted: %dms → %dms (prevented overlap)",
+                                        delta_ms, target_delta))
+                                end
+
+                                restore_trimmed_clips()
+
+                                command:set_parameter("clamped_delta_ms", target_delta)
+                                command:set_parameter("edge_deltas", false)
+
+                                return command_executors["BatchRippleEdit"](command)
+                            end
+                        end
+                    end
+
+                    local blocking_reason
+                    if violates_min and move_range.min_time then
+                        blocking_reason = string.format("before %dms", move_range.min_time)
+                    elseif violates_max and move_range.max_time then
+                        blocking_reason = string.format("after %dms", move_range.max_time)
+                    else
+                        blocking_reason = "outside allowed range"
+                    end
+
+                    local error_message = string.format(
+                        "Ripple blocked: clip %s cannot move to %dms (%s)",
+                        clip.id:sub(1,8),
+                        new_start,
+                        blocking_reason
+                    )
+
+                    if not dry_run then
+                        print(string.format("⚠️  BatchRippleEdit: %s", error_message))
+                    end
+
+                    restore_trimmed_clips()
+
+                    if dry_run then
+                        return false, {error = error_message}
+                    end
+
+                    return false
+                end
+            end
+
             if not dry_run then
-                print(string.format("  Will shift: %s at %dms on %s", other_clip.id:sub(1,8), other_clip.start_time, other_clip.track_id))
+                print(string.format("  Will shift: %s at %dms on %s by %dms",
+                    clip.id:sub(1,8), clip.start_time, clip.track_id, shift_amount))
             end
         elseif not dry_run then
-            print(string.format("  Skip: %s at %dms (edited=%s, >= ripple_time=%s)",
-                other_clip.id:sub(1,8), other_clip.start_time, tostring(is_edited), tostring(other_clip.start_time >= earliest_ripple_time)))
+            print(string.format("  Skip: %s at %dms (cumulative shift = 0)",
+                clip.id:sub(1,8), clip.start_time))
         end
+    end
+
+    preview_affected_clips = {}
+    for _, info in pairs(preview_map) do
+        table.insert(preview_affected_clips, info)
     end
 
     if dry_run then
         local preview_shifted_clips = {}
-        for _, downstream_clip in ipairs(clips_to_shift) do
-            table.insert(preview_shifted_clips, {
-                clip_id = downstream_clip.id,
-                new_start_time = downstream_clip.start_time + downstream_shift_amount
-            })
+        for _, clip in ipairs(clips_to_shift) do
+            local shift_amount = clip_shift_lookup[clip.id]
+            if shift_amount and math.abs(shift_amount) > 1e-6 then
+                table.insert(preview_shifted_clips, {
+                    clip_id = clip.id,
+                    new_start_time = clip.start_time + shift_amount
+                })
+            end
         end
         return true, {
             affected_clips = preview_affected_clips,
@@ -2586,33 +3177,67 @@ command_executors["BatchRippleEdit"] = function(command)
         }
     end
 
-    for _, downstream_clip in ipairs(clips_to_shift) do
-        local shift_clip = Clip.load(downstream_clip.id, db)
-        if not shift_clip then
-            print(string.format("WARNING: BatchRippleEdit: Failed to load downstream clip %s", downstream_clip.id:sub(1,8)))
-            goto continue_batch_shift
+    local shifted_clips_param = {}
+    for _, clip in ipairs(clips_to_shift) do
+        local shift_amount = clip_shift_lookup[clip.id]
+        if shift_amount and math.abs(shift_amount) > 1e-6 then
+            local shift_clip = Clip.load(clip.id, db)
+            if not shift_clip then
+                print(string.format("WARNING: BatchRippleEdit: Failed to load downstream clip %s", clip.id:sub(1,8)))
+                goto continue_shift_apply
+            end
+
+            local trim_info = trim_updates[clip.id]
+            if trim_info then
+                shift_clip.duration = trim_info.duration
+                shift_clip.source_in = trim_info.source_in
+                shift_clip.source_out = trim_info.source_out
+                shift_clip.start_time = trim_info.start_time or (shift_clip.start_time + shift_amount)
+                trim_updates[clip.id] = nil
+            else
+                shift_clip.start_time = shift_clip.start_time + shift_amount
+            end
+
+            if not shift_clip:save(db) then
+                print(string.format("ERROR: BatchRippleEdit: Failed to save downstream clip %s", clip.id:sub(1,8)))
+                return false
+            end
+
+            table.insert(shifted_clips_param, {
+                clip_id = clip.id,
+                shift_amount = shift_amount
+            })
         end
 
-        shift_clip.start_time = shift_clip.start_time + downstream_shift_amount
+        ::continue_shift_apply::
+    end
 
-        if not shift_clip:save(db) then
-            print(string.format("ERROR: BatchRippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
-            return false
+    if not dry_run then
+        for clip_id, info in pairs(trim_updates) do
+            local shift_amount = clip_shift_lookup[clip_id]
+            if not shift_amount or math.abs(shift_amount) <= 1e-6 then
+                local clip_model = Clip.load(clip_id, db)
+                if clip_model then
+                    clip_model.start_time = info.start_time or clip_model.start_time
+                    clip_model.duration = info.duration
+                    clip_model.source_in = info.source_in
+                    clip_model.source_out = info.source_out
+                    if not clip_model:save(db) then
+                        print(string.format("ERROR: BatchRippleEdit: Failed to persist trimmed clip %s", clip_id:sub(1,8)))
+                        return false
+                    end
+                else
+                    print(string.format("WARNING: BatchRippleEdit: Trimmed clip %s no longer exists during save", clip_id:sub(1,8)))
+                end
+            end
         end
-
-        ::continue_batch_shift::
     end
 
     command:set_parameter("original_states", original_states)
-    command:set_parameter("shifted_clip_ids", (function()
-        local ids = {}
-        for _, c in ipairs(clips_to_shift) do table.insert(ids, c.id) end
-        return ids
-    end)())
-    command:set_parameter("shift_amount", downstream_shift_amount)
+    command:set_parameter("shifted_clips", shifted_clips_param)
 
-    print(string.format("✅ Batch ripple: trimmed %d edges, shifted %d downstream clips by %dms",
-        #edge_infos, #clips_to_shift, downstream_shift_amount))
+    print(string.format("✅ Batch ripple: trimmed %d edges, shifted %d downstream clips",
+        #edge_infos, #shifted_clips_param))
 
     return true
 end
@@ -2621,12 +3246,13 @@ command_executors["UndoBatchRippleEdit"] = function(command)
     print("Executing UndoBatchRippleEdit command")
 
     local original_states = command:get_parameter("original_states")
-    local shift_amount = command:get_parameter("shift_amount")  -- BUG FIX: Use stored shift, not delta_ms
-    local shifted_clip_ids = command:get_parameter("shifted_clip_ids")
+    local shifted_clips = command:get_parameter("shifted_clips") or {}
 
     local Clip = require('models.clip')
 
     -- Restore all edited clips
+    local restored_count = 0
+
     for clip_id, state in pairs(original_states) do
         local clip = Clip.load(clip_id, db)
         if not clip then
@@ -2644,21 +3270,23 @@ command_executors["UndoBatchRippleEdit"] = function(command)
             return false
         end
 
+        restored_count = restored_count + 1
+
         ::continue_restore::
     end
 
     -- Shift all affected clips back
-    for _, clip_id in ipairs(shifted_clip_ids) do
-        local shift_clip = Clip.load(clip_id, db)
+    for _, entry in ipairs(shifted_clips) do
+        local shift_clip = Clip.load(entry.clip_id, db)
         if not shift_clip then
-            print(string.format("WARNING: UndoBatchRippleEdit: Shifted clip %s not found", clip_id:sub(1,8)))
+            print(string.format("WARNING: UndoBatchRippleEdit: Shifted clip %s not found", entry.clip_id:sub(1,8)))
             goto continue_unshift
         end
 
-        shift_clip.start_time = shift_clip.start_time - shift_amount  -- BUG FIX: Use stored shift
+        shift_clip.start_time = shift_clip.start_time - entry.shift_amount
 
         if not shift_clip:save(db) then
-            print(string.format("ERROR: UndoBatchRippleEdit: Failed to save shifted clip %s", clip_id:sub(1,8)))
+            print(string.format("ERROR: UndoBatchRippleEdit: Failed to save shifted clip %s", entry.clip_id:sub(1,8)))
             return false
         end
 
@@ -2666,7 +3294,7 @@ command_executors["UndoBatchRippleEdit"] = function(command)
     end
 
     print(string.format("✅ Undone batch ripple: restored %d clips, shifted %d clips back",
-        table.getn(original_states), #shifted_clip_ids))
+        restored_count, #shifted_clips))
     return true
 end
 
@@ -2913,11 +3541,7 @@ function M.replay_events(sequence_id, target_sequence_number)
 
         print(string.format("✅ Replayed %d commands successfully", commands_replayed))
     else
-        -- No commands to replay - reset to initial state
-        local timeline_state = require('ui.timeline.timeline_state')
-        timeline_state.set_playhead_time(0)
-        timeline_state.set_selection({})
-        print("No commands to replay - reset playhead and selection to initial state")
+        print("No commands to replay - initial snapshot already matches target state")
     end
 
     return true
@@ -2983,10 +3607,21 @@ function M.undo()
         end
 
         -- Move current_sequence_number back
+        local previous_sequence_number = current_sequence_number
         current_sequence_number = target_sequence > 0 and target_sequence or nil
 
         -- Save undo position to database (persists across sessions)
-        save_undo_position()
+        local undo_saved, undo_err = save_undo_position()
+        if not undo_saved then
+            current_sequence_number = previous_sequence_number
+            return {
+                success = false,
+                error_message = string.format(
+                    "Failed to persist undo position: %s",
+                    undo_err or "unknown error"
+                )
+            }
+        end
 
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
@@ -3047,10 +3682,21 @@ function M.redo()
 
     if replay_success then
         -- Move current_sequence_number forward
+        local previous_sequence_number = current_sequence_number
         current_sequence_number = target_sequence
 
         -- Save undo position to database (persists across sessions)
-        save_undo_position()
+        local undo_saved, undo_err = save_undo_position()
+        if not undo_saved then
+            current_sequence_number = previous_sequence_number
+            return {
+                success = false,
+                error_message = string.format(
+                    "Failed to persist undo position: %s",
+                    undo_err or "unknown error"
+                )
+            }
+        end
 
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws

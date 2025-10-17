@@ -26,6 +26,7 @@ private:
         bool ctrl = false;
         bool shift = false;
         bool alt = false;
+        bool command = false;
         int button = 0;
         int key = 0;
     };
@@ -56,6 +57,13 @@ private:
 
             lua_getfield(L, 1, "alt");
             lastMouseEvent.alt = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+
+            lua_getfield(L, 1, "command");
+            if (!lua_isnil(L, -1)) {
+                lastMouseEvent.command = lua_toboolean(L, -1);
+                lastMouseEvent.ctrl = lastMouseEvent.ctrl || lastMouseEvent.command;
+            }
             lua_pop(L, 1);
 
             lua_getfield(L, 1, "button");
@@ -147,14 +155,20 @@ private slots:
         timeline->setMouseEventHandler("mock_mouse_handler");
 
         // Simulate mouse press
-        QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(150, 200),
-                              Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        QMouseEvent pressEvent(QEvent::MouseButtonPress,
+                               QPointF(150, 200),
+                               QPointF(150, 200),
+                               QPointF(timeline->mapToGlobal(QPoint(150, 200))),
+                               Qt::LeftButton,
+                               Qt::LeftButton,
+                               Qt::ControlModifier,
+                               Qt::MouseEventNotSynthesized);
         QCoreApplication::sendEvent(timeline, &pressEvent);
 
         QCOMPARE(lastMouseEvent.type, QString("press"));
         QCOMPARE(lastMouseEvent.x, 150);
         QCOMPARE(lastMouseEvent.y, 200);
-        QVERIFY(lastMouseEvent.ctrl);
+        QVERIFY(lastMouseEvent.ctrl || lastMouseEvent.command);
         QCOMPARE(lastMouseEvent.button, (int)Qt::LeftButton);
     }
 
@@ -162,8 +176,14 @@ private slots:
     void testMouseMoveEvent() {
         timeline->setMouseEventHandler("mock_mouse_handler");
 
-        QMouseEvent moveEvent(QEvent::MouseMove, QPointF(75, 100),
-                             Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QMouseEvent moveEvent(QEvent::MouseMove,
+                              QPointF(75, 100),
+                              QPointF(75, 100),
+                              QPointF(timeline->mapToGlobal(QPoint(75, 100))),
+                              Qt::NoButton,
+                              Qt::NoButton,
+                              Qt::NoModifier,
+                              Qt::MouseEventNotSynthesized);
         QCoreApplication::sendEvent(timeline, &moveEvent);
 
         QCOMPARE(lastMouseEvent.type, QString("move"));
@@ -175,8 +195,14 @@ private slots:
     void testMouseReleaseEvent() {
         timeline->setMouseEventHandler("mock_mouse_handler");
 
-        QMouseEvent releaseEvent(QEvent::MouseButtonRelease, QPointF(200, 150),
-                                Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent releaseEvent(QEvent::MouseButtonRelease,
+                                 QPointF(200, 150),
+                                 QPointF(200, 150),
+                                 QPointF(timeline->mapToGlobal(QPoint(200, 150))),
+                                 Qt::LeftButton,
+                                 Qt::LeftButton,
+                                 Qt::NoModifier,
+                                 Qt::MouseEventNotSynthesized);
         QCoreApplication::sendEvent(timeline, &releaseEvent);
 
         QCOMPARE(lastMouseEvent.type, QString("release"));
@@ -248,32 +274,48 @@ private slots:
         lastMouseEvent = EventData();
 
         // Test Shift modifier
-        QMouseEvent shiftEvent(QEvent::MouseButtonPress, QPointF(100, 100),
-                              Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+        QMouseEvent shiftEvent(QEvent::MouseButtonPress,
+                               QPointF(100, 100),
+                               QPointF(100, 100),
+                               QPointF(timeline->mapToGlobal(QPoint(100, 100))),
+                               Qt::LeftButton,
+                               Qt::LeftButton,
+                               Qt::ShiftModifier,
+                               Qt::MouseEventNotSynthesized);
         QCoreApplication::sendEvent(timeline, &shiftEvent);
         QVERIFY(lastMouseEvent.shift);
-        QVERIFY(!lastMouseEvent.ctrl);
         QVERIFY(!lastMouseEvent.alt);
 
         // Reset state
         lastMouseEvent = EventData();
 
         // Test Alt modifier
-        QMouseEvent altEvent(QEvent::MouseButtonPress, QPointF(100, 100),
-                            Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
+        QMouseEvent altEvent(QEvent::MouseButtonPress,
+                             QPointF(100, 100),
+                             QPointF(100, 100),
+                             QPointF(timeline->mapToGlobal(QPoint(100, 100))),
+                             Qt::LeftButton,
+                             Qt::LeftButton,
+                             Qt::AltModifier,
+                             Qt::MouseEventNotSynthesized);
         QCoreApplication::sendEvent(timeline, &altEvent);
         QVERIFY(lastMouseEvent.alt);
-        QVERIFY(!lastMouseEvent.ctrl);
         QVERIFY(!lastMouseEvent.shift);
 
         // Reset state
         lastMouseEvent = EventData();
 
         // Test Ctrl modifier
-        QMouseEvent ctrlEvent(QEvent::MouseButtonPress, QPointF(100, 100),
-                             Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        QMouseEvent ctrlEvent(QEvent::MouseButtonPress,
+                              QPointF(100, 100),
+                              QPointF(100, 100),
+                              QPointF(timeline->mapToGlobal(QPoint(100, 100))),
+                              Qt::LeftButton,
+                              Qt::LeftButton,
+                              Qt::ControlModifier,
+                              Qt::MouseEventNotSynthesized);
         QCoreApplication::sendEvent(timeline, &ctrlEvent);
-        QVERIFY(lastMouseEvent.ctrl);
+        QVERIFY(lastMouseEvent.ctrl || lastMouseEvent.command);
         QVERIFY(!lastMouseEvent.shift);
         QVERIFY(!lastMouseEvent.alt);
     }

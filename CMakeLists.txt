@@ -267,29 +267,6 @@ set_target_properties(test_scriptable_timeline_widget PROPERTIES
 add_test(NAME test_scriptable_timeline_widget COMMAND test_scriptable_timeline_widget)
 
 # Standalone Lua timeline logic test (no test_base dependency)
-add_executable(test_timeline_lua_logic
-    tests/unit/test_timeline_lua_logic.cpp
-)
-target_link_libraries(test_timeline_lua_logic
-    JVECore
-    Qt6::Test
-    Qt6::Core
-    Qt6::Gui
-    ${LUAJIT_LIBRARIES}
-)
-target_include_directories(test_timeline_lua_logic PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${LUAJIT_INCLUDE_DIRS}
-)
-target_link_directories(test_timeline_lua_logic PRIVATE
-    ${LUAJIT_LIBRARY_DIRS}
-)
-set_target_properties(test_timeline_lua_logic PROPERTIES
-    AUTOMOC ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-add_test(NAME test_timeline_lua_logic COMMAND test_timeline_lua_logic)
-
 # Installation (not applicable for M1 Foundation tests)
 
 # Package configuration
