@@ -206,6 +206,10 @@ function M.get_all_tracks()
     return state.tracks
 end
 
+function M.get_sequence_id()
+    return state.sequence_id or "default_sequence"
+end
+
 function M.get_video_tracks()
     local video_tracks = {}
     for _, track in ipairs(state.tracks) do

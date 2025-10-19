@@ -214,6 +214,51 @@ function M.load_media()
     return media_items
 end
 
+function M.load_sequences(project_id)
+    project_id = project_id or M.get_current_project_id()
+    if not db_connection then
+        print("WARNING: load_sequences: No database connection")
+        return {}
+    end
+
+    local sequences = {}
+    local query = db_connection:prepare([[SELECT id, name, frame_rate, width, height, playhead_time FROM sequences WHERE project_id = ? ORDER BY name]])
+    if not query then
+        print("WARNING: load_sequences: Failed to prepare query")
+        return sequences
+    end
+
+    query:bind_value(1, project_id)
+    if query:exec() then
+        while query:next() do
+            table.insert(sequences, {
+                id = query:value(0),
+                name = query:value(1),
+                frame_rate = query:value(2),
+                width = query:value(3),
+                height = query:value(4),
+                playhead_time = query:value(5),
+            })
+        end
+    end
+    query:finalize()
+
+    -- Compute duration for each sequence (max clip end)
+    for _, sequence in ipairs(sequences) do
+        local clips = M.load_clips(sequence.id)
+        local max_end = 0
+        for _, clip in ipairs(clips) do
+            local clip_end = (clip.start_time or 0) + (clip.duration or 0)
+            if clip_end > max_end then
+                max_end = clip_end
+            end
+        end
+        sequence.duration = max_end
+    end
+
+    return sequences
+end
+
 -- Load all tags for a specific namespace (or all namespaces if nil)
 function M.load_media_tags(namespace)
     local media_items = M.load_media()

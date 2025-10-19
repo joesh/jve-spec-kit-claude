@@ -7,6 +7,8 @@
 -- - Performance optimization for batch operations
 -- - Undo/redo functionality with state consistency
 
+local uuid = require("uuid")
+
 local M = {}
 
 -- Database connection (set externally)
@@ -3852,7 +3854,6 @@ command_undoers["UnlinkClip"] = function(command)
 
     if not link_group_id then
         -- The entire link group was deleted, recreate it
-        local uuid = require('uuid')
         link_group_id = uuid.generate()
     end
 
@@ -3923,14 +3924,21 @@ command_executors["ImportFCP7XML"] = function(command)
     end
 
     -- Store created IDs for undo
-    command:set_parameter("created_sequence_ids", create_result.sequence_ids)
-    command:set_parameter("created_track_ids", create_result.track_ids)
-    command:set_parameter("created_clip_ids", create_result.clip_ids)
+    command:set_parameter("created_sequence_ids", create_result.sequence_ids or {})
+    command:set_parameter("created_track_ids", create_result.track_ids or {})
+    command:set_parameter("created_clip_ids", create_result.clip_ids or {})
+    command:set_parameter("created_media_ids", create_result.media_ids or {})
 
-    print(string.format("✅ Imported %d sequence(s), %d track(s), %d clip(s)",
-        #create_result.sequence_ids,
-        #create_result.track_ids,
-        #create_result.clip_ids))
+    local sequence_count = #(create_result.sequence_ids or {})
+    local track_count = #(create_result.track_ids or {})
+    local clip_count = #(create_result.clip_ids or {})
+    local media_count = #(create_result.media_ids or {})
+
+    print(string.format("✅ Imported %d sequence(s), %d track(s), %d clip(s), %d media item(s)",
+        sequence_count,
+        track_count,
+        clip_count,
+        media_count))
 
     return true
 end
@@ -3940,6 +3948,7 @@ command_undoers["ImportFCP7XML"] = function(command)
     local sequence_ids = command:get_parameter("created_sequence_ids") or {}
     local track_ids = command:get_parameter("created_track_ids") or {}
     local clip_ids = command:get_parameter("created_clip_ids") or {}
+    local media_ids = command:get_parameter("created_media_ids") or {}
 
     -- Delete in reverse order (clips, tracks, sequences)
     for _, clip_id in ipairs(clip_ids) do
@@ -3964,6 +3973,15 @@ command_undoers["ImportFCP7XML"] = function(command)
         local delete_query = db:prepare("DELETE FROM sequences WHERE id = ?")
         if delete_query then
             delete_query:bind_value(1, sequence_id)
+            delete_query:exec()
+            delete_query:finalize()
+        end
+    end
+
+    for _, media_id in ipairs(media_ids) do
+        local delete_query = db:prepare("DELETE FROM media WHERE id = ?")
+        if delete_query then
+            delete_query:bind_value(1, media_id)
             delete_query:exec()
             delete_query:finalize()
         end
@@ -4147,162 +4165,255 @@ end
 -- Creates: project record, media items, timelines, tracks, clips
 -- Full undo support: deletes all created entities
 
-command_executors.ImportResolveProject = function(cmd, params)
-    local drp_path = params.drp_path
-
+command_executors.ImportResolveProject = function(cmd)
+    local drp_path = cmd:get_parameter("drp_path")
     if not drp_path or drp_path == "" then
-        return {success = false, error_message = "No .drp file path provided"}
+        print("ERROR: ImportResolveProject requires 'drp_path'")
+        return false
     end
 
-    -- Parse .drp file
     local drp_importer = require("importers.drp_importer")
     local parse_result = drp_importer.parse_drp_file(drp_path)
-
     if not parse_result.success then
-        return {success = false, error_message = parse_result.error}
+        print(string.format("ERROR: Failed to parse .drp '%s': %s", drp_path, parse_result.error or "unknown error"))
+        return false
     end
 
     local Project = require("models.project")
-    local Media = require("models.media")
+    local Sequence = require("models.sequence")
+    local Track = require("models.track")
     local Clip = require("models.clip")
+    local Media = require("models.media")
+    local json = require("dkjson")
 
-    -- Create project record
-    local project = Project.create({
-        name = parse_result.project.name,
-        frame_rate = parse_result.project.settings.frame_rate,
-        width = parse_result.project.settings.width,
-        height = parse_result.project.settings.height
-    })
-
-    if not project:save(db) then
-        return {success = false, error_message = "Failed to create project"}
+    local project_settings = parse_result.project.settings or {}
+    local settings_json = project_settings
+    if type(settings_json) ~= "string" then
+        local ok, encoded = pcall(json.encode, project_settings)
+        settings_json = ok and encoded or "{}"
     end
 
-    print(string.format("Created project: %s (%dx%d @ %.2ffps)",
-        project.name, project.width, project.height, project.frame_rate))
+    local project = Project.create(parse_result.project.name or "Resolve Import", {
+        settings = settings_json
+    })
+    if not project then
+        print("ERROR: Unable to allocate project entity for Resolve import")
+        return false
+    end
 
-    -- Track created entities for undo
+    if not project:save(db) then
+        print("ERROR: Failed to persist imported Resolve project record")
+        return false
+    end
+
+    print(string.format("Created Resolve project '%s'", project.name))
+
     local created_media_ids = {}
-    local created_timeline_ids = {}
+    local created_sequence_ids = {}
     local created_track_ids = {}
     local created_clip_ids = {}
 
-    -- Import media items
-    local media_id_map = {}  -- resolve_id -> jve_media_id
-    for _, media_item in ipairs(parse_result.media_items) do
+    local media_by_key = {}
+
+    local default_width = project_settings.width or 1920
+    local default_height = project_settings.height or 1080
+    local default_rate = project_settings.frame_rate or 30.0
+
+    local function normalise_duration(value)
+        value = tonumber(value) or 0
+        if value <= 0 then
+            return 1000
+        end
+        return math.floor(value)
+    end
+
+    local function ensure_media(info)
+        if not info then
+            return nil
+        end
+
+        local key = info.key or info.path or info.file_path or info.id
+        if not key or key == "" then
+            return nil
+        end
+
+        if media_by_key[key] then
+            return media_by_key[key]
+        end
+
+        local file_path = info.path or info.file_path or ""
+        if file_path == "" then
+            return nil
+        end
+
         local media = Media.create({
             project_id = project.id,
-            name = media_item.name,
-            file_path = media_item.file_path,
-            duration = media_item.duration,
-            width = parse_result.project.settings.width,
-            height = parse_result.project.settings.height
+            name = info.name or (file_path:match("([^/\\]+)$") or "Imported Media"),
+            file_path = file_path,
+            duration = normalise_duration(info.duration),
+            frame_rate = info.frame_rate or default_rate,
+            width = info.width or default_width,
+            height = info.height or default_height,
+            audio_channels = info.audio_channels or 0
         })
 
-        if media:save(db) then
-            table.insert(created_media_ids, media.id)
-            if media_item.resolve_id then
-                media_id_map[media_item.resolve_id] = media.id
-            end
-            print(string.format("  Imported media: %s", media.name))
-        else
-            print(string.format("WARNING: Failed to import media: %s", media_item.name))
+        if not media then
+            print(string.format("WARNING: Skipping media with invalid metadata: %s", file_path))
+            return nil
         end
+
+        if not media:save(db) then
+            print(string.format("WARNING: Failed to save media: %s", file_path))
+            return nil
+        end
+
+        media_by_key[key] = media.id
+        table.insert(created_media_ids, media.id)
+        return media.id
     end
 
-    -- Import timelines
-    for _, timeline_data in ipairs(parse_result.timelines) do
-        -- Create sequence (timeline) record
-        local stmt = db:prepare([[
-            INSERT INTO sequences (id, project_id, name, duration, frame_rate)
-            VALUES (?, ?, ?, ?, ?)
-        ]])
+    for _, media_item in ipairs(parse_result.media_items or {}) do
+        ensure_media({
+            key = media_item.file_path or media_item.resolve_id,
+            path = media_item.file_path,
+            name = media_item.name,
+            duration = media_item.duration,
+            frame_rate = media_item.frame_rate,
+            width = media_item.width,
+            height = media_item.height,
+            audio_channels = media_item.audio_channels
+        })
+    end
 
-        local timeline_id = require("models.clip").generate_uuid()  -- Reuse UUID generator
-        stmt:bind_values(
-            timeline_id,
+    local function create_track(sequence_id, track_info)
+        local opts = {
+            index = track_info.index,
+            enabled = track_info.enabled ~= false,
+            locked = track_info.locked == true,
+            muted = track_info.muted == true,
+            soloed = track_info.soloed == true,
+            db = db
+        }
+
+        local track
+        if track_info.type == "AUDIO" then
+            track = Track.create_audio(track_info.name or string.format("A%d", track_info.index or 1), sequence_id, opts)
+        else
+            track = Track.create_video(track_info.name or string.format("V%d", track_info.index or 1), sequence_id, opts)
+        end
+
+        if not track then
+            return nil
+        end
+
+        if not track:save(db) then
+            print(string.format("WARNING: Failed to save track %s (%s)", track.name, track_info.type))
+            return nil
+        end
+
+        table.insert(created_track_ids, track.id)
+        return track
+    end
+
+    local function create_clip(track_id, clip_info)
+        local media_id = nil
+        if clip_info.file_path and clip_info.file_path ~= "" then
+            media_id = ensure_media({
+                key = clip_info.file_path,
+                path = clip_info.file_path,
+                name = clip_info.name,
+                duration = clip_info.duration,
+                frame_rate = clip_info.frame_rate,
+                width = clip_info.width,
+                height = clip_info.height,
+                audio_channels = clip_info.audio_channels
+            })
+        elseif clip_info.media_key then
+            media_id = ensure_media({
+                key = clip_info.media_key,
+                path = clip_info.file_path or clip_info.media_key,
+                name = clip_info.name,
+                duration = clip_info.duration,
+                frame_rate = clip_info.frame_rate
+            })
+        end
+
+        local clip = Clip.create(clip_info.name or "Clip", media_id)
+        if not clip then
+            return nil
+        end
+
+        clip.track_id = track_id
+        clip.start_time = math.floor(clip_info.start_time or 0)
+        clip.duration = normalise_duration(clip_info.duration)
+        clip.source_in = math.floor(clip_info.source_in or 0)
+        clip.source_out = math.floor(clip_info.source_out or (clip.source_in + clip.duration))
+        if clip.source_out <= clip.source_in then
+            clip.source_out = clip.source_in + clip.duration
+        end
+        clip.enabled = clip_info.enabled ~= false
+
+        if not clip:save(db) then
+            print(string.format("WARNING: Failed to save clip '%s'", clip.name))
+            return nil
+        end
+
+        table.insert(created_clip_ids, clip.id)
+        return clip
+    end
+
+    for _, timeline in ipairs(parse_result.timelines or {}) do
+        local seq = Sequence.create(
+            timeline.name or "Timeline",
             project.id,
-            timeline_data.name,
-            timeline_data.duration,
-            parse_result.project.settings.frame_rate
+            timeline.frame_rate or default_rate,
+            timeline.width or default_width,
+            timeline.height or default_height
         )
 
-        if stmt:step() == sqlite3.DONE then
-            table.insert(created_timeline_ids, timeline_id)
-            print(string.format("  Imported timeline: %s", timeline_data.name))
+        if seq and seq:save(db) then
+            table.insert(created_sequence_ids, seq.id)
 
-            -- Import tracks
-            for _, track_data in ipairs(timeline_data.tracks) do
-                local track_stmt = db:prepare([[
-                    INSERT INTO tracks (id, sequence_id, track_type, track_index)
-                    VALUES (?, ?, ?, ?)
-                ]])
-
-                local track_id = require("models.clip").generate_uuid()
-                track_stmt:bind_values(
-                    track_id,
-                    timeline_id,
-                    track_data.type,
-                    track_data.index
-                )
-
-                if track_stmt:step() == sqlite3.DONE then
-                    table.insert(created_track_ids, track_id)
-                    print(string.format("    Created track: %s%d", track_data.type, track_data.index))
-
-                    -- Import clips
-                    for _, clip_data in ipairs(track_data.clips) do
-                        -- Find matching media_id (if file_path available)
-                        local media_id = nil
-                        if clip_data.file_path then
-                            for _, media in ipairs(created_media_ids) do
-                                local m = Media.load(media, db)
-                                if m and m.file_path == clip_data.file_path then
-                                    media_id = m.id
-                                    break
-                                end
-                            end
-                        end
-
-                        local clip = Clip.create({
-                            track_id = track_id,
-                            media_id = media_id,
-                            start_time = clip_data.start_time,
-                            duration = clip_data.duration,
-                            source_in = clip_data.source_in,
-                            source_out = clip_data.source_out
-                        })
-
-                        if clip:save(db) then
-                            table.insert(created_clip_ids, clip.id)
-                        else
-                            print(string.format("WARNING: Failed to import clip: %s", clip_data.name))
-                        end
-                    end
-                else
-                    print(string.format("WARNING: Failed to create track: %s%d", track_data.type, track_data.index))
+            if timeline.media_files then
+                for _, info in pairs(timeline.media_files) do
+                    ensure_media(info)
                 end
+            end
 
-                track_stmt:finalize()
+            for _, track_info in ipairs(timeline.tracks or {}) do
+                local track = create_track(seq.id, track_info)
+                if track then
+                    for _, clip_info in ipairs(track_info.clips or {}) do
+                        create_clip(track.id, clip_info)
+                    end
+                end
             end
         else
-            print(string.format("WARNING: Failed to create timeline: %s", timeline_data.name))
+            if seq then
+                print(string.format("WARNING: Failed to save sequence '%s'", seq.name))
+            else
+                print("WARNING: Failed to allocate sequence for Resolve import")
+            end
         end
-
-        stmt:finalize()
     end
 
-    print(string.format("Imported Resolve project: %d media, %d timelines, %d tracks, %d clips",
-        #created_media_ids, #created_timeline_ids, #created_track_ids, #created_clip_ids))
+    local total_tracks = #created_track_ids
+    local total_clips = #created_clip_ids
 
-    return {
+    print(string.format("Imported Resolve project: %d media, %d sequences, %d tracks, %d clips",
+        #created_media_ids, #created_sequence_ids, total_tracks, total_clips))
+
+    cmd.result = {
         success = true,
         project_id = project.id,
         created_media_ids = created_media_ids,
-        created_timeline_ids = created_timeline_ids,
+        created_timeline_ids = created_sequence_ids,
         created_track_ids = created_track_ids,
         created_clip_ids = created_clip_ids
     }
+
+    cmd:set_parameter("imported_project_id", project.id)
+    return true
 end
 
 command_undoers.ImportResolveProject = function(cmd)
@@ -4438,7 +4549,7 @@ command_executors.ImportResolveDatabase = function(cmd, params)
             VALUES (?, ?, ?, ?, ?)
         ]])
 
-        local timeline_id = require("models.clip").generate_uuid()
+        local timeline_id = uuid.generate()
         stmt:bind_values(
             timeline_id,
             project.id,
@@ -4458,7 +4569,7 @@ command_executors.ImportResolveDatabase = function(cmd, params)
                     VALUES (?, ?, ?, ?)
                 ]])
 
-                local track_id = require("models.clip").generate_uuid()
+                local track_id = uuid.generate()
                 track_stmt:bind_values(
                     track_id,
                     timeline_id,

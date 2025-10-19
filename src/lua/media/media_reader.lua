@@ -6,6 +6,7 @@ local M = {}
 
 -- Load JSON library (dkjson - pure Lua, no C dependencies)
 local json = require("dkjson")
+local uuid = require("uuid")
 
 -- ============================================================================
 -- FFprobe Integration
@@ -185,7 +186,7 @@ function M.import_media(file_path, db, project_id)
     end
 
     -- Generate media ID
-    local media_id = "media_" .. tostring(math.random(100000, 999999))
+    local media_id = uuid.generate_with_prefix("media")
 
     -- Extract filename from path
     local filename = file_path:match("([^/\\]+)$") or file_path

@@ -1,13 +1,6 @@
-local M = {}
+local uuid = require("uuid")
 
--- UUID generation
-local function generate_uuid()
-    local template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
-    return string.gsub(template, '[xy]', function(c)
-        local v = (c == 'x') and math.random(0, 0xf) or math.random(8, 0xb)
-        return string.format('%x', v)
-    end)
-end
+local M = {}
 
 -- Create a new media item
 -- Accepts either: table of named params OR positional args (backward compatible)
@@ -66,7 +59,7 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
 
     local now = os.time()
     local media = {
-        id = params.id or generate_uuid(),
+        id = params.id or uuid.generate(),
         project_id = project_id,
         file_path = file_path,
         name = name,

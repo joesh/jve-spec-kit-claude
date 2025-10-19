@@ -49,6 +49,10 @@ local MOD = {
     Meta = 0x10000000,
 }
 
+-- Expose key/modifier maps for other modules that need to parse shortcuts
+keyboard_shortcuts.KEY = KEY
+keyboard_shortcuts.MOD = MOD
+
 -- References to timeline state and other modules
 local timeline_state = nil
 local command_manager = nil

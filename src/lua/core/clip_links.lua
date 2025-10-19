@@ -1,6 +1,8 @@
 -- Clip Links: A/V sync relationships between clips
 -- Manages linked clip groups for synchronized editing operations
 
+local uuid = require("uuid")
+
 local M = {}
 
 -- Get all clips in the same link group as the given clip
@@ -87,7 +89,6 @@ function M.create_link_group(clips, db)
     end
 
     -- Generate new link group ID
-    local uuid = require('uuid')
     local link_group_id = uuid.generate()
 
     -- Insert all clips into the link group
