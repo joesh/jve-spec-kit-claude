@@ -99,6 +99,7 @@ make clean          # Clean build artifacts
 - Most keyboard shortcuts non-functional
 - Play button doesn't work
 - No audio playback system
+- FCP7 XML import cannot be undone safely; undoing the import corrupts the command event tree
 
 ## Pending Tasks
 
@@ -318,10 +319,10 @@ The previous documentation contained extensive false "milestone" claims about co
   - FCP7 `<sequence>` → JVE Sequence with frame rate, dimensions
   - URL decoding: `file://localhost/path%20with%20spaces.mov` → `/path with spaces.mov`
 - Command integration
-  - **ImportFCP7XML** command with full undo/redo
+  - **ImportFCP7XML** command successfully creates sequences, tracks, and clips in the database
+  - Undo support is currently broken: reverting this import corrupts the command event tree
   - Creates sequences, tracks, clips in database
-  - Stores created entity IDs for rollback
-  - Undo deletes all imported entities in correct order
+  - Stores created entity IDs for future rollback work (undo path must be repaired before enabling)
 - Format support
   - Root `<xmeml>` validation
   - Direct sequence import
@@ -561,6 +562,8 @@ The previous documentation contained extensive false "milestone" claims about co
 1. Connect inspector UI to clip data (add data binding)
 2. Remove C++ UI components that violate architecture
 3. Fix test system build issues
+4. Fix keyboard shortcut capture box so modifier-inclusive shortcuts record correctly
+5. Route runtime key handling through keyboard_shortcut_registry instead of hard-coded cases
 
 ## Commit History
 - 2025-10-11: Fix 9 critical ripple trim constraint bugs - gap calculation, cross-track collisions, overlap handling
