@@ -64,6 +64,7 @@ local pending_shortcut = nil
 local capture_active = false
 local has_unsaved_changes = false
 local active_filter = ""
+local capture_modifiers = 0
 
 local original_global_key_handler = nil
 local capture_hook_installed = false
@@ -92,6 +93,21 @@ local function is_modifier_key(key)
     return key == KEY.Shift or key == KEY.Control or key == KEY.Alt or key == KEY.Meta
 end
 
+local function modifier_flag_for_key(key)
+    local MOD = keyboard_shortcuts.MOD
+    local KEY = keyboard_shortcuts.KEY
+    if key == KEY.Shift then
+        return MOD.Shift
+    elseif key == KEY.Control then
+        return MOD.Control
+    elseif key == KEY.Alt then
+        return MOD.Alt
+    elseif key == KEY.Meta then
+        return MOD.Meta
+    end
+    return 0
+end
+
 local function install_global_key_capture()
     if capture_hook_installed then
         return
@@ -104,10 +120,21 @@ local function install_global_key_capture()
                 return true
             end
             if is_modifier_key(event.key) then
+                local flag = modifier_flag_for_key(event.key)
+                if flag ~= 0 then
+                    capture_modifiers = bit.bor(event.modifiers or 0, flag)
+                else
+                    capture_modifiers = event.modifiers or capture_modifiers
+                end
                 return true
             end
 
-            local shortcut_string = build_shortcut_string(event.key, event.modifiers or 0)
+            local effective_modifiers = event.modifiers or 0
+            if effective_modifiers == 0 and capture_modifiers ~= 0 then
+                effective_modifiers = capture_modifiers
+            end
+
+            local shortcut_string = build_shortcut_string(event.key, effective_modifiers)
             if shortcut_string then
                 pending_shortcut = shortcut_string
                 PROP.SET_TEXT(key_capture_edit, shortcut_string)
@@ -333,6 +360,7 @@ local function handle_capture_focus(event)
     if not capture_active then
         pending_shortcut = nil
         PROP.SET_TEXT(key_capture_edit, "")
+        capture_modifiers = 0
     end
 end
 
