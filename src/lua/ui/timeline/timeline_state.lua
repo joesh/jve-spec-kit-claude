@@ -6,6 +6,7 @@ local M = {}
 local db = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
+local ui_constants = require("core.ui_constants")
 
 -- State listeners (views register here for notifications)
 local listeners = {}
@@ -13,7 +14,7 @@ local listeners = {}
 -- Debouncing configuration
 -- Batches rapid state changes to prevent excessive redraws
 local notify_timer = nil
-local NOTIFY_DEBOUNCE_MS = 16  -- ~60fps (one frame)
+local NOTIFY_DEBOUNCE_MS = ui_constants.TIMELINE.NOTIFY_DEBOUNCE_MS
 
 -- Project browser reference (for media insertion)
 local project_browser = nil
@@ -26,8 +27,8 @@ local on_selection_changed_callback = nil
 
 -- Dimensions (shared across all views)
 M.dimensions = {
-    default_track_height = 50,  -- Default height for new tracks
-    track_header_width = 150,
+    default_track_height = ui_constants.TIMELINE.TRACK_HEIGHT,
+    track_header_width = ui_constants.TIMELINE.TRACK_HEADER_WIDTH,
 }
 
 -- Version tracking for stale data detection
@@ -478,7 +479,7 @@ end
 -- Edge detection helper for trimming
 -- Returns: edge_type ("in"/"out"), trim_type ("ripple"/"roll"), or nil if not near edge
 function M.detect_edge_at_position(clip, click_x, viewport_width)
-    local EDGE_ZONE_PX = 8  -- Pixels from edge to detect ripple
+    local EDGE_ZONE_PX = ui_constants.TIMELINE.EDGE_ZONE_PX
 
     local clip_start_x = M.time_to_pixel(clip.start_time, viewport_width)
     local clip_end_x = M.time_to_pixel(clip.start_time + clip.duration, viewport_width)
@@ -500,7 +501,7 @@ end
 function M.detect_roll_between_clips(clip1, clip2, click_x, viewport_width)
     if not clip1 or not clip2 then return false end
 
-    local ROLL_ZONE_PX = 16
+    local ROLL_ZONE_PX = ui_constants.TIMELINE.ROLL_ZONE_PX
     local gap_start_x = M.time_to_pixel(clip1.start_time + clip1.duration, viewport_width)
     local gap_end_x = M.time_to_pixel(clip2.start_time, viewport_width)
 

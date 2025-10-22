@@ -261,7 +261,14 @@ ui_constants.LOGGING = {
 ui_constants.TIMELINE = {
     ZOOM_TO_FIT_PADDING = 0.05,  -- 5% padding for zoom to fit operations
     RULER_HEIGHT = 30,           -- Height reserved for timeline ruler in pixels
-    TRACK_HEIGHT = 40            -- Fixed height of each track in pixels (matches C++ ScriptableTimeline)
+    TRACK_HEIGHT = 50,           -- Default height for new tracks in pixels
+    TRACK_HEADER_WIDTH = 150,    -- Width of track header labels in pixels
+    DRAG_THRESHOLD = 5,          -- Pixels of movement before starting drag operation
+    NOTIFY_DEBOUNCE_MS = 16,     -- Milliseconds (~60fps) for state change debouncing
+    EDGE_ZONE_PX = 8,            -- Pixels from clip edge to detect edge selection for ripple edits
+    ROLL_ZONE_PX = 16,           -- Pixels for roll edit detection zone
+    EDIT_POINT_ZONE = 4,         -- Pixels - must be close to center for edit point detection
+    SPLITTER_HANDLE_HEIGHT = 7,  -- Qt default vertical splitter handle height in pixels
 }
 
 return ui_constants

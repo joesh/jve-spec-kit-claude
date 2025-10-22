@@ -5,11 +5,12 @@ local timeline_state = require("ui.timeline.timeline_state")
 local timeline_view = require("ui.timeline.timeline_view")
 local timeline_ruler = require("ui.timeline.timeline_ruler")
 local timeline_scrollbar = require("ui.timeline.timeline_scrollbar")
+local ui_constants = require("core.ui_constants")
 
 local M = {}
 
 -- Constants
-local SPLITTER_HANDLE_HEIGHT = 7  -- Qt default vertical splitter handle height (pixels)
+local SPLITTER_HANDLE_HEIGHT = ui_constants.TIMELINE.SPLITTER_HANDLE_HEIGHT
 
 -- Store references
 local state = nil

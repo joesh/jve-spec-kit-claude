@@ -12,7 +12,7 @@
 ### Panel Proportions
 - **Horizontal Split**: ~60% viewer area, ~40% timeline area
 - **Vertical Split**: ~75% main content, ~25% browser/inspector panels
-- **Dark Theme**: Professional dark gray/black color scheme throughout
+- **Dark Theme**: Dark gray/black color scheme (#232323 background, #2b2b2b panels)
 
 ## Project Browser Panel (Top-Left)
 
@@ -117,7 +117,7 @@ Based on Resolve Properties panel, structured as:
 - **Zoom Controls**: Fit/100%/200% view options
 - **Overlay Options**: Toggle guides, safe areas, focus assists
 
-## Professional Design Standards
+## Design Standards
 
 ### Color Scheme
 - **Background**: Dark charcoal (#2b2b2b)
@@ -134,7 +134,7 @@ Based on Resolve Properties panel, structured as:
 ### Spacing & Layout
 - **Consistent Margins**: 8px standard spacing unit
 - **Grouped Controls**: Related items visually clustered
-- **Aligned Elements**: Grid-based alignment for professional appearance
+- **Aligned Elements**: Grid-based alignment matching DaVinci Resolve
 - **Collapsible Sections**: Expandable groups to manage complexity
 
 ### Interaction Patterns
@@ -143,4 +143,4 @@ Based on Resolve Properties panel, structured as:
 - **Drag & Drop**: Visual feedback during media placement
 - **Context Sensitivity**: Inspector updates based on timeline selection
 
-This detailed layout specification ensures the M1 editor matches professional editor UX expectations while maintaining the specific proportions and organization patterns shown in the reference images.
+This detailed layout specification ensures the M1 editor matches established NLE UX patterns (DaVinci Resolve, FCP7) while maintaining the specific proportions and organization patterns shown in the reference images.

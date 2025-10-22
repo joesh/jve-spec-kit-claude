@@ -36,19 +36,21 @@ function M.get_connection()
 end
 
 -- Get current project ID
--- For now, returns default project ID
--- TODO: Implement proper project tracking
+-- FATAL: Not yet implemented - proper project tracking required
 function M.get_current_project_id()
-    return "default_project"
+    error("FATAL: get_current_project_id() not implemented - proper project tracking required before use")
 end
 
 -- Load all tracks for a sequence
 function M.load_tracks(sequence_id)
-    print("Loading tracks for sequence: " .. (sequence_id or "default"))
+    if not sequence_id then
+        error("FATAL: load_tracks() requires sequence_id parameter")
+    end
+
+    print("Loading tracks for sequence: " .. sequence_id)
 
     if not db_connection then
-        print("WARNING: No database connection")
-        return {}
+        error("FATAL: No database connection - cannot load tracks")
     end
 
     local query = db_connection:prepare([[
@@ -59,11 +61,10 @@ function M.load_tracks(sequence_id)
     ]])
 
     if not query then
-        print("WARNING: Failed to prepare track query")
-        return {}
+        error("FATAL: Failed to prepare track query")
     end
 
-    query:bind_value(1, sequence_id or "default_sequence")
+    query:bind_value(1, sequence_id)
 
     local tracks = {}
     if query:exec() then
@@ -84,9 +85,12 @@ end
 
 -- Load all clips for a sequence
 function M.load_clips(sequence_id)
+    if not sequence_id then
+        error("FATAL: load_clips() requires sequence_id parameter")
+    end
+
     if not db_connection then
-        print("WARNING: No database connection")
-        return {}
+        error("FATAL: No database connection - cannot load clips")
     end
 
     local query = db_connection:prepare([[
@@ -99,11 +103,10 @@ function M.load_clips(sequence_id)
     ]])
 
     if not query then
-        print("WARNING: Failed to prepare clip query")
-        return {}
+        error("FATAL: Failed to prepare clip query")
     end
 
-    query:bind_value(1, sequence_id or "default_sequence")
+    query:bind_value(1, sequence_id)
 
     local clips = {}
     if query:exec() then
@@ -131,9 +134,18 @@ end
 
 -- Update clip position - PRESERVED (has real SQL implementation)
 function M.update_clip_position(clip_id, start_time, duration)
+    if not clip_id then
+        error("FATAL: update_clip_position() requires clip_id parameter")
+    end
+    if not start_time then
+        error("FATAL: update_clip_position() requires start_time parameter")
+    end
+    if not duration then
+        error("FATAL: update_clip_position() requires duration parameter")
+    end
+
     if not db_connection then
-        print("WARNING: update_clip_position: No database connection")
-        return false
+        error("FATAL: No database connection - cannot update clip position")
     end
 
     local query = db_connection:prepare([[
@@ -143,8 +155,7 @@ function M.update_clip_position(clip_id, start_time, duration)
     ]])
 
     if not query then
-        print("WARNING: update_clip_position: Failed to prepare UPDATE query")
-        return false
+        error("FATAL: Failed to prepare UPDATE query for clip position")
     end
 
     query:bind_value(1, start_time)
@@ -153,8 +164,7 @@ function M.update_clip_position(clip_id, start_time, duration)
 
     local success = query:exec()
     if not success then
-        print(string.format("WARNING: update_clip_position: Failed to update clip %s", clip_id))
-        return false
+        error(string.format("FATAL: Failed to update clip position for clip %s", clip_id))
     end
 
     return true
@@ -171,8 +181,7 @@ function M.load_media()
     print("Loading media library from database")
 
     if not db_connection then
-        print("WARNING: No database connection")
-        return {}
+        error("FATAL: No database connection - cannot load media")
     end
 
     local query = db_connection:prepare([[
@@ -183,8 +192,7 @@ function M.load_media()
     ]])
 
     if not query then
-        print("WARNING: Failed to prepare media query")
-        return {}
+        error("FATAL: Failed to prepare media query")
     end
 
     local media_items = {}
@@ -328,17 +336,7 @@ function M.load_bins()
     return bins
 end
 
--- Import media file
-function M.import_media(file_path)
-    local file_name = file_path:match("([^/]+)$")
-    print("Importing media: " .. file_name)
-    -- TODO: Implement actual SQLite insert via C++ bindings
-    return {
-        id = "media_" .. os.time(),
-        file_name = file_name,
-        file_path = file_path,
-        duration = 10000, -- TODO: Get actual duration
-    }
-end
+-- REMOVED: import_media() - Stub function that returned dummy data
+-- Use media_reader.lua and ImportMedia command instead
 
 return M

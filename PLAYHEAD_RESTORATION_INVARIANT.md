@@ -169,7 +169,7 @@ Want state before Command 3?
   → Get exact state from Command 2's record
 ```
 
-### 3. **Matches Professional NLE Behavior**
+### 3. **Matches Standard NLE Behavior**
 FCP7, FCPX, and Avid all work this way: undo takes you to "after the previous command", not "before the current command."
 
 ---
@@ -309,7 +309,7 @@ Stale references (deleted clips in selection) are automatically filtered during 
 ### 4. **Session Persistence for Free**
 The same state capture used for undo/redo also works for session persistence. The sequences table stores the "current" state checkpoint.
 
-### 5. **Matches Professional NLEs**
+### 5. **Matches Standard NLE Behavior**
 FCP7, FCPX, and Avid all use this model. Users coming from those tools will find the behavior familiar.
 
 ---

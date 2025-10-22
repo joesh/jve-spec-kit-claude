@@ -2,18 +2,20 @@
 -- This demonstrates the drawing command API where Lua defines timeline appearance
 
 local TimelineRenderer = {}
+local ui_constants = require("core.ui_constants")
+local timeline_state = require("ui.timeline.timeline_state")
 
 -- Configuration constants
-local RULER_HEIGHT = 30
-local TRACK_HEIGHT = 50
-local TRACK_HEADER_WIDTH = 150
-local PLAYHEAD_COLOR = "#ff6b6b"
+local RULER_HEIGHT = ui_constants.TIMELINE.RULER_HEIGHT
+local TRACK_HEIGHT = ui_constants.TIMELINE.TRACK_HEIGHT
+local TRACK_HEADER_WIDTH = ui_constants.TIMELINE.TRACK_HEADER_WIDTH
+local PLAYHEAD_COLOR = timeline_state.colors.playhead
 local RULER_COLOR = "#444444"
 local TRACK_COLOR = "#333333"
-local TEXT_COLOR = "#cccccc"
-local CLIP_COLOR = "#4a90e2"
+local TEXT_COLOR = timeline_state.colors.text
+local CLIP_COLOR = timeline_state.colors.clip
 local CLIP_BORDER_COLOR = "#6bb6ff"
-local SELECTED_CLIP_COLOR = "#ffa500"
+local SELECTED_CLIP_COLOR = timeline_state.colors.clip_selected
 
 function TimelineRenderer.new(timeline_widget)
     local self = {

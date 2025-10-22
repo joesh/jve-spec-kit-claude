@@ -187,10 +187,10 @@ T056 & T057 & T058 & T059 & T060 & T061 & T062 &
 - [x] Each task specifies exact file path
 - [x] Sequential dependencies clearly documented
 
-**Professional Editor Requirements**:
-- [x] 4-panel layout with professional proportions
-- [x] Multi-selection with tri-state controls  
-- [x] Edge selection with professional interaction patterns
+**Core Editor Requirements**:
+- [x] 4-panel layout with 60/40 horizontal, 75/25 vertical splits
+- [x] Multi-selection with tri-state controls
+- [x] Edge selection with FCP7-style bracket indicators and 8px tolerance zones
 - [x] Keyboard shortcuts (J,K,L, Cmd+B)
 - [x] Deterministic command system with replay
 - [x] Single-file (.jve) project persistence

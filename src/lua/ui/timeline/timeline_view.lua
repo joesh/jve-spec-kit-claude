@@ -3,6 +3,7 @@
 -- Multiple views can exist, each showing different tracks
 
 local M = {}
+local ui_constants = require("core.ui_constants")
 
 -- Create a new timeline view
 -- Parameters:
@@ -29,7 +30,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         debug_id = options.debug_id or tostring(widget),
     }
 
-    local DRAG_THRESHOLD = 5  -- Pixels of movement before starting drag
+    local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
 
     -- Filter tracks and cache result
     local function update_filtered_tracks()
@@ -627,8 +628,8 @@ function M.create(widget, state_module, track_filter_fn, options)
             --   3. Click between two adjacent clips → select ][ (edit point: right clip's out + left clip's in)
             --   4. Click in middle of clip → no edge selection (future: select clip body for dragging)
 
-            local EDGE_ZONE = 8  -- Pixels from edge to detect single edge
-            local EDIT_POINT_ZONE = 4  -- Pixels - must be close to center for edit point
+            local EDGE_ZONE = ui_constants.TIMELINE.EDGE_ZONE_PX
+            local EDIT_POINT_ZONE = ui_constants.TIMELINE.EDIT_POINT_ZONE
             local clips_at_position = {}
 
             -- First pass: find all clips at this Y position and their edge proximity
@@ -1055,8 +1056,8 @@ function M.create(widget, state_module, track_filter_fn, options)
                 view.panel_drag_move(view.widget, x, y)
             else
                 -- Update cursor based on what's under the mouse
-                local EDGE_ZONE = 8
-                local EDIT_POINT_ZONE = 4
+                local EDGE_ZONE = ui_constants.TIMELINE.EDGE_ZONE_PX
+                local EDIT_POINT_ZONE = ui_constants.TIMELINE.EDIT_POINT_ZONE
                 local cursor_type = "arrow"  -- Default
                 local clips_at_position = {}
 
