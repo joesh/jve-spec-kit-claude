@@ -33,71 +33,47 @@ local edge_delta = delta_ms  -- Same delta for ALL edges!
 ## Bug #2: Incorrect Downstream Shift (FIXED ✅)
 
 ### Problem
-Code shifted downstream clips by raw `delta_ms`:
-```lua
-shift_clip.start_time = shift_clip.start_time + delta_ms
-```
+Downstream clips were shifted by the drag delta captured from a single "winning" edge. When multiple ripple points existed, this caused two failures:
 
-**Impact**: With asymmetric selection, downstream shift ignored edge type differences
+1. Clips located between earlier and later ripple points never moved, even though their upstream edits changed the timeline length.
+2. Undo stored only one `shift_amount`, so it could never faithfully restore per-clip offsets once the operation became asymmetric.
 
 ### Fix
-Calculate shift from rightmost edge's type:
+Model ripple edits as a set of **ripple events** and apply the cumulative shift for each downstream clip:
+
 ```lua
--- Track shift during Phase 1
-local latest_shift_amount = 0
+local ripple_events = {}
 
-for each edge:
-    local shift_for_this_edge
-    if actual_edge_type == "in" then
-        shift_for_this_edge = -edge_delta  -- Opposite direction
-    else  -- "out"
-        shift_for_this_edge = edge_delta   -- Same direction
-    end
+-- Phase 1: record every ripple point and its net shift contribution
+table.insert(ripple_events, {
+    time = ripple_time,
+    shift = shift_for_this_edge  -- duration delta for that edge/gap
+})
 
-    if ripple_time > latest_ripple_time then
-        latest_ripple_time = ripple_time
-        latest_shift_amount = shift_for_this_edge
-    end
+-- Phase 2: walk clips in start-time order and accumulate all events that
+-- occur at or before the clip's start
+local cumulative_shift = 0
+while event_index <= #ripple_events and ripple_events[event_index].time <= clip.start_time do
+    cumulative_shift = cumulative_shift + ripple_events[event_index].shift
+    event_index = event_index + 1
 end
 
--- Phase 2: Use calculated shift
-shift_clip.start_time = shift_clip.start_time + latest_shift_amount
+if cumulative_shift ~= 0 then
+    clip.start_time = clip.start_time + cumulative_shift
+end
 ```
+
+Undo now persists the exact `shift_amount` applied to each clip (`{clip_id, shift_amount}`), making the operation reversible regardless of how many ripple points are involved.
 
 ---
 
 ## Changes Made
 
-### 1. Removed Reference Edge Type (Lines 2329-2346)
-**Before:**
-```lua
-local original_states = {}
-local latest_ripple_time = 0
-local preview_affected_clips = {}
+### 1. Removed Reference Edge Type (Lines 2393-2461)
+- Dropped the `reference_bracket` bookkeeping and the "negate delta for opposite edges" hack.
+- Each edge now receives the same user drag delta; asymmetry stays localized inside `apply_edge_ripple`.
 
-local reference_edge_type = edge_infos[1].edge_type
-if reference_edge_type == "gap_after" then
-    reference_edge_type = "out"
-elseif reference_edge_type == "gap_before" then
-    reference_edge_type = "in"
-end
-
-print(string.format("DEBUG BatchRippleEdit: %d edges, delta_ms=%d, reference_edge=%s",
-    #edge_infos, delta_ms, reference_edge_type))
-```
-
-**After:**
-```lua
-local original_states = {}
-local latest_ripple_time = 0
-local latest_shift_amount = 0  -- Track shift for downstream clips
-local preview_affected_clips = {}
-
-print(string.format("DEBUG BatchRippleEdit: %d edges, delta_ms=%d",
-    #edge_infos, delta_ms))
-```
-
-### 2. Fixed Delta Negation (Lines 2382-2388)
+### 2. Fixed Delta Negation (Lines 2453-2461)
 **Before:**
 ```lua
 local edge_delta = (actual_edge_type ~= reference_edge_type) and -delta_ms or delta_ms
@@ -114,92 +90,19 @@ print(string.format("  Processing: clip=%s, actual_edge=%s, edge_delta=%d",
     clip.id:sub(1,8), actual_edge_type, edge_delta))
 ```
 
-### 3. Track Shift Amount (Lines 2412-2432)
-**Before:**
-```lua
--- Track latest ripple point
-if ripple_time and ripple_time > latest_ripple_time then
-    latest_ripple_time = ripple_time
-end
-```
+### 3. Aggregate Ripple Events (Lines 2453-2521)
+- Build `ripple_events` for every edge/gap.
+- Merge events that occur at the same time (they cancel or compound).
+- Sort clips by start time and accumulate shift as we cross each ripple point.
+- Produce a deterministic `{clip_id, shift_amount}` list for preview, execution, and undo.
 
-**After:**
-```lua
--- Track latest ripple point and its shift amount
--- BUG FIX: Calculate shift based on edge type, not raw delta
-if ripple_time then
-    local shift_for_this_edge
-    if actual_edge_type == "in" then
-        shift_for_this_edge = -edge_delta  -- Opposite direction
-    else  -- "out"
-        shift_for_this_edge = edge_delta   -- Same direction
-    end
+### 4. Dry-Run Preview (Lines 2521-2534)
+- Preview now mirrors the execution path: clips are listed only when their cumulative shift is non-zero and use the same `clip_shift_lookup` values that execution applies.
 
-    -- Use the rightmost ripple point's shift
-    if ripple_time > latest_ripple_time then
-        latest_ripple_time = ripple_time
-        latest_shift_amount = shift_for_this_edge
-        print(string.format("  New latest ripple: time=%dms, shift=%dms (edge_type=%s)",
-            latest_ripple_time, latest_shift_amount, actual_edge_type))
-    end
-end
-```
-
-### 4. Fixed Dry-Run Preview Shift (Line 2466)
-**Before:**
-```lua
-new_start_time = downstream_clip.start_time + delta_ms
-```
-
-**After:**
-```lua
-new_start_time = downstream_clip.start_time + latest_shift_amount  -- BUG FIX: Use calculated shift
-```
-
-### 5. Fixed Execution Shift (Line 2483)
-**Before:**
-```lua
-shift_clip.start_time = shift_clip.start_time + delta_ms
-```
-
-**After:**
-```lua
-shift_clip.start_time = shift_clip.start_time + latest_shift_amount  -- BUG FIX: Use calculated shift
-```
-
-### 6. Store Shift for Undo (Line 2500)
-**Added:**
-```lua
-command:set_parameter("shift_amount", latest_shift_amount)  -- Store calculated shift for undo
-```
-
-### 7. Enhanced Success Message (Line 2502)
-**Before:**
-```lua
-print(string.format("✅ Batch ripple: trimmed %d edges by %dms, shifted %d downstream clips",
-    #edge_infos, delta_ms, #clips_to_shift))
-```
-
-**After:**
-```lua
-print(string.format("✅ Batch ripple: trimmed %d edges by %dms, shifted %d downstream clips by %dms",
-    #edge_infos, delta_ms, #clips_to_shift, latest_shift_amount))
-```
-
-### 8. Fixed Undo Shift (Lines 2513, 2547)
-**Before:**
-```lua
-local delta_ms = command:get_parameter("delta_ms")
-...
-shift_clip.start_time = shift_clip.start_time - delta_ms
-```
-
-**After:**
-```lua
-local shift_amount = command:get_parameter("shift_amount")  -- BUG FIX: Use stored shift, not delta_ms
-...
-shift_clip.start_time = shift_clip.start_time - shift_amount  -- BUG FIX: Use stored shift
-```
+### 5. Execution & Undo (Lines 2536-2588)
+- Execution stores the exact per-clip shift list instead of a single scalar.
+- Undo iterates over that list to reverse each movement.
+- Success logging reports the number of downstream clips touched rather than a misleading "single shift" summary.
 
 ---
 
@@ -228,36 +131,29 @@ Downstream clips: shift by +500ms ✗ WRONG!
 
 **Actual Behavior (AFTER FIX):**
 ```
-Clip A: edge_delta = +500 (same for all)
-  → duration += 500 = 1500ms ✓
-  → ripple_time = 1500ms
-  → shift_for_this_edge = +500ms (out-point: same direction)
+Clip A: shift contribution = +500ms at 1500ms
+Clip B: shift contribution = -500ms at 2000ms
 
-Clip B: edge_delta = +500 (same for all)
-  → duration -= 500 = 1500ms ✓ CORRECT!
-  → ripple_time = 2000ms
-  → shift_for_this_edge = -500ms (in-point: opposite direction)
-
-Latest: ripple_time = 2000ms, shift = -500ms
-
-Downstream clips: shift by -500ms ✓ CORRECT!
+Downstream clips accumulate events in time order:
+- Between 1500ms and 2000ms → net shift = +500ms
+- At/after 2000ms           → net shift = 0ms
 ```
 
-**Result**: Balanced asymmetric edit works correctly!
+**Result**: Balanced asymmetric edits no longer disturb downstream clips, and multi-point trims during the same drag stay consistent across the entire timeline.
 
 ---
 
 ## Key Insights
 
-1. **Asymmetry is built into `apply_edge_ripple`**: The function already knows how to handle in-point vs out-point differently. We don't need to negate delta.
+1. **Asymmetry stays localized**: `apply_edge_ripple` already encapsulates in/out semantics, so the batch executor should never flip the user delta itself.
 
 2. **Shift direction depends on edge type**:
    - In-point drag right = clip shrinks = timeline shifts LEFT (-delta)
    - Out-point drag right = clip grows = timeline shifts RIGHT (+delta)
 
-3. **Rightmost ripple wins**: With multiple edges, use the shift amount from the rightmost (latest) ripple point for downstream clips.
+3. **Cumulative timeline change matters**: Ripple edits can introduce multiple shift events; downstream clips must accumulate every prior event at or before their start time, not just the "last" one.
 
-4. **Undo must use calculated shift**: Can't reconstruct shift from delta_ms alone - must store it during execution.
+4. **Undo needs per-clip data**: Persisting `{clip_id, shift_amount}` keeps the event log reversible and ensures replays/undos match execution exactly.
 
 ---
 

@@ -20,10 +20,14 @@
 local M = {}
 
 local lxp = require("lxp")
+local keyboard_shortcut_registry = require("core.keyboard_shortcut_registry")
 local command_manager = nil
 local main_window = nil
 local project_browser = nil
 local timeline_panel = nil
+
+local registered_shortcut_commands = {}
+local defaults_initialized = false
 
 -- Qt bindings (loaded from qt_constants global)
 local qt = {
@@ -110,6 +114,92 @@ local function find_element(elem, tag_name)
     end
 
     return nil
+end
+
+local function copy_path(path)
+    local result = {}
+    for index, value in ipairs(path) do
+        result[index] = value
+    end
+    return result
+end
+
+local function trim_whitespace(value)
+    assert(value ~= nil, "trim_whitespace requires a value")
+    local trimmed = value:match("^%s*(.-)%s*$")
+    if trimmed == nil then
+        return ""
+    end
+    return trimmed
+end
+
+local function register_menu_shortcut(menu_path, attrs)
+    assert(type(menu_path) == "table" and #menu_path > 0, "Menu path required for shortcut registration")
+    assert(type(attrs) == "table", "Menu item attributes required for shortcut registration")
+
+    local command_id = attrs.command
+    local item_name = attrs.name
+    assert(type(command_id) == "string" and command_id ~= "", string.format("Menu item '%s' missing command attribute", tostring(item_name)))
+    assert(type(item_name) == "string" and item_name ~= "", "Menu item missing name for command " .. command_id)
+
+    local category = table.concat(menu_path, " ▸ ")
+    local description = attrs.description
+    if description == nil then
+        description = ""
+    end
+
+    local default_shortcuts = {}
+    if attrs.shortcut ~= nil then
+        local shortcut_value = trim_whitespace(attrs.shortcut)
+        if shortcut_value ~= "" then
+            table.insert(default_shortcuts, shortcut_value)
+        end
+    end
+
+    if not registered_shortcut_commands[command_id] then
+        keyboard_shortcut_registry.register_command({
+            id = command_id,
+            category = category,
+            name = item_name,
+            description = description,
+            default_shortcuts = default_shortcuts
+        })
+        registered_shortcut_commands[command_id] = true
+        if defaults_initialized and #default_shortcuts > 0 then
+            for _, shortcut_value in ipairs(default_shortcuts) do
+                local assigned, assign_err = keyboard_shortcut_registry.assign_shortcut(command_id, shortcut_value)
+                if not assigned then
+                    error(string.format("Failed to assign default shortcut '%s' to command '%s': %s", shortcut_value, command_id, tostring(assign_err)))
+                end
+            end
+        end
+        return
+    end
+
+    if #default_shortcuts == 0 then
+        return
+    end
+
+    local command = keyboard_shortcut_registry.commands[command_id]
+    assert(command ~= nil, "Registered command table missing for " .. command_id)
+
+    local shortcut_to_add = default_shortcuts[1]
+    for _, existing in ipairs(command.default_shortcuts) do
+        if existing == shortcut_to_add then
+            shortcut_to_add = nil
+            break
+        end
+    end
+
+    if shortcut_to_add ~= nil then
+        table.insert(command.default_shortcuts, shortcut_to_add)
+        if defaults_initialized then
+            local assigned, assign_err = keyboard_shortcut_registry.assign_shortcut(command_id, shortcut_to_add)
+            if not assigned then
+                error(string.format("Failed to assign default shortcut '%s' to command '%s': %s", shortcut_to_add, command_id, tostring(assign_err)))
+            end
+        end
+    end
 end
 
 --- Convert platform-agnostic shortcut to Qt format
@@ -237,6 +327,36 @@ local function create_action_callback(command_name, params)
                 print("⏹️  Import cancelled")
             end
 
+        elseif command_name == "ImportFCP7XML" then
+            print("📂 Opening file picker for ImportFCP7XML...")
+            local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
+                main_window,
+                "Import Final Cut Pro 7 XML",
+                "Final Cut Pro XML (*.xml);;All Files (*)"
+            )
+
+            if file_path then
+                print(string.format("📥 Importing FCP7 XML: %s", file_path))
+                local Command = require("command")
+                local cmd = Command.create("ImportFCP7XML", "default_project")
+                cmd:set_parameter("xml_path", file_path)
+                cmd:set_parameter("project_id", "default_project")
+
+                local success, result = pcall(function()
+                    return command_manager.execute(cmd)
+                end)
+
+                if not success then
+                    print(string.format("❌ Import failed: %s", tostring(result)))
+                elseif result and not result.success then
+                    print(string.format("⚠️  Import error: %s", result.error_message or "unknown"))
+                else
+                    print("✅ FCP7 XML imported successfully!")
+                end
+            else
+                print("⏹️  Import cancelled")
+            end
+
         elseif command_name == "ImportResolveProject" then
             print("📂 Opening file picker for ImportResolveProject...")
             local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
@@ -293,6 +413,16 @@ local function create_action_callback(command_name, params)
             else
                 print("⏹️  Import cancelled")
             end
+
+        elseif command_name == "ShowKeyboardCustomization" then
+            print("🎹 Opening keyboard customization dialog")
+            local ok, err = pcall(function()
+                require("ui.keyboard_customization_dialog").show()
+            end)
+            if not ok then
+                print(string.format("❌ Failed to open keyboard dialog: %s", tostring(err)))
+            end
+
         elseif command_name == "Split" then
             -- Map Split menu item to SplitClip command
             print("✂️  Calling SplitClip command (mapped from Split)")
@@ -484,14 +614,17 @@ local function create_action_callback(command_name, params)
             print("   For now, use Delete key which calls BatchCommand for selected clips")
         else
             -- Regular command execution
-            local success, result = pcall(function()
-                return command_manager.execute(command_name, params or {})
+            local command_params = params
+            if command_params == nil then
+                command_params = {}
+            end
+            local success_flag, result_value = pcall(function()
+                return command_manager.execute(command_name, command_params)
             end)
-
-            if not success then
-                print(string.format("❌ Command '%s' failed: %s", command_name, tostring(result)))
-            elseif result and not result.success then
-                print(string.format("⚠️  Command '%s' returned error: %s", command_name, result.error_message or "unknown"))
+            if not success_flag then
+                print(string.format("❌ Command '%s' failed: %s", command_name, tostring(result_value)))
+            elseif result_value and not result_value.success then
+                print(string.format("⚠️  Command '%s' returned error: %s", command_name, result_value.error_message or "unknown"))
             else
                 print(string.format("✅ Command '%s' executed successfully", command_name))
             end
@@ -502,21 +635,28 @@ end
 --- Build QMenu from XML element (recursive)
 -- @param menu_elem table: XML <menu> element
 -- @param parent_menu userdata: Qt QMenu or QMenuBar parent
-local function build_menu(menu_elem, parent_menu)
-    local menu_name = menu_elem.attrs.name or "Untitled"
+local function build_menu(menu_elem, parent_menu, menu_path)
+    assert(menu_elem.attrs ~= nil, "Menu element missing attributes")
+    assert(type(menu_elem.attrs.name) == "string" and menu_elem.attrs.name ~= "", "Menu element missing name attribute")
+    local menu_name = menu_elem.attrs.name
+    local current_path = copy_path(menu_path)
+    table.insert(current_path, menu_name)
 
-    -- Create QMenu
     local menu = qt.CREATE_MENU(parent_menu, menu_name)
 
-    -- Process children
     for _, child in ipairs(menu_elem.children) do
         if child.tag == "item" then
-            -- Menu item -> QAction
-            local item_name = child.attrs.name or "Untitled"
+            assert(child.attrs ~= nil, string.format("Menu item under '%s' missing attributes", menu_name))
+            register_menu_shortcut(current_path, child.attrs)
+
+            local item_name = child.attrs.name
             local command_name = child.attrs.command
-            local shortcut = convert_shortcut(child.attrs.shortcut or "")
+            local shortcut = convert_shortcut(child.attrs.shortcut)
             local checkable = child.attrs.checkable == "true"
-            local params = parse_params(child.attrs.params or "")
+            local params = {}
+            if child.attrs.params ~= nil then
+                params = parse_params(child.attrs.params)
+            end
 
             local action = qt.CREATE_MENU_ACTION(menu, item_name, shortcut, checkable)
 
@@ -525,12 +665,10 @@ local function build_menu(menu_elem, parent_menu)
             end
 
         elseif child.tag == "separator" then
-            -- Separator
             qt.ADD_MENU_SEPARATOR(menu)
 
         elseif child.tag == "menu" then
-            -- Submenu (recursive)
-            local submenu = build_menu(child, menu)
+            local submenu = build_menu(child, menu, current_path)
             qt.ADD_SUBMENU(menu, submenu)
         end
     end
@@ -558,15 +696,18 @@ function M.load_from_file(xml_path)
         return false, "No <menus> root element found"
     end
 
-    -- Create menu bar
     local menu_bar = qt.GET_MENU_BAR(main_window)
 
-    -- Build all top-level menus
     for _, child in ipairs(menus_elem.children) do
         if child.tag == "menu" then
-            local menu = build_menu(child, menu_bar)
+            local menu = build_menu(child, menu_bar, {})
             qt.ADD_MENU_TO_BAR(menu_bar, menu)
         end
+    end
+
+    if not defaults_initialized then
+        keyboard_shortcut_registry.reset_to_defaults()
+        defaults_initialized = true
     end
 
     print(string.format("Menu system: Loaded %d menus from %s", #menus_elem.children, xml_path))

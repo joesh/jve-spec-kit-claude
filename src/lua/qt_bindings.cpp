@@ -1,6 +1,7 @@
 #include "qt_bindings.h"
 #include "simple_lua_engine.h"
 #include <QWidget>
+#include <QApplication>
 #include <QMainWindow>
 #include <QLabel>
 #include <QLineEdit>
@@ -17,18 +18,25 @@
 #include <QPushButton>
 #include <QRubberBand>
 #include <QSizePolicy>
+#include <QEvent>
+#include <QMouseEvent>
+#include <QKeyEvent>
 #include <QSet>
 #include <QMap>
 #include <QTimer>
 #include <QDebug>
+#include <QStyle>
+#include <QIcon>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonValue>
+#include <QVariant>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
 #include <QFileDialog>
+#include <string>
 
 // Include existing UI components
 #include "ui/timeline/scriptable_timeline.h"  // Performance-critical timeline rendering
@@ -780,6 +788,10 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_LAYOUT_MARGINS");
     lua_pushcfunction(L, lua_set_widget_size_policy);
     lua_setfield(L, -2, "SET_WIDGET_SIZE_POLICY");
+    lua_pushcfunction(L, lua_set_button_click_handler);
+    lua_setfield(L, -2, "SET_BUTTON_CLICK_HANDLER");
+    lua_pushcfunction(L, lua_set_widget_click_handler);
+    lua_setfield(L, -2, "SET_WIDGET_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_tree_headers);
     lua_setfield(L, -2, "SET_TREE_HEADERS");
     lua_pushcfunction(L, lua_set_tree_column_width);
@@ -796,6 +808,16 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "CLEAR_TREE");
     lua_pushcfunction(L, lua_set_tree_item_expanded);
     lua_setfield(L, -2, "SET_TREE_ITEM_EXPANDED");
+    lua_pushcfunction(L, lua_set_tree_item_data);
+    lua_setfield(L, -2, "SET_TREE_ITEM_DATA");
+    lua_pushcfunction(L, lua_get_tree_item_data);
+    lua_setfield(L, -2, "GET_TREE_ITEM_DATA");
+    lua_pushcfunction(L, lua_set_tree_selection_changed_handler);
+    lua_setfield(L, -2, "SET_TREE_SELECTION_HANDLER");
+    lua_pushcfunction(L, lua_set_tree_item_icon);
+    lua_setfield(L, -2, "SET_TREE_ITEM_ICON");
+    lua_pushcfunction(L, lua_set_tree_item_double_click_handler);
+    lua_setfield(L, -2, "SET_TREE_DOUBLE_CLICK_HANDLER");
     lua_setfield(L, -2, "CONTROL");
     
     // Register signal handler functions globally for qt_signals module
@@ -805,6 +827,12 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_widget_click_handler");
     lua_pushcfunction(L, lua_set_line_edit_text_changed_handler);
     lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
+    lua_pushcfunction(L, lua_set_tree_selection_changed_handler);
+    lua_setglobal(L, "qt_set_tree_selection_handler");
+    lua_pushcfunction(L, lua_set_tree_item_icon);
+    lua_setglobal(L, "qt_set_tree_item_icon");
+    lua_pushcfunction(L, lua_set_tree_item_double_click_handler);
+    lua_setglobal(L, "qt_set_tree_item_double_click_handler");
     lua_pushcfunction(L, lua_hide_splitter_handle);
     lua_setglobal(L, "qt_hide_splitter_handle");
     lua_pushcfunction(L, lua_set_splitter_moved_handler);
@@ -2268,8 +2296,8 @@ private:
 class FocusEventFilter : public QObject
 {
 public:
-    FocusEventFilter(lua_State* L, const std::string& handler, void* widget)
-        : QObject(), lua_state(L), handler_name(handler), tracked_widget(widget) {}
+    FocusEventFilter(lua_State* L, const std::string& handler, QWidget* widget)
+        : QObject(widget), lua_state(L), handler_name(handler), tracked_widget(widget) {}
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
@@ -2302,7 +2330,7 @@ protected:
 private:
     lua_State* lua_state;
     std::string handler_name;
-    void* tracked_widget;
+    QWidget* tracked_widget;
 };
 
 int lua_set_global_key_handler(lua_State* L)
@@ -2332,7 +2360,8 @@ int lua_set_focus_handler(lua_State* L)
     const char* handler_name = luaL_checkstring(L, 2);
 
     if (widget) {
-        FocusEventFilter* filter = new FocusEventFilter(L, handler_name, widget);
+        std::string handler(handler_name);
+        FocusEventFilter* filter = new FocusEventFilter(L, handler, widget);
         widget->installEventFilter(filter);
 
         // Make sure widget can receive focus
@@ -2853,6 +2882,8 @@ int lua_set_tree_indentation(lua_State* L)
     return 1;
 }
 
+static QMap<quintptr, QTreeWidgetItem*> g_treeItemMap;
+
 int lua_add_tree_item(lua_State* L)
 {
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
@@ -2891,6 +2922,7 @@ int lua_add_tree_item(lua_State* L)
     // // qDebug() << "Adding tree item from Lua:" << values;
     QTreeWidgetItem* item = new QTreeWidgetItem(tree, values);
     tree->addTopLevelItem(item);
+    g_treeItemMap[reinterpret_cast<quintptr>(item)] = item;
 
     // Set up auto-updating triangles and click-to-expand for items with children
     // Connect signals only once per tree widget
@@ -2924,8 +2956,48 @@ int lua_add_tree_item(lua_State* L)
     return 1;
 }
 
-// Global map to track all tree items (both top-level and children)
-static QMap<quintptr, QTreeWidgetItem*> g_treeItemMap;
+static QTreeWidgetItem* getTreeItemById(QTreeWidget* tree, lua_Integer item_id)
+{
+    if (!tree || item_id < 0) {
+        return nullptr;
+    }
+
+    if (item_id < tree->topLevelItemCount()) {
+        return tree->topLevelItem(static_cast<int>(item_id));
+    }
+
+    return g_treeItemMap.value(static_cast<quintptr>(item_id), nullptr);
+}
+
+static lua_Integer makeTreeItemId(QTreeWidget* tree, QTreeWidgetItem* item)
+{
+    if (!tree || !item) {
+        return -1;
+    }
+
+    int topIndex = tree->indexOfTopLevelItem(item);
+    if (topIndex >= 0) {
+        return topIndex;
+    }
+
+    quintptr ptrId = reinterpret_cast<quintptr>(item);
+    g_treeItemMap[ptrId] = item;
+    return static_cast<lua_Integer>(ptrId);
+}
+
+static void removeTreeItemFromMap(QTreeWidgetItem* item)
+{
+    if (!item) {
+        return;
+    }
+
+    g_treeItemMap.remove(reinterpret_cast<quintptr>(item));
+    const int childCount = item->childCount();
+    for (int i = 0; i < childCount; ++i) {
+        removeTreeItemFromMap(item->child(i));
+    }
+}
+
 
 int lua_add_tree_child_item(lua_State* L)
 {
@@ -3037,6 +3109,11 @@ int lua_clear_tree(lua_State* L)
         return 1;
     }
 
+    const int topLevelCount = tree->topLevelItemCount();
+    for (int i = 0; i < topLevelCount; ++i) {
+        removeTreeItemFromMap(tree->topLevelItem(i));
+    }
+
     // // qDebug() << "Clearing tree from Lua";
     tree->clear();
     lua_pushboolean(L, 1);
@@ -3081,6 +3158,228 @@ int lua_set_tree_item_expanded(lua_State* L)
         text.replace(QString::fromUtf8("▼"), QString::fromUtf8("▶"));
     }
     item->setText(0, text);
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_set_tree_item_data(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    lua_Integer item_id = luaL_checkinteger(L, 2);
+    const char* value = luaL_checkstring(L, 3);
+
+    if (!widget) {
+        qWarning() << "Invalid tree widget in set_tree_item_data";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in set_tree_item_data";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+    if (!item) {
+        qWarning() << "Invalid item id in set_tree_item_data:" << item_id;
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    item->setData(0, Qt::UserRole, QString::fromUtf8(value));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_get_tree_item_data(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    lua_Integer item_id = luaL_checkinteger(L, 2);
+
+    if (!widget) {
+        qWarning() << "Invalid tree widget in get_tree_item_data";
+        lua_pushnil(L);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in get_tree_item_data";
+        lua_pushnil(L);
+        return 1;
+    }
+
+    QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+    if (!item) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    QVariant data = item->data(0, Qt::UserRole);
+    if (!data.isValid()) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    QByteArray bytes = data.toString().toUtf8();
+    lua_pushlstring(L, bytes.constData(), bytes.size());
+    return 1;
+}
+
+int lua_set_tree_selection_changed_handler(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+
+    if (!widget) {
+        qWarning() << "Invalid tree widget in set_tree_selection_changed_handler";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in set_tree_selection_changed_handler";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    std::string handler(handler_name);
+
+    QObject::connect(tree, &QTreeWidget::itemSelectionChanged, [tree, L, handler]() {
+        lua_getglobal(L, handler.c_str());
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 1);
+            return;
+        }
+
+        lua_newtable(L);
+
+        QList<QTreeWidgetItem*> selected = tree->selectedItems();
+        if (!selected.isEmpty()) {
+            QTreeWidgetItem* item = selected.first();
+            lua_pushstring(L, "item_id");
+            lua_pushinteger(L, makeTreeItemId(tree, item));
+            lua_settable(L, -3);
+
+            QVariant data = item->data(0, Qt::UserRole);
+            if (data.isValid()) {
+                QByteArray bytes = data.toString().toUtf8();
+                lua_pushstring(L, "data");
+                lua_pushlstring(L, bytes.constData(), bytes.size());
+                lua_settable(L, -3);
+            }
+        }
+
+        if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+            qWarning() << "Error calling Lua selection handler:" << lua_tostring(L, -1);
+            lua_pop(L, 1);
+        }
+    });
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_set_tree_item_icon(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    lua_Integer item_id = luaL_checkinteger(L, 2);
+    const char* icon_name = luaL_checkstring(L, 3);
+
+    if (!widget) {
+        qWarning() << "Invalid tree widget in set_tree_item_icon";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in set_tree_item_icon";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+    if (!item) {
+        qWarning() << "Invalid item id in set_tree_item_icon:" << item_id;
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QStyle* style = QApplication::style();
+    if (!style) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QString name = QString::fromUtf8(icon_name);
+    QIcon icon;
+    if (name == "timeline") {
+        icon = style->standardIcon(QStyle::SP_FileDialogDetailedView);
+    } else if (name == "bin") {
+        icon = style->standardIcon(QStyle::SP_DirIcon);
+    } else {
+        icon = style->standardIcon(QStyle::SP_FileIcon);
+    }
+
+    item->setIcon(0, icon);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_set_tree_item_double_click_handler(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+
+    if (!widget) {
+        qWarning() << "Invalid tree widget in set_tree_double_click_handler";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in set_tree_double_click_handler";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    std::string handler(handler_name);
+
+    QObject::connect(tree, &QTreeWidget::itemDoubleClicked, [tree, L, handler](QTreeWidgetItem* item, int column) {
+        lua_getglobal(L, handler.c_str());
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 1);
+            return;
+        }
+
+        lua_newtable(L);
+        lua_pushstring(L, "item_id");
+        lua_pushinteger(L, makeTreeItemId(tree, item));
+        lua_settable(L, -3);
+
+        QVariant data = item->data(0, Qt::UserRole);
+        if (data.isValid()) {
+            QByteArray bytes = data.toString().toUtf8();
+            lua_pushstring(L, "data");
+            lua_pushlstring(L, bytes.constData(), bytes.size());
+            lua_settable(L, -3);
+        }
+
+        lua_pushstring(L, "column");
+        lua_pushinteger(L, column);
+        lua_settable(L, -3);
+
+        if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+            qWarning() << "Error calling Lua double click handler:" << lua_tostring(L, -1);
+            lua_pop(L, 1);
+        }
+    });
 
     lua_pushboolean(L, 1);
     return 1;

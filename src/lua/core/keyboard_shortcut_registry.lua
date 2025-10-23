@@ -29,23 +29,29 @@ function M.register_command(command_def)
     }
     ]]--
 
-    if not command_def.id then
-        error("Command must have an id")
-    end
+    assert(type(command_def) == "table", "command_def must be a table")
+    assert(type(command_def.id) == "string" and command_def.id ~= "", "Command must have an id")
+    assert(M.commands[command_def.id] == nil, "Command already registered: " .. command_def.id)
+    assert(type(command_def.category) == "string" and command_def.category ~= "", "Command " .. command_def.id .. " missing category")
+    assert(command_def.description ~= nil, "Command " .. command_def.id .. " missing description")
+    assert(type(command_def.name) == "string" and command_def.name ~= "", "Command " .. command_def.id .. " missing name")
+    assert(type(command_def.default_shortcuts) == "table", "Command " .. command_def.id .. " must provide default_shortcuts table")
 
-    if M.commands[command_def.id] then
-        print(string.format("WARNING: Overwriting command %s", command_def.id))
+    local default_shortcuts = {}
+    for index, shortcut in ipairs(command_def.default_shortcuts) do
+        assert(type(shortcut) == "string" and shortcut ~= "", string.format("Command %s has invalid default shortcut at index %d", command_def.id, index))
+        table.insert(default_shortcuts, shortcut)
     end
 
     M.commands[command_def.id] = {
         id = command_def.id,
-        category = command_def.category or "General",
-        name = command_def.name or command_def.id,
-        description = command_def.description or "",
-        default_shortcuts = command_def.default_shortcuts or {},
+        category = command_def.category,
+        name = command_def.name,
+        description = command_def.description,
+        default_shortcuts = default_shortcuts,
         context = command_def.context,
         handler = command_def.handler,
-        current_shortcuts = {}  -- Will be populated from preset
+        current_shortcuts = {}
     }
 end
 

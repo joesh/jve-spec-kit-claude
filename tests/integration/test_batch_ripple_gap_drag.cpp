@@ -41,6 +41,7 @@ private slots:
     void cleanup();
 
     void testCanonicalGapDragRight();
+    void testGapDragClampsToNeighbor();
 
 private:
     void waitForUi();
@@ -57,6 +58,8 @@ private:
     QTemporaryDir* m_tempDir = nullptr;
     QString m_dbPath;
     QSqlDatabase m_db;
+    QString m_connectionName;
+    int m_connectionCounter = 0;
 
     SimpleLuaEngine* m_luaEngine = nullptr;
     QWidget* m_mainWindow = nullptr;
@@ -79,20 +82,20 @@ void TestBatchRippleGapDrag::initTestCase()
 
     Migrations::initialize();
 
-    m_dbPath = m_tempDir->path() + "/batch_ripple_gap_drag.db";
-    QVERIFY(Migrations::createNewProject(m_dbPath));
-
-    m_db = QSqlDatabase::addDatabase("QSQLITE", "test_batch_ripple_gap_drag");
-    m_db.setDatabaseName(m_dbPath);
-    QVERIFY(m_db.open());
 }
 
 void TestBatchRippleGapDrag::cleanupTestCase()
 {
-    if (m_db.isOpen()) {
+    if (m_db.isValid() && m_db.isOpen()) {
         m_db.close();
     }
-    QSqlDatabase::removeDatabase("test_batch_ripple_gap_drag");
+    if (!m_connectionName.isEmpty()) {
+        QString name = m_connectionName;
+        m_connectionName.clear();
+        m_db = QSqlDatabase();
+        QSqlDatabase::removeDatabase(name);
+    }
+    m_dbPath.clear();
 
     delete m_tempDir;
     m_tempDir = nullptr;
@@ -100,15 +103,35 @@ void TestBatchRippleGapDrag::cleanupTestCase()
 
 void TestBatchRippleGapDrag::init()
 {
+    // Recreate fresh project database for each test to avoid residual locks
     // Clean out timeline-specific tables while keeping project/track metadata intact
-    QSqlQuery clearClips(m_db);
-    QVERIFY(clearClips.exec("DELETE FROM clips"));
+    if (m_luaEngine) {
+        executeLua(R"(
+            local db = require('core.database')
+            local conn = db.get_connection()
+            if conn then
+                conn:close()
+            end
+        )");
+    }
 
-    QSqlQuery clearMedia(m_db);
-    QVERIFY(clearMedia.exec("DELETE FROM media"));
+    m_dbPath = m_tempDir->path() + QStringLiteral("/batch_ripple_gap_drag_%1.db").arg(++m_connectionCounter);
+    QVERIFY(Migrations::createNewProject(m_dbPath));
 
-    QSqlQuery clearCommands(m_db);
-    QVERIFY(clearCommands.exec("DELETE FROM commands"));
+    if (m_db.isValid() && m_db.isOpen()) {
+        m_db.close();
+        if (!m_connectionName.isEmpty()) {
+            QString name = m_connectionName;
+            m_connectionName.clear();
+            m_db = QSqlDatabase();
+            QSqlDatabase::removeDatabase(name);
+        }
+    }
+
+    m_connectionName = QStringLiteral("test_batch_ripple_gap_drag_conn_%1").arg(m_connectionCounter);
+    m_db = QSqlDatabase::addDatabase("QSQLITE", m_connectionName);
+    m_db.setDatabaseName(m_dbPath);
+    QVERIFY(m_db.open());
 
     // Ensure the Lua runtime points at our test database
     qputenv("JVE_TEST_DATABASE", m_dbPath.toUtf8());
@@ -141,6 +164,16 @@ void TestBatchRippleGapDrag::init()
 
 void TestBatchRippleGapDrag::cleanup()
 {
+    if (m_luaEngine) {
+        executeLua(R"(
+            local db = require('core.database')
+            local conn = db.get_connection()
+            if conn then
+                conn:close()
+            end
+        )");
+    }
+
     if (m_mainWindow) {
         m_mainWindow->close();
         m_mainWindow = nullptr;
@@ -150,12 +183,16 @@ void TestBatchRippleGapDrag::cleanup()
     m_luaEngine = nullptr;
     m_videoTimeline = nullptr;
 
-    QSqlQuery clearClips(m_db);
-    clearClips.exec("DELETE FROM clips");
-    QSqlQuery clearMedia(m_db);
-    clearMedia.exec("DELETE FROM media");
-    QSqlQuery clearCommands(m_db);
-    clearCommands.exec("DELETE FROM commands");
+    if (m_db.isOpen()) {
+        m_db.close();
+    }
+    if (!m_connectionName.isEmpty()) {
+        QString name = m_connectionName;
+        m_connectionName.clear();
+        m_db = QSqlDatabase();
+        QSqlDatabase::removeDatabase(name);
+    }
+
 }
 
 void TestBatchRippleGapDrag::waitForUi()
@@ -514,7 +551,14 @@ void TestBatchRippleGapDrag::testCanonicalGapDragRight()
     const auto sendMouseEvent = [&](QEvent::Type type, const QPoint& localPos, Qt::MouseButton button,
                                     Qt::MouseButtons buttons, Qt::KeyboardModifiers modifiers) {
         const QPoint globalPos = m_videoTimeline->mapToGlobal(localPos);
-        QMouseEvent event(type, localPos, globalPos, button, buttons, modifiers);
+        QMouseEvent event(type,
+                          QPointF(localPos),
+                          QPointF(localPos),
+                          QPointF(globalPos),
+                          button,
+                          buttons,
+                          modifiers,
+                          Qt::MouseEventSource::MouseEventNotSynthesized);
         QCoreApplication::sendEvent(m_videoTimeline, &event);
     };
 
@@ -558,22 +602,138 @@ void TestBatchRippleGapDrag::testCanonicalGapDragRight()
     sendMouseEvent(QEvent::MouseButtonRelease, dragTarget, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     waitForUi();
 
-    // Verify timeline changes were persisted
-    {
-        QSqlQuery query(m_db);
-        QVERIFY(query.exec("SELECT duration, source_in FROM clips WHERE id='clip_v2_a'"));
-        QVERIFY(query.next());
-        QCOMPARE(query.value(0).toInt(), 4000);  // duration shortened by 1s
-        QCOMPARE(query.value(1).toInt(), 1000);  // source advanced by 1s
-    }
+    // Verify timeline changes were persisted using Lua-side database access
+    executeLua(R"LUAVAL(
+        local db = require('core.database')
+        local conn = db.get_connection()
+        local stmt = conn:prepare("SELECT duration, source_in FROM clips WHERE id='clip_v2_a'")
+        assert(stmt and stmt:exec(), "clip_v2_a query failed")
+        assert(stmt:next(), "clip_v2_a missing after canonical drag")
+        TEST_clip_v2_duration = stmt:value(0)
+        TEST_clip_v2_source_in = stmt:value(1)
+        stmt:finalize()
 
-    {
-        QSqlQuery query(m_db);
-        QVERIFY(query.exec("SELECT start_time, duration FROM clips WHERE id='clip_v1_b'"));
-        QVERIFY(query.next());
-        QCOMPARE(query.value(0).toInt(), 2000);  // clip moved left by 1s (gap closed)
-        QCOMPARE(query.value(1).toInt(), 5000);  // duration unchanged
-    }
+        local stmt_b = conn:prepare("SELECT start_time, duration FROM clips WHERE id='clip_v1_b'")
+        assert(stmt_b and stmt_b:exec(), "clip_v1_b query failed")
+        assert(stmt_b:next(), "clip_v1_b missing after canonical drag")
+        TEST_clip_v1_b_start = stmt_b:value(0)
+        TEST_clip_v1_b_duration = stmt_b:value(1)
+        stmt_b:finalize()
+    )LUAVAL");
+
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_v2_duration")), 4000);  // duration shortened by 1s
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_v2_source_in")), 1000);  // source advanced by 1s
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_v1_b_start")), 2000);  // clip moved left by 1s (gap closed)
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_v1_b_duration")), 5000);  // duration unchanged
+}
+
+void TestBatchRippleGapDrag::testGapDragClampsToNeighbor()
+{
+    QVERIFY(m_videoTimeline != nullptr);
+
+    m_videoTimeline->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    m_videoTimeline->show();
+    waitForUi();
+
+    executeLua("require('ui.timeline.timeline_state').set_playhead_time(5000)");
+    waitForUi();
+
+    executeLua(R"LUACODE(
+        local db = require('core.database')
+        local conn = db.get_connection()
+        local insert = conn:prepare("INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled) VALUES ('extra_clip', 'video1', 'media_v1_clip', 0, 2000, 0, 2000, 1)")
+        assert(insert:exec())
+        insert:finalize()
+    )LUACODE");
+    reloadTimelineState();
+    fetchTimelineMetrics();
+    waitForUi();
+
+    const auto sendMouseEvent = [&](QEvent::Type type, const QPoint& localPos, Qt::MouseButton button,
+                                    Qt::MouseButtons buttons, Qt::KeyboardModifiers modifiers) {
+        const QPoint globalPos = m_videoTimeline->mapToGlobal(localPos);
+        QMouseEvent event(type, localPos, globalPos, button, buttons, modifiers);
+        QCoreApplication::sendEvent(m_videoTimeline, &event);
+    };
+
+    const QPoint v2InPoint = pointForEdge("clip_v2_a", true);
+    sendMouseEvent(QEvent::MouseMove, v2InPoint, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    sendMouseEvent(QEvent::MouseButtonPress, v2InPoint, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouseEvent(QEvent::MouseButtonRelease, v2InPoint, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    waitForUi();
+
+    executeLua(R"(
+        local state = require('ui.timeline.timeline_state')
+        TEST_edge_count = #state.get_selected_edges()
+    )");
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_edge_count")), 1);
+
+    const QPoint v1GapPoint = pointForEdge("clip_v1_b", false);
+#ifdef Q_OS_MAC
+    const Qt::KeyboardModifiers commandModifier = Qt::ControlModifier;
+#else
+    const Qt::KeyboardModifiers commandModifier = Qt::MetaModifier;
+#endif
+
+    sendMouseEvent(QEvent::MouseMove, v1GapPoint, Qt::NoButton, Qt::NoButton, commandModifier);
+    sendMouseEvent(QEvent::MouseButtonPress, v1GapPoint, Qt::LeftButton, Qt::LeftButton, commandModifier);
+    sendMouseEvent(QEvent::MouseButtonRelease, v1GapPoint, Qt::LeftButton, Qt::NoButton, commandModifier);
+    waitForUi();
+
+    executeLua(R"(
+        local state = require('ui.timeline.timeline_state')
+        TEST_edge_count = #state.get_selected_edges()
+    )");
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_edge_count")), 2);
+
+    // Attempt to drag right by 5000ms (greater than available 1000ms gap)
+    const int deltaPixels = timeToPixel(5000) - timeToPixel(0);
+    const QPoint dragTarget = v2InPoint + QPoint(deltaPixels, 0);
+
+    sendMouseEvent(QEvent::MouseButtonPress, v2InPoint, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouseEvent(QEvent::MouseMove, v2InPoint + QPoint(10, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouseEvent(QEvent::MouseMove, dragTarget, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouseEvent(QEvent::MouseButtonRelease, dragTarget, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    waitForUi();
+
+    executeLua(R"LUA(
+        local db = require('core.database')
+        local conn = db.get_connection()
+        local stmt = conn:prepare("SELECT duration, source_in FROM clips WHERE id='clip_v2_a'")
+        assert(stmt and stmt:exec(), "clip_v2_a query failed (clamp test)")
+        assert(stmt:next(), "clip_v2_a missing after clamp drag")
+        TEST_clip_v2_duration = stmt:value(0)
+        TEST_clip_v2_source_in = stmt:value(1)
+        stmt:finalize()
+
+        local stmt_b = conn:prepare("SELECT start_time FROM clips WHERE id='clip_v1_b'")
+        assert(stmt_b and stmt_b:exec(), "clip_v1_b query failed (clamp test)")
+        assert(stmt_b:next(), "clip_v1_b missing after clamp drag")
+        TEST_clip_v1_b_start = stmt_b:value(0)
+        stmt_b:finalize()
+
+        local stmt_a = conn:prepare("SELECT start_time, duration FROM clips WHERE id='extra_clip'")
+        assert(stmt_a and stmt_a:exec(), "extra_clip query failed (clamp test)")
+        assert(stmt_a:next(), "extra_clip missing after clamp drag")
+        TEST_clip_extra_start = stmt_a:value(0)
+        TEST_clip_extra_duration = stmt_a:value(1)
+        stmt_a:finalize()
+    )LUA");
+
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_v2_duration")), 4000);  // clamp to 1000ms trim
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_v2_source_in")), 1000);
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_v1_b_start")), 2000);  // clipped to neighbor's out-point
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_extra_start")), 0);
+    QCOMPARE(static_cast<int>(getLuaNumber("TEST_clip_extra_duration")), 2000);
+
+
+    executeLua(R"(
+        local db = require('core.database')
+        local conn = db.get_connection()
+        if conn then
+            conn:close()
+        end
+    )");
 }
 
 QTEST_MAIN(TestBatchRippleGapDrag)

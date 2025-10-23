@@ -2,20 +2,12 @@
 -- Handles periodic state snapshots for fast event replay
 -- Part of the event sourcing architecture
 
+local uuid = require("uuid")
+
 local M = {}
 
 -- Configuration
 M.SNAPSHOT_INTERVAL = 50  -- Create snapshot every N commands
-
--- Generate UUID for snapshots
-local function generate_uuid()
-    local random = math.random
-    local template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
-    return string.gsub(template, '[xy]', function(c)
-        local v = (c == 'x') and random(0, 0xf) or random(8, 0xb)
-        return string.format('%x', v)
-    end)
-end
 
 -- Serialize clips array to JSON
 -- Takes an array of clip objects and returns a JSON string
@@ -112,7 +104,7 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
         return false
     end
 
-    query:bind_value(1, generate_uuid())
+    query:bind_value(1, uuid.generate())
     query:bind_value(2, sequence_id)
     query:bind_value(3, sequence_number)
     query:bind_value(4, clips_json)

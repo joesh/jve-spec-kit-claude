@@ -450,6 +450,9 @@ function M.create()
 
     -- LEFT SIDE: Headers column (all headers stacked vertically)
     local headers_column, headers_main_splitter, header_video_scroll, header_audio_scroll = create_headers_column()
+    M.headers_main_splitter = headers_main_splitter
+    M.header_video_scroll = header_video_scroll
+    M.header_audio_scroll = header_audio_scroll
 
     -- RIGHT SIDE: Timeline area column
     local timeline_area = qt_constants.WIDGET.CREATE()
@@ -846,9 +849,41 @@ function M.create()
     -- Make main container expand to fill available space
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(container, "Expanding", "Expanding")
 
+    M.container = container
+    M.main_splitter = main_splitter
+    M.timeline_video_scroll = timeline_video_scroll
+    M.timeline_audio_scroll = timeline_audio_scroll
+
     print("Multi-view timeline panel created successfully")
 
     return container
+end
+
+function M.load_sequence(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return
+    end
+
+    local current = state.get_sequence_id and state.get_sequence_id()
+    if current == sequence_id then
+        print(string.format("Timeline already displaying sequence %s", sequence_id))
+        return
+    end
+
+    print(string.format("Loading sequence %s into timeline panel", sequence_id))
+    state.init(sequence_id)
+
+    if M.header_video_scroll and M.header_audio_scroll then
+        local new_video_splitter = select(1, create_video_headers())
+        qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(M.header_video_scroll, new_video_splitter)
+
+        local new_audio_splitter = select(1, create_audio_headers())
+        qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(M.header_audio_scroll, new_audio_splitter)
+
+        if M.headers_main_splitter then
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {1, 1})
+        end
+    end
 end
 
 -- Check if timeline is currently dragging clips or edges

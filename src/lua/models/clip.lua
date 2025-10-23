@@ -1,26 +1,14 @@
 -- Clip model: Lua wrapper around clip database operations
 -- Provides CRUD operations for clips following the Lua-for-logic, C++-for-performance architecture
 
+local uuid = require("uuid")
+
 local M = {}
-
--- Seed random number generator once when module loads
--- Use os.time() and os.clock() for better entropy
-math.randomseed(os.time() + os.clock() * 1000000)
-
--- UUID generation (simple implementation for now)
-local function generate_uuid()
-    local random = math.random
-    local template ='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
-    return string.gsub(template, '[xy]', function (c)
-        local v = (c == 'x') and random(0, 0xf) or random(8, 0xb)
-        return string.format('%x', v)
-    end)
-end
 
 -- Create a new Clip instance
 function M.create(name, media_id)
     local clip = {
-        id = generate_uuid(),
+        id = uuid.generate(),
         name = name or "Untitled Clip",
         media_id = media_id,
         track_id = nil,

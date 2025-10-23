@@ -2,6 +2,7 @@
 #include "lua/qt_bindings.h"
 #include <QPaintEvent>
 #include <QResizeEvent>
+#include <QApplication>
 
 namespace JVE {
 
@@ -177,15 +178,19 @@ void ScriptableTimeline::mousePressEvent(QMouseEvent* event)
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
 
-            // On macOS, Cmd key is Qt::ControlModifier (not MetaModifier)
-            // On other platforms, Ctrl is ControlModifier and Meta is MetaModifier
-            #ifdef Q_OS_MAC
-                bool is_command = event->modifiers() & Qt::ControlModifier;
-                bool is_ctrl = event->modifiers() & Qt::MetaModifier;
-            #else
-                bool is_command = event->modifiers() & Qt::MetaModifier;
-                bool is_ctrl = event->modifiers() & Qt::ControlModifier;
-            #endif
+            Qt::KeyboardModifiers mods = event->modifiers();
+            Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+            bool is_command = mods.testFlag(Qt::ControlModifier) ||
+                              globalMods.testFlag(Qt::ControlModifier);
+            bool is_ctrl = mods.testFlag(Qt::MetaModifier) ||
+                           globalMods.testFlag(Qt::MetaModifier);
+#else
+            bool is_command = mods.testFlag(Qt::MetaModifier) ||
+                              globalMods.testFlag(Qt::MetaModifier);
+            bool is_ctrl = mods.testFlag(Qt::ControlModifier) ||
+                           globalMods.testFlag(Qt::ControlModifier);
+#endif
 
             lua_pushboolean(lua_state_, is_ctrl);
             lua_setfield(lua_state_, -2, "ctrl");
@@ -222,14 +227,19 @@ void ScriptableTimeline::mouseReleaseEvent(QMouseEvent* event)
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
 
-            // On macOS, Cmd key is Qt::ControlModifier (not MetaModifier)
-            #ifdef Q_OS_MAC
-                bool is_command_rel = event->modifiers() & Qt::ControlModifier;
-                bool is_ctrl_rel = event->modifiers() & Qt::MetaModifier;
-            #else
-                bool is_command_rel = event->modifiers() & Qt::MetaModifier;
-                bool is_ctrl_rel = event->modifiers() & Qt::ControlModifier;
-            #endif
+            Qt::KeyboardModifiers mods = event->modifiers();
+            Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+            bool is_command_rel = mods.testFlag(Qt::ControlModifier) ||
+                                  globalMods.testFlag(Qt::ControlModifier);
+            bool is_ctrl_rel = mods.testFlag(Qt::MetaModifier) ||
+                               globalMods.testFlag(Qt::MetaModifier);
+#else
+            bool is_command_rel = mods.testFlag(Qt::MetaModifier) ||
+                                  globalMods.testFlag(Qt::MetaModifier);
+            bool is_ctrl_rel = mods.testFlag(Qt::ControlModifier) ||
+                               globalMods.testFlag(Qt::ControlModifier);
+#endif
 
             lua_pushboolean(lua_state_, is_ctrl_rel);
             lua_setfield(lua_state_, -2, "ctrl");
@@ -264,14 +274,19 @@ void ScriptableTimeline::mouseMoveEvent(QMouseEvent* event)
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
 
-            // On macOS, Cmd key is Qt::ControlModifier (not MetaModifier)
-            #ifdef Q_OS_MAC
-                bool is_command_move = event->modifiers() & Qt::ControlModifier;
-                bool is_ctrl_move = event->modifiers() & Qt::MetaModifier;
-            #else
-                bool is_command_move = event->modifiers() & Qt::MetaModifier;
-                bool is_ctrl_move = event->modifiers() & Qt::ControlModifier;
-            #endif
+            Qt::KeyboardModifiers mods = event->modifiers();
+            Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+            bool is_command_move = mods.testFlag(Qt::ControlModifier) ||
+                                   globalMods.testFlag(Qt::ControlModifier);
+            bool is_ctrl_move = mods.testFlag(Qt::MetaModifier) ||
+                                globalMods.testFlag(Qt::MetaModifier);
+#else
+            bool is_command_move = mods.testFlag(Qt::MetaModifier) ||
+                                   globalMods.testFlag(Qt::MetaModifier);
+            bool is_ctrl_move = mods.testFlag(Qt::ControlModifier) ||
+                                globalMods.testFlag(Qt::ControlModifier);
+#endif
 
             lua_pushboolean(lua_state_, is_ctrl_move);
             lua_setfield(lua_state_, -2, "ctrl");

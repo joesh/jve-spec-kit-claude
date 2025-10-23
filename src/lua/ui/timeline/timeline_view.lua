@@ -175,19 +175,64 @@ function M.create(widget, state_module, track_filter_fn, options)
         --   outline_only: if true, only draw outlines
         --   clip_filter: optional function(clip) to filter which clips to draw
         --   target_track_id: optional track ID to override clip's track (for drag preview)
-        local function draw_clips(time_offset_ms, outline_only, clip_filter, target_track_id)
-            local clips = state_module.get_clips()
-            local selected_clips = state_module.get_selected_clips()
+        local function get_track_with_offset(track_id, offset)
+    if not offset or offset == 0 then
+        return track_id
+    end
 
-            for _, clip in ipairs(clips) do
-                -- Skip if filter function provided and returns false
-                if clip_filter and not clip_filter(clip) then
-                    goto continue
-                end
+    local tracks = state_module.get_all_tracks()
+    local original_index = nil
+    for i, track in ipairs(tracks) do
+        if track.id == track_id then
+            original_index = i
+            break
+        end
+    end
 
-                -- Use target track if provided, otherwise use clip's actual track
-                local track_id = target_track_id or clip.track_id
-                local y = get_track_y_by_id(track_id, height)
+    if not original_index then
+        return track_id
+    end
+
+    local new_index = original_index + offset
+    if new_index < 1 or new_index > #tracks then
+        return track_id
+    end
+
+    local original_track = tracks[original_index]
+    local target_track = tracks[new_index]
+    if target_track and original_track and target_track.track_type == original_track.track_type then
+        return target_track.id
+    end
+
+    return track_id
+end
+
+    local function draw_clips(time_offset_ms, outline_only, clip_filter, preview_hint)
+        local clips = state_module.get_clips()
+        local selected_clips = state_module.get_selected_clips()
+
+        local preview_target_id = nil
+        local preview_track_offset = nil
+        if type(preview_hint) == 'string' then
+            preview_target_id = preview_hint
+        elseif type(preview_hint) == 'table' then
+            preview_target_id = preview_hint.target_track_id
+            preview_track_offset = preview_hint.track_offset
+        end
+
+        for _, clip in ipairs(clips) do
+            if clip_filter and not clip_filter(clip) then
+                goto continue
+            end
+
+            local render_track_id = clip.track_id
+            if preview_track_offset then
+                render_track_id = get_track_with_offset(render_track_id, preview_track_offset)
+            elseif preview_target_id then
+                render_track_id = preview_target_id
+            end
+
+            local y = get_track_y_by_id(render_track_id, height)
 
                 if y >= 0 then  -- Clip is on a track in this view
                     local track_height = state_module.get_track_height(clip.track_id)

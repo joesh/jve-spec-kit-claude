@@ -28,7 +28,9 @@ local on_selection_changed_callback = nil
 -- Dimensions (shared across all views)
 M.dimensions = {
     default_track_height = ui_constants.TIMELINE.TRACK_HEIGHT,
+    track_height = ui_constants.TIMELINE.TRACK_HEIGHT,  -- Legacy field for unit tests expecting track_height
     track_header_width = ui_constants.TIMELINE.TRACK_HEADER_WIDTH,
+    ruler_height = ui_constants.TIMELINE.RULER_HEIGHT,  -- Height of the timeline ruler in pixels
 }
 
 -- Version tracking for stale data detection
@@ -203,6 +205,10 @@ end
 -- Getters
 function M.get_all_tracks()
     return state.tracks
+end
+
+function M.get_sequence_id()
+    return state.sequence_id or "default_sequence"
 end
 
 function M.get_video_tracks()

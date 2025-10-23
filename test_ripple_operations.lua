@@ -269,13 +269,87 @@ local function execute_batch_ripple_edit(command)
         end
     end
 
-    -- Phase 2: Shift downstream clips
+    -- Phase 2: Shift downstream clips with clamp
     local edited_clip_ids = {}
     for _, edge_info in ipairs(edge_infos) do
         table.insert(edited_clip_ids, edge_info.clip_id)
     end
 
     all_clips = database_module.load_clips(sequence_id)
+
+    local function compute_move_bounds(target_clip)
+        local left_end = 0
+        local right_start = math.huge
+
+        for _, candidate in ipairs(all_clips) do
+            if candidate.id ~= target_clip.id and candidate.track_id == target_clip.track_id then
+                local candidate_end = candidate.start_time + candidate.duration
+                if candidate_end <= target_clip.start_time then
+                    if candidate_end > left_end then
+                        left_end = candidate_end
+                    end
+                elseif candidate.start_time >= target_clip.start_time + target_clip.duration then
+                    if candidate.start_time < right_start then
+                        right_start = candidate.start_time
+                    end
+                end
+            end
+        end
+
+        local right_bound = right_start
+        if right_bound < math.huge then
+            right_bound = right_bound - target_clip.duration
+        end
+
+        return left_end, right_bound
+    end
+
+    if latest_shift_amount ~= 0 then
+        if latest_shift_amount < 0 then
+            local max_negative = latest_shift_amount
+            for _, other_clip in ipairs(all_clips) do
+                local is_edited = false
+                for _, edited_id in ipairs(edited_clip_ids) do
+                    if other_clip.id == edited_id then
+                        is_edited = true
+                        break
+                    end
+                end
+
+                if not is_edited and other_clip.start_time >= latest_ripple_time then
+                    local left_bound,_ = compute_move_bounds(other_clip)
+                    local allowed = left_bound - other_clip.start_time
+                    if allowed > max_negative then
+                        max_negative = allowed
+                    end
+                end
+            end
+            latest_shift_amount = max_negative
+        else
+            local min_positive = latest_shift_amount
+            for _, other_clip in ipairs(all_clips) do
+                local is_edited = false
+                for _, edited_id in ipairs(edited_clip_ids) do
+                    if other_clip.id == edited_id then
+                        is_edited = true
+                        break
+                    end
+                end
+
+                if not is_edited and other_clip.start_time >= latest_ripple_time then
+                    local _, right_bound = compute_move_bounds(other_clip)
+                    if right_bound < math.huge then
+                        local allowed = right_bound - other_clip.start_time
+                        if allowed < min_positive then
+                            min_positive = allowed
+                        end
+                    end
+                end
+            end
+            latest_shift_amount = min_positive
+        end
+    end
+
     for _, other_clip in ipairs(all_clips) do
         local is_edited = false
         for _, edited_id in ipairs(edited_clip_ids) do
@@ -309,10 +383,10 @@ local function setup_timeline()
 end
 
 -- Test helper: Create clip
-local function create_clip(id, start_time, duration, source_in, source_out, media_id)
+local function create_clip(id, start_time, duration, source_in, source_out, media_id, track_id)
     mock_db:store_clip({
         id = id,
-        track_id = "track1",
+        track_id = track_id or "track1",
         media_id = media_id or "media1",
         start_time = start_time,
         duration = duration,
@@ -676,6 +750,34 @@ assert_eq(get_clip("clip_v1_2").start_time, 4500, "V1 second clip shifted left b
 -- Latest ripple from V2 at 5000ms with out-point shift -500ms
 assert_eq(result.latest_ripple_time, 5000, "Latest ripple at V2 out-point")
 assert_eq(result.latest_shift_amount, -500, "Shift = -500ms (out-point left trim)")
+
+-- ============================================================================
+-- TEST 13: Gap Clamp prevents overlap with earlier clip
+-- ============================================================================
+current_test = "Test 13"
+print("\n" .. current_test .. ": Gap clamp stops V1 overlap when dragging V2 in-point")
+print("Scenario: Select V2 in-point + V1 gap_before, drag right +5000ms but only 4000ms gap")
+
+setup_timeline()
+create_clip("clip_v1_left", 0, 3000, 0, 3000, "media1", "track_v1")
+create_clip("clip_v1_right", 7000, 3000, 0, 3000, "media1", "track_v1")
+create_clip("clip_v2", 2000, 9000, 0, 9000, "media2", "track_v2")
+
+cmd = Command.create("BatchRippleEdit", "test_project")
+cmd:set_parameter("edge_infos", {
+    {clip_id = "clip_v2", edge_type = "in"},
+    {clip_id = "clip_v1_right", edge_type = "gap_before"}
+})
+cmd:set_parameter("delta_ms", 5000)
+cmd:set_parameter("sequence_id", "test_sequence")
+
+success, result = execute_batch_ripple_edit(cmd)
+
+assert_eq(success, true, "Command succeeded with clamp")
+assert_eq(get_clip("clip_v2").duration, 5000, "V2 clip trimmed by 4000ms (clamped)")
+assert_eq(get_clip("clip_v2").source_in, 4000, "V2 source_in advanced to clamp amount")
+assert_eq(get_clip("clip_v1_right").start_time, 3000, "V1 right clip moved to butt against left clip")
+assert_eq(result.latest_shift_amount, -4000, "Shift amount reflects 4000ms clamp")
 
 -- ============================================================================
 -- SUMMARY

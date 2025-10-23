@@ -81,11 +81,21 @@ int lua_add_tree_child_item(lua_State* L);
 int lua_get_tree_selected_index(lua_State* L);
 int lua_clear_tree(lua_State* L);
 int lua_set_tree_item_expanded(lua_State* L);
+int lua_set_tree_item_data(lua_State* L);
+int lua_get_tree_item_data(lua_State* L);
+int lua_set_tree_selection_changed_handler(lua_State* L);
+int lua_set_tree_item_icon(lua_State* L);
+int lua_set_tree_item_double_click_handler(lua_State* L);
 
 // Signal handling functions
 int lua_set_button_click_handler(lua_State* L);
 int lua_set_widget_click_handler(lua_State* L);
 int lua_set_tree_item_click_handler(lua_State* L);
+int lua_set_line_edit_text_changed_handler(lua_State* L);
+int lua_set_global_key_handler(lua_State* L);
+int lua_set_focus_handler(lua_State* L);
+int lua_set_focus_policy(lua_State* L);
+int lua_set_focus(lua_State* L);
 
 // Layout styling functions
 int lua_set_layout_spacing(lua_State* L);

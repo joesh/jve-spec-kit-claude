@@ -1,22 +1,14 @@
 -- Command module: Lua representation of commands for the command system
 -- Provides command creation, parameter management, and serialization
 
-local M = {}
+local uuid = require("uuid")
 
--- UUID generation (simple implementation)
-local function generate_uuid()
-    local random = math.random
-    local template ='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
-    return string.gsub(template, '[xy]', function (c)
-        local v = (c == 'x') and random(0, 0xf) or random(8, 0xb)
-        return string.format('%x', v)
-    end)
-end
+local M = {}
 
 -- Create a new Command
 function M.create(command_type, project_id)
     local command = {
-        id = generate_uuid(),
+        id = uuid.generate(),
         type = command_type,
         project_id = project_id,
         sequence_number = 0,
