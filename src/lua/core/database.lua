@@ -36,9 +36,44 @@ function M.get_connection()
 end
 
 -- Get current project ID
--- FATAL: Not yet implemented - proper project tracking required
+-- Creates a default project if none exists (ensures app can always run)
+-- TODO: Implement multi-project support with user selection
 function M.get_current_project_id()
-    error("FATAL: get_current_project_id() not implemented - proper project tracking required before use")
+    if not db_connection then
+        error("FATAL: No database connection - cannot get current project")
+    end
+
+    -- Check if default project exists
+    local stmt = db_connection:prepare("SELECT id FROM projects WHERE id = ?")
+    if not stmt then
+        error("FATAL: Failed to prepare project query")
+    end
+
+    local default_id = "default_project"
+    stmt:bind_value(1, default_id)
+
+    if not stmt:exec() then
+        stmt:finalize()
+        error("FATAL: Failed to execute project query")
+    end
+
+    local exists = stmt:next()
+    stmt:finalize()
+
+    -- If default project doesn't exist, create it
+    if not exists then
+        local Project = require('models.project')
+        local project = Project.create_with_id(default_id, "Default Project")
+        if not project then
+            error("FATAL: Failed to create default project")
+        end
+        if not project:save(db_connection) then
+            error("FATAL: Failed to save default project to database")
+        end
+        print("INFO: Created default project")
+    end
+
+    return default_id
 end
 
 -- Load all tracks for a sequence

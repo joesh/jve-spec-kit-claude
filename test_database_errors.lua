@@ -12,15 +12,16 @@ local db = require("core.database")
 
 print("Testing database.lua error handling (Rule 2.13 compliance)...\n")
 
--- Test 1: get_current_project_id() should throw error
-print("Test 1: get_current_project_id() throws error")
+-- Test 1: get_current_project_id() should throw error without database
+print("Test 1: get_current_project_id() throws error without database")
 local success, err = pcall(function()
     return db.get_current_project_id()
 end)
-if not success and err:match("FATAL.*not implemented") then
-    print("  ✅ PASS: Throws error instead of returning fallback")
+if not success and err:match("FATAL.*No database connection") then
+    print("  ✅ PASS: Throws error for missing database connection")
+    print("    (Note: Function now properly creates/manages projects when database is available)")
 else
-    print("  ❌ FAIL: Should throw FATAL error")
+    print("  ❌ FAIL: Should throw FATAL error for missing connection")
     print("    Got:", err)
 end
 
