@@ -74,15 +74,39 @@ function M.load(clip_id, db)
 end
 
 -- Save clip to database (INSERT or UPDATE)
-function M:save(db)
+function M:save(db, opts)
     if not db then
         print("WARNING: Clip.save: No database provided")
         return false
     end
 
+    opts = opts or {}
+
     if not self.id or self.id == "" then
         print("WARNING: Clip.save: Invalid clip ID")
         return false
+    end
+
+    -- Normalise numeric fields
+    if self.start_time then
+        self.start_time = math.floor(self.start_time + 0.5)
+    end
+    if self.duration then
+        self.duration = math.floor(self.duration + 0.5)
+    end
+    if self.source_in then
+        self.source_in = math.floor(self.source_in + 0.5)
+    end
+    if self.source_out then
+        self.source_out = math.floor(self.source_out + 0.5)
+    end
+    if self.duration == nil or self.duration < 1 then
+        print(string.format("WARNING: Clip.save: duration %s invalid, clamping to 1 for clip %s",
+            tostring(self.duration), tostring(self.id)))
+        self.duration = 1
+    end
+    if self.source_out and self.source_in and self.source_out <= self.source_in then
+        self.source_out = self.source_in + self.duration
     end
 
     -- Validate required fields to prevent NULL constraint violations
@@ -93,27 +117,19 @@ function M:save(db)
     end
 
     -- FRAME ALIGNMENT ENFORCEMENT (VIDEO ONLY)
-    -- Video clips must align to frame boundaries for proper playback
-    -- Audio clips preserve sample-accurate precision
-    if self.track_id then
-        -- Query track to get type and sequence
+    if not opts.skip_frame_snap and self.track_id then
         local track_query = db:prepare("SELECT track_type, sequence_id FROM tracks WHERE id = ?")
         if track_query then
             track_query:bind_value(1, self.track_id)
             if track_query:exec() and track_query:next() then
                 local track_type = track_query:value(0)
                 local sequence_id = track_query:value(1)
-
-                -- Only snap video clips to frame boundaries
                 if track_type == "VIDEO" and sequence_id then
-                    -- Get sequence frame rate
                     local seq_query = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
                     if seq_query then
                         seq_query:bind_value(1, sequence_id)
                         if seq_query:exec() and seq_query:next() then
                             local frame_rate = seq_query:value(0)
-
-                            -- Snap all time values to frame boundaries
                             local frame_utils = require('core.frame_utils')
                             self.start_time = frame_utils.snap_to_frame(self.start_time, frame_rate)
                             self.duration = frame_utils.snap_to_frame(self.duration, frame_rate)
@@ -126,7 +142,6 @@ function M:save(db)
                         end
                     end
                 end
-                -- Audio clips: no snapping, preserve sample-accurate precision
             end
         end
     end
@@ -138,6 +153,26 @@ function M:save(db)
     local exists = false
     if exists_query:exec() and exists_query:next() then
         exists = exists_query:value(0) > 0
+    end
+
+    local occlusion_opts = opts.resolve_occlusion
+    if occlusion_opts and self.track_id and self.start_time and self.duration then
+        local clip_mutator = require('core.clip_mutator')
+        local ignore = nil
+        if type(occlusion_opts) == "table" then
+            ignore = occlusion_opts.ignore_ids
+        end
+        local ok, err = clip_mutator.resolve_occlusions(db, {
+            track_id = self.track_id,
+            start_time = self.start_time,
+            duration = self.duration,
+            exclude_clip_id = exists and self.id or nil,
+            ignore_ids = ignore
+        })
+        if not ok then
+            print("WARNING: Clip.save: Failed to resolve occlusions: " .. tostring(err or "unknown"))
+            return false
+        end
     end
 
     local query

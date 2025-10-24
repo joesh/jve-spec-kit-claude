@@ -861,176 +861,12 @@ command_executors["Overwrite"] = function(command)
         return false
     end
 
-    local overwrite_end = overwrite_time + duration
-
-    -- Step 1: Find all clips that overlap the overwrite range [overwrite_time, overwrite_end)
-    local query = db:prepare([[
-        SELECT id, start_time, duration FROM clips
-        WHERE track_id = ?
-        ORDER BY start_time ASC
-    ]])
-
-    if not query then
-        print("WARNING: Overwrite: Failed to prepare query")
-        return false
-    end
-
-    query:bind_value(1, track_id)
-
-    local affected_clips = {}
-    if query:exec() then
-        while query:next() do
-            local clip_id = query:value(0)
-            local clip_start = query:value(1)
-            local clip_duration = query:value(2)
-            local clip_end = clip_start + clip_duration
-
-            -- Check if clip overlaps [overwrite_time, overwrite_end)
-            if clip_start < overwrite_end and clip_end > overwrite_time then
-                table.insert(affected_clips, {
-                    id = clip_id,
-                    start_time = clip_start,
-                    duration = clip_duration
-                })
-            end
-        end
-    end
-
-    -- Step 2: Handle affected clips (trim or delete)
     local Clip = require('models.clip')
-    local modified_clips = {}
-    local preview_affected_clips = {}
 
-    for _, clip_info in ipairs(affected_clips) do
-        local clip = Clip.load(clip_info.id, db)
-        if clip then
-            local clip_start = clip_info.start_time
-            local clip_end = clip_start + clip_info.duration
-
-            -- Save original state for undo
-            table.insert(modified_clips, {
-                id = clip.id,
-                start_time = clip.start_time,
-                duration = clip.duration,
-                source_in = clip.source_in,
-                source_out = clip.source_out
-            })
-
-            -- Completely covered - delete
-            if clip_start >= overwrite_time and clip_end <= overwrite_end then
-                if dry_run then
-                    table.insert(preview_affected_clips, {
-                        clip_id = clip.id,
-                        action = "delete"
-                    })
-                else
-                    if not clip:delete(db) then
-                        print(string.format("WARNING: Overwrite: Failed to delete clip %s", clip.id))
-                        return false
-                    end
-                end
-            -- Partially covered from left - trim left side
-            elseif clip_start < overwrite_time and clip_end > overwrite_time and clip_end <= overwrite_end then
-                local trim_amount = clip_end - overwrite_time
-                if dry_run then
-                    table.insert(preview_affected_clips, {
-                        clip_id = clip.id,
-                        action = "trim_left",
-                        new_duration = clip.duration - trim_amount,
-                        new_source_out = clip.source_out - trim_amount
-                    })
-                else
-                    clip.duration = clip.duration - trim_amount
-                    clip.source_out = clip.source_out - trim_amount
-                    if not clip:save(db) then
-                        print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
-                        return false
-                    end
-                end
-            -- Partially covered from right - trim right side and move
-            elseif clip_start >= overwrite_time and clip_start < overwrite_end and clip_end > overwrite_end then
-                local trim_amount = overwrite_end - clip_start
-                if dry_run then
-                    table.insert(preview_affected_clips, {
-                        clip_id = clip.id,
-                        action = "trim_right",
-                        new_start_time = overwrite_end,
-                        new_duration = clip.duration - trim_amount,
-                        new_source_in = clip.source_in + trim_amount
-                    })
-                else
-                    clip.start_time = overwrite_end
-                    clip.duration = clip.duration - trim_amount
-                    clip.source_in = clip.source_in + trim_amount
-                    if not clip:save(db) then
-                        print(string.format("WARNING: Overwrite: Failed to trim clip %s", clip.id))
-                        return false
-                    end
-                end
-            -- Spans entire overwrite range - split into two
-            elseif clip_start < overwrite_time and clip_end > overwrite_end then
-                -- Trim left part
-                local left_duration = overwrite_time - clip_start
-
-                if dry_run then
-                    local right_clip = Clip.create("Split Clip", clip.media_id)
-                    table.insert(preview_affected_clips, {
-                        clip_id = clip.id,
-                        action = "split",
-                        new_duration = left_duration,
-                        new_source_out = clip.source_in + left_duration,
-                        right_clip = {
-                            clip_id = right_clip.id,
-                            start_time = overwrite_end,
-                            duration = clip_end - overwrite_end,
-                            source_in = clip.source_in + (overwrite_time - clip_start) + duration,
-                            source_out = clip_info.source_out
-                        }
-                    })
-                else
-                    clip.duration = left_duration
-                    clip.source_out = clip.source_in + left_duration
-
-                    -- Create right part
-                    local right_clip = Clip.create("Split Clip", clip.media_id)
-                    right_clip.track_id = clip.track_id
-                    right_clip.start_time = overwrite_end
-                    right_clip.duration = clip_end - overwrite_end
-                    right_clip.source_in = clip.source_in + (overwrite_time - clip_start) + duration
-                    right_clip.source_out = clip_info.source_out
-
-                    if not clip:save(db) or not right_clip:save(db) then
-                        print("WARNING: Overwrite: Failed to split clip")
-                        return false
-                    end
-                end
-            end
-        end
-    end
-
-    -- DRY RUN: Return preview data without executing
     if dry_run then
-        local existing_clip_id = command:get_parameter("clip_id")
-        local new_clip_id = existing_clip_id or Clip.generate_id()
-
-        return true, {
-            new_clip = {
-                clip_id = new_clip_id,
-                track_id = track_id,
-                start_time = overwrite_time,
-                duration = duration,
-                source_in = source_in,
-                source_out = source_out
-            },
-            affected_clips = preview_affected_clips
-        }
+        return true, {}
     end
 
-    -- Store modified clips for undo
-    command:set_parameter("modified_clips", modified_clips)
-
-    -- Step 3: Create the new clip at overwrite_time
-    -- Reuse clip_id if this is a replay (to preserve UUID references)
     local existing_clip_id = command:get_parameter("clip_id")
     local clip = Clip.create("Overwrite Clip", media_id)
     if existing_clip_id then
@@ -1044,7 +880,7 @@ command_executors["Overwrite"] = function(command)
 
     command:set_parameter("clip_id", clip.id)
 
-    if clip:save(db) then
+    if clip:save(db, {resolve_occlusion = true}) then
         -- Advance playhead to end of overwritten clip (if requested)
         local advance_playhead = command:get_parameter("advance_playhead")
         if advance_playhead then
@@ -1052,7 +888,7 @@ command_executors["Overwrite"] = function(command)
             timeline_state.set_playhead_time(overwrite_time + duration)
         end
 
-        print(string.format("✅ Overwrote at %dms, affected %d clips", overwrite_time, #affected_clips))
+        print(string.format("✅ Overwrote at %dms", overwrite_time))
         return true
     else
         print("WARNING: Overwrite: Failed to save clip")
@@ -1247,6 +1083,8 @@ command_executors["Nudge"] = function(command)
         end
 
         -- Nudge clips (move)
+        local save_opts = {resolve_occlusion = {ignore_ids = clips_to_move}}
+
         for clip_id, _ in pairs(clips_to_move) do
             local Clip = require('models.clip')
             local clip = Clip.load(clip_id, db)
@@ -1267,7 +1105,7 @@ command_executors["Nudge"] = function(command)
                 })
             else
                 -- EXECUTE: Save changes
-                if not clip:save(db) then
+                if not clip:save(db, save_opts) then
                     print(string.format("ERROR: Nudge: Failed to save clip %s", clip_id:sub(1,8)))
                     return false
                 end
@@ -1675,12 +1513,12 @@ command_executors["RippleEdit"] = function(command)
     local all_clips = database.load_clips(command:get_parameter("sequence_id") or "default_sequence")
 
     for _, other_clip in ipairs(all_clips) do
-        -- Include clips at or after ripple point (use > ripple_time - 1 to catch adjacent clips)
+        -- Include clips at or after ripple point (>= ripple_time - 1 handles rounding)
         -- This handles floating point rounding and clips that are within 1ms of the ripple point
         -- For gap edits: clip.id is "temp_gap_*" so we never exclude real clips (correct!)
         -- For regular edits: clip.id is the actual clip being edited, so we exclude it (correct!)
         if other_clip.id ~= clip.id and
-           other_clip.start_time > ripple_time - 1 then
+           other_clip.start_time >= ripple_time - 1 then
             table.insert(clips_to_shift, other_clip)
             if not dry_run then
                 print(string.format("  Will shift clip %s from %d to %d", other_clip.id:sub(1,8), other_clip.start_time, other_clip.start_time + shift_amount))
@@ -2098,7 +1936,7 @@ command_executors["BatchRippleEdit"] = function(command)
             end
         end
 
-        if not is_edited and other_clip.start_time >= earliest_ripple_time then
+        if not is_edited and other_clip.start_time >= earliest_ripple_time - 1 then
             table.insert(clips_to_shift, other_clip)
             if not dry_run then
                 print(string.format("  Will shift: %s at %dms on %s", other_clip.id:sub(1,8), other_clip.start_time, other_clip.track_id))
