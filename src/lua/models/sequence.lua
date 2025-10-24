@@ -137,7 +137,8 @@ function Sequence:save(db)
     ]])
 
     if not stmt then
-        print("WARNING: Sequence.save: failed to prepare insert statement")
+        local err = conn.last_error and conn:last_error() or "unknown error"
+        print("WARNING: Sequence.save: failed to prepare insert statement: " .. err)
         return false
     end
 

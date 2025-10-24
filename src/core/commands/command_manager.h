@@ -4,6 +4,7 @@
 #include <QSqlDatabase>
 #include <QString>
 #include <QList>
+#include <QtGlobal>
 
 extern "C" {
 #include <lua.h>

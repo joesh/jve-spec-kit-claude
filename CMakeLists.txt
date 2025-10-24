@@ -266,6 +266,14 @@ set_target_properties(test_scriptable_timeline_widget PROPERTIES
 )
 add_test(NAME test_scriptable_timeline_widget COMMAND test_scriptable_timeline_widget)
 
+add_custom_target(lua_tests ALL
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running Lua test suite"
+)
+
+add_dependencies(lua_tests JVEEditor)
+
 # Standalone Lua timeline logic test (no test_base dependency)
 # Installation (not applicable for M1 Foundation tests)
 

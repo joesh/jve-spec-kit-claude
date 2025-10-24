@@ -94,6 +94,8 @@ local schema_statements = {
         height INTEGER,
         timecode_start INTEGER,
         playhead_time INTEGER,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
         current_sequence_number INTEGER
     )]],
     [[CREATE TABLE tracks (
@@ -145,7 +147,10 @@ local schema_statements = {
         post_hash TEXT,
         timestamp INTEGER,
         playhead_time INTEGER,
-        selected_clip_ids TEXT
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
+        selected_clip_ids_pre TEXT,
+        selected_edge_infos_pre TEXT
     )]]
 }
 
@@ -154,7 +159,7 @@ for _, statement in ipairs(schema_statements) do
 end
 
 exec_sql(db, "INSERT INTO projects VALUES ('default_project','Default',0,0,'{}')")
-exec_sql(db, "INSERT INTO sequences VALUES ('default_sequence','default_project','Default Timeline',30,1920,1080,0,0,NULL)")
+exec_sql(db, "INSERT INTO sequences VALUES ('default_sequence','default_project','Default Timeline',30,1920,1080,0,0,'[]','[]',NULL)")
 
 command_manager.init(db)
 

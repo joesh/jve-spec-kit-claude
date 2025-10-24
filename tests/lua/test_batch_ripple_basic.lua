@@ -27,11 +27,11 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     local schema = [[
         CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, modified_at INTEGER, settings TEXT);
-        CREATE TABLE sequences (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, frame_rate REAL, width INTEGER, height INTEGER, timecode_start INTEGER, playhead_time INTEGER, current_sequence_number INTEGER);
+        CREATE TABLE sequences (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, frame_rate REAL, width INTEGER, height INTEGER, timecode_start INTEGER, playhead_time INTEGER, selected_clip_ids TEXT DEFAULT '[]', selected_edge_infos TEXT DEFAULT '[]', current_sequence_number INTEGER);
         CREATE TABLE tracks (id TEXT PRIMARY KEY, sequence_id TEXT, name TEXT, track_type TEXT, track_index INTEGER, enabled INTEGER);
         CREATE TABLE media (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, file_path TEXT, duration INTEGER, frame_rate REAL, width INTEGER, height INTEGER, audio_channels INTEGER, codec TEXT, created_at INTEGER, modified_at INTEGER);
         CREATE TABLE clips (id TEXT PRIMARY KEY, track_id TEXT, media_id TEXT, start_time INTEGER, duration INTEGER, source_in INTEGER, source_out INTEGER, enabled INTEGER);
-        CREATE TABLE commands (id TEXT PRIMARY KEY, parent_id TEXT, parent_sequence_number INTEGER, sequence_number INTEGER, command_type TEXT, command_args TEXT, pre_hash TEXT, post_hash TEXT, timestamp INTEGER, playhead_time INTEGER, selected_clip_ids TEXT);
+        CREATE TABLE commands (id TEXT PRIMARY KEY, parent_id TEXT, parent_sequence_number INTEGER, sequence_number INTEGER, command_type TEXT, command_args TEXT, pre_hash TEXT, post_hash TEXT, timestamp INTEGER, playhead_time INTEGER, selected_clip_ids TEXT, selected_edge_infos TEXT, selected_clip_ids_pre TEXT, selected_edge_infos_pre TEXT);
     ]]
 
     for stmt in schema:gmatch("[^;]+;") do
@@ -43,7 +43,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     local inserts = {
         "INSERT INTO projects VALUES ('default_project','Test',0,0,'{}')",
-        "INSERT INTO sequences VALUES ('default_sequence','default_project','Seq',30,1920,1080,0,0,NULL)"
+        "INSERT INTO sequences VALUES ('default_sequence','default_project','Seq',30,1920,1080,0,0,'[]','[]',NULL)"
     }
 
     for _, track in ipairs(layout.tracks) do

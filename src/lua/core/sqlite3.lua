@@ -20,6 +20,9 @@ ffi.cdef[[
     int sqlite3_bind_double(sqlite3_stmt *pStmt, int idx, double value);
     int sqlite3_bind_null(sqlite3_stmt *pStmt, int idx);
 
+    int sqlite3_exec(sqlite3 *db, const char *sql, int (*callback)(void*,int,char**,char**), void *arg, char **errmsg);
+    void sqlite3_free(void*);
+
     const unsigned char *sqlite3_column_text(sqlite3_stmt *pStmt, int iCol);
     int sqlite3_column_int(sqlite3_stmt *pStmt, int iCol);
     int64_t sqlite3_column_int64(sqlite3_stmt *pStmt, int iCol);
@@ -44,7 +47,38 @@ local SQLITE_NULL = 5
 local SQLITE_TRANSIENT = ffi.cast("void(*)(void*)", -1)
 
 -- Load SQLite library
-local sqlite3_lib = ffi.load("/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib")
+local function load_sqlite3_library()
+    local env_path = os.getenv("JVE_SQLITE3_PATH")
+    local candidates = {
+        env_path,
+        "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
+        "/usr/local/opt/sqlite/lib/libsqlite3.dylib",
+        "/usr/local/lib/libsqlite3.dylib",
+        "/usr/local/lib/libsqlite3.so",
+        "/usr/lib/libsqlite3.dylib",
+        "/usr/lib/libsqlite3.so",
+        "sqlite3.dll",
+        "libsqlite3.dll",
+        "sqlite3",          -- allow system default lookup
+        "libsqlite3",       -- alternate name
+    }
+
+    local last_error = nil
+    for _, candidate in ipairs(candidates) do
+        if candidate and candidate ~= "" then
+            local ok, lib = pcall(ffi.load, candidate)
+            if ok then
+                return lib
+            else
+                last_error = lib
+            end
+        end
+    end
+
+    error(string.format("Failed to load SQLite3 library. Last error: %s. Set JVE_SQLITE3_PATH to override.", tostring(last_error)))
+end
+
+local sqlite3_lib = load_sqlite3_library()
 
 local M = {}
 
@@ -107,6 +141,24 @@ end
 
 function Database:last_insert_rowid()
     return tonumber(sqlite3_lib.sqlite3_last_insert_rowid(self._db))
+end
+
+function Database:exec(sql)
+    local errmsg = ffi.new("char*[1]", nil)
+    local rc = sqlite3_lib.sqlite3_exec(self._db, sql, nil, nil, errmsg)
+
+    if rc ~= SQLITE_OK then
+        local message = nil
+        if errmsg[0] ~= nil then
+            message = ffi.string(errmsg[0])
+            sqlite3_lib.sqlite3_free(errmsg[0])
+        else
+            message = self:last_error()
+        end
+        return false, message
+    end
+
+    return true
 end
 
 -- Statement methods (declaration is at top of file)

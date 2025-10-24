@@ -282,6 +282,7 @@ void TestBatchRippleGapDrag::populateCanonicalScenario()
             QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN parent_sequence_number INTEGER"), alter.lastError().text().toUtf8().constData());
             QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN playhead_time INTEGER NOT NULL DEFAULT 0"), alter.lastError().text().toUtf8().constData());
             QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN selected_clip_ids TEXT"), alter.lastError().text().toUtf8().constData());
+            QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN selected_edge_infos TEXT"), alter.lastError().text().toUtf8().constData());
         }
     }
 

@@ -89,6 +89,8 @@ local function setup_database(layout)
             height INTEGER NOT NULL,
             timecode_start INTEGER DEFAULT 0,
             playhead_time INTEGER DEFAULT 0,
+            selected_clip_ids TEXT DEFAULT '[]',
+            selected_edge_infos TEXT DEFAULT '[]',
             current_sequence_number INTEGER
         )]],
         [[CREATE TABLE IF NOT EXISTS tracks (
@@ -139,7 +141,10 @@ local function setup_database(layout)
             post_hash TEXT,
             timestamp INTEGER,
             playhead_time INTEGER DEFAULT 0,
-            selected_clip_ids TEXT DEFAULT '[]'
+            selected_clip_ids TEXT DEFAULT '[]',
+            selected_edge_infos TEXT DEFAULT '[]',
+            selected_clip_ids_pre TEXT DEFAULT '[]',
+            selected_edge_infos_pre TEXT DEFAULT '[]'
         )]]
     }
 
@@ -162,7 +167,7 @@ local function setup_database(layout)
 
     local inserts = {
         "INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES ('default_project', 'Test Project', 0, 0, '{}')",
-        "INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080, 0, 0)"
+        "INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080, 0, 0, '[]', '[]')"
     }
 
     for _, track in ipairs(tracks) do

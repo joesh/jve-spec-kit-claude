@@ -8,6 +8,7 @@ CommandManager::CommandManager(QSqlDatabase& database)
     : m_database(database), L(nullptr)
 {
     qCDebug(jveCommandManager, "Initializing CommandManager (Lua wrapper)");
+    qCDebug(jveCommandManager, "Using database connection '%s'", qPrintable(m_database.connectionName()));
 
     // Initialize Lua state
     L = luaL_newstate();
@@ -45,6 +46,8 @@ void CommandManager::initializeLuaCommandManager()
 
 ExecutionResult CommandManager::callLuaExecute(Command& command)
 {
+    Q_UNUSED(command);
+
     ExecutionResult result;
     result.success = false;
 
@@ -106,6 +109,8 @@ ExecutionResult CommandManager::execute(Command& command)
 
 ExecutionResult CommandManager::executeUndo(const Command& originalCommand)
 {
+    Q_UNUSED(originalCommand);
+
     qCDebug(jveCommandManager, "Executing undo (delegating to Lua)");
 
     ExecutionResult result;
@@ -133,6 +138,8 @@ void CommandManager::revertToSequence(int sequenceNumber)
 
 QString CommandManager::getProjectState(const QString& projectId) const
 {
+    Q_UNUSED(projectId);
+
     qCDebug(jveCommandManager, "Getting project state (stub)");
     return "";
 }

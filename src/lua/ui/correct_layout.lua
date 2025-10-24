@@ -115,8 +115,8 @@ else
 
             -- Insert test sequence
             local insert_sequence = db_conn:prepare([[
-                INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start)
-                VALUES ('default_sequence', 'default_project', 'Sequence 1', 30.0, 1920, 1080, 0)
+                INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos)
+                VALUES ('default_sequence', 'default_project', 'Sequence 1', 30.0, 1920, 1080, 0, 0, '[]', '[]')
             ]])
             if insert_sequence then insert_sequence:exec() end
 

@@ -26,8 +26,8 @@ DELETE FROM projects;
 INSERT INTO projects (id, name, created_at, modified_at, settings)
 VALUES ('default_project', 'Canonical Ripple Project', strftime('%s','now'), strftime('%s','now'), '{}');
 
-INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time)
-VALUES ('default_sequence', 'default_project', 'Sequence 1', 30.0, 1920, 1080, 0, 0);
+INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos)
+VALUES ('default_sequence', 'default_project', 'Sequence 1', 30.0, 1920, 1080, 0, 0, '[]', '[]');
 
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES

@@ -3,7 +3,9 @@
 -- Test undo/replay media table cleanup
 -- Ensures media table is cleared before replay to prevent UNIQUE constraint violations
 
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/core/?.lua;../src/lua/models/?.lua"
+package.path = package.path .. ";../src/lua/?.lua;../src/lua/core/?.lua;../src/lua/models/?.lua;../tests/?.lua"
+
+require('test_env')
 
 local command_manager = require('core.command_manager')
 local Command = require('command')
@@ -23,7 +25,8 @@ local db = database.get_connection()
 db:exec([[
     CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
-        name TEXT NOT NULL
+        name TEXT NOT NULL,
+        settings TEXT NOT NULL DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS sequences (
@@ -33,6 +36,10 @@ db:exec([[
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
+        timecode_start INTEGER NOT NULL DEFAULT 0,
+        playhead_time INTEGER NOT NULL DEFAULT 0,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
         current_sequence_number INTEGER
     );
 
@@ -40,7 +47,8 @@ db:exec([[
         id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
         track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL
+        track_index INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS clips (
@@ -81,7 +89,10 @@ db:exec([[
         post_hash TEXT,
         timestamp INTEGER,
         playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]'
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
+        selected_clip_ids_pre TEXT DEFAULT '[]',
+        selected_edge_infos_pre TEXT DEFAULT '[]'
     );
 ]])
 
@@ -90,11 +101,15 @@ db:exec([[
     INSERT INTO projects (id, name) VALUES ('test_project', 'Test Project');
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index)
-    VALUES ('track_v1', 'test_sequence', 'VIDEO', 1);
+    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
+    VALUES ('default_sequence', 'test_project', 'Default Sequence', 30.0, 1920, 1080);
+    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
+    VALUES ('track_v1', 'test_sequence', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
+    VALUES ('track_default_v1', 'default_sequence', 'VIDEO', 1, 1);
 ]])
 
-command_manager.init(db, 'test_sequence')
+command_manager.init(db, 'default_sequence', 'test_project')
 
 -- Test 1: Media cleanup during replay
 print("Test 1: Media cleanup during undo/replay")
@@ -102,16 +117,17 @@ print("Test 1: Media cleanup during undo/replay")
 -- Create ImportMedia command executor (simplified for testing)
 local function execute_import_media(cmd)
     local file_path = cmd:get_parameter("file_path")
-    local media = Media.create(
-        "test_project",
-        file_path,
-        file_path:match("([^/]+)$"),  -- name from path
-        10000,  -- duration
-        30.0,   -- frame_rate
-        1920, 1080,
-        2,      -- audio_channels
-        "h264"
-    )
+    local media = Media.create({
+        project_id = 'test_project',
+        file_path = file_path,
+        name = file_path:match('([^/]+)$'),
+        duration = 10000,
+        frame_rate = 30.0,
+        width = 1920,
+        height = 1080,
+        audio_channels = 2,
+        codec = 'h264'
+    })
     if media and media:save(db) then
         cmd:set_parameter("media_id", media.id)
         return true
@@ -119,8 +135,7 @@ local function execute_import_media(cmd)
     return false
 end
 
--- Register temporary ImportMedia executor
-package.loaded['core.command_manager'].register_executor("ImportMedia", execute_import_media)
+command_manager.register_executor("ImportMedia", execute_import_media)
 
 -- Import first media file
 local import1 = Command.create("ImportMedia", "test_project")
@@ -206,6 +221,10 @@ else
     print("   Got: " .. tostring(err) .. "\n")
     os.exit(1)
 end
+
+command_manager.unregister_executor("ImportMedia")
+
+
 
 print("=== All Undo Media Cleanup Tests Passed ===")
 os.remove(test_db_path)

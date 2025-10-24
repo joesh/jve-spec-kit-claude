@@ -3,7 +3,9 @@
 -- Test BatchCommand parameter contract and transaction safety
 -- Ensures parameter name matches between caller and executor
 
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/core/?.lua;../src/lua/models/?.lua"
+package.path = package.path .. ";../src/lua/?.lua;../src/lua/core/?.lua;../src/lua/models/?.lua;../tests/?.lua"
+
+require('test_env')
 
 local command_manager = require('core.command_manager')
 local Command = require('command')
@@ -22,7 +24,8 @@ local db = database.get_connection()
 db:exec([[
     CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
-        name TEXT NOT NULL
+        name TEXT NOT NULL,
+        settings TEXT NOT NULL DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS sequences (
@@ -32,6 +35,10 @@ db:exec([[
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
+        timecode_start INTEGER NOT NULL DEFAULT 0,
+        playhead_time INTEGER NOT NULL DEFAULT 0,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
         current_sequence_number INTEGER
     );
 
@@ -39,7 +46,8 @@ db:exec([[
         id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
         track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL
+        track_index INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS clips (
@@ -75,17 +83,25 @@ db:exec([[
         post_hash TEXT,
         timestamp INTEGER,
         playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]'
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
+        selected_clip_ids_pre TEXT DEFAULT '[]',
+        selected_edge_infos_pre TEXT DEFAULT '[]'
     );
 ]])
 
 -- Insert test data
 db:exec([[
     INSERT INTO projects (id, name) VALUES ('test_project', 'Test Project');
+    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index)
-    VALUES ('track_v1', 'test_sequence', 'VIDEO', 1);
+    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
+    VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
+    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
+    VALUES ('track_v1', 'test_sequence', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
+    VALUES ('track_default_v1', 'default_sequence', 'VIDEO', 1, 1);
 ]])
 
 command_manager.init(db, 'test_sequence')
@@ -98,7 +114,8 @@ local command_specs = {
         command_type = "CreateSequence",
         project_id = "test_project",
         parameters = {
-            sequence_name = "Batch Test Sequence",
+            name = "Batch Test Sequence",
+            project_id = "test_project",
             frame_rate = 30.0,
             width = 1920,
             height = 1080

@@ -61,6 +61,17 @@ cd build
 make -j4  # Perfect clean build - zero warnings, zero errors
 ```
 
+The default `make` target now runs the Lua command-system regression scripts via `scripts/run_lua_tests.sh`. These require:
+
+- `luajit` available on `PATH`
+- A loadable `libsqlite3` shared library
+
+The runner auto-detects common locations (Homebrew, /usr/local, Linux). If your setup uses a custom install, override with:
+
+```bash
+export JVE_SQLITE3_PATH=/custom/path/to/libsqlite3.dylib
+```
+
 ## Testing
 
 ```bash

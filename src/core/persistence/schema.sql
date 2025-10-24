@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS sequences (
     timecode_start INTEGER NOT NULL DEFAULT 0 CHECK(timecode_start >= 0),
     playhead_time INTEGER NOT NULL DEFAULT 0 CHECK(playhead_time >= 0),  -- Current playhead position in ms
     selected_clip_ids TEXT,                                                -- JSON array of selected clip IDs
+    selected_edge_infos TEXT,                                              -- JSON array of selected edge descriptors
     current_sequence_number INTEGER,                                       -- Current position in undo tree (NULL = at HEAD)
 
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -143,6 +144,9 @@ CREATE TABLE IF NOT EXISTS commands (
     timestamp INTEGER NOT NULL,             -- Unix timestamp
     playhead_time INTEGER NOT NULL DEFAULT 0,  -- Playhead position after this command (for undo/redo)
     selected_clip_ids TEXT,                     -- JSON array of selected clip IDs after this command
+    selected_edge_infos TEXT,                   -- JSON array of selected edge descriptors after this command
+    selected_clip_ids_pre TEXT,                 -- JSON array of selected clip IDs before this command
+    selected_edge_infos_pre TEXT,               -- JSON array of selected edge descriptors before this command
 
     FOREIGN KEY (parent_id) REFERENCES commands(id) ON DELETE SET NULL,
 

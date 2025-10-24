@@ -116,7 +116,7 @@ function M.init(sequence_id)
     -- Load playhead and selection state from sequence
     local db_conn = db.get_connection()
     if db_conn then
-        local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids FROM sequences WHERE id = ?")
+        local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos FROM sequences WHERE id = ?")
         if query then
             query:bind_value(1, sequence_id)
             if query:exec() and query:next() then
@@ -141,8 +141,48 @@ function M.init(sequence_id)
                                 end
                             end
                         end
-                        print(string.format("Restored playhead to %dms, selection: %d clips",
-                            state.playhead_time, #state.selected_clips))
+                        if #state.selected_clips > 0 then
+                            print(string.format("Restored playhead to %dms, selection: %d clips",
+                                state.playhead_time, #state.selected_clips))
+                        end
+                    end
+                end
+
+                -- Restore edge selection
+                local saved_edges_json = query:value(2)
+                if saved_edges_json and saved_edges_json ~= "" then
+                    local success_edges, edge_infos = pcall(qt_json_decode, saved_edges_json)
+                    if success_edges and type(edge_infos) == "table" then
+                        state.selected_edges = {}
+                        for _, edge_info in ipairs(edge_infos) do
+                            if type(edge_info) == "table" and edge_info.clip_id and edge_info.edge_type then
+                                local clip_exists = false
+                                for _, clip in ipairs(state.clips) do
+                                    if clip.id == edge_info.clip_id then
+                                        clip_exists = true
+                                        break
+                                    end
+                                end
+
+                                if clip_exists then
+                                    table.insert(state.selected_edges, {
+                                        clip_id = edge_info.clip_id,
+                                        edge_type = edge_info.edge_type,
+                                        trim_type = edge_info.trim_type
+                                    })
+                                end
+                            end
+                        end
+
+                        if #state.selected_edges > 0 then
+                            -- Edge selection is exclusive with clip selection
+                            state.selected_clips = {}
+                            print(string.format(
+                                "Restored playhead to %dms, edge selection: %d edges",
+                                state.playhead_time,
+                                #state.selected_edges
+                            ))
+                        end
                     end
                 end
             end
@@ -345,6 +385,9 @@ function M.set_edge_selection(edges)
     state.selected_clips = {}
 
     notify_listeners()
+
+    -- Persist edge selection to database
+    M.persist_state_to_db()
 end
 
 function M.toggle_edge_selection(clip_id, edge_type, trim_type)
@@ -354,6 +397,7 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
             -- Remove it
             table.remove(state.selected_edges, i)
             notify_listeners()
+            M.persist_state_to_db()
             return false  -- Deselected
         end
     end
@@ -370,6 +414,7 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
         trim_type = trim_type
     })
     notify_listeners()
+    M.persist_state_to_db()
     return true  -- Selected
 end
 
@@ -377,6 +422,7 @@ function M.clear_edge_selection()
     if #state.selected_edges > 0 then
         state.selected_edges = {}
         notify_listeners()
+        M.persist_state_to_db()
     end
 end
 
@@ -672,17 +718,35 @@ function M.persist_state_to_db()
         json_str = "[]"
     end
 
+    -- Serialize selected edge descriptors to JSON
+    local edge_descriptors = {}
+    for _, edge in ipairs(state.selected_edges) do
+        if edge and edge.clip_id and edge.edge_type then
+            table.insert(edge_descriptors, {
+                clip_id = edge.clip_id,
+                edge_type = edge.edge_type,
+                trim_type = edge.trim_type
+            })
+        end
+    end
+
+    local success_edges, edges_json = pcall(qt_json_encode, edge_descriptors)
+    if not success_edges then
+        edges_json = "[]"
+    end
+
     -- Update sequences table with current state
     local query = db_conn:prepare([[
         UPDATE sequences
-        SET playhead_time = ?, selected_clip_ids = ?
+        SET playhead_time = ?, selected_clip_ids = ?, selected_edge_infos = ?
         WHERE id = ?
     ]])
 
     if query then
         query:bind_value(1, state.playhead_time)
         query:bind_value(2, json_str)
-        query:bind_value(3, sequence_id)
+        query:bind_value(3, edges_json)
+        query:bind_value(4, sequence_id)
         query:exec()
     end
 end

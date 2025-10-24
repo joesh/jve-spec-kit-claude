@@ -18,6 +18,10 @@ local current_state_hash = ""
 local state_hash_cache = {}
 local last_error_message = ""
 
+-- Active context
+local active_sequence_id = "default_sequence"
+local active_project_id = "default_project"
+
 -- Undo tree tracking
 local current_sequence_number = nil  -- Current position in undo tree (nil = at HEAD, latest command)
 local current_branch_path = {}  -- Sequence of command IDs from root to current position (for tree navigation)
@@ -26,9 +30,159 @@ local current_branch_path = {}  -- Sequence of command IDs from root to current 
 local command_executors = {}
 local command_undoers = {}
 
+local function capture_selection_snapshot()
+    local timeline_state = require('ui.timeline.timeline_state')
+    local selected_clips = timeline_state.get_selected_clips() or {}
+    local clip_ids = {}
+    for _, clip in ipairs(selected_clips) do
+        if clip and clip.id then
+            table.insert(clip_ids, clip.id)
+        end
+    end
+
+    local selected_edges = timeline_state.get_selected_edges() or {}
+    local edge_descriptors = {}
+    for _, edge in ipairs(selected_edges) do
+        if edge and edge.clip_id and edge.edge_type then
+            table.insert(edge_descriptors, {
+                clip_id = edge.clip_id,
+                edge_type = edge.edge_type,
+                trim_type = edge.trim_type
+            })
+        end
+    end
+
+    local success_clips, clips_json = pcall(qt_json_encode, clip_ids)
+    if not success_clips then
+        clips_json = "[]"
+    end
+
+    local success_edges, edges_json = pcall(qt_json_encode, edge_descriptors)
+    if not success_edges then
+        edges_json = "[]"
+    end
+
+    return clips_json, edges_json
+end
+
+
+
+local function ensure_command_selection_columns()
+    if not db then
+        return
+    end
+
+    local pragma = db:prepare("PRAGMA table_info(commands)")
+    if not pragma then
+        return
+    end
+
+    local has_clip_pre = false
+    local has_edge_pre = false
+
+    if pragma:exec() then
+        while pragma:next() do
+            local column_name = pragma:value(1)
+            if column_name == "selected_clip_ids_pre" then
+                has_clip_pre = true
+            elseif column_name == "selected_edge_infos_pre" then
+                has_edge_pre = true
+            end
+        end
+    end
+
+    pragma:finalize()
+
+    if not has_clip_pre then
+        local ok, err = db:exec("ALTER TABLE commands ADD COLUMN selected_clip_ids_pre TEXT DEFAULT '[]'")
+        if not ok then
+            print("WARNING: Failed to add selected_clip_ids_pre column: " .. tostring(err or "unknown error"))
+        end
+    end
+
+    if not has_edge_pre then
+        local ok, err = db:exec("ALTER TABLE commands ADD COLUMN selected_edge_infos_pre TEXT DEFAULT '[]'")
+        if not ok then
+            print("WARNING: Failed to add selected_edge_infos_pre column: " .. tostring(err or "unknown error"))
+        end
+    end
+end
+
+local function capture_pre_selection_for_command(command)
+    local clips_json, edges_json = capture_selection_snapshot()
+    command.selected_clip_ids_pre = clips_json
+    command.selected_edge_infos_pre = edges_json
+end
+
+local function capture_post_selection_for_command(command)
+    local clips_json, edges_json = capture_selection_snapshot()
+    command.selected_clip_ids = clips_json
+    command.selected_edge_infos = edges_json
+end
+
+local function restore_selection_from_serialized(clips_json, edges_json)
+    local timeline_state = require('ui.timeline.timeline_state')
+    local Clip = require('models.clip')
+
+    local function decode(json_text)
+        if not json_text or json_text == "" then
+            return {}
+        end
+        local ok, value = pcall(qt_json_decode, json_text)
+        if ok and type(value) == "table" then
+            return value
+        end
+        return {}
+    end
+
+    local edge_infos = decode(edges_json)
+    if #edge_infos > 0 then
+        local restored_edges = {}
+        for _, info in ipairs(edge_infos) do
+            if type(info) == "table" and info.clip_id and info.edge_type then
+                local clip = Clip.load(info.clip_id, db)
+                if clip then
+                    table.insert(restored_edges, {
+                        clip_id = info.clip_id,
+                        edge_type = info.edge_type,
+                        trim_type = info.trim_type
+                    })
+                end
+            end
+        end
+
+        if #restored_edges > 0 then
+            timeline_state.set_edge_selection(restored_edges)
+            return
+        end
+    end
+
+    local clip_ids = decode(clips_json)
+    if #clip_ids > 0 then
+        local restored_clips = {}
+        for _, clip_id in ipairs(clip_ids) do
+            local clip = Clip.load(clip_id, db)
+            if clip then
+                table.insert(restored_clips, clip)
+            end
+        end
+
+        if #restored_clips > 0 then
+            timeline_state.set_selection(restored_clips)
+            return
+        end
+    end
+
+    timeline_state.set_selection({})
+end
+
+
 -- Initialize CommandManager with database connection
-function M.init(database)
+function M.init(database, sequence_id, project_id)
     db = database
+    active_sequence_id = sequence_id or "default_sequence"
+    active_project_id = project_id or "default_project"
+
     
     -- Register all command executors and undoers
     local command_implementations = require("core.command_implementations")
@@ -41,7 +195,11 @@ function M.init(database)
     end
 
     -- Load current undo position from sequences table (persisted across sessions)
-    local pos_query = db:prepare("SELECT current_sequence_number FROM sequences WHERE id = 'default_sequence'")
+    local pos_query = db:prepare("SELECT current_sequence_number FROM sequences WHERE id = ?")
+    if pos_query then
+        pos_query:bind_value(1, active_sequence_id)
+    end
+
     if pos_query and pos_query:exec() and pos_query:next() then
         local saved_position = pos_query:value(0)
         if saved_position and saved_position > 0 then
@@ -154,7 +312,7 @@ local function save_undo_position()
     local update = db:prepare([[
         UPDATE sequences
         SET current_sequence_number = ?
-        WHERE id = 'default_sequence'
+        WHERE id = ?
     ]])
 
     if not update then
@@ -163,6 +321,7 @@ local function save_undo_position()
     end
 
     update:bind_value(1, current_sequence_number)
+    update:bind_value(2, active_sequence_id)
     local success = update:exec()
 
     if not success then
@@ -326,16 +485,19 @@ function M.execute(command)
 
     -- VALIDATION: parent_sequence_number should never be NULL after first command
     -- NULL parent is only valid for the very first command (sequence 1)
-    if not command.parent_sequence_number and sequence_number > 1 then
-        print(string.format("ERROR: Command %d has NULL parent but is not the first command!", sequence_number))
-        print(string.format("ERROR: current_sequence_number = %s, last_sequence_number = %d",
-            tostring(current_sequence_number), last_sequence_number))
-        print("ERROR: This indicates a bug in undo position tracking!")
-        local rollback_tx = db:prepare("ROLLBACK")
-        if rollback_tx then rollback_tx:exec() end
-        last_sequence_number = last_sequence_number - 1
-        result.error_message = "FATAL: Cannot execute command with NULL parent (would break undo tree)"
-        return result
+    if not command.parent_sequence_number then
+        local executing_from_root = current_sequence_number == nil
+        if not executing_from_root and sequence_number > 1 then
+            print(string.format("ERROR: Command %d has NULL parent but is not the first command!", sequence_number))
+            print(string.format("ERROR: current_sequence_number = %s, last_sequence_number = %d",
+                tostring(current_sequence_number), last_sequence_number))
+            print("ERROR: This indicates a bug in undo position tracking!")
+            local rollback_tx = db:prepare("ROLLBACK")
+            if rollback_tx then rollback_tx:exec() end
+            last_sequence_number = last_sequence_number - 1
+            result.error_message = "FATAL: Cannot execute command with NULL parent (would break undo tree)"
+            return result
+        end
     end
 
     -- VALIDATION: If parent exists, verify it actually exists in database
@@ -362,15 +524,7 @@ function M.execute(command)
     -- Capture playhead and selection state BEFORE command execution (pre-state model)
     local timeline_state = require('ui.timeline.timeline_state')
     command.playhead_time = timeline_state.get_playhead_time()
-
-    -- Serialize selected clip IDs to JSON
-    local selected_clips = timeline_state.get_selected_clips()
-    local selected_ids = {}
-    for _, clip in ipairs(selected_clips) do
-        table.insert(selected_ids, clip.id)
-    end
-    local success, json_str = pcall(qt_json_encode, selected_ids)
-    command.selected_clip_ids = success and json_str or "[]"
+    capture_pre_selection_for_command(command)
 
     -- Execute the actual command logic
     local execution_success = execute_command_implementation(command)
@@ -378,6 +532,8 @@ function M.execute(command)
     if execution_success then
         command.status = "Executed"
         command.executed_at = os.time()
+
+        capture_post_selection_for_command(command)
 
         -- Calculate post-execution hash
         local post_hash = calculate_state_hash(command.project_id)
@@ -399,8 +555,8 @@ function M.execute(command)
             local snapshot_mgr = require('core.snapshot_manager')
             if snapshot_mgr.should_snapshot(sequence_number) then
                 local db_module = require('core.database')
-                local clips = db_module.load_clips("default_sequence")
-                snapshot_mgr.create_snapshot(db, "default_sequence", sequence_number, clips)
+                local clips = db_module.load_clips(active_sequence_id)
+                snapshot_mgr.create_snapshot(db, active_sequence_id, sequence_number, clips)
             end
 
             -- COMMIT TRANSACTION: Everything succeeded
@@ -444,7 +600,8 @@ function M.get_last_command(project_id)
 
     -- Get command at current position
     local query = db:prepare([[
-        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time
+        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time,
+               selected_clip_ids, selected_edge_infos, selected_clip_ids_pre, selected_edge_infos_pre
         FROM commands
         WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
     ]])
@@ -469,6 +626,10 @@ function M.get_last_command(project_id)
             created_at = query:value(7) or os.time(),
             executed_at = query:value(7),
             playhead_time = query:value(8) or 0,  -- Playhead position BEFORE this command
+            selected_clip_ids = query:value(9) or "[]",
+            selected_edge_infos = query:value(10) or "[]",
+            selected_clip_ids_pre = query:value(11) or "[]",
+            selected_edge_infos_pre = query:value(12) or "[]",
         }
 
         -- Parse command_args JSON to populate parameters
@@ -614,6 +775,30 @@ end
 function M.replay_all()
     print("Replaying all commands")
     return M.replay_from_sequence(1)
+end
+
+-- Test/extension hook: register additional executors at runtime (e.g. for Lua tests)
+function M.register_executor(command_type, executor, undoer)
+    if type(command_type) ~= "string" or command_type == "" then
+        error("register_executor requires a command type string")
+    end
+    if type(executor) ~= "function" then
+        error("register_executor requires an executor function")
+    end
+
+    command_executors[command_type] = executor
+
+    if undoer ~= nil then
+        if type(undoer) ~= "function" then
+            error("register_executor undoer must be a function if provided")
+        end
+        command_undoers[command_type] = undoer
+    end
+end
+
+function M.unregister_executor(command_type)
+    command_executors[command_type] = nil
+    command_undoers[command_type] = nil
 end
 
 -- Validate sequence integrity
@@ -794,7 +979,7 @@ function M.replay_events(sequence_id, target_sequence_number)
 
         while current_seq > start_sequence do
             local find_query = db:prepare([[
-                SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids
+                SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos
                 FROM commands
                 WHERE sequence_number = ?
             ]])
@@ -818,7 +1003,10 @@ function M.replay_events(sequence_id, target_sequence_number)
                     post_hash = find_query:value(6),
                     timestamp = find_query:value(7),
                     playhead_time = find_query:value(8),
-                    selected_clip_ids = find_query:value(9)
+                    selected_clip_ids = find_query:value(9),
+                    selected_edge_infos = find_query:value(10),
+                    selected_clip_ids_pre = find_query:value(11),
+                    selected_edge_infos_pre = find_query:value(12)
                 })
 
                 -- Move to parent
@@ -855,10 +1043,14 @@ function M.replay_events(sequence_id, target_sequence_number)
         local commands_replayed = 0
         local final_playhead_time = 0
         local final_selected_clip_ids = "[]"
+        local final_selected_edge_infos = "[]"
 
         for _, cmd_data in ipairs(command_chain) do
+            -- Restore selection state prior to executing this command
+            restore_selection_from_serialized(cmd_data.selected_clip_ids_pre, cmd_data.selected_edge_infos_pre)
+
             -- Create command object from stored data
-            local command = Command.create(cmd_data.command_type, "default_project")
+            local command = Command.create(cmd_data.command_type, active_project_id)
             command.id = cmd_data.id
             command.sequence_number = cmd_data.sequence_number
             command.parent_sequence_number = cmd_data.parent_sequence_number
@@ -878,9 +1070,8 @@ function M.replay_events(sequence_id, target_sequence_number)
             local timeline_state = require('ui.timeline.timeline_state')
             timeline_state.set_playhead_time(cmd_data.playhead_time or 0)
 
-            -- Execute the command (but don't save it again - it's already in commands table)
-            -- Note: We don't restore selection here - it's user state, not command state
-            local execution_success = execute_command_implementation(command)
+        -- Execute the command (but don't save it again - it's already in commands table)
+        local execution_success = execute_command_implementation(command)
 
             if execution_success then
                 commands_replayed = commands_replayed + 1
@@ -893,9 +1084,13 @@ function M.replay_events(sequence_id, target_sequence_number)
                 print("HINT: instead of going through the command system")
                 return false
             end
+            final_playhead_time = cmd_data.playhead_time or 0
+            final_selected_clip_ids = cmd_data.selected_clip_ids or "[]"
+            final_selected_edge_infos = cmd_data.selected_edge_infos or "[]"
         end
 
         print(string.format("✅ Replayed %d commands successfully", commands_replayed))
+        restore_selection_from_serialized(final_selected_clip_ids, final_selected_edge_infos)
     else
         -- No commands to replay - reset to initial state
         local timeline_state = require('ui.timeline.timeline_state')
@@ -907,30 +1102,24 @@ function M.replay_events(sequence_id, target_sequence_number)
     return true
 end
 
--- Undo: Move back one command in the undo tree using event replay
--- Track selection across undo/redo
-local saved_selection_on_undo = nil
-
 -- Track last warning message to suppress consecutive duplicates
 local last_warning_message = nil
 
 function M.undo()
     -- Get the command at current position
-    local current_command = M.get_last_command("default_project")
+    local current_command = M.get_last_command(active_project_id)
 
     if not current_command then
         print("Nothing to undo")
         return {success = false, error_message = "Nothing to undo"}
     end
 
+    local timeline_state = require('ui.timeline.timeline_state')
+
     print(string.format("Undoing command: %s (seq %d, parent %s)",
         current_command.type,
         current_command.sequence_number,
         tostring(current_command.parent_sequence_number)))
-
-    -- Save current selection before undo (user state between commands)
-    local timeline_state = require('ui.timeline.timeline_state')
-    saved_selection_on_undo = timeline_state.get_selected_clips()
 
     -- Calculate target sequence (parent of current command for branching support)
     -- In a branching history, undo follows the parent link, not sequence_number - 1
@@ -951,19 +1140,18 @@ function M.undo()
             print("Cleared all clips (undo to beginning)")
         end
 
-        -- Reset playhead and selection to initial state
-        local timeline_state = require('ui.timeline.timeline_state')
-        timeline_state.set_playhead_time(0)
-        timeline_state.set_selection({})
-        print("Reset playhead and selection to initial state")
+        print("Reset timeline database to initial state")
     end
 
     if replay_success then
         -- Restore playhead to position BEFORE the undone command (i.e., AFTER the last valid command)
         -- This is stored in current_command.playhead_time
-        if target_sequence > 0 and current_command.playhead_time then
+        if current_command.playhead_time then
             timeline_state.set_playhead_time(current_command.playhead_time)
             print(string.format("Restored playhead to %dms", current_command.playhead_time))
+        else
+            timeline_state.set_playhead_time(0)
+            print("Restored playhead to 0ms (default)")
         end
 
         -- Move current_sequence_number back
@@ -975,7 +1163,7 @@ function M.undo()
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
         timeline_state.reload_clips()
-
+        restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre)
         print(string.format("Undo complete - moved to position %s", tostring(current_sequence_number)))
         return {success = true}
     else
@@ -1036,19 +1224,49 @@ function M.redo()
         -- Save undo position to database (persists across sessions)
         save_undo_position()
 
+        local restored_command = M.get_last_command(active_project_id)
+
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
         local timeline_state = require('ui.timeline.timeline_state')
         timeline_state.reload_clips()
 
-        -- Restore selection that was saved during undo
-        if saved_selection_on_undo then
-            timeline_state.set_selection(saved_selection_on_undo)
-            print(string.format("Redo complete - moved to position %d, restored %d selected clips",
-                  current_sequence_number, #saved_selection_on_undo))
-        else
-            print(string.format("Redo complete - moved to position %d", current_sequence_number))
+        if restored_command then
+            local selection_restored = false
+
+            if db and current_sequence_number then
+                local next_query = db:prepare([[
+                    SELECT sequence_number, selected_clip_ids_pre, selected_edge_infos_pre
+                    FROM commands
+                    WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
+                    ORDER BY sequence_number DESC
+                    LIMIT 1
+                ]])
+
+                if next_query then
+                    next_query:bind_value(1, current_sequence_number)
+                    next_query:bind_value(2, current_sequence_number)
+
+                    if next_query:exec() and next_query:next() then
+                        local next_sequence = next_query:value(0)
+                        if next_sequence and next_sequence > current_sequence_number then
+                            local next_clip_ids_pre = next_query:value(1)
+                            local next_edge_infos_pre = next_query:value(2)
+                            if next_clip_ids_pre ~= nil or next_edge_infos_pre ~= nil then
+                                restore_selection_from_serialized(next_clip_ids_pre, next_edge_infos_pre)
+                                selection_restored = true
+                            end
+                        end
+                    end
+                end
+            end
+
+            if not selection_restored then
+                restore_selection_from_serialized(restored_command.selected_clip_ids, restored_command.selected_edge_infos)
+            end
         end
+
+        print(string.format("Redo complete - moved to position %d", current_sequence_number))
 
         return {success = true}
     else

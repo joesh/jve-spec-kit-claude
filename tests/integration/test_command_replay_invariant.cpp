@@ -54,9 +54,23 @@ private:
     void sendRedoKey();
     void waitForLuaProcessing();
 
+    struct EdgeSelection {
+        QString clip_id;
+        QString edge_type;
+        QString trim_type;
+
+        bool operator==(const EdgeSelection& other) const
+        {
+            return clip_id == other.clip_id &&
+                   edge_type == other.edge_type &&
+                   trim_type == other.trim_type;
+        }
+    };
+
     struct TimelineState {
         int playhead_time;
         QStringList selected_clip_ids;
+        QList<EdgeSelection> selected_edges;
         int clip_count;
     };
     TimelineState captureTimelineState();
@@ -154,7 +168,7 @@ void TestCommandReplayInvariant::cleanup()
     QSqlQuery query(m_db);
     query.exec("DELETE FROM clips");
     query.exec("DELETE FROM commands");
-    query.exec("UPDATE sequences SET playhead_time = 0, selected_clip_ids = NULL");
+    query.exec("UPDATE sequences SET playhead_time = 0, selected_clip_ids = NULL, selected_edge_infos = NULL");
 
     qDebug() << "Test cleaned up";
 }
@@ -199,12 +213,13 @@ TestCommandReplayInvariant::TimelineState TestCommandReplayInvariant::queryDatab
 
     // Query sequence state
     QSqlQuery seqQuery(m_db);
-    seqQuery.prepare("SELECT playhead_time, selected_clip_ids FROM sequences WHERE id = ?");
+    seqQuery.prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos FROM sequences WHERE id = ?");
     seqQuery.addBindValue("default_sequence");
 
     if (seqQuery.exec() && seqQuery.next()) {
         state.playhead_time = seqQuery.value(0).toInt();
         QString selectedJson = seqQuery.value(1).toString();
+        QString edgesJson = seqQuery.value(2).toString();
 
         if (!selectedJson.isEmpty()) {
             QJsonDocument doc = QJsonDocument::fromJson(selectedJson.toUtf8());
@@ -212,6 +227,24 @@ TestCommandReplayInvariant::TimelineState TestCommandReplayInvariant::queryDatab
                 QJsonArray arr = doc.array();
                 for (const QJsonValue& val : arr) {
                     state.selected_clip_ids.append(val.toString());
+                }
+            }
+        }
+
+        if (!edgesJson.isEmpty()) {
+            QJsonDocument edgesDoc = QJsonDocument::fromJson(edgesJson.toUtf8());
+            if (edgesDoc.isArray()) {
+                QJsonArray arr = edgesDoc.array();
+                for (const QJsonValue& val : arr) {
+                    if (!val.isObject()) {
+                        continue;
+                    }
+                    QJsonObject obj = val.toObject();
+                    EdgeSelection edge;
+                    edge.clip_id = obj.value("clip_id").toString();
+                    edge.edge_type = obj.value("edge_type").toString();
+                    edge.trim_type = obj.value("trim_type").toString();
+                    state.selected_edges.append(edge);
                 }
             }
         }
@@ -248,6 +281,10 @@ void TestCommandReplayInvariant::assertStatesEqual(
     }
     if (actual.selected_clip_ids != expected.selected_clip_ids) {
         QFAIL(qPrintable(QString("%1: selection mismatch")
+                         .arg(context)));
+    }
+    if (actual.selected_edges != expected.selected_edges) {
+        QFAIL(qPrintable(QString("%1: edge selection mismatch")
                          .arg(context)));
     }
 }
@@ -398,8 +435,9 @@ void TestCommandReplayInvariant::testSelectionPreservation()
 
     qDebug() << "Verifying selection can be stored in database";
     QSqlQuery query(m_db);
-    query.prepare("UPDATE sequences SET selected_clip_ids = ? WHERE id = ?");
+    query.prepare("UPDATE sequences SET selected_clip_ids = ?, selected_edge_infos = ? WHERE id = ?");
     query.addBindValue("[\"clip1\", \"clip2\"]");
+    query.addBindValue("[]");
     query.addBindValue("default_sequence");
     QVERIFY(query.exec());
 

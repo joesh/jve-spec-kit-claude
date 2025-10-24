@@ -7,7 +7,7 @@
 
 ## Overview
 
-Implemented comprehensive persistence of playhead position and clip selection state across both **undo/redo operations** and **application sessions**. This treats UI state as first-class data that participates in the event sourcing system.
+Implemented comprehensive persistence of playhead position plus both clip and edge selection state across **undo/redo operations** and **application sessions**. This treats UI state as first-class data that participates in the event sourcing system.
 
 ---
 
@@ -16,13 +16,13 @@ Implemented comprehensive persistence of playhead position and clip selection st
 ### Two-Tier Persistence Strategy
 
 #### 1. **Command-Level Persistence** (Undo/Redo)
-- Every command execution captures current playhead position and selected clip IDs
+- Every command execution captures current playhead position, plus clip/edge selection both **before** and **after** the command
 - Stored in `commands` table as part of command history
 - Restored during event replay (undo/redo operations)
 - **Result:** Cmd+Z not only undoes clip changes but also restores where the playhead was and what was selected
 
 #### 2. **Sequence-Level Persistence** (Session Restoration)
-- Playhead and selection state continuously persisted to `sequences` table
+- Playhead plus clip/edge selection state continuously persisted to `sequences` table
 - Updated every time playhead moves or selection changes
 - Loaded on application startup
 - **Result:** Reopen project and everything is exactly where you left it
@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS sequences (
     timecode_start INTEGER NOT NULL DEFAULT 0,
     playhead_time INTEGER NOT NULL DEFAULT 0,          -- NEW: Current playhead position (ms)
     selected_clip_ids TEXT,                             -- NEW: JSON array of selected clip IDs
+    selected_edge_infos TEXT,                           -- NEW: JSON array of selected edge descriptors
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 ```
@@ -60,7 +61,10 @@ CREATE TABLE IF NOT EXISTS commands (
     post_hash TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
     playhead_time INTEGER NOT NULL DEFAULT 0,          -- NEW: Playhead after this command
-    selected_clip_ids TEXT,                             -- NEW: Selection after this command
+    selected_clip_ids TEXT,                             -- NEW: Clip selection after this command
+    selected_edge_infos TEXT,                           -- NEW: Edge selection after this command
+    selected_clip_ids_pre TEXT,                         -- NEW: Clip selection before this command
+    selected_edge_infos_pre TEXT,                       -- NEW: Edge selection before this command
     FOREIGN KEY (parent_id) REFERENCES commands(id) ON DELETE SET NULL,
     UNIQUE(sequence_number)
 );
@@ -74,6 +78,13 @@ CREATE TABLE IF NOT EXISTS commands (
 **File:** `src/lua/core/command_manager.lua:208-219`
 
 ```lua
+-- Capture pre-command selection snapshot (used during undo)
+local pre_clips_json, pre_edges_json = capture_selection_snapshot()
+command.selected_clip_ids_pre = pre_clips_json
+command.selected_edge_infos_pre = pre_edges_json
+
+-- Execute command implementation ...
+
 if execution_success then
     command.status = "Executed"
     command.executed_at = os.time()
@@ -82,18 +93,10 @@ if execution_success then
     local post_hash = calculate_state_hash(command.project_id)
     command.post_hash = post_hash
 
-    -- Capture playhead and selection state for undo/redo
-    local timeline_state = require('ui.timeline.timeline_state')
-    command.playhead_time = timeline_state.get_playhead_time()
-
-    -- Serialize selected clip IDs to JSON
-    local selected_clips = timeline_state.get_selected_clips()
-    local selected_ids = {}
-    for _, clip in ipairs(selected_clips) do
-        table.insert(selected_ids, clip.id)
-    end
-    local success, json_str = pcall(qt_json_encode, selected_ids)
-    command.selected_clip_ids = success and json_str or "[]"
+    -- Capture post-command selection snapshot (used during redo/replay)
+    local post_clips_json, post_edges_json = capture_selection_snapshot()
+    command.selected_clip_ids = post_clips_json
+    command.selected_edge_infos = post_edges_json
 
     -- Save command to database (with playhead/selection)
     if command:save(db) then
@@ -101,65 +104,29 @@ if execution_success then
 ```
 
 **What Happens:**
-- After every command executes, we snapshot the current UI state
-- Playhead position captured as integer (milliseconds)
-- Selected clips converted to ID array and serialized to JSON
-- Both fields saved to database with the command record
+- Before each command runs, we snapshot selection to capture the user's pre-command context
+- After the command succeeds, we snapshot again to record the post-command selection
+- Both snapshots, along with the playhead, are written to the `commands` table for deterministic undo/redo
 
 ---
 
 ### 2. Event Replay Restoration
-**File:** `src/lua/core/command_manager.lua:1341-1418`
 
-```lua
--- Step 5: Replay commands and capture final state
-local query = db:prepare([[
-    SELECT id, command_type, command_args, sequence_number,
-           parent_sequence_number, pre_hash, post_hash, timestamp,
-           playhead_time, selected_clip_ids
-    FROM commands
-    WHERE sequence_number > ? AND sequence_number <= ?
-    ORDER BY sequence_number ASC
-]])
+Undo/redo now applies selection state in two phases so that replayed commands
+always see the same context the player saw originally:
 
-local final_playhead_time = 0
-local final_selected_clip_ids = "[]"
+1. **Pre-state** — restored before each replayed command executes using the
+   `selected_*_pre` columns. This ensures the executor runs against the same
+   selection that existed when the command first ran.
+2. **Post-state** — restored after the replay finishes. When there are further
+   redo steps available, the redo logic prefers the *next* command’s stored
+   pre-selection so that a subsequent redo starts from the correct context.
+   If there is no next command, we fall back to the current command’s post
+   selection (the “head” state).
 
-while query:next() do
-    -- Execute command
-    local execution_success = execute_command_implementation(command)
-
-    -- Capture final state from last command replayed
-    final_playhead_time = query:value(8)         -- playhead_time column
-    final_selected_clip_ids = query:value(9)     -- selected_clip_ids column
-end
-
--- Step 6: Restore playhead and selection from final command
-local timeline_state = require('ui.timeline.timeline_state')
-timeline_state.set_playhead_time(final_playhead_time)
-
--- Deserialize and restore selection
-local success, selected_ids = pcall(qt_json_decode, final_selected_clip_ids)
-if success and type(selected_ids) == "table" then
-    -- Load clip objects for selected IDs
-    local Clip = require('models.clip')
-    local selected_clips = {}
-    for _, clip_id in ipairs(selected_ids) do
-        local clip = Clip.load(clip_id, db)
-        if clip then  -- Only add if clip still exists
-            table.insert(selected_clips, clip)
-        end
-    end
-    timeline_state.set_selection(selected_clips)
-end
-```
-
-**What Happens:**
-- During undo/redo, we replay commands up to target sequence number
-- As we replay, we track the playhead/selection state from each command
-- After replay completes, we restore the final captured state
-- **Automatic cleanup:** Clips that were deleted are filtered out (line: `if clip then`)
-- **Result:** Timeline UI matches exactly how it looked at that point in history
+The deserialization layer still filters out clips or edges that no longer
+exist. The timeline thus lands on the exact playhead/selection pair associated
+with the chosen position in history, while also making the next redo idempotent.
 
 ---
 
@@ -377,6 +344,16 @@ end
 3. Redo partway through (playhead follows forwards)
 4. Make new edit from middle of history
 5. Playhead always matches the state at each point ✅
+```
+
+### Test 6: Selection Idempotence (Regression)
+```
+1. Execute command that selects Clip A
+2. Manually change selection to Clip B
+3. Execute second command that relies on Clip B
+4. Undo twice, redo twice
+5. After first redo selection is back on Clip B, ensuring the next redo
+   replays with the correct context ✅
 ```
 
 ---

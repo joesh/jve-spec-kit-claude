@@ -8,6 +8,14 @@ local sqlite3 = require("core.sqlite3")
 local db_connection = nil
 local db_path = nil
 
+-- Initialize database at given path (legacy helper for tests/tools)
+function M.init(path)
+    if not path or path == "" then
+        error("FATAL: database.init() requires a file path")
+    end
+    return M.set_path(path)
+end
+
 -- Set database path and open connection
 function M.set_path(path)
     db_path = path
