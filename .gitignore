@@ -64,3 +64,6 @@ test_*.jve
 *.rpm
 *.pkg
 *.dmg
+
+# Generated Qt/CMake autogen artifacts
+*_autogen/
