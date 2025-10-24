@@ -9,6 +9,28 @@ local M = {}
 -- Configuration
 M.SNAPSHOT_INTERVAL = 50  -- Create snapshot every N commands
 
+local function ensure_snapshots_table(db)
+    if not db then
+        return false
+    end
+
+    local ok = db:exec([[
+        CREATE TABLE IF NOT EXISTS snapshots (
+            id TEXT PRIMARY KEY,
+            sequence_id TEXT NOT NULL,
+            sequence_number INTEGER NOT NULL,
+            clips_state TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    ]])
+
+    if not ok then
+        print("WARNING: snapshot_manager: Failed to ensure snapshots table")
+    end
+
+    return ok
+end
+
 -- Serialize clips array to JSON
 -- Takes an array of clip objects and returns a JSON string
 function M.serialize_clips(clips)
@@ -80,6 +102,8 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
         return false
     end
 
+    ensure_snapshots_table(db)
+
     print(string.format("Creating snapshot at sequence %d with %d clips",
         sequence_number, #clips))
 
@@ -126,6 +150,8 @@ function M.load_snapshot(db, sequence_id)
         print("WARNING: load_snapshot: Missing required parameters")
         return nil
     end
+
+    ensure_snapshots_table(db)
 
     local query = db:prepare([[
         SELECT sequence_number, clips_state
