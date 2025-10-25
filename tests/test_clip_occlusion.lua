@@ -4,6 +4,16 @@ require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
+local Media = require('models.media')
+local Command = require('command')
+local command_impl = require('core.command_implementations')
+
+local function new_command_env(db)
+    local executors = {}
+    local undoers = {}
+    command_impl.register_commands(executors, undoers, db)
+    return executors, undoers
+end
 
 local function setup_db(path)
     os.remove(path)
@@ -76,6 +86,8 @@ local function setup_db(path)
         VALUES ('track_v1', 'sequence', 'VIDEO', 1, 1);
         INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
         VALUES ('track_v2', 'sequence', 'VIDEO', 2, 1);
+        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
+        VALUES ('track_v3', 'sequence', 'VIDEO', 3, 1);
     ]])
 
     return db
@@ -213,7 +225,6 @@ assert(right_fragment.duration == 3000, "right fragment duration should be 3000"
 print("✅ Straddled clip split into two fragments")
 
 print("Test 4: Ripple clamp respects media duration")
-local Media = require('models.media')
 local media_row = Media.create({
     id = "media_ripple",
     project_id = "project",
@@ -240,11 +251,7 @@ clip_row:bind_value(1, ripple_clip.id)
 assert(clip_row:exec() and clip_row:next(), "failed to fetch ripple clip row")
 assert(clip_row:value(0) == "media_ripple", "clip should reference media_ripple")
 
-local command_executors = {}
-local command_undoers = {}
-local command_impl = require('core.command_implementations')
-command_impl.register_commands(command_executors, command_undoers, db)
-local Command = require('command')
+local command_executors = new_command_env(db)
 local ripple_cmd = Command.create("RippleEdit", "project")
 ripple_cmd:set_parameter("edge_info", {clip_id = ripple_clip.id, edge_type = "out", track_id = "track_v1"})
 ripple_cmd:set_parameter("delta_ms", 1500)
@@ -257,5 +264,62 @@ assert(ripple_after.duration == 5000, string.format("ripple duration should clam
 assert(ripple_after.source_out == 5000, "source_out should match media duration after clamping")
 
 print("✅ RippleEdit clamps extension to media duration")
+
+print("Test 5: Insert splits overlapping clip")
+local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/base.mov", file_name = "base.mov", duration = 6000, frame_rate = 30})
+assert(base_media:save(db), "failed to save base media")
+local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/new.mov", file_name = "new.mov", duration = 1000, frame_rate = 30})
+assert(new_media:save(db), "failed to save new media")
+
+local base_clip = Clip.create("Base Split", "media_split_base")
+base_clip.track_id = "track_v3"
+base_clip.start_time = 0
+base_clip.duration = 6000
+base_clip.source_in = 0
+base_clip.source_out = 6000
+assert(base_clip:save(db), "failed saving base clip for split test")
+
+command_executors = new_command_env(db)
+local insert_split = Command.create("Insert", "project")
+insert_split:set_parameter("media_id", "media_split_new")
+insert_split:set_parameter("track_id", "track_v3")
+insert_split:set_parameter("insert_time", 2000)
+insert_split:set_parameter("duration", 1000)
+insert_split:set_parameter("source_in", 0)
+insert_split:set_parameter("source_out", 1000)
+insert_split:set_parameter("sequence_id", "sequence")
+assert(command_executors["Insert"](insert_split), "Insert command failed")
+
+local stmt_split = db:prepare([[SELECT id, start_time, duration FROM clips WHERE track_id = 'track_v3' ORDER BY start_time]])
+assert(stmt_split:exec(), "failed to query split results")
+
+local rows = {}
+while stmt_split:next() do
+    table.insert(rows, {
+        id = stmt_split:value(0),
+        start_time = stmt_split:value(1),
+        duration = stmt_split:value(2)
+    })
+end
+
+-- Debug output for inspection (removed in final assertions if needed)
+-- for _, row in ipairs(rows) do
+--     print("track_v3 clip", row.id, row.start_time, row.duration)
+-- end
+
+assert(#rows == 3, string.format("expected 3 clips after insert split, got %d", #rows))
+assert(rows[1].id == base_clip.id, "base clip should retain original id")
+assert(rows[1].start_time == 0, "left fragment start should remain 0")
+assert(rows[1].duration == 2000, string.format("left fragment duration should be 2000ms, got %d", rows[1].duration))
+
+local inserted_row = rows[2]
+assert(inserted_row.start_time == 2000, string.format("inserted clip should start at 2000ms, got %d", inserted_row.start_time))
+assert(inserted_row.duration == 1000, string.format("inserted clip duration mismatch: %d", inserted_row.duration))
+
+local right_row = rows[3]
+assert(right_row.start_time == 3000, string.format("right fragment should start at 3000ms, got %d", right_row.start_time))
+assert(right_row.duration == 3000, string.format("right fragment duration should be 3000ms, got %d", right_row.duration))
+
+print("✅ Insert splits overlapping clip into left/new/right segments")
 
 print("\nAll occlusion tests passed.")

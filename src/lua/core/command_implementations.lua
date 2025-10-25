@@ -820,7 +820,7 @@ command_executors["Insert"] = function(command)
 
     command:set_parameter("clip_id", clip.id)
 
-    if clip:save(db) then
+    if clip:save(db, {resolve_occlusion = true}) then
         -- Advance playhead to end of inserted clip (if requested)
         local advance_playhead = command:get_parameter("advance_playhead")
         if advance_playhead then

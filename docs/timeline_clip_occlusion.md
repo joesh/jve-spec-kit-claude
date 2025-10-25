@@ -31,6 +31,7 @@ Historically, commands such as `Overwrite` manually trimmed or deleted occluded 
    - `Overwrite` simply calls `clip:save(db, {resolve_occlusion = true})`.
    - Clip moves (`Nudge`) pass the selected clip set as `ignore_ids` so only neighbours are trimmed.
   - Ripple edit downstream selection now uses `>= ripple_time - 1` to ensure adjacent clips shift, and right-edge trims clamp to the available media duration.
+  - Insert calls into the mutator so clips covering the insertion point split into left/new/right fragments automatically.
 
 4. **Regression coverage**  
    `tests/test_clip_occlusion.lua` covers tail trims, deletion, splits, and multi-clip moves.
