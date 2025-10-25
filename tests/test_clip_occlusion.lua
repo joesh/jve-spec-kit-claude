@@ -9,6 +9,7 @@ local function setup_db(path)
     os.remove(path)
     database.init(path)
     local db = database.get_connection()
+    rawset(_G, "db", db)
 
     db:exec([[
         CREATE TABLE IF NOT EXISTS projects (
@@ -48,6 +49,22 @@ local function setup_db(path)
             source_in INTEGER NOT NULL DEFAULT 0,
             source_out INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS media (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            file_path TEXT,
+            name TEXT,
+            duration INTEGER,
+            frame_rate REAL,
+            width INTEGER,
+            height INTEGER,
+            audio_channels INTEGER,
+            codec TEXT,
+            created_at INTEGER,
+            modified_at INTEGER,
+            metadata TEXT
         );
     ]])
 
@@ -194,5 +211,51 @@ local right_fragment = fetch_clip(db, right_id)
 assert(right_fragment.duration == 3000, "right fragment duration should be 3000")
 
 print("✅ Straddled clip split into two fragments")
+
+print("Test 4: Ripple clamp respects media duration")
+local Media = require('models.media')
+local media_row = Media.create({
+    id = "media_ripple",
+    project_id = "project",
+    file_path = "/tmp/media_ripple.mov",
+    file_name = "media_ripple.mov",
+    duration = 5000,
+    frame_rate = 30.0
+})
+assert(media_row:save(db), "failed saving media for ripple test")
+
+local loaded_media = Media.load("media_ripple", db)
+assert(loaded_media and loaded_media.duration == 5000, "media duration should be 5000ms")
+
+local ripple_clip = Clip.create("Ripple Clip", "media_ripple")
+ripple_clip.track_id = "track_v1"
+ripple_clip.start_time = 0
+ripple_clip.duration = 4000
+ripple_clip.source_in = 0
+ripple_clip.source_out = 4000
+assert(ripple_clip:save(db), "failed saving ripple clip")
+
+local clip_row = db:prepare([[SELECT media_id, source_in, source_out FROM clips WHERE id = ?]])
+clip_row:bind_value(1, ripple_clip.id)
+assert(clip_row:exec() and clip_row:next(), "failed to fetch ripple clip row")
+assert(clip_row:value(0) == "media_ripple", "clip should reference media_ripple")
+
+local command_executors = {}
+local command_undoers = {}
+local command_impl = require('core.command_implementations')
+command_impl.register_commands(command_executors, command_undoers, db)
+local Command = require('command')
+local ripple_cmd = Command.create("RippleEdit", "project")
+ripple_cmd:set_parameter("edge_info", {clip_id = ripple_clip.id, edge_type = "out", track_id = "track_v1"})
+ripple_cmd:set_parameter("delta_ms", 1500)
+ripple_cmd:set_parameter("sequence_id", "sequence")
+
+local ripple_result = command_executors["RippleEdit"](ripple_cmd)
+assert(ripple_result == true, "RippleEdit should succeed with clamped delta")
+local ripple_after = fetch_clip(db, ripple_clip.id)
+assert(ripple_after.duration == 5000, string.format("ripple duration should clamp to media length (5000), got %d", ripple_after.duration))
+assert(ripple_after.source_out == 5000, "source_out should match media duration after clamping")
+
+print("✅ RippleEdit clamps extension to media duration")
 
 print("\nAll occlusion tests passed.")

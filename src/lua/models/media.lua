@@ -26,13 +26,13 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
     -- Extract with multiple name variations for compatibility
     local file_path = params.file_path
     local name = params.name or params.file_name
-    local dur = params.duration
-    local fps = params.frame_rate
+    local dur = tonumber(params.duration)
+    local fps = tonumber(params.frame_rate)
     local meta = params.metadata
     local project_id = params.project_id
-    local width = params.width or 0
-    local height = params.height or 0
-    local audio_channels = params.audio_channels or 0
+    local width = tonumber(params.width) or 0
+    local height = tonumber(params.height) or 0
+    local audio_channels = tonumber(params.audio_channels) or 0
     local codec = params.codec or ""
 
     -- Validation
@@ -52,7 +52,7 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
     end
 
     -- Frame rate can be 0 for audio-only files
-    if not fps or fps < 0 then
+    if fps == nil or fps < 0 then
         print("WARNING: Media.create: Invalid frame_rate")
         return nil
     end
@@ -116,11 +116,11 @@ function M.load(media_id, db)
         name = query:value(2),
         file_name = query:value(2),  -- Alias for backward compatibility
         file_path = query:value(3),
-        duration = query:value(4),
-        frame_rate = query:value(5),
-        width = query:value(6),
-        height = query:value(7),
-        audio_channels = query:value(8),
+        duration = tonumber(query:value(4)) or 0,
+        frame_rate = tonumber(query:value(5)) or 0,
+        width = tonumber(query:value(6)) or 0,
+        height = tonumber(query:value(7)) or 0,
+        audio_channels = tonumber(query:value(8)) or 0,
         codec = query:value(9),
         created_at = query:value(10),
         modified_at = query:value(11),

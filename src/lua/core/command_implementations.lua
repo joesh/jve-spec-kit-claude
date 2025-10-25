@@ -1234,11 +1234,21 @@ local function apply_edge_ripple(clip, edge_type, delta_ms)
                 media = Media.load(clip.media_id, db)
             end
 
-            if media and new_source_out > media.duration then
-                -- Hit media boundary - can't extend beyond source file duration
-                print(string.format("  BLOCKED: new_source_out=%d > media.duration=%d (can't extend past end of media)",
-                    new_source_out, media.duration))
-                return nil, false
+            if media and media.duration and media.duration > 0 then
+                local max_source_out = media.duration
+                local available_tail = max_source_out - (clip.source_in + clip.duration)
+                if available_tail < 0 then available_tail = 0 end
+                if delta_ms > available_tail then
+                    if available_tail == 0 then
+                        print(string.format("  BLOCKED: already at media end (%dms)", max_source_out))
+                        delta_ms = 0
+                    else
+                        print(string.format("  CLAMPED: requested delta=%dms, available tail=%dms", delta_ms, available_tail))
+                        delta_ms = available_tail
+                    end
+                    new_duration = clip.duration + delta_ms
+                    new_source_out = clip.source_in + new_duration
+                end
             end
 
             -- Check if new duration would be too small
