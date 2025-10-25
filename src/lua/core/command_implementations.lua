@@ -861,16 +861,59 @@ command_executors["Overwrite"] = function(command)
         return false
     end
 
-    local Clip = require('models.clip')
+    local overwrite_end = overwrite_time + duration
 
-    if dry_run then
-        return true, {}
+    -- Inspect overlaps to capture metadata and reuse IDs when overwriting whole clips
+    local overlap_query = db:prepare([[
+        SELECT id, start_time, duration
+        FROM clips
+        WHERE track_id = ?
+        ORDER BY start_time ASC
+    ]])
+
+    if not overlap_query then
+        print("WARNING: Overwrite: Failed to prepare overlap query")
+        return false
     end
 
+    overlap_query:bind_value(1, track_id)
+
+    local overlapping = {}
+    local reuse_clip_id = nil
+
+    if overlap_query:exec() then
+        while overlap_query:next() do
+            local clip_id = overlap_query:value(0)
+            local clip_start = overlap_query:value(1)
+            local clip_duration = overlap_query:value(2)
+            local clip_end = clip_start + clip_duration
+
+            if clip_start < overwrite_end and clip_end > overwrite_time then
+                table.insert(overlapping, {
+                    id = clip_id,
+                    start_time = clip_start,
+                    duration = clip_duration,
+                    end_time = clip_end
+                })
+
+                if clip_start >= overwrite_time and clip_end <= overwrite_end and not reuse_clip_id then
+                    reuse_clip_id = clip_id
+                end
+            end
+        end
+    end
+
+    if dry_run then
+        return true, {affected_clips = overlapping}
+    end
+
+    local Clip = require('models.clip')
     local existing_clip_id = command:get_parameter("clip_id")
     local clip = Clip.create("Overwrite Clip", media_id)
     if existing_clip_id then
         clip.id = existing_clip_id  -- Reuse existing ID for replay
+    elseif reuse_clip_id then
+        clip.id = reuse_clip_id  -- Preserve identity for downstream commands
     end
     clip.track_id = track_id
     clip.start_time = overwrite_time

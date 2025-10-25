@@ -88,6 +88,8 @@ local function setup_db(path)
         VALUES ('track_v2', 'sequence', 'VIDEO', 2, 1);
         INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
         VALUES ('track_v3', 'sequence', 'VIDEO', 3, 1);
+        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
+        VALUES ('track_v4', 'sequence', 'VIDEO', 4, 1);
     ]])
 
     return db
@@ -321,5 +323,51 @@ assert(right_row.start_time == 3000, string.format("right fragment should start 
 assert(right_row.duration == 3000, string.format("right fragment duration should be 3000ms, got %d", right_row.duration))
 
 print("✅ Insert splits overlapping clip into left/new/right segments")
+
+print("Test 6: Overwrite reuses clip ID for downstream commands")
+local overwrite_media = Media.create({id = "media_overwrite_src", project_id = "project", file_path = "/tmp/overwrite_src.mov", file_name = "overwrite_src.mov", duration = 4000, frame_rate = 30})
+assert(overwrite_media:save(db), "failed to save overwrite source media")
+local overwrite_replacement = Media.create({id = "media_overwrite_new", project_id = "project", file_path = "/tmp/overwrite_new.mov", file_name = "overwrite_new.mov", duration = 1500, frame_rate = 30})
+assert(overwrite_replacement:save(db), "failed to save overwrite replacement media")
+
+local overwrite_clip = Clip.create("Overwrite Target", "media_overwrite_src")
+overwrite_clip.track_id = "track_v4"
+overwrite_clip.start_time = 5000
+overwrite_clip.duration = 2000
+overwrite_clip.source_in = 0
+overwrite_clip.source_out = 2000
+assert(overwrite_clip:save(db), "failed saving overwrite base clip")
+
+command_executors = new_command_env(db)
+local overwrite_cmd = Command.create("Overwrite", "project")
+overwrite_cmd:set_parameter("media_id", "media_overwrite_new")
+overwrite_cmd:set_parameter("track_id", "track_v4")
+overwrite_cmd:set_parameter("overwrite_time", 5000)
+overwrite_cmd:set_parameter("duration", 2000)
+overwrite_cmd:set_parameter("source_in", 0)
+overwrite_cmd:set_parameter("source_out", 2000)
+overwrite_cmd:set_parameter("sequence_id", "sequence")
+assert(command_executors["Overwrite"](overwrite_cmd), "Overwrite command failed")
+
+local stmt_overwrite = db:prepare("SELECT start_time, duration FROM clips WHERE id = ?")
+stmt_overwrite:bind_value(1, overwrite_clip.id)
+assert(stmt_overwrite:exec() and stmt_overwrite:next(), "overwritten clip not found")
+local start_time = tonumber(stmt_overwrite:value(0))
+local duration_after = tonumber(stmt_overwrite:value(1))
+assert(start_time == 5000, string.format("overwritten clip start should remain 5000, got %s", tostring(start_time)))
+assert(duration_after == 2000, string.format("overwritten clip duration should be 2000ms, got %s", tostring(duration_after)))
+
+local move_cmd = Command.create("MoveClipToTrack", "project")
+move_cmd:set_parameter("clip_id", overwrite_clip.id)
+move_cmd:set_parameter("target_track_id", "track_v2")
+assert(command_executors["MoveClipToTrack"](move_cmd), "MoveClipToTrack failed after overwrite")
+
+local stmt_verify = db:prepare("SELECT start_time FROM clips WHERE id = ?")
+stmt_verify:bind_value(1, overwrite_clip.id)
+assert(stmt_verify:exec() and stmt_verify:next(), "clip missing after move")
+local moved_start = tonumber(stmt_verify:value(0))
+assert(moved_start == 5000, string.format("moved clip should retain start time, got %s", tostring(moved_start)))
+
+print("✅ Overwrite preserves clip ID for subsequent commands")
 
 print("\nAll occlusion tests passed.")
