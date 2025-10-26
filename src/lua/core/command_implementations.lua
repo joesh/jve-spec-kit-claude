@@ -14,6 +14,49 @@ local M = {}
 --   db: database connection reference (captured by closures)
 function M.register_commands(command_executors, command_undoers, db)
 
+    local function restore_clip_state(state)
+        if not state then
+            return
+        end
+        local Clip = require('models.clip')
+        local clip = Clip.load(state.id, db)
+        if not clip then
+            clip = Clip.create('Restored Clip', state.media_id)
+            clip.id = state.id
+        end
+        clip.track_id = state.track_id
+        clip.media_id = state.media_id
+        clip.start_time = state.start_time
+        clip.duration = state.duration
+        clip.source_in = state.source_in
+        clip.source_out = state.source_out
+        clip.enabled = state.enabled ~= false
+        clip:save(db, {resolve_occlusion = false})
+    end
+
+    local function revert_occlusion_actions(actions)
+        if not actions or #actions == 0 then
+            return
+        end
+        local Clip = require('models.clip')
+        for i = #actions, 1, -1 do
+            local action = actions[i]
+            if action.type == 'trim' then
+                restore_clip_state(action.before)
+            elseif action.type == 'delete' then
+                restore_clip_state(action.clip or action.before)
+            elseif action.type == 'insert' then
+                local state = action.clip
+                if state then
+                    local clip = Clip.load(state.id, db)
+                    if clip then
+                        clip:delete(db)
+                    end
+                end
+            end
+        end
+    end
+
 -- Command type implementations
 command_executors["CreateProject"] = function(command)
     print("Executing CreateProject command")
@@ -187,6 +230,7 @@ command_executors["ImportMedia"] = function(command)
 
     local file_path = command:get_parameter("file_path")
     local project_id = command:get_parameter("project_id")
+    local existing_media_id = command:get_parameter("media_id")
 
     if not file_path or file_path == "" or not project_id or project_id == "" then
         print("WARNING: ImportMedia: Missing required parameters")
@@ -195,7 +239,7 @@ command_executors["ImportMedia"] = function(command)
 
     -- Use MediaReader to probe file and extract metadata
     local MediaReader = require("media.media_reader")
-    local media_id, err = MediaReader.import_media(file_path, db, project_id)
+    local media_id, err = MediaReader.import_media(file_path, db, project_id, existing_media_id)
 
     if not media_id then
         print(string.format("ERROR: ImportMedia: Failed to import %s: %s", file_path, err or "unknown error"))
@@ -1331,8 +1375,10 @@ command_executors["RippleEdit"] = function(command)
     local Clip = require('models.clip')
     local database = require('core.database')
     local all_clips = database.load_clips(command:get_parameter("sequence_id") or "default_sequence")
+    local occlusion_actions = {}
 
     -- MATERIALIZE GAP CLIPS: Convert gap edges to temporary gap clip objects
+    local gap_reference_clip = nil
     local clip, edge_type, is_gap_clip
     if edge_info.edge_type == "gap_after" or edge_info.edge_type == "gap_before" then
         -- Find the real clip that defines this gap
@@ -1341,6 +1387,7 @@ command_executors["RippleEdit"] = function(command)
             print("ERROR: RippleEdit: Reference clip not found")
             return {success = false, error_message = "Reference clip not found"}
         end
+        gap_reference_clip = reference_clip
 
         -- Use stored gap boundaries if available (for deterministic replay)
         -- Otherwise calculate dynamically from adjacent clips
@@ -1386,7 +1433,8 @@ command_executors["RippleEdit"] = function(command)
             start_time = gap_start,
             duration = gap_duration,
             source_in = 0,
-            source_out = gap_duration
+            source_out = gap_duration,
+            is_gap = true
         }
         edge_type = edge_info.edge_type == "gap_after" and "in" or "out"  -- gap_after→in, gap_before→out
         is_gap_clip = true
@@ -1510,7 +1558,7 @@ command_executors["RippleEdit"] = function(command)
             clamped_delta = math.max(min_delta, math.min(max_delta, delta_ms))
         else
             -- Regular clip trim: use normal constraint logic (no frame snapping)
-            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, nil, true)
+            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, nil, nil, true)
         end
 
         if clamped_delta ~= delta_ms and not dry_run then
@@ -1606,9 +1654,15 @@ command_executors["RippleEdit"] = function(command)
 
     -- EXECUTE: Actually save changes (skip for gap clips - they're not persisted)
     if not is_gap_clip then
-        if not clip:save(db) then
+        local ok, actions = clip:save(db, {resolve_occlusion = true})
+        if not ok then
             print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
             return {success = false, error_message = "Failed to save clip"}
+        end
+        if actions then
+            for _, action in ipairs(actions) do
+                table.insert(occlusion_actions, action)
+            end
         end
     end
 
@@ -1622,9 +1676,15 @@ command_executors["RippleEdit"] = function(command)
 
         shift_clip.start_time = shift_clip.start_time + shift_amount
 
-        if not shift_clip:save(db) then
+        local ok, actions = shift_clip:save(db, {resolve_occlusion = true})
+        if not ok then
             print(string.format("ERROR: RippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
             return {success = false, error_message = "Failed to save downstream clip"}
+        end
+        if actions then
+            for _, action in ipairs(actions) do
+                table.insert(occlusion_actions, action)
+            end
         end
 
         ::continue_shift::
@@ -1637,6 +1697,10 @@ command_executors["RippleEdit"] = function(command)
         for _, c in ipairs(clips_to_shift) do table.insert(ids, c.id) end
         return ids
     end)())
+
+    if #occlusion_actions > 0 then
+        command:set_parameter("occlusion_actions", occlusion_actions)
+    end
 
     -- For gap clips, store the calculated boundaries for deterministic replay
     if is_gap_clip then
@@ -1673,6 +1737,7 @@ command_executors["BatchRippleEdit"] = function(command)
     local earliest_ripple_time = math.huge  -- Track leftmost ripple point (determines which clips shift)
     local downstream_shift_amount = nil  -- Timeline length change (NOT summed across tracks)
     local preview_affected_clips = {}
+    local occlusion_actions = {}
 
     -- Load all clips once for gap materialization
     local all_clips = database.load_clips(sequence_id)
@@ -1682,9 +1747,8 @@ command_executors["BatchRippleEdit"] = function(command)
     local max_allowed_delta = delta_ms
     local min_allowed_delta = delta_ms
 
-    -- Determine reference bracket type from first edge
-    -- Bracket mapping: in/gap_after → [, out/gap_before → ]
-    local reference_bracket = (edge_infos[1].edge_type == "in" or edge_infos[1].edge_type == "gap_after") and "[" or "]"
+    -- Determine reference bracket type from first effective edge
+    local reference_bracket = nil
     for _, edge_info in ipairs(edge_infos) do
         -- Materialize clip (gap or real)
         local clip, actual_edge_type, is_gap_clip
@@ -1696,36 +1760,37 @@ command_executors["BatchRippleEdit"] = function(command)
                 return false
             end
 
-            -- Calculate gap boundaries
-            local gap_start, gap_end
-            if edge_info.edge_type == "gap_after" then
-                gap_start = reference_clip.start_time + reference_clip.duration
-                gap_end = math.huge
-                for _, c in ipairs(all_clips) do
-                    if c.track_id == reference_clip.track_id and c.start_time > gap_start then
-                        gap_end = math.min(gap_end, c.start_time)
-                    end
-                end
-            else  -- gap_before
-                gap_end = reference_clip.start_time
-                gap_start = 0
-                for _, c in ipairs(all_clips) do
-                    if c.track_id == reference_clip.track_id and c.start_time + c.duration < gap_end then
-                        gap_start = math.max(gap_start, c.start_time + c.duration)
-                    end
+        -- Calculate gap boundaries
+        local gap_start, gap_end
+        if edge_info.edge_type == "gap_after" then
+            gap_start = reference_clip.start_time + reference_clip.duration
+            gap_end = math.huge
+            for _, c in ipairs(all_clips) do
+                if c.track_id == reference_clip.track_id and c.start_time > gap_start then
+                    gap_end = math.min(gap_end, c.start_time)
                 end
             end
+        else  -- gap_before
+            gap_end = reference_clip.start_time
+            gap_start = 0
+            for _, c in ipairs(all_clips) do
+                if c.track_id == reference_clip.track_id and c.start_time + c.duration < gap_end then
+                    gap_start = math.max(gap_start, c.start_time + c.duration)
+                end
+            end
+        end
 
-            clip = {
-                id = "temp_gap_" .. edge_info.clip_id,
-                track_id = reference_clip.track_id,
-                start_time = gap_start,
-                duration = gap_end - gap_start,
-                source_in = 0,
-                source_out = gap_end - gap_start
-            }
-            actual_edge_type = edge_info.edge_type == "gap_after" and "in" or "out"
-            is_gap_clip = true
+        clip = {
+            id = "temp_gap_" .. edge_info.clip_id,
+            track_id = reference_clip.track_id,
+            start_time = gap_start,
+            duration = gap_end - gap_start,
+            source_in = 0,
+            source_out = gap_end - gap_start,
+            is_gap = true
+        }
+        actual_edge_type = edge_info.edge_type == "gap_after" and "in" or "out"
+        is_gap_clip = true
         else
             clip = Clip.load(edge_info.clip_id, db)
             if not clip then
@@ -1740,7 +1805,10 @@ command_executors["BatchRippleEdit"] = function(command)
         -- Bracket mapping: in/gap_after → [, out/gap_before → ]
         -- If dragging [ edge: all ] edges get negated delta
         -- If dragging ] edge: all [ edges get negated delta
-        local edge_bracket = (edge_info.edge_type == "in" or edge_info.edge_type == "gap_after") and "[" or "]"
+        local edge_bracket = (actual_edge_type == "in") and "[" or "]"
+        if not reference_bracket and edge_info == edge_infos[1] then
+            reference_bracket = edge_bracket
+        end
         local edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
 
         -- Calculate constraints using timeline_constraints module
@@ -1832,41 +1900,42 @@ command_executors["BatchRippleEdit"] = function(command)
                 return false
             end
 
-            -- Calculate gap boundaries from adjacent clips
-            local gap_start, gap_duration
-            local gap_end
-            if edge_info.edge_type == "gap_after" then
-                gap_start = reference_clip.start_time + reference_clip.duration
-                -- Find next clip on same track to determine gap end
-                gap_end = math.huge
-                for _, c in ipairs(all_clips) do
-                    if c.track_id == reference_clip.track_id and c.start_time > gap_start then
-                        gap_end = math.min(gap_end, c.start_time)
-                    end
-                end
-            else  -- gap_before
-                gap_end = reference_clip.start_time
-                -- Find previous clip on same track to determine gap start
-                gap_start = 0
-                for _, c in ipairs(all_clips) do
-                    if c.track_id == reference_clip.track_id and c.start_time + c.duration < gap_end then
-                        gap_start = math.max(gap_start, c.start_time + c.duration)
-                    end
+        -- Calculate gap boundaries from adjacent clips
+        local gap_start, gap_duration
+        local gap_end
+        if edge_info.edge_type == "gap_after" then
+            gap_start = reference_clip.start_time + reference_clip.duration
+            -- Find next clip on same track to determine gap end
+            gap_end = math.huge
+            for _, c in ipairs(all_clips) do
+                if c.track_id == reference_clip.track_id and c.start_time > gap_start then
+                    gap_end = math.min(gap_end, c.start_time)
                 end
             end
-            gap_duration = gap_end - gap_start
+        else  -- gap_before
+            gap_end = reference_clip.start_time
+            -- Find previous clip on same track to determine gap start
+            gap_start = 0
+            for _, c in ipairs(all_clips) do
+                if c.track_id == reference_clip.track_id and c.start_time + c.duration < gap_end then
+                    gap_start = math.max(gap_start, c.start_time + c.duration)
+                end
+            end
+        end
+        gap_duration = gap_end - gap_start
 
-            -- Create temporary gap clip object (not saved to database)
-            clip = {
-                id = "temp_gap_" .. edge_info.clip_id,
-                track_id = reference_clip.track_id,
-                start_time = gap_start,
-                duration = gap_duration,
-                source_in = 0,
-                source_out = gap_duration
-            }
-            actual_edge_type = edge_info.edge_type == "gap_after" and "in" or "out"
-            is_gap_clip = true
+        -- Create temporary gap clip object (not saved to database)
+        clip = {
+            id = "temp_gap_" .. edge_info.clip_id,
+            track_id = reference_clip.track_id,
+            start_time = gap_start,
+            duration = gap_duration,
+            source_in = 0,
+            source_out = gap_duration,
+            is_gap = true
+        }
+        actual_edge_type = edge_info.edge_type == "gap_after" and "in" or "out"
+        is_gap_clip = true
         else
             clip = Clip.load(edge_info.clip_id, db)
             if not clip then
@@ -1901,7 +1970,7 @@ command_executors["BatchRippleEdit"] = function(command)
         -- Phase 0 already ensured this will succeed by clamping delta_ms
         -- ASYMMETRIC FIX: Negate delta for opposite BRACKET types (not in/out types!)
         -- Bracket mapping: in/gap_after → [, out/gap_before → ]
-        local edge_bracket = (edge_info.edge_type == "in" or edge_info.edge_type == "gap_after") and "[" or "]"
+        local edge_bracket = (actual_edge_type == "in") and "[" or "]"
         local edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
         local ripple_time, success = apply_edge_ripple(clip, actual_edge_type, edge_delta)
         if not success then
@@ -1922,9 +1991,15 @@ command_executors["BatchRippleEdit"] = function(command)
         else
             -- EXECUTE: Save changes (skip gap clips - they're not persisted)
             if not is_gap_clip then
-                if not clip:save(db) then
+                local ok, actions = clip:save(db, {resolve_occlusion = true})
+                if not ok then
                     print(string.format("ERROR: BatchRippleEdit: Failed to save clip %s", clip.id:sub(1,8)))
                     return false
+                end
+                if actions then
+                    for _, action in ipairs(actions) do
+                        table.insert(occlusion_actions, action)
+                    end
                 end
             end
         end
@@ -2000,6 +2075,26 @@ command_executors["BatchRippleEdit"] = function(command)
         end
     end
 
+    -- Clamp negative shifts so we never push a clip before t=0
+    if downstream_shift_amount < 0 then
+        local min_start = math.huge
+        for _, clip in ipairs(clips_to_shift) do
+            if clip.start_time < min_start then
+                min_start = clip.start_time
+            end
+        end
+        if min_start ~= math.huge then
+            local max_negative_shift = -min_start
+            if downstream_shift_amount < max_negative_shift then
+                if not dry_run then
+                    print(string.format("  Clamped negative downstream shift: %d → %d (prevent negative start)",
+                        downstream_shift_amount, max_negative_shift))
+                end
+                downstream_shift_amount = max_negative_shift
+            end
+        end
+    end
+
     -- DRY RUN: Return preview data without executing
     if dry_run then
         local preview_shifted_clips = {}
@@ -2037,9 +2132,15 @@ command_executors["BatchRippleEdit"] = function(command)
             print(string.format("  After:  clip %s start_time=%s", shift_clip.id:sub(1,8), tostring(shift_clip.start_time)))
         end
 
-        if not shift_clip:save(db) then
+        local ok, actions = shift_clip:save(db, {resolve_occlusion = true})
+        if not ok then
             print(string.format("ERROR: BatchRippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
             return false
+        end
+        if actions then
+            for _, action in ipairs(actions) do
+                table.insert(occlusion_actions, action)
+            end
         end
 
         ::continue_batch_shift::
@@ -2053,6 +2154,9 @@ command_executors["BatchRippleEdit"] = function(command)
         return ids
     end)())
     command:set_parameter("shift_amount", downstream_shift_amount or 0)  -- Store shift for undo
+    if #occlusion_actions > 0 then
+        command:set_parameter("occlusion_actions", occlusion_actions)
+    end
 
     print(string.format("✅ Batch ripple: trimmed %d edges, shifted %d downstream clips by %dms",
         #edge_infos, #clips_to_shift, downstream_shift_amount or 0))
@@ -2067,6 +2171,7 @@ command_executors["UndoBatchRippleEdit"] = function(command)
     local original_states = command:get_parameter("original_states")
     local shift_amount = command:get_parameter("shift_amount")  -- BUG FIX: Use stored shift, not delta_ms
     local shifted_clip_ids = command:get_parameter("shifted_clip_ids")
+    local occlusion_actions = command:get_parameter("occlusion_actions") or {}
 
     local Clip = require('models.clip')
 
@@ -2083,7 +2188,7 @@ command_executors["UndoBatchRippleEdit"] = function(command)
         clip.source_in = state.source_in
         clip.source_out = state.source_out
 
-        if not clip:save(db) then
+        if not clip:save(db, {resolve_occlusion = false}) then
             print(string.format("ERROR: UndoBatchRippleEdit: Failed to save clip %s", clip_id:sub(1,8)))
             return false
         end
@@ -2101,13 +2206,15 @@ command_executors["UndoBatchRippleEdit"] = function(command)
 
         shift_clip.start_time = shift_clip.start_time - shift_amount  -- BUG FIX: Use stored shift
 
-        if not shift_clip:save(db) then
+        if not shift_clip:save(db, {resolve_occlusion = false}) then
             print(string.format("ERROR: UndoBatchRippleEdit: Failed to save shifted clip %s", clip_id:sub(1,8)))
             return false
         end
 
         ::continue_unshift::
     end
+
+    revert_occlusion_actions(occlusion_actions)
 
     print(string.format("✅ Undone batch ripple: restored %d clips, shifted %d clips back",
         table.getn(original_states), #shifted_clip_ids))
@@ -2122,6 +2229,7 @@ command_executors["UndoRippleEdit"] = function(command)
     local delta_ms = command:get_parameter("delta_ms")
     local original_clip_state = command:get_parameter("original_clip_state")
     local shifted_clip_ids = command:get_parameter("shifted_clip_ids")
+    local occlusion_actions = command:get_parameter("occlusion_actions") or {}
 
     -- Restore original clip
     local Clip = require('models.clip')
@@ -2131,7 +2239,7 @@ command_executors["UndoRippleEdit"] = function(command)
         clip.duration = original_clip_state.duration
         clip.source_in = original_clip_state.source_in
         clip.source_out = original_clip_state.source_out
-        clip:save(db)
+        clip:save(db, {resolve_occlusion = false})
     end
 
     -- Shift all affected clips back
@@ -2139,9 +2247,11 @@ command_executors["UndoRippleEdit"] = function(command)
         local shift_clip = Clip.load(clip_id, db)
         if shift_clip then
             shift_clip.start_time = shift_clip.start_time - delta_ms
-            shift_clip:save(db)
+            shift_clip:save(db, {resolve_occlusion = false})
         end
     end
+
+    revert_occlusion_actions(occlusion_actions)
 
     print(string.format("✅ Undone ripple edit: restored clip and shifted %d clips back", #shifted_clip_ids))
     return true

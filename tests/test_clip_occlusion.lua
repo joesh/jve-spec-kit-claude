@@ -7,6 +7,9 @@ local Clip = require('models.clip')
 local Media = require('models.media')
 local Command = require('command')
 local command_impl = require('core.command_implementations')
+local timeline_constraints = require('core.timeline_constraints')
+local command_manager = require('core.command_manager')
+local timeline_state = require('ui.timeline.timeline_state')
 
 local function new_command_env(db)
     local executors = {}
@@ -45,6 +48,7 @@ local function setup_db(path)
         CREATE TABLE IF NOT EXISTS tracks (
             id TEXT PRIMARY KEY,
             sequence_id TEXT NOT NULL,
+            name TEXT,
             track_type TEXT NOT NULL,
             track_index INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
@@ -76,20 +80,42 @@ local function setup_db(path)
             modified_at INTEGER,
             metadata TEXT
         );
+        CREATE TABLE IF NOT EXISTS commands (
+            id TEXT PRIMARY KEY,
+            parent_id TEXT,
+            parent_sequence_number INTEGER,
+            sequence_number INTEGER,
+            command_type TEXT NOT NULL,
+            command_args TEXT,
+            pre_hash TEXT,
+            post_hash TEXT,
+            timestamp INTEGER,
+            playhead_time INTEGER DEFAULT 0,
+            selected_clip_ids TEXT DEFAULT '[]',
+            selected_edge_infos TEXT DEFAULT '[]',
+            selected_clip_ids_pre TEXT DEFAULT '[]',
+            selected_edge_infos_pre TEXT DEFAULT '[]'
+        );
     ]])
 
     db:exec([[
         INSERT INTO projects (id, name) VALUES ('project', 'Test Project');
         INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
         VALUES ('sequence', 'project', 'Seq', 30.0, 1920, 1080);
-        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-        VALUES ('track_v1', 'sequence', 'VIDEO', 1, 1);
-        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-        VALUES ('track_v2', 'sequence', 'VIDEO', 2, 1);
-        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-        VALUES ('track_v3', 'sequence', 'VIDEO', 3, 1);
-        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-        VALUES ('track_v4', 'sequence', 'VIDEO', 4, 1);
+        INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
+        VALUES ('selection_sequence', 'project', 'Selection Seq', 30.0, 1920, 1080);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 1, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 2, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v3', 'sequence', 'V3', 'VIDEO', 3, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v4', 'sequence', 'V4', 'VIDEO', 4, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v5', 'sequence', 'V5', 'VIDEO', 5, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('selection_track_v1', 'selection_sequence', 'Selection V1', 'VIDEO', 1, 1);
     ]])
 
     return db
@@ -318,13 +344,399 @@ local inserted_row = rows[2]
 assert(inserted_row.start_time == 2000, string.format("inserted clip should start at 2000ms, got %d", inserted_row.start_time))
 assert(inserted_row.duration == 1000, string.format("inserted clip duration mismatch: %d", inserted_row.duration))
 
+print("✅ Insert splits overlapping clip")
+
+print("Test 6: Gap trim clamps against upstream clip")
+local gap_media_up = Media.create({
+    id = "media_gap_up",
+    project_id = "project",
+    file_path = "/tmp/gap_up.mov",
+    name = "gap_up.mov",
+    duration = 10000,
+    frame_rate = 30
+})
+assert(gap_media_up:save(db), "failed saving gap upstream media")
+
+local gap_media_down = Media.create({
+    id = "media_gap_down",
+    project_id = "project",
+    file_path = "/tmp/gap_down.mov",
+    name = "gap_down.mov",
+    duration = 8000,
+    frame_rate = 30
+})
+assert(gap_media_down:save(db), "failed saving gap downstream media")
+
+local gap_upstream = Clip.create("Gap Upstream", "media_gap_up")
+gap_upstream.track_id = "track_v5"
+gap_upstream.start_time = 1000
+gap_upstream.duration = 3000
+gap_upstream.source_in = 0
+gap_upstream.source_out = 3000
+assert(gap_upstream:save(db, {resolve_occlusion = true}), "failed saving upstream gap clip")
+
+local gap_downstream = Clip.create("Gap Downstream", "media_gap_down")
+gap_downstream.track_id = "track_v5"
+gap_downstream.start_time = 7000
+gap_downstream.duration = 2000
+gap_downstream.source_in = 0
+gap_downstream.source_out = 2000
+assert(gap_downstream:save(db, {resolve_occlusion = true}), "failed saving downstream gap clip")
+
+local gap_all_clips = database.load_clips("sequence")
+local gap_start = gap_upstream.start_time + gap_upstream.duration
+local gap_end = gap_downstream.start_time
+local gap_duration = gap_end - gap_start
+assert(gap_duration > 1, "gap duration should be greater than 1ms for constraint test")
+
+local materialized_gap = {
+    id = "temp_gap_" .. gap_upstream.id,
+    track_id = gap_upstream.track_id,
+    start_time = gap_start,
+    duration = gap_duration,
+    source_in = 0,
+    source_out = gap_duration,
+    is_gap = true
+}
+
+local gap_constraints = timeline_constraints.calculate_trim_range(
+    materialized_gap,
+    "in",
+    gap_all_clips,
+    false,
+    true
+)
+
+assert(gap_constraints.min_delta < 0, string.format("expected negative min_delta to allow gap expansion, got %d", gap_constraints.min_delta))
+assert(gap_constraints.max_delta == math.huge, string.format("expected max_delta to allow closing past original gap, got %s", tostring(gap_constraints.max_delta)))
+
+print("✅ Gap trim clamps against upstream clip")
+
 local right_row = rows[3]
 assert(right_row.start_time == 3000, string.format("right fragment should start at 3000ms, got %d", right_row.start_time))
 assert(right_row.duration == 3000, string.format("right fragment duration should be 3000ms, got %d", right_row.duration))
 
 print("✅ Insert splits overlapping clip into left/new/right segments")
 
-print("Test 6: Overwrite reuses clip ID for downstream commands")
+print("Test 7: Gap bracket trim delegates to clip when closing")
+command_executors = new_command_env(db)
+local close_gap_cmd = Command.create("RippleEdit", "project")
+close_gap_cmd:set_parameter("edge_info", {clip_id = gap_upstream.id, edge_type = "gap_after", track_id = "track_v5"})
+close_gap_cmd:set_parameter("delta_ms", gap_duration + 500)
+close_gap_cmd:set_parameter("sequence_id", "sequence")
+local original_upstream_duration = gap_upstream.duration
+local original_downstream_start = gap_downstream.start_time
+assert(command_executors["RippleEdit"](close_gap_cmd), "RippleEdit closing gap via gap_after should succeed")
+
+local upstream_after = fetch_clip(db, gap_upstream.id)
+assert(upstream_after.duration == original_upstream_duration,
+    string.format("upstream clip duration should remain %d, got %d", original_upstream_duration, upstream_after.duration))
+
+local downstream_stmt = db:prepare("SELECT start_time FROM clips WHERE id = ?")
+downstream_stmt:bind_value(1, gap_downstream.id)
+assert(downstream_stmt:exec() and downstream_stmt:next(), "downstream clip missing after gap close")
+local downstream_start = tonumber(downstream_stmt:value(0))
+assert(downstream_start >= gap_upstream.start_time + upstream_after.duration,
+    "downstream clip should not overlap upstream clip after gap close")
+
+print("✅ Gap closing via bracket removes gap without touching upstream clip")
+
+print("Test 8: Gap ripple opens downstream space")
+local gap_extend_clip = Clip.create("Gap Extend Upstream", "media_gap_up")
+gap_extend_clip.track_id = "track_v5"
+gap_extend_clip.start_time = 20000
+gap_extend_clip.duration = 3000
+gap_extend_clip.source_in = 0
+gap_extend_clip.source_out = 3000
+assert(gap_extend_clip:save(db, {resolve_occlusion = true}), "failed saving gap extend clip")
+
+local gap_extend_down = Clip.create("Gap Extend Downstream", "media_gap_down")
+gap_extend_down.track_id = "track_v5"
+gap_extend_down.start_time = 26000
+gap_extend_down.duration = 2000
+gap_extend_down.source_in = 0
+gap_extend_down.source_out = 2000
+assert(gap_extend_down:save(db, {resolve_occlusion = true}), "failed saving gap extend downstream clip")
+
+local gap_extend_cmd = Command.create("RippleEdit", "project")
+gap_extend_cmd:set_parameter("edge_info", {clip_id = gap_extend_clip.id, edge_type = "gap_after", track_id = "track_v5"})
+gap_extend_cmd:set_parameter("delta_ms", -1500)
+gap_extend_cmd:set_parameter("sequence_id", "sequence")
+assert(command_executors["RippleEdit"](gap_extend_cmd), "RippleEdit gap extension should succeed")
+
+local extended_downstream = fetch_clip(db, gap_extend_down.id)
+assert(extended_downstream.start_time == 27500,
+    string.format("downstream clip should shift right by gap extension (expected 27500, got %d)", extended_downstream.start_time))
+
+print("✅ Gap ripple opens additional space and shifts downstream clips")
+
+print("Test 9: Batch gap ripple handles multiple edges")
+local batch_gap_cmd = Command.create("BatchRippleEdit", "project")
+batch_gap_cmd:set_parameter("edge_infos", {{clip_id = gap_extend_clip.id, edge_type = "gap_after", track_id = "track_v5"}})
+batch_gap_cmd:set_parameter("delta_ms", -1200)
+batch_gap_cmd:set_parameter("sequence_id", "sequence")
+assert(command_executors["BatchRippleEdit"](batch_gap_cmd), "BatchRippleEdit gap extension should succeed")
+local batch_downstream = fetch_clip(db, gap_extend_down.id)
+assert(batch_downstream.start_time == 28700,
+    string.format("downstream clip should shift right by batch gap extension (expected 28700, got %d)", batch_downstream.start_time))
+
+print("✅ Batch gap ripple expands gap and shifts downstream clips")
+
+print("Test 10: Track1 gap ripple matches UI scenario")
+db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+          VALUES ('track_v6', 'sequence', 'V6', 'VIDEO', 6, 1)]])
+
+local gap_track_media = Media.create({id = "media_gap_track", project_id = "project", file_path = "/tmp/gap_track.mov", name = "gap_track.mov", duration = 4543567, frame_rate = 30})
+assert(gap_track_media:save(db), "failed to save track gap media")
+
+local track_clip1 = Clip.create("Track Clip 1", "media_gap_track")
+track_clip1.track_id = "track_v6"
+track_clip1.start_time = 0
+track_clip1.duration = 4543567
+track_clip1.source_in = 0
+track_clip1.source_out = 4543567
+assert(track_clip1:save(db, {resolve_occlusion = true}), "failed saving track clip1")
+
+local track_clip2 = Clip.create("Track Clip 2", "media_gap_track")
+track_clip2.track_id = "track_v6"
+track_clip2.start_time = 5614567
+track_clip2.duration = 4543567
+track_clip2.source_in = 0
+track_clip2.source_out = 4543567
+assert(track_clip2:save(db, {resolve_occlusion = true}), "failed saving track clip2")
+
+local gap_delta = track_clip2.start_time - (track_clip1.start_time + track_clip1.duration)
+
+command_executors = new_command_env(db)
+local track_gap_cmd = Command.create("RippleEdit", "project")
+track_gap_cmd:set_parameter("edge_info", {clip_id = track_clip1.id, edge_type = "gap_after", track_id = "track_v6"})
+track_gap_cmd:set_parameter("delta_ms", -1500)
+track_gap_cmd:set_parameter("sequence_id", "sequence")
+assert(command_executors["RippleEdit"](track_gap_cmd), "RippleEdit gap expansion on track should succeed")
+
+local track_clip2_after = fetch_clip(db, track_clip2.id)
+assert(track_clip2_after.start_time == 5614567 + 1500,
+    string.format("track gap ripple should shift downstream clip by delta (expected %d, got %d)", 5614567 + 1500, track_clip2_after.start_time))
+
+local track_clip1_after = fetch_clip(db, track_clip1.id)
+assert(track_clip1_after.duration == 4543567,
+    string.format("track gap ripple should not change upstream clip duration (expected %d, got %d)", 4543567, track_clip1_after.duration))
+
+print("✅ Track1 gap ripple expands gap without altering upstream clip")
+
+local clip1_after_expand = fetch_clip(db, track_clip1.id)
+local clip2_after_expand = fetch_clip(db, track_clip2.id)
+local current_gap = clip2_after_expand.start_time - (clip1_after_expand.start_time + clip1_after_expand.duration)
+assert(current_gap > 0, string.format("expected positive gap after expansion, got %d", current_gap))
+
+print("Test 11: Gap edge drag prefers clip after closure")
+local track_close_cmd = Command.create("RippleEdit", "project")
+track_close_cmd:set_parameter("edge_info", {clip_id = track_clip1.id, edge_type = "gap_after", track_id = "track_v6"})
+track_close_cmd:set_parameter("delta_ms", current_gap)
+track_close_cmd:set_parameter("sequence_id", "sequence")
+assert(command_executors["RippleEdit"](track_close_cmd), "RippleEdit gap-after closure should succeed")
+
+local clip1_post_close = fetch_clip(db, track_clip1.id)
+local clip2_post_close = fetch_clip(db, track_clip2.id)
+assert(clip2_post_close.start_time == clip1_post_close.start_time + clip1_post_close.duration,
+    string.format("gap should be closed (expected %d, got %d)", clip1_post_close.start_time + clip1_post_close.duration, clip2_post_close.start_time))
+
+local trim_amount = 1200
+local track_trim_cmd = Command.create("RippleEdit", "project")
+track_trim_cmd:set_parameter("edge_info", {clip_id = track_clip1.id, edge_type = "out", track_id = "track_v6"})
+track_trim_cmd:set_parameter("delta_ms", -trim_amount)
+track_trim_cmd:set_parameter("sequence_id", "sequence")
+assert(command_executors["RippleEdit"](track_trim_cmd), "RippleEdit clip out trim after gap closure should succeed")
+
+local clip1_after_trim = fetch_clip(db, track_clip1.id)
+assert(clip1_after_trim.duration == clip1_post_close.duration - trim_amount,
+    string.format("clip out trim should reduce duration (expected %d, got %d)", clip1_post_close.duration - trim_amount, clip1_after_trim.duration))
+
+local clip2_after_trim = fetch_clip(db, track_clip2.id)
+assert(clip2_after_trim.start_time == clip2_post_close.start_time - trim_amount,
+    string.format("downstream clip should shift left by trim amount (expected %d, got %d)", clip2_post_close.start_time - trim_amount, clip2_after_trim.start_time))
+
+print("✅ Gap edge drag after closure affects clip out appropriately")
+
+print("Test 12: Gap selection normalizes after closure")
+
+local selection_media_left = Media.create({
+    id = "media_gap_selection_left",
+    project_id = "project",
+    file_path = "/tmp/gap_selection_left.mov",
+    name = "gap_selection_left.mov",
+    duration = 8000,
+    frame_rate = 30
+})
+assert(selection_media_left:save(db), "failed saving selection upstream media")
+
+local selection_media_right = Media.create({
+    id = "media_gap_selection_right",
+    project_id = "project",
+    file_path = "/tmp/gap_selection_right.mov",
+    name = "gap_selection_right.mov",
+    duration = 6000,
+    frame_rate = 30
+})
+assert(selection_media_right:save(db), "failed saving selection downstream media")
+
+local selection_upstream = Clip.create("Selection Upstream", selection_media_left.id)
+selection_upstream.track_id = "selection_track_v1"
+selection_upstream.start_time = 0
+selection_upstream.duration = 4000
+selection_upstream.source_in = 0
+selection_upstream.source_out = 4000
+assert(selection_upstream:save(db, {resolve_occlusion = true}), "failed saving selection upstream clip")
+
+local selection_downstream = Clip.create("Selection Downstream", selection_media_right.id)
+selection_downstream.track_id = "selection_track_v1"
+selection_downstream.start_time = 7000
+selection_downstream.duration = 3500
+selection_downstream.source_in = 0
+selection_downstream.source_out = 3500
+assert(selection_downstream:save(db, {resolve_occlusion = true}), "failed saving selection downstream clip")
+
+local selection_gap = selection_downstream.start_time - (selection_upstream.start_time + selection_upstream.duration)
+assert(selection_gap > 1, string.format("expected gap larger than 1ms for selection test, got %d", selection_gap))
+
+command_manager.init(db, 'selection_sequence', 'project')
+timeline_state.init('selection_sequence')
+
+timeline_state.set_edge_selection({
+    {clip_id = selection_upstream.id, edge_type = "gap_after", trim_type = "ripple"}
+})
+
+local close_selection_cmd = Command.create("RippleEdit", "project")
+close_selection_cmd:set_parameter("edge_info", {clip_id = selection_upstream.id, edge_type = "gap_after", track_id = "selection_track_v1"})
+local close_delta = selection_gap - 1  -- Gap closure leaves 1ms due to constraint
+close_selection_cmd:set_parameter("delta_ms", close_delta)
+close_selection_cmd:set_parameter("sequence_id", "selection_sequence")
+
+local close_result = command_manager.execute(close_selection_cmd)
+assert(close_result.success, "RippleEdit via CommandManager should close gap successfully")
+
+local edges_after_close = timeline_state.get_selected_edges()
+assert(#edges_after_close == 1, "selection should persist with one edge after closing gap")
+local normalized_edge = edges_after_close[1]
+assert(normalized_edge.clip_id == selection_downstream.id,
+    "expected selection to move to downstream clip in-edge after closing gap_after")
+assert(normalized_edge.edge_type == "in",
+    string.format("expected gap_after to normalize to downstream 'in', got %s", tostring(normalized_edge.edge_type)))
+
+local upstream_after_close = fetch_clip(db, selection_upstream.id)
+local downstream_after_close = fetch_clip(db, selection_downstream.id)
+local expected_contact = upstream_after_close.start_time + upstream_after_close.duration
+assert(downstream_after_close.start_time == expected_contact or
+       downstream_after_close.start_time == expected_contact + 1,
+    string.format("downstream clip should align with upstream clip (expected %d or %d, got %d)",
+        expected_contact, expected_contact + 1, downstream_after_close.start_time))
+
+local trim_delta = 600
+local selection_trim_cmd = Command.create("RippleEdit", "project")
+selection_trim_cmd:set_parameter("edge_info", {clip_id = normalized_edge.clip_id, edge_type = normalized_edge.edge_type, track_id = "selection_track_v1"})
+selection_trim_cmd:set_parameter("delta_ms", trim_delta)
+selection_trim_cmd:set_parameter("sequence_id", "selection_sequence")
+
+local trim_result = command_manager.execute(selection_trim_cmd)
+assert(trim_result.success, "trim after normalized selection should execute successfully")
+
+print("✅ Gap selection converts gap handles to clip edge after closure")
+
+print("Test 13: Gap-before selection normalizes to upstream out edge")
+timeline_state.set_edge_selection({
+    {clip_id = selection_downstream.id, edge_type = "gap_before", trim_type = "ripple"}
+})
+
+local gap_before_close = Command.create("RippleEdit", "project")
+gap_before_close:set_parameter("edge_info", {clip_id = selection_downstream.id, edge_type = "gap_before", track_id = "selection_track_v1"})
+gap_before_close:set_parameter("delta_ms", -trim_delta)
+gap_before_close:set_parameter("sequence_id", "selection_sequence")
+
+local gap_before_result = command_manager.execute(gap_before_close)
+assert(gap_before_result.success, "gap_before closure via RippleEdit should succeed")
+
+local edges_after_gap_before = timeline_state.get_selected_edges()
+assert(#edges_after_gap_before == 1, "gap_before collapse should leave one selected edge")
+local normalized_gap_before = edges_after_gap_before[1]
+assert(normalized_gap_before.clip_id == selection_upstream.id,
+    "expected gap_before collapse to target upstream clip")
+assert(normalized_gap_before.edge_type == "out",
+    string.format("expected gap_before collapse to normalize to 'out', got %s", tostring(normalized_gap_before.edge_type)))
+
+print("Test 14: Batch ripple closes gaps without leaving overlaps")
+db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+          VALUES ('track_v8', 'sequence', 'V8', 'VIDEO', 8, 1);
+          INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+          VALUES ('track_v9', 'sequence', 'V9', 'VIDEO', 9, 1)]])
+
+local multi_media = Media.create({
+    id = "media_multi_gap",
+    project_id = "project",
+    file_path = "/tmp/media_multi_gap.mov",
+    name = "media_multi_gap.mov",
+    duration = 20000,
+    frame_rate = 30
+})
+assert(multi_media:save(db), "failed saving multi-track media for gap test")
+
+local top_left = Clip.create("Top Left", "media_multi_gap")
+top_left.track_id = "track_v8"
+top_left.start_time = 0
+top_left.duration = 4000
+top_left.source_in = 0
+top_left.source_out = 4000
+assert(top_left:save(db, {resolve_occlusion = true}), "failed saving top_left clip")
+
+local bottom_left = Clip.create("Bottom Left", "media_multi_gap")
+bottom_left.track_id = "track_v9"
+bottom_left.start_time = 0
+bottom_left.duration = 5000
+bottom_left.source_in = 0
+bottom_left.source_out = 5000
+assert(bottom_left:save(db, {resolve_occlusion = true}), "failed saving bottom_left clip")
+
+local top_right = Clip.create("Top Right", "media_multi_gap")
+top_right.track_id = "track_v8"
+top_right.start_time = 8000
+top_right.duration = 3000
+top_right.source_in = 4000
+top_right.source_out = 7000
+assert(top_right:save(db, {resolve_occlusion = true}), "failed saving top_right clip")
+
+local bottom_right = Clip.create("Bottom Right", "media_multi_gap")
+bottom_right.track_id = "track_v9"
+bottom_right.start_time = 9000
+bottom_right.duration = 3500
+bottom_right.source_in = 6000
+bottom_right.source_out = 9500
+assert(bottom_right:save(db, {resolve_occlusion = true}), "failed saving bottom_right clip")
+
+command_executors = new_command_env(db)
+local multi_close_cmd = Command.create("BatchRippleEdit", "project")
+multi_close_cmd:set_parameter("edge_infos", {
+    {clip_id = top_right.id, edge_type = "gap_before", track_id = "track_v8"},
+    {clip_id = bottom_right.id, edge_type = "gap_before", track_id = "track_v9"}
+})
+multi_close_cmd:set_parameter("delta_ms", -4000)
+multi_close_cmd:set_parameter("sequence_id", "sequence")
+assert(command_executors["BatchRippleEdit"](multi_close_cmd), "BatchRippleEdit multi-track overlap closure failed")
+
+local top_left_after = fetch_clip(db, top_left.id)
+local top_right_after = fetch_clip(db, top_right.id)
+local bottom_left_after = fetch_clip(db, bottom_left.id)
+local bottom_right_after = fetch_clip(db, bottom_right.id)
+
+local top_left_end = top_left_after.start_time + top_left_after.duration
+local bottom_left_end = bottom_left_after.start_time + bottom_left_after.duration
+
+assert(top_right_after.start_time == top_left_end,
+    string.format("top track should butt after closure (expected %d, got %d)", top_left_end, top_right_after.start_time))
+assert(bottom_right_after.start_time == bottom_left_end,
+    string.format("bottom track should butt after closure (expected %d, got %d)", bottom_left_end, bottom_right_after.start_time))
+
+print("✅ Batch ripple trims overlaps when closing gaps across tracks")
+
+print("Test 15: Overwrite reuses clip ID for downstream commands")
 local overwrite_media = Media.create({id = "media_overwrite_src", project_id = "project", file_path = "/tmp/overwrite_src.mov", file_name = "overwrite_src.mov", duration = 4000, frame_rate = 30})
 assert(overwrite_media:save(db), "failed to save overwrite source media")
 local overwrite_replacement = Media.create({id = "media_overwrite_new", project_id = "project", file_path = "/tmp/overwrite_new.mov", file_name = "overwrite_new.mov", duration = 1500, frame_rate = 30})

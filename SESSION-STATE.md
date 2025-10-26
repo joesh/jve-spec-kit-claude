@@ -153,3 +153,50 @@
 - **All changes compiled**: ✅ No syntax errors
 - **Runtime status**: ⚠️ Ripple trim incorrect, NULL parent bug exists
 - **Tests**: ❌ Still broken (old issue)
+
+---
+
+# Session State - 2025-10-24 Gap Selection Persistence
+
+## CRITICAL SESSION CONTEXT
+**Edge selections must persist correctly across undo/redo and when gap placeholders collapse after ripple trims.**
+
+**Date**: October 24, 2025  
+**Session Focus**: Normalise gap-edge selections, extend occlusion regression coverage, and confirm Lua suite passes without manual intervention.
+
+---
+
+## Session Accomplishments (2025-10-24)
+
+### 1. Selection Normalisation After Gap Closure (COMPLETED)
+- **ISSUE**: After closing a gap, the UI continued to report `gap_after` handles even though no gap remained, so the next drag behaved inconsistently and redo lost the intended selection.
+- **FIX**: `timeline_state.reload_clips()` now calls `normalize_edge_selection_after_reload()` which:
+  - Computes remaining gap distance to the nearest neighbour (treating ≤1 ms as touching).
+  - Converts `gap_after → out` and `gap_before → in` once the placeholder disappears.
+  - Deduplicates edges and persists the adjusted selection back to `sequences`.
+- **FILES**: `src/lua/ui/timeline/timeline_state.lua:68-172`, `src/lua/ui/timeline/timeline_state.lua:224-231`.
+
+### 2. Regression Coverage for Gap Selection & Constraints (COMPLETED)
+- **ADDED**:
+  - Dedicated `selection_sequence` schema with commands table so the tests exercise the command log and selection persistence exactly like the app.
+  - New scenario in `tests/test_clip_occlusion.lua` that:
+    1. Selects a gap edge.
+    2. Closes the gap via `RippleEdit`.
+    3. Verifies the selection is normalised to the clip’s `out` edge.
+    4. Trims the edge again to ensure downstream clips shift correctly.
+- **FILES**: `tests/test_clip_occlusion.lua:7-706`.
+
+### 3. Documentation Update (COMPLETED)
+- Documented the gap-selection normalisation behaviour and expanded regression coverage details.
+- **FILES**: `docs/timeline_clip_occlusion.md:19-24`.
+
+### 4. Full Regression Run (COMPLETED)
+- `JVE_SQLITE3_PATH=/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib make -j4`
+- All C++ and Lua suites pass after the above fixes.
+
+---
+
+### Addendum: Batch Ripple Occlusion (2025-10-24)
+- Closed gaps on multiple tracks now resolve occlusions so ripple drags cannot leave overlapped media hidden under neighbouring clips (`BatchRippleEdit` + `RippleEdit` save paths pass `resolve_occlusion = true`).
+- Downstream shift clamps ensure we never rewind clips past t=0 during replay.
+- Regression: `tests/test_clip_occlusion.lua` adds “Batch ripple closes gaps without leaving overlaps” ensuring both clips butt cleanly after a multi-track drag and replay maintains a valid state.

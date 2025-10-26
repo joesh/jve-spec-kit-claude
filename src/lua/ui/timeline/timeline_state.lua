@@ -68,6 +68,163 @@ local state = {
 -- Debug layout capture (populated by views when rendering)
 local debug_layouts = {}
 
+local function compute_gap_after(clip)
+    local clip_end = clip.start_time + clip.duration
+    local min_gap = nil
+
+    for _, other in ipairs(state.clips) do
+        if other.track_id == clip.track_id and other.id ~= clip.id then
+            if other.start_time >= clip_end then
+                local gap = other.start_time - clip_end
+                if gap <= 1 then
+                    return 0
+                end
+                if not min_gap or gap < min_gap then
+                    min_gap = gap
+                end
+            end
+        end
+    end
+
+    return min_gap
+end
+
+local function compute_gap_before(clip)
+    local clip_start = clip.start_time
+    local min_gap = nil
+
+    for _, other in ipairs(state.clips) do
+        if other.track_id == clip.track_id and other.id ~= clip.id then
+            local other_end = other.start_time + other.duration
+            if other_end <= clip_start then
+                local gap = clip_start - other_end
+                if gap <= 1 then
+                    return 0
+                end
+                if not min_gap or gap < min_gap then
+                    min_gap = gap
+                end
+            end
+        end
+    end
+
+    return min_gap
+end
+
+local function find_next_clip(clip)
+    local clip_end = clip.start_time + clip.duration
+    local closest = nil
+    local closest_start = nil
+    for _, other in ipairs(state.clips) do
+        if other.track_id == clip.track_id and other.id ~= clip.id then
+            if other.start_time >= clip_end then
+                if not closest_start or other.start_time < closest_start then
+                    closest = other
+                    closest_start = other.start_time
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function find_previous_clip(clip)
+    local clip_start = clip.start_time
+    local closest = nil
+    local closest_end = nil
+    for _, other in ipairs(state.clips) do
+        if other.track_id == clip.track_id and other.id ~= clip.id then
+            local other_end = other.start_time + other.duration
+            if other_end <= clip_start then
+                if not closest_end or other_end > closest_end then
+                    closest = other
+                    closest_end = other_end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function normalize_edge_selection()
+    if not state.selected_edges or #state.selected_edges == 0 then
+        return false
+    end
+
+    local normalized = {}
+    local seen = {}
+    local changed = false
+
+    for _, edge in ipairs(state.selected_edges) do
+        local clip = nil
+        for _, candidate in ipairs(state.clips) do
+            if candidate.id == edge.clip_id then
+                clip = candidate
+                break
+            end
+        end
+
+        if clip then
+            local new_edge_type = edge.edge_type
+            local new_clip_id = clip.id
+            if edge.edge_type == "gap_after" then
+                local gap = compute_gap_after(clip)
+                if gap and gap <= 0 then
+                    local neighbour = find_next_clip(clip)
+                    if neighbour then
+                        new_clip_id = neighbour.id
+                        new_edge_type = "in"
+                    else
+                        new_edge_type = "in"
+                    end
+                end
+            elseif edge.edge_type == "gap_before" then
+                local gap = compute_gap_before(clip)
+                if gap and gap <= 0 then
+                    local neighbour = find_previous_clip(clip)
+                    if neighbour then
+                        new_clip_id = neighbour.id
+                        new_edge_type = "out"
+                    else
+                        new_edge_type = "out"
+                    end
+                end
+            end
+
+            local key = new_clip_id .. ":" .. new_edge_type
+            if not seen[key] then
+                table.insert(normalized, {
+                    clip_id = new_clip_id,
+                    edge_type = new_edge_type,
+                    trim_type = edge.trim_type
+                })
+                seen[key] = true
+            else
+                changed = true
+            end
+
+            if new_edge_type ~= edge.edge_type then
+                changed = true
+            end
+            if new_clip_id ~= edge.clip_id then
+                changed = true
+            end
+        else
+            changed = true
+        end
+    end
+
+    if changed then
+        state.selected_edges = normalized
+    end
+
+    return changed
+end
+
+function M.normalize_edge_selection()
+    return normalize_edge_selection()
+end
+
 -- Colors (shared visual style)
 M.colors = {
     background = "#232323",
@@ -224,7 +381,11 @@ function M.reload_clips()
         clip._version = state_version
     end
 
+    local selection_adjusted = normalize_edge_selection()
     print(string.format("Reloaded %d clips from database (version %d)", #state.clips, state_version))
+    if selection_adjusted then
+        M.persist_state_to_db()
+    end
     notify_listeners()
 end
 
@@ -384,6 +545,8 @@ function M.set_edge_selection(edges)
     -- Clear clip selection (clips and edges are mutually exclusive)
     state.selected_clips = {}
 
+    normalize_edge_selection()
+
     notify_listeners()
 
     -- Persist edge selection to database
@@ -396,6 +559,7 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
         if edge.clip_id == clip_id and edge.edge_type == edge_type then
             -- Remove it
             table.remove(state.selected_edges, i)
+            normalize_edge_selection()
             notify_listeners()
             M.persist_state_to_db()
             return false  -- Deselected
@@ -413,6 +577,9 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
         edge_type = edge_type,
         trim_type = trim_type
     })
+
+    normalize_edge_selection()
+
     notify_listeners()
     M.persist_state_to_db()
     return true  -- Selected
@@ -421,6 +588,7 @@ end
 function M.clear_edge_selection()
     if #state.selected_edges > 0 then
         state.selected_edges = {}
+        normalize_edge_selection()
         notify_listeners()
         M.persist_state_to_db()
     end

@@ -30,12 +30,15 @@ Historically, commands such as `Overwrite` manually trimmed or deleted occluded 
 3. **Commands updated**  
    - `Overwrite` simply calls `clip:save(db, {resolve_occlusion = true})`.
    - Clip moves (`Nudge`) pass the selected clip set as `ignore_ids` so only neighbours are trimmed.
-  - Ripple edit downstream selection now uses `>= ripple_time - 1` to ensure adjacent clips shift, and right-edge trims clamp to the available media duration.
-  - Insert calls into the mutator so clips covering the insertion point split into left/new/right fragments automatically.
-  - Overwrite reuses the fully-covered clip's ID when the incoming media completely replaces it, keeping downstream commands pointed at the same identifier.
+   - Ripple edit downstream selection now uses `>= ripple_time - 1` to ensure adjacent clips shift, and right-edge trims clamp to the available media duration.
+   - Insert calls into the mutator so clips covering the insertion point split into left/new/right fragments automatically.
+   - Overwrite reuses the fully-covered clip's ID when the incoming media completely replaces it, keeping downstream commands pointed at the same identifier.
+   - Gap-edge drags materialise temporary clips for constraint evaluation, but once a gap collapses the selection is normalised back onto the real clip edge, guaranteeing the next drag/redo starts from the same state as the original command.
+   - RippleEdit and BatchRippleEdit now save affected clips with occlusion resolution enabled, so aggressive gap closures trim or delete overlapped media instead of leaving hidden overlaps across tracks.
+   - Batch ripple clamps negative downstream shifts so clips never rewind past t=0, preserving replay safety during multi-track gap closures.
 
 4. **Regression coverage**  
-   `tests/test_clip_occlusion.lua` covers tail trims, deletion, splits, and multi-clip moves.
+   `tests/test_clip_occlusion.lua` now covers tail trims, deletion, splits, multi-clip moves, gap expansion/contraction, selection normalisation after gap closure, and the multi-track batch ripple scenario that previously left overlapping clips.
 
 ## Migration Notes
 
