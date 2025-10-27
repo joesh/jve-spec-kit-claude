@@ -65,6 +65,45 @@ local state = {
     drag_select_end_track_index = 0,
 }
 
+local function ensure_sequence_viewport_columns(db_conn)
+    if not db_conn then
+        return
+    end
+
+    local pragma = db_conn:prepare("PRAGMA table_info(sequences)")
+    if not pragma then
+        return
+    end
+
+    local has_start = false
+    local has_duration = false
+    if pragma:exec() then
+        while pragma:next() do
+            local column_name = pragma:value(1)
+            if column_name == "viewport_start_time" then
+                has_start = true
+            elseif column_name == "viewport_duration" then
+                has_duration = true
+            end
+        end
+    end
+    pragma:finalize()
+
+    if not has_start then
+        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN viewport_start_time INTEGER NOT NULL DEFAULT 0")
+        if not ok then
+            print("WARNING: Failed to add viewport_start_time column: " .. tostring(err or "unknown error"))
+        end
+    end
+
+    if not has_duration then
+        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN viewport_duration INTEGER NOT NULL DEFAULT 10000")
+        if not ok then
+            print("WARNING: Failed to add viewport_duration column: " .. tostring(err or "unknown error"))
+        end
+    end
+end
+
 local function calculate_timeline_extent()
     local max_end = 0
     for _, clip in ipairs(state.clips) do
@@ -301,7 +340,9 @@ function M.init(sequence_id)
     -- Load playhead and selection state from sequence
     local db_conn = db.get_connection()
     if db_conn then
-        local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos FROM sequences WHERE id = ?")
+        ensure_sequence_viewport_columns(db_conn)
+
+        local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos, viewport_start_time, viewport_duration FROM sequences WHERE id = ?")
         if query then
             query:bind_value(1, sequence_id)
             if query:exec() and query:next() then
@@ -370,7 +411,18 @@ function M.init(sequence_id)
                         end
                     end
                 end
+
+                local saved_viewport_start = query:value(3)
+                local saved_viewport_duration = query:value(4)
+                if saved_viewport_duration and saved_viewport_duration > 0 then
+                    state.viewport_duration = math.max(1000, saved_viewport_duration)
+                end
+                if saved_viewport_start and saved_viewport_start >= 0 then
+                    state.viewport_start_time = saved_viewport_start
+                end
+                state.viewport_start_time = clamp_viewport_start(state.viewport_start_time, state.viewport_duration)
             end
+            query:finalize()
         end
     end
 
@@ -953,7 +1005,7 @@ function M.persist_state_to_db()
     -- Update sequences table with current state
     local query = db_conn:prepare([[
         UPDATE sequences
-        SET playhead_time = ?, selected_clip_ids = ?, selected_edge_infos = ?
+        SET playhead_time = ?, selected_clip_ids = ?, selected_edge_infos = ?, viewport_start_time = ?, viewport_duration = ?
         WHERE id = ?
     ]])
 
@@ -961,7 +1013,9 @@ function M.persist_state_to_db()
         query:bind_value(1, state.playhead_time)
         query:bind_value(2, json_str)
         query:bind_value(3, edges_json)
-        query:bind_value(4, sequence_id)
+        query:bind_value(4, math.floor(state.viewport_start_time or 0))
+        query:bind_value(5, math.floor(state.viewport_duration or 10000))
+        query:bind_value(6, sequence_id)
         query:exec()
     end
 end
