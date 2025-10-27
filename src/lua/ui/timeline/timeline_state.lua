@@ -65,6 +65,34 @@ local state = {
     drag_select_end_track_index = 0,
 }
 
+local function calculate_timeline_extent()
+    local max_end = 0
+    for _, clip in ipairs(state.clips) do
+        local clip_end = clip.start_time + clip.duration
+        if clip_end > max_end then
+            max_end = clip_end
+        end
+    end
+
+    if state.playhead_time and state.playhead_time > max_end then
+        max_end = state.playhead_time
+    end
+
+    return math.max(60000, max_end + 10000)
+end
+
+local function clamp_viewport_start(desired_start, duration)
+    local total_extent = calculate_timeline_extent()
+    local max_start = math.max(0, total_extent - duration)
+    if desired_start < 0 then
+        return 0
+    end
+    if desired_start > max_start then
+        return max_start
+    end
+    return desired_start
+end
+
 -- Debug layout capture (populated by views when rendering)
 local debug_layouts = {}
 
@@ -490,16 +518,35 @@ end
 
 -- Setters (with notification)
 function M.set_viewport_start_time(time_ms)
-    if state.viewport_start_time ~= time_ms then
-        state.viewport_start_time = math.max(0, time_ms)
+    local clamped_start = clamp_viewport_start(time_ms, state.viewport_duration)
+    if state.viewport_start_time ~= clamped_start then
+        state.viewport_start_time = clamped_start
         notify_listeners()
     end
 end
 
 function M.set_viewport_duration(duration_ms)
-    if state.viewport_duration ~= duration_ms then
-        state.viewport_duration = math.max(1000, duration_ms)  -- Min 1 second
-        notify_listeners()
+    local new_duration = math.max(1000, duration_ms)
+    if state.viewport_duration ~= new_duration then
+        local playhead = state.playhead_time or (state.viewport_start_time + state.viewport_duration / 2)
+        local desired_start = playhead - (new_duration / 2)
+        local clamped_start = clamp_viewport_start(desired_start, new_duration)
+
+        local changed = false
+
+        if state.viewport_duration ~= new_duration then
+            state.viewport_duration = new_duration
+            changed = true
+        end
+
+        if state.viewport_start_time ~= clamped_start then
+            state.viewport_start_time = clamped_start
+            changed = true
+        end
+
+        if changed then
+            notify_listeners()
+        end
     end
 end
 
