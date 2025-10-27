@@ -1,4 +1,4 @@
--- Correct layout: 3 panels across top, timeline across bottom
+-- Application layout: 3 panels across top, timeline across bottom
 
 -- Add luarocks path for C modules (like lxp.so)
 package.cpath = package.cpath .. ';' .. os.getenv('HOME') .. '/.luarocks/lib/lua/5.1/?.so'
@@ -16,7 +16,7 @@ debug.setmetatable(nil, {
 io.stdout:setvbuf("no")
 io.stderr:setvbuf("no")
 
-print("🎬 Creating correct layout...")
+print("🎬 Creating layout...")
 
 -- Initialize database connection
 print("💾 Initializing database...")

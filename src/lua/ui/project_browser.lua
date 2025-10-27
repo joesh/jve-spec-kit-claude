@@ -433,7 +433,7 @@ function M.create()
     return container
 end
 
--- Set timeline panel reference (called by correct_layout after both are created)
+-- Set timeline panel reference (called by layout.lua after both are created)
 function M.set_timeline_panel(timeline_panel_mod)
     M.timeline_panel = timeline_panel_mod
 

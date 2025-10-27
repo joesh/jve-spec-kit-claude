@@ -142,7 +142,7 @@ void TestBatchRippleGapDrag::init()
 
     m_luaEngine = new SimpleLuaEngine();
     QString layoutScript = QString::fromStdString(
-        JVE::ResourcePaths::getScriptPath("ui/correct_layout.lua")
+        JVE::ResourcePaths::getScriptPath("ui/layout.lua")
     );
     QVERIFY(QFileInfo(layoutScript).exists());
     QVERIFY(m_luaEngine->executeFile(layoutScript));

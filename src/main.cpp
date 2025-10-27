@@ -131,7 +131,7 @@ int main(int argc, char *argv[])
     
     // Execute Lua main window creation using ResourcePaths
     QString scriptsDir = QString::fromStdString(JVE::ResourcePaths::getScriptsDirectory());
-    QString mainWindowScript = QString::fromStdString(JVE::ResourcePaths::getScriptPath("ui/correct_layout.lua"));
+    QString mainWindowScript = QString::fromStdString(JVE::ResourcePaths::getScriptPath("ui/layout.lua"));
     
     qCInfo(jveMain, "Starting pure Lua UI system...");
     qCInfo(jveMain, "Scripts directory: %s", qPrintable(scriptsDir));

@@ -127,7 +127,7 @@ void TestCommandReplayInvariant::init()
 
     // Execute Lua main window creation
     QString mainWindowScript = QString::fromStdString(
-        JVE::ResourcePaths::getScriptPath("ui/correct_layout.lua")
+        JVE::ResourcePaths::getScriptPath("ui/layout.lua")
     );
 
     QVERIFY(QFileInfo(mainWindowScript).exists());
