@@ -132,6 +132,24 @@ local function clamp_viewport_start(desired_start, duration)
     return desired_start
 end
 
+local function ensure_playhead_visible()
+    local duration = state.viewport_duration
+    if not duration or duration <= 0 then
+        return false
+    end
+
+    local start_time = state.viewport_start_time
+    local end_time = start_time + duration
+    local playhead = state.playhead_time or 0
+
+    if playhead < start_time or playhead > end_time then
+        local desired_start = playhead - (duration / 2)
+        M.set_viewport_start_time(desired_start)
+        return true
+    end
+    return false
+end
+
 -- Debug layout capture (populated by views when rendering)
 local debug_layouts = {}
 
@@ -574,6 +592,7 @@ function M.set_viewport_start_time(time_ms)
     if state.viewport_start_time ~= clamped_start then
         state.viewport_start_time = clamped_start
         notify_listeners()
+        M.persist_state_to_db()
     end
 end
 
@@ -598,19 +617,27 @@ function M.set_viewport_duration(duration_ms)
 
         if changed then
             notify_listeners()
+            M.persist_state_to_db()
         end
     end
 end
 
 function M.set_playhead_time(time_ms)
-    if state.playhead_time ~= time_ms then
-        state.playhead_time = math.max(0, time_ms)
-        notify_listeners()
+    local normalized_time = math.max(0, time_ms)
+    local changed = state.playhead_time ~= normalized_time
+    state.playhead_time = normalized_time
 
-        -- Persist playhead position to database
+    local viewport_adjusted = ensure_playhead_visible()
+
+    if changed then
+        notify_listeners()
         M.persist_state_to_db()
 
-        -- Also notify selection callback if registered
+        if on_selection_changed_callback then
+            on_selection_changed_callback(state.selected_clips)
+        end
+    elseif viewport_adjusted then
+        -- ensure_playhead_visible already persisted via set_viewport_start_time
         if on_selection_changed_callback then
             on_selection_changed_callback(state.selected_clips)
         end

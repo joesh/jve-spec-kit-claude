@@ -1468,6 +1468,24 @@ end
         render()
     end
 
+    local function on_wheel_event(delta_x, delta_y, modifiers)
+        local horizontal = delta_x or 0
+        if math.abs(horizontal) < 0.0001 and modifiers and modifiers.shift then
+            horizontal = delta_y or 0
+        end
+
+        if horizontal and math.abs(horizontal) > 0.0001 then
+            local width = timeline.get_dimensions(widget)
+            if width and width > 0 then
+                local viewport_duration = state_module.get_viewport_duration()
+                local delta_time = (horizontal / width) * viewport_duration
+                local new_start = state_module.get_viewport_start_time() + delta_time
+                state_module.set_viewport_start_time(new_start)
+                render()
+            end
+        end
+    end
+
     -- Initialize
     update_filtered_tracks()
     update_widget_height()
@@ -1478,7 +1496,11 @@ end
     -- Wire up mouse event handler
     local handler_name = "timeline_view_mouse_handler_" .. tostring(widget)
     _G[handler_name] = function(event)
-        on_mouse_event(event.type, event.x, event.y, event.button, event)
+        if event.type == "wheel" then
+            on_wheel_event(event.delta_x, event.delta_y, event.modifiers)
+        else
+            on_mouse_event(event.type, event.x, event.y, event.button, event)
+        end
     end
     timeline.set_mouse_event_handler(widget, handler_name)
 
@@ -1516,6 +1538,7 @@ end
             return view.vertical_scroll_offset
         end,
         on_mouse_event = on_mouse_event,
+        on_wheel_event = on_wheel_event,
     }
 end
 
