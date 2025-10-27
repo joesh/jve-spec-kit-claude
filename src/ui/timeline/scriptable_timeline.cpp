@@ -3,6 +3,7 @@
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QApplication>
+#include <QWheelEvent>
 
 namespace JVE {
 
@@ -306,6 +307,62 @@ void ScriptableTimeline::mouseMoveEvent(QMouseEvent* event)
         }
     }
     QWidget::mouseMoveEvent(event);
+}
+
+void ScriptableTimeline::wheelEvent(QWheelEvent* event)
+{
+    if (!mouse_event_handler_.empty() && lua_state_) {
+        lua_getglobal(lua_state_, mouse_event_handler_.c_str());
+        if (lua_isfunction(lua_state_, -1)) {
+            lua_newtable(lua_state_);
+            lua_pushstring(lua_state_, "wheel");
+            lua_setfield(lua_state_, -2, "type");
+
+            QPoint pixelDelta = event->pixelDelta();
+            QPoint angleDelta = event->angleDelta();
+            double deltaX = 0.0;
+            double deltaY = 0.0;
+            if (!pixelDelta.isNull()) {
+                deltaX = pixelDelta.x();
+                deltaY = pixelDelta.y();
+            } else {
+                deltaX = angleDelta.x() / 8.0; // convert from eighths of a degree roughly to "steps"
+                deltaY = angleDelta.y() / 8.0;
+            }
+
+            lua_pushnumber(lua_state_, deltaX);
+            lua_setfield(lua_state_, -2, "delta_x");
+            lua_pushnumber(lua_state_, deltaY);
+            lua_setfield(lua_state_, -2, "delta_y");
+
+            Qt::KeyboardModifiers mods = event->modifiers();
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+            bool is_command = mods.testFlag(Qt::ControlModifier);
+            bool is_ctrl = mods.testFlag(Qt::MetaModifier);
+#else
+            bool is_command = mods.testFlag(Qt::MetaModifier);
+            bool is_ctrl = mods.testFlag(Qt::ControlModifier);
+#endif
+
+            lua_pushboolean(lua_state_, is_ctrl);
+            lua_setfield(lua_state_, -2, "ctrl");
+            lua_pushboolean(lua_state_, mods.testFlag(Qt::ShiftModifier));
+            lua_setfield(lua_state_, -2, "shift");
+            lua_pushboolean(lua_state_, mods.testFlag(Qt::AltModifier));
+            lua_setfield(lua_state_, -2, "alt");
+            lua_pushboolean(lua_state_, is_command);
+            lua_setfield(lua_state_, -2, "command");
+
+            int result = lua_pcall(lua_state_, 1, 0, 0);
+            if (result != 0) {
+                lua_pop(lua_state_, 1);
+            }
+        } else {
+            lua_pop(lua_state_, 1);
+        }
+    }
+
+    QWidget::wheelEvent(event);
 }
 
 void ScriptableTimeline::keyPressEvent(QKeyEvent* event)
