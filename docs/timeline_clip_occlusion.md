@@ -23,14 +23,13 @@ Historically, commands such as `Overwrite` manually trimmed or deleted occluded 
 
 2. **Model integration (`Clip:save`)**  
    - Normalises `start_time`, `duration`, `source_in/out` to integer ms, clamping duration ≥ 1.
-   - Accepts `resolve_occlusion` options:
-     - `true` → resolve occlusions (Overwrite).
-     - `{ignore_ids = {...}}` → resolve, but skip trimming clips in the provided set (drag/nudge batches).
+   - Always runs occlusion resolution; callers may supply `{pending_clips = {...}}` so the mutator evaluates a batch move atomically. If those future positions still collide, the save fails instead of trimming.
+   - A dedicated `Clip:restore_without_occlusion` helper is reserved for undo/redo to persist historical states without reapplying occlusion.
 
 3. **Commands updated**  
    - `Overwrite` simply calls `clip:save(db, {resolve_occlusion = true})`.
-   - Clip moves (`Nudge`) pass the selected clip set as `ignore_ids` so only neighbours are trimmed.
-   - Ripple edit downstream selection now uses `>= ripple_time - 1` to ensure adjacent clips shift, and right-edge trims clamp to the available media duration.
+   - Clip moves (`Nudge`) pre-compute future start times and pass them via `pending_clips`, so the mutator validates the whole move atomically and keeps the invariant intact.
+   - Ripple edit downstream selection now uses `>= ripple_time - 1` to ensure adjacent clips shift, and provides the same pending map so no temporary trimming happens before the batch shift.
    - Insert calls into the mutator so clips covering the insertion point split into left/new/right fragments automatically.
    - Overwrite reuses the fully-covered clip's ID when the incoming media completely replaces it, keeping downstream commands pointed at the same identifier.
    - Gap-edge drags materialise temporary clips for constraint evaluation, but once a gap collapses the selection is normalised back onto the real clip edge, guaranteeing the next drag/redo starts from the same state as the original command.
@@ -42,8 +41,8 @@ Historically, commands such as `Overwrite` manually trimmed or deleted occluded 
 
 ## Migration Notes
 
-* All future commands that persist timeline clips should call `clip:save` with the appropriate `resolve_occlusion` options; avoid hand-written trimming logic in executors.
-* If a command manipulates multiple clips simultaneously, pass the moving set via `ignore_ids` so the mutator only touches true neighbours.
+* All future commands that persist timeline clips should call `clip:save`, optionally providing `pending_clips` when batching moves, and avoid hand-written trimming logic in executors. Use `clip:restore_without_occlusion` only for replay/restore code paths.
+* If a command manipulates multiple clips simultaneously, pre-compute their future positions and pass them via `pending_clips`; the mutator will abort the save if those positions would still collide.
 * When adding new timeline operations, add Lua tests similar to `test_clip_occlusion.lua` to lock in occlusion expectations.
 
 ## Open Items

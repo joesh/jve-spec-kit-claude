@@ -3,6 +3,7 @@
 
 local M = {}
 local sqlite3 = require("core.sqlite3")
+local json = require("dkjson")
 
 -- Database connection
 local db_connection = nil
@@ -18,6 +19,11 @@ end
 
 -- Set database path and open connection
 function M.set_path(path)
+    if db_connection and db_connection.close then
+        db_connection:close()
+        db_connection = nil
+    end
+
     db_path = path
     print("Database path set to: " .. path)
 
@@ -29,6 +35,18 @@ function M.set_path(path)
     end
 
     db_connection = db
+
+    -- Configure busy timeout so we wait for locks instead of failing immediately
+    if db_connection.busy_timeout then
+        db_connection:busy_timeout(5000)  -- 5 seconds
+    else
+        -- Fallback for drivers without helper
+        db_connection:exec("PRAGMA busy_timeout = 5000;")
+    end
+
+    -- Enable WAL to reduce writer contention when multiple tools touch the DB
+    db_connection:exec("PRAGMA journal_mode = WAL;")
+
     print("Database connection opened successfully")
     return true
 end
@@ -41,6 +59,52 @@ end
 -- Get database connection (for use by command_manager, models, etc.)
 function M.get_connection()
     return db_connection
+end
+
+-- Ensure a media row exists for the given media_id.
+-- If missing, attempt to rebuild it from the original ImportMedia command.
+function M.ensure_media_record(media_id)
+    if not media_id or media_id == "" or not db_connection then
+        return false
+    end
+
+    local check_stmt = db_connection:prepare("SELECT 1 FROM media WHERE id = ?")
+    if check_stmt then
+        check_stmt:bind_value(1, media_id)
+        if check_stmt:exec() and check_stmt:next() then
+            check_stmt:finalize()
+            return true
+        end
+        check_stmt:finalize()
+    end
+
+    local cmd_stmt = db_connection:prepare("SELECT command_args FROM commands WHERE command_type = 'ImportMedia'")
+    if not cmd_stmt then
+        return false
+    end
+
+    local restored = false
+    if cmd_stmt:exec() then
+        while cmd_stmt:next() do
+            local args_json = cmd_stmt:value(0)
+            local ok, args = pcall(json.decode, args_json or "{}")
+            if ok and args and args.media_id == media_id then
+                local file_path = args.file_path or args.path
+                local project_id = args.project_id or "default_project"
+                if file_path and project_id then
+                    local MediaReader = require('media.media_reader')
+                    local new_id, err = MediaReader.import_media(file_path, db_connection, project_id, media_id)
+                    if new_id == media_id then
+                        restored = true
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    cmd_stmt:finalize()
+    return restored
 end
 
 -- Get current project ID

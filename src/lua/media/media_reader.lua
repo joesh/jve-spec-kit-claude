@@ -176,9 +176,10 @@ end
 -- @param file_path string Absolute path to media file
 -- @param db table Database connection
 -- @param project_id string Project ID for media ownership
+-- @param existing_media_id string|nil Optional media ID to reuse (for deterministic replays)
 -- @return string|nil Media ID if successful, nil on error
 -- @return string|nil Error message if import failed
-function M.import_media(file_path, db, project_id)
+function M.import_media(file_path, db, project_id, existing_media_id)
     -- Probe file first
     local metadata, err = M.probe_file(file_path)
     if not metadata then
@@ -186,7 +187,7 @@ function M.import_media(file_path, db, project_id)
     end
 
     -- Generate media ID
-    local media_id = uuid.generate_with_prefix("media")
+    local media_id = existing_media_id or uuid.generate_with_prefix("media")
 
     -- Extract filename from path
     local filename = file_path:match("([^/\\]+)$") or file_path
@@ -240,7 +241,7 @@ function M.batch_import_media(file_paths, db, project_id)
     }
 
     for _, file_path in ipairs(file_paths) do
-        local media_id, err = M.import_media(file_path, db, project_id)
+        local media_id, err = M.import_media(file_path, db, project_id, nil)
         if media_id then
             table.insert(results.success, {
                 file_path = file_path,

@@ -128,6 +128,16 @@ The deserialization layer still filters out clips or edges that no longer
 exist. The timeline thus lands on the exact playhead/selection pair associated
 with the chosen position in history, while also making the next redo idempotent.
 
+#### 2025-10-23 Update — Handling Missing Selection Clips
+- `restore_selection_from_serialized` now uses `Clip.load_optional` and discards
+  stale clip or edge references instead of treating them as fatal errors. Replay
+  continues even when a prior command deleted items that were selected.
+- Regression coverage:
+  - `tests/test_selection_undo_redo.lua` adds Test 4 to confirm redo silently
+    ignores missing clips.
+  - `tests/test_ripple_redo_integrity.lua` snapshots the post-ripple clip layout
+    and verifies undo/redo restores the identical state.
+
 ---
 
 ### 3. Session Persistence (Startup Loading)

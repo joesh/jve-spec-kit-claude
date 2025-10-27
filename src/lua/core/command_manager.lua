@@ -127,6 +127,17 @@ local function restore_selection_from_serialized(clips_json, edges_json)
     local timeline_state = require('ui.timeline.timeline_state')
     local Clip = require('models.clip')
 
+    local function safe_load_clip(clip_id)
+        if not clip_id then
+            return nil
+        end
+        local clip = Clip.load_optional(clip_id, db)
+        if not clip then
+            print(string.format("WARNING: Failed to restore selection for clip %s (clip not found)", tostring(clip_id)))
+        end
+        return clip
+    end
+
     local function decode(json_text)
         if not json_text or json_text == "" then
             return {}
@@ -143,7 +154,7 @@ local function restore_selection_from_serialized(clips_json, edges_json)
         local restored_edges = {}
         for _, info in ipairs(edge_infos) do
             if type(info) == "table" and info.clip_id and info.edge_type then
-                local clip = Clip.load(info.clip_id, db)
+                local clip = safe_load_clip(info.clip_id)
                 if clip then
                     table.insert(restored_edges, {
                         clip_id = info.clip_id,
@@ -164,7 +175,7 @@ local function restore_selection_from_serialized(clips_json, edges_json)
     if #clip_ids > 0 then
         local restored_clips = {}
         for _, clip_id in ipairs(clip_ids) do
-            local clip = Clip.load(clip_id, db)
+            local clip = safe_load_clip(clip_id)
             if clip then
                 table.insert(restored_clips, clip)
             end

@@ -5,6 +5,62 @@ local uuid = require("uuid")
 
 local M = {}
 
+local function load_internal(clip_id, db, raise_errors)
+    if not clip_id or clip_id == "" then
+        if raise_errors then
+            error("Clip.load_failed: Invalid clip_id")
+        end
+        return nil
+    end
+
+    if not db then
+        if raise_errors then
+            error("Clip.load_failed: No database provided")
+        end
+        return nil
+    end
+
+    local query = db:prepare("SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled FROM clips WHERE id = ?")
+    if not query then
+        if raise_errors then
+            error("Clip.load_failed: Failed to prepare query")
+        end
+        return nil
+    end
+
+    query:bind_value(1, clip_id)
+
+    if not query:exec() then
+        if raise_errors then
+            error(string.format("Clip.load_failed: Query execution failed: %s", query:last_error()))
+        end
+        return nil
+    end
+
+    if not query:next() then
+        if raise_errors then
+            error(string.format("Clip.load_failed: Clip not found: %s", clip_id))
+        end
+        return nil
+    end
+
+    local clip = {
+        id = query:value(0),
+        track_id = query:value(1),
+        media_id = query:value(2),
+        start_time = query:value(3),
+        duration = query:value(4),
+        source_in = query:value(5),
+        source_out = query:value(6),
+        enabled = query:value(7) == 1 or query:value(7) == true,
+    }
+
+    clip.name = "Clip " .. clip.id:sub(1, 8)
+
+    setmetatable(clip, {__index = M})
+    return clip
+end
+
 -- Create a new Clip instance
 function M.create(name, media_id)
     local clip = {
@@ -25,56 +81,15 @@ end
 
 -- Load clip from database
 function M.load(clip_id, db)
-    if not clip_id or clip_id == "" then
-        print("WARNING: Clip.load: Invalid clip_id")
-        return nil
-    end
+    return load_internal(clip_id, db, true)
+end
 
-    if not db then
-        print("WARNING: Clip.load: No database provided")
-        return nil
-    end
-
-    local query = db:prepare("SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled FROM clips WHERE id = ?")
-    if not query then
-        print("WARNING: Clip.load: Failed to prepare query")
-        return nil
-    end
-
-    query:bind_value(1, clip_id)
-
-    if not query:exec() then
-        print(string.format("WARNING: Clip.load: Query execution failed: %s", query:last_error()))
-        return nil
-    end
-
-    if not query:next() then
-        print(string.format("WARNING: Clip.load: Clip not found: %s", clip_id))
-        return nil
-    end
-
-    -- Read values from query result
-    local clip = {
-        id = query:value(0),
-        track_id = query:value(1),
-        media_id = query:value(2),
-        start_time = query:value(3),
-        duration = query:value(4),
-        source_in = query:value(5),
-        source_out = query:value(6),
-        enabled = query:value(7) == 1 or query:value(7) == true,
-    }
-
-    -- Set name from media or default
-    -- TODO: Query media table for actual name
-    clip.name = "Clip " .. clip.id:sub(1, 8)
-
-    setmetatable(clip, {__index = M})
-    return clip
+function M.load_optional(clip_id, db)
+    return load_internal(clip_id, db, false)
 end
 
 -- Save clip to database (INSERT or UPDATE)
-function M:save(db, opts)
+local function save_internal(self, db, opts)
     if not db then
         print("WARNING: Clip.save: No database provided")
         return false
@@ -155,24 +170,23 @@ function M:save(db, opts)
         exists = exists_query:value(0) > 0
     end
 
-    local occlusion_opts = opts.resolve_occlusion
-    if occlusion_opts and self.track_id and self.start_time and self.duration then
+    local skip_occlusion = opts.skip_occlusion == true
+    local occlusion_actions = nil
+    if not skip_occlusion and self.track_id and self.start_time and self.duration then
         local clip_mutator = require('core.clip_mutator')
-        local ignore = nil
-        if type(occlusion_opts) == "table" then
-            ignore = occlusion_opts.ignore_ids
-        end
-        local ok, err = clip_mutator.resolve_occlusions(db, {
+        local pending = opts.pending_clips
+        local ok, err, actions = clip_mutator.resolve_occlusions(db, {
             track_id = self.track_id,
             start_time = self.start_time,
             duration = self.duration,
             exclude_clip_id = exists and self.id or nil,
-            ignore_ids = ignore
+            pending_clips = pending
         })
         if not ok then
             print("WARNING: Clip.save: Failed to resolve occlusions: " .. tostring(err or "unknown"))
             return false
         end
+        occlusion_actions = actions
     end
 
     local query
@@ -218,7 +232,15 @@ function M:save(db, opts)
         return false
     end
 
-    return true
+    return true, occlusion_actions
+end
+
+function M:save(db, opts)
+    return save_internal(self, db, opts or {})
+end
+
+function M:restore_without_occlusion(db)
+    return save_internal(self, db, {skip_occlusion = true})
 end
 
 -- Delete clip from database

@@ -510,6 +510,39 @@ end
         -- Get clips for edge bracket rendering
         local all_clips = state_module.get_clips()
 
+        -- Capture trim constraints for edge rendering so we can show limit state
+        local database_module = require('core.database')
+        local constraints_module = require('core.timeline_constraints')
+        local Clip = require('models.clip')
+        local sequence_id = state_module.get_sequence_id()
+        local all_for_constraints = database_module.load_clips(sequence_id)
+        local db_conn = database_module.get_connection()
+
+        local trim_constraints = {}
+        local function ensure_constraint(edge_info)
+            if not edge_info or not edge_info.clip_id then return end
+            local key = edge_info.clip_id .. ':' .. edge_info.edge_type
+            if trim_constraints[key] ~= nil then return end
+            local clip = Clip.load(edge_info.clip_id, db_conn)
+            if not clip then return end
+            local normalized_edge = edge_info.edge_type
+            if normalized_edge == 'gap_after' then
+                normalized_edge = 'in'
+            elseif normalized_edge == 'gap_before' then
+                normalized_edge = 'out'
+            end
+            trim_constraints[key] = constraints_module.calculate_trim_range(clip, normalized_edge, all_for_constraints, false, true)
+        end
+
+        if view.drag_state and view.drag_state.type == 'edges' then
+            for _, drag_edge in ipairs(view.drag_state.edges) do
+                ensure_constraint(drag_edge)
+            end
+        end
+        for _, selected in ipairs(selected_edges) do
+            ensure_constraint(selected)
+        end
+
         for _, edge in ipairs(selected_edges) do
             -- Find the clip for this edge
             local edge_clip = nil
@@ -532,6 +565,7 @@ end
 
                     local clip_start = edge_clip.start_time
                     local clip_duration = edge_clip.duration
+                    local at_limit = false
 
                     if is_dragging then
                         -- Adjust clip boundaries based on which edge is being dragged
@@ -553,37 +587,74 @@ end
                     local bracket_width = 8  -- Width of bracket indicator
                     local bracket_thickness = 2
                     local bracket_type = "in"  -- "in" for [, "out" for ]
+                    local is_gap_edge = (edge.edge_type == "gap_after" or edge.edge_type == "gap_before")
 
                     if edge.edge_type == "in" then
                         -- Clip's in-point: [ facing right
                         edge_x = clip_x
                         bracket_type = "in"
-                        has_available_media = edge_clip.source_in > 0
+                        local constraints = trim_constraints[edge_key]
+                        if constraints then
+                            has_available_media = constraints.min_delta < 0
+                            if constraints.min_delta >= 0 then
+                                at_limit = true
+                            end
+                        else
+                            has_available_media = edge_clip.source_in > 0
+                        end
                     elseif edge.edge_type == "out" then
                         -- Clip's out-point: ] facing left
                         edge_x = clip_x + clip_width
                         bracket_type = "out"
-                        has_available_media = true
+                        local constraints = trim_constraints[edge_key]
+                        if constraints then
+                            has_available_media = constraints.max_delta > 0
+                            if constraints.max_delta <= 0 then
+                                at_limit = true
+                            end
+                        else
+                            has_available_media = true
+                        end
                     elseif edge.edge_type == "gap_before" then
                         -- Gap's edge before clip: ] facing right (closing towards clip)
                         edge_x = clip_x
                         bracket_type = "out"
-                        has_available_media = true  -- Gap always has "space" available
+                        local constraints = trim_constraints[edge_key]
+                        if constraints then
+                            has_available_media = constraints.max_delta > 0
+                            if constraints.max_delta <= 0 then
+                                at_limit = true
+                            end
+                        else
+                            has_available_media = true  -- Gap always has "space" available
+                        end
                     elseif edge.edge_type == "gap_after" then
                         -- Gap's edge after clip: [ facing left (opening into gap)
                         edge_x = clip_x + clip_width
                         bracket_type = "in"
-                        has_available_media = true  -- Gap always has "space" available
+                        local constraints = trim_constraints[edge_key]
+                        if constraints then
+                            has_available_media = constraints.min_delta < 0
+                            if constraints.min_delta >= 0 then
+                                at_limit = true
+                            end
+                        else
+                            has_available_media = true  -- Gap always has "space" available
+                        end
                     end
 
                     -- Choose color based on media availability (white if dragging for visibility)
                     local edge_color
-                    if is_dragging then
-                        edge_color = 0xFFFFFFFF  -- Bright white for drag preview
+                    if is_gap_edge then
+                        edge_color = is_dragging and 0xFFFFFFFF or state_module.colors.edge_selected_available
                     else
-                        edge_color = has_available_media
-                            and state_module.colors.edge_selected_available
-                            or state_module.colors.edge_selected_limit
+                        if is_dragging then
+                            edge_color = at_limit and state_module.colors.edge_selected_limit or 0xFFFFFFFF
+                        else
+                            edge_color = (not has_available_media or at_limit)
+                                and state_module.colors.edge_selected_limit
+                                or state_module.colors.edge_selected_available
+                        end
                     end
 
                     -- Draw bracket indicator: [ for in point, ] for out point

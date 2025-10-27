@@ -197,6 +197,6 @@
 ---
 
 ### Addendum: Batch Ripple Occlusion (2025-10-24)
-- Closed gaps on multiple tracks now resolve occlusions so ripple drags cannot leave overlapped media hidden under neighbouring clips (`BatchRippleEdit` + `RippleEdit` save paths pass `resolve_occlusion = true`).
+- Closed gaps on multiple tracks now resolve occlusions so ripple drags cannot leave overlapped media hidden under neighbouring clips (`BatchRippleEdit` + `RippleEdit` save paths call `clip:save` with batch `pending_clips`).
 - Downstream shift clamps ensure we never rewind clips past t=0 during replay.
 - Regression: `tests/test_clip_occlusion.lua` adds “Batch ripple closes gaps without leaving overlaps” ensuring both clips butt cleanly after a multi-track drag and replay maintains a valid state.

@@ -102,18 +102,15 @@ function ClipMutator.resolve_occlusions(db, params)
 
     local end_time = start_time + duration
     local exclude_id = params.exclude_clip_id
-    local ignore_ids = {}
-    if params.ignore_ids then
-        if type(params.ignore_ids) == "table" then
-            for key, value in pairs(params.ignore_ids) do
-                if type(key) == "string" and value then
-                    ignore_ids[key] = true
-                elseif type(value) == "string" then
-                    ignore_ids[value] = true
-                end
+
+    local pending_clips = {}
+    if params.pending_clips and type(params.pending_clips) == "table" then
+        for key, value in pairs(params.pending_clips) do
+            if type(key) == "string" and type(value) == "table" then
+                pending_clips[key] = value
+            elseif type(value) == "table" and type(value.id) == "string" then
+                pending_clips[value.id] = value
             end
-        elseif type(params.ignore_ids) == "string" then
-            ignore_ids[params.ignore_ids] = true
         end
     end
 
@@ -141,6 +138,8 @@ function ClipMutator.resolve_occlusions(db, params)
         return false, select_stmt:last_error()
     end
 
+    local actions = {}
+
     while select_stmt:next() do
         local row = {
             id = select_stmt:value(0),
@@ -153,7 +152,33 @@ function ClipMutator.resolve_occlusions(db, params)
             enabled = select_stmt:value(7) == 1 or select_stmt:value(7) == true
         }
 
-        if ignore_ids[row.id] then
+        local pending_state = pending_clips[row.id]
+        if pending_state ~= nil then
+            if pending_state == false or pending_state.deleted then
+                goto continue
+            end
+
+            local pending_start = pending_state.start_time
+            if pending_start == nil then
+                pending_start = row.start_time
+            end
+            local pending_duration = pending_state.duration or row.duration
+            local pending_end = pending_start + pending_duration
+
+            local pending_overlap_start = math.max(pending_start, start_time)
+            local pending_overlap_end = math.min(pending_end, end_time)
+            if pending_overlap_end > pending_overlap_start then
+                local overlap_amount = pending_overlap_end - pending_overlap_start
+                local tolerance = pending_state.tolerance or 0
+                if overlap_amount > tolerance then
+                    select_stmt:finalize()
+                    return false, string.format(
+                        "Pending clip %s would overlap target range (%d-%d vs %d-%d)",
+                        row.id, pending_start, pending_end, start_time, end_time
+                    )
+                end
+            end
+
             goto continue
         end
 
@@ -170,6 +195,10 @@ function ClipMutator.resolve_occlusions(db, params)
 
         -- Fully covered → delete
         if overlap_start <= clip_start and overlap_end >= clip_end then
+            table.insert(actions, {
+                type = "delete",
+                clip = original
+            })
             local ok, err = run_delete(db, row.id)
             if not ok then
                 return false, err
@@ -182,6 +211,10 @@ function ClipMutator.resolve_occlusions(db, params)
             local trim_amount = clip_end - start_time
             row.duration = row.duration - trim_amount
             if row.duration < 1 then
+                table.insert(actions, {
+                    type = "delete",
+                    clip = original
+                })
                 local ok, err = run_delete(db, row.id)
                 if not ok then
                     return false, err
@@ -200,6 +233,11 @@ function ClipMutator.resolve_occlusions(db, params)
             if not ok then
                 return false, err
             end
+            table.insert(actions, {
+                type = "trim",
+                before = original,
+                after = clone_state(row)
+            })
             goto continue
         end
 
@@ -209,6 +247,10 @@ function ClipMutator.resolve_occlusions(db, params)
             row.start_time = end_time
             row.duration = row.duration - trim_amount
             if row.duration < 1 then
+                table.insert(actions, {
+                    type = "delete",
+                    clip = original
+                })
                 local ok, err = run_delete(db, row.id)
                 if not ok then
                     return false, err
@@ -231,6 +273,11 @@ function ClipMutator.resolve_occlusions(db, params)
             if not ok then
                 return false, err
             end
+            table.insert(actions, {
+                type = "trim",
+                before = original,
+                after = clone_state(row)
+            })
             goto continue
         end
 
@@ -252,6 +299,11 @@ function ClipMutator.resolve_occlusions(db, params)
             if not ok then
                 return false, err
             end
+            table.insert(actions, {
+                type = "trim",
+                before = original,
+                after = clone_state(row)
+            })
 
             -- Create right portion
             if right_duration > 0 then
@@ -271,6 +323,10 @@ function ClipMutator.resolve_occlusions(db, params)
                 if not ok_insert then
                     return false, err_insert
                 end
+                table.insert(actions, {
+                    type = "insert",
+                    clip = clone_state(right_clip)
+                })
             end
             goto continue
         end
@@ -278,7 +334,7 @@ function ClipMutator.resolve_occlusions(db, params)
         ::continue::
     end
 
-    return true
+    return true, nil, actions
 end
 
 return ClipMutator

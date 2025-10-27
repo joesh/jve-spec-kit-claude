@@ -252,6 +252,30 @@ assert_selection("clip2", "After redoing command 1 (should match next command pr
 command_manager.redo()
 assert_selection("clip2", "After redoing command 2 (head state)")
 
+-- Regression: redo gracefully handles missing selection clips
+print("\nTest 4: Redo skips missing selection clips")
+mock_timeline_state.selection_log = {}
+
+local select_clip0 = Command.create("TestSelectClip", "test_project")
+select_clip0:set_parameter("clip_id", "clip0")
+assert(command_manager.execute(select_clip0).success, "Selecting clip0 should succeed")
+
+local noop_cmd = Command.create("TestNoOp", "test_project")
+assert(command_manager.execute(noop_cmd).success, "Executing no-op command should succeed")
+
+assert(db:exec("DELETE FROM clips WHERE id = 'clip0'"), "Failed to delete clip0 from database")
+
+local undo_result = command_manager.undo()
+assert(undo_result.success, "Undo after deleting clip should succeed")
+
+local redo_result = command_manager.redo()
+assert(redo_result.success, "Redo should succeed even if selection clip was deleted")
+
+local last_log_entry = mock_timeline_state.selection_log[#mock_timeline_state.selection_log] or ""
+assert(last_log_entry == "", string.format("Selection after redo should be empty, got '%s'", last_log_entry))
+
+print("✅ Redo gracefully handles missing selection clips")
+
 command_manager.unregister_executor("TestSelectClip")
 command_manager.unregister_executor("TestNoOp")
 

@@ -72,19 +72,29 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
     local limit_left = nil  -- What's limiting us on the left
     local limit_right = nil  -- What's limiting us on the right
 
-    -- CONSTRAINT 1: Minimum clip duration (must be at least 1ms)
-    if edge_type == "in" then
-        -- Trimming in-point: can't make duration < 1
-        max_delta = clip.duration - 1  -- Drag right max
-        min_delta = -math.huge  -- Drag left limited by media/adjacent clip
-    else  -- edge_type == "out"
-        -- Trimming out-point: can't make duration < 1
-        min_delta = -(clip.duration - 1)  -- Drag left max
-        max_delta = math.huge  -- Drag right limited by media/adjacent clip
+    local is_gap_clip = clip and (clip.is_gap or (clip.media_id == nil and type(clip.id) == "string" and clip.id:find("^temp_gap_") ~= nil))
+
+    if not is_gap_clip then
+        -- CONSTRAINT 1: Minimum clip duration (must be at least 1ms)
+        if edge_type == "in" then
+            -- Trimming in-point: can't make duration < 1
+            max_delta = clip.duration - 1  -- Drag right max
+            min_delta = -math.huge  -- Drag left limited by media/adjacent clip
+        else  -- edge_type == "out"
+            -- Trimming out-point: can't make duration < 1
+            min_delta = -(clip.duration - 1)  -- Drag left max
+            max_delta = math.huge  -- Drag right limited by media/adjacent clip
+        end
+    else
+        -- Gap placeholders should not contribute their own duration limits.
+        -- They only inherit constraints from surrounding clips/timeline.
+        min_delta = -math.huge
+        max_delta = math.huge
     end
 
     -- CONSTRAINT 2: Media boundaries (can't trim beyond available media)
     -- Gap clips have no media_id - they represent empty timeline space
+    local media_missing = false
     if clip.media_id ~= nil then  -- Real clip with media
         if edge_type == "in" then
             -- Can't drag left beyond source_in = 0
@@ -106,9 +116,26 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
 
             if Media and Media.load and db_connection then
                 local ok, result = pcall(Media.load, clip.media_id, db_connection)
-                if ok then
+                if ok and result then
                     media_record = result
+                else
+                    local restored = false
+                    if database_module and database_module.ensure_media_record then
+                        local ensure_ok, ensure_result = pcall(database_module.ensure_media_record, clip.media_id)
+                        restored = ensure_ok and ensure_result
+                    end
+                    if restored then
+                        local reload_ok, reload_result = pcall(Media.load, clip.media_id, db_connection)
+                        if reload_ok then
+                            media_record = reload_result
+                        end
+                    end
+                    if not media_record then
+                        media_missing = true
+                    end
                 end
+            else
+                media_missing = true
             end
 
             local media_duration = media_record and media_record.duration or nil
@@ -124,37 +151,59 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
                     max_delta = available_tail
                     limit_right = "media_end"
                 end
+            else
+                media_missing = true
             end
+        end
+    end
+
+    if media_missing and edge_type == "out" then
+        -- Without media metadata we cannot allow extending further; clamp to zero
+        if 0 < max_delta then
+            max_delta = 0
+            limit_right = "media_missing"
         end
     end
 
     -- CONSTRAINT 3: Adjacent clips (can't trim into another clip)
     -- Skip this for ripple edits where adjacent clips move downstream
-    if not skip_adjacent_check then
+    local enforce_adjacent_left = not skip_adjacent_check
+    local enforce_adjacent_right = not skip_adjacent_check
+
+    if is_gap_clip then
+        enforce_adjacent_left = false
+        enforce_adjacent_right = false
+    end
+
+    if enforce_adjacent_left or enforce_adjacent_right then
         for _, other in ipairs(all_clips) do
             -- For ripple edits: check all tracks. For regular trims: only same track
             local should_check = (check_all_tracks or other.track_id == clip.track_id)
             if other.id ~= clip.id and should_check then
                 if edge_type == "in" then
-                    -- Trimming in-point: check for clip to the left
-                    local other_end = other.start_time + other.duration
-                    if other_end <= clip.start_time then
-                        -- Clip is to our left
-                        local max_drag_left = clip.start_time - other_end
-                        if -max_drag_left > min_delta then
-                            min_delta = -max_drag_left
-                            limit_left = other
+                    if enforce_adjacent_left then
+                        -- Trimming in-point: check for clip to the left
+                        local other_end = other.start_time + other.duration
+                        if other_end <= clip.start_time then
+                            -- Clip is to our left
+                            local max_drag_left = clip.start_time - other_end
+                            if -max_drag_left > min_delta then
+                                min_delta = -max_drag_left
+                                limit_left = other
+                            end
                         end
                     end
-                else  -- edge_type == "out"
-                    -- Trimming out-point: check for clip to the right
-                    local clip_end = clip.start_time + clip.duration
-                    if other.start_time >= clip_end then
-                        -- Clip is to our right
-                        local max_drag_right = other.start_time - clip_end
-                        if max_drag_right < max_delta then
-                            max_delta = max_drag_right
-                            limit_right = other
+                elseif edge_type == "out" then
+                    if enforce_adjacent_right then
+                        -- Trimming out-point: check for clip to the right
+                        local clip_end = clip.start_time + clip.duration
+                        if other.start_time >= clip_end then
+                            -- Clip is to our right
+                            local max_drag_right = other.start_time - clip_end
+                            if max_drag_right < max_delta then
+                                max_delta = max_drag_right
+                                limit_right = other
+                            end
                         end
                     end
                 end
@@ -238,8 +287,8 @@ function M.check_trim_collision(clip, edge_type, delta_ms, all_clips)
 end
 
 -- Clamp a drag delta to valid range and snap to frame boundaries
-function M.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, frame_rate, check_all_tracks)
-    local constraints = M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks)
+function M.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, frame_rate, check_all_tracks, skip_adjacent_check)
+    local constraints = M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, skip_adjacent_check)
     local clamped = math.max(constraints.min_delta, math.min(constraints.max_delta, delta_ms))
 
     -- Snap to frame boundaries if frame_rate is provided
