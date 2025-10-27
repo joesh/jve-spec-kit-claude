@@ -186,20 +186,52 @@ function keyboard_shortcuts.handle_key(event)
     -- Cmd/Ctrl + A: Select all clips
     -- Shift + Cmd/Ctrl + A: Deselect all
     if key == KEY.A and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
-        if timeline_state then
+        if command_manager then
+            local command_name
             if has_modifier(modifiers, MOD.Shift) then
-                -- Shift+Cmd+A: Clear selection
-                timeline_state.set_selection({})
-                timeline_state.clear_edge_selection()
-                print("Cleared selection")
+                command_name = "DeselectAll"
             else
-                -- Cmd+A: Select all clips
-                local all_clips = timeline_state.get_clips()
-                timeline_state.set_selection(all_clips)
-                print(string.format("Selected all %d clips", #all_clips))
+                command_name = "SelectAll"
+            end
+
+            local result = command_manager.execute(command_name)
+            if not result.success then
+                print(string.format("⚠️  %s returned error: %s", command_name, result.error_message or "unknown"))
             end
             return true
         end
+    end
+
+    if key == KEY.Up and command_manager then
+        local result = command_manager.execute("GoToPrevEdit")
+        if not result.success then
+            print(string.format("⚠️  GoToPrevEdit returned error: %s", result.error_message or "unknown"))
+        end
+        return true
+    end
+
+    if key == KEY.Down and command_manager then
+        local result = command_manager.execute("GoToNextEdit")
+        if not result.success then
+            print(string.format("⚠️  GoToNextEdit returned error: %s", result.error_message or "unknown"))
+        end
+        return true
+    end
+
+    if key == KEY.Home and command_manager then
+        local result = command_manager.execute("GoToStart")
+        if not result.success then
+            print(string.format("⚠️  GoToStart returned error: %s", result.error_message or "unknown"))
+        end
+        return true
+    end
+
+    if key == KEY.End and command_manager then
+        local result = command_manager.execute("GoToEnd")
+        if not result.success then
+            print(string.format("⚠️  GoToEnd returned error: %s", result.error_message or "unknown"))
+        end
+        return true
     end
 
     -- Comma/Period: Frame-accurate nudge for clips and edges

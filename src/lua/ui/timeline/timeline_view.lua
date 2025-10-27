@@ -1338,12 +1338,18 @@ end
                     -- Add track changes
                     if #clips_to_move > 0 then
                         for _, move_info in ipairs(clips_to_move) do
+                            local move_params = {
+                                clip_id = move_info.clip.id,
+                                target_track_id = move_info.target_track_id
+                            }
+                            if delta_ms ~= 0 then
+                                move_params.skip_occlusion = true
+                                move_params.pending_new_start_time = move_info.clip.start_time + delta_ms
+                                move_params.pending_duration = move_info.clip.duration
+                            end
                             table.insert(command_specs, {
                                 command_type = "MoveClipToTrack",
-                                parameters = {
-                                    clip_id = move_info.clip.id,
-                                    target_track_id = move_info.target_track_id
-                                }
+                                parameters = move_params
                             })
                         end
                     end
@@ -1478,7 +1484,7 @@ end
             local width = timeline.get_dimensions(widget)
             if width and width > 0 then
                 local viewport_duration = state_module.get_viewport_duration()
-                local delta_time = (horizontal / width) * viewport_duration
+                local delta_time = (-horizontal / width) * viewport_duration
                 local new_start = state_module.get_viewport_start_time() + delta_time
                 state_module.set_viewport_start_time(new_start)
                 render()

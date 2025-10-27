@@ -150,13 +150,25 @@ command_executors["BatchCommand"] = function(command)
         return false
     end
 
+    local batch_project_id = command:get_parameter("project_id") or command.project_id
+    if not batch_project_id or batch_project_id == "" then
+        print("ERROR: BatchCommand: Missing project_id on parent command")
+        return false
+    end
+
     -- Execute each command in sequence
     -- Outer execute() provides transaction safety - no nested transactions needed
     local Command = require("command")
     local executed_commands = {}
 
     for i, spec in ipairs(command_specs) do
-        local cmd = Command.create(spec.command_type, spec.project_id or "default_project")
+        local child_project_id = spec.project_id
+        if not child_project_id or child_project_id == "" then
+            child_project_id = batch_project_id
+            spec.project_id = child_project_id
+        end
+
+        local cmd = Command.create(spec.command_type, child_project_id)
 
         -- Set parameters from spec
         if spec.parameters then
@@ -164,6 +176,11 @@ command_executors["BatchCommand"] = function(command)
                 cmd:set_parameter(key, value)
             end
         end
+
+        if not cmd:get_parameter("project_id") or cmd:get_parameter("project_id") == "" then
+            cmd:set_parameter("project_id", child_project_id)
+        end
+        cmd.project_id = child_project_id
 
         -- Execute command (don't add to command log - batch is the log entry)
         local executor = command_executors[spec.command_type]
@@ -202,9 +219,21 @@ command_undoers["BatchCommand"] = function(command)
     local command_specs = json.decode(commands_json)
 
     local Command = require("command")
+    local batch_project_id = command:get_parameter("project_id") or command.project_id
+    if not batch_project_id or batch_project_id == "" then
+        print("ERROR: BatchCommand undo: Missing project_id on parent command")
+        return false
+    end
+
     for i = #command_specs, 1, -1 do
         local spec = command_specs[i]
-        local cmd = Command.create(spec.command_type, spec.project_id or "default_project")
+        local child_project_id = spec.project_id
+        if not child_project_id or child_project_id == "" then
+            child_project_id = batch_project_id
+            spec.project_id = child_project_id
+        end
+
+        local cmd = Command.create(spec.command_type, child_project_id)
 
         -- Restore parameters
         if spec.parameters then
@@ -212,6 +241,11 @@ command_undoers["BatchCommand"] = function(command)
                 cmd:set_parameter(key, value)
             end
         end
+
+        if not cmd:get_parameter("project_id") or cmd:get_parameter("project_id") == "" then
+            cmd:set_parameter("project_id", child_project_id)
+        end
+        cmd.project_id = child_project_id
 
         -- Execute undo
         local undoer = command_undoers[spec.command_type]
@@ -224,6 +258,55 @@ command_undoers["BatchCommand"] = function(command)
     end
 
     print(string.format("BatchCommand: Undid %d commands", #command_specs))
+    return true
+end
+
+command_executors["DeleteClip"] = function(command)
+    print("Executing DeleteClip command")
+
+    local clip_id = command:get_parameter("clip_id")
+    if not clip_id or clip_id == "" then
+        print("WARNING: DeleteClip: Missing required parameter 'clip_id'")
+        return false
+    end
+
+    local Clip = require('models.clip')
+    local clip = Clip.load(clip_id, db)
+    if not clip then
+        print(string.format("WARNING: DeleteClip: Clip not found: %s", clip_id))
+        return false
+    end
+
+    local clip_state = {
+        id = clip.id,
+        track_id = clip.track_id,
+        media_id = clip.media_id,
+        start_time = clip.start_time,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out,
+        enabled = clip.enabled
+    }
+    command:set_parameter("deleted_clip_state", clip_state)
+
+    if not clip:delete(db) then
+        print(string.format("WARNING: DeleteClip: Failed to delete clip %s", clip_id))
+        return false
+    end
+
+    print(string.format("✅ Deleted clip %s from timeline", clip_id))
+    return true
+end
+
+command_undoers["DeleteClip"] = function(command)
+    local clip_state = command:get_parameter("deleted_clip_state")
+    if not clip_state then
+        print("WARNING: DeleteClip undo: Missing clip state")
+        return false
+    end
+
+    restore_clip_state(clip_state)
+    print(string.format("✅ Undo DeleteClip: Restored clip %s", clip_state.id))
     return true
 end
 
@@ -784,7 +867,7 @@ command_executors["Insert"] = function(command)
 
     -- Load all clips on this track
     local query = db:prepare([[
-        SELECT id, start_time FROM clips
+        SELECT id, start_time, duration FROM clips
         WHERE track_id = ?
         ORDER BY start_time ASC
     ]])
@@ -797,13 +880,27 @@ command_executors["Insert"] = function(command)
     query:bind_value(1, track_id)
 
     local clips_to_ripple = {}
+    local pending_moves = {}
+    local pending_tolerance = frame_utils.frame_duration_ms()
     if query:exec() then
         while query:next() do
             local clip_id = query:value(0)
             local start_time = query:value(1)
+            local clip_duration = query:value(2)
             -- Ripple clips that start at or after insert_time to prevent overlap
             if start_time >= insert_time then
-                table.insert(clips_to_ripple, {id = clip_id, old_start = start_time})
+                local new_start = start_time + duration
+                table.insert(clips_to_ripple, {
+                    id = clip_id,
+                    old_start = start_time,
+                    new_start = new_start,
+                    duration = clip_duration
+                })
+                pending_moves[clip_id] = {
+                    start_time = new_start,
+                    duration = clip_duration,
+                    tolerance = pending_tolerance
+                }
             end
         end
     end
@@ -814,7 +911,7 @@ command_executors["Insert"] = function(command)
         for _, clip_info in ipairs(clips_to_ripple) do
             table.insert(preview_rippled_clips, {
                 clip_id = clip_info.id,
-                new_start_time = clip_info.old_start + duration
+                new_start_time = clip_info.new_start
             })
         end
 
@@ -838,14 +935,27 @@ command_executors["Insert"] = function(command)
     -- EXECUTE: Ripple clips forward
     local Clip = require('models.clip')
     for _, clip_info in ipairs(clips_to_ripple) do
-        local clip = Clip.load(clip_info.id, db)
-        if clip then
-            clip.start_time = clip_info.old_start + duration
-            if not clip:save(db) then
-                print(string.format("WARNING: Insert: Failed to ripple clip %s", clip_info.id))
-                return false
-            end
+        local clip = Clip.load_optional(clip_info.id, db)
+        if not clip then
+            print(string.format("WARNING: Insert: Skipping missing clip %s during ripple", clip_info.id))
+            pending_moves[clip_info.id] = nil
+            goto continue_ripple
         end
+
+        clip.start_time = clip_info.new_start
+
+        local save_opts = nil
+        if next(pending_moves) ~= nil then
+            save_opts = {pending_clips = pending_moves}
+        end
+
+        if not clip:save(db, save_opts) then
+            print(string.format("WARNING: Insert: Failed to ripple clip %s", clip_info.id))
+            return false
+        end
+        pending_moves[clip.id] = nil
+
+        ::continue_ripple::
     end
 
     -- Store ripple info for undo
@@ -1029,12 +1139,210 @@ command_executors["MoveClipToTrack"] = function(command)
     -- EXECUTE: Update clip's track
     clip.track_id = target_track_id
 
-    if not clip:save(db) then
+    local save_opts = nil
+    local skip_occlusion = command:get_parameter("skip_occlusion") == true
+    local pending_new_start = command:get_parameter("pending_new_start_time")
+    if skip_occlusion or pending_new_start then
+        save_opts = save_opts or {}
+        if skip_occlusion then
+            save_opts.skip_occlusion = true
+        end
+        if pending_new_start then
+            local pending_duration = command:get_parameter("pending_duration") or clip.duration
+            save_opts.pending_clips = save_opts.pending_clips or {}
+            save_opts.pending_clips[clip.id] = {
+                start_time = pending_new_start,
+                duration = pending_duration,
+                tolerance = math.max(pending_duration or 0, frame_utils.frame_duration_ms())
+            }
+        end
+    end
+
+    if not clip:save(db, save_opts) then
         print(string.format("WARNING: MoveClipToTrack: Failed to save clip %s", clip_id))
         return false
     end
 
     print(string.format("✅ Moved clip %s to track %s", clip_id, target_track_id))
+    return true
+end
+
+local function collect_edit_points()
+    local timeline_state = require('ui.timeline.timeline_state')
+    local clips = timeline_state.get_clips() or {}
+    local point_map = {[0] = true}
+
+    local function add_point(value)
+        if type(value) == "number" then
+            point_map[value] = true
+        end
+    end
+
+    for _, clip in ipairs(clips) do
+        local start_time = clip.start_time or clip.start or clip.startTime
+        local duration = clip.duration or clip.length or clip.duration_ms
+
+        add_point(start_time)
+        if type(start_time) == "number" and type(duration) == "number" then
+            add_point(start_time + duration)
+        end
+    end
+
+    local points = {}
+    for value in pairs(point_map) do
+        table.insert(points, value)
+    end
+    table.sort(points)
+    return points
+end
+
+command_executors["DeselectAll"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing DeselectAll command")
+    end
+
+    if dry_run then
+        return true
+    end
+
+    local timeline_state = require('ui.timeline.timeline_state')
+    local current_clips = timeline_state.get_selected_clips() or {}
+    local current_edges = timeline_state.get_selected_edges() or {}
+
+    if #current_clips == 0 and #current_edges == 0 then
+        print("DeselectAll: nothing currently selected")
+    end
+
+    timeline_state.set_selection({})
+    timeline_state.clear_edge_selection()
+
+    print("✅ Deselected all clips and edges")
+    return true
+end
+
+command_executors["SelectAll"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing SelectAll command")
+    end
+
+    local timeline_state = require('ui.timeline.timeline_state')
+    if dry_run then
+        return true, {total_clips = #(timeline_state.get_clips() or {})}
+    end
+
+    local all_clips = timeline_state.get_clips() or {}
+    if #all_clips == 0 then
+        timeline_state.set_selection({})
+        timeline_state.clear_edge_selection()
+        print("SelectAll: no clips available to select")
+        return true
+    end
+
+    timeline_state.set_selection(all_clips)
+    timeline_state.clear_edge_selection()
+    print(string.format("✅ Selected all %d clip(s)", #all_clips))
+    return true
+end
+
+command_executors["GoToStart"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing GoToStart command")
+    end
+
+    if dry_run then
+        return true
+    end
+
+    local timeline_state = require('ui.timeline.timeline_state')
+    timeline_state.set_playhead_time(0)
+    print("✅ Moved playhead to start")
+    return true
+end
+
+command_executors["GoToEnd"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing GoToEnd command")
+    end
+
+    local timeline_state = require('ui.timeline.timeline_state')
+    local clips = timeline_state.get_clips() or {}
+    local max_end = 0
+    for _, clip in ipairs(clips) do
+        local start_time = clip.start_time
+        local duration = clip.duration
+        if start_time and duration then
+            local clip_end = start_time + duration
+            if clip_end > max_end then
+                max_end = clip_end
+            end
+        end
+    end
+
+    if dry_run then
+        return true, { timeline_end = max_end }
+    end
+
+    timeline_state.set_playhead_time(max_end)
+    print(string.format("✅ Moved playhead to timeline end (%dms)", max_end))
+    return true
+end
+
+command_executors["GoToPrevEdit"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing GoToPrevEdit command")
+    end
+
+    local timeline_state = require('ui.timeline.timeline_state')
+    local points = collect_edit_points()
+    local playhead = timeline_state.get_playhead_time() or 0
+
+    local target = 0
+    for _, point in ipairs(points) do
+        if point < playhead then
+            target = point
+        else
+            break
+        end
+    end
+
+    if dry_run then
+        return true, { target = target }
+    end
+
+    timeline_state.set_playhead_time(target)
+    print(string.format("✅ Moved playhead to previous edit (%dms)", target))
+    return true
+end
+
+command_executors["GoToNextEdit"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing GoToNextEdit command")
+    end
+
+    local timeline_state = require('ui.timeline.timeline_state')
+    local points = collect_edit_points()
+    local playhead = timeline_state.get_playhead_time() or 0
+
+    local target = playhead
+    for _, point in ipairs(points) do
+        if point > playhead then
+            target = point
+            break
+        end
+    end
+
+    if dry_run then
+        return true, { target = target }
+    end
+
+    timeline_state.set_playhead_time(target)
+    print(string.format("✅ Moved playhead to next edit (%dms)", target))
     return true
 end
 

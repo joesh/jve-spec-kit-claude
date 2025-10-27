@@ -432,13 +432,17 @@ function M.init(sequence_id)
 
                 local saved_viewport_start = query:value(3)
                 local saved_viewport_duration = query:value(4)
+                local restored_viewport = false
                 if saved_viewport_duration and saved_viewport_duration > 0 then
                     state.viewport_duration = math.max(1000, saved_viewport_duration)
+                    restored_viewport = true
                 end
                 if saved_viewport_start and saved_viewport_start >= 0 then
                     state.viewport_start_time = saved_viewport_start
+                    restored_viewport = true
                 end
                 state.viewport_start_time = clamp_viewport_start(state.viewport_start_time, state.viewport_duration)
+                state._restored_viewport = restored_viewport
             end
             query:finalize()
         end
@@ -461,8 +465,14 @@ function M.init(sequence_id)
         end
     end
 
-    -- Show at least 10 seconds, or enough to see all content
-    state.viewport_duration = math.max(10000, max_clip_end * 1.2)
+    local restored_viewport = state._restored_viewport
+    state._restored_viewport = nil
+
+    if not restored_viewport then
+        -- Show at least 10 seconds, or enough to see all content
+        state.viewport_duration = math.max(10000, max_clip_end * 1.2)
+        state.viewport_start_time = clamp_viewport_start(state.viewport_start_time, state.viewport_duration)
+    end
 
     notify_listeners()
     return true

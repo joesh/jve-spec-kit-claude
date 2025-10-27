@@ -22,6 +22,99 @@ local last_error_message = ""
 local active_sequence_id = "default_sequence"
 local active_project_id = "default_project"
 
+local non_recording_commands = {
+    SelectAll = true,
+    DeselectAll = true,
+    GoToStart = true,
+    GoToEnd = true,
+    GoToPrevEdit = true,
+    GoToNextEdit = true,
+}
+
+local function ensure_active_project_id()
+    if not active_project_id or active_project_id == "" then
+        error("CommandManager.execute: active project_id is not set")
+    end
+    return active_project_id
+end
+
+local function normalize_command(command_or_name, params)
+    local Command = require('command')
+
+    if type(command_or_name) == "string" then
+        local project_id = ensure_active_project_id()
+        local command = Command.create(command_or_name, project_id)
+
+        if params then
+            for key, value in pairs(params) do
+                command:set_parameter(key, value)
+            end
+        end
+
+        local param_project_id = command:get_parameter("project_id")
+        if param_project_id and param_project_id ~= "" then
+            command.project_id = param_project_id
+        else
+            command:set_parameter("project_id", project_id)
+            command.project_id = project_id
+        end
+
+        return command
+    elseif type(command_or_name) == "table" then
+        local command = command_or_name
+
+        local mt = getmetatable(command)
+        if not mt or mt.__index ~= Command then
+            setmetatable(command, {__index = Command})
+        end
+
+        local param_project_id = nil
+        if command.get_parameter then
+            param_project_id = command:get_parameter("project_id")
+        elseif command.parameters then
+            param_project_id = command.parameters.project_id
+        end
+
+        if not command.project_id or command.project_id == "" then
+            if param_project_id and param_project_id ~= "" then
+                command.project_id = param_project_id
+            else
+                command.project_id = ensure_active_project_id()
+            end
+        end
+
+        if command.get_parameter then
+            if not param_project_id or param_project_id == "" then
+                command:set_parameter("project_id", command.project_id)
+            end
+        elseif command.parameters then
+            command.parameters.project_id = command.project_id
+        end
+
+        return command
+    else
+        error(string.format("CommandManager.execute: Unsupported command argument type '%s'", type(command_or_name)))
+    end
+end
+
+local function normalize_executor_result(exec_result)
+    if exec_result == nil then
+        return false, ""
+    end
+
+    if type(exec_result) == "table" then
+        local success_field = exec_result.success
+        if success_field == nil then
+            success_field = true
+        end
+        local error_message = exec_result.error_message or ""
+        local result_data = exec_result.result_data or ""
+        return success_field ~= false, error_message, result_data
+    end
+
+    return exec_result ~= false, ""
+end
+
 -- Undo tree tracking
 local current_sequence_number = nil  -- Current position in undo tree (nil = at HEAD, latest command)
 local current_branch_path = {}  -- Sequence of command IDs from root to current position (for tree navigation)
@@ -465,8 +558,51 @@ local function execute_command_implementation(command)
     end
 end
 
+local function execute_non_recording(command)
+    local ok, exec_result = pcall(execute_command_implementation, command)
+    if not ok then
+        return {
+            success = false,
+            error_message = tostring(exec_result),
+            result_data = ""
+        }
+    end
+
+    local success, error_message, result_data = normalize_executor_result(exec_result)
+    if not success then
+        if error_message == "" then
+            error_message = last_error_message ~= "" and last_error_message or "Command execution failed"
+        end
+        last_error_message = ""
+        return {
+            success = false,
+            error_message = error_message,
+            result_data = result_data or ""
+        }
+    end
+
+    last_error_message = ""
+    return {
+        success = true,
+        error_message = "",
+        result_data = result_data or ""
+    }
+end
+
 -- Main execute function
-function M.execute(command)
+function M.execute(command_or_name, params)
+    local command
+    local ok, normalize_err = pcall(function()
+        command = normalize_command(command_or_name, params)
+    end)
+    if not ok then
+        return {
+            success = false,
+            error_message = tostring(normalize_err),
+            result_data = ""
+        }
+    end
+
     local result = {
         success = false,
         error_message = "",
@@ -476,6 +612,10 @@ function M.execute(command)
     if not validate_command_parameters(command) then
         result.error_message = "Invalid command parameters"
         return result
+    end
+
+    if non_recording_commands[command.type] then
+        return execute_non_recording(command)
     end
 
     -- BEGIN TRANSACTION: All database changes (command save + state changes) are atomic

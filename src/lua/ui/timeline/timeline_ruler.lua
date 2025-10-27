@@ -158,7 +158,7 @@ function M.create(widget, state_module)
             local width = timeline.get_dimensions(widget)
             if width and width > 0 then
                 local viewport_duration = state_module.get_viewport_duration()
-                local delta_time = (horizontal / width) * viewport_duration
+                local delta_time = (-horizontal / width) * viewport_duration
                 local new_start = state_module.get_viewport_start_time() + delta_time
                 state_module.set_viewport_start_time(new_start)
                 render()
