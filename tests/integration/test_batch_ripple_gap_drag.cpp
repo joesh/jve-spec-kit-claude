@@ -134,7 +134,7 @@ void TestBatchRippleGapDrag::init()
     QVERIFY(m_db.open());
 
     // Ensure the Lua runtime points at our test database
-    qputenv("JVE_TEST_DATABASE", m_dbPath.toUtf8());
+    qputenv("JVE_TEST_MODE", "1");
     qputenv("JVE_PROJECT_PATH", m_dbPath.toUtf8());
 
     // Seed canonical scenario before initializing UI (avoids connection locking)

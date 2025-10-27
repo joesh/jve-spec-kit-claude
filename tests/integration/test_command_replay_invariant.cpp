@@ -123,7 +123,7 @@ void TestCommandReplayInvariant::init()
     m_luaEngine = new SimpleLuaEngine();
 
     // Set environment variable for test database
-    qputenv("JVE_TEST_DATABASE", m_dbPath.toUtf8());
+    qputenv("JVE_TEST_MODE", "1");
 
     // Execute Lua main window creation
     QString mainWindowScript = QString::fromStdString(

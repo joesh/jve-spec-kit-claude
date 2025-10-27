@@ -23,7 +23,7 @@ print("💾 Initializing database...")
 local db_module = require("core.database")
 
 -- Determine database path - check for test environment variable first
-local db_path = os.getenv("JVE_PROJECT_PATH") or os.getenv("JVE_TEST_DATABASE")
+local db_path = os.getenv("JVE_PROJECT_PATH")
 if db_path then
     print("💾 Using test database: " .. db_path)
 else
@@ -298,7 +298,9 @@ qt_constants.PROPERTIES.SET_STYLE(main_window, [[
 ]])
 
 -- Install global keyboard shortcut handler (skip in test mode to avoid crashes)
-local is_test_mode = os.getenv("JVE_TEST_DATABASE") ~= nil
+local test_mode_flag = os.getenv("JVE_TEST_MODE")
+local is_test_mode = test_mode_flag == "1" or test_mode_flag == "true"
+
 if not is_test_mode then
     _G.global_key_handler = function(event)
         return keyboard_shortcuts.handle_key(event)
@@ -306,7 +308,7 @@ if not is_test_mode then
     qt_set_global_key_handler(main_window, "global_key_handler")
     print("✅ Keyboard shortcuts installed")
 else
-    print("⚠️  Keyboard shortcuts disabled in test mode")
+    print("⚠️  Keyboard shortcuts disabled (JVE_TEST_MODE set)")
 end
 
 -- Show window

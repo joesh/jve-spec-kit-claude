@@ -110,14 +110,14 @@ int main(int argc, char *argv[])
         }
 
         qputenv("JVE_PROJECT_PATH", projectPath.toUtf8());
-        qputenv("JVE_TEST_DATABASE", projectPath.toUtf8());  // Legacy env for Lua/testing
+        qunsetenv("JVE_TEST_MODE");
         qCInfo(jveMain, "Opening project from CLI argument: %s", qPrintable(projectPath));
     } else {
         const QString defaultDir = QDir(QDir::homePath()).filePath("Documents/JVE Projects");
         QDir().mkpath(defaultDir);
         projectPath = QDir(defaultDir).filePath("Untitled Project.jvp");
         qputenv("JVE_PROJECT_PATH", projectPath.toUtf8());
-        qputenv("JVE_TEST_DATABASE", projectPath.toUtf8());
+        qunsetenv("JVE_TEST_MODE");
         qCInfo(jveMain, "Opening default project: %s", qPrintable(projectPath));
     }
 
