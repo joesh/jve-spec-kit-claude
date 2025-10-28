@@ -1385,9 +1385,9 @@ function M.replay_events(sequence_id, target_sequence_number)
                     print(string.format("ERROR: Failed to replay command %d (%s)",
                         command.sequence_number, command.type))
                     print("ERROR: Event log is incomplete or corrupted")
-                    print("ERROR: Some clips in the database were not created via logged commands")
-                    print("HINT: This usually happens when clips are created directly in the database")
-                    print("HINT: instead of going through the command system")
+                    print("ERROR: Command replay expected database objects that are missing")
+                    print("HINT: Earlier commands may not have persisted generated IDs (e.g., split results)")
+                    print("HINT: Re-run the failing command outside undo/redo to refresh its stored parameters")
                     return false
                 end
                 final_playhead_time = cmd_data.playhead_time or 0

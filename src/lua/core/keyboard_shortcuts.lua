@@ -152,7 +152,37 @@ function keyboard_shortcuts.handle_key(event)
     -- Delete/Backspace: Delete selected clips via command system
     if (key == KEY.Delete or key == KEY.Backspace) and timeline_state and command_manager then
         local selected_clips = timeline_state.get_selected_clips()
-        if #selected_clips > 0 then
+        local shift_held = has_modifier(modifiers, MOD.Shift)
+
+        if shift_held and selected_clips and #selected_clips > 0 then
+            local clip_ids = {}
+            for _, clip in ipairs(selected_clips) do
+                if type(clip) == "table" then
+                    if clip.id then
+                        clip_ids[#clip_ids + 1] = clip.id
+                    elseif clip.clip_id then
+                        clip_ids[#clip_ids + 1] = clip.clip_id
+                    end
+                elseif type(clip) == "string" then
+                    clip_ids[#clip_ids + 1] = clip
+                end
+            end
+
+            if #clip_ids > 0 then
+                local params = {clip_ids = clip_ids}
+                if timeline_state.get_sequence_id then
+                    params.sequence_id = timeline_state.get_sequence_id()
+                end
+
+                local result = command_manager.execute("RippleDeleteSelection", params)
+                if not result.success then
+                    print(string.format("Failed to ripple delete selection: %s", result.error_message or "unknown error"))
+                end
+                return true
+            end
+        end
+
+        if selected_clips and #selected_clips > 0 then
             local Command = require("command")
             local json = require("dkjson")
 
@@ -178,6 +208,30 @@ function keyboard_shortcuts.handle_key(event)
                 print(string.format("Deleted %d clips (single undo)", #selected_clips))
             else
                 print(string.format("Failed to delete clips: %s", result.error_message or "unknown error"))
+            end
+            return true
+        end
+
+        local selected_gaps = timeline_state.get_selected_gaps and timeline_state.get_selected_gaps() or {}
+        if #selected_gaps > 0 then
+            local gap = selected_gaps[1]
+            local params = {
+                track_id = gap.track_id,
+                gap_start = gap.start_time,
+                gap_duration = gap.duration,
+            }
+            if timeline_state.get_sequence_id then
+                params.sequence_id = timeline_state.get_sequence_id()
+            end
+
+            local result = command_manager.execute("RippleDelete", params)
+            if result.success then
+                if timeline_state.clear_gap_selection then
+                    timeline_state.clear_gap_selection()
+                end
+                print(string.format("Ripple deleted gap of %dms on track %s", gap.duration, tostring(gap.track_id)))
+            else
+                print(string.format("Failed to ripple delete gap: %s", result.error_message or "unknown error"))
             end
             return true
         end

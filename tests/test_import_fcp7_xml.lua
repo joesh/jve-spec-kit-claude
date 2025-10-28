@@ -323,3 +323,127 @@ assert(after_replay_counts.tracks == after_import_counts.tracks, "Replay should 
 assert(after_replay_counts.clips == after_import_counts.clips, "Replay should not duplicate clips")
 
 print("✅ FCP7 XML import is idempotent across undo/redo and command replay")
+
+-- Regression setup helpers
+local function fetch_video_tracks()
+    local tracks = {}
+    local stmt = db:prepare([[SELECT id FROM tracks WHERE track_type = 'VIDEO' ORDER BY track_index]])
+    assert(stmt:exec())
+    while stmt:next() do
+        tracks[#tracks + 1] = stmt:value(0)
+    end
+    stmt:finalize()
+    return tracks
+end
+
+local function fetch_media_ids(limit)
+    local ids = {}
+    local stmt = db:prepare("SELECT id FROM media ORDER BY id")
+    assert(stmt:exec())
+    while stmt:next() do
+        ids[#ids + 1] = stmt:value(0)
+        if limit and #ids >= limit then break end
+    end
+    stmt:finalize()
+    return ids
+end
+
+local function fetch_single_clip_id()
+    local stmt = db:prepare("SELECT id FROM clips LIMIT 1")
+    assert(stmt:exec())
+    local clip_id = nil
+    if stmt:next() then
+        clip_id = stmt:value(0)
+    end
+    stmt:finalize()
+    return clip_id
+end
+
+local video_tracks = fetch_video_tracks()
+assert(#video_tracks >= 2, "Importer should provide at least two video tracks")
+
+local media_ids = fetch_media_ids(1)
+assert(#media_ids >= 1, "Importer should provide media rows for insert operations")
+
+local json = require("dkjson")
+
+-- Simulate additional editing commands to mirror real-world history.
+local clip_for_move = fetch_single_clip_id()
+
+local move_nudge_spec = json.encode({
+    {
+        command_type = "MoveClipToTrack",
+        parameters = {
+            clip_id = clip_for_move,
+            target_track_id = video_tracks[2],
+            skip_occlusion = true  -- Match drag batching behaviour
+        }
+    },
+    {
+        command_type = "Nudge",
+        parameters = {
+            nudge_amount_ms = -333,
+            selected_clip_ids = {clip_for_move}
+        }
+    }
+})
+
+local move_nudge_cmd = Command.create("BatchCommand", "default_project")
+move_nudge_cmd:set_parameter("commands_json", move_nudge_spec)
+assert(command_manager.execute(move_nudge_cmd).success, "MoveClipToTrack + Nudge batch should succeed")
+
+local toggle_cmd = Command.create("ToggleClipEnabled", "default_project")
+toggle_cmd:set_parameter("clip_ids", {clip_for_move})
+assert(command_manager.execute(toggle_cmd).success, "ToggleClipEnabled should succeed for regression setup")
+
+local insert_cmd = Command.create("Insert", "default_project")
+insert_cmd:set_parameter("media_id", media_ids[1])
+insert_cmd:set_parameter("track_id", video_tracks[1])
+insert_cmd:set_parameter("insert_time", 800000)  -- far enough to avoid collisions
+insert_cmd:set_parameter("duration", 1000)
+insert_cmd:set_parameter("source_in", 0)
+insert_cmd:set_parameter("source_out", 1000)
+insert_cmd:set_parameter("sequence_id", "default_sequence")
+assert(command_manager.execute(insert_cmd).success, "Insert command should succeed for regression setup")
+local inserted_clip_id = insert_cmd:get_parameter("clip_id")
+assert(inserted_clip_id, "Insert command must record new clip_id for replay")
+
+local split_spec = json.encode({
+    {
+        command_type = "SplitClip",
+        parameters = {
+            clip_id = inserted_clip_id,
+            split_time = 800500
+        }
+    }
+})
+
+local split_cmd = Command.create("BatchCommand", "default_project")
+split_cmd:set_parameter("commands_json", split_spec)
+assert(command_manager.execute(split_cmd).success, "SplitClip batch should succeed for regression setup")
+
+local split_exec = split_cmd:get_parameter("executed_commands_json")
+local child_specs = json.decode(split_exec)
+local split_second_clip_id = child_specs and child_specs[1] and child_specs[1].parameters and child_specs[1].parameters.second_clip_id
+
+-- Regression: deleting a clip and undoing should succeed after a long history.
+local clip_to_delete = split_second_clip_id or inserted_clip_id or fetch_single_clip_id()
+assert(clip_to_delete, "There should be a clip to delete")
+
+local delete_spec = json.encode({
+    {
+        command_type = "DeleteClip",
+        parameters = { clip_id = clip_to_delete }
+    }
+})
+
+local delete_cmd = Command.create("BatchCommand", "default_project")
+delete_cmd:set_parameter("commands_json", delete_spec)
+
+local delete_result = command_manager.execute(delete_cmd)
+assert(delete_result.success, "Deleting a clip via BatchCommand should succeed")
+
+local undo_delete_result = command_manager.undo()
+assert(undo_delete_result.success, "Undo after deleting a clip should succeed")
+
+print("✅ Delete clip undo regression covered")

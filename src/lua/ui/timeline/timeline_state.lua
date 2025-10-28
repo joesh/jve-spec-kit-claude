@@ -54,6 +54,7 @@ local state = {
     selected_clips = {},  -- Array of selected clip objects
     selected_edges = {},  -- Array of selected edge objects for trimming
                           -- Each edge: {clip_id, edge_type ("in"/"out"), trim_type ("ripple"/"roll")}
+    selected_gaps = {},   -- Array of selected gap descriptors {track_id, start_time, duration}
 
     -- Interaction state (for cross-view operations)
     dragging_playhead = false,
@@ -325,8 +326,10 @@ M.colors = {
     audio_track_header = "#3a4a3a",
     clip = "#4a90e2",
     clip_selected = "#ff8c42",
-    clip_disabled = "#3a3a3a",
-    clip_disabled_text = "#9a9a9a",
+    clip_disabled = "#3f7fcc",
+    clip_disabled_text = "#c3d6ff",
+    gap_selected_fill = "#2d3f5c",
+    gap_selected_outline = "#4a90e2",
     playhead = "#ff6b6b",
     text = "#cccccc",
     grid_line = "#3a3a3a",
@@ -738,6 +741,7 @@ function M.set_selection(clips)
 
     -- Clear edge selection (clips and edges are mutually exclusive)
     state.selected_edges = {}
+    state.selected_gaps = {}
 
     notify_listeners()
 
@@ -759,6 +763,7 @@ function M.set_edge_selection(edges)
 
     -- Clear clip selection (clips and edges are mutually exclusive)
     state.selected_clips = {}
+    state.selected_gaps = {}
 
     normalize_edge_selection()
 
@@ -775,6 +780,7 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
             -- Remove it
             table.remove(state.selected_edges, i)
             normalize_edge_selection()
+            state.selected_gaps = {}
             notify_listeners()
             M.persist_state_to_db()
             return false  -- Deselected
@@ -784,6 +790,7 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
     -- Clear clip selection when selecting first edge (clips and edges are mutually exclusive)
     if #state.selected_edges == 0 then
         state.selected_clips = {}
+        state.selected_gaps = {}
     end
 
     -- Add new edge
@@ -795,6 +802,7 @@ function M.toggle_edge_selection(clip_id, edge_type, trim_type)
 
     normalize_edge_selection()
 
+    state.selected_gaps = {}
     notify_listeners()
     M.persist_state_to_db()
     return true  -- Selected
@@ -804,8 +812,53 @@ function M.clear_edge_selection()
     if #state.selected_edges > 0 then
         state.selected_edges = {}
         normalize_edge_selection()
+        state.selected_gaps = {}
         notify_listeners()
         M.persist_state_to_db()
+    end
+end
+
+function M.get_selected_gaps()
+    return state.selected_gaps or {}
+end
+
+local function gaps_equal(a, b)
+    return a and b
+        and a.track_id == b.track_id
+        and math.abs((a.start_time or 0) - (b.start_time or 0)) < 1
+        and math.abs((a.duration or 0) - (b.duration or 0)) < 1
+end
+
+function M.set_gap_selection(gaps)
+    state.selected_gaps = gaps or {}
+    state.selected_clips = {}
+    state.selected_edges = {}
+    notify_listeners()
+end
+
+function M.clear_gap_selection()
+    if state.selected_gaps and #state.selected_gaps > 0 then
+        state.selected_gaps = {}
+        notify_listeners()
+    end
+end
+
+function M.toggle_gap_selection(gap)
+    if not gap then
+        return false
+    end
+
+    local current = state.selected_gaps or {}
+    if #current == 1 and gaps_equal(current[1], gap) then
+        state.selected_gaps = {}
+        notify_listeners()
+        return false
+    else
+        state.selected_gaps = {gap}
+        state.selected_clips = {}
+        state.selected_edges = {}
+        notify_listeners()
+        return true
     end
 end
 

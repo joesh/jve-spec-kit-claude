@@ -1,0 +1,236 @@
+#!/usr/bin/env luajit
+
+require('test_env')
+
+local database = require('core.database')
+local command_manager = require('core.command_manager')
+local command_impl = require('core.command_implementations')
+local Command = require('command')
+
+local TEST_DB = "/tmp/test_ripple_delete_selection.db"
+os.remove(TEST_DB)
+
+database.init(TEST_DB)
+local db = database.get_connection()
+
+db:exec([[
+    CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        settings TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE sequences (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        frame_rate REAL NOT NULL,
+        width INTEGER NOT NULL,
+        height INTEGER NOT NULL,
+        timecode_start INTEGER NOT NULL DEFAULT 0,
+        playhead_time INTEGER NOT NULL DEFAULT 0,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
+        current_sequence_number INTEGER
+    );
+
+    CREATE TABLE tracks (
+        id TEXT PRIMARY KEY,
+        sequence_id TEXT NOT NULL,
+        track_type TEXT NOT NULL,
+        track_index INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE clips (
+        id TEXT PRIMARY KEY,
+        track_id TEXT NOT NULL,
+        media_id TEXT,
+        start_time INTEGER NOT NULL,
+        duration INTEGER NOT NULL,
+        source_in INTEGER NOT NULL DEFAULT 0,
+        source_out INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE commands (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT,
+        parent_sequence_number INTEGER,
+        sequence_number INTEGER UNIQUE NOT NULL,
+        command_type TEXT NOT NULL,
+        command_args TEXT,
+        pre_hash TEXT,
+        post_hash TEXT,
+        timestamp INTEGER,
+        playhead_time INTEGER DEFAULT 0,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
+        selected_clip_ids_pre TEXT DEFAULT '[]',
+        selected_edge_infos_pre TEXT DEFAULT '[]'
+    );
+]])
+
+db:exec([[
+    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
+    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
+    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'VIDEO', 1, 1);
+]])
+
+local function clips_snapshot()
+    local clips = {}
+    local stmt = db:prepare("SELECT id, track_id, start_time, duration FROM clips ORDER BY start_time")
+    assert(stmt:exec())
+    while stmt:next() do
+        clips[#clips + 1] = {
+            id = stmt:value(0),
+            track_id = stmt:value(1),
+            start_time = stmt:value(2),
+            duration = stmt:value(3)
+        }
+    end
+    return clips
+end
+
+local timeline_state = {
+    clips = {},
+    selected_clips = {},
+    selected_edges = {},
+    selected_gaps = {},
+    playhead_time = 0,
+    viewport_start_time = 0,
+    viewport_duration = 10000,
+}
+
+local function reload_state_clips()
+    timeline_state.clips = clips_snapshot()
+end
+
+function timeline_state.get_selected_clips() return timeline_state.selected_clips end
+function timeline_state.get_selected_edges() return timeline_state.selected_edges end
+function timeline_state.clear_edge_selection() timeline_state.selected_edges = {} end
+function timeline_state.clear_gap_selection() timeline_state.selected_gaps = {} end
+function timeline_state.get_selected_gaps() return timeline_state.selected_gaps end
+function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
+function timeline_state.reload_clips() reload_state_clips() end
+function timeline_state.persist_state_to_db() end
+function timeline_state.get_clips()
+    reload_state_clips()
+    return timeline_state.clips
+end
+function timeline_state.get_sequence_id() return "default_sequence" end
+function timeline_state.get_playhead_time() return timeline_state.playhead_time end
+function timeline_state.set_playhead_time(time_ms) timeline_state.playhead_time = time_ms end
+function timeline_state.push_viewport_guard() return 1 end
+function timeline_state.pop_viewport_guard() return 0 end
+function timeline_state.capture_viewport()
+    return {
+        start_time = timeline_state.viewport_start_time,
+        duration = timeline_state.viewport_duration,
+    }
+end
+function timeline_state.restore_viewport(snapshot)
+    if not snapshot then return end
+    timeline_state.viewport_start_time = snapshot.start_time or timeline_state.viewport_start_time
+    timeline_state.viewport_duration = snapshot.duration or timeline_state.viewport_duration
+end
+
+package.loaded['ui.timeline.timeline_state'] = timeline_state
+
+local executors = {}
+local undoers = {}
+command_impl.register_commands(executors, undoers, db)
+command_manager.init(db, 'default_sequence', 'default_project')
+
+local function create_clip_command(params)
+    local clip = require('models.clip').create("Test Clip", nil)
+    clip.id = params.clip_id
+    clip.track_id = params.track_id
+    clip.start_time = params.start_time
+    clip.duration = params.duration
+    clip.source_in = 0
+    clip.source_out = params.duration
+    clip.enabled = true
+    return clip:save(db, {skip_occlusion = true})
+end
+
+command_manager.register_executor("TestCreateClip", function(cmd)
+    return create_clip_command({
+        clip_id = cmd:get_parameter("clip_id"),
+        track_id = cmd:get_parameter("track_id"),
+        start_time = cmd:get_parameter("start_time"),
+        duration = cmd:get_parameter("duration"),
+    })
+end)
+
+local clip_specs = {
+    {id = "clip_a", start = 0, duration = 1000},
+    {id = "clip_b", start = 1000, duration = 1000},
+    {id = "clip_c", start = 2000, duration = 1000},
+}
+
+for _, spec in ipairs(clip_specs) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_time", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+
+reload_state_clips()
+
+timeline_state.selected_clips = {
+    {id = "clip_b"}
+}
+
+local function execute_ripple_delete(ids)
+    local cmd = Command.create("RippleDeleteSelection", "default_project")
+    cmd:set_parameter("clip_ids", ids)
+    cmd:set_parameter("sequence_id", "default_sequence")
+    local result = command_manager.execute(cmd)
+    assert(result.success, result.error_message or "RippleDeleteSelection failed")
+end
+
+-- Test: Ripple delete removes clip and shifts downstream clips
+execute_ripple_delete({"clip_b"})
+
+local after_delete = clips_snapshot()
+assert(#after_delete == 2, "Expected 2 clips after ripple delete")
+
+local clip_a = after_delete[1]
+local clip_c = after_delete[2]
+
+assert(clip_a.id == "clip_a", "Clip A should remain first")
+assert(clip_c.id == "clip_c", "Clip C should remain after ripple")
+assert(clip_c.start_time == 1000, string.format("Clip C start_time expected 1000, got %d", clip_c.start_time))
+
+-- Undo restores original state
+local undo_result = command_manager.undo()
+assert(undo_result.success, undo_result.error_message or "Undo failed for RippleDeleteSelection")
+
+local after_undo = clips_snapshot()
+assert(#after_undo == 3, "Expected 3 clips after undo")
+
+local clip_b_restored = nil
+for _, clip in ipairs(after_undo) do
+    if clip.id == "clip_b" then
+        clip_b_restored = clip
+    end
+end
+assert(clip_b_restored, "Clip B should be restored after undo")
+assert(clip_b_restored.start_time == 1000, string.format("Clip B start_time expected 1000, got %d", clip_b_restored.start_time))
+
+-- Redo reapplies ripple delete
+local redo_result = command_manager.redo()
+assert(redo_result.success, redo_result.error_message or "Redo failed for RippleDeleteSelection")
+
+local after_redo = clips_snapshot()
+assert(#after_redo == 2, "Expected 2 clips after redo")
+local clip_c_after_redo = after_redo[2]
+assert(clip_c_after_redo.id == "clip_c", "Clip C should still be present after redo")
+assert(clip_c_after_redo.start_time == 1000, string.format("Clip C start_time expected 1000 after redo, got %d", clip_c_after_redo.start_time))
+
+print("✅ test_ripple_delete_selection.lua passed")

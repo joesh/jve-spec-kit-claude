@@ -104,6 +104,49 @@ function M.create(widget, state_module, track_filter_fn, options)
         return nil  -- No track at this Y position
     end
 
+    local function find_gap_at_time(track_id, time_ms)
+        if not track_id or not time_ms then
+            return nil
+        end
+
+        local clips_on_track = {}
+        for _, clip in ipairs(state_module.get_clips() or {}) do
+            if clip.track_id == track_id then
+                table.insert(clips_on_track, clip)
+            end
+        end
+
+        table.sort(clips_on_track, function(a, b)
+            if a.start_time == b.start_time then
+                return a.id < b.id
+            end
+            return a.start_time < b.start_time
+        end)
+
+        local previous_end = 0
+        local previous_clip_id = nil
+        for _, clip in ipairs(clips_on_track) do
+            local gap_start = previous_end
+            local gap_end = clip.start_time
+            local gap_duration = gap_end - gap_start
+
+            if gap_duration > 0 and time_ms >= gap_start and time_ms < gap_end then
+                return {
+                    track_id = track_id,
+                    start_time = gap_start,
+                    duration = gap_duration,
+                    prev_clip_id = previous_clip_id,
+                    next_clip_id = clip.id,
+                }
+            end
+
+            previous_end = clip.start_time + clip.duration
+            previous_clip_id = clip.id
+        end
+
+        return nil
+    end
+
     -- Convert local track index to global track index
     local function local_to_global_track_index(local_index)
         if local_index >= 0 and local_index < #view.filtered_tracks then
@@ -295,6 +338,31 @@ end
 
         -- Draw clips at their normal positions
         draw_clips(0, false, nil)
+
+        -- Highlight selected gaps (empty regions) if any
+        local selected_gaps = state_module.get_selected_gaps and state_module.get_selected_gaps() or {}
+        if #selected_gaps > 0 then
+            for _, gap in ipairs(selected_gaps) do
+                local gap_track_y = get_track_y_by_id(gap.track_id, height)
+                if gap_track_y >= 0 then
+                    local track_height = state_module.get_track_height(gap.track_id)
+                    local gap_start_x = state_module.time_to_pixel(gap.start_time, width)
+                    local gap_end_x = state_module.time_to_pixel(gap.start_time + gap.duration, width)
+                    local gap_width = gap_end_x - gap_start_x
+                    if gap_width > 0 then
+                        local gap_top = gap_track_y + 5
+                        local gap_height = track_height - 10
+                        timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, gap_height, state_module.colors.gap_selected_fill)
+                        local outline = state_module.colors.gap_selected_outline or state_module.colors.clip_selected
+                        local outline_thickness = 2
+                        timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, outline_thickness, outline)
+                        timeline.add_rect(view.widget, gap_start_x, gap_top + gap_height - outline_thickness, gap_width, outline_thickness, outline)
+                        timeline.add_rect(view.widget, gap_start_x, gap_top, outline_thickness, gap_height, outline)
+                        timeline.add_rect(view.widget, gap_start_x + gap_width - outline_thickness, gap_top, outline_thickness, gap_height, outline)
+                    end
+                end
+            end
+        end
 
         -- If dragging clips, draw outline preview at new positions
         if view.drag_state and view.drag_state.type == "clips" then
@@ -1002,12 +1070,31 @@ end
                     render()
                     return
                 end
+            else
+                -- No clip under cursor, check for gap selection
+                local track_id = get_track_id_at_y(y, height)
+                if track_id then
+                    local click_time = state_module.pixel_to_time(x, width)
+                    local gap = find_gap_at_time(track_id, click_time)
+                    if gap and gap.duration > 0 then
+                        if modifiers and modifiers.command then
+                            state_module.toggle_gap_selection(gap)
+                        else
+                            state_module.set_gap_selection({gap})
+                        end
+                        render()
+                        return
+                    end
+                end
             end
 
             -- Not clicking on clip or edge - starting drag selection
             -- Clear selections unless Cmd is held (for multi-select)
             if not (modifiers and modifiers.command) then
                 state_module.clear_edge_selection()
+                if state_module.clear_gap_selection then
+                    state_module.clear_gap_selection()
+                end
                 state_module.set_selection({})
             end
 
