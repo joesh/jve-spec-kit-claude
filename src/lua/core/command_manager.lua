@@ -1825,6 +1825,10 @@ command_undoers["UnlinkClip"] = function(command)
     return result
 end
 
+-- Alias plural menu command to singular implementation
+command_executors["UnlinkClips"] = command_executors["UnlinkClip"]
+command_undoers["UnlinkClips"] = command_undoers["UnlinkClip"]
+
 -- ImportFCP7XML: Import Final Cut Pro 7 XML sequence
 command_executors["ImportFCP7XML"] = function(command)
     local dry_run = command:get_parameter("dry_run")

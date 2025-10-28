@@ -1246,6 +1246,105 @@ command_executors["SelectAll"] = function(command)
     return true
 end
 
+command_executors["ToggleClipEnabled"] = function(command)
+    local dry_run = command:get_parameter("dry_run")
+    if not dry_run then
+        print("Executing ToggleClipEnabled command")
+    end
+
+    local toggles = command:get_parameter("clip_toggles")
+    if not toggles or #toggles == 0 then
+        local clip_ids = command:get_parameter("clip_ids")
+
+        if not clip_ids or #clip_ids == 0 then
+            local timeline_state = require('ui.timeline.timeline_state')
+            local selected_clips = timeline_state.get_selected_clips() or {}
+            clip_ids = {}
+            for _, clip in ipairs(selected_clips) do
+                if clip and clip.id then
+                    table.insert(clip_ids, clip.id)
+                end
+            end
+        end
+
+        if not clip_ids or #clip_ids == 0 then
+            print("ToggleClipEnabled: No clips selected")
+            return false
+        end
+
+        local Clip = require('models.clip')
+        toggles = {}
+        for _, clip_id in ipairs(clip_ids) do
+            local clip = Clip.load_optional(clip_id, db)
+            if clip then
+                local enabled_before = clip.enabled ~= false
+                table.insert(toggles, {
+                    clip_id = clip_id,
+                    enabled_before = enabled_before,
+                    enabled_after = not enabled_before,
+                })
+            else
+                print(string.format("WARNING: ToggleClipEnabled: Clip %s not found", tostring(clip_id)))
+            end
+        end
+
+        if #toggles == 0 then
+            print("ToggleClipEnabled: No valid clips to toggle")
+            return false
+        end
+
+        command:set_parameter("clip_toggles", toggles)
+    end
+
+    if dry_run then
+        return true, {clip_toggles = toggles}
+    end
+
+    local Clip = require('models.clip')
+    local toggled = 0
+    for _, toggle in ipairs(toggles) do
+        local clip = Clip.load_optional(toggle.clip_id, db)
+        if clip then
+            clip.enabled = toggle.enabled_after and true or false
+            if clip:save(db, {skip_occlusion = true}) then
+                toggled = toggled + 1
+            else
+                print(string.format("ERROR: ToggleClipEnabled: Failed to save clip %s", tostring(toggle.clip_id)))
+                return false
+            end
+        else
+            print(string.format("WARNING: ToggleClipEnabled: Clip %s missing during execution", tostring(toggle.clip_id)))
+        end
+    end
+
+    print(string.format("✅ Toggled enabled state for %d clip(s)", toggled))
+    return toggled > 0
+end
+
+command_undoers["ToggleClipEnabled"] = function(command)
+    local toggles = command:get_parameter("clip_toggles")
+    if not toggles or #toggles == 0 then
+        return true
+    end
+
+    local Clip = require('models.clip')
+    local restored = 0
+    for _, toggle in ipairs(toggles) do
+        local clip = Clip.load_optional(toggle.clip_id, db)
+        if clip then
+            clip.enabled = toggle.enabled_before and true or false
+            if clip:save(db, {skip_occlusion = true}) then
+                restored = restored + 1
+            else
+                print(string.format("WARNING: ToggleClipEnabled undo: Failed to restore clip %s", tostring(toggle.clip_id)))
+            end
+        end
+    end
+
+    print(string.format("✅ Undo ToggleClipEnabled: Restored %d clip(s)", restored))
+    return true
+end
+
 command_executors["GoToStart"] = function(command)
     local dry_run = command:get_parameter("dry_run")
     if not dry_run then
