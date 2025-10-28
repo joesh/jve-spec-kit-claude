@@ -262,13 +262,17 @@ end
 
                         local outline_thickness = 2
 
+                        local clip_enabled = clip.enabled ~= false
+                        local body_color = clip_enabled and state_module.colors.clip or state_module.colors.clip_disabled
+                        local text_color = clip_enabled and state_module.colors.text or state_module.colors.clip_disabled_text
+
                         if not outline_only then
                             -- Draw filled clip
-                            timeline.add_rect(view.widget, x, y, clip_width, clip_height, state_module.colors.clip)
+                            timeline.add_rect(view.widget, x, y, clip_width, clip_height, body_color)
 
                             -- Clip name (if there's enough space)
                             if clip_width > 60 then
-                                timeline.add_text(view.widget, x + 5, y + 25, clip.name, state_module.colors.text)
+                                timeline.add_text(view.widget, x + 5, y + 25, clip.name, text_color)
                             end
                         end
 
