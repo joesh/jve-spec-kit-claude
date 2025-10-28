@@ -92,7 +92,9 @@ local timeline_state = {
     clips = {
         {id = 'clip_a', start_time = 0, duration = 1000},
         {id = 'clip_b', start_time = 2000, duration = 1500}
-    }
+    },
+    viewport_start_time = 0,
+    viewport_duration = 10000
 }
 
 function timeline_state.get_selected_clips() return {} end
@@ -105,6 +107,41 @@ function timeline_state.persist_state_to_db() end
 function timeline_state.get_playhead_time() return timeline_state.playhead_time end
 function timeline_state.set_playhead_time(time_ms) timeline_state.playhead_time = time_ms end
 function timeline_state.get_clips() return timeline_state.clips end
+
+local viewport_guard = 0
+
+function timeline_state.capture_viewport()
+    return {
+        start_time = timeline_state.viewport_start_time,
+        duration = timeline_state.viewport_duration,
+    }
+end
+
+function timeline_state.restore_viewport(snapshot)
+    if not snapshot then
+        return
+    end
+
+    if snapshot.duration then
+        timeline_state.viewport_duration = snapshot.duration
+    end
+
+    if snapshot.start_time then
+        timeline_state.viewport_start_time = snapshot.start_time
+    end
+end
+
+function timeline_state.push_viewport_guard()
+    viewport_guard = viewport_guard + 1
+    return viewport_guard
+end
+
+function timeline_state.pop_viewport_guard()
+    if viewport_guard > 0 then
+        viewport_guard = viewport_guard - 1
+    end
+    return viewport_guard
+end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
@@ -128,4 +165,3 @@ assert(timeline_state.playhead_time == 3500,
     string.format("GoToEnd must set playhead to timeline end (expected 3500, got %d)", timeline_state.playhead_time))
 
 print("✅ GoToStart/GoToEnd navigation commands adjust playhead correctly")
-

@@ -65,6 +65,8 @@ local state = {
     drag_select_end_track_index = 0,
 }
 
+local viewport_guard_count = 0
+
 local function ensure_sequence_viewport_columns(db_conn)
     if not db_conn then
         return
@@ -133,6 +135,10 @@ local function clamp_viewport_start(desired_start, duration)
 end
 
 local function ensure_playhead_visible()
+    if viewport_guard_count > 0 then
+        return false
+    end
+
     local duration = state.viewport_duration
     if not duration or duration <= 0 then
         return false
@@ -555,6 +561,40 @@ function M.get_clip_by_id(clip_id)
     return nil
 end
 
+-- Return clips intersecting the provided playhead time.
+-- Optional allowed_clips parameter filters the results to specific clip IDs.
+function M.get_clips_at_time(time_ms, allowed_clips)
+    if type(time_ms) ~= "number" then
+        error("timeline_state.get_clips_at_time requires numeric time_ms")
+    end
+
+    local filter = nil
+    if allowed_clips and #allowed_clips > 0 then
+        filter = {}
+        for _, entry in ipairs(allowed_clips) do
+            if type(entry) == "table" then
+                if entry.id and entry.id ~= "" then
+                    filter[entry.id] = true
+                end
+            elseif type(entry) == "string" then
+                filter[entry] = true
+            end
+        end
+    end
+
+    local results = {}
+    for _, clip in ipairs(state.clips) do
+        local clip_start = clip.start_time
+        local clip_end = clip.start_time + clip.duration
+        if time_ms > clip_start and time_ms < clip_end then
+            if not filter or filter[clip.id] then
+                table.insert(results, clip)
+            end
+        end
+    end
+    return results
+end
+
 -- Validate that a clip object is still fresh (not stale)
 -- Returns: success (bool), error_message (string or nil)
 function M.validate_clip_fresh(clip)
@@ -586,6 +626,43 @@ end
 
 function M.get_viewport_end_time()
     return state.viewport_start_time + state.viewport_duration
+end
+
+function M.capture_viewport()
+    return {
+        start_time = state.viewport_start_time,
+        duration = state.viewport_duration,
+    }
+end
+
+function M.restore_viewport(snapshot)
+    if not snapshot then
+        return
+    end
+
+    local target_duration = math.max(1000, snapshot.duration or state.viewport_duration)
+    local target_start = snapshot.start_time
+    if target_start == nil then
+        target_start = state.viewport_start_time
+    end
+    target_start = clamp_viewport_start(target_start, target_duration)
+
+    local changed = false
+
+    if state.viewport_duration ~= target_duration then
+        state.viewport_duration = target_duration
+        changed = true
+    end
+
+    if state.viewport_start_time ~= target_start then
+        state.viewport_start_time = target_start
+        changed = true
+    end
+
+    if changed then
+        notify_listeners()
+        M.persist_state_to_db()
+    end
 end
 
 function M.get_playhead_time()
@@ -728,6 +805,18 @@ function M.clear_edge_selection()
         notify_listeners()
         M.persist_state_to_db()
     end
+end
+
+function M.push_viewport_guard()
+    viewport_guard_count = viewport_guard_count + 1
+    return viewport_guard_count
+end
+
+function M.pop_viewport_guard()
+    if viewport_guard_count > 0 then
+        viewport_guard_count = viewport_guard_count - 1
+    end
+    return viewport_guard_count
 end
 
 -- Selection callback (for inspector integration)

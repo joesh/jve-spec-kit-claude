@@ -348,35 +348,59 @@ function keyboard_shortcuts.handle_key(event)
         return true
     end
 
-    -- Cmd/Ctrl + B: Blade tool - split selected clip at playhead
+    -- Cmd/Ctrl + B: Blade tool - split clips at playhead
     if key == KEY.B and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
         if timeline_state and command_manager then
             local selected_clips = timeline_state.get_selected_clips()
             local playhead_time = timeline_state.get_playhead_time()
 
-            if #selected_clips == 1 then
-                local clip = selected_clips[1]
-                -- Check if playhead is within the clip bounds
-                if playhead_time > clip.start_time and playhead_time < (clip.start_time + clip.duration) then
-                    -- Create proper Command object
-                    local Command = require("command")
-                    local split_command = Command.create("SplitClip", "default_project")
-                    split_command:set_parameter("clip_id", clip.id)
-                    split_command:set_parameter("split_time", playhead_time)
-
-                    local result = command_manager.execute(split_command)
-                    if result.success then
-                        print(string.format("Split clip at playhead %dms", playhead_time))
-                    else
-                        print(string.format("Failed to split clip: %s", result.error_message))
-                    end
-                else
-                    print("Playhead is not within selected clip bounds")
-                end
-            elseif #selected_clips == 0 then
-                print("No clip selected for blade tool")
+            local target_clips
+            if selected_clips and #selected_clips > 0 then
+                target_clips = timeline_state.get_clips_at_time(playhead_time, selected_clips)
             else
-                print("Blade tool requires exactly one selected clip")
+                target_clips = timeline_state.get_clips_at_time(playhead_time)
+            end
+
+            if #target_clips == 0 then
+                if selected_clips and #selected_clips > 0 then
+                    print("Blade: Playhead does not intersect selected clips")
+                else
+                    print("Blade: No clips under playhead")
+                end
+                return true
+            end
+
+            local json = require("dkjson")
+            local Command = require("command")
+            local specs = {}
+
+            for _, clip in ipairs(target_clips) do
+                local start_time = clip.start_time
+                local end_time = clip.start_time + clip.duration
+                if playhead_time > start_time and playhead_time < end_time then
+                    table.insert(specs, {
+                        command_type = "SplitClip",
+                        parameters = {
+                            clip_id = clip.id,
+                            split_time = playhead_time
+                        }
+                    })
+                end
+            end
+
+            if #specs == 0 then
+                print("Blade: No valid clips to split at current playhead position")
+                return true
+            end
+
+            local batch_cmd = Command.create("BatchCommand", "default_project")
+            batch_cmd:set_parameter("commands_json", json.encode(specs))
+
+            local result = command_manager.execute(batch_cmd)
+            if result.success then
+                print(string.format("Blade: Split %d clip(s) at %dms", #specs, playhead_time))
+            else
+                print(string.format("Blade: Failed to split clips: %s", result.error_message or "unknown error"))
             end
         end
         return true

@@ -637,6 +637,15 @@ function M.execute(command_or_name, params)
     -- This creates branches when executing after undo
     command.parent_sequence_number = current_sequence_number
 
+    -- If we appear to be at the root (nil) but there is existing history,
+    -- default to chaining off the latest command so we don't orphan the new entry.
+    if not command.parent_sequence_number then
+        local candidate_parent = sequence_number - 1
+        if candidate_parent > 0 then
+            command.parent_sequence_number = candidate_parent
+        end
+    end
+
     -- VALIDATION: parent_sequence_number should never be NULL after first command
     -- NULL parent is only valid for the very first command (sequence 1)
     if not command.parent_sequence_number then
@@ -1039,221 +1048,239 @@ function M.replay_events(sequence_id, target_sequence_number)
         return false
     end
 
-    print(string.format("Replaying events for sequence '%s' up to command %d",
-        sequence_id, target_sequence_number))
+    local timeline_state = require('ui.timeline.timeline_state')
+    local viewport_snapshot = timeline_state.capture_viewport()
+    timeline_state.push_viewport_guard()
 
-    -- Step 1: Load snapshot if available
-    local snapshot_mgr = require('core.snapshot_manager')
-    local snapshot = snapshot_mgr.load_snapshot(db, sequence_id)
-
-    local start_sequence = 0
-    local clips = {}
-
-    if snapshot and snapshot.sequence_number <= target_sequence_number then
-        -- Start from snapshot
-        start_sequence = snapshot.sequence_number
-        clips = snapshot.clips
-        print(string.format("Starting from snapshot at sequence %d with %d clips",
-            start_sequence, #clips))
-    else
-        -- No snapshot or snapshot is ahead of target, start from beginning
-        print("No snapshot available, replaying from beginning")
-        start_sequence = 0
-        clips = {}
+    local function cleanup()
+        timeline_state.pop_viewport_guard()
+        timeline_state.restore_viewport(viewport_snapshot)
     end
 
-    -- Step 2: Determine which clips to preserve (initial state before any commands)
-    -- If we have a snapshot, use it. Otherwise, start from EMPTY state.
-    local initial_clips = {}
+    local function replay_body()
+        print(string.format("Replaying events for sequence '%s' up to command %d",
+            sequence_id, target_sequence_number))
 
-    if snapshot and #clips > 0 then
-        -- We have a snapshot - use it as the base state
-        initial_clips = clips
-        print(string.format("Using snapshot with %d clips as initial state", #initial_clips))
-    else
-        -- No snapshot - start from EMPTY state (commands will build up from nothing)
-        initial_clips = {}
-        print("Starting from empty initial state (no snapshot)")
-    end
+        -- Step 1: Load snapshot if available
+        local snapshot_mgr = require('core.snapshot_manager')
+        local snapshot = snapshot_mgr.load_snapshot(db, sequence_id)
 
-    -- Step 3: Clear ALL clips and media (we'll restore initial state + replay commands)
-    local delete_clips_query = db:prepare("DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)")
-    if delete_clips_query then
-        delete_clips_query:bind_value(1, sequence_id)
-        delete_clips_query:exec()
-        print("Cleared all clips from database")
-    end
+        local start_sequence = 0
+        local clips = {}
 
-    -- Also clear all media for the project (ImportMedia commands will recreate them)
-    -- Get project_id from sequence
-    local project_id = nil
-    local project_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
-    if project_query then
-        project_query:bind_value(1, sequence_id)
-        if project_query:exec() and project_query:next() then
-            project_id = project_query:value(0)
+        if snapshot and snapshot.sequence_number <= target_sequence_number then
+            -- Start from snapshot
+            start_sequence = snapshot.sequence_number
+            clips = snapshot.clips
+            print(string.format("Starting from snapshot at sequence %d with %d clips",
+                start_sequence, #clips))
+        else
+            -- No snapshot or snapshot is ahead of target, start from beginning
+            print("No snapshot available, replaying from beginning")
+            start_sequence = 0
+            clips = {}
         end
-    end
 
-    if not project_id then
-        error(string.format("FATAL: Cannot determine project_id for sequence '%s' - cannot safely clear media table", sequence_id))
-    end
+        -- Step 2: Determine which clips to preserve (initial state before any commands)
+        -- If we have a snapshot, use it. Otherwise, start from EMPTY state.
+        local initial_clips = {}
 
-    local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")
-    if delete_media_query then
-        delete_media_query:bind_value(1, project_id)
-        delete_media_query:exec()
-        print(string.format("Cleared all media for project '%s' from database for replay", project_id))
-    end
-
-    -- Step 4: Restore initial state clips
-    if #initial_clips > 0 then
-        local Clip = require('models.clip')
-        for _, clip in ipairs(initial_clips) do
-            -- Recreate clip in database
-            local restored_clip = Clip.create(clip.name or "", clip.media_id)
-            restored_clip.id = clip.id  -- Preserve original ID
-            restored_clip.track_id = clip.track_id
-            restored_clip.start_time = clip.start_time
-            restored_clip.duration = clip.duration
-            restored_clip.source_in = clip.source_in
-            restored_clip.source_out = clip.source_out
-            restored_clip.enabled = clip.enabled
-            restored_clip:save(db)
+        if snapshot and #clips > 0 then
+            -- We have a snapshot - use it as the base state
+            initial_clips = clips
+            print(string.format("Using snapshot with %d clips as initial state", #initial_clips))
+        else
+            -- No snapshot - start from EMPTY state (commands will build up from nothing)
+            initial_clips = {}
+            print("Starting from empty initial state (no snapshot)")
         end
-        print(string.format("Restored %d clips as initial state", #initial_clips))
-    end
 
-    -- Step 5: Replay commands from start_sequence + 1 to target_sequence_number
-    -- IMPORTANT: Follow the parent_sequence_number chain to only replay commands on the active branch
-    if target_sequence_number > start_sequence then
-        -- Build the command chain by walking backwards from target to start
-        local command_chain = {}
-        local current_seq = target_sequence_number
+        -- Step 3: Clear ALL clips and media (we'll restore initial state + replay commands)
+        local delete_clips_query = db:prepare("DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)")
+        if delete_clips_query then
+            delete_clips_query:bind_value(1, sequence_id)
+            delete_clips_query:exec()
+            print("Cleared all clips from database")
+        end
 
-        while current_seq > start_sequence do
-            local find_query = db:prepare([[
-                SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos
-                FROM commands
-                WHERE sequence_number = ?
-            ]])
-
-            if not find_query then
-                print("WARNING: Failed to prepare find command query")
-                break
+        -- Also clear all media for the project (ImportMedia commands will recreate them)
+        -- Get project_id from sequence
+        local project_id = nil
+        local project_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+        if project_query then
+            project_query:bind_value(1, sequence_id)
+            if project_query:exec() and project_query:next() then
+                project_id = project_query:value(0)
             end
+        end
 
-            find_query:bind_value(1, current_seq)
+        if not project_id then
+            error(string.format("FATAL: Cannot determine project_id for sequence '%s' - cannot safely clear media table", sequence_id))
+        end
 
-            if find_query:exec() and find_query:next() then
-                -- Store this command
-                table.insert(command_chain, 1, {  -- Insert at beginning to reverse order
-                    id = find_query:value(0),
-                    command_type = find_query:value(1),
-                    command_args = find_query:value(2),
-                    sequence_number = find_query:value(3),
-                    parent_sequence_number = find_query:value(4),
-                    pre_hash = find_query:value(5),
-                    post_hash = find_query:value(6),
-                    timestamp = find_query:value(7),
-                    playhead_time = find_query:value(8),
-                    selected_clip_ids = find_query:value(9),
-                    selected_edge_infos = find_query:value(10),
-                    selected_clip_ids_pre = find_query:value(11),
-                    selected_edge_infos_pre = find_query:value(12)
-                })
+        local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")
+        if delete_media_query then
+            delete_media_query:bind_value(1, project_id)
+            delete_media_query:exec()
+            print(string.format("Cleared all media for project '%s' from database for replay", project_id))
+        end
 
-                -- Move to parent
-                local parent = find_query:value(4)
-                -- Check for NULL parent (only error if not the first command)
-                if not parent then
-                    if current_seq == 1 then
-                        -- First command with NULL parent is valid
-                        current_seq = 0
-                    elseif current_seq > start_sequence then
-                        -- Found NULL parent in middle of chain - treating as root command
-                        local warning_key = "orphaned_cmd_" .. current_seq
-                        if last_warning_message ~= warning_key then
-                            print(string.format("⚠️  Note: Command %d has no parent (orphaned from previous session)", current_seq))
-                            print(string.format("    Replay will start from command %d instead of the beginning", current_seq))
-                            last_warning_message = warning_key
+        -- Step 4: Restore initial state clips
+        if #initial_clips > 0 then
+            local Clip = require('models.clip')
+            for _, clip in ipairs(initial_clips) do
+                -- Recreate clip in database
+                local restored_clip = Clip.create(clip.name or "", clip.media_id)
+                restored_clip.id = clip.id  -- Preserve original ID
+                restored_clip.track_id = clip.track_id
+                restored_clip.start_time = clip.start_time
+                restored_clip.duration = clip.duration
+                restored_clip.source_in = clip.source_in
+                restored_clip.source_out = clip.source_out
+                restored_clip.enabled = clip.enabled
+                restored_clip:save(db)
+            end
+            print(string.format("Restored %d clips as initial state", #initial_clips))
+        end
+
+        -- Step 5: Replay commands from start_sequence + 1 to target_sequence_number
+        -- IMPORTANT: Follow the parent_sequence_number chain to only replay commands on the active branch
+        if target_sequence_number > start_sequence then
+            -- Build the command chain by walking backwards from target to start
+            local command_chain = {}
+            local current_seq = target_sequence_number
+
+            while current_seq > start_sequence do
+                local find_query = db:prepare([[
+                    SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos, selected_clip_ids_pre, selected_edge_infos_pre
+                    FROM commands
+                    WHERE sequence_number = ?
+                ]])
+
+                if not find_query then
+                    print("WARNING: Failed to prepare find command query")
+                    break
+                end
+
+                find_query:bind_value(1, current_seq)
+
+                if find_query:exec() and find_query:next() then
+                    -- Store this command
+                    table.insert(command_chain, 1, {  -- Insert at beginning to reverse order
+                        id = find_query:value(0),
+                        command_type = find_query:value(1),
+                        command_args = find_query:value(2),
+                        sequence_number = find_query:value(3),
+                        parent_sequence_number = find_query:value(4),
+                        pre_hash = find_query:value(5),
+                        post_hash = find_query:value(6),
+                        timestamp = find_query:value(7),
+                        playhead_time = find_query:value(8),
+                        selected_clip_ids = find_query:value(9),
+                        selected_edge_infos = find_query:value(10),
+                        selected_clip_ids_pre = find_query:value(11),
+                        selected_edge_infos_pre = find_query:value(12)
+                    })
+
+                    -- Move to parent
+                    local parent = find_query:value(4)
+                    -- Check for NULL parent (only error if not the first command)
+                    if not parent then
+                        if current_seq == 1 then
+                            -- First command with NULL parent is valid
+                            current_seq = 0
+                        elseif current_seq > start_sequence then
+                            -- Found NULL parent in middle of chain - treating as root command
+                            local warning_key = "orphaned_cmd_" .. current_seq
+                            if last_warning_message ~= warning_key then
+                                print(string.format("⚠️  Note: Command %d has no parent (orphaned from previous session)", current_seq))
+                                print(string.format("    Replay will start from command %d instead of the beginning", current_seq))
+                                last_warning_message = warning_key
+                            end
+                            break
+                        else
+                            current_seq = 0
                         end
-                        break
                     else
-                        current_seq = 0
+                        current_seq = parent
                     end
                 else
-                    current_seq = parent
-                end
-            else
-                print(string.format("WARNING: Could not find command with sequence %d", current_seq))
-                break
-            end
-        end
-
-        print(string.format("Replaying %d commands on active branch to sequence %d", #command_chain, target_sequence_number))
-
-        local Command = require("command")
-        local commands_replayed = 0
-        local final_playhead_time = 0
-        local final_selected_clip_ids = "[]"
-        local final_selected_edge_infos = "[]"
-
-        for _, cmd_data in ipairs(command_chain) do
-            -- Restore selection state prior to executing this command
-            restore_selection_from_serialized(cmd_data.selected_clip_ids_pre, cmd_data.selected_edge_infos_pre)
-
-            -- Create command object from stored data
-            local command = Command.create(cmd_data.command_type, active_project_id)
-            command.id = cmd_data.id
-            command.sequence_number = cmd_data.sequence_number
-            command.parent_sequence_number = cmd_data.parent_sequence_number
-            command.pre_hash = cmd_data.pre_hash
-            command.post_hash = cmd_data.post_hash
-            command.timestamp = cmd_data.timestamp
-
-            -- Decode parameters from JSON
-            if cmd_data.command_args and cmd_data.command_args ~= "" then
-                local success, params = pcall(qt_json_decode, cmd_data.command_args)
-                if success then
-                    command.parameters = params
+                    print(string.format("WARNING: Could not find command with sequence %d", current_seq))
+                    break
                 end
             end
 
-            -- Restore playhead BEFORE executing command
-            local timeline_state = require('ui.timeline.timeline_state')
-            timeline_state.set_playhead_time(cmd_data.playhead_time or 0)
+            print(string.format("Replaying %d commands on active branch to sequence %d", #command_chain, target_sequence_number))
 
-        -- Execute the command (but don't save it again - it's already in commands table)
-        local execution_success = execute_command_implementation(command)
+            local Command = require("command")
+            local commands_replayed = 0
+            local final_playhead_time = 0
+            local final_selected_clip_ids = "[]"
+            local final_selected_edge_infos = "[]"
 
-            if execution_success then
-                commands_replayed = commands_replayed + 1
-            else
-                print(string.format("ERROR: Failed to replay command %d (%s)",
-                    command.sequence_number, command.type))
-                print("ERROR: Event log is incomplete or corrupted")
-                print("ERROR: Some clips in the database were not created via logged commands")
-                print("HINT: This usually happens when clips are created directly in the database")
-                print("HINT: instead of going through the command system")
-                return false
+            for _, cmd_data in ipairs(command_chain) do
+                -- Restore selection state prior to executing this command
+                restore_selection_from_serialized(cmd_data.selected_clip_ids_pre, cmd_data.selected_edge_infos_pre)
+
+                -- Create command object from stored data
+                local command = Command.create(cmd_data.command_type, active_project_id)
+                command.id = cmd_data.id
+                command.sequence_number = cmd_data.sequence_number
+                command.parent_sequence_number = cmd_data.parent_sequence_number
+                command.pre_hash = cmd_data.pre_hash
+                command.post_hash = cmd_data.post_hash
+                command.timestamp = cmd_data.timestamp
+
+                -- Decode parameters from JSON
+                if cmd_data.command_args and cmd_data.command_args ~= "" then
+                    local success, params = pcall(qt_json_decode, cmd_data.command_args)
+                    if success then
+                        command.parameters = params
+                    end
+                end
+
+                -- Restore playhead BEFORE executing command
+                timeline_state.set_playhead_time(cmd_data.playhead_time or 0)
+
+                -- Execute the command (but don't save it again - it's already in commands table)
+                local execution_success = execute_command_implementation(command)
+
+                if execution_success then
+                    commands_replayed = commands_replayed + 1
+                else
+                    print(string.format("ERROR: Failed to replay command %d (%s)",
+                        command.sequence_number, command.type))
+                    print("ERROR: Event log is incomplete or corrupted")
+                    print("ERROR: Some clips in the database were not created via logged commands")
+                    print("HINT: This usually happens when clips are created directly in the database")
+                    print("HINT: instead of going through the command system")
+                    return false
+                end
+                final_playhead_time = cmd_data.playhead_time or 0
+                final_selected_clip_ids = cmd_data.selected_clip_ids or "[]"
+                final_selected_edge_infos = cmd_data.selected_edge_infos or "[]"
             end
-            final_playhead_time = cmd_data.playhead_time or 0
-            final_selected_clip_ids = cmd_data.selected_clip_ids or "[]"
-            final_selected_edge_infos = cmd_data.selected_edge_infos or "[]"
+
+            print(string.format("✅ Replayed %d commands successfully", commands_replayed))
+            restore_selection_from_serialized(final_selected_clip_ids, final_selected_edge_infos)
+        else
+            -- No commands to replay - reset to initial state
+            timeline_state.set_playhead_time(0)
+            timeline_state.set_selection({})
+            print("No commands to replay - reset playhead and selection to initial state")
         end
 
-        print(string.format("✅ Replayed %d commands successfully", commands_replayed))
-        restore_selection_from_serialized(final_selected_clip_ids, final_selected_edge_infos)
-    else
-        -- No commands to replay - reset to initial state
-        local timeline_state = require('ui.timeline.timeline_state')
-        timeline_state.set_playhead_time(0)
-        timeline_state.set_selection({})
-        print("No commands to replay - reset playhead and selection to initial state")
+        return true
     end
 
-    return true
+    local ok, result = pcall(replay_body)
+    cleanup()
+
+    if not ok then
+        error(result)
+    end
+
+    return result
 end
 
 -- Track last warning message to suppress consecutive duplicates
@@ -1624,8 +1651,20 @@ command_executors["ImportFCP7XML"] = function(command)
 
     print(string.format("Found %d sequence(s)", #parse_result.sequences))
 
+    -- Prepare replay context so importer can reuse deterministic IDs
+    local replay_context = {
+        sequence_id_map = command:get_parameter("sequence_id_map") or command:get_parameter("created_sequence_id_map"),
+        track_id_map = command:get_parameter("track_id_map"),
+        clip_id_map = command:get_parameter("clip_id_map"),
+        media_id_map = command:get_parameter("media_id_map"),
+        sequence_ids = command:get_parameter("created_sequence_ids"),
+        track_ids = command:get_parameter("created_track_ids"),
+        clip_ids = command:get_parameter("created_clip_ids"),
+        media_ids = command:get_parameter("created_media_ids")
+    }
+
     -- Create entities in database
-    local create_result = fcp7_importer.create_entities(parse_result, db, project_id)
+    local create_result = fcp7_importer.create_entities(parse_result, db, project_id, replay_context)
 
     if not create_result.success then
         print(string.format("ERROR: %s", create_result.error or "Failed to create entities"))
@@ -1636,6 +1675,11 @@ command_executors["ImportFCP7XML"] = function(command)
     command:set_parameter("created_sequence_ids", create_result.sequence_ids)
     command:set_parameter("created_track_ids", create_result.track_ids)
     command:set_parameter("created_clip_ids", create_result.clip_ids)
+    command:set_parameter("created_media_ids", create_result.media_ids)
+    command:set_parameter("sequence_id_map", create_result.sequence_id_map)
+    command:set_parameter("track_id_map", create_result.track_id_map)
+    command:set_parameter("clip_id_map", create_result.clip_id_map)
+    command:set_parameter("media_id_map", create_result.media_id_map)
 
     print(string.format("✅ Imported %d sequence(s), %d track(s), %d clip(s)",
         #create_result.sequence_ids,

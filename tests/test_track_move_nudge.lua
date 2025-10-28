@@ -115,6 +115,8 @@ local timeline_state = {
     persist_state_to_db = function() end,
     get_playhead_time = function() return 0 end,
     set_playhead_time = function() end,
+    viewport_start_time = 0,
+    viewport_duration = 10000,
     get_clips = function()
         local clips = {}
         local stmt = db:prepare("SELECT id FROM clips ORDER BY start_time")
@@ -126,6 +128,41 @@ local timeline_state = {
         return clips
     end
 }
+
+local viewport_guard = 0
+
+function timeline_state.capture_viewport()
+    return {
+        start_time = timeline_state.viewport_start_time,
+        duration = timeline_state.viewport_duration,
+    }
+end
+
+function timeline_state.restore_viewport(snapshot)
+    if not snapshot then
+        return
+    end
+
+    if snapshot.duration then
+        timeline_state.viewport_duration = snapshot.duration
+    end
+
+    if snapshot.start_time then
+        timeline_state.viewport_start_time = snapshot.start_time
+    end
+end
+
+function timeline_state.push_viewport_guard()
+    viewport_guard = viewport_guard + 1
+    return viewport_guard
+end
+
+function timeline_state.pop_viewport_guard()
+    if viewport_guard > 0 then
+        viewport_guard = viewport_guard - 1
+    end
+    return viewport_guard
+end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 

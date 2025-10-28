@@ -173,6 +173,7 @@ end
 -- Parse clip item
 local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info)
     local clip_info = {
+        original_id = get_attr(clipitem_node, "id"),
         id = get_attr(clipitem_node, "id"),
         name = nil,
         file_id = nil,
@@ -236,6 +237,7 @@ end
 -- Parse track
 local function parse_track(track_node, frame_rate, track_type, track_index, sequence_info)
     local track_info = {
+        original_id = get_attr(track_node, "id"),
         type = track_type,  -- "VIDEO" or "AUDIO"
         index = track_index,
         name = string.format("%s %d", track_type, track_index),
@@ -264,6 +266,7 @@ end
 -- Parse sequence
 local function parse_sequence(sequence_node)
     local sequence_info = {
+        original_id = get_attr(sequence_node, "id"),
         name = "Untitled Sequence",
         frame_rate = 30.0,
         width = 1920,
@@ -408,7 +411,7 @@ end
 -- parsed_result: output from import_xml()
 -- db: database connection
 -- Returns: {success, sequence_ids, error}
-function M.create_entities(parsed_result, db, project_id)
+function M.create_entities(parsed_result, db, project_id, replay_context)
     if not parsed_result or not parsed_result.success then
         return {success = false, error = "Import failed"}
     end
@@ -416,6 +419,8 @@ function M.create_entities(parsed_result, db, project_id)
     if not project_id or project_id == "" then
         return {success = false, error = "Project ID is required"}
     end
+
+    replay_context = replay_context or {}
 
     local database = require("core.database")
     local Sequence = require("models.sequence")
@@ -433,10 +438,87 @@ function M.create_entities(parsed_result, db, project_id)
         sequence_ids = {},
         track_ids = {},
         clip_ids = {},
-        media_ids = {}
+        media_ids = {},
+        sequence_id_map = {},
+        track_id_map = {},
+        clip_id_map = {},
+        media_id_map = {}
     }
 
+    local reuse_maps = {
+        sequences = replay_context.sequence_id_map or {},
+        tracks = replay_context.track_id_map or {},
+        clips = replay_context.clip_id_map or {},
+        media = replay_context.media_id_map or {}
+    }
+
+    local reuse_queues = {
+        sequences = replay_context.sequence_ids or {},
+        tracks = replay_context.created_track_ids or replay_context.track_ids or {},
+        clips = replay_context.created_clip_ids or replay_context.clip_ids or {},
+        media = replay_context.created_media_ids or replay_context.media_ids or {}
+    }
+
+    local reuse_indices = {
+        sequences = 1,
+        tracks = 1,
+        clips = 1,
+        media = 1
+    }
+
+    local function next_from_queue(kind)
+        local queue = reuse_queues[kind]
+        local idx = reuse_indices[kind]
+        if queue and idx and idx <= #queue then
+            local value = queue[idx]
+            reuse_indices[kind] = idx + 1
+            return value
+        end
+        return nil
+    end
+
+    local function resolve_reuse_id(kind, key)
+        key = key and tostring(key) or nil
+        local map = reuse_maps[kind]
+        if key and map and map[key] then
+            return map[key]
+        end
+        return next_from_queue(kind)
+    end
+
     local media_lookup = {}
+    local recorded_media_ids = {}
+
+    local function record_media_id(key, id)
+        if not key or key == "" or not id then
+            return
+        end
+        key = tostring(key)
+        media_lookup[key] = id
+        if not recorded_media_ids[id] then
+            recorded_media_ids[id] = true
+            table.insert(result.media_ids, id)
+        end
+        result.media_id_map[key] = id
+    end
+
+    local function find_existing_media_id(file_path)
+        if not file_path or file_path == "" then
+            return nil
+        end
+        local stmt = conn:prepare([[SELECT id FROM media WHERE project_id = ? AND file_path = ? LIMIT 1]])
+        if not stmt then
+            return nil
+        end
+        stmt:bind_value(1, project_id)
+        stmt:bind_value(2, file_path)
+        local media_id = nil
+        if stmt:exec() and stmt:next() then
+            media_id = stmt:value(0)
+        end
+        stmt:finalize()
+        return media_id
+    end
 
     local function ensure_media(clip_info)
         if not clip_info then
@@ -444,17 +526,13 @@ function M.create_entities(parsed_result, db, project_id)
         end
 
         local key = clip_info.media_key or clip_info.file_id
-        if not key or key == "" then
-            return nil
-        end
-
-        if media_lookup[key] then
+        if key and media_lookup[key] then
             return media_lookup[key]
         end
 
         local media_info = parsed_result.media_files[key] or clip_info.media
         if not media_info then
-            print(string.format("WARNING: create_entities: missing media info for key %s", key))
+            print(string.format("WARNING: create_entities: missing media info for key %s", tostring(key)))
             return nil
         end
 
@@ -462,24 +540,31 @@ function M.create_entities(parsed_result, db, project_id)
         if (not duration or duration <= 0) and clip_info.duration and clip_info.duration > 0 then
             duration = clip_info.duration
         end
-
         if not duration or duration <= 0 then
-            print(string.format("WARNING: create_entities: invalid duration for media %s", key))
             duration = 1
         end
 
         local file_path = media_info.path
         if not file_path or file_path == "" then
-            print(string.format("WARNING: create_entities: missing file path for media %s", key))
+            print(string.format("WARNING: create_entities: missing file path for media %s", tostring(key)))
             return nil
         end
 
         local frame_rate = media_info.frame_rate or clip_info.frame_rate or 30.0
 
+        local reuse_id = nil
+        if key then
+            reuse_id = resolve_reuse_id('media', key)
+            if not reuse_id then
+                reuse_id = find_existing_media_id(file_path)
+            end
+        end
+
         local media = Media.create({
+            id = reuse_id,
             project_id = project_id,
             file_path = file_path,
-            name = media_info.name or key,
+            name = media_info.name or tostring(key or file_path),
             duration = math.floor(duration),
             frame_rate = frame_rate,
             width = media_info.width,
@@ -492,19 +577,32 @@ function M.create_entities(parsed_result, db, project_id)
         end
 
         if not media:save(conn) then
+            -- If save fails because media already exists, attempt to load it
+            local existing_id = find_existing_media_id(file_path)
+            if existing_id then
+                record_media_id(key, existing_id)
+                return existing_id
+            end
             return nil
         end
 
-        media_lookup[key] = media.id
-        table.insert(result.media_ids, media.id)
+        record_media_id(key, media.id)
         return media.id
     end
 
-    local function create_clip(track_id, clip_info)
+    local function create_clip(track_id, clip_info, clip_key)
         local media_id = ensure_media(clip_info)
         local clip = Clip.create(clip_info.name or "Clip", media_id)
         if not clip then
             return false, "Failed to allocate clip"
+        end
+
+        local reuse_id = resolve_reuse_id('clips', clip_key)
+        if not reuse_id and clip_info.original_id and clip_info.original_id ~= "" then
+            reuse_id = clip_info.original_id
+        end
+        if reuse_id then
+            clip.id = reuse_id
         end
 
         clip.track_id = track_id
@@ -522,12 +620,16 @@ function M.create_entities(parsed_result, db, project_id)
         end
 
         table.insert(result.clip_ids, clip.id)
+        if clip_key then
+            result.clip_id_map[tostring(clip_key)] = clip.id
+        end
         return true
     end
 
-    local function create_clip_set(track_id, clips)
-        for _, clip_info in ipairs(clips or {}) do
-            local ok, err = create_clip(track_id, clip_info)
+    local function create_clip_set(sequence_key, track_key, track_id, clips)
+        for clip_index, clip_info in ipairs(clips or {}) do
+            local clip_key = track_key .. "::" .. (clip_info.original_id or clip_index)
+            local ok, err = create_clip(track_id, clip_info, clip_key)
             if not ok then
                 return false, err
             end
@@ -535,7 +637,7 @@ function M.create_entities(parsed_result, db, project_id)
         return true
     end
 
-    local function create_track(sequence_id, track_info, kind)
+    local function create_track(sequence_key, sequence_id, track_info, kind)
         local name = track_info.name
         if not name or name == "" then
             if kind == "VIDEO" then
@@ -545,7 +647,10 @@ function M.create_entities(parsed_result, db, project_id)
             end
         end
 
+        local track_key = sequence_key .. "::" .. (track_info.original_id or (kind .. ":" .. tostring(track_info.index)))
+        local reuse_id = resolve_reuse_id('tracks', track_key)
         local opts = {
+            id = reuse_id or track_info.original_id,
             index = track_info.index,
             enabled = track_info.enabled ~= false,
             locked = track_info.locked == true,
@@ -570,8 +675,9 @@ function M.create_entities(parsed_result, db, project_id)
         end
 
         table.insert(result.track_ids, track.id)
+        result.track_id_map[track_key] = track.id
 
-        local ok, err = create_clip_set(track.id, track_info.clips)
+        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips)
         if not ok then
             return false, err
         end
@@ -580,7 +686,6 @@ function M.create_entities(parsed_result, db, project_id)
     end
 
     local function rollback_partial()
-        -- best-effort cleanup while we are still in the command_manager transaction
         for _, clip_id in ipairs(result.clip_ids or {}) do
             local stmt = conn:prepare("DELETE FROM clips WHERE id = ?")
             if stmt then
@@ -619,13 +724,16 @@ function M.create_entities(parsed_result, db, project_id)
     end
 
     local ok, err = pcall(function()
-        for _, seq_info in ipairs(parsed_result.sequences or {}) do
+        for seq_index, seq_info in ipairs(parsed_result.sequences or {}) do
+            local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
+            local reuse_id = resolve_reuse_id('sequences', sequence_key)
             local sequence = Sequence.create(
                 seq_info.name,
                 project_id,
                 seq_info.frame_rate,
                 seq_info.width,
-                seq_info.height
+                seq_info.height,
+                {id = reuse_id or seq_info.original_id}
             )
             if not sequence then
                 error("Failed to allocate sequence")
@@ -636,16 +744,17 @@ function M.create_entities(parsed_result, db, project_id)
             end
 
             table.insert(result.sequence_ids, sequence.id)
+            result.sequence_id_map[sequence_key] = sequence.id
 
-            for _, track_info in ipairs(seq_info.video_tracks or {}) do
-                local success, track_err = create_track(sequence.id, track_info, "VIDEO")
+            for track_index, track_info in ipairs(seq_info.video_tracks or {}) do
+                local success, track_err = create_track(sequence_key, sequence.id, track_info, "VIDEO")
                 if not success then
                     error(track_err)
                 end
             end
 
-            for _, track_info in ipairs(seq_info.audio_tracks or {}) do
-                local success, track_err = create_track(sequence.id, track_info, "AUDIO")
+            for track_index, track_info in ipairs(seq_info.audio_tracks or {}) do
+                local success, track_err = create_track(sequence_key, sequence.id, track_info, "AUDIO")
                 if not success then
                     error(track_err)
                 end

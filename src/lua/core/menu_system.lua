@@ -352,6 +352,9 @@ local function create_action_callback(command_name, params)
                     print(string.format("⚠️  Import error: %s", result.error_message or "unknown"))
                 else
                     print("✅ FCP7 XML imported successfully!")
+                    if project_browser and project_browser.refresh then
+                        project_browser.refresh()
+                    end
                 end
             else
                 print("⏹️  Import cancelled")
@@ -424,7 +427,7 @@ local function create_action_callback(command_name, params)
             end
 
         elseif command_name == "Split" then
-            -- Map Split menu item to SplitClip command
+            -- Map Split menu item to BatchCommand of SplitClip operations
             print("✂️  Calling SplitClip command (mapped from Split)")
 
             if not timeline_panel then
@@ -432,37 +435,63 @@ local function create_action_callback(command_name, params)
                 return
             end
 
-            -- Get selected clip and playhead position from timeline
             local timeline_state = timeline_panel.get_state()
+            local playhead_time = timeline_state.get_playhead_time()
             local selected_clips = timeline_state.get_selected_clips()
 
-            if #selected_clips == 0 then
-                print("⚠️  Split: No clip selected")
+            local target_clips
+            if selected_clips and #selected_clips > 0 then
+                target_clips = timeline_state.get_clips_at_time(playhead_time, selected_clips)
+            else
+                target_clips = timeline_state.get_clips_at_time(playhead_time)
+            end
+
+            if #target_clips == 0 then
+                if selected_clips and #selected_clips > 0 then
+                    print("⚠️  Split: Playhead does not intersect selected clips")
+                else
+                    print("⚠️  Split: No clips under playhead")
+                end
                 return
             end
 
-            if #selected_clips > 1 then
-                print("⚠️  Split: Cannot split multiple clips at once")
-                return
-            end
-
-            local clip_id = selected_clips[1].id
-            local split_time = timeline_state.get_playhead_time()
-
+            local json = require("dkjson")
             local Command = require("command")
-            local cmd = Command.create("SplitClip", "default_project")
-            cmd:set_parameter("clip_id", clip_id)
-            cmd:set_parameter("split_time", split_time)
+            local specs = {}
+
+            for _, clip in ipairs(target_clips) do
+                local start_time = clip.start_time
+                local end_time = clip.start_time + clip.duration
+                if playhead_time <= start_time or playhead_time >= end_time then
+                    -- Skip invalid targets to avoid SplitClip errors
+                else
+                    table.insert(specs, {
+                        command_type = "SplitClip",
+                        parameters = {
+                            clip_id = clip.id,
+                            split_time = playhead_time
+                        }
+                    })
+                end
+            end
+
+            if #specs == 0 then
+                print("⚠️  Split: No valid clips to split at current playhead position")
+                return
+            end
+
+            local batch_cmd = Command.create("BatchCommand", "default_project")
+            batch_cmd:set_parameter("commands_json", json.encode(specs))
 
             local success, result = pcall(function()
-                return command_manager.execute(cmd)
+                return command_manager.execute(batch_cmd)
             end)
             if not success then
-                print(string.format("❌ SplitClip failed: %s", tostring(result)))
+                print(string.format("❌ Split failed: %s", tostring(result)))
             elseif result and not result.success then
-                print(string.format("⚠️  SplitClip returned error: %s", result.error_message or "unknown"))
+                print(string.format("⚠️  Split returned error: %s", result.error_message or "unknown"))
             else
-                print("✅ SplitClip executed successfully")
+                print(string.format("✅ Split executed on %d clip(s)", #specs))
             end
         elseif command_name == "Insert" then
             -- Timeline > Insert menu item (same logic as F9)
@@ -605,7 +634,14 @@ local function create_action_callback(command_name, params)
                 print("⚠️  No clips to fit")
             end
 
-        elseif command_name == "Cut" or command_name == "Copy" or command_name == "Paste" then
+        elseif command_name == "Cut" then
+            local result = command_manager.execute("Cut")
+            if result.success then
+                print("✂️  Cut executed successfully")
+            else
+                print(string.format("⚠️  Cut returned error: %s", result.error_message or "unknown"))
+            end
+        elseif command_name == "Copy" or command_name == "Paste" then
             print(string.format("⚠️  Command '%s' not implemented yet", command_name))
             print("   TODO: Implement clipboard operations")
         elseif command_name == "Delete" then

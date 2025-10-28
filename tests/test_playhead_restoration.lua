@@ -12,7 +12,9 @@ local mock_timeline_state = {
     playhead_time = 0,
     clips = {},
     selected_clips = {},
-    selected_edges = {}
+    selected_edges = {},
+    viewport_start_time = 0,
+    viewport_duration = 10000
 }
 
 function mock_timeline_state.get_playhead_time()
@@ -43,6 +45,41 @@ end
 
 function mock_timeline_state.reload_clips()
     -- Mock implementation - does nothing
+end
+
+local viewport_guard = 0
+
+function mock_timeline_state.capture_viewport()
+    return {
+        start_time = mock_timeline_state.viewport_start_time,
+        duration = mock_timeline_state.viewport_duration,
+    }
+end
+
+function mock_timeline_state.restore_viewport(snapshot)
+    if not snapshot then
+        return
+    end
+
+    if snapshot.duration then
+        mock_timeline_state.viewport_duration = snapshot.duration
+    end
+
+    if snapshot.start_time then
+        mock_timeline_state.viewport_start_time = snapshot.start_time
+    end
+end
+
+function mock_timeline_state.push_viewport_guard()
+    viewport_guard = viewport_guard + 1
+    return viewport_guard
+end
+
+function mock_timeline_state.pop_viewport_guard()
+    if viewport_guard > 0 then
+        viewport_guard = viewport_guard - 1
+    end
+    return viewport_guard
 end
 
 -- Register mock before loading command_manager
