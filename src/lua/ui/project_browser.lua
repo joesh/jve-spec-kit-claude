@@ -8,6 +8,7 @@ local ui_constants = require("core.ui_constants")
 local focus_manager = require("ui.focus_manager")
 local command_manager = require("core.command_manager")
 local command_scope = require("core.command_scope")
+local browser_state = require("ui.project_browser.browser_state")
 
 local handler_seq = 0
 
@@ -22,9 +23,12 @@ end
 
 M.item_lookup = {}
 M.media_map = {}
+M.sequence_map = {}
 M.selected_item = nil
+M.selected_items = {}
 M.project_id = nil
 M.viewer_panel = nil
+M.inspector_view = nil
 
 local ACTIVATE_COMMAND = "ActivateBrowserSelection"
 
@@ -39,6 +43,8 @@ local function activate_item(item_info)
         else
             print("⚠️  Timeline panel not available")
         end
+
+        focus_manager.set_focused_panel("timeline")
 
         if M.viewer_panel then
             if M.viewer_panel.show_timeline then
@@ -99,6 +105,25 @@ local function format_date(timestamp)
     return os.date("%b %d %Y", timestamp)
 end
 
+local function resolve_tree_item(entry)
+    if not entry then
+        return nil
+    end
+
+    if entry.data and entry.data ~= "" then
+        local ok, decoded = pcall(qt_json_decode, entry.data)
+        if ok and type(decoded) == "table" then
+            return decoded
+        end
+    end
+
+    if entry.item_id and M.item_lookup then
+        return M.item_lookup[tostring(entry.item_id)]
+    end
+
+    return nil
+end
+
 local function populate_tree()
     if not M.tree then
         return
@@ -107,7 +132,10 @@ local function populate_tree()
     qt_constants.CONTROL.CLEAR_TREE(M.tree)
     M.item_lookup = {}
     M.media_map = {}
+    M.sequence_map = {}
     M.selected_item = nil
+    M.selected_items = {}
+    browser_state.clear_selection()
 
     local project_id = M.project_id or db.get_current_project_id()
     M.project_id = project_id
@@ -184,14 +212,18 @@ local function populate_tree()
             ""
         })
 
-        store_tree_item(M.tree, tree_id, {
+        local sequence_info = {
             type = "timeline",
             id = sequence.id,
             name = sequence.name,
             frame_rate = sequence.frame_rate,
             width = sequence.width,
-            height = sequence.height
-        })
+            height = sequence.height,
+            duration = sequence.duration
+        }
+
+        store_tree_item(M.tree, tree_id, sequence_info)
+        M.sequence_map[sequence.id] = sequence_info
         if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "timeline")
         end
@@ -252,7 +284,14 @@ local function populate_tree()
         store_tree_item(M.tree, tree_id, {
             type = "clip",
             media_id = media.id,
-            name = media.name or media.file_name
+            name = media.name or media.file_name,
+            file_path = media.file_path,
+            duration = media.duration,
+            frame_rate = media.frame_rate,
+            width = media.width,
+            height = media.height,
+            codec = media.codec,
+            metadata = media.metadata
         })
         if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "clip")
@@ -400,19 +439,42 @@ function M.create()
     -- Set minimal indentation like Premiere (just enough for nested items)
     qt_constants.CONTROL.SET_TREE_INDENTATION(tree, 12)
 
+    if qt_constants.CONTROL.SET_TREE_SELECTION_MODE then
+        qt_constants.CONTROL.SET_TREE_SELECTION_MODE(tree, "extended")
+    end
+
     M.tree = tree
     M.project_id = db.get_current_project_id()
     populate_tree()
 
     local selection_handler = register_handler(function(event)
-        M.selected_item = nil
-        if not event or not event.data then
-            return
+        local collected = {}
+
+        if event and type(event.items) == "table" then
+            for _, entry in ipairs(event.items) do
+                local info = resolve_tree_item(entry)
+                if info then
+                    table.insert(collected, info)
+                end
+            end
         end
-        local ok, decoded = pcall(qt_json_decode, event.data)
-        if ok and type(decoded) == "table" then
-            M.selected_item = decoded
+
+        if #collected == 0 then
+            local fallback = resolve_tree_item(event)
+            if fallback then
+                table.insert(collected, fallback)
+            end
         end
+
+        M.selected_items = collected
+        M.selected_item = collected[1]
+
+        browser_state.update_selection(collected, {
+            media_lookup = M.media_map,
+            sequence_lookup = M.sequence_map
+        })
+
+        focus_manager.set_focused_panel("project_browser")
     end)
     if qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER then
         qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER(tree, selection_handler)
@@ -423,16 +485,9 @@ function M.create()
             return
         end
 
-        local item_info = nil
-        if event.data and event.data ~= "" then
-            local ok, decoded = pcall(qt_json_decode, event.data)
-            if ok and type(decoded) == "table" then
-                item_info = decoded
-            end
-        end
-
-        if not item_info and event.item_id and M.item_lookup then
-            item_info = M.item_lookup[tostring(event.item_id)]
+        local item_info = resolve_tree_item(event)
+        if not item_info and event and type(event.items) == "table" then
+            item_info = resolve_tree_item(event.items[1])
         end
 
         if not item_info or type(item_info) ~= "table" then
@@ -497,12 +552,20 @@ function M.set_viewer_panel(viewer_panel_mod)
     M.viewer_panel = viewer_panel_mod
 end
 
+function M.set_inspector(inspector_view)
+    M.inspector_view = inspector_view
+end
+
 -- Get selected media item
 function M.get_selected_media()
-    if not M.selected_item or M.selected_item.type ~= "clip" then
+    if not M.selected_items or #M.selected_items == 0 then
         return nil
     end
-    return M.media_map[M.selected_item.media_id]
+    local first = M.selected_items[1]
+    if not first or first.type ~= "clip" then
+        return nil
+    end
+    return M.media_map[first.media_id]
 end
 
 -- Refresh media list from database
@@ -565,6 +628,7 @@ function M.insert_selected_to_timeline()
 
     if success and result and result.success then
         print(string.format("✅ Media inserted to timeline: %s", media.name or media.file_name))
+        focus_manager.set_focused_panel("timeline")
     else
         print(string.format("❌ Failed to insert: %s", result and result.error_message or "unknown"))
     end

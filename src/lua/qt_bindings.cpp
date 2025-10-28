@@ -10,6 +10,7 @@
 #include <QSlider>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QAbstractItemView>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QSplitter>
@@ -80,6 +81,7 @@ int lua_set_focus(lua_State* L);
 int lua_set_global_key_handler(lua_State* L);
 int lua_set_focus_handler(lua_State* L);
 int lua_set_widget_cursor(lua_State* L);
+int lua_set_tree_selection_mode(lua_State* L);
 
 // Helper function to convert Lua table to QJsonValue
 static QJsonValue luaTableToJsonValue(lua_State* L, int index);
@@ -815,6 +817,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "GET_TREE_ITEM_DATA");
     lua_pushcfunction(L, lua_set_tree_selection_changed_handler);
     lua_setfield(L, -2, "SET_TREE_SELECTION_HANDLER");
+    lua_pushcfunction(L, lua_set_tree_selection_mode);
+    lua_setfield(L, -2, "SET_TREE_SELECTION_MODE");
     lua_pushcfunction(L, lua_set_tree_item_icon);
     lua_setfield(L, -2, "SET_TREE_ITEM_ICON");
     lua_pushcfunction(L, lua_set_tree_item_double_click_handler);
@@ -830,6 +834,8 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
     lua_pushcfunction(L, lua_set_tree_selection_changed_handler);
     lua_setglobal(L, "qt_set_tree_selection_handler");
+    lua_pushcfunction(L, lua_set_tree_selection_mode);
+    lua_setglobal(L, "qt_set_tree_selection_mode");
     lua_pushcfunction(L, lua_set_tree_item_icon);
     lua_setglobal(L, "qt_set_tree_item_icon");
     lua_pushcfunction(L, lua_set_tree_item_double_click_handler);
@@ -3252,6 +3258,42 @@ int lua_get_tree_item_data(lua_State* L)
     return 1;
 }
 
+int lua_set_tree_selection_mode(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* mode_str = luaL_checkstring(L, 2);
+
+    if (!widget) {
+        qWarning() << "Invalid tree widget in set_tree_selection_mode";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in set_tree_selection_mode";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QAbstractItemView::SelectionMode mode = QAbstractItemView::SingleSelection;
+    if (strcasecmp(mode_str, "extended") == 0) {
+        mode = QAbstractItemView::ExtendedSelection;
+    } else if (strcasecmp(mode_str, "multi") == 0 || strcasecmp(mode_str, "multiple") == 0) {
+        mode = QAbstractItemView::MultiSelection;
+    } else if (strcasecmp(mode_str, "contiguous") == 0) {
+        mode = QAbstractItemView::ContiguousSelection;
+    } else if (strcasecmp(mode_str, "none") == 0) {
+        mode = QAbstractItemView::NoSelection;
+    } else {
+        mode = QAbstractItemView::SingleSelection;
+    }
+
+    tree->setSelectionMode(mode);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int lua_set_tree_selection_changed_handler(lua_State* L)
 {
     QWidget* widget = (QWidget*)lua_to_widget(L, 1);
@@ -3282,13 +3324,39 @@ int lua_set_tree_selection_changed_handler(lua_State* L)
         lua_newtable(L);
 
         QList<QTreeWidgetItem*> selected = tree->selectedItems();
-        if (!selected.isEmpty()) {
-            QTreeWidgetItem* item = selected.first();
+
+        lua_pushstring(L, "items");
+        lua_newtable(L);
+
+        int index = 1;
+        for (QTreeWidgetItem* item : selected) {
+            lua_newtable(L);
+
             lua_pushstring(L, "item_id");
             lua_pushinteger(L, makeTreeItemId(tree, item));
             lua_settable(L, -3);
 
             QVariant data = item->data(0, Qt::UserRole);
+            if (data.isValid()) {
+                QByteArray bytes = data.toString().toUtf8();
+                lua_pushstring(L, "data");
+                lua_pushlstring(L, bytes.constData(), bytes.size());
+                lua_settable(L, -3);
+            }
+
+            lua_rawseti(L, -2, index);
+            index++;
+        }
+
+        lua_settable(L, -3);
+
+        if (!selected.isEmpty()) {
+            QTreeWidgetItem* first = selected.first();
+            lua_pushstring(L, "item_id");
+            lua_pushinteger(L, makeTreeItemId(tree, first));
+            lua_settable(L, -3);
+
+            QVariant data = first->data(0, Qt::UserRole);
             if (data.isValid()) {
                 QByteArray bytes = data.toString().toUtf8();
                 lua_pushstring(L, "data");

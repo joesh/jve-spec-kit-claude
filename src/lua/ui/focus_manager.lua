@@ -4,6 +4,7 @@
 
 local qt_constants = require("core.qt_constants")
 local ui_constants = require("core.ui_constants")
+local selection_hub = require("ui.selection_hub")
 
 local M = {}
 
@@ -142,6 +143,8 @@ function M.set_focused_panel(panel_id)
             print(string.format("🎯 Focus: %s", panel.panel_name))
         end
     end
+
+    selection_hub.set_active_panel(focused_panel_id)
 end
 
 -- Update visual indicators for a panel

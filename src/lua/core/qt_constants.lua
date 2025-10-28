@@ -67,6 +67,10 @@ if qt_constants then
         print("DEBUG qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER missing")
     end
     qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER = qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER or require_global_function("qt_set_tree_selection_handler")
+    if not qt_constants.CONTROL.SET_TREE_SELECTION_MODE then
+        print("DEBUG qt_constants.CONTROL.SET_TREE_SELECTION_MODE missing")
+    end
+    qt_constants.CONTROL.SET_TREE_SELECTION_MODE = qt_constants.CONTROL.SET_TREE_SELECTION_MODE or require_global_function("qt_set_tree_selection_mode")
 
     -- Note: CONTROL section is now provided by the real qt_constants from C++
     -- SET_SCROLL_AREA_WIDGET is implemented as lua_set_scroll_area_widget

@@ -83,6 +83,7 @@ int lua_clear_tree(lua_State* L);
 int lua_set_tree_item_expanded(lua_State* L);
 int lua_set_tree_item_data(lua_State* L);
 int lua_get_tree_item_data(lua_State* L);
+int lua_set_tree_selection_mode(lua_State* L);
 int lua_set_tree_selection_changed_handler(lua_State* L);
 int lua_set_tree_item_icon(lua_State* L);
 int lua_set_tree_item_double_click_handler(lua_State* L);

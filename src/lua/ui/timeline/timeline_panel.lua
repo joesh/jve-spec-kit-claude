@@ -6,6 +6,7 @@ local timeline_view = require("ui.timeline.timeline_view")
 local timeline_ruler = require("ui.timeline.timeline_ruler")
 local timeline_scrollbar = require("ui.timeline.timeline_scrollbar")
 local ui_constants = require("core.ui_constants")
+local selection_hub = require("ui.selection_hub")
 
 local M = {}
 
@@ -14,22 +15,28 @@ local SPLITTER_HANDLE_HEIGHT = ui_constants.TIMELINE.SPLITTER_HANDLE_HEIGHT
 
 -- Store references
 local state = nil
-local inspector_view = nil
 local video_view_ref = nil
 local audio_view_ref = nil
 
-function M.set_inspector(view)
-    inspector_view = view
-
-    -- If there's already a selection when inspector is wired up, notify it immediately
-    -- This handles the case where selection is restored from database before inspector is ready
-    if state and view and view.update_selection then
-        local selected_clips = state.get_selected_clips()
-        if #selected_clips > 0 then
-            print(string.format("Notifying newly-wired inspector of %d selected clips", #selected_clips))
-            view.update_selection(selected_clips)
+local function normalize_timeline_selection(clips)
+    if not clips or #clips == 0 then
+        return {}
+    end
+    local normalized = {}
+    for _, clip in ipairs(clips) do
+        if clip then
+            local copy = {}
+            for k, v in pairs(clip) do
+                copy[k] = v
+            end
+            copy.item_type = "timeline_clip"
+            table.insert(normalized, copy)
         end
     end
+    return normalized
+end
+function M.set_inspector(_)
+    -- Inspector updates are routed through selection_hub in layout wiring.
 end
 
 function M.set_project_browser(browser)
@@ -425,19 +432,10 @@ function M.create()
 
     -- Set up selection callback for inspector
     state.set_on_selection_changed(function(selected_clips)
-        if inspector_view and inspector_view.update_selection then
-            inspector_view.update_selection(selected_clips)
-        end
-
-        -- Log selection for debugging
-        -- if #selected_clips == 1 then
-        --     print("Selected clip: " .. selected_clips[1].name .. " (" .. selected_clips[1].id .. ")")
-        -- elseif #selected_clips > 1 then
-        --     print("Selected " .. #selected_clips .. " clips")
-        -- else
-        --     print("No clips selected")
-        -- end
+        selection_hub.update_selection("timeline", normalize_timeline_selection(selected_clips))
     end)
+    local initial_selection = state.get_selected_clips and state.get_selected_clips() or {}
+    selection_hub.update_selection("timeline", normalize_timeline_selection(initial_selection))
 
     -- Main container
     local container = qt_constants.WIDGET.CREATE()

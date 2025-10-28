@@ -186,6 +186,7 @@ local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
 local top_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
 -- 1. Project Browser (left) - create EARLY so menu system can reference it
+local selection_hub = require("ui.selection_hub")
 local project_browser_mod = require("ui.project_browser")
 local project_browser = project_browser_mod.create()
 
@@ -245,9 +246,18 @@ if mount_result and mount_result.success then
     -- Wire up project browser to timeline for insert button
     project_browser_mod.set_timeline_panel(timeline_panel_mod)
     project_browser_mod.set_viewer_panel(viewer_panel_mod)
+    project_browser_mod.set_inspector(view)
 
     -- Wire up menu system to timeline for Split command
     menu_system.set_timeline_panel(timeline_panel_mod)
+
+    -- Route active selection through inspector via selection hub
+    selection_hub.register_listener(function(items, panel_id)
+        if view and view.update_selection then
+            view.update_selection(items or {}, panel_id)
+        end
+    end)
+    selection_hub.set_active_panel("timeline")
 else
     print("ERROR: Inspector mount failed: " .. tostring(mount_result))
 end

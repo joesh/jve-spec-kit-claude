@@ -4,6 +4,8 @@
 local qt_constants = require("core.qt_constants")
 local frame_utils = require("core.frame_utils")
 local ui_constants = require("core.ui_constants")
+local selection_hub = require("ui.selection_hub")
+local json = require("dkjson")
 
 local M = {}
 
@@ -54,6 +56,22 @@ local function soft_wrap_path(path)
     -- Insert zero-width break opportunities after path separators so QLabel can wrap
     local zwsp = utf8 and utf8.char(0x200B) or "\226\128\139"  -- U+200B ZERO WIDTH SPACE
     return path:gsub("/", "/" .. zwsp)
+end
+
+local function normalize_metadata(meta)
+    if not meta or meta == "" then
+        return {}
+    end
+    if type(meta) == "table" then
+        return meta
+    end
+    if type(meta) == "string" then
+        local ok, decoded = pcall(json.decode, meta)
+        if ok and type(decoded) == "table" then
+            return decoded
+        end
+    end
+    return {}
 end
 
 function M.create()
@@ -122,6 +140,7 @@ function M.clear()
     if qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Source Viewer")
     end
+    selection_hub.update_selection("viewer", {})
 end
 
 function M.show_source_clip(media)
@@ -163,6 +182,20 @@ function M.show_source_clip(media)
     end
 
     render_text(lines)
+
+    selection_hub.update_selection("viewer", {{
+        item_type = "viewer_media",
+        id = media.id,
+        media_id = media.id,
+        name = media.name or media.file_name or media.id or "Untitled",
+        duration = media.duration,
+        frame_rate = media.frame_rate,
+        width = media.width,
+        height = media.height,
+        codec = media.codec,
+        file_path = media.file_path,
+        metadata = normalize_metadata(media.metadata),
+    }})
 end
 
 function M.show_timeline(sequence)
@@ -188,6 +221,20 @@ function M.show_timeline(sequence)
     end
 
     render_text(lines)
+
+    if sequence then
+        selection_hub.update_selection("viewer", {{
+            item_type = "viewer_timeline",
+            id = sequence.id,
+            name = sequence.name or sequence.id or "Untitled",
+            duration = sequence.duration,
+            frame_rate = sequence.frame_rate,
+            width = sequence.width,
+            height = sequence.height,
+        }})
+    else
+        selection_hub.update_selection("viewer", {})
+    end
 end
 
 return M

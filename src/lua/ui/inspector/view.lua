@@ -34,6 +34,26 @@ local M = {
   _widgets_initialized = false, -- Track if widgets have been created
 }
 
+local function reset_all_fields()
+  if not M._field_widgets then
+    return
+  end
+  local props = qt_constants.PROPERTIES or {}
+  local set_placeholder = props.SET_PLACEHOLDER_TEXT
+  local set_text = props.SET_TEXT
+  for _, field_info in pairs(M._field_widgets) do
+    local widget = field_info.widget
+    if widget then
+      if set_placeholder then
+        pcall(set_placeholder, widget, "")
+      end
+      if set_text then
+        pcall(set_text, widget, "")
+      end
+    end
+  end
+end
+
 function M.mount(root)
   -- Accept either userdata (Qt widget) or table (inspector interface)
   local root_type = type(root)
@@ -1199,40 +1219,104 @@ function M.apply_multi_edit()
   end
 end
 
-function M.update_selection(selected_clips)
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Selection changed: " .. #selected_clips .. " clips")
+function M.update_selection(selected_items, source_panel)
+  selected_items = selected_items or {}
+  source_panel = source_panel or "timeline"
 
-  -- Update the selection label
+  if source_panel ~= "timeline" then
+    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      string.format("[inspector][view] Selection from %s (%d item(s))", source_panel, #selected_items))
+
+    M._current_clip = nil
+    M._selected_clips = {}
+    M._multi_edit_mode = false
+    reset_all_fields()
+    if M._apply_button then
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
+    end
+
+    if M._selection_label then
+      local label_text
+      if source_panel == "project_browser" then
+        if #selected_items == 0 then
+          label_text = "Project Browser: No selection"
+        elseif #selected_items == 1 then
+          local item = selected_items[1]
+          if item.item_type == "media" then
+            label_text = string.format("Project Browser Media:\n%s", item.name or item.file_name or item.media_id or "Untitled")
+          elseif item.item_type == "timeline" then
+            label_text = string.format("Project Browser Timeline:\n%s", item.name or item.id or "Untitled")
+          else
+            label_text = "Project Browser: 1 item selected"
+          end
+        else
+          label_text = string.format("Project Browser: %d items selected", #selected_items)
+        end
+      elseif source_panel == "viewer" then
+        if #selected_items == 0 then
+          label_text = "Viewer: No clip loaded"
+        elseif #selected_items == 1 then
+          local item = selected_items[1]
+          if item.item_type == "viewer_media" then
+            label_text = string.format("Viewer Clip:\n%s", item.name or item.media_id or "Untitled")
+          elseif item.item_type == "viewer_timeline" then
+            label_text = string.format("Viewer Timeline:\n%s", item.name or item.id or "Untitled")
+          else
+            label_text = "Viewer: 1 item selected"
+          end
+        else
+          label_text = string.format("Viewer: %d items selected", #selected_items)
+        end
+      else
+        if #selected_items == 0 then
+          label_text = string.format("%s: No selection", source_panel)
+        else
+          label_text = string.format("%s: %d item(s) selected", source_panel, #selected_items)
+        end
+      end
+
+      local ok, err = pcall(qt_constants.PROPERTIES.SET_TEXT, M._selection_label, label_text)
+      if not ok then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+          "[inspector][view] Failed to update selection label for non-timeline selection: " .. tostring(err))
+      end
+    end
+    return
+  end
+
+  local selected_clips = selected_items
+  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+    "[inspector][view] Timeline selection changed: " .. #selected_clips .. " clip(s)")
+  M._selected_clips = selected_clips
+
   if M._selection_label then
     local label_text = ""
     if #selected_clips == 1 then
       local clip = selected_clips[1]
-      label_text = string.format("Selected: %s\nID: %s\nStart: %dms\nDuration: %dms",
-        clip.name, clip.id, clip.start_time, clip.duration)
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Showing clip: " .. clip.name)
+      label_text = string.format("Timeline Clip: %s\nID: %s\nStart: %dms\nDuration: %dms",
+        clip.name or clip.id, clip.id, clip.start_time or 0, clip.duration or 0)
+      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Showing clip: " .. (clip.name or clip.id))
 
-      -- Exit multi-edit mode
       M._multi_edit_mode = false
       if M._apply_button then
         pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
       end
 
-      -- Load clip data into inspector fields
       M.load_clip_data(clip)
     elseif #selected_clips > 1 then
-      label_text = string.format("%d clips selected", #selected_clips)
+      label_text = string.format("Timeline: %d clips selected", #selected_clips)
       logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Multiple clips selected")
 
-      -- Enter multi-edit mode
       M.load_multi_clip_data(selected_clips)
     else
-      label_text = "No clip selected"
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No selection")
+      label_text = "Timeline: No clip selected"
+      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No timeline selection")
       M._current_clip = nil
       M._multi_edit_mode = false
       if M._apply_button then
         pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
       end
+      reset_all_fields()
     end
 
     local set_text_success, set_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, M._selection_label, label_text)
