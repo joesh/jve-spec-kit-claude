@@ -433,6 +433,14 @@ function M.create()
     return container
 end
 
+function M.get_focus_widgets()
+    local widgets = {}
+    if M.tree then
+        table.insert(widgets, M.tree)
+    end
+    return widgets
+end
+
 -- Set timeline panel reference (called by layout.lua after both are created)
 function M.set_timeline_panel(timeline_panel_mod)
     M.timeline_panel = timeline_panel_mod

@@ -260,10 +260,16 @@ else
 end
 
 -- Register all panels with focus manager for visual indicators
-focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser")
+focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser", {
+    focus_widgets = project_browser_mod.get_focus_widgets and project_browser_mod.get_focus_widgets() or nil
+})
 focus_manager.register_panel("viewer", viewer_panel, viewer_title, "Viewer")
-focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector")
-focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline")
+focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector", {
+    focus_widgets = view.get_focus_widgets and view.get_focus_widgets() or nil
+})
+focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline", {
+    focus_widgets = timeline_panel_mod.get_focus_widgets and timeline_panel_mod.get_focus_widgets() or nil
+})
 
 -- Initialize all panels to unfocused state
 focus_manager.initialize_all_panels()

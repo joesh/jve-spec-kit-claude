@@ -2,6 +2,9 @@
 --- Tracks which panel has keyboard focus and provides clear visual feedback
 --- Shows a bright colored header/border on the active panel
 
+local qt_constants = require("core.qt_constants")
+local ui_constants = require("core.ui_constants")
+
 local M = {}
 
 -- Panel registry: maps panel_id -> {widget, header_widget, panel_name}
@@ -11,37 +14,100 @@ local registered_panels = {}
 local focused_panel_id = nil
 
 -- Focus indicator colors
+local FOCUS_COLOR = ui_constants.COLORS.FOCUS_BORDER_COLOR or "#0078d4"
+
 local COLORS = {
-    focused_header = "#ff8c42",      -- Bright orange for focused panel header
-    unfocused_header = "#2a2a2a",    -- Dark gray for unfocused panels
-    focused_border = "#ff8c42",      -- Bright orange border
-    unfocused_border = "#1a1a1a",    -- Invisible border for unfocused
+    focused_header = FOCUS_COLOR,
+    unfocused_header = "#2a2a2a",
+    focused_border = FOCUS_COLOR,
+    unfocused_border = "#2d2d2d",
 }
+
+local BORDER_RADIUS = 6
+local BORDER_WIDTH = 2
+
+local function sanitize_panel_id(panel_id)
+    return tostring(panel_id or ""):gsub("[^%w_]", "_")
+end
+
+local function safe_set_stylesheet(widget, stylesheet, context)
+    if not widget or not stylesheet then
+        return
+    end
+    local ok, err = pcall(qt_set_widget_stylesheet, widget, stylesheet)
+    if not ok then
+        local suffix = context and (" (" .. context .. ")") or ""
+        print(string.format("WARNING: focus_manager: failed to set stylesheet%s: %s", suffix, tostring(err)))
+    end
+end
 
 -- Register a panel for focus tracking
 -- Args:
---   panel_id: unique identifier (e.g., "project_browser", "timeline", "inspector")
---   widget: the main panel widget (will receive focus events)
---   header_widget: optional separate header widget to highlight
---   panel_name: display name (e.g., "Project Browser")
-function M.register_panel(panel_id, widget, header_widget, panel_name)
+--   panel_id (string) - unique identifier
+--   widget (userdata) - main panel container
+--   header_widget (userdata|nil) - optional header label to recolor
+--   panel_name (string|nil) - friendly name for logs
+--   options (table|nil):
+--       focus_widgets: array of widgets that should trigger focus highlights (defaults to {widget})
+function M.register_panel(panel_id, widget, header_widget, panel_name, options)
     if not panel_id or not widget then
         print("WARNING: focus_manager.register_panel: missing panel_id or widget")
         return false
+    end
+    options = options or {}
+
+    local sanitized_id = sanitize_panel_id(panel_id)
+    local focus_widgets = {}
+    if type(options.focus_widgets) == "table" then
+        for _, w in ipairs(options.focus_widgets) do
+            if w then
+                table.insert(focus_widgets, w)
+            end
+        end
+    end
+    if #focus_widgets == 0 then
+        table.insert(focus_widgets, widget)
+    end
+
+    local object_name = "focus_panel_" .. sanitized_id
+    if qt_set_object_name then
+        pcall(qt_set_object_name, widget, object_name)
+    end
+    if qt_set_widget_attribute then
+        pcall(qt_set_widget_attribute, widget, "WA_StyledBackground", true)
+    end
+
+    local highlight_widget = qt_constants.WIDGET.CREATE()
+    qt_constants.WIDGET.SET_PARENT(highlight_widget, widget)
+    qt_constants.PROPERTIES.SET_GEOMETRY(highlight_widget, 0, 0, 1, 1)
+    qt_constants.DISPLAY.SET_VISIBLE(highlight_widget, false)
+    if qt_set_widget_attribute then
+        pcall(qt_set_widget_attribute, highlight_widget, "WA_TransparentForMouseEvents", true)
+        pcall(qt_set_widget_attribute, highlight_widget, "WA_StyledBackground", true)
     end
 
     registered_panels[panel_id] = {
         widget = widget,
         header_widget = header_widget,
-        panel_name = panel_name or panel_id
+        panel_name = panel_name or panel_id,
+        focus_widgets = focus_widgets,
+        object_name = object_name,
+        highlight_widget = highlight_widget,
     }
 
-    -- Install focus event handler on this panel
-    _G["focus_handler_" .. panel_id] = function(event)
-        M.handle_focus_event(panel_id, event)
+    -- Install focus event handlers for all focusable widgets associated with this panel
+    for index, focus_widget in ipairs(focus_widgets) do
+        if focus_widget then
+            local handler_name = string.format("focus_handler_%s_%d", sanitized_id, index)
+            _G[handler_name] = function(event)
+                M.handle_focus_event(panel_id, event)
+            end
+            qt_set_focus_handler(focus_widget, handler_name)
+        end
     end
 
-    qt_set_focus_handler(widget, "focus_handler_" .. panel_id)
+    -- Apply initial unfocused style
+    M.update_panel_visual(panel_id, false)
 
     print(string.format("✅ Focus tracking registered for panel: %s", panel_name or panel_id))
     return true
@@ -51,11 +117,6 @@ end
 function M.handle_focus_event(panel_id, event)
     if event.focus_in then
         M.set_focused_panel(panel_id)
-    else
-        -- Focus out - only clear if this was the focused panel
-        if focused_panel_id == panel_id then
-            M.set_focused_panel(nil)
-        end
     end
 end
 
@@ -90,11 +151,11 @@ function M.update_panel_visual(panel_id, is_focused)
         return
     end
 
-    -- MINIMAL APPROACH: Only update header widget to avoid breaking panel internals
-    -- Don't set border on main widget - it breaks timeline canvas, tree widgets, etc.
+    local border_color = is_focused and COLORS.focused_border or COLORS.unfocused_border
+
     if panel.header_widget then
         local header_color = is_focused and COLORS.focused_header or COLORS.unfocused_header
-        qt_set_widget_stylesheet(panel.header_widget, string.format([[
+        safe_set_stylesheet(panel.header_widget, string.format([[ 
             QLabel {
                 background: %s;
                 color: white;
@@ -102,14 +163,25 @@ function M.update_panel_visual(panel_id, is_focused)
                 font-size: 12px;
                 border: none;
             }
-        ]], header_color))
+        ]], header_color), panel_id .. ":header")
     end
 
-    -- For panels without a header widget (timeline, inspector, project browser),
-    -- just print focus status - don't modify their styling at all
-    if not panel.header_widget and is_focused then
-        -- Visual feedback is optional - the focused panel just works
-        -- We don't need a visual indicator if it breaks the panel
+    if panel.highlight_widget then
+        local width, height = qt_constants.PROPERTIES.GET_SIZE(panel.widget)
+        if width and height then
+            qt_constants.PROPERTIES.SET_GEOMETRY(panel.highlight_widget, 0, 0, width, height)
+        end
+
+        local highlight_style = string.format([[ 
+            QWidget {
+                border: %dpx solid %s;
+                border-radius: %dpx;
+                background-color: rgba(0, 0, 0, 0);
+            }
+        ]], BORDER_WIDTH, border_color, BORDER_RADIUS)
+        safe_set_stylesheet(panel.highlight_widget, highlight_style, panel_id .. ":highlight")
+        qt_constants.DISPLAY.SET_VISIBLE(panel.highlight_widget, is_focused)
+        qt_constants.DISPLAY.RAISE(panel.highlight_widget)
     end
 end
 

@@ -36,6 +36,7 @@
 #include <QMenu>
 #include <QAction>
 #include <QFileDialog>
+#include <QString>
 #include <string>
 
 // Include existing UI components
@@ -867,6 +868,8 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_parent");
     lua_pushcfunction(L, lua_set_widget_attribute);
     lua_setglobal(L, "qt_set_widget_attribute");
+    lua_pushcfunction(L, lua_set_object_name);
+    lua_setglobal(L, "qt_set_object_name");
     lua_pushcfunction(L, lua_set_widget_stylesheet);
     lua_setglobal(L, "qt_set_widget_stylesheet");
     lua_pushcfunction(L, lua_set_widget_cursor);
@@ -2781,6 +2784,8 @@ int lua_set_widget_attribute(lua_State* L)
         attr = Qt::WA_TransparentForMouseEvents;
     } else if (strcmp(attr_name, "WA_Hover") == 0) {
         attr = Qt::WA_Hover;
+    } else if (strcmp(attr_name, "WA_StyledBackground") == 0) {
+        attr = Qt::WA_StyledBackground;
     } else {
         qWarning() << "Unknown widget attribute:" << attr_name;
         lua_pushboolean(L, 0);
@@ -2788,6 +2793,22 @@ int lua_set_widget_attribute(lua_State* L)
     }
 
     widget->setAttribute(attr, value);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_set_object_name(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    const char* name = lua_tostring(L, 2);
+
+    if (!widget || !name) {
+        qWarning() << "Invalid arguments in set_object_name";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    widget->setObjectName(QString::fromUtf8(name));
     lua_pushboolean(L, 1);
     return 1;
 }

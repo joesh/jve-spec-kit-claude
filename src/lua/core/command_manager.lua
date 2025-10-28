@@ -24,12 +24,129 @@ local active_project_id = "default_project"
 
 local non_recording_commands = {
     SelectAll = true,
-    DeselectAll = true,
-    GoToStart = true,
-    GoToEnd = true,
-    GoToPrevEdit = true,
-    GoToNextEdit = true,
+   DeselectAll = true,
+   GoToStart = true,
+   GoToEnd = true,
+   GoToPrevEdit = true,
+   GoToNextEdit = true,
 }
+
+local GLOBAL_STACK_ID = "global"
+local TIMELINE_STACK_PREFIX = "timeline:"
+
+local undo_stack_states = {
+    [GLOBAL_STACK_ID] = {
+        current_sequence_number = nil,
+        current_branch_path = {},
+        sequence_id = nil,
+    }
+}
+
+local active_stack_id = GLOBAL_STACK_ID
+local current_sequence_number = undo_stack_states[GLOBAL_STACK_ID].current_sequence_number
+local current_branch_path = undo_stack_states[GLOBAL_STACK_ID].current_branch_path
+
+local multi_stack_enabled = false
+if os and os.getenv then
+    multi_stack_enabled = os.getenv("JVE_ENABLE_MULTI_STACK_UNDO") == "1"
+end
+
+-- Registry that callers can use to route commands to specific undo stacks.
+local command_stack_resolvers = {}
+
+local function ensure_stack_state(stack_id)
+    stack_id = stack_id or GLOBAL_STACK_ID
+    local state = undo_stack_states[stack_id]
+    if not state then
+        state = {
+            current_sequence_number = nil,
+            current_branch_path = {},
+            sequence_id = nil,
+        }
+        undo_stack_states[stack_id] = state
+    end
+    return state
+end
+
+local function apply_stack_state(stack_id)
+    active_stack_id = stack_id or GLOBAL_STACK_ID
+    local state = ensure_stack_state(active_stack_id)
+    current_sequence_number = state.current_sequence_number
+    current_branch_path = state.current_branch_path
+    return state
+end
+
+local function set_active_stack(stack_id, opts)
+    local state = apply_stack_state(stack_id)
+    if opts and opts.sequence_id then
+        state.sequence_id = opts.sequence_id
+    end
+end
+
+local function set_current_sequence_number(value)
+    current_sequence_number = value
+    ensure_stack_state(active_stack_id).current_sequence_number = value
+end
+
+local function get_current_stack_id()
+    return active_stack_id
+end
+
+local function get_current_stack_sequence_id(fallback_to_active_sequence)
+    local state = ensure_stack_state(active_stack_id)
+    if state.sequence_id and state.sequence_id ~= "" then
+        return state.sequence_id
+    end
+    if fallback_to_active_sequence then
+        return active_sequence_id
+    end
+    return nil
+end
+
+local function stack_id_for_sequence(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return GLOBAL_STACK_ID
+    end
+    return TIMELINE_STACK_PREFIX .. sequence_id
+end
+
+local function resolve_stack_for_command(command)
+    if not multi_stack_enabled then
+        return GLOBAL_STACK_ID, nil
+    end
+
+    if command.stack_id then
+        if type(command.stack_id) == "string" then
+            return command.stack_id, nil
+        elseif type(command.stack_id) == "table" then
+            return command.stack_id.stack_id or GLOBAL_STACK_ID, command.stack_id
+        end
+    end
+
+    local resolver = command_stack_resolvers[command.type]
+    if resolver then
+        local ok, stack_info = pcall(resolver, command)
+        if ok and stack_info then
+            if type(stack_info) == "string" then
+                return stack_info, nil
+            elseif type(stack_info) == "table" then
+                return stack_info.stack_id or GLOBAL_STACK_ID, stack_info
+            end
+        elseif not ok then
+            print(string.format("WARNING: stack resolver for %s threw error: %s",
+                command.type, tostring(stack_info)))
+        end
+    end
+
+    if command.get_parameter then
+        local sequence_param = command:get_parameter("sequence_id")
+        if sequence_param and sequence_param ~= "" then
+            return stack_id_for_sequence(sequence_param), {sequence_id = sequence_param}
+        end
+    end
+
+    return GLOBAL_STACK_ID, nil
+end
 
 local function ensure_active_project_id()
     if not active_project_id or active_project_id == "" then
@@ -114,10 +231,6 @@ local function normalize_executor_result(exec_result)
 
     return exec_result ~= false, ""
 end
-
--- Undo tree tracking
-local current_sequence_number = nil  -- Current position in undo tree (nil = at HEAD, latest command)
-local current_branch_path = {}  -- Sequence of command IDs from root to current position (for tree navigation)
 
 -- Command type implementations
 local command_executors = {}
@@ -290,7 +403,10 @@ function M.init(database, sequence_id, project_id)
     active_sequence_id = sequence_id or "default_sequence"
     active_project_id = project_id or "default_project"
 
-    
+    local global_state = ensure_stack_state(GLOBAL_STACK_ID)
+    global_state.sequence_id = active_sequence_id
+    set_active_stack(GLOBAL_STACK_ID, {sequence_id = active_sequence_id})
+
     -- Register all command executors and undoers
     local command_implementations = require("core.command_implementations")
     command_implementations.register_commands(command_executors, command_undoers, db)
@@ -310,22 +426,22 @@ function M.init(database, sequence_id, project_id)
     if pos_query and pos_query:exec() and pos_query:next() then
         local saved_position = pos_query:value(0)
         if saved_position and saved_position > 0 then
-            current_sequence_number = saved_position
+            set_current_sequence_number(saved_position)
         elseif saved_position == 0 then
             -- 0 means at beginning (all commands undone)
-            current_sequence_number = 0
+            set_current_sequence_number(0)
         else
             -- NULL means no position saved yet - default to HEAD
             if last_sequence_number > 0 then
-                current_sequence_number = last_sequence_number
+                set_current_sequence_number(last_sequence_number)
             else
-                current_sequence_number = nil  -- No commands exist yet
+                set_current_sequence_number(nil)  -- No commands exist yet
             end
         end
     else
         -- If no saved position row exists, default to HEAD if we have commands
         if last_sequence_number > 0 then
-            current_sequence_number = last_sequence_number
+            set_current_sequence_number(last_sequence_number)
         end
     end
 
@@ -416,6 +532,11 @@ local function save_undo_position()
         return false
     end
 
+    local sequence_id = get_current_stack_sequence_id(true)
+    if not sequence_id or sequence_id == "" then
+        return false
+    end
+
     local update = db:prepare([[
         UPDATE sequences
         SET current_sequence_number = ?
@@ -428,7 +549,7 @@ local function save_undo_position()
     end
 
     update:bind_value(1, current_sequence_number)
-    update:bind_value(2, active_sequence_id)
+    update:bind_value(2, sequence_id)
     local success = update:exec()
 
     if not success then
@@ -618,6 +739,14 @@ function M.execute(command_or_name, params)
         return execute_non_recording(command)
     end
 
+    local stack_id, stack_info = resolve_stack_for_command(command)
+    local stack_opts = nil
+    if stack_info and type(stack_info) == "table" and stack_info.sequence_id then
+        stack_opts = {sequence_id = stack_info.sequence_id}
+    end
+    set_active_stack(stack_id, stack_opts)
+    command.stack_id = stack_id
+
     -- BEGIN TRANSACTION: All database changes (command save + state changes) are atomic
     -- If anything fails, everything rolls back automatically
     local begin_tx = db:prepare("BEGIN TRANSACTION")
@@ -709,17 +838,18 @@ function M.execute(command_or_name, params)
             current_state_hash = post_hash
 
             -- Move to HEAD after executing new command
-            current_sequence_number = sequence_number
+            set_current_sequence_number(sequence_number)
 
             -- Save undo position to database (persists across sessions)
             save_undo_position()
 
             -- Create snapshot every N commands for fast event replay
             local snapshot_mgr = require('core.snapshot_manager')
-            if snapshot_mgr.should_snapshot(sequence_number) then
+            local snapshot_sequence_id = get_current_stack_sequence_id(true)
+            if snapshot_sequence_id and snapshot_mgr.should_snapshot(sequence_number) then
                 local db_module = require('core.database')
-                local clips = db_module.load_clips(active_sequence_id)
-                snapshot_mgr.create_snapshot(db, active_sequence_id, sequence_number, clips)
+                local clips = db_module.load_clips(snapshot_sequence_id)
+                snapshot_mgr.create_snapshot(db, snapshot_sequence_id, sequence_number, clips)
             end
 
             -- COMMIT TRANSACTION: Everything succeeded
@@ -834,7 +964,7 @@ function M.execute_undo(original_command)
         result.result_data = undo_command:serialize()
 
         -- Move to parent in undo tree
-        current_sequence_number = original_command.parent_sequence_number
+        set_current_sequence_number(original_command.parent_sequence_number)
         print(string.format("  Undo successful! Moved to position: %s", tostring(current_sequence_number)))
     else
         result.error_message = last_error_message or "Undo execution failed"
@@ -1090,9 +1220,13 @@ function M.replay_events(sequence_id, target_sequence_number)
             initial_clips = clips
             print(string.format("Using snapshot with %d clips as initial state", #initial_clips))
         else
-            -- No snapshot - start from EMPTY state (commands will build up from nothing)
-            initial_clips = {}
-            print("Starting from empty initial state (no snapshot)")
+            local db_module = require('core.database')
+            initial_clips = db_module.load_clips(sequence_id) or {}
+            if #initial_clips > 0 then
+                print(string.format("Using current database state with %d clips as baseline", #initial_clips))
+            else
+                print("Starting from empty initial state (no snapshot)")
+            end
         end
 
         -- Step 3: Clear ALL clips and media (we'll restore initial state + replay commands)
@@ -1286,7 +1420,23 @@ end
 -- Track last warning message to suppress consecutive duplicates
 local last_warning_message = nil
 
-function M.undo()
+function M.undo(options)
+    if type(options) == "string" then
+        options = {stack_id = options}
+    else
+        options = options or {}
+    end
+
+    if options.stack_id then
+        local stack_opts = nil
+        if options.sequence_id then
+            stack_opts = {sequence_id = options.sequence_id}
+        end
+        set_active_stack(options.stack_id, stack_opts)
+    end
+
+    local sequence_id = get_current_stack_sequence_id(true) or active_sequence_id
+
     -- Get the command at current position
     local current_command = M.get_last_command(active_project_id)
 
@@ -1311,17 +1461,9 @@ function M.undo()
     -- Replay events up to target (or clear all if target is 0)
     local replay_success = true
     if target_sequence > 0 then
-        replay_success = M.replay_events("default_sequence", target_sequence)
+        replay_success = M.replay_events(sequence_id, target_sequence)
     else
-        -- Undo all - clear the clips table and reset playhead/selection
-        local delete_query = db:prepare("DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)")
-        if delete_query then
-            delete_query:bind_value(1, "default_sequence")
-            delete_query:exec()
-            print("Cleared all clips (undo to beginning)")
-        end
-
-        print("Reset timeline database to initial state")
+        replay_success = M.replay_events(sequence_id, 0)
     end
 
     if replay_success then
@@ -1336,7 +1478,8 @@ function M.undo()
         end
 
         -- Move current_sequence_number back
-        current_sequence_number = target_sequence > 0 and target_sequence or nil
+        local new_position = target_sequence > 0 and target_sequence or nil
+        set_current_sequence_number(new_position)
 
         -- Save undo position to database (persists across sessions)
         save_undo_position()
@@ -1358,7 +1501,23 @@ function M.undo()
 end
 
 -- Redo: Move forward one command in the undo tree using event replay
-function M.redo()
+function M.redo(options)
+    if type(options) == "string" then
+        options = {stack_id = options}
+    else
+        options = options or {}
+    end
+
+    if options.stack_id then
+        local stack_opts = nil
+        if options.sequence_id then
+            stack_opts = {sequence_id = options.sequence_id}
+        end
+        set_active_stack(options.stack_id, stack_opts)
+    end
+
+    local sequence_id = get_current_stack_sequence_id(true) or active_sequence_id
+
     if not db then
         print("No database connection")
         return {success = false, error_message = "No database connection"}
@@ -1392,15 +1551,15 @@ function M.redo()
     end
 
     local target_sequence = query:value(0)
-    local command_type = query:value(1)
-    print(string.format("Redoing command: %s (seq %d)", command_type, target_sequence))
+   local command_type = query:value(1)
+   print(string.format("Redoing command: %s (seq %d)", command_type, target_sequence))
 
     -- Replay events up to target sequence
-    local replay_success = M.replay_events("default_sequence", target_sequence)
+    local replay_success = M.replay_events(sequence_id, target_sequence)
 
     if replay_success then
         -- Move current_sequence_number forward
-        current_sequence_number = target_sequence
+        set_current_sequence_number(target_sequence)
 
         -- Save undo position to database (persists across sessions)
         save_undo_position()
@@ -1453,6 +1612,55 @@ function M.redo()
     else
         return {success = false, error_message = "Redo replay failed"}
     end
+end
+
+function M.enable_multi_stack(value)
+    multi_stack_enabled = value and true or false
+end
+
+function M.is_multi_stack_enabled()
+    return multi_stack_enabled
+end
+
+function M.stack_id_for_sequence(sequence_id)
+    return stack_id_for_sequence(sequence_id)
+end
+
+function M.activate_stack(stack_id, opts)
+    if opts and opts.sequence_id then
+        set_active_stack(stack_id, {sequence_id = opts.sequence_id})
+    else
+        set_active_stack(stack_id)
+    end
+end
+
+function M.activate_timeline_stack(sequence_id)
+    local seq = sequence_id or active_sequence_id
+    local stack_id = stack_id_for_sequence(seq)
+    set_active_stack(stack_id, {sequence_id = seq})
+    return stack_id
+end
+
+function M.get_active_stack_id()
+    return get_current_stack_id()
+end
+
+function M.get_stack_state(stack_id)
+    local state = ensure_stack_state(stack_id or get_current_stack_id())
+    return {
+        current_sequence_number = state.current_sequence_number,
+        sequence_id = state.sequence_id,
+    }
+end
+
+function M.register_stack_resolver(command_type, resolver)
+    if type(command_type) ~= "string" or command_type == "" then
+        error("register_stack_resolver: command_type must be a non-empty string")
+    end
+    if type(resolver) ~= "function" then
+        error("register_stack_resolver: resolver must be a function")
+    end
+    command_stack_resolvers[command_type] = resolver
 end
 
 -- LinkClips: Create A/V sync relationship between clips

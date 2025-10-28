@@ -467,6 +467,7 @@ function M.create()
     qt_constants.PROPERTIES.SET_MIN_HEIGHT(ruler_widget, timeline_ruler.RULER_HEIGHT)  -- Set 32px height
     qt_constants.PROPERTIES.SET_MAX_HEIGHT(ruler_widget, timeline_ruler.RULER_HEIGHT)  -- Lock to 32px
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, ruler_widget)
+    M.ruler_widget = ruler_widget
 
     -- Drag selection coordination state (panel-level, not view-level)
     local drag_state = {
@@ -533,6 +534,7 @@ function M.create()
 
     -- Register video widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[video_widget] = timeline_video_scroll
+    M.video_widget = video_widget
 
     -- Create audio timeline view
     local audio_widget = qt_constants.WIDGET.CREATE_TIMELINE()
@@ -557,6 +559,7 @@ function M.create()
 
     -- Register audio widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[audio_widget] = timeline_audio_scroll
+    M.audio_widget = audio_widget
 
     -- Vertical splitter between video and audio scroll areas
     vertical_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
@@ -853,6 +856,7 @@ function M.create()
     M.main_splitter = main_splitter
     M.timeline_video_scroll = timeline_video_scroll
     M.timeline_audio_scroll = timeline_audio_scroll
+    M.timeline_area = timeline_area
 
     print("Multi-view timeline panel created successfully")
 
@@ -891,6 +895,23 @@ function M.is_dragging()
     local video_dragging = video_view_ref and video_view_ref.drag_state ~= nil
     local audio_dragging = audio_view_ref and audio_view_ref.drag_state ~= nil
     return video_dragging or audio_dragging
+end
+
+local function append_widget(list, widget)
+    if widget then
+        table.insert(list, widget)
+    end
+end
+
+function M.get_focus_widgets()
+    local widgets = {}
+    append_widget(widgets, M.video_widget)
+    append_widget(widgets, M.audio_widget)
+    append_widget(widgets, M.timeline_video_scroll)
+    append_widget(widgets, M.timeline_audio_scroll)
+    append_widget(widgets, M.ruler_widget)
+    append_widget(widgets, M.container)
+    return widgets
 end
 
 return M

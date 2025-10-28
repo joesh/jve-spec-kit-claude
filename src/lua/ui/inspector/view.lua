@@ -146,6 +146,7 @@ function M.create_schema_driven_inspector()
   if not scroll_area_success then
     return error_system.create_error({message = "Failed to create scroll area"})
   end
+  M._scroll_area = scroll_area
   
   -- Create content widget for the scroll area
   local content_widget_success, content_widget = pcall(qt_constants.WIDGET.CREATE)
@@ -1245,5 +1246,18 @@ function M.update_selection(selected_clips)
   end
 end
 
--- print("🚨 DEBUG: inspector/view.lua file LOADED")
+function M.get_focus_widgets()
+  local widgets = {}
+  if M._scroll_area then
+    table.insert(widgets, M._scroll_area)
+  end
+  if M._search_input then
+    table.insert(widgets, M._search_input)
+  end
+  if M.root then
+    table.insert(widgets, M.root)
+  end
+  return widgets
+end
+
 return M

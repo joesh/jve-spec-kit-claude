@@ -4,6 +4,7 @@
 
 local M = {}
 local ui_constants = require("core.ui_constants")
+local focus_manager = require("ui.focus_manager")
 
 -- Create a new timeline view
 -- Parameters:
@@ -729,6 +730,12 @@ end
         local width, height = timeline.get_dimensions(view.widget)
 
         if event_type == "press" then
+            if focus_manager and focus_manager.set_focused_panel then
+                pcall(focus_manager.set_focused_panel, "timeline")
+            end
+            if qt_set_focus then
+                pcall(qt_set_focus, view.widget)
+            end
             -- Check if clicking on playhead
             local playhead_time = state_module.get_playhead_time()
             local playhead_x = state_module.time_to_pixel(playhead_time, width)
