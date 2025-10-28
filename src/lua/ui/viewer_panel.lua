@@ -47,6 +47,15 @@ local function render_text(lines)
     end
 end
 
+local function soft_wrap_path(path)
+    if not path or path == "" then
+        return nil
+    end
+    -- Insert zero-width break opportunities after path separators so QLabel can wrap
+    local zwsp = utf8 and utf8.char(0x200B) or "\226\128\139"  -- U+200B ZERO WIDTH SPACE
+    return path:gsub("/", "/" .. zwsp)
+end
+
 function M.create()
     if viewer_widget then
         return viewer_widget
@@ -77,6 +86,13 @@ function M.create()
     ]], ui_constants.COLORS and (ui_constants.COLORS.TEXT_PRIMARY or "#d0d0d0") or "#d0d0d0"))
     if qt_constants.PROPERTIES.SET_ALIGNMENT then
         qt_constants.PROPERTIES.SET_ALIGNMENT(content_label, qt_constants.PROPERTIES.ALIGN_TOP)
+    end
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        -- Ignore the long-line size hint so the splitter width controls the panel
+        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_label, "ignored", "preferred")
+    end
+    if qt_constants.PROPERTIES.SET_MINIMUM_WIDTH then
+        pcall(qt_constants.PROPERTIES.SET_MINIMUM_WIDTH, content_label, 0)
     end
     if qt_constants.PROPERTIES.SET_WORD_WRAP then
         qt_constants.PROPERTIES.SET_WORD_WRAP(content_label, true)
@@ -140,9 +156,10 @@ function M.show_source_clip(media)
         table.insert(lines, "Codec: " .. media.codec)
     end
 
-    if media.file_path and media.file_path ~= "" then
+    local wrapped_path = soft_wrap_path(media.file_path)
+    if wrapped_path and wrapped_path ~= "" then
         table.insert(lines, "")
-        table.insert(lines, media.file_path)
+        table.insert(lines, wrapped_path)
     end
 
     render_text(lines)
@@ -174,4 +191,3 @@ function M.show_timeline(sequence)
 end
 
 return M
-

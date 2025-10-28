@@ -2676,11 +2676,13 @@ int lua_set_widget_size_policy(lua_State* L)
         else if (strcasecmp(horizontal, "fixed") == 0) hPolicy = QSizePolicy::Fixed;
         else if (strcasecmp(horizontal, "minimum") == 0) hPolicy = QSizePolicy::Minimum;
         else if (strcasecmp(horizontal, "maximum") == 0) hPolicy = QSizePolicy::Maximum;
+        else if (strcasecmp(horizontal, "ignored") == 0) hPolicy = QSizePolicy::Ignored;
 
         if (strcasecmp(vertical, "expanding") == 0) vPolicy = QSizePolicy::Expanding;
         else if (strcasecmp(vertical, "fixed") == 0) vPolicy = QSizePolicy::Fixed;
         else if (strcasecmp(vertical, "minimum") == 0) vPolicy = QSizePolicy::Minimum;
         else if (strcasecmp(vertical, "maximum") == 0) vPolicy = QSizePolicy::Maximum;
+        else if (strcasecmp(vertical, "ignored") == 0) vPolicy = QSizePolicy::Ignored;
 
         // qDebug() << "Setting size policy:" << horizontal << "->" << hPolicy << "," << vertical << "->" << vPolicy << "on widget" << widget;
         widget->setSizePolicy(hPolicy, vPolicy);
