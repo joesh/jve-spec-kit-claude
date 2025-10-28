@@ -279,7 +279,7 @@ end
             local y = get_track_y_by_id(render_track_id, height)
 
                 if y >= 0 then  -- Clip is on a track in this view
-                    local track_height = state_module.get_track_height(clip.track_id)
+                    local track_height = state_module.get_track_height(render_track_id or clip.track_id)
                     local clip_start = clip.start_time + time_offset_ms
                     local x = state_module.time_to_pixel(clip_start, width)
                     y = y + 5  -- Add padding from track top
@@ -380,6 +380,59 @@ end
                 end
             end
 
+            local anchor_clip = nil
+            if view.drag_state.anchor_clip_id then
+                for _, clip in ipairs(view.drag_state.clips) do
+                    if clip.id == view.drag_state.anchor_clip_id then
+                        anchor_clip = clip
+                        break
+                    end
+                end
+            end
+            if not anchor_clip then
+                anchor_clip = view.drag_state.clips[1]
+            end
+
+            local preview_hint = nil
+            if target_track_id then
+                if anchor_clip then
+                    local all_tracks = state_module.get_all_tracks()
+                    local anchor_index = nil
+                    local target_index = nil
+                    for i, track in ipairs(all_tracks) do
+                        if track.id == anchor_clip.track_id then
+                            anchor_index = i
+                        end
+                        if track.id == target_track_id then
+                            target_index = i
+                        end
+                    end
+
+                    if anchor_index and target_index then
+                        local track_offset = target_index - anchor_index
+                        if track_offset ~= 0 then
+                            if multi_track_selection then
+                                preview_hint = {track_offset = track_offset}
+                            else
+                                preview_hint = target_track_id
+                            end
+                        else
+                            if not multi_track_selection then
+                                preview_hint = target_track_id
+                            end
+                        end
+                    else
+                        if not multi_track_selection then
+                            preview_hint = target_track_id
+                        end
+                    end
+                else
+                    if not multi_track_selection then
+                        preview_hint = target_track_id
+                    end
+                end
+            end
+
             local dragging_clip_ids = {}
             for _, clip in ipairs(view.drag_state.clips) do
                 dragging_clip_ids[clip.id] = true
@@ -389,7 +442,7 @@ end
             -- For multi-track selections, don't change tracks (pass nil)
             draw_clips(drag_offset_ms, true, function(clip)
                 return dragging_clip_ids[clip.id]
-            end, multi_track_selection and nil or target_track_id)
+            end, preview_hint)
         end
 
         -- If dragging edges, draw outline preview of affected clips at their new trimmed dimensions
@@ -1032,7 +1085,8 @@ end
                             start_y = y,
                             start_time = state_module.pixel_to_time(x, width),
                             clips = selected_clips,
-                            modifiers = modifiers
+                            modifiers = modifiers,
+                            anchor_clip_id = clicked_clip.id
                         }
                         print(string.format("Clicked %d selected clip(s)", #selected_clips))
                         return
@@ -1064,7 +1118,8 @@ end
                         start_y = y,
                         start_time = state_module.pixel_to_time(x, width),
                         clips = new_selection,
-                        modifiers = modifiers
+                        modifiers = modifiers,
+                        anchor_clip_id = clicked_clip.id
                     }
                     print(string.format("Selected %d clip(s)", #view.potential_drag.clips))
                     render()
@@ -1120,10 +1175,14 @@ end
                         start_time = view.potential_drag.start_time,
                         clips = view.potential_drag.clips,
                         edges = view.potential_drag.edges,
+                        anchor_clip_id = view.potential_drag.anchor_clip_id,
                         current_x = x,
                         current_y = y,
                         current_time = state_module.pixel_to_time(x, width)
                     }
+                    if (not view.drag_state.anchor_clip_id) and view.drag_state.clips and #view.drag_state.clips > 0 then
+                        view.drag_state.anchor_clip_id = view.drag_state.clips[1].id
+                    end
                     view.drag_state.delta_ms = math.floor(view.drag_state.current_time - view.drag_state.start_time)
 
                     -- For edge drags, augment each edge with its original_time for snapping calculations
@@ -1352,12 +1411,10 @@ end
                 print(string.format("DEBUG: Drag release - delta_ms=%d, current_y=%d, target_track=%s",
                     delta_ms, current_y, tostring(target_track_id)))
 
-                -- Clear drag state IMMEDIATELY to prevent preview rendering during command execution
-                -- (reload_clips triggers listeners which call render)
+                local anchor_clip_id = view.drag_state and view.drag_state.anchor_clip_id
                 view.drag_state = nil
                 view.potential_drag = nil
 
-                -- Reset drag snapping inversion (N-key during drag)
                 local keyboard_shortcuts = require("core.keyboard_shortcuts")
                 keyboard_shortcuts.reset_drag_snapping()
 
@@ -1378,8 +1435,21 @@ end
                     end
 
                     -- Calculate track offset for maintaining relative positions
-                    -- Use first clip as reference for calculating offset
                     local reference_clip = current_clips[1]
+                    if anchor_clip_id then
+                        for _, clip in ipairs(current_clips) do
+                            if clip.id == anchor_clip_id then
+                                reference_clip = clip
+                                break
+                            end
+                        end
+                    end
+
+                    if not reference_clip then
+                        print("WARNING: Drag release: no reference clip found")
+                        return
+                    end
+
                     local reference_original_track = reference_clip.track_id
 
                     -- Calculate offset: target - original

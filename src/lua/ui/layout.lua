@@ -203,16 +203,8 @@ else
 end
 
 -- 2. Src/Timeline Viewer (center)
-local viewer_panel = qt_constants.WIDGET.CREATE()
-local viewer_layout = qt_constants.LAYOUT.CREATE_VBOX()
-local viewer_title = qt_constants.WIDGET.CREATE_LABEL("Src/Timeline Viewer")
-qt_constants.PROPERTIES.SET_STYLE(viewer_title, "background: #3a3a3a; color: white; padding: 4px; font-size: 12px;")
-qt_constants.LAYOUT.ADD_WIDGET(viewer_layout, viewer_title)
-
-local viewer_content = qt_constants.WIDGET.CREATE_LABEL("Video Preview")
-qt_constants.PROPERTIES.SET_STYLE(viewer_content, "background: black; color: #666; padding: 40px; text-align: center;")
-qt_constants.LAYOUT.ADD_WIDGET(viewer_layout, viewer_content)
-qt_constants.LAYOUT.SET_ON_WIDGET(viewer_panel, viewer_layout)
+local viewer_panel_mod = require("ui.viewer_panel")
+local viewer_panel = viewer_panel_mod.create()
 
 -- 3. Inspector (right) - Create container for Lua inspector
 local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
@@ -252,6 +244,7 @@ if mount_result and mount_result.success then
 
     -- Wire up project browser to timeline for insert button
     project_browser_mod.set_timeline_panel(timeline_panel_mod)
+    project_browser_mod.set_viewer_panel(viewer_panel_mod)
 
     -- Wire up menu system to timeline for Split command
     menu_system.set_timeline_panel(timeline_panel_mod)
@@ -263,7 +256,7 @@ end
 focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser", {
     focus_widgets = project_browser_mod.get_focus_widgets and project_browser_mod.get_focus_widgets() or nil
 })
-focus_manager.register_panel("viewer", viewer_panel, viewer_title, "Viewer")
+focus_manager.register_panel("viewer", viewer_panel, viewer_panel_mod.get_title_widget and viewer_panel_mod.get_title_widget() or nil, "Viewer")
 focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector", {
     focus_widgets = view.get_focus_widgets and view.get_focus_widgets() or nil
 })

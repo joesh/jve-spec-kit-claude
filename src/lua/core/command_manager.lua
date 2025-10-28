@@ -12,6 +12,8 @@ local M = {}
 -- Database connection (set externally)
 local db = nil
 
+local command_scope = require("core.command_scope")
+
 -- State tracking
 local last_sequence_number = 0
 local current_state_hash = ""
@@ -29,6 +31,7 @@ local non_recording_commands = {
    GoToEnd = true,
    GoToPrevEdit = true,
    GoToNextEdit = true,
+   ActivateBrowserSelection = true,
 }
 
 local GLOBAL_STACK_ID = "global"
@@ -732,6 +735,12 @@ function M.execute(command_or_name, params)
 
     if not validate_command_parameters(command) then
         result.error_message = "Invalid command parameters"
+        return result
+    end
+
+    local scope_ok, scope_err = command_scope.check(command)
+    if not scope_ok then
+        result.error_message = scope_err or "Command cannot execute in current scope"
         return result
     end
 

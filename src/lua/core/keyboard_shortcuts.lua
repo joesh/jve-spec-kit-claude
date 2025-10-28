@@ -38,6 +38,8 @@ local KEY = {
     Period = 46,     -- '.'
     F9 = 16777272,   -- 0x01000038
     F10 = 16777273,  -- 0x01000039
+    Return = 16777220,
+    Enter = 16777221,
 }
 
 -- Qt modifier constants (from Qt::KeyboardModifier enum)
@@ -58,6 +60,7 @@ local timeline_state = nil
 local command_manager = nil
 local project_browser = nil
 local timeline_panel = nil
+local focus_manager = require("ui.focus_manager")
 
 -- MAGNETIC SNAPPING STATE
 -- Baseline preference (persists across drags)
@@ -78,6 +81,18 @@ function keyboard_shortcuts.is_snapping_enabled()
     local effective = baseline_snapping_enabled
     if drag_snapping_inverted then
         effective = not effective
+    end
+
+    if (key == KEY.Return or key == KEY.Enter) then
+        if focus_manager and focus_manager.get_focused_panel and focus_manager.get_focused_panel() == "project_browser" then
+            if command_manager then
+                local result = command_manager.execute("ActivateBrowserSelection")
+                if not result.success then
+                    print(string.format("⚠️  ActivateBrowserSelection returned error: %s", result.error_message or "unknown"))
+                end
+            end
+            return true
+        end
     end
     return effective
 end

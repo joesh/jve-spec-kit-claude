@@ -5,6 +5,9 @@
 local M = {}
 local db = require("core.database")
 local ui_constants = require("core.ui_constants")
+local focus_manager = require("ui.focus_manager")
+local command_manager = require("core.command_manager")
+local command_scope = require("core.command_scope")
 
 local handler_seq = 0
 
@@ -21,6 +24,45 @@ M.item_lookup = {}
 M.media_map = {}
 M.selected_item = nil
 M.project_id = nil
+M.viewer_panel = nil
+
+local ACTIVATE_COMMAND = "ActivateBrowserSelection"
+
+local function activate_item(item_info)
+    if not item_info or type(item_info) ~= "table" then
+        return false, "No browser item selected"
+    end
+
+    if item_info.type == "timeline" then
+        if M.timeline_panel and M.timeline_panel.load_sequence then
+            M.timeline_panel.load_sequence(item_info.id)
+        else
+            print("⚠️  Timeline panel not available")
+        end
+
+        if M.viewer_panel then
+            if M.viewer_panel.show_timeline then
+                M.viewer_panel.show_timeline(item_info)
+            elseif M.viewer_panel.clear then
+                M.viewer_panel.clear()
+            end
+        end
+        return true
+    elseif item_info.type == "clip" then
+        local media = M.media_map[item_info.media_id]
+        if not media then
+            return false, "Media metadata missing"
+        end
+
+        if M.viewer_panel and M.viewer_panel.show_source_clip then
+            M.viewer_panel.show_source_clip(media)
+        end
+        focus_manager.set_focused_panel("viewer")
+        return true
+    end
+
+    return false, "Browser item type not supported"
+end
 
 local function store_tree_item(tree, tree_id, info)
     if not tree_id or not info then
@@ -145,7 +187,10 @@ local function populate_tree()
         store_tree_item(M.tree, tree_id, {
             type = "timeline",
             id = sequence.id,
-            name = sequence.name
+            name = sequence.name,
+            frame_rate = sequence.frame_rate,
+            width = sequence.width,
+            height = sequence.height
         })
         if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "timeline")
@@ -394,15 +439,10 @@ function M.create()
             return
         end
 
-        if item_info.type == "timeline" then
-            if M.timeline_panel and M.timeline_panel.load_sequence then
-                M.timeline_panel.load_sequence(item_info.id)
-            else
-                print("⚠️  Timeline panel not available")
-            end
-        elseif item_info.type == "clip" then
-            M.selected_item = item_info
-            M.insert_selected_to_timeline()
+        M.selected_item = item_info
+        local result = command_manager.execute(ACTIVATE_COMMAND)
+        if not result.success then
+            print(string.format("⚠️  ActivateBrowserSelection failed: %s", result.error_message or "unknown error"))
         end
     end)
     if qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER then
@@ -451,6 +491,10 @@ function M.set_timeline_panel(timeline_panel_mod)
         end
         qt_set_button_click_handler(M.insert_button, "project_browser_insert_handler")
     end
+end
+
+function M.set_viewer_panel(viewer_panel_mod)
+    M.viewer_panel = viewer_panel_mod
 end
 
 -- Get selected media item
@@ -525,5 +569,22 @@ function M.insert_selected_to_timeline()
         print(string.format("❌ Failed to insert: %s", result and result.error_message or "unknown"))
     end
 end
+
+function M.activate_selection()
+    if not M.selected_item then
+        return false, "No selection"
+    end
+    return activate_item(M.selected_item)
+end
+
+command_manager.register_executor(ACTIVATE_COMMAND, function()
+    local ok, err = M.activate_selection()
+    if not ok and err then
+        print(string.format("⚠️  %s", err))
+    end
+    return ok and true or false
+end)
+
+command_scope.register(ACTIVATE_COMMAND, {scope = "panel", panel_id = "project_browser"})
 
 return M
