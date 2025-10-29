@@ -35,6 +35,7 @@
 - **1.9**: Respect the Architecture - NEVER bypass existing abstractions (error system, widget registry, Lua API); ALWAYS use existing patterns - don't invent new approaches; If unsure, ask - don't guess and implement
 - **1.10**: Stay in Your Layer - Lua scripts call Qt bindings - never direct Qt; Use widget registry RAII handles - never manual memory management; Go through command dispatcher - never direct function calls
 - **1.11**: Never Change Architecture Without Permission - NEVER modify function calling patterns without explicit user approval; NEVER reorganize modules or interfaces without user consultation; NEVER replace one system with another without user decision; ALWAYS ask first before changing how components interact
+- **1.12**: External inputs must NEVER crash the system - all imported data (XML, DB, files) must be validated; degrade gracefully when metadata is missing; record warnings, extract whatever can be trusted, and keep the app running
 
 ### **2.x Development Standards**
 - **2.1**: Clear technical tone, no excessive enthusiasm/emojis
