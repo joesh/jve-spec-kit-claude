@@ -236,7 +236,8 @@ function M.load_clips(sequence_id)
                 label = extract_filename(media_path)
             end
             if label == nil or label == "" then
-                error(string.format("Clip %s missing media label (media_id=%s)", tostring(clip_id), tostring(query:value(2))))
+                label = clip_id and ("Clip " .. clip_id:sub(1, 8)) or ""
+                print(string.format("WARNING: Clip %s missing media metadata (media_id=%s); using generated label '%s'", tostring(clip_id), tostring(query:value(2)), label))
             end
 
             local clip = {
