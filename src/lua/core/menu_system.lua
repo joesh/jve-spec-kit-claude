@@ -508,11 +508,19 @@ local function create_action_callback(command_name, params)
                 return
             end
 
-            local selected_media = project_browser.get_selected_media()
-            if not selected_media then
+            local selected_clip = project_browser.get_selected_media()
+            if not selected_clip then
                 print("❌ INSERT: No media selected in project browser")
                 return
             end
+
+            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
+            if not media_id then
+                print("❌ INSERT: Selected clip missing media reference")
+                return
+            end
+
+            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local timeline_state = timeline_panel.get_state()
             local playhead_time = timeline_state.get_playhead_time()
@@ -527,20 +535,22 @@ local function create_action_callback(command_name, params)
             end
 
             local cmd = Command.create("Insert", project_id)
-            cmd:set_parameter("media_id", selected_media.id)
+            cmd:set_parameter("master_clip_id", selected_clip.clip_id)
+            cmd:set_parameter("media_id", media_id)
             cmd:set_parameter("sequence_id", sequence_id)
             cmd:set_parameter("track_id", track_id)
             cmd:set_parameter("insert_time", playhead_time)
-            cmd:set_parameter("duration", selected_media.duration)
+            cmd:set_parameter("duration", clip_duration)
             cmd:set_parameter("source_in", 0)
-            cmd:set_parameter("source_out", selected_media.duration)
+            cmd:set_parameter("source_out", clip_duration)
+            cmd:set_parameter("project_id", project_id)
             cmd:set_parameter("advance_playhead", true)
 
             local success, result = pcall(function()
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_media.name, playhead_time))
+                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_clip.name or media_id, playhead_time))
             else
                 print(string.format("❌ INSERT failed: %s", result and result.error_message or "unknown error"))
             end
@@ -560,11 +570,19 @@ local function create_action_callback(command_name, params)
                 return
             end
 
-            local selected_media = project_browser.get_selected_media()
-            if not selected_media then
+            local selected_clip = project_browser.get_selected_media()
+            if not selected_clip then
                 print("❌ OVERWRITE: No media selected in project browser")
                 return
             end
+
+            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
+            if not media_id then
+                print("❌ OVERWRITE: Selected clip missing media reference")
+                return
+            end
+
+            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local timeline_state = timeline_panel.get_state()
             local playhead_time = timeline_state.get_playhead_time()
@@ -579,20 +597,22 @@ local function create_action_callback(command_name, params)
             end
 
             local cmd = Command.create("Overwrite", project_id)
-            cmd:set_parameter("media_id", selected_media.id)
+            cmd:set_parameter("master_clip_id", selected_clip.clip_id)
+            cmd:set_parameter("media_id", media_id)
             cmd:set_parameter("sequence_id", sequence_id)
             cmd:set_parameter("track_id", track_id)
             cmd:set_parameter("overwrite_time", playhead_time)
-            cmd:set_parameter("duration", selected_media.duration)
+            cmd:set_parameter("duration", clip_duration)
             cmd:set_parameter("source_in", 0)
-            cmd:set_parameter("source_out", selected_media.duration)
+            cmd:set_parameter("source_out", clip_duration)
+            cmd:set_parameter("project_id", project_id)
             cmd:set_parameter("advance_playhead", true)
 
             local success, result = pcall(function()
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_media.name, playhead_time))
+                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_clip.name or media_id, playhead_time))
             else
                 print(string.format("❌ OVERWRITE failed: %s", result and result.error_message or "unknown error"))
             end

@@ -159,7 +159,7 @@ for _, statement in ipairs(schema_statements) do
 end
 
 exec_sql(db, "INSERT INTO projects VALUES ('default_project','Default',0,0,'{}')")
-exec_sql(db, "INSERT INTO sequences VALUES ('default_sequence','default_project','Default Timeline',30,1920,1080,0,0,'[]','[]',NULL)")
+exec_sql(db, "INSERT INTO sequences VALUES ('default_sequence','default_project','Default Timeline','timeline',30,1920,1080,0,0,'[]','[]',NULL)")
 
 command_manager.init(db)
 

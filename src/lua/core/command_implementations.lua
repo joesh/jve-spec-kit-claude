@@ -22,19 +22,39 @@ function M.register_commands(command_executors, command_undoers, db)
         end
         local Clip = require('models.clip')
         local clip = Clip.load_optional(state.id, db)
-        if not clip then
-            clip = Clip.create('Restored Clip', state.media_id)
-            clip.id = state.id
-        end
-        clip.track_id = state.track_id
-        clip.media_id = state.media_id
+    if not clip then
+        clip = Clip.create(state.name or 'Restored Clip', state.media_id, {
+            id = state.id,
+            project_id = state.project_id,
+            clip_kind = state.clip_kind,
+            track_id = state.track_id,
+            parent_clip_id = state.parent_clip_id,
+            owner_sequence_id = state.owner_sequence_id,
+            source_sequence_id = state.source_sequence_id,
+            start_time = state.start_time,
+            duration = state.duration,
+            source_in = state.source_in,
+            source_out = state.source_out,
+            enabled = state.enabled ~= false,
+            offline = state.offline,
+        })
+    else
+        clip.project_id = state.project_id or clip.project_id
+        clip.clip_kind = state.clip_kind or clip.clip_kind
+        clip.track_id = state.track_id or clip.track_id
+        clip.parent_clip_id = state.parent_clip_id
+        clip.owner_sequence_id = state.owner_sequence_id or clip.owner_sequence_id
+        clip.source_sequence_id = state.source_sequence_id or clip.source_sequence_id
         clip.start_time = state.start_time
         clip.duration = state.duration
         clip.source_in = state.source_in
         clip.source_out = state.source_out
         clip.enabled = state.enabled ~= false
-        clip:restore_without_occlusion(db)
+        clip.offline = state.offline or false
     end
+    clip.media_id = state.media_id
+    clip:restore_without_occlusion(db)
+end
 
     local function revert_occlusion_actions(actions)
         if not actions or #actions == 0 then
@@ -371,7 +391,7 @@ command_executors["ImportMedia"] = function(command)
 
     -- Use MediaReader to probe file and extract metadata
     local MediaReader = require("media.media_reader")
-    local media_id, err = MediaReader.import_media(file_path, db, project_id, existing_media_id)
+    local media_id, metadata, err = MediaReader.import_media(file_path, db, project_id, existing_media_id)
 
     if not media_id then
         print(string.format("ERROR: ImportMedia: Failed to import %s: %s", file_path, err or "unknown error"))
@@ -380,6 +400,172 @@ command_executors["ImportMedia"] = function(command)
 
     -- Store media_id for undo/redo
     command:set_parameter("media_id", media_id)
+    if metadata then
+        command:set_parameter("media_metadata", metadata)
+    end
+
+    local Sequence = require("models.sequence")
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+
+    local function extract_filename(path)
+        if not path then
+            return "Imported Media"
+        end
+        local name = path:match("([^/\\]+)$")
+        if not name or name == "" then
+            return path
+        end
+        return name
+    end
+
+    local duration_ms = 1000
+    if metadata and metadata.duration_ms and metadata.duration_ms > 0 then
+        duration_ms = math.floor(metadata.duration_ms + 0.5)
+    end
+    if duration_ms <= 0 then
+        duration_ms = 1000
+    end
+
+    local base_name = extract_filename(file_path)
+    local master_sequence_id = command:get_parameter("master_sequence_id")
+    local sequence = Sequence.create(base_name .. " (Source)", project_id,
+        metadata and metadata.video and metadata.video.frame_rate or 30.0,
+        metadata and metadata.video and metadata.video.width or 1920,
+        metadata and metadata.video and metadata.video.height or 1080,
+        {
+            id = master_sequence_id,
+            kind = "master",
+            timecode_start = 0
+        })
+    if not sequence then
+        print("ERROR: ImportMedia: Failed to create master sequence object")
+        return false
+    end
+    if not sequence:save(db) then
+        print("ERROR: ImportMedia: Failed to save master sequence")
+        return false
+    end
+    command:set_parameter("master_sequence_id", sequence.id)
+
+    -- Create or reuse internal tracks
+    local master_video_track_id = command:get_parameter("master_video_track_id")
+    local video_track = nil
+    if metadata and metadata.has_video then
+        video_track = Track.create_video("Video 1", sequence.id, {
+            id = master_video_track_id,
+            index = 1,
+            db = db
+        })
+        if not video_track or not video_track:save(db) then
+            print("ERROR: ImportMedia: Failed to create master video track")
+            return false
+        end
+        command:set_parameter("master_video_track_id", video_track.id)
+    else
+        command:set_parameter("master_video_track_id", nil)
+    end
+
+    local stored_audio_track_ids = command:get_parameter("master_audio_track_ids")
+    if type(stored_audio_track_ids) ~= "table" then
+        stored_audio_track_ids = {}
+    end
+    local audio_track_ids = {}
+    if metadata and metadata.has_audio then
+        local channels = metadata.audio and metadata.audio.channels or 1
+        if channels < 1 then
+            channels = 1
+        end
+        for channel = 1, channels do
+            local track = Track.create_audio(string.format("Audio %d", channel), sequence.id, {
+                id = stored_audio_track_ids[channel],
+                index = channel,
+                db = db
+            })
+            if not track or not track:save(db) then
+                print("ERROR: ImportMedia: Failed to create master audio track")
+                return false
+            end
+            audio_track_ids[channel] = track.id
+        end
+    end
+    command:set_parameter("master_audio_track_ids", audio_track_ids)
+
+    -- Create master clip entry referencing this sequence
+    local master_clip_id = command:get_parameter("master_clip_id")
+    local master_clip = Clip.create(base_name, media_id, {
+        id = master_clip_id,
+        project_id = project_id,
+        clip_kind = "master",
+        source_sequence_id = sequence.id,
+        start_time = 0,
+        duration = duration_ms,
+        source_in = 0,
+        source_out = duration_ms,
+        enabled = true,
+        offline = false
+    })
+    local ok_master, occlusion_actions = master_clip:save(db, {skip_occlusion = true})
+    if not ok_master then
+        print("ERROR: ImportMedia: Failed to persist master clip")
+        return false
+    end
+    command:set_parameter("master_clip_id", master_clip.id)
+    if occlusion_actions and #occlusion_actions > 0 then
+        print("WARNING: ImportMedia: Unexpected occlusion actions when saving master clip")
+    end
+
+    -- Populate internal source clips for tracks
+    if video_track then
+        local video_clip_id = command:get_parameter("master_video_clip_id")
+        local video_clip = Clip.create(master_clip.name .. " (Video)", media_id, {
+            id = video_clip_id,
+            project_id = project_id,
+            track_id = video_track.id,
+            parent_clip_id = master_clip.id,
+            owner_sequence_id = sequence.id,
+            start_time = 0,
+            duration = duration_ms,
+            source_in = 0,
+            source_out = duration_ms,
+            enabled = true,
+            offline = false
+        })
+        if not video_clip:save(db, {skip_occlusion = true}) then
+            print("ERROR: ImportMedia: Failed to create master video clip")
+            return false
+        end
+        command:set_parameter("master_video_clip_id", video_clip.id)
+    else
+        command:set_parameter("master_video_clip_id", nil)
+    end
+
+    local stored_audio_clip_ids = command:get_parameter("master_audio_clip_ids")
+    if type(stored_audio_clip_ids) ~= "table" then
+        stored_audio_clip_ids = {}
+    end
+    local audio_clip_ids = {}
+    for index, track_id in ipairs(audio_track_ids) do
+        local audio_clip = Clip.create(string.format("%s (Audio %d)", master_clip.name, index), media_id, {
+            id = stored_audio_clip_ids[index],
+            project_id = project_id,
+            track_id = track_id,
+            parent_clip_id = master_clip.id,
+            owner_sequence_id = sequence.id,
+            start_time = 0,
+            duration = duration_ms,
+            source_in = 0,
+            source_out = duration_ms,
+            enabled = true,
+            offline = false
+        })
+        if not audio_clip:save(db, {skip_occlusion = true}) then
+            print("ERROR: ImportMedia: Failed to create master audio clip")
+            return false
+        end
+        audio_clip_ids[index] = audio_clip.id
+    end
+    command:set_parameter("master_audio_clip_ids", audio_clip_ids)
 
     print(string.format("Imported media: %s with ID: %s", file_path, media_id))
     return true
@@ -393,6 +579,28 @@ command_undoers["ImportMedia"] = function(command)
     if not media_id or media_id == "" then
         print("WARNING: ImportMedia undo: No media_id found in command parameters")
         return false
+    end
+
+    -- Delete master clip (cascade removes nested clips)
+    local master_clip_id = command:get_parameter("master_clip_id")
+    if master_clip_id and master_clip_id ~= "" then
+        local clip_stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+        if clip_stmt then
+            clip_stmt:bind(1, master_clip_id)
+            clip_stmt:exec()
+            clip_stmt:finalize()
+        end
+    end
+
+    -- Delete master sequence (cascade removes tracks)
+    local master_sequence_id = command:get_parameter("master_sequence_id")
+    if master_sequence_id and master_sequence_id ~= "" then
+        local seq_stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
+        if seq_stmt then
+            seq_stmt:bind(1, master_sequence_id)
+            seq_stmt:exec()
+            seq_stmt:finalize()
+        end
     end
 
     -- Delete media from database
@@ -542,28 +750,66 @@ command_executors["CreateClip"] = function(command)
     local duration = command:get_parameter("duration")
     local source_in = command:get_parameter("source_in") or 0
     local source_out = command:get_parameter("source_out")
+    local master_clip_id = command:get_parameter("master_clip_id")
+    local project_id_param = command:get_parameter("project_id")
+
+    local Clip = require('models.clip')
+    local master_clip = nil
+    if master_clip_id and master_clip_id ~= "" then
+        master_clip = Clip.load_optional(master_clip_id, db)
+        if not master_clip then
+            print(string.format("WARNING: CreateClip: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
+            master_clip_id = nil
+        end
+    end
+
+    if master_clip and (not media_id or media_id == "") then
+        media_id = master_clip.media_id
+    end
 
     if not track_id or track_id == "" or not media_id or media_id == "" then
         print("WARNING: CreateClip: Missing required parameters")
         return false
     end
 
-    if not duration or not source_out then
-        print("WARNING: CreateClip: Missing duration or source_out")
+    if master_clip then
+        if not duration or duration <= 0 then
+            duration = master_clip.duration or ((master_clip.source_out or 0) - (master_clip.source_in or 0))
+        end
+        if not source_out or source_out <= source_in then
+            source_in = master_clip.source_in or source_in
+            source_out = master_clip.source_out or (master_clip.duration or 0)
+        end
+    end
+
+    if not duration or duration <= 0 or not source_out or source_out <= source_in then
+        print("WARNING: CreateClip: Missing or invalid duration/source range")
         return false
     end
 
-    local Clip = require('models.clip')
-    local clip = Clip.create("Timeline Clip", media_id)
-
-    -- Set all clip parameters from command
-    clip.track_id = track_id
-    clip.start_time = start_time
-    clip.duration = duration
-    clip.source_in = source_in
-    clip.source_out = source_out
+    local clip = Clip.create("Timeline Clip", media_id, {
+        project_id = project_id_param or (master_clip and master_clip.project_id),
+        track_id = track_id,
+        owner_sequence_id = command:get_parameter("sequence_id"),
+        parent_clip_id = master_clip_id,
+        source_sequence_id = master_clip and master_clip.source_sequence_id,
+        start_time = start_time,
+        duration = duration,
+        source_in = source_in,
+        source_out = source_out,
+        enabled = true,
+        offline = master_clip and master_clip.offline,
+    })
 
     command:set_parameter("clip_id", clip.id)
+    if master_clip_id and master_clip_id ~= "" then
+        command:set_parameter("master_clip_id", master_clip_id)
+    end
+    if project_id_param then
+        command:set_parameter("project_id", project_id_param)
+    elseif master_clip and master_clip.project_id then
+        command:set_parameter("project_id", master_clip.project_id)
+    end
 
     if clip:save(db) then
         print(string.format("Created clip with ID: %s on track %s at %dms", clip.id, track_id, start_time))
@@ -632,14 +878,62 @@ command_executors["InsertClipToTimeline"] = function(command)
     end
 
     local Clip = require('models.clip')
-    local clip = Clip.create("Clip", media_id)
-    clip.track_id = track_id
-    clip.start_time = start_time
-    clip.duration = media_duration
-    clip.source_in = 0
-    clip.source_out = media_duration
+    local master_clip_id = command:get_parameter("master_clip_id")
+    local project_id_param = command:get_parameter("project_id")
+    local master_clip = nil
+
+    if master_clip_id and master_clip_id ~= "" then
+        master_clip = Clip.load_optional(master_clip_id, db)
+        if not master_clip then
+            print(string.format("WARNING: InsertClipToTimeline: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
+            master_clip_id = nil
+        end
+    end
+
+    if master_clip and (not media_id or media_id == "") then
+        media_id = master_clip.media_id
+    end
+
+    if not media_id or media_id == "" then
+        print("WARNING: InsertClipToTimeline: Missing media_id after resolving master clip")
+        return false
+    end
+
+    local duration = media_duration
+    local source_in = 0
+    local source_out = media_duration
+    if master_clip then
+        duration = master_clip.duration or ((master_clip.source_out or 0) - (master_clip.source_in or 0)) or media_duration
+        source_in = master_clip.source_in or 0
+        source_out = master_clip.source_out or (source_in + duration)
+        if duration <= 0 then
+            duration = media_duration
+        end
+    end
+
+    local clip = Clip.create("Clip", media_id, {
+        project_id = project_id_param or (master_clip and master_clip.project_id),
+        track_id = track_id,
+        owner_sequence_id = command:get_parameter("sequence_id"),
+        parent_clip_id = master_clip_id,
+        source_sequence_id = master_clip and master_clip.source_sequence_id,
+        start_time = start_time,
+        duration = duration,
+        source_in = source_in,
+        source_out = source_out,
+        enabled = true,
+        offline = master_clip and master_clip.offline,
+    })
 
     command:set_parameter("clip_id", clip.id)
+    if master_clip_id and master_clip_id ~= "" then
+        command:set_parameter("master_clip_id", master_clip_id)
+    end
+    if project_id_param then
+        command:set_parameter("project_id", project_id_param)
+    elseif master_clip and master_clip.project_id then
+        command:set_parameter("project_id", master_clip.project_id)
+    end
 
     if clip:save(db) then
         print(string.format("✅ Inserted clip %s to track %s at time %d", clip.id, track_id, start_time))
@@ -765,16 +1059,23 @@ command_executors["SplitClip"] = function(command)
     -- Create second clip (right side of split)
     -- IMPORTANT: Reuse second_clip_id if this is a replay (deterministic replay for event sourcing)
     local existing_second_clip_id = command:get_parameter("second_clip_id")
-    local second_clip = Clip.create(original_clip.name .. " (2)", original_clip.media_id)
+    local second_clip = Clip.create(original_clip.name .. " (2)", original_clip.media_id, {
+        project_id = original_clip.project_id,
+        track_id = original_clip.track_id,
+        owner_sequence_id = original_clip.owner_sequence_id,
+        parent_clip_id = original_clip.parent_clip_id,
+        source_sequence_id = original_clip.source_sequence_id,
+        start_time = split_time,
+        duration = second_duration,
+        source_in = source_split_point,
+        source_out = original_clip.source_out,
+        enabled = original_clip.enabled,
+        offline = original_clip.offline,
+        clip_kind = original_clip.clip_kind,
+    })
     if existing_second_clip_id then
         second_clip.id = existing_second_clip_id  -- Reuse ID from original execution
     end
-    second_clip.track_id = original_clip.track_id
-    second_clip.start_time = split_time
-    second_clip.duration = second_duration
-    second_clip.source_in = source_split_point
-    second_clip.source_out = original_clip.source_out
-    second_clip.enabled = original_clip.enabled
 
     -- DRY RUN: Return preview data without executing
     if dry_run then
@@ -904,20 +1205,49 @@ command_executors["Insert"] = function(command)
         print("Executing Insert command")
     end
 
+    local Clip = require('models.clip')
+
     local media_id = command:get_parameter("media_id")
     local track_id = command:get_parameter("track_id")
     local insert_time = command:get_parameter("insert_time")
     local duration = command:get_parameter("duration")
     local source_in = command:get_parameter("source_in") or 0
     local source_out = command:get_parameter("source_out")
+    local master_clip_id = command:get_parameter("master_clip_id")
+    local project_id_param = command:get_parameter("project_id")
+
+    local master_clip = nil
+    if master_clip_id and master_clip_id ~= "" then
+        master_clip = Clip.load_optional(master_clip_id, db)
+        if not master_clip then
+            print(string.format("WARNING: Insert: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
+            master_clip_id = nil
+        end
+    end
+
+    if master_clip then
+        if (not media_id or media_id == "") and master_clip.media_id then
+            media_id = master_clip.media_id
+        end
+        if not duration or duration <= 0 then
+            local master_duration = master_clip.duration or ((master_clip.source_out or 0) - (master_clip.source_in or 0))
+            duration = master_duration
+        end
+        if not source_out or source_out <= source_in then
+            local master_source_in = master_clip.source_in or source_in
+            local master_source_out = master_clip.source_out or (master_clip.duration or 0)
+            source_in = master_source_in
+            source_out = master_source_out
+        end
+    end
 
     if not media_id or media_id == "" or not track_id or track_id == "" then
         print("WARNING: Insert: Missing media_id or track_id")
         return false
     end
 
-    if not insert_time or not duration or not source_out then
-        print("WARNING: Insert: Missing insert_time, duration, or source_out")
+    if not insert_time or not duration or duration <= 0 or not source_out then
+        print("WARNING: Insert: Missing or invalid insert_time, duration, or source_out")
         return false
     end
 
@@ -996,7 +1326,6 @@ command_executors["Insert"] = function(command)
     end
 
     -- EXECUTE: Ripple clips forward
-    local Clip = require('models.clip')
     for _, clip_info in ipairs(clips_to_ripple) do
         local clip = Clip.load_optional(clip_info.id, db)
         if not clip then
@@ -1027,17 +1356,32 @@ command_executors["Insert"] = function(command)
     -- Step 2: Create the new clip at insert_time
     -- Reuse clip_id if this is a replay (to preserve selection references)
     local existing_clip_id = command:get_parameter("clip_id")
-    local clip = Clip.create("Inserted Clip", media_id)
-    if existing_clip_id then
-        clip.id = existing_clip_id  -- Reuse existing ID for replay
-    end
-    clip.track_id = track_id
-    clip.start_time = insert_time
-    clip.duration = duration
-    clip.source_in = source_in
-    clip.source_out = source_out
+    local clip_name = (master_clip and master_clip.name) or "Inserted Clip"
+    local clip_opts = {
+        id = existing_clip_id,
+        project_id = project_id_param or (master_clip and master_clip.project_id),
+        track_id = track_id,
+        owner_sequence_id = sequence_id,
+        parent_clip_id = master_clip_id,
+        source_sequence_id = master_clip and master_clip.source_sequence_id,
+        start_time = insert_time,
+        duration = duration,
+        source_in = source_in,
+        source_out = source_out,
+        enabled = true,
+        offline = master_clip and master_clip.offline,
+    }
+    local clip = Clip.create(clip_name, media_id, clip_opts)
 
     command:set_parameter("clip_id", clip.id)
+    if master_clip_id and master_clip_id ~= "" then
+        command:set_parameter("master_clip_id", master_clip_id)
+    end
+    if project_id_param then
+        command:set_parameter("project_id", project_id_param)
+    elseif master_clip and master_clip.project_id then
+        command:set_parameter("project_id", master_clip.project_id)
+    end
 
     if clip:save(db) then
         -- Advance playhead to end of inserted clip (if requested)
@@ -1069,14 +1413,40 @@ command_executors["Overwrite"] = function(command)
     local duration = command:get_parameter("duration")
     local source_in = command:get_parameter("source_in") or 0
     local source_out = command:get_parameter("source_out")
+    local master_clip_id = command:get_parameter("master_clip_id")
+    local project_id_param = command:get_parameter("project_id")
+
+    local Clip = require('models.clip')
+    local master_clip = nil
+    if master_clip_id and master_clip_id ~= "" then
+        master_clip = Clip.load_optional(master_clip_id, db)
+        if not master_clip then
+            print(string.format("WARNING: Overwrite: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
+            master_clip_id = nil
+        end
+    end
+
+    if master_clip and (not media_id or media_id == "") then
+        media_id = master_clip.media_id
+    end
 
     if not media_id or media_id == "" or not track_id or track_id == "" then
         print("WARNING: Overwrite: Missing media_id or track_id")
         return false
     end
 
-    if not overwrite_time or not duration or not source_out then
-        print("WARNING: Overwrite: Missing overwrite_time, duration, or source_out")
+    if master_clip then
+        if not duration or duration <= 0 then
+            duration = master_clip.duration or ((master_clip.source_out or 0) - (master_clip.source_in or 0))
+        end
+        if not source_out or source_out <= source_in then
+            source_in = master_clip.source_in or source_in
+            source_out = master_clip.source_out or (source_in + duration)
+        end
+    end
+
+    if not overwrite_time or not duration or duration <= 0 or not source_out or source_out <= source_in then
+        print("WARNING: Overwrite: Missing or invalid overwrite_time, duration, or source range")
         return false
     end
 
@@ -1126,21 +1496,32 @@ command_executors["Overwrite"] = function(command)
         return true, {affected_clips = overlapping}
     end
 
-    local Clip = require('models.clip')
     local existing_clip_id = command:get_parameter("clip_id")
-    local clip = Clip.create("Overwrite Clip", media_id)
-    if existing_clip_id then
-        clip.id = existing_clip_id  -- Reuse existing ID for replay
-    elseif reuse_clip_id then
-        clip.id = reuse_clip_id  -- Preserve identity for downstream commands
-    end
-    clip.track_id = track_id
-    clip.start_time = overwrite_time
-    clip.duration = duration
-    clip.source_in = source_in
-    clip.source_out = source_out
+    local clip_opts = {
+        id = existing_clip_id or reuse_clip_id,
+        project_id = project_id_param or (master_clip and master_clip.project_id),
+        track_id = track_id,
+        owner_sequence_id = command:get_parameter("sequence_id"),
+        parent_clip_id = master_clip_id,
+        source_sequence_id = master_clip and master_clip.source_sequence_id,
+        start_time = overwrite_time,
+        duration = duration,
+        source_in = source_in,
+        source_out = source_out,
+        enabled = true,
+        offline = master_clip and master_clip.offline,
+    }
+    local clip = Clip.create("Overwrite Clip", media_id, clip_opts)
 
     command:set_parameter("clip_id", clip.id)
+    if master_clip_id and master_clip_id ~= "" then
+        command:set_parameter("master_clip_id", master_clip_id)
+    end
+    if project_id_param then
+        command:set_parameter("project_id", project_id_param)
+    elseif master_clip and master_clip.project_id then
+        command:set_parameter("project_id", master_clip.project_id)
+    end
 
     if clip:save(db) then
         -- Advance playhead to end of overwritten clip (if requested)

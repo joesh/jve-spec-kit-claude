@@ -43,7 +43,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     local inserts = {
         "INSERT INTO projects VALUES ('default_project','Test',0,0,'{}')",
-        "INSERT INTO sequences VALUES ('default_sequence','default_project','Seq',30,1920,1080,0,0,'[]','[]',NULL)"
+        "INSERT INTO sequences VALUES ('default_sequence','default_project','Seq','timeline',30,1920,1080,0,0,'[]','[]',NULL)"
     }
 
     for _, track in ipairs(layout.tracks) do
@@ -62,7 +62,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     for _, clip in ipairs(layout.clips) do
         table.insert(inserts, string.format(
-            "INSERT INTO clips VALUES ('%s','%s','%s',%d,%d,%d,%d,1)",
+            "INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id, start_time, duration, source_in, source_out, enabled, offline) VALUES ('%s','default_project','timeline','', '%s','%s',NULL,NULL,'default_sequence',%d,%d,%d,%d,1,0)",
             clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration,
             clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration
         ))

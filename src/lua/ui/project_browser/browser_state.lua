@@ -28,39 +28,53 @@ local function decode_metadata(raw)
     return {}
 end
 
-local function normalize_media(item, context)
+local function normalize_master_clip(item, context)
     context = context or {}
-    local media = nil
+    local clip = nil
 
-    if context.media_lookup and item.media_id then
-        media = context.media_lookup[item.media_id]
+    if context.master_lookup and item.clip_id then
+        clip = context.master_lookup[item.clip_id]
     end
 
-    if not media and type(item.media) == "table" then
-        media = item.media
+    if not clip and context.master_lookup and item.media_id then
+        clip = context.master_lookup[item.media_id]
     end
 
-    if not media then
+    if not clip and type(item.clip) == "table" then
+        clip = item.clip
+    end
+
+    if not clip then
         return nil
     end
 
-    local duration = tonumber(media.duration) or 0
+    local media = clip.media
+    if not media and context.media_lookup and clip.media_id then
+        media = context.media_lookup[clip.media_id]
+    end
+
+    local duration = tonumber(clip.duration or (media and media.duration) or 0) or 0
+    local source_in = tonumber(clip.source_in) or 0
+    local source_out = tonumber(clip.source_out) or duration
 
     return {
-        id = media.id,
-        media_id = media.id,
-        name = media.name or media.file_name or media.id,
+        id = clip.clip_id,
+        clip_id = clip.clip_id,
+        media_id = clip.media_id,
+        name = clip.name or (media and media.name) or clip.clip_id,
         duration = duration,
-        start_time = 0,
-        source_in = 0,
-        source_out = duration,
-        frame_rate = media.frame_rate or 0,
-        width = media.width or 0,
-        height = media.height or 0,
-        codec = media.codec,
-        file_path = media.file_path,
-        metadata = decode_metadata(media.metadata),
-        item_type = "media",
+        start_time = source_in,
+        source_in = source_in,
+        source_out = source_out,
+        frame_rate = clip.frame_rate or (media and media.frame_rate) or 0,
+        width = clip.width or (media and media.width) or 0,
+        height = clip.height or (media and media.height) or 0,
+        codec = clip.codec or (media and media.codec),
+        file_path = clip.file_path or (media and media.file_path),
+        metadata = decode_metadata(media and media.metadata),
+        offline = clip.offline,
+        master_sequence_id = clip.source_sequence_id,
+        item_type = "master_clip",
         view = "project_browser",
     }
 end
@@ -106,10 +120,10 @@ function M.normalize_selection(raw_items, context)
 
     local normalized = {}
     for _, item in ipairs(raw_items) do
-        if item and item.type == "clip" then
-            local media_entry = normalize_media(item, context)
-            if media_entry then
-                table.insert(normalized, media_entry)
+        if item and (item.type == "clip" or item.type == "master_clip") then
+            local clip_entry = normalize_master_clip(item, context)
+            if clip_entry then
+                table.insert(normalized, clip_entry)
             end
         elseif item and item.type == "timeline" then
             local timeline_entry = normalize_timeline(item, context)

@@ -93,10 +93,14 @@ function M.ensure_media_record(media_id)
                 local project_id = args.project_id or "default_project"
                 if file_path and project_id then
                     local MediaReader = require('media.media_reader')
-                    local new_id, err = MediaReader.import_media(file_path, db_connection, project_id, media_id)
+                    local new_id, _, import_err = MediaReader.import_media(file_path, db_connection, project_id, media_id)
                     if new_id == media_id then
                         restored = true
                         break
+                    else
+                        if import_err then
+                            print("WARNING: ensure_media_record: failed to reimport media: " .. tostring(import_err))
+                        end
                     end
                 end
             end
@@ -201,8 +205,9 @@ function M.load_clips(sequence_id)
     end
 
     local query = db_connection:prepare([[
-        SELECT c.id, c.track_id, c.media_id, c.start_time, c.duration,
-               c.source_in, c.source_out, c.enabled,
+        SELECT c.id, c.clip_kind, c.name, c.track_id, c.media_id,
+               c.parent_clip_id, c.owner_sequence_id, c.start_time, c.duration,
+               c.source_in, c.source_out, c.enabled, c.offline,
                m.name, m.file_path
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
@@ -229,8 +234,8 @@ function M.load_clips(sequence_id)
     if query:exec() then
         while query:next() do
             local clip_id = query:value(0)
-            local media_name = query:value(8)
-            local media_path = query:value(9)
+            local media_name = query:value(13)
+            local media_path = query:value(14)
             local label = media_name
             if label == nil or label == "" then
                 label = extract_filename(media_path)
@@ -242,18 +247,33 @@ function M.load_clips(sequence_id)
 
             local clip = {
                 id = clip_id,
-                track_id = query:value(1),
-                media_id = query:value(2),
-                start_time = query:value(3),
-                duration = query:value(4),
-                source_in = query:value(5),
-                source_out = query:value(6),
-                enabled = query:value(7) == 1,
-                name = "Clip " .. (clip_id and clip_id:sub(1, 8) or ""),
+                clip_kind = query:value(1),
+                name = query:value(2),
+                track_id = query:value(3),
+                media_id = query:value(4),
+                parent_clip_id = query:value(5),
+                owner_sequence_id = query:value(6),
+                start_time = query:value(7),
+                duration = query:value(8),
+                source_in = query:value(9),
+                source_out = query:value(10),
+                enabled = query:value(11) == 1,
+                offline = query:value(12) == 1,
                 media_name = media_name,
                 media_path = media_path,
                 label = label
             }
+            if not clip.name or clip.name == "" then
+                clip.name = "Clip " .. (clip_id and clip_id:sub(1, 8) or "")
+            end
+            local display_label = clip.name
+            if (not display_label or display_label == "") and media_name and media_name ~= "" then
+                display_label = media_name
+            end
+            if (not display_label or display_label == "") and label and label ~= "" then
+                display_label = label
+            end
+            clip.label = display_label
             table.insert(clips, clip)
         end
     end
@@ -282,7 +302,7 @@ function M.update_clip_position(clip_id, start_time, duration)
 
     local query = db_connection:prepare([[
         UPDATE clips
-        SET start_time = ?, duration = ?
+        SET start_time = ?, duration = ?, modified_at = strftime('%s','now')
         WHERE id = ?
     ]])
 
@@ -354,6 +374,154 @@ function M.load_media()
     return media_items
 end
 
+function M.load_master_clips(project_id)
+    project_id = project_id or M.get_current_project_id()
+
+    if not db_connection then
+        error("FATAL: No database connection - cannot load master clips")
+    end
+
+    local query = db_connection:prepare([[
+        SELECT
+            c.id,
+            c.name,
+            c.project_id,
+            c.media_id,
+            c.source_sequence_id,
+            c.duration,
+            c.source_in,
+            c.source_out,
+            c.enabled,
+            c.offline,
+            c.created_at,
+            c.modified_at,
+            m.project_id,
+            m.name,
+            m.file_path,
+            m.duration,
+            m.frame_rate,
+            m.width,
+            m.height,
+            m.audio_channels,
+            m.codec,
+            m.metadata,
+            m.created_at,
+            m.modified_at,
+            s.project_id,
+            s.frame_rate,
+            s.width,
+            s.height
+        FROM clips c
+        LEFT JOIN media m ON c.media_id = m.id
+        LEFT JOIN sequences s ON c.source_sequence_id = s.id
+        WHERE c.clip_kind = 'master'
+          AND (
+                (c.project_id IS NOT NULL AND c.project_id = ?)
+                OR (c.project_id IS NULL AND (s.project_id = ? OR s.project_id IS NULL))
+            )
+        ORDER BY c.name
+    ]])
+
+    if not query then
+        error("FATAL: Failed to prepare master clip query")
+    end
+
+    query:bind_value(1, project_id)
+    query:bind_value(2, project_id)
+
+    local clips = {}
+    if query:exec() then
+        while query:next() do
+            local clip_id = query:value(0)
+            local clip_name = query:value(1)
+            local clip_project_id = query:value(2)
+            local media_id = query:value(3)
+            local source_sequence_id = query:value(4)
+            local duration = query:value(5)
+            local source_in = query:value(6) or 0
+            local source_out = query:value(7) or duration
+            local enabled = query:value(8) == 1
+            local offline = query:value(9) == 1
+            local created_at = query:value(10)
+            local modified_at = query:value(11)
+
+            local media_project_id = query:value(12)
+            local media_name = query:value(13)
+            local media_path = query:value(14)
+            local media_duration = query:value(15)
+            local media_frame_rate = query:value(16)
+            local media_width = query:value(17)
+            local media_height = query:value(18)
+            local media_channels = query:value(19)
+            local media_codec = query:value(20)
+            local media_metadata = query:value(21)
+            local media_created_at = query:value(22)
+            local media_modified_at = query:value(23)
+
+            local sequence_project_id = query:value(24)
+            local sequence_frame_rate = query:value(25)
+            local sequence_width = query:value(26)
+            local sequence_height = query:value(27)
+
+            local media_info = {
+                id = media_id,
+                project_id = media_project_id,
+                name = media_name,
+                file_name = media_name,
+                file_path = media_path,
+                duration = media_duration,
+                frame_rate = media_frame_rate,
+                width = media_width,
+                height = media_height,
+                audio_channels = media_channels,
+                codec = media_codec,
+                metadata = media_metadata,
+                created_at = media_created_at,
+                modified_at = media_modified_at,
+            }
+
+            local sequence_info = {
+                id = source_sequence_id,
+                project_id = sequence_project_id,
+                frame_rate = sequence_frame_rate,
+                width = sequence_width,
+                height = sequence_height,
+            }
+
+            local clip_entry = {
+                clip_id = clip_id,
+                project_id = clip_project_id or media_project_id or sequence_project_id,
+                name = clip_name or (media_name or clip_id),
+                media_id = media_id,
+                source_sequence_id = source_sequence_id,
+                duration = duration,
+                source_in = source_in,
+                source_out = source_out,
+                enabled = enabled,
+                offline = offline,
+                created_at = created_at,
+                modified_at = modified_at,
+                media = media_info,
+                sequence = sequence_info,
+            }
+
+            -- Convenience fields for consumers
+            clip_entry.file_path = media_path
+            clip_entry.frame_rate = media_frame_rate or sequence_frame_rate
+            clip_entry.width = media_width or sequence_width
+            clip_entry.height = media_height or sequence_height
+            clip_entry.codec = media_codec
+
+            table.insert(clips, clip_entry)
+        end
+    end
+
+    query:finalize()
+
+    print(string.format("Loaded %d master clips from database", #clips))
+    return clips
+end
+
 function M.load_sequences(project_id)
     project_id = project_id or M.get_current_project_id()
     if not db_connection then
@@ -362,7 +530,7 @@ function M.load_sequences(project_id)
     end
 
     local sequences = {}
-    local query = db_connection:prepare([[SELECT id, name, frame_rate, width, height, playhead_time FROM sequences WHERE project_id = ? ORDER BY name]])
+    local query = db_connection:prepare([[SELECT id, name, kind, frame_rate, width, height, playhead_time FROM sequences WHERE project_id = ? ORDER BY name]])
     if not query then
         print("WARNING: load_sequences: Failed to prepare query")
         return sequences
@@ -374,10 +542,11 @@ function M.load_sequences(project_id)
             table.insert(sequences, {
                 id = query:value(0),
                 name = query:value(1),
-                frame_rate = query:value(2),
-                width = query:value(3),
-                height = query:value(4),
-                playhead_time = query:value(5),
+                kind = query:value(2),
+                frame_rate = query:value(3),
+                width = query:value(4),
+                height = query:value(5),
+                playhead_time = query:value(6),
             })
         end
     end

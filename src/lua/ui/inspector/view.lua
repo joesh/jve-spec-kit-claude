@@ -33,6 +33,8 @@ local M = {
   _content_widget = nil,  -- The content widget that holds all sections (for redraws)
   _widgets_initialized = false, -- Track if widgets have been created
   _suppress_field_updates_depth = 0,
+  _schemas_active = false, -- Whether schema sections should be interactive/visible
+  _sections_visible_state = nil, -- Tracks last visibility applied to schema sections
 }
 
 local function suppress_field_updates()
@@ -47,6 +49,18 @@ end
 
 local function field_updates_suppressed()
   return (M._suppress_field_updates_depth or 0) > 0
+end
+
+local function set_sections_visible(visible)
+  for _, section_data in pairs(M._sections) do
+    if section_data.widget then
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, section_data.widget, visible)
+    end
+  end
+  M._sections_visible_state = visible
+  if M._content_widget then
+    pcall(qt_update_widget, M._content_widget)
+  end
 end
 
 local function reset_all_fields()
@@ -902,6 +916,11 @@ function M.apply_search_filter(query)
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Applying search filter: '" .. search_text .. "'")
 
+  if not M._schemas_active then
+    set_sections_visible(false)
+    return
+  end
+
   -- If empty search, show all sections
   if search_text == "" then
     for section_name, section_data in pairs(M._sections) do
@@ -1261,6 +1280,11 @@ function M.update_selection(selected_items, source_panel)
   selected_items = selected_items or {}
   source_panel = source_panel or "timeline"
 
+  if source_panel == "inspector" then
+    logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Ignoring inspector-origin selection update")
+    return
+  end
+
   if source_panel ~= "timeline" then
     logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
       string.format("[inspector][view] Selection from %s (%d item(s))", source_panel, #selected_items))
@@ -1268,6 +1292,8 @@ function M.update_selection(selected_items, source_panel)
     M._current_clip = nil
     M._selected_clips = {}
     M._multi_edit_mode = false
+    M._schemas_active = false
+    set_sections_visible(false)
     reset_all_fields()
     if M._apply_button then
       pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
@@ -1280,8 +1306,14 @@ function M.update_selection(selected_items, source_panel)
           label_text = "Project Browser: No selection"
         elseif #selected_items == 1 then
           local item = selected_items[1]
-          if item.item_type == "media" then
-            label_text = string.format("Project Browser Media:\n%s", item.name or item.file_name or item.media_id or "Untitled")
+          if item.item_type == "media" or item.item_type == "master_clip" then
+            local descriptor = item.offline and "(Offline)" or ""
+            local display_name = item.name or item.file_name or item.media_id or item.clip_id or "Untitled"
+            if descriptor ~= "" then
+              label_text = string.format("Project Browser Clip:\n%s %s", display_name, descriptor)
+            else
+              label_text = string.format("Project Browser Clip:\n%s", display_name)
+            end
           elseif item.item_type == "timeline" then
             label_text = string.format("Project Browser Timeline:\n%s", item.name or item.id or "Untitled")
           else
@@ -1340,17 +1372,25 @@ function M.update_selection(selected_items, source_panel)
         pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
       end
 
+      M._schemas_active = true
+      set_sections_visible(true)
+      M.apply_search_filter(M._filter)
       M.load_clip_data(clip)
     elseif #selected_clips > 1 then
       label_text = string.format("Timeline: %d clips selected", #selected_clips)
       logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Multiple clips selected")
 
+      M._schemas_active = true
+      set_sections_visible(true)
+      M.apply_search_filter(M._filter)
       M.load_multi_clip_data(selected_clips)
     else
       label_text = "Timeline: No clip selected"
       logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No timeline selection")
       M._current_clip = nil
       M._multi_edit_mode = false
+      M._schemas_active = false
+      set_sections_visible(false)
       if M._apply_button then
         pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
       end

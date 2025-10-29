@@ -53,6 +53,7 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         id = opts.id or uuid.generate(),
         project_id = project_id,
         name = name,
+        kind = opts.kind or "timeline",
         frame_rate = fr,
         width = w,
         height = h,
@@ -76,7 +77,7 @@ function Sequence.load(id, db)
     end
 
     local stmt = conn:prepare([[
-        SELECT id, project_id, name, frame_rate, width, height, timecode_start
+        SELECT id, project_id, name, kind, frame_rate, width, height, timecode_start
         FROM sequences WHERE id = ?
     ]])
 
@@ -101,10 +102,11 @@ function Sequence.load(id, db)
         id = stmt:value(0),
         project_id = stmt:value(1),
         name = stmt:value(2),
-        frame_rate = stmt:value(3),
-        width = stmt:value(4),
-        height = stmt:value(5),
-        timecode_start = stmt:value(6) or 0,
+        kind = stmt:value(3),
+        frame_rate = stmt:value(4),
+        width = stmt:value(5),
+        height = stmt:value(6),
+        timecode_start = stmt:value(7) or 0,
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -132,8 +134,8 @@ function Sequence:save(db)
 
     local stmt = conn:prepare([[
         INSERT OR REPLACE INTO sequences
-        (id, project_id, name, frame_rate, width, height, timecode_start)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, project_id, name, kind, frame_rate, width, height, timecode_start)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ]])
 
     if not stmt then
@@ -145,10 +147,11 @@ function Sequence:save(db)
     stmt:bind_value(1, self.id)
     stmt:bind_value(2, self.project_id)
     stmt:bind_value(3, self.name)
-    stmt:bind_value(4, self.frame_rate)
-    stmt:bind_value(5, self.width)
-    stmt:bind_value(6, self.height)
-    stmt:bind_value(7, self.timecode_start or 0)
+    stmt:bind_value(4, self.kind or "timeline")
+    stmt:bind_value(5, self.frame_rate)
+    stmt:bind_value(6, self.width)
+    stmt:bind_value(7, self.height)
+    stmt:bind_value(8, self.timecode_start or 0)
 
     local ok = stmt:exec()
     if not ok then

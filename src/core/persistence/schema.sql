@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS sequences (
     id TEXT PRIMARY KEY,                    -- UUID
     project_id TEXT NOT NULL,
     name TEXT NOT NULL CHECK(length(name) > 0),
+    kind TEXT NOT NULL DEFAULT 'timeline' CHECK(kind IN ('timeline', 'master', 'compound')),
     frame_rate REAL NOT NULL CHECK(frame_rate > 0),
     width INTEGER NOT NULL CHECK(width > 0),
     height INTEGER NOT NULL CHECK(height > 0),
@@ -88,16 +89,29 @@ CREATE TABLE IF NOT EXISTS media (
 -- Clips table: Media references with timeline position and properties
 CREATE TABLE IF NOT EXISTS clips (
     id TEXT PRIMARY KEY,                    -- UUID
+    project_id TEXT,                        -- Owning project (NULL when derived from track/sequence)
+    clip_kind TEXT NOT NULL DEFAULT 'timeline' CHECK(clip_kind IN ('timeline', 'master', 'generated')),
+    name TEXT DEFAULT '',                   -- Display name
     track_id TEXT,                          -- NULL when clip not yet on timeline
     media_id TEXT,                          -- NULL for generated clips (bars, tone, etc.)
+    source_sequence_id TEXT,                -- For clips whose source is another sequence (compound/master)
+    parent_clip_id TEXT,                    -- Master clip that this placement references
+    owner_sequence_id TEXT,                 -- Sequence that directly owns this clip (if not derivable from track)
     start_time INTEGER NOT NULL CHECK(start_time >= 0),
     duration INTEGER NOT NULL CHECK(duration > 0),
     source_in INTEGER NOT NULL DEFAULT 0 CHECK(source_in >= 0),
     source_out INTEGER NOT NULL CHECK(source_out > source_in),
     enabled BOOLEAN NOT NULL DEFAULT 1,
+    offline BOOLEAN NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    modified_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE,
-    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE SET NULL
+    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE SET NULL,
+    FOREIGN KEY (source_sequence_id) REFERENCES sequences(id) ON DELETE SET NULL,
+    FOREIGN KEY (parent_clip_id) REFERENCES clips(id) ON DELETE CASCADE,
+    FOREIGN KEY (owner_sequence_id) REFERENCES sequences(id) ON DELETE CASCADE
 );
 
 -- Properties table: Clip instance settings with validation and undo
@@ -176,6 +190,9 @@ CREATE INDEX IF NOT EXISTS idx_sequences_project ON sequences(project_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_sequence ON tracks(sequence_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track ON clips(track_id);
 CREATE INDEX IF NOT EXISTS idx_clips_media ON clips(media_id);
+CREATE INDEX IF NOT EXISTS idx_clips_parent ON clips(parent_clip_id);
+CREATE INDEX IF NOT EXISTS idx_clips_owner_sequence ON clips(owner_sequence_id);
+CREATE INDEX IF NOT EXISTS idx_clips_source_sequence ON clips(source_sequence_id);
 CREATE INDEX IF NOT EXISTS idx_properties_clip ON properties(clip_id);
 CREATE INDEX IF NOT EXISTS idx_commands_sequence ON commands(sequence_number);
 CREATE INDEX IF NOT EXISTS idx_commands_parent_sequence ON commands(parent_sequence_number);

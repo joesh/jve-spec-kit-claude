@@ -183,7 +183,7 @@ function M.import_media(file_path, db, project_id, existing_media_id)
     -- Probe file first
     local metadata, err = M.probe_file(file_path)
     if not metadata then
-        return nil, "Failed to probe media file: " .. (err or "unknown error")
+        return nil, nil, "Failed to probe media file: " .. (err or "unknown error")
     end
 
     -- Generate media ID
@@ -218,15 +218,15 @@ function M.import_media(file_path, db, project_id, existing_media_id)
     })
 
     if not media then
-        return nil, "Failed to create Media record"
+        return nil, nil, "Failed to create Media record"
     end
 
     -- Save to database
     if not media:save(db) then
-        return nil, "Failed to save Media record to database"
+        return nil, nil, "Failed to save Media record to database"
     end
 
-    return media_id, nil
+    return media_id, metadata, nil
 end
 
 --- Batch import multiple media files
@@ -241,7 +241,7 @@ function M.batch_import_media(file_paths, db, project_id)
     }
 
     for _, file_path in ipairs(file_paths) do
-        local media_id, err = M.import_media(file_path, db, project_id, nil)
+        local media_id, _, err = M.import_media(file_path, db, project_id, nil)
         if media_id then
             table.insert(results.success, {
                 file_path = file_path,

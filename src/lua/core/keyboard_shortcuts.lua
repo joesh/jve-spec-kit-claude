@@ -515,11 +515,19 @@ function keyboard_shortcuts.handle_key(event)
     if key == KEY.F9 then
         if command_manager and timeline_state and project_browser then
             -- Get selected media from project browser
-            local selected_media = project_browser.get_selected_media()
-            if not selected_media then
+            local selected_clip = project_browser.get_selected_media()
+            if not selected_clip then
                 print("❌ INSERT: No media selected in project browser")
                 return true
             end
+
+            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
+            if not media_id then
+                print("❌ INSERT: Selected clip missing media reference")
+                return true
+            end
+
+            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local Command = require("command")
             local playhead_time = timeline_state.get_playhead_time()
@@ -532,17 +540,19 @@ function keyboard_shortcuts.handle_key(event)
             end
 
             local insert_cmd = Command.create("Insert", project_id)
-            insert_cmd:set_parameter("media_id", selected_media.id)
+            insert_cmd:set_parameter("master_clip_id", selected_clip.clip_id)
+            insert_cmd:set_parameter("media_id", media_id)
             insert_cmd:set_parameter("sequence_id", sequence_id)
             insert_cmd:set_parameter("track_id", track_id)
             insert_cmd:set_parameter("insert_time", playhead_time)
-            insert_cmd:set_parameter("duration", selected_media.duration)
+            insert_cmd:set_parameter("duration", clip_duration)
             insert_cmd:set_parameter("source_in", 0)
-            insert_cmd:set_parameter("source_out", selected_media.duration)
+            insert_cmd:set_parameter("source_out", clip_duration)
+            insert_cmd:set_parameter("project_id", project_id)
             insert_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
             local result = command_manager.execute(insert_cmd)
             if result.success then
-                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_media.name, playhead_time))
+                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_clip.name or media_id, playhead_time))
             else
                 print("❌ INSERT failed: " .. (result.error_message or "unknown error"))
             end
@@ -554,11 +564,19 @@ function keyboard_shortcuts.handle_key(event)
     if key == KEY.F10 then
         if command_manager and timeline_state and project_browser then
             -- Get selected media from project browser
-            local selected_media = project_browser.get_selected_media()
-            if not selected_media then
+            local selected_clip = project_browser.get_selected_media()
+            if not selected_clip then
                 print("❌ OVERWRITE: No media selected in project browser")
                 return true
             end
+
+            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
+            if not media_id then
+                print("❌ OVERWRITE: Selected clip missing media reference")
+                return true
+            end
+
+            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local Command = require("command")
             local playhead_time = timeline_state.get_playhead_time()
@@ -571,17 +589,19 @@ function keyboard_shortcuts.handle_key(event)
             end
 
             local overwrite_cmd = Command.create("Overwrite", project_id)
-            overwrite_cmd:set_parameter("media_id", selected_media.id)
+            overwrite_cmd:set_parameter("master_clip_id", selected_clip.clip_id)
+            overwrite_cmd:set_parameter("media_id", media_id)
             overwrite_cmd:set_parameter("sequence_id", sequence_id)
             overwrite_cmd:set_parameter("track_id", track_id)
             overwrite_cmd:set_parameter("overwrite_time", playhead_time)
-            overwrite_cmd:set_parameter("duration", selected_media.duration)
+            overwrite_cmd:set_parameter("duration", clip_duration)
             overwrite_cmd:set_parameter("source_in", 0)
-            overwrite_cmd:set_parameter("source_out", selected_media.duration)
+            overwrite_cmd:set_parameter("source_out", clip_duration)
+            overwrite_cmd:set_parameter("project_id", project_id)
             overwrite_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
             local result = command_manager.execute(overwrite_cmd)
             if result.success then
-                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_media.name, playhead_time))
+                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_clip.name or media_id, playhead_time))
             else
                 print("❌ OVERWRITE failed: " .. (result.error_message or "unknown error"))
             end

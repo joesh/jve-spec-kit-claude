@@ -5,6 +5,19 @@ local uuid = require("uuid")
 
 local M = {}
 
+local DEFAULT_CLIP_KIND = "timeline"
+
+local function derive_display_name(id, existing_name)
+    if existing_name and existing_name ~= "" then
+        return existing_name
+    end
+    return "Clip " .. tostring(id):sub(1, 8)
+end
+
+function M.generate_id()
+    return uuid.generate()
+end
+
 local function load_internal(clip_id, db, raise_errors)
     if not clip_id or clip_id == "" then
         if raise_errors then
@@ -20,7 +33,13 @@ local function load_internal(clip_id, db, raise_errors)
         return nil
     end
 
-    local query = db:prepare("SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled FROM clips WHERE id = ?")
+    local query = db:prepare([[
+        SELECT id, project_id, clip_kind, name, track_id, media_id,
+               source_sequence_id, parent_clip_id, owner_sequence_id,
+               start_time, duration, source_in, source_out, enabled, offline
+        FROM clips
+        WHERE id = ?
+    ]])
     if not query then
         if raise_errors then
             error("Clip.load_failed: Failed to prepare query")
@@ -46,34 +65,50 @@ local function load_internal(clip_id, db, raise_errors)
 
     local clip = {
         id = query:value(0),
-        track_id = query:value(1),
-        media_id = query:value(2),
-        start_time = query:value(3),
-        duration = query:value(4),
-        source_in = query:value(5),
-        source_out = query:value(6),
-        enabled = query:value(7) == 1 or query:value(7) == true,
+        project_id = query:value(1),
+        clip_kind = query:value(2),
+        name = query:value(3),
+        track_id = query:value(4),
+        media_id = query:value(5),
+        source_sequence_id = query:value(6),
+        parent_clip_id = query:value(7),
+        owner_sequence_id = query:value(8),
+        start_time = query:value(9),
+        duration = query:value(10),
+        source_in = query:value(11),
+        source_out = query:value(12),
+        enabled = query:value(13) == 1 or query:value(13) == true,
+        offline = query:value(14) == 1 or query:value(14) == true,
     }
 
-    clip.name = "Clip " .. clip.id:sub(1, 8)
+    clip.name = derive_display_name(clip.id, clip.name)
 
     setmetatable(clip, {__index = M})
     return clip
 end
 
 -- Create a new Clip instance
-function M.create(name, media_id)
+function M.create(name, media_id, opts)
+    opts = opts or {}
     local clip = {
-        id = uuid.generate(),
-        name = name or "Untitled Clip",
+        id = opts.id or uuid.generate(),
+        project_id = opts.project_id,
+        clip_kind = opts.clip_kind or DEFAULT_CLIP_KIND,
+        name = name,
+        track_id = opts.track_id,
         media_id = media_id,
-        track_id = nil,
-        start_time = 0,
-        duration = 1000,  -- Default 1 second
-        source_in = 0,
-        source_out = 1000,
-        enabled = true,
+        source_sequence_id = opts.source_sequence_id,
+        parent_clip_id = opts.parent_clip_id,
+        owner_sequence_id = opts.owner_sequence_id,
+        start_time = opts.start_time or 0,
+        duration = opts.duration or 1000,  -- Default 1 second
+        source_in = opts.source_in or 0,
+        source_out = opts.source_out or (opts.source_in or 0) + (opts.duration or 1000),
+        enabled = opts.enabled ~= false,
+        offline = opts.offline or false,
     }
+
+    clip.name = derive_display_name(clip.id, clip.name)
 
     setmetatable(clip, {__index = M})
     return clip
@@ -86,6 +121,44 @@ end
 
 function M.load_optional(clip_id, db)
     return load_internal(clip_id, db, false)
+end
+
+local function ensure_project_context(self, db)
+    if self.project_id then
+        return
+    end
+
+    -- Try to derive from owning sequence via track
+    if self.track_id then
+        local track_query = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
+        if track_query then
+            track_query:bind_value(1, self.track_id)
+            if track_query:exec() and track_query:next() then
+                local sequence_id = track_query:value(0)
+                self.owner_sequence_id = self.owner_sequence_id or sequence_id
+                if sequence_id then
+                    local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+                    if seq_query then
+                        seq_query:bind_value(1, sequence_id)
+                        if seq_query:exec() and seq_query:next() then
+                            self.project_id = seq_query:value(0)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Fallback: derive from source sequence if present
+    if not self.project_id and self.source_sequence_id then
+        local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+        if seq_query then
+            seq_query:bind_value(1, self.source_sequence_id)
+            if seq_query:exec() and seq_query:next() then
+                self.project_id = seq_query:value(0)
+            end
+        end
+    end
 end
 
 -- Save clip to database (INSERT or UPDATE)
@@ -123,45 +196,15 @@ local function save_internal(self, db, opts)
     if self.source_out and self.source_in and self.source_out <= self.source_in then
         self.source_out = self.source_in + self.duration
     end
-
-    -- Validate required fields to prevent NULL constraint violations
-    if self.start_time == nil then
-        print(string.format("ERROR: Clip.save: Clip %s has nil start_time - cannot save", self.id:sub(1,8)))
-        print(string.format("  track_id=%s, duration=%s", tostring(self.track_id), tostring(self.duration)))
-        return false
+    if not self.start_time then
+        self.start_time = 0
     end
 
-    -- FRAME ALIGNMENT ENFORCEMENT (VIDEO ONLY)
-    if not opts.skip_frame_snap and self.track_id then
-        local track_query = db:prepare("SELECT track_type, sequence_id FROM tracks WHERE id = ?")
-        if track_query then
-            track_query:bind_value(1, self.track_id)
-            if track_query:exec() and track_query:next() then
-                local track_type = track_query:value(0)
-                local sequence_id = track_query:value(1)
-                if track_type == "VIDEO" and sequence_id then
-                    local seq_query = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
-                    if seq_query then
-                        seq_query:bind_value(1, sequence_id)
-                        if seq_query:exec() and seq_query:next() then
-                            local frame_rate = seq_query:value(0)
-                            local frame_utils = require('core.frame_utils')
-                            self.start_time = frame_utils.snap_to_frame(self.start_time, frame_rate)
-                            self.duration = frame_utils.snap_to_frame(self.duration, frame_rate)
-                            if self.source_in then
-                                self.source_in = frame_utils.snap_to_frame(self.source_in, frame_rate)
-                            end
-                            if self.source_out then
-                                self.source_out = frame_utils.snap_to_frame(self.source_out, frame_rate)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
+    ensure_project_context(self, db)
+    self.clip_kind = self.clip_kind or DEFAULT_CLIP_KIND
+    self.offline = self.offline and true or false
+    self.name = derive_display_name(self.id, self.name)
 
-    -- Check if clip exists
     local exists_query = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
     exists_query:bind_value(1, self.id)
 
@@ -191,40 +234,62 @@ local function save_internal(self, db, opts)
 
     local query
     if exists then
-        -- UPDATE existing clip
         query = db:prepare([[
             UPDATE clips
-            SET track_id = ?, media_id = ?, start_time = ?, duration = ?,
-                source_in = ?, source_out = ?, enabled = ?
+            SET project_id = ?, clip_kind = ?, name = ?, track_id = ?, media_id = ?,
+                source_sequence_id = ?, parent_clip_id = ?, owner_sequence_id = ?,
+                start_time = ?, duration = ?, source_in = ?, source_out = ?,
+                enabled = ?, offline = ?, modified_at = strftime('%s','now')
             WHERE id = ?
         ]])
-        query:bind_value(1, self.track_id)
-        query:bind_value(2, self.media_id)
-        query:bind_value(3, self.start_time)
-        query:bind_value(4, self.duration)
-        query:bind_value(5, self.source_in)
-        query:bind_value(6, self.source_out)
-        query:bind_value(7, self.enabled and 1 or 0)
-        query:bind_value(8, self.id)
     else
-        -- INSERT new clip
         query = db:prepare([[
-            INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO clips (
+                id, project_id, clip_kind, name, track_id, media_id,
+                source_sequence_id, parent_clip_id, owner_sequence_id,
+                start_time, duration, source_in, source_out, enabled, offline
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
-        query:bind_value(1, self.id)
-        query:bind_value(2, self.track_id)
-        query:bind_value(3, self.media_id)
-        query:bind_value(4, self.start_time)
-        query:bind_value(5, self.duration)
-        query:bind_value(6, self.source_in)
-        query:bind_value(7, self.source_out)
-        query:bind_value(8, self.enabled and 1 or 0)
     end
 
     if not query then
         print("WARNING: Clip.save: Failed to prepare query")
         return false
+    end
+
+    if exists then
+        query:bind_value(1, self.project_id)
+        query:bind_value(2, self.clip_kind)
+        query:bind_value(3, self.name or "")
+        query:bind_value(4, self.track_id)
+        query:bind_value(5, self.media_id)
+        query:bind_value(6, self.source_sequence_id)
+        query:bind_value(7, self.parent_clip_id)
+        query:bind_value(8, self.owner_sequence_id)
+        query:bind_value(9, self.start_time)
+        query:bind_value(10, self.duration)
+        query:bind_value(11, self.source_in)
+        query:bind_value(12, self.source_out)
+        query:bind_value(13, self.enabled and 1 or 0)
+        query:bind_value(14, self.offline and 1 or 0)
+        query:bind_value(15, self.id)
+    else
+        query:bind_value(1, self.id)
+        query:bind_value(2, self.project_id)
+        query:bind_value(3, self.clip_kind)
+        query:bind_value(4, self.name or "")
+        query:bind_value(5, self.track_id)
+        query:bind_value(6, self.media_id)
+        query:bind_value(7, self.source_sequence_id)
+        query:bind_value(8, self.parent_clip_id)
+        query:bind_value(9, self.owner_sequence_id)
+        query:bind_value(10, self.start_time)
+        query:bind_value(11, self.duration)
+        query:bind_value(12, self.source_in)
+        query:bind_value(13, self.source_out)
+        query:bind_value(14, self.enabled and 1 or 0)
+        query:bind_value(15, self.offline and 1 or 0)
     end
 
     if not query:exec() then

@@ -65,13 +65,20 @@ local sequence_initial_state = {
 local function clone_clip_entry(clip)
     return {
         id = clip.id,
+        project_id = clip.project_id,
+        clip_kind = clip.clip_kind,
+        name = clip.name,
         track_id = clip.track_id,
         media_id = clip.media_id,
+        parent_clip_id = clip.parent_clip_id,
+        owner_sequence_id = clip.owner_sequence_id,
+        source_sequence_id = clip.source_sequence_id,
         start_time = clip.start_time,
         duration = clip.duration,
         source_in = clip.source_in,
         source_out = clip.source_out,
-        enabled = clip.enabled
+        enabled = clip.enabled,
+        offline = clip.offline
     }
 end
 

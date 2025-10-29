@@ -23,6 +23,7 @@ end
 
 M.item_lookup = {}
 M.media_map = {}
+M.master_clip_map = {}
 M.sequence_map = {}
 M.selected_item = nil
 M.selected_items = {}
@@ -58,14 +59,31 @@ local function activate_item(item_info)
             end
         end
         return true
-    elseif item_info.type == "clip" then
-        local media = M.media_map[item_info.media_id]
-        if not media then
-            return false, "Media metadata missing"
+    elseif item_info.type == "master_clip" then
+        local clip = item_info.clip_id and M.master_clip_map[item_info.clip_id]
+            or (item_info.media_id and M.master_clip_map[item_info.media_id])
+        if not clip then
+            return false, "Master clip metadata missing"
         end
 
+        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+
         if M.viewer_panel and M.viewer_panel.show_source_clip then
-            M.viewer_panel.show_source_clip(media)
+            local viewer_payload = {
+                id = clip.clip_id,
+                clip_id = clip.clip_id,
+                media_id = clip.media_id,
+                name = clip.name or media.name or clip.clip_id,
+                duration = clip.duration or media.duration,
+                frame_rate = clip.frame_rate or media.frame_rate,
+                width = clip.width or media.width,
+                height = clip.height or media.height,
+                codec = clip.codec or media.codec,
+                file_path = clip.file_path or media.file_path,
+                metadata = media.metadata,
+                offline = clip.offline,
+            }
+            M.viewer_panel.show_source_clip(viewer_payload)
         end
         if focus_manager and focus_manager.focus_panel then
             focus_manager.focus_panel("viewer")
@@ -140,6 +158,7 @@ local function populate_tree()
     qt_constants.CONTROL.CLEAR_TREE(M.tree)
     M.item_lookup = {}
     M.media_map = {}
+    M.master_clip_map = {}
     M.sequence_map = {}
     M.selected_item = nil
     M.selected_items = {}
@@ -150,11 +169,21 @@ local function populate_tree()
 
     local bins = db.load_bins()
     local media_items = db.load_media()
+    local master_clips = db.load_master_clips(project_id)
     local sequences = db.load_sequences(project_id)
 
     M.media_items = media_items
+    M.master_clips = master_clips
     for _, media in ipairs(media_items) do
         M.media_map[media.id] = media
+    end
+    for _, clip in ipairs(master_clips) do
+        if clip.media and clip.media.id and not M.media_map[clip.media.id] then
+            M.media_map[clip.media.id] = clip.media
+        elseif clip.media_id and M.media_map[clip.media_id] and not clip.media then
+            clip.media = M.media_map[clip.media_id]
+        end
+        M.master_clip_map[clip.clip_id] = clip
     end
 
     local bin_tree_map = {}
@@ -203,6 +232,7 @@ local function populate_tree()
 
     -- Root sequences
     for _, sequence in ipairs(sequences) do
+        if not sequence.kind or sequence.kind == "timeline" then
         local duration_str = format_duration(sequence.duration)
         local resolution_str = (sequence.width and sequence.height and sequence.width > 0)
             and string.format("%dx%d", sequence.width, sequence.height)
@@ -236,6 +266,7 @@ local function populate_tree()
         if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "timeline")
         end
+        end
     end
 
     -- Root bins
@@ -263,19 +294,24 @@ local function populate_tree()
         return nil
     end
 
-    local function add_media_item(parent_id, media)
-        local duration_str = format_duration(media.duration)
-        local resolution_str = (media.width and media.height and media.width > 0)
-            and string.format("%dx%d", media.width, media.height)
+    local function add_master_clip_item(parent_id, clip)
+        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+        local duration_ms = clip.duration or media.duration
+        local duration_str = format_duration(duration_ms)
+        local display_width = clip.width or media.width
+        local display_height = clip.height or media.height
+        local display_fps = clip.frame_rate or media.frame_rate
+        local resolution_str = (display_width and display_height and display_width > 0)
+            and string.format("%dx%d", display_width, display_height)
             or ""
-        local fps_str = (media.frame_rate and media.frame_rate > 0)
-            and string.format("%.2f", media.frame_rate)
+        local fps_str = (display_fps and display_fps > 0)
+            and string.format("%.2f", display_fps)
             or ""
-        local codec_str = media.codec or ""
-        local date_str = format_date(media.modified_at or media.created_at)
+        local codec_str = clip.codec or media.codec or ""
+        local date_str = format_date(clip.modified_at or clip.created_at or media.modified_at or media.created_at)
 
         local columns = {
-            media.name or media.file_name,
+            clip.name or media.name or clip.clip_id,
             duration_str,
             resolution_str,
             fps_str,
@@ -291,40 +327,46 @@ local function populate_tree()
         end
 
         store_tree_item(M.tree, tree_id, {
-            type = "clip",
-            media_id = media.id,
-            name = media.name or media.file_name,
-            file_path = media.file_path,
-            duration = media.duration,
-            frame_rate = media.frame_rate,
-            width = media.width,
-            height = media.height,
-            codec = media.codec,
-            metadata = media.metadata
+            type = "master_clip",
+            clip_id = clip.clip_id,
+            media_id = clip.media_id,
+            sequence_id = clip.source_sequence_id,
+            name = clip.name or media.name or clip.clip_id,
+            file_path = clip.file_path or media.file_path,
+            duration = duration_ms,
+            frame_rate = display_fps,
+            width = display_width,
+            height = display_height,
+            codec = codec_str,
+            metadata = media.metadata,
+            offline = clip.offline
         })
         if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
-            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "clip")
+            local icon = clip.offline and "clip_offline" or "clip"
+            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, icon)
         end
     end
 
-    -- Root media
-    for _, media in ipairs(media_items) do
+    -- Root master clips
+    for _, clip in ipairs(master_clips) do
+        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
         local bin_tag = get_bin_tag(media)
         if not bin_tag then
-            add_media_item(nil, media)
+            add_master_clip_item(nil, clip)
         end
     end
 
-    -- Media inside bins
-    for _, media in ipairs(media_items) do
+    -- Master clips inside bins
+    for _, clip in ipairs(master_clips) do
+        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
         local bin_tag = get_bin_tag(media)
         if bin_tag then
             local bin_id = bin_path_lookup[bin_tag]
             local parent_tree = bin_id and bin_tree_map[bin_id]
             if parent_tree then
-                add_media_item(parent_tree, media)
+                add_master_clip_item(parent_tree, clip)
             else
-                add_media_item(nil, media)
+                add_master_clip_item(nil, clip)
             end
         end
     end
@@ -479,6 +521,7 @@ function M.create()
         M.selected_item = collected[1]
 
         browser_state.update_selection(collected, {
+            master_lookup = M.master_clip_map,
             media_lookup = M.media_map,
             sequence_lookup = M.sequence_map
         })
@@ -527,7 +570,7 @@ function M.create()
     M.insert_button = insert_btn
     M.container = container
 
-    local media_count = M.media_items and #M.media_items or 0
+    local media_count = M.master_clips and #M.master_clips or 0
     local sequence_count = 0
     if M.item_lookup then
         for _, info in pairs(M.item_lookup) do
@@ -570,15 +613,19 @@ function M.set_inspector(inspector_view)
 end
 
 -- Get selected media item
-function M.get_selected_media()
+function M.get_selected_master_clip()
     if not M.selected_items or #M.selected_items == 0 then
         return nil
     end
     local first = M.selected_items[1]
-    if not first or first.type ~= "clip" then
+    if not first or first.type ~= "master_clip" then
         return nil
     end
-    return M.media_map[first.media_id]
+    return first.clip_id and M.master_clip_map[first.clip_id]
+end
+
+function M.get_selected_media()
+    return M.get_selected_master_clip()
 end
 
 -- Refresh media list from database
@@ -592,11 +639,12 @@ function M.insert_selected_to_timeline()
         return
     end
 
-    local media = M.get_selected_media()
-    if not media then
+    local clip = M.get_selected_master_clip()
+    if not clip then
         print("⚠️  No media item selected")
         return
     end
+    local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
 
     local timeline_state_module = M.timeline_panel.get_state()
     local sequence_id = timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id() or "default_sequence"
@@ -610,8 +658,8 @@ function M.insert_selected_to_timeline()
     local Command = require("command")
 
     local insert_time = timeline_state_module.get_playhead_time and timeline_state_module.get_playhead_time() or 0
-    local source_in = 0
-    local source_out = media.duration or 0
+    local source_in = clip.source_in or 0
+    local source_out = clip.source_out or clip.duration or media.duration or 0
     local duration = source_out - source_in
     if duration <= 0 then
         print("⚠️  Media duration is invalid")
@@ -621,11 +669,13 @@ function M.insert_selected_to_timeline()
     local cmd = Command.create("Insert", project_id)
     cmd:set_parameter("sequence_id", sequence_id)
     cmd:set_parameter("track_id", track_id)
-    cmd:set_parameter("media_id", media.id)
+    cmd:set_parameter("master_clip_id", clip.clip_id)
+    cmd:set_parameter("media_id", clip.media_id or media.id)
     cmd:set_parameter("insert_time", insert_time)
     cmd:set_parameter("duration", duration)
     cmd:set_parameter("source_in", source_in)
     cmd:set_parameter("source_out", source_out)
+    cmd:set_parameter("project_id", clip.project_id or project_id)
 
     local success, result = pcall(function()
         return command_manager.execute(cmd)

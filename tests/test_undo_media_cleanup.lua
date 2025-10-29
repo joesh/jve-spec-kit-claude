@@ -33,6 +33,7 @@ db:exec([[
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
@@ -53,13 +54,17 @@ db:exec([[
 
     CREATE TABLE IF NOT EXISTS clips (
         id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
+        project_id TEXT,
+        clip_kind TEXT NOT NULL DEFAULT 'timeline',
+        name TEXT DEFAULT '',
+        track_id TEXT,
         media_id TEXT,
         start_time INTEGER NOT NULL,
         duration INTEGER NOT NULL,
         source_in INTEGER NOT NULL,
         source_out INTEGER NOT NULL,
-        enabled BOOLEAN DEFAULT 1
+        enabled BOOLEAN DEFAULT 1,
+        offline BOOLEAN DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS media (
