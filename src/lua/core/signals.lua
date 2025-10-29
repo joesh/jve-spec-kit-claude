@@ -3,6 +3,7 @@
 -- Provides unified event system for Qt signals, Lua-to-Lua communication, and user extensions
 
 local error_system = require("core.error_system")
+local unpack = table.unpack or unpack
 
 local Signals = {}
 
@@ -88,7 +89,8 @@ function Signals.connect(signal_name, handler, priority)
         id = connection_id,
         handler = handler,
         priority = priority,
-        signal_name = signal_name
+        signal_name = signal_name,
+        creation_trace = debug.traceback("Signal connection created here", 2)
     }
     
     -- Insert in priority order (lower priority numbers first)
@@ -110,6 +112,11 @@ function Signals.connect(signal_name, handler, priority)
     connections[connection_id] = connection_record
     
     return connection_id
+end
+
+-- Debug helper to inspect a connection record (read-only)
+function Signals._debug_get_connection(connection_id)
+    return connections[connection_id]
 end
 
 -- Disconnect a signal connection
@@ -190,15 +197,36 @@ function Signals.emit(signal_name, ...)
     
     -- Execute handlers in priority order
     for i, handler_record in ipairs(handlers) do
-        local success, result = pcall(handler_record.handler, table.unpack(args))
+        if handler_record.handler == nil then
+            error(string.format(
+                "Signal '%s' connection %s has no handler (index %d, total %d)\nCreation trace:\n%s",
+                signal_name,
+                tostring(handler_record.id),
+                i,
+                #handlers,
+                handler_record.creation_trace or "(unknown)"
+            ))
+        end
+
+        local success, result = pcall(handler_record.handler, unpack(args))
         
         local handler_result = {
             connection_id = handler_record.id,
             success = success,
-            result = result
+            result = result,
+            creation_trace = handler_record.creation_trace,
+            handler_type = type(handler_record.handler)
         }
         
         if not success then
+            print(string.format(
+                "[signals] Handler failure: signal=%s connection=%s handler=%s (%s) error=%s",
+                signal_name,
+                tostring(handler_record.id),
+                tostring(handler_record.handler),
+                type(handler_record.handler),
+                tostring(result)
+            ))
             -- Handler failed - include error information but continue with other handlers
             handler_result.error = result
         end

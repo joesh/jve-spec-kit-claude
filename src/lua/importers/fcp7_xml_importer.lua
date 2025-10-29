@@ -3,6 +3,7 @@
 -- Supports: sequences, tracks, clips, media references
 
 local M = {}
+local uuid = require("uuid")
 
 -- Parse FCP7 time value (rational number like "900/30")
 -- Returns milliseconds
@@ -525,15 +526,53 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             return nil
         end
 
-        local key = clip_info.media_key or clip_info.file_id
+        local key = clip_info.media_key
+            or clip_info.file_id
+            or clip_info.original_id
+            or clip_info.name
         if key and media_lookup[key] then
             return media_lookup[key]
         end
 
-        local media_info = parsed_result.media_files[key] or clip_info.media
+        local media_info = nil
+        if key then
+            media_info = parsed_result.media_files[key]
+        end
         if not media_info then
-            print(string.format("WARNING: create_entities: missing media info for key %s", tostring(key)))
-            return nil
+            media_info = clip_info.media
+        end
+        if not media_info then
+            local placeholder_id = key or clip_info.original_id or uuid.generate()
+            local placeholder_path = string.format("synthetic://%s", tostring(placeholder_id))
+            media_info = {
+                id = placeholder_id,
+                name = clip_info.name or tostring(key or clip_info.original_id or "Imported Media"),
+                path = placeholder_path,
+                duration = clip_info.duration,
+                frame_rate = clip_info.frame_rate,
+                width = clip_info.width,
+                height = clip_info.height,
+                audio_channels = 0
+            }
+            print(string.format("WARNING: create_entities: missing media info for key %s; generating synthetic placeholder", tostring(key)))
+        end
+        if not key or key == "" then
+            key = media_info.key
+                or media_info.id
+                or media_info.path
+                or uuid.generate()
+        end
+        if not media_info.key then
+            media_info.key = key
+        end
+        if clip_info.media_key ~= key then
+            clip_info.media_key = key
+        end
+        if clip_info.media ~= media_info then
+            clip_info.media = media_info
+        end
+        if key and not parsed_result.media_files[key] then
+            parsed_result.media_files[key] = media_info
         end
 
         local duration = media_info.duration
@@ -546,8 +585,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
         local file_path = media_info.path
         if not file_path or file_path == "" then
-            print(string.format("WARNING: create_entities: missing file path for media %s", tostring(key)))
-            return nil
+            file_path = string.format("synthetic://%s", tostring(key or media_info.id or uuid.generate()))
+            print(string.format("WARNING: create_entities: missing file path for media %s; using placeholder %s", tostring(key), file_path))
         end
 
         local frame_rate = media_info.frame_rate or clip_info.frame_rate or 30.0

@@ -619,6 +619,10 @@ function M.add_schema_field_to_section(section, field)
     if (field_type == "string" or field_type == "integer" or field_type == "double") and not is_slider_field then
         -- Use widget pool's signal connection tracking
         widget_pool.connect_signal(control_widget, "textChanged", function(new_text)
+            if type(M.save_field_value) ~= "function" then
+                -- Module is still initializing; skip until save handler is ready
+                return
+            end
             -- Convert text to appropriate type
             local typed_value = new_text
             if field_type == "integer" then
@@ -942,7 +946,7 @@ end
 -- Save field value to current clip
 function M.save_field_value(field_key, value)
   if not M._current_clip then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Cannot save field - no clip selected")
+    -- Inspector loads its schema before any timeline selection exists; suppress saves until we have a clip.
     return
   end
 

@@ -90,12 +90,40 @@ function QtSignals.connect(widget, signal_name, handler)
     
     -- Register global handler function that emits to our signal system
     _G[qt_handler_name] = function(...)
-        local results = signals.emit(unique_signal_name, ...)
+        local ok, results_or_error = pcall(signals.emit, unique_signal_name, ...)
+        if not ok then
+            local err_msg = tostring(results_or_error)
+            local connection_info = signals._debug_get_connection(connection_id)
+            local creation_trace = connection_info and connection_info.creation_trace or "(unknown)"
+            local handler_type = connection_info and type(connection_info.handler) or "(unknown)"
+            print(string.format(
+                "ERROR: Qt signal dispatch failed (signal=%s, connection=%s, handler_type=%s): %s",
+                unique_signal_name,
+                tostring(connection_id),
+                handler_type,
+                err_msg
+            ))
+            print("-- Handler creation trace --")
+            print(creation_trace)
+            return
+        end
+
+        local results = results_or_error
         -- Qt callbacks typically don't need return values, but we log errors
         for _, result in ipairs(results) do
             if not result.success then
                 -- Log handler error but don't fail Qt operation
-                print("WARNING: Qt signal handler failed:", result.error)
+                local prefix = string.format(
+                    "WARNING: Qt signal handler failed (signal=%s, connection=%s, handler_type=%s)",
+                    unique_signal_name,
+                    tostring(result.connection_id),
+                    tostring(result.handler_type)
+                )
+                print(prefix .. ": " .. tostring(result.error))
+                if result.creation_trace then
+                    print("-- Handler creation trace --")
+                    print(result.creation_trace)
+                end
             end
         end
     end

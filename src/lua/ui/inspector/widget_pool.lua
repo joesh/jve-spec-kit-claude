@@ -226,7 +226,12 @@ function M.return_widget(widget)
 
     -- Disconnect any signal connections
     if M._signal_connections[widget] then
-        -- TODO: Implement signal disconnection in qt_signals
+        local qt_signals = require("core.qt_signals")
+        for _, connection in ipairs(M._signal_connections[widget]) do
+            if connection.signal then
+                qt_signals.disconnect(widget, connection.signal)
+            end
+        end
         M._signal_connections[widget] = nil
     end
 
@@ -264,15 +269,30 @@ function M.connect_signal(widget, signal_name, handler)
     local qt_signals = require("core.qt_signals")
 
     local result
+    local wrapped_handler
+    wrapped_handler = function(...)
+        local ok, err = pcall(handler, ...)
+        if not ok then
+            print(string.format("[widget_pool] Handler for signal '%s' failed: %s", signal_name, tostring(err)))
+            print(debug.traceback(err, 2))
+        end
+    end
+
     if signal_name == "textChanged" then
-        result = qt_signals.onTextChanged(widget, handler)
+        result = qt_signals.onTextChanged(widget, wrapped_handler)
     elseif signal_name == "clicked" then
-        result = qt_signals.connect(widget, "clicked", handler)
+        result = qt_signals.connect(widget, "clicked", wrapped_handler)
     elseif signal_name == "valueChanged" then
-        result = qt_signals.onValueChanged(widget, handler)
+        result = qt_signals.onValueChanged(widget, wrapped_handler)
     else
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
             "[widget_pool] Unknown signal type: " .. signal_name)
+        return false
+    end
+
+    if type(result) == "table" and result.success == false then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+            "[widget_pool] Failed to connect signal '" .. signal_name .. "': " .. (result.message or "unknown error"))
         return false
     end
 
@@ -282,7 +302,8 @@ function M.connect_signal(widget, signal_name, handler)
     end
     table.insert(M._signal_connections[widget], {
         signal = signal_name,
-        handler = handler
+        connection_id = result,
+        handler = wrapped_handler
     })
 
     return result
