@@ -113,6 +113,7 @@ package.loaded['ui.timeline.timeline_state'] = mock_timeline_state
 local command_manager = require('core.command_manager')
 local Command = require('command')
 local database = require('core.database')
+local Media = require('models.media')
 
 print("=== Selection Undo/Redo Tests ===\n")
 
@@ -168,10 +169,15 @@ db:exec([[
         project_id TEXT NOT NULL,
         file_path TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER
+        duration INTEGER NOT NULL DEFAULT 0,
+        frame_rate REAL NOT NULL DEFAULT 0,
+        width INTEGER NOT NULL DEFAULT 0,
+        height INTEGER NOT NULL DEFAULT 0,
+        audio_channels INTEGER NOT NULL DEFAULT 0,
+        codec TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL DEFAULT 0,
+        modified_at INTEGER NOT NULL DEFAULT 0,
+        metadata TEXT NOT NULL DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS commands (
@@ -214,6 +220,28 @@ db:exec([[
 ]])
 
 command_manager.init(db, 'test_sequence', 'test_project')
+
+command_manager.register_executor("TestEnsureMedia", function(cmd)
+    local media = Media.create({
+        id = cmd:get_parameter("media_id"),
+        project_id = cmd:get_parameter("project_id") or 'test_project',
+        file_path = cmd:get_parameter("file_path"),
+        file_name = cmd:get_parameter("file_name"),
+        name = cmd:get_parameter("file_name"),
+        duration = cmd:get_parameter("duration") or 1000,
+        frame_rate = cmd:get_parameter("frame_rate") or 30
+    })
+    assert(media, "failed to create media " .. tostring(cmd:get_parameter("media_id")))
+    return media:save(db)
+end)
+
+local ensure_media_cmd = Command.create("TestEnsureMedia", "test_project")
+ensure_media_cmd:set_parameter("media_id", "media_clip")
+ensure_media_cmd:set_parameter("file_path", "/tmp/media_clip.mov")
+ensure_media_cmd:set_parameter("file_name", "Test Clip")
+ensure_media_cmd:set_parameter("duration", 1000)
+ensure_media_cmd:set_parameter("frame_rate", 30)
+assert(command_manager.execute(ensure_media_cmd).success)
 
 -- Provide lightweight command executors used only by this test.
 command_manager.register_executor("TestSelectClip", function(command)

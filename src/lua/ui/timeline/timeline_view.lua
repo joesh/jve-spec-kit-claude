@@ -315,7 +315,8 @@ end
 
                             -- Clip name (if there's enough space)
                             if clip_width > 60 then
-                                timeline.add_text(view.widget, x + 5, y + 25, clip.name, text_color)
+                                local clip_label = clip.label or clip.name or clip.id or ""
+                                timeline.add_text(view.widget, x + 5, y + 25, clip_label, text_color)
                             end
                         end
 

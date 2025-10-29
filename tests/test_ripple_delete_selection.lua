@@ -6,6 +6,7 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 local Command = require('command')
+local Media = require('models.media')
 
 local TEST_DB = "/tmp/test_ripple_delete_selection.db"
 os.remove(TEST_DB)
@@ -51,6 +52,22 @@ db:exec([[
         source_in INTEGER NOT NULL DEFAULT 0,
         source_out INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE media (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        name TEXT,
+        file_path TEXT,
+        duration INTEGER,
+        frame_rate REAL,
+        width INTEGER,
+        height INTEGER,
+        audio_channels INTEGER,
+        codec TEXT,
+        created_at INTEGER,
+        modified_at INTEGER,
+        metadata TEXT
     );
 
     CREATE TABLE commands (
@@ -145,7 +162,22 @@ command_impl.register_commands(executors, undoers, db)
 command_manager.init(db, 'default_sequence', 'default_project')
 
 local function create_clip_command(params)
-    local clip = require('models.clip').create("Test Clip", nil)
+    local clip_id = params.clip_id
+    local clip_duration = params.duration
+    local media_id = params.media_id or (clip_id .. "_media")
+
+    local media = Media.create({
+        id = media_id,
+        project_id = 'default_project',
+        file_path = '/tmp/' .. clip_id .. '.mov',
+        file_name = clip_id .. '.mov',
+        duration = clip_duration,
+        frame_rate = 30
+    })
+    assert(media, "failed to create media for clip " .. tostring(clip_id))
+    assert(media:save(db), "failed to save media for clip " .. tostring(clip_id))
+
+    local clip = require('models.clip').create("Test Clip", media_id)
     clip.id = params.clip_id
     clip.track_id = params.track_id
     clip.start_time = params.start_time
@@ -162,6 +194,7 @@ command_manager.register_executor("TestCreateClip", function(cmd)
         track_id = cmd:get_parameter("track_id"),
         start_time = cmd:get_parameter("start_time"),
         duration = cmd:get_parameter("duration"),
+        media_id = cmd:get_parameter("media_id")
     })
 end)
 

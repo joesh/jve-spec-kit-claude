@@ -166,10 +166,31 @@ local function assert_no_overlaps(clips)
     end
 end
 
+local function ensure_media_record(db, media_id, duration)
+    local media = Media.create({
+        id = media_id,
+        project_id = "project",
+        file_path = "/tmp/" .. media_id .. ".mov",
+        file_name = media_id .. ".mov",
+        name = media_id .. ".mov",
+        duration = duration,
+        frame_rate = 30
+    })
+    assert(media, "failed creating media " .. tostring(media_id))
+    assert(media:save(db), "failed saving media " .. tostring(media_id))
+end
+
 print("=== Clip Occlusion Tests ===\n")
 
 local db_path = "/tmp/test_clip_occlusion.db"
 local db = setup_db(db_path)
+
+ensure_media_record(db, "media_A", 4000)
+ensure_media_record(db, "media_B", 3000)
+ensure_media_record(db, "media_C", 4000)
+ensure_media_record(db, "media_D", 5000)
+ensure_media_record(db, "media_E", 8000)
+ensure_media_record(db, "media_F", 2000)
 
 -- Seed two clips
 local clip_a = Clip.create("A", "media_A")

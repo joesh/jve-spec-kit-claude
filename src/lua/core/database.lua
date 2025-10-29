@@ -202,9 +202,11 @@ function M.load_clips(sequence_id)
 
     local query = db_connection:prepare([[
         SELECT c.id, c.track_id, c.media_id, c.start_time, c.duration,
-               c.source_in, c.source_out, c.enabled
+               c.source_in, c.source_out, c.enabled,
+               m.name, m.file_path
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
+        LEFT JOIN media m ON c.media_id = m.id
         WHERE t.sequence_id = ?
         ORDER BY c.start_time ASC
     ]])
@@ -216,10 +218,29 @@ function M.load_clips(sequence_id)
     query:bind_value(1, sequence_id)
 
     local clips = {}
+    local function extract_filename(path)
+        if not path or path == "" then
+            return nil
+        end
+        local filename = path:match("([^/\\]+)$")
+        return filename
+    end
+
     if query:exec() then
         while query:next() do
+            local clip_id = query:value(0)
+            local media_name = query:value(8)
+            local media_path = query:value(9)
+            local label = media_name
+            if label == nil or label == "" then
+                label = extract_filename(media_path)
+            end
+            if label == nil or label == "" then
+                error(string.format("Clip %s missing media label (media_id=%s)", tostring(clip_id), tostring(query:value(2))))
+            end
+
             local clip = {
-                id = query:value(0),
+                id = clip_id,
                 track_id = query:value(1),
                 media_id = query:value(2),
                 start_time = query:value(3),
@@ -227,7 +248,10 @@ function M.load_clips(sequence_id)
                 source_in = query:value(5),
                 source_out = query:value(6),
                 enabled = query:value(7) == 1,
-                name = "Clip " .. query:value(0):sub(1, 8)  -- TODO: Get from media table
+                name = "Clip " .. (clip_id and clip_id:sub(1, 8) or ""),
+                media_name = media_name,
+                media_path = media_path,
+                label = label
             }
             table.insert(clips, clip)
         end

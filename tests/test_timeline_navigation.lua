@@ -44,6 +44,14 @@ db:exec([[
         enabled INTEGER NOT NULL DEFAULT 1
     );
 
+    CREATE TABLE media (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        file_path TEXT,
+        duration INTEGER NOT NULL DEFAULT 0,
+        frame_rate REAL
+    );
+
     CREATE TABLE clips (
         id TEXT PRIMARY KEY,
         track_id TEXT NOT NULL,
@@ -81,10 +89,15 @@ db:exec([[
 ]])
 
 db:exec([[
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_a', 'track_v1', 0, 1000, 0, 1000, 1);
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_b', 'track_v1', 2000, 1500, 0, 1500, 1);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_clip_a', 'clip_a.mov', '/tmp/clip_a.mov', 1000, 30.0);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_clip_b', 'clip_b.mov', '/tmp/clip_b.mov', 1500, 30.0);
+
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip_a', 'track_v1', 'media_clip_a', 0, 1000, 0, 1000, 1);
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip_b', 'track_v1', 'media_clip_b', 2000, 1500, 0, 1500, 1);
 ]])
 
 local timeline_state = {

@@ -93,18 +93,34 @@ local function setup_db(path)
 end
 
 local function create_clip(id, track_id, start_time, duration)
-    local stmt = database.get_connection():prepare([[
-        INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out, enabled)
-        VALUES (?, ?, ?, ?, 0, ?, 1)
+    local conn = database.get_connection()
+    local media_id = id .. "_media"
+
+    local media_stmt = conn:prepare([[
+        INSERT OR REPLACE INTO media (id, name, file_path, duration, frame_rate)
+        VALUES (?, ?, ?, ?, 30.0)
     ]])
-    assert(stmt, "failed to prepare clip insert")
-    assert(stmt:bind_value(1, id))
-    assert(stmt:bind_value(2, track_id))
-    assert(stmt:bind_value(3, start_time))
-    assert(stmt:bind_value(4, duration))
-    assert(stmt:bind_value(5, duration))
-    assert(stmt:exec())
-    stmt:finalize()
+    assert(media_stmt, "failed to prepare media insert")
+    assert(media_stmt:bind_value(1, media_id))
+    assert(media_stmt:bind_value(2, id .. ".mov"))
+    assert(media_stmt:bind_value(3, "/tmp/" .. id .. ".mov"))
+    assert(media_stmt:bind_value(4, duration))
+    assert(media_stmt:exec())
+    media_stmt:finalize()
+
+    local clip_stmt = conn:prepare([[
+        INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+        VALUES (?, ?, ?, ?, ?, 0, ?, 1)
+    ]])
+    assert(clip_stmt, "failed to prepare clip insert")
+    assert(clip_stmt:bind_value(1, id))
+    assert(clip_stmt:bind_value(2, track_id))
+    assert(clip_stmt:bind_value(3, media_id))
+    assert(clip_stmt:bind_value(4, start_time))
+    assert(clip_stmt:bind_value(5, duration))
+    assert(clip_stmt:bind_value(6, duration))
+    assert(clip_stmt:exec())
+    clip_stmt:finalize()
 end
 
 local function fetch_clip(id)
@@ -149,6 +165,7 @@ local timeline_state = require('ui.timeline.timeline_state')
 
 local function reset_clips()
     db:exec("DELETE FROM clips")
+    db:exec("DELETE FROM media")
     create_clip('clip_a', 'track_v1', 0, 1500)
     create_clip('clip_b', 'track_v1', 3000, 1500)
     create_clip('clip_c', 'track_v2', 500, 1200)

@@ -45,6 +45,14 @@ db:exec([[
         enabled INTEGER NOT NULL DEFAULT 1
     );
 
+    CREATE TABLE media (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        file_path TEXT,
+        duration INTEGER NOT NULL DEFAULT 0,
+        frame_rate REAL
+    );
+
     CREATE TABLE clips (
         id TEXT PRIMARY KEY,
         track_id TEXT NOT NULL,
@@ -87,14 +95,23 @@ db:exec([[
 -- V1: clip_a [0, 1500), clip_b [3000, 4500)
 -- V2: clip_c [1200, 2400), clip_d [5000, 6200)
 db:exec([[
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_a', 'track_v1', 0, 1500, 0, 1500, 1);
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_b', 'track_v1', 3000, 1500, 0, 1500, 1);
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_c', 'track_v2', 1200, 1200, 0, 1200, 1);
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_d', 'track_v2', 5000, 1200, 0, 1200, 1);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_clip_a', 'clip_a.mov', '/tmp/clip_a.mov', 1500, 30.0);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_clip_b', 'clip_b.mov', '/tmp/clip_b.mov', 1500, 30.0);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_clip_c', 'clip_c.mov', '/tmp/clip_c.mov', 1200, 30.0);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_clip_d', 'clip_d.mov', '/tmp/clip_d.mov', 1200, 30.0);
+
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip_a', 'track_v1', 'media_clip_a', 0, 1500, 0, 1500, 1);
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip_b', 'track_v1', 'media_clip_b', 3000, 1500, 0, 1500, 1);
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip_c', 'track_v2', 'media_clip_c', 1200, 1200, 0, 1200, 1);
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip_d', 'track_v2', 'media_clip_d', 5000, 1200, 0, 1200, 1);
 ]])
 
 local timeline_state = {

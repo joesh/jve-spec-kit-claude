@@ -49,6 +49,14 @@ db:exec([[
         enabled INTEGER NOT NULL DEFAULT 1
     );
 
+    CREATE TABLE media (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        file_path TEXT,
+        duration INTEGER NOT NULL DEFAULT 0,
+        frame_rate REAL
+    );
+
     CREATE TABLE clips (
         id TEXT PRIMARY KEY,
         track_id TEXT NOT NULL,
@@ -96,12 +104,21 @@ local clip_move_duration = 1500
 local nudge_amount_ms = 2000
 
 db:exec(string.format([[
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out)
-    VALUES ('clip_dest', 'track_v2', 500, 2500, 0, 2500);
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out)
-    VALUES ('clip_keep', 'track_v1', 0, 2000, 0, 2000);
-    INSERT INTO clips (id, track_id, start_time, duration, source_in, source_out)
-    VALUES ('clip_move', 'track_v1', %d, %d, 0, %d);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_dest', 'clip_dest.mov', '/tmp/clip_dest.mov', 2500, 30.0);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_keep', 'clip_keep.mov', '/tmp/clip_keep.mov', 2000, 30.0);
+    INSERT INTO media (id, name, file_path, duration, frame_rate)
+    VALUES ('media_move', 'clip_move.mov', '/tmp/clip_move.mov', %d, 30.0);
+]], clip_move_duration))
+
+db:exec(string.format([[
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out)
+    VALUES ('clip_dest', 'track_v2', 'media_dest', 500, 2500, 0, 2500);
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out)
+    VALUES ('clip_keep', 'track_v1', 'media_keep', 0, 2000, 0, 2000);
+    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out)
+    VALUES ('clip_move', 'track_v1', 'media_move', %d, %d, 0, %d);
 ]], clip_move_start, clip_move_duration, clip_move_duration))
 
 -- Minimal stub for timeline state used by command_manager internals.

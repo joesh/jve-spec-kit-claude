@@ -8,6 +8,7 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
 local timeline_state = require('ui.timeline.timeline_state')
+local Media = require('models.media')
 
 local function setup_db(path)
     os.remove(path)
@@ -86,16 +87,38 @@ INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
 VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
 VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
-INSERT INTO media (id, project_id, file_path, name, duration, frame_rate, width, height)
-VALUES ('media_src', 'default_project', '/tmp/media_src.mov', 'Test Media', 10000000, 30, 1920, 1080);
     ]])
 
     command_manager.init(conn, 'default_sequence', 'default_project')
     timeline_state.init('default_sequence')
+
+    command_manager.register_executor("TestCreateMedia", function(cmd)
+        local media = Media.create({
+            id = cmd:get_parameter("media_id"),
+            project_id = cmd:get_parameter("project_id") or 'default_project',
+            file_path = cmd:get_parameter("file_path"),
+            file_name = cmd:get_parameter("file_name"),
+            name = cmd:get_parameter("file_name"),
+            duration = cmd:get_parameter("duration"),
+            frame_rate = cmd:get_parameter("frame_rate") or 30
+        })
+        assert(media, "failed to create media " .. tostring(cmd:get_parameter("media_id")))
+        return media:save(conn)
+    end)
+
     return conn
 end
 
 local db = setup_db("/tmp/test_ripple_redo_integrity.db")
+
+local media_cmd = Command.create("TestCreateMedia", "default_project")
+media_cmd:set_parameter("media_id", "media_src")
+media_cmd:set_parameter("file_path", "/tmp/media_src.mov")
+media_cmd:set_parameter("file_name", "Test Media")
+media_cmd:set_parameter("duration", 10000000)
+media_cmd:set_parameter("frame_rate", 30)
+local media_result = command_manager.execute(media_cmd)
+assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
 
 local function exec(cmd)
@@ -192,6 +215,15 @@ print("✅ Ripple redo preserves clip deletions")
 
 -- Regression: extending a clip keeps the downstream neighbour adjacent (no gaps)
 db = setup_db("/tmp/test_ripple_gap_alignment.db")
+
+media_cmd = Command.create("TestCreateMedia", "default_project")
+media_cmd:set_parameter("media_id", "media_src")
+media_cmd:set_parameter("file_path", "/tmp/media_src.mov")
+media_cmd:set_parameter("file_name", "Test Media")
+media_cmd:set_parameter("duration", 10000000)
+media_cmd:set_parameter("frame_rate", 30)
+media_result = command_manager.execute(media_cmd)
+assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
 local function insert_clip(start_time, duration, source_in)
     local cmd = Command.create("Insert", "default_project")
