@@ -57,6 +57,80 @@ end
 -- Registry that callers can use to route commands to specific undo stacks.
 local command_stack_resolvers = {}
 
+local sequence_initial_state = {
+    clips = {},
+    media = {}
+}
+
+local function clone_clip_entry(clip)
+    return {
+        id = clip.id,
+        track_id = clip.track_id,
+        media_id = clip.media_id,
+        start_time = clip.start_time,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out,
+        enabled = clip.enabled
+    }
+end
+
+local function clone_media_entry(media)
+    return {
+        id = media.id,
+        project_id = media.project_id,
+        file_path = media.file_path,
+        name = media.name,
+        duration = media.duration,
+        frame_rate = media.frame_rate,
+        width = media.width,
+        height = media.height,
+        audio_channels = media.audio_channels,
+        codec = media.codec,
+        created_at = media.created_at,
+        modified_at = media.modified_at,
+        metadata = media.metadata
+    }
+end
+
+local function clone_list(source, cloner)
+    local result = {}
+    if source then
+        for _, item in ipairs(source) do
+            table.insert(result, cloner(item))
+        end
+    end
+    return result
+end
+
+local function cache_initial_state(sequence_id, project_id)
+    local database = require('core.database')
+
+    if sequence_id and not sequence_initial_state.clips[sequence_id] then
+        local ok, clips = pcall(database.load_clips, sequence_id)
+        if ok and type(clips) == "table" then
+            sequence_initial_state.clips[sequence_id] = clone_list(clips, clone_clip_entry)
+        else
+            sequence_initial_state.clips[sequence_id] = {}
+        end
+    end
+
+    if project_id and not sequence_initial_state.media[project_id] then
+        local ok, media_items = pcall(database.load_media)
+        if ok and type(media_items) == "table" then
+            local filtered = {}
+            for _, media in ipairs(media_items) do
+                if media.project_id == project_id then
+                    table.insert(filtered, clone_media_entry(media))
+                end
+            end
+            sequence_initial_state.media[project_id] = filtered
+        else
+            sequence_initial_state.media[project_id] = {}
+        end
+    end
+end
+
 local function ensure_stack_state(stack_id)
     stack_id = stack_id or GLOBAL_STACK_ID
     local state = undo_stack_states[stack_id]
@@ -756,6 +830,9 @@ function M.execute(command_or_name, params)
     set_active_stack(stack_id, stack_opts)
     command.stack_id = stack_id
 
+    local active_sequence = get_current_stack_sequence_id(true)
+    cache_initial_state(active_sequence, command.project_id or active_project_id)
+
     -- BEGIN TRANSACTION: All database changes (command save + state changes) are atomic
     -- If anything fails, everything rolls back automatically
     local begin_tx = db:prepare("BEGIN TRANSACTION")
@@ -1200,12 +1277,42 @@ function M.replay_events(sequence_id, target_sequence_number)
         print(string.format("Replaying events for sequence '%s' up to command %d",
             sequence_id, target_sequence_number))
 
+        local project_id = nil
+        do
+            local project_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+            if project_query then
+                project_query:bind_value(1, sequence_id)
+                if project_query:exec() and project_query:next() then
+                    project_id = project_query:value(0)
+                end
+            end
+        end
+
+        if not project_id then
+            error(string.format("FATAL: Cannot determine project_id for sequence '%s' - cannot safely clear media table", sequence_id))
+        end
+
         -- Step 1: Load snapshot if available
         local snapshot_mgr = require('core.snapshot_manager')
         local snapshot = snapshot_mgr.load_snapshot(db, sequence_id)
 
         local start_sequence = 0
         local clips = {}
+
+        local cached_initial_clips = sequence_initial_state.clips[sequence_id]
+        local cached_initial_media = sequence_initial_state.media[project_id]
+
+        local ClipModel = require('models.clip')
+        if cached_initial_clips and #cached_initial_clips > 0 then
+            local filtered = {}
+            for _, clip_info in ipairs(cached_initial_clips) do
+                local exists = ClipModel.load_optional(clip_info.id, db)
+                if exists then
+                    table.insert(filtered, clip_info)
+                end
+            end
+            cached_initial_clips = filtered
+        end
 
         if snapshot and snapshot.sequence_number <= target_sequence_number then
             -- Start from snapshot
@@ -1223,12 +1330,14 @@ function M.replay_events(sequence_id, target_sequence_number)
         -- Step 2: Determine which clips to preserve (initial state before any commands)
         -- If we have a snapshot, use it. Otherwise, start from EMPTY state.
         local initial_clips = {}
+        local initial_media = {}
 
         if snapshot and #clips > 0 then
             -- We have a snapshot - use it as the base state
             initial_clips = clips
             print(string.format("Using snapshot with %d clips as initial state", #initial_clips))
-        else
+        elseif start_sequence > 0 then
+            -- Fallback: reuse persisted clips if we have prior commands but no snapshot
             local db_module = require('core.database')
             initial_clips = db_module.load_clips(sequence_id) or {}
             if #initial_clips > 0 then
@@ -1236,6 +1345,17 @@ function M.replay_events(sequence_id, target_sequence_number)
             else
                 print("Starting from empty initial state (no snapshot)")
             end
+        elseif cached_initial_clips then
+            initial_clips = clone_list(cached_initial_clips, clone_clip_entry)
+            print(string.format("Using cached initial clip state with %d clip(s)", #initial_clips))
+        else
+            -- No snapshot and we're replaying from the very beginning; start empty
+            print("Starting from empty initial state (no snapshot)")
+        end
+
+        if cached_initial_media then
+            initial_media = clone_list(cached_initial_media, clone_media_entry)
+            print(string.format("Using cached initial media state with %d item(s)", #initial_media))
         end
 
         -- Step 3: Clear ALL clips and media (we'll restore initial state + replay commands)
@@ -1248,27 +1368,35 @@ function M.replay_events(sequence_id, target_sequence_number)
 
         -- Also clear all media for the project (ImportMedia commands will recreate them)
         -- Get project_id from sequence
-        local project_id = nil
-        local project_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
-        if project_query then
-            project_query:bind_value(1, sequence_id)
-            if project_query:exec() and project_query:next() then
-                project_id = project_query:value(0)
-            end
-        end
-
-        if not project_id then
-            error(string.format("FATAL: Cannot determine project_id for sequence '%s' - cannot safely clear media table", sequence_id))
-        end
-
-        local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")
-        if delete_media_query then
-            delete_media_query:bind_value(1, project_id)
-            delete_media_query:exec()
-            print(string.format("Cleared all media for project '%s' from database for replay", project_id))
+       local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")
+       if delete_media_query then
+           delete_media_query:bind_value(1, project_id)
+           delete_media_query:exec()
+           print(string.format("Cleared all media for project '%s' from database for replay", project_id))
         end
 
         -- Step 4: Restore initial state clips
+        if #initial_media > 0 then
+            local Media = require('models.media')
+            local restored_count = 0
+            for _, media in ipairs(initial_media) do
+                local duration = tonumber(media.duration) or 0
+                if duration > 0 then
+                    local restored_media = Media.create(media)
+                    if restored_media then
+                        restored_media.id = media.id
+                        restored_media.project_id = media.project_id
+                        if restored_media:save(db) then
+                            restored_count = restored_count + 1
+                        end
+                    end
+                end
+            end
+            if restored_count > 0 then
+                print(string.format("Restored %d media as initial state", restored_count))
+            end
+        end
+
         if #initial_clips > 0 then
             local Clip = require('models.clip')
             for _, clip in ipairs(initial_clips) do
