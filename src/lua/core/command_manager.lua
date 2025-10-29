@@ -187,6 +187,25 @@ local function stack_id_for_sequence(sequence_id)
     return TIMELINE_STACK_PREFIX .. sequence_id
 end
 
+local function extract_sequence_id(command)
+    if not command then
+        return nil
+    end
+
+    if command.get_parameter then
+        local value = command:get_parameter("sequence_id")
+        if value and value ~= "" then
+            return value
+        end
+    end
+
+    if command.parameters and command.parameters.sequence_id and command.parameters.sequence_id ~= "" then
+        return command.parameters.sequence_id
+    end
+
+    return nil
+end
+
 local function resolve_stack_for_command(command)
     if not multi_stack_enabled then
         return GLOBAL_STACK_ID, nil
@@ -826,6 +845,13 @@ function M.execute(command_or_name, params)
     local stack_opts = nil
     if stack_info and type(stack_info) == "table" and stack_info.sequence_id then
         stack_opts = {sequence_id = stack_info.sequence_id}
+    end
+    if not stack_opts or not stack_opts.sequence_id then
+        local seq_param = extract_sequence_id(command)
+        if seq_param and seq_param ~= "" then
+            stack_opts = stack_opts or {}
+            stack_opts.sequence_id = seq_param
+        end
     end
     set_active_stack(stack_id, stack_opts)
     command.stack_id = stack_id
@@ -1974,6 +2000,7 @@ command_executors["ImportFCP7XML"] = function(command)
     end
 
     local xml_path = command:get_parameter("xml_path")
+    local xml_contents = command:get_parameter("xml_contents")
     local project_id = command:get_parameter("project_id") or "default_project"
 
     if not xml_path then
@@ -1988,8 +2015,14 @@ command_executors["ImportFCP7XML"] = function(command)
     local fcp7_importer = require('importers.fcp7_xml_importer')
 
     -- Parse XML
-    print(string.format("Parsing FCP7 XML: %s", xml_path))
-    local parse_result = fcp7_importer.import_xml(xml_path, project_id)
+    if xml_path and xml_path ~= "" then
+        print(string.format("Parsing FCP7 XML: %s", xml_path))
+    else
+        print("Parsing FCP7 XML from stored content")
+    end
+    local parse_result = fcp7_importer.import_xml(xml_path, project_id, {
+        xml_content = xml_contents
+    })
 
     if not parse_result.success then
         for _, error_msg in ipairs(parse_result.errors) do
@@ -2029,6 +2062,9 @@ command_executors["ImportFCP7XML"] = function(command)
     command:set_parameter("track_id_map", create_result.track_id_map)
     command:set_parameter("clip_id_map", create_result.clip_id_map)
     command:set_parameter("media_id_map", create_result.media_id_map)
+    if parse_result.xml_content and (not xml_contents or xml_contents == "") then
+        command:set_parameter("xml_contents", parse_result.xml_content)
+    end
 
     print(string.format("✅ Imported %d sequence(s), %d track(s), %d clip(s)",
         #create_result.sequence_ids,

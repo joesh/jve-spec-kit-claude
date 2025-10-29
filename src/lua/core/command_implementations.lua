@@ -21,7 +21,7 @@ function M.register_commands(command_executors, command_undoers, db)
             return
         end
         local Clip = require('models.clip')
-        local clip = Clip.load(state.id, db)
+        local clip = Clip.load_optional(state.id, db)
         if not clip then
             clip = Clip.create('Restored Clip', state.media_id)
             clip.id = state.id
@@ -320,8 +320,8 @@ command_executors["DeleteClip"] = function(command)
         end
     end
     if not clip then
-        print(string.format("WARNING: DeleteClip: Clip not found: %s", clip_id))
-        return false
+        print(string.format("INFO: DeleteClip: Clip %s already absent during replay; skipping delete", clip_id))
+        return true
     end
 
     local clip_state = {
@@ -427,15 +427,31 @@ command_executors["SetClipProperty"] = function(command)
     end
 
     local Clip = require('models.clip')
-    local clip = Clip.load(clip_id, db)
+    local clip = Clip.load_optional(clip_id, db)
     if not clip or clip.id == "" then
-        print(string.format("WARNING: SetClipProperty: Clip not found: %s", clip_id))
-        return false
+        local executed_with_clip = command:get_parameter("executed_with_clip")
+        if executed_with_clip then
+            -- If the clip was deleted later (e.g., via Delete command), skip gracefully.
+            print(string.format("INFO: SetClipProperty: Clip %s missing during replay; property update skipped", clip_id))
+            return true
+        end
+
+        -- If we don't know whether the command ever executed, try to infer from parameters.
+        -- Commands that executed successfully will have stored the previous_value snapshot.
+        if command:get_parameter("previous_value") ~= nil then
+            print(string.format("INFO: SetClipProperty: Clip %s missing but previous_value present; assuming clip deleted and skipping", clip_id))
+            return true
+        end
+
+        -- Final fallback: if the clip is still missing, treat it as deleted but warn for diagnostics.
+        print(string.format("WARNING: SetClipProperty: Clip not found during replay: %s; skipping property update", clip_id))
+        return true
     end
 
     -- Get current value for undo
     local previous_value = clip:get_property(property_name)
     command:set_parameter("previous_value", previous_value)
+    command:set_parameter("executed_with_clip", true)
 
     -- Set new value
     clip:set_property(property_name, new_value)

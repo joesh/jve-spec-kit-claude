@@ -44,7 +44,11 @@ local function activate_item(item_info)
             print("⚠️  Timeline panel not available")
         end
 
-        focus_manager.set_focused_panel("timeline")
+        if focus_manager and focus_manager.focus_panel then
+            focus_manager.focus_panel("timeline")
+        else
+            focus_manager.set_focused_panel("timeline")
+        end
 
         if M.viewer_panel then
             if M.viewer_panel.show_timeline then
@@ -63,7 +67,11 @@ local function activate_item(item_info)
         if M.viewer_panel and M.viewer_panel.show_source_clip then
             M.viewer_panel.show_source_clip(media)
         end
-        focus_manager.set_focused_panel("viewer")
+        if focus_manager and focus_manager.focus_panel then
+            focus_manager.focus_panel("viewer")
+        else
+            focus_manager.set_focused_panel("viewer")
+        end
         return true
     end
 
@@ -219,7 +227,8 @@ local function populate_tree()
             frame_rate = sequence.frame_rate,
             width = sequence.width,
             height = sequence.height,
-            duration = sequence.duration
+            duration = sequence.duration,
+            tree_id = tree_id
         }
 
         store_tree_item(M.tree, tree_id, sequence_info)
@@ -474,7 +483,11 @@ function M.create()
             sequence_lookup = M.sequence_map
         })
 
-        focus_manager.set_focused_panel("project_browser")
+        if focus_manager and focus_manager.focus_panel then
+            focus_manager.focus_panel("project_browser")
+        else
+            focus_manager.set_focused_panel("project_browser")
+        end
     end)
     if qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER then
         qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER(tree, selection_handler)
@@ -587,22 +600,13 @@ function M.insert_selected_to_timeline()
 
     local timeline_state_module = M.timeline_panel.get_state()
     local sequence_id = timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id() or "default_sequence"
-
-    local tracks = db.load_tracks(sequence_id)
-    local target_track = nil
-    for _, track in ipairs(tracks) do
-        if track.track_type == "VIDEO" then
-            target_track = track
-            break
-        end
-    end
-
-    if not target_track then
-        print("❌ No video track found")
+    local project_id = timeline_state_module.get_project_id and timeline_state_module.get_project_id() or "default_project"
+    local track_id = timeline_state_module.get_default_video_track_id and timeline_state_module.get_default_video_track_id() or nil
+    if not track_id or track_id == "" then
+        print("❌ No video track found in active sequence")
         return
     end
 
-    local command_manager = require("core.command_manager")
     local Command = require("command")
 
     local insert_time = timeline_state_module.get_playhead_time and timeline_state_module.get_playhead_time() or 0
@@ -614,8 +618,9 @@ function M.insert_selected_to_timeline()
         return
     end
 
-    local cmd = Command.create("Insert", "default_project")
-    cmd:set_parameter("track_id", target_track.id)
+    local cmd = Command.create("Insert", project_id)
+    cmd:set_parameter("sequence_id", sequence_id)
+    cmd:set_parameter("track_id", track_id)
     cmd:set_parameter("media_id", media.id)
     cmd:set_parameter("insert_time", insert_time)
     cmd:set_parameter("duration", duration)
@@ -628,7 +633,11 @@ function M.insert_selected_to_timeline()
 
     if success and result and result.success then
         print(string.format("✅ Media inserted to timeline: %s", media.name or media.file_name))
-        focus_manager.set_focused_panel("timeline")
+        if focus_manager and focus_manager.focus_panel then
+            focus_manager.focus_panel("timeline")
+        else
+            focus_manager.set_focused_panel("timeline")
+        end
     else
         print(string.format("❌ Failed to insert: %s", result and result.error_message or "unknown"))
     end
@@ -639,6 +648,31 @@ function M.activate_selection()
         return false, "No selection"
     end
     return activate_item(M.selected_item)
+end
+
+function M.focus_sequence(sequence_id, opts)
+    if not sequence_id or sequence_id == "" then
+        return false, "Invalid sequence id"
+    end
+
+    local sequence_info = M.sequence_map and M.sequence_map[sequence_id]
+    if not sequence_info then
+        return false, "Sequence not found"
+    end
+
+    M.selected_item = sequence_info
+    M.selected_items = {sequence_info}
+
+    browser_state.update_selection({sequence_info}, {
+        media_lookup = M.media_map,
+        sequence_lookup = M.sequence_map
+    })
+
+    if not opts or not opts.skip_activate then
+        activate_item(sequence_info)
+    end
+
+    return true
 end
 
 command_manager.register_executor(ACTIVATE_COMMAND, function()

@@ -7,6 +7,8 @@ local timeline_ruler = require("ui.timeline.timeline_ruler")
 local timeline_scrollbar = require("ui.timeline.timeline_scrollbar")
 local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
+local database = require("core.database")
+local command_manager = require("core.command_manager")
 
 local M = {}
 
@@ -874,6 +876,15 @@ function M.load_sequence(sequence_id)
 
     print(string.format("Loading sequence %s into timeline panel", sequence_id))
     state.init(sequence_id)
+
+    local project_id = state.get_project_id and state.get_project_id() or database.get_current_project_id()
+    if project_id then
+        database.set_project_setting(project_id, "last_open_sequence_id", sequence_id)
+    end
+
+    if command_manager and command_manager.activate_timeline_stack then
+        command_manager.activate_timeline_stack(sequence_id)
+    end
 
     if M.header_video_scroll and M.header_audio_scroll then
         local new_video_splitter = select(1, create_video_headers())

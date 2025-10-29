@@ -32,12 +32,28 @@ local M = {
   _sections = {},         -- Table of all sections {section_name = {section_obj, widget, fields}}
   _content_widget = nil,  -- The content widget that holds all sections (for redraws)
   _widgets_initialized = false, -- Track if widgets have been created
+  _suppress_field_updates_depth = 0,
 }
+
+local function suppress_field_updates()
+  M._suppress_field_updates_depth = (M._suppress_field_updates_depth or 0) + 1
+end
+
+local function resume_field_updates()
+  if M._suppress_field_updates_depth and M._suppress_field_updates_depth > 0 then
+    M._suppress_field_updates_depth = M._suppress_field_updates_depth - 1
+  end
+end
+
+local function field_updates_suppressed()
+  return (M._suppress_field_updates_depth or 0) > 0
+end
 
 local function reset_all_fields()
   if not M._field_widgets then
     return
   end
+  suppress_field_updates()
   local props = qt_constants.PROPERTIES or {}
   local set_placeholder = props.SET_PLACEHOLDER_TEXT
   local set_text = props.SET_TEXT
@@ -52,6 +68,7 @@ local function reset_all_fields()
       end
     end
   end
+  resume_field_updates()
 end
 
 function M.mount(root)
@@ -623,6 +640,9 @@ function M.add_schema_field_to_section(section, field)
                 -- Module is still initializing; skip until save handler is ready
                 return
             end
+            if field_updates_suppressed() then
+                return
+            end
             -- Convert text to appropriate type
             local typed_value = new_text
             if field_type == "integer" then
@@ -949,6 +969,9 @@ function M.save_field_value(field_key, value)
     -- Inspector loads its schema before any timeline selection exists; suppress saves until we have a clip.
     return
   end
+  if field_updates_suppressed() then
+    return
+  end
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Saving field '%s' = '%s' to clip %s", field_key, tostring(value), M._current_clip.id))
 
@@ -982,6 +1005,9 @@ end
 -- Save all modified fields from widgets back to current clip
 function M.save_all_fields()
   if not M._current_clip then
+    return
+  end
+  if field_updates_suppressed() then
     return
   end
 
@@ -1063,6 +1089,8 @@ function M.load_clip_data(clip)
   M._current_clip = clip
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Loading clip data: " .. clip.name)
 
+  suppress_field_updates()
+
   -- Populate all field widgets from clip data
   for field_key, field_info in pairs(M._field_widgets) do
     local widget = field_info.widget
@@ -1079,6 +1107,8 @@ function M.load_clip_data(clip)
       logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Failed to set field '%s': %s", field_key, tostring(set_text_error)))
     end
   end
+
+  resume_field_updates()
 end
 
 -- Update inspector when selection changes
@@ -1091,6 +1121,8 @@ function M.load_multi_clip_data(clips)
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
       "[inspector][view] Loading multi-clip data: " .. #clips .. " clips")
+
+  suppress_field_updates()
 
   -- For each field, check if all clips have the same value
   for field_key, field_info in pairs(M._field_widgets) do
@@ -1121,6 +1153,8 @@ function M.load_multi_clip_data(clips)
   if M._apply_button then
     pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, true)
   end
+
+  resume_field_updates()
 end
 
 function M.apply_multi_edit()

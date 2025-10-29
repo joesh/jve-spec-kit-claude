@@ -523,9 +523,18 @@ function keyboard_shortcuts.handle_key(event)
 
             local Command = require("command")
             local playhead_time = timeline_state.get_playhead_time()
-            local insert_cmd = Command.create("Insert", "default_project")
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
+            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+            local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
+            if not track_id or track_id == "" then
+                print("❌ INSERT: Active sequence has no video tracks")
+                return true
+            end
+
+            local insert_cmd = Command.create("Insert", project_id)
             insert_cmd:set_parameter("media_id", selected_media.id)
-            insert_cmd:set_parameter("track_id", "video1")
+            insert_cmd:set_parameter("sequence_id", sequence_id)
+            insert_cmd:set_parameter("track_id", track_id)
             insert_cmd:set_parameter("insert_time", playhead_time)
             insert_cmd:set_parameter("duration", selected_media.duration)
             insert_cmd:set_parameter("source_in", 0)
@@ -553,9 +562,18 @@ function keyboard_shortcuts.handle_key(event)
 
             local Command = require("command")
             local playhead_time = timeline_state.get_playhead_time()
-            local overwrite_cmd = Command.create("Overwrite", "default_project")
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
+            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+            local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
+            if not track_id or track_id == "" then
+                print("❌ OVERWRITE: Active sequence has no video tracks")
+                return true
+            end
+
+            local overwrite_cmd = Command.create("Overwrite", project_id)
             overwrite_cmd:set_parameter("media_id", selected_media.id)
-            overwrite_cmd:set_parameter("track_id", "video1")
+            overwrite_cmd:set_parameter("sequence_id", sequence_id)
+            overwrite_cmd:set_parameter("track_id", track_id)
             overwrite_cmd:set_parameter("overwrite_time", playhead_time)
             overwrite_cmd:set_parameter("duration", selected_media.duration)
             overwrite_cmd:set_parameter("source_in", 0)

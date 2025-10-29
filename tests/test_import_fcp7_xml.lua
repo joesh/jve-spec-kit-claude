@@ -6,6 +6,7 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 local Command = require('command')
+local json = require("dkjson")
 
 local TEST_DB = "/tmp/test_import_fcp7_xml.db"
 os.remove(TEST_DB)
@@ -194,7 +195,25 @@ local initial_counts = {
     media = count_rows("media")
 }
 
-local xml_path = "fixtures/resolve/sample_timeline_fcp7xml.xml"
+local xml_path_relative = "fixtures/resolve/sample_timeline_fcp7xml.xml"
+local pwd = os.getenv("PWD") or "."
+local function resolve_fixture(path)
+    local absolute = pwd .. "/" .. path
+    local handle = io.open(absolute, "r")
+    if handle then
+        handle:close()
+        return absolute
+    end
+    local fallback = absolute .. ".real"
+    handle = io.open(fallback, "r")
+    if handle then
+        handle:close()
+        return fallback
+    end
+    error("Unable to locate fixture at " .. absolute .. " (or .real)")
+end
+
+local xml_path = resolve_fixture(xml_path_relative)
 local import_cmd = Command.create("ImportFCP7XML", "default_project")
 import_cmd:set_parameter("xml_path", xml_path)
 import_cmd:set_parameter("project_id", "default_project")
@@ -241,6 +260,15 @@ local after_nudge_counts = {
     media = count_rows("media")
 }
 assert(after_nudge_counts.clips == after_import_counts.clips, "Nudge should not change clip count")
+
+-- Ensure the import command persisted XML contents for offline replay.
+local args_stmt = db:prepare([[SELECT command_args FROM commands WHERE command_type = 'ImportFCP7XML' ORDER BY sequence_number DESC LIMIT 1]])
+assert(args_stmt:exec() and args_stmt:next(), "Import command should exist in log")
+local args_json = args_stmt:value(0)
+args_stmt:finalize()
+local args_ok, args_table = pcall(json.decode, args_json or "{}")
+assert(args_ok and type(args_table) == "table", "Import command args must decode to a table")
+assert(type(args_table.xml_contents) == "string" and #args_table.xml_contents > 0, "Import command should store xml_contents for replay")
 
 -- Undo nudge should restore import state without clearing the timeline.
 local undo_nudge_result = command_manager.undo()
@@ -293,8 +321,13 @@ assert(after_undo_counts.tracks <= after_import_counts.tracks, "Undo should not 
 assert(after_undo_counts.clips <= after_import_counts.clips, "Undo should not increase clip count")
 
 -- Redo replays the command. Counts should match the original import (no duplicates).
+local backup_path = xml_path .. ".bak"
+local renamed = os.rename(xml_path, backup_path)
+assert(renamed, "Should be able to rename XML fixture for offline replay test")
 local redo_result = command_manager.redo()
 assert(redo_result.success, "Redo after import should succeed")
+local restore_ok, restore_err = os.rename(backup_path, xml_path)
+assert(restore_ok, "Failed to restore XML fixture: " .. tostring(restore_err))
 
 local after_redo_counts = {
     sequences = count_rows("sequences"),
@@ -364,8 +397,6 @@ assert(#video_tracks >= 2, "Importer should provide at least two video tracks")
 
 local media_ids = fetch_media_ids(1)
 assert(#media_ids >= 1, "Importer should provide media rows for insert operations")
-
-local json = require("dkjson")
 
 -- Simulate additional editing commands to mirror real-world history.
 local clip_for_move = fetch_single_clip_id()

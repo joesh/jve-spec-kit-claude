@@ -399,6 +399,95 @@ function M.load_sequences(project_id)
     return sequences
 end
 
+local function decode_settings_json(raw)
+    if not raw or raw == "" then
+        return {}
+    end
+
+    local ok, decoded = pcall(json.decode, raw)
+    if ok and type(decoded) == "table" then
+        return decoded
+    end
+
+    return {}
+end
+
+function M.get_project_settings(project_id)
+    project_id = project_id or M.get_current_project_id()
+    if not db_connection then
+        print("WARNING: get_project_settings: No database connection")
+        return {}
+    end
+
+    local stmt = db_connection:prepare("SELECT settings FROM projects WHERE id = ?")
+    if not stmt then
+        print("WARNING: get_project_settings: Failed to prepare query")
+        return {}
+    end
+
+    stmt:bind_value(1, project_id)
+    local settings_json = "{}"
+    if stmt:exec() and stmt:next() then
+        settings_json = stmt:value(0) or "{}"
+    end
+    stmt:finalize()
+
+    return decode_settings_json(settings_json)
+end
+
+function M.get_project_setting(project_id, key)
+    if not key or key == "" then
+        return nil
+    end
+    local settings = M.get_project_settings(project_id)
+    return settings[key]
+end
+
+function M.set_project_setting(project_id, key, value)
+    if not key or key == "" then
+        return false
+    end
+
+    project_id = project_id or M.get_current_project_id()
+    if not db_connection then
+        print("WARNING: set_project_setting: No database connection")
+        return false
+    end
+
+    local settings = M.get_project_settings(project_id)
+    if value == nil then
+        settings[key] = nil
+    else
+        settings[key] = value
+    end
+
+    local encoded, encode_err = json.encode(settings)
+    if not encoded then
+        print("WARNING: set_project_setting: Failed to encode settings JSON: " .. tostring(encode_err))
+        return false
+    end
+
+    local stmt = db_connection:prepare([[
+        UPDATE projects
+        SET settings = ?, modified_at = strftime('%s', 'now')
+        WHERE id = ?
+    ]])
+
+    if not stmt then
+        print("WARNING: set_project_setting: Failed to prepare update statement")
+        return false
+    end
+
+    stmt:bind_value(1, encoded)
+    stmt:bind_value(2, project_id)
+    local ok = stmt:exec()
+    if not ok then
+        print("WARNING: set_project_setting: Update failed for project " .. tostring(project_id))
+    end
+    stmt:finalize()
+    return ok
+end
+
 -- Load all tags for a specific namespace (or all namespaces if nil)
 function M.load_media_tags(namespace)
     local media_items = M.load_media()

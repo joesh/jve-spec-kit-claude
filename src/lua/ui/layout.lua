@@ -277,6 +277,39 @@ focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline", {
 -- Initialize all panels to unfocused state
 focus_manager.initialize_all_panels()
 
+-- Restore last-open sequence when available
+local project_id = db_module.get_current_project_id()
+local sequences = db_module.load_sequences(project_id)
+
+local function find_sequence_id(candidate_id, list)
+    if not candidate_id or candidate_id == "" then
+        return nil
+    end
+    for _, seq in ipairs(list or {}) do
+        if seq.id == candidate_id then
+            return candidate_id
+        end
+    end
+    return nil
+end
+
+local last_sequence_id = nil
+if db_module.get_project_setting then
+    last_sequence_id = db_module.get_project_setting(project_id, "last_open_sequence_id")
+end
+
+local initial_sequence_id = find_sequence_id(last_sequence_id, sequences)
+if not initial_sequence_id and #sequences > 0 then
+    initial_sequence_id = sequences[1].id
+end
+
+if initial_sequence_id and project_browser_mod.focus_sequence then
+    project_browser_mod.focus_sequence(initial_sequence_id)
+    if focus_manager and focus_manager.focus_panel then
+        focus_manager.focus_panel("timeline")
+    end
+end
+
 -- Add three panels to top splitter
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, viewer_panel)

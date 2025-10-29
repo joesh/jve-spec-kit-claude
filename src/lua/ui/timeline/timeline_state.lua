@@ -42,6 +42,7 @@ local state = {
     -- Data
     tracks = {},  -- All tracks from database
     clips = {},   -- All clips from database
+    project_id = "default_project",
 
     -- Logical viewport (time-based, not pixel-based)
     viewport_start_time = 0,     -- milliseconds - left edge of visible area
@@ -371,6 +372,20 @@ function M.init(sequence_id)
     if db_conn then
         ensure_sequence_viewport_columns(db_conn)
 
+        local project_stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
+        if project_stmt then
+            project_stmt:bind_value(1, sequence_id)
+            if project_stmt:exec() and project_stmt:next() then
+                local seq_project = project_stmt:value(0)
+                if seq_project and seq_project ~= "" then
+                    state.project_id = seq_project
+                else
+                    state.project_id = "default_project"
+                end
+            end
+            project_stmt:finalize()
+        end
+
         local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos, viewport_start_time, viewport_duration FROM sequences WHERE id = ?")
         if query then
             query:bind_value(1, sequence_id)
@@ -527,6 +542,10 @@ function M.get_all_tracks()
     return state.tracks
 end
 
+function M.get_project_id()
+    return state.project_id or "default_project"
+end
+
 function M.get_sequence_id()
     return state.sequence_id or "default_sequence"
 end
@@ -549,6 +568,39 @@ function M.get_audio_tracks()
         end
     end
     return audio_tracks
+end
+
+local function normalize_track_type(track_type)
+    if not track_type then
+        return nil
+    end
+    if type(track_type) ~= "string" then
+        return nil
+    end
+    return track_type:upper()
+end
+
+function M.get_primary_track_id(track_type)
+    local desired_type = normalize_track_type(track_type)
+    if not desired_type then
+        return nil
+    end
+
+    for _, track in ipairs(state.tracks) do
+        if track.track_type == desired_type then
+            return track.id
+        end
+    end
+
+    return nil
+end
+
+function M.get_default_video_track_id()
+    return M.get_primary_track_id("VIDEO")
+end
+
+function M.get_default_audio_track_id()
+    return M.get_primary_track_id("AUDIO")
 end
 
 -- Get all clips (WARNING: returned objects become stale after next reload_clips())

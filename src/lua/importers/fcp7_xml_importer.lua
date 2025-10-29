@@ -337,7 +337,10 @@ end
 -- xml_path: path to FCP7 XML file
 -- project_id: target JVE project ID
 -- Returns: {success, sequences, errors}
-function M.import_xml(xml_path, project_id)
+function M.import_xml(xml_path, project_id, options)
+    options = options or {}
+    local xml_content = options.xml_content
+    local source_label = xml_path or options.source_label or "<memory>"
     local xml2 = require('xml2')
     local result = {
         success = false,
@@ -347,20 +350,28 @@ function M.import_xml(xml_path, project_id)
     }
 
     -- Read and parse XML
-    local file = io.open(xml_path, "r")
-    if not file then
-        table.insert(result.errors, string.format("Failed to open file: %s", xml_path))
-        return result
-    end
+    if not xml_content or xml_content == "" then
+        if not xml_path or xml_path == "" then
+            table.insert(result.errors, "No XML content or file path provided")
+            return result
+        end
 
-    local xml_content = file:read("*all")
-    file:close()
+        local file = io.open(xml_path, "r")
+        if not file then
+            table.insert(result.errors, string.format("Failed to open file: %s", xml_path))
+            return result
+        end
+
+        xml_content = file:read("*all")
+        file:close()
+    end
 
     local doc, err = xml2.parse(xml_content)
     if not doc then
-        table.insert(result.errors, string.format("Failed to parse XML: %s", err or "unknown error"))
+        table.insert(result.errors, string.format("Failed to parse XML (%s): %s", source_label, err or "unknown error"))
         return result
     end
+    result.xml_content = xml_content
 
     -- Verify root element
     local root = doc:root()
