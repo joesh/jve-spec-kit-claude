@@ -110,13 +110,18 @@ db:exec([[
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         timecode_start INTEGER NOT NULL DEFAULT 0,
         playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
+        viewport_start_time INTEGER NOT NULL DEFAULT 0,
+        viewport_duration INTEGER NOT NULL DEFAULT 10000,
+        mark_in_time INTEGER,
+        mark_out_time INTEGER,
         current_sequence_number INTEGER
     );
 

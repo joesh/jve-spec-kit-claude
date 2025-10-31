@@ -4,6 +4,7 @@
 
 local M = {}
 local db = require("core.database")
+local frame_utils = require("core.frame_utils")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local ui_constants = require("core.ui_constants")
@@ -43,6 +44,8 @@ local state = {
     tracks = {},  -- All tracks from database
     clips = {},   -- All clips from database
     project_id = "default_project",
+    sequence_frame_rate = frame_utils.default_frame_rate,
+    sequence_timecode_start = 0,
 
     -- Logical viewport (time-based, not pixel-based)
     viewport_start_time = 0,     -- milliseconds - left edge of visible area
@@ -56,6 +59,8 @@ local state = {
     selected_edges = {},  -- Array of selected edge objects for trimming
                           -- Each edge: {clip_id, edge_type ("in"/"out"), trim_type ("ripple"/"roll")}
     selected_gaps = {},   -- Array of selected gap descriptors {track_id, start_time, duration}
+    mark_in_time = nil,   -- Mark In point in milliseconds (nil when unset)
+    mark_out_time = nil,  -- Mark Out point in milliseconds (nil when unset)
 
     -- Interaction state (for cross-view operations)
     dragging_playhead = false,
@@ -81,6 +86,8 @@ local function ensure_sequence_viewport_columns(db_conn)
 
     local has_start = false
     local has_duration = false
+    local has_mark_in = false
+    local has_mark_out = false
     if pragma:exec() then
         while pragma:next() do
             local column_name = pragma:value(1)
@@ -88,6 +95,10 @@ local function ensure_sequence_viewport_columns(db_conn)
                 has_start = true
             elseif column_name == "viewport_duration" then
                 has_duration = true
+            elseif column_name == "mark_in_time" then
+                has_mark_in = true
+            elseif column_name == "mark_out_time" then
+                has_mark_out = true
             end
         end
     end
@@ -106,22 +117,63 @@ local function ensure_sequence_viewport_columns(db_conn)
             print("WARNING: Failed to add viewport_duration column: " .. tostring(err or "unknown error"))
         end
     end
+
+    if not has_mark_in then
+        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN mark_in_time INTEGER")
+        if not ok then
+            print("WARNING: Failed to add mark_in_time column: " .. tostring(err or "unknown error"))
+        end
+    end
+
+    if not has_mark_out then
+        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN mark_out_time INTEGER")
+        if not ok then
+            print("WARNING: Failed to add mark_out_time column: " .. tostring(err or "unknown error"))
+        end
+    end
 end
 
-local function calculate_timeline_extent()
+local function compute_sequence_content_length()
     local max_end = 0
     for _, clip in ipairs(state.clips) do
-        local clip_end = clip.start_time + clip.duration
+        local clip_start = clip.start_time or 0
+        local clip_duration = clip.duration or 0
+        local clip_end = clip_start + clip_duration
         if clip_end > max_end then
             max_end = clip_end
         end
     end
+    return max_end
+end
+
+local function calculate_timeline_extent()
+    local content_end = compute_sequence_content_length()
+    local max_end = content_end
 
     if state.playhead_time and state.playhead_time > max_end then
         max_end = state.playhead_time
     end
 
+    if state.viewport_start_time and state.viewport_duration then
+        local viewport_end = state.viewport_start_time + state.viewport_duration
+        if viewport_end > max_end then
+            max_end = viewport_end
+        end
+    end
+
     return math.max(60000, max_end + 10000)
+end
+
+local function sanitize_mark_time(time_ms)
+    if type(time_ms) ~= "number" then
+        return nil
+    end
+    local frame_rate = state.sequence_frame_rate or frame_utils.default_frame_rate
+    local snapped = frame_utils.snap_to_frame(time_ms, frame_rate)
+    if snapped < 0 then
+        snapped = 0
+    end
+    return snapped
 end
 
 local function clamp_viewport_start(desired_start, duration)
@@ -323,14 +375,19 @@ M.colors = {
     background = "#232323",
     track_odd = "#2b2b2b",
     track_even = "#252525",
-    video_track_header = "#3a3a5a",
-    audio_track_header = "#3a4a3a",
-    clip = "#4a90e2",
+    video_track_header = "#1d1d1f",
+    audio_track_header = "#1d1d1f",
+    clip = "#548bb5",
+    clip_video = "#548bb5",
+    clip_audio = "#32986b",
     clip_selected = "#ff8c42",
     clip_disabled = "#3f7fcc",
     clip_disabled_text = "#c3d6ff",
-    gap_selected_fill = "#2d3f5c",
-    gap_selected_outline = "#4a90e2",
+    clip_boundary = "#232323",
+    gap_selected_fill = "#ff8c42",
+    gap_selected_outline = "#ff8c42",
+    mark_range_fill = "#19dfeeff",
+    mark_range_edge = "#ff6b6b",
     playhead = "#ff6b6b",
     text = "#cccccc",
     grid_line = "#3a3a3a",
@@ -386,7 +443,7 @@ function M.init(sequence_id)
             project_stmt:finalize()
         end
 
-        local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos, viewport_start_time, viewport_duration FROM sequences WHERE id = ?")
+        local query = db_conn:prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos, viewport_start_time, viewport_duration, frame_rate, timecode_start, mark_in_time, mark_out_time FROM sequences WHERE id = ?")
         if query then
             query:bind_value(1, sequence_id)
             if query:exec() and query:next() then
@@ -453,11 +510,36 @@ function M.init(sequence_id)
                                 #state.selected_edges
                             ))
                         end
-                    end
                 end
+            end
 
-                local saved_viewport_start = query:value(3)
-                local saved_viewport_duration = query:value(4)
+            -- Restore sequence-level timing metadata
+            local saved_frame_rate = tonumber(query:value(5))
+            if saved_frame_rate and saved_frame_rate > 0 then
+                state.sequence_frame_rate = saved_frame_rate
+            else
+                state.sequence_frame_rate = frame_utils.default_frame_rate
+            end
+
+            local saved_timecode_start = tonumber(query:value(6))
+            state.sequence_timecode_start = saved_timecode_start or 0
+
+            local saved_mark_in = query:value(7)
+            if saved_mark_in ~= nil then
+                state.mark_in_time = tonumber(saved_mark_in)
+            else
+                state.mark_in_time = nil
+            end
+
+            local saved_mark_out = query:value(8)
+            if saved_mark_out ~= nil then
+                state.mark_out_time = tonumber(saved_mark_out)
+            else
+                state.mark_out_time = nil
+            end
+
+            local saved_viewport_start = query:value(3)
+            local saved_viewport_duration = query:value(4)
                 local restored_viewport = false
                 if saved_viewport_duration and saved_viewport_duration > 0 then
                     state.viewport_duration = math.max(1000, saved_viewport_duration)
@@ -548,6 +630,141 @@ end
 
 function M.get_sequence_id()
     return state.sequence_id or "default_sequence"
+end
+
+function M.get_sequence_frame_rate()
+    local rate = state.sequence_frame_rate or frame_utils.default_frame_rate
+    if type(rate) ~= "number" or rate <= 0 then
+        return frame_utils.default_frame_rate
+    end
+    return rate
+end
+
+function M.get_sequence_timecode_start()
+    return state.sequence_timecode_start or 0
+end
+
+function M.has_explicit_mark_in()
+    return state.mark_in_time ~= nil
+end
+
+function M.has_explicit_mark_out()
+    return state.mark_out_time ~= nil
+end
+
+function M.get_timeline_content_length()
+    return compute_sequence_content_length()
+end
+
+function M.get_timeline_extent_end()
+    local content_end = compute_sequence_content_length()
+    local viewport_end = 0
+    if state.viewport_start_time and state.viewport_duration then
+        viewport_end = state.viewport_start_time + state.viewport_duration
+    end
+    local playhead = state.playhead_time or 0
+    return math.max(content_end, viewport_end, playhead)
+end
+
+function M.get_mark_in()
+    if state.mark_in_time ~= nil then
+        return state.mark_in_time
+    end
+    if state.mark_out_time ~= nil then
+        return 0
+    end
+    return nil
+end
+
+function M.get_mark_out()
+    if state.mark_out_time ~= nil then
+        return state.mark_out_time
+    end
+    if state.mark_in_time ~= nil then
+        local content_end = compute_sequence_content_length()
+        if content_end > 0 then
+            return content_end
+        end
+        local viewport_end = 0
+        if state.viewport_start_time and state.viewport_duration then
+            viewport_end = state.viewport_start_time + state.viewport_duration
+        end
+        return viewport_end
+    end
+    return nil
+end
+
+function M.set_mark_in(time_ms)
+    if time_ms == nil then
+        if state.mark_in_time ~= nil then
+            state.mark_in_time = nil
+            notify_listeners()
+            M.persist_state_to_db()
+        end
+        return
+    end
+
+    local sanitized = sanitize_mark_time(time_ms)
+    if not sanitized then
+        return
+    end
+
+    if state.mark_in_time == sanitized then
+        return
+    end
+
+    if state.mark_out_time and sanitized > state.mark_out_time then
+        state.mark_out_time = nil
+    end
+
+    state.mark_in_time = sanitized
+
+    notify_listeners()
+    M.persist_state_to_db()
+end
+
+function M.set_mark_out(time_ms)
+    if time_ms == nil then
+        if state.mark_out_time ~= nil then
+            state.mark_out_time = nil
+            notify_listeners()
+            M.persist_state_to_db()
+        end
+        return
+    end
+
+    local sanitized = sanitize_mark_time(time_ms)
+    if not sanitized then
+        return
+    end
+
+    if state.mark_in_time and sanitized < state.mark_in_time then
+        state.mark_in_time = nil
+    end
+
+    if state.mark_out_time == sanitized then
+        return
+    end
+
+    state.mark_out_time = sanitized
+    notify_listeners()
+    M.persist_state_to_db()
+end
+
+function M.clear_marks()
+    local changed = false
+    if state.mark_in_time ~= nil then
+        state.mark_in_time = nil
+        changed = true
+    end
+    if state.mark_out_time ~= nil then
+        state.mark_out_time = nil
+        changed = true
+    end
+    if changed then
+        notify_listeners()
+        M.persist_state_to_db()
+    end
 end
 
 function M.get_video_tracks()
@@ -1238,7 +1455,7 @@ function M.persist_state_to_db()
     -- Update sequences table with current state
     local query = db_conn:prepare([[
         UPDATE sequences
-        SET playhead_time = ?, selected_clip_ids = ?, selected_edge_infos = ?, viewport_start_time = ?, viewport_duration = ?
+        SET playhead_time = ?, selected_clip_ids = ?, selected_edge_infos = ?, viewport_start_time = ?, viewport_duration = ?, mark_in_time = ?, mark_out_time = ?
         WHERE id = ?
     ]])
 
@@ -1248,7 +1465,9 @@ function M.persist_state_to_db()
         query:bind_value(3, edges_json)
         query:bind_value(4, math.floor(state.viewport_start_time or 0))
         query:bind_value(5, math.floor(state.viewport_duration or 10000))
-        query:bind_value(6, sequence_id)
+        query:bind_value(6, state.mark_in_time)
+        query:bind_value(7, state.mark_out_time)
+        query:bind_value(8, sequence_id)
         query:exec()
     end
 end

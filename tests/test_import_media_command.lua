@@ -11,6 +11,7 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local media_reader = require("media.media_reader")
+local Media = require("models.media")
 
 local function create_schema(db)
     db:exec([[
@@ -23,21 +24,23 @@ local function create_schema(db)
         );
 
         CREATE TABLE IF NOT EXISTS sequences (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'timeline',
-            frame_rate REAL NOT NULL,
-            width INTEGER NOT NULL,
-            height INTEGER NOT NULL,
-            timecode_start INTEGER NOT NULL DEFAULT 0,
-            playhead_time INTEGER NOT NULL DEFAULT 0,
-            selected_clip_ids TEXT DEFAULT '[]',
-            selected_edge_infos TEXT DEFAULT '[]',
-            viewport_start_time INTEGER NOT NULL DEFAULT 0,
-            viewport_duration INTEGER NOT NULL DEFAULT 10000,
-            current_sequence_number INTEGER
-        );
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
+        frame_rate REAL NOT NULL,
+        width INTEGER NOT NULL,
+        height INTEGER NOT NULL,
+        timecode_start INTEGER NOT NULL DEFAULT 0,
+        playhead_time INTEGER NOT NULL DEFAULT 0,
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
+        viewport_start_time INTEGER NOT NULL DEFAULT 0,
+        viewport_duration INTEGER NOT NULL DEFAULT 10000,
+        mark_in_time INTEGER,
+        mark_out_time INTEGER,
+        current_sequence_number INTEGER
+    );
 
         CREATE TABLE IF NOT EXISTS tracks (
             id TEXT PRIMARY KEY,
@@ -166,6 +169,25 @@ media_reader.import_media = function(file_path, db_conn, project_id, existing_me
             codec = "aac",
         },
     }
+
+    local media_record = Media.create({
+        id = media_id,
+        project_id = project_id,
+        name = file_path:match("([^/\\]+)$") or file_path,
+        file_path = file_path,
+        duration = metadata.duration_ms,
+        frame_rate = metadata.video and metadata.video.frame_rate or 0,
+        width = metadata.video and metadata.video.width or 0,
+        height = metadata.video and metadata.video.height or 0,
+        audio_channels = metadata.audio and metadata.audio.channels or 0,
+        codec = metadata.video and metadata.video.codec or metadata.audio.codec or "",
+        metadata = '{}',
+        created_at = os.time(),
+        modified_at = os.time()
+    })
+    assert(media_record, "Failed to create stub media record")
+    assert(media_record:save(db_conn), "Failed to persist stub media record")
+
     return media_id, metadata
 end
 

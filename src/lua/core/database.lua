@@ -217,7 +217,12 @@ function M.load_clips(sequence_id)
     ]])
 
     if not query then
-        error("FATAL: Failed to prepare clip query")
+        local err_func = db_connection.last_error
+        local err = nil
+        if err_func then
+            err = err_func(db_connection)
+        end
+        error("FATAL: Failed to prepare clip query: " .. tostring(err or "unknown error"))
     end
 
     query:bind_value(1, sequence_id)
@@ -279,6 +284,56 @@ function M.load_clips(sequence_id)
     end
 
     return clips
+end
+
+function M.load_clip_properties(clip_id)
+    if not clip_id or clip_id == "" then
+        return {}
+    end
+
+    if not db_connection then
+        print("WARNING: load_clip_properties: No database connection")
+        return {}
+    end
+
+    local properties = {}
+    local query = db_connection:prepare([[
+        SELECT property_name, property_value
+        FROM properties
+        WHERE clip_id = ?
+    ]])
+
+    if not query then
+        return properties
+    end
+
+    query:bind_value(1, clip_id)
+
+    if query:exec() then
+        while query:next() do
+            local name = query:value(0)
+            local raw_value = query:value(1)
+            local decoded_value = nil
+
+            if raw_value and raw_value ~= "" then
+                local ok, decoded = pcall(json.decode, raw_value)
+                if ok and type(decoded) == "table" then
+                    if decoded.value ~= nil then
+                        decoded_value = decoded.value
+                    else
+                        decoded_value = decoded
+                    end
+                else
+                    decoded_value = raw_value
+                end
+            end
+
+            properties[name] = decoded_value
+        end
+    end
+
+    query:finalize()
+    return properties
 end
 
 -- REMOVED: save_clip() - Stub implementation violated event sourcing
@@ -566,6 +621,54 @@ function M.load_sequences(project_id)
     end
 
     return sequences
+end
+
+function M.load_sequence_record(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return nil
+    end
+
+    if not db_connection then
+        print("WARNING: load_sequence_record: No database connection")
+        return nil
+    end
+
+    local query = db_connection:prepare([[
+        SELECT id, project_id, name, kind, frame_rate, width, height,
+               timecode_start, playhead_time, viewport_start_time,
+               viewport_duration, mark_in_time, mark_out_time
+        FROM sequences
+        WHERE id = ?
+    ]])
+
+    if not query then
+        print("WARNING: load_sequence_record: Failed to prepare query")
+        return nil
+    end
+
+    query:bind_value(1, sequence_id)
+
+    local sequence = nil
+    if query:exec() and query:next() then
+        sequence = {
+            id = query:value(0),
+            project_id = query:value(1),
+            name = query:value(2),
+            kind = query:value(3),
+            frame_rate = tonumber(query:value(4)) or 0,
+            width = tonumber(query:value(5)) or 0,
+            height = tonumber(query:value(6)) or 0,
+            timecode_start = tonumber(query:value(7)) or 0,
+            playhead_time = tonumber(query:value(8)) or 0,
+            viewport_start_time = tonumber(query:value(9)) or 0,
+            viewport_duration = tonumber(query:value(10)) or 0,
+            mark_in_time = tonumber(query:value(11)),
+            mark_out_time = tonumber(query:value(12))
+        }
+    end
+
+    query:finalize()
+    return sequence
 end
 
 local function decode_settings_json(raw)

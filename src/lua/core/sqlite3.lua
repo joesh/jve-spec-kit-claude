@@ -14,6 +14,7 @@ ffi.cdef[[
     int sqlite3_step(sqlite3_stmt *pStmt);
     int sqlite3_finalize(sqlite3_stmt *pStmt);
     int sqlite3_reset(sqlite3_stmt *pStmt);
+    int sqlite3_clear_bindings(sqlite3_stmt *pStmt);
     int sqlite3_bind_text(sqlite3_stmt *pStmt, int idx, const char *text, int n, void(*destructor)(void*));
     int sqlite3_bind_int(sqlite3_stmt *pStmt, int idx, int value);
     int sqlite3_bind_int64(sqlite3_stmt *pStmt, int idx, int64_t value);
@@ -186,11 +187,27 @@ function Statement:bind_value(index, value)
     return rc == SQLITE_OK
 end
 
-function Statement:exec()
-    -- Reset before execution
-    sqlite3_lib.sqlite3_reset(self._stmt)
+function Statement:reset()
+    local rc = sqlite3_lib.sqlite3_reset(self._stmt)
     self._current_row = 0
     self._has_row = false
+    if rc ~= SQLITE_OK then
+        error("sqlite3_reset failed: " .. self:last_error())
+    end
+    return true
+end
+
+function Statement:clear_bindings()
+    local rc = sqlite3_lib.sqlite3_clear_bindings(self._stmt)
+    if rc ~= SQLITE_OK then
+        error("sqlite3_clear_bindings failed: " .. self:last_error())
+    end
+    return true
+end
+
+function Statement:exec()
+    -- Reset before execution
+    self:reset()
 
     -- Execute first step
     local rc = sqlite3_lib.sqlite3_step(self._stmt)

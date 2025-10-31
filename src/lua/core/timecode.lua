@@ -93,50 +93,67 @@ end
 function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixel_spacing, pixels_per_ms)
     target_pixel_spacing = target_pixel_spacing or 100
 
-    -- Calculate how many milliseconds per pixel
     if not pixels_per_ms then
-        -- Assume 1920px width if not provided
         pixels_per_ms = 1920 / viewport_duration_ms
     end
 
-    -- Target interval in milliseconds
-    local target_interval_ms = target_pixel_spacing / pixels_per_ms
-
-    -- Frame duration in milliseconds
     local frame_ms = 1000 / frame_rate
 
-    -- Define intervals in frames, then convert to ms
-    -- Intervals: 1f, 5f, 10f, 30f, 1s, 5s, 10s, 30s, 1m, 5m, 10m
-    local intervals_frames = {1, 5, 10, 30}
-    local intervals_seconds = {1, 5, 10, 30}
-    local intervals_minutes = {1, 5, 10}
+    local candidate_intervals = {
+        {kind = "frames", value = 1},
+        {kind = "frames", value = 2},
+        {kind = "frames", value = 4},
+        {kind = "frames", value = 8},
+        {kind = "seconds", value = 1},
+        {kind = "seconds", value = 2},
+        {kind = "seconds", value = 5},
+        {kind = "seconds", value = 10},
+        {kind = "seconds", value = 20},
+        {kind = "seconds", value = 30},
+        {kind = "minutes", value = 1},
+        {kind = "minutes", value = 2},
+        {kind = "minutes", value = 5},
+        {kind = "minutes", value = 10},
+    }
 
-    -- Try frame-based intervals first
-    for _, frames in ipairs(intervals_frames) do
-        local interval_ms = frames * frame_ms
-        if interval_ms >= target_interval_ms then
-            return interval_ms, "frames", frames
+    local function interval_to_ms(entry)
+        if entry.kind == "frames" then
+            return entry.value * frame_ms
+        elseif entry.kind == "seconds" then
+            return entry.value * 1000
+        elseif entry.kind == "minutes" then
+            return entry.value * 60000
+        end
+        return 1000
+    end
+
+    local best_entry = candidate_intervals[#candidate_intervals]
+    local best_score = math.huge
+
+    for _, entry in ipairs(candidate_intervals) do
+        local interval_ms = interval_to_ms(entry)
+        local count = viewport_duration_ms / interval_ms
+        local score = math.abs(count - 10)
+
+        if count >= 4 and score < best_score then
+            best_score = score
+            best_entry = entry
         end
     end
 
-    -- Try second-based intervals
-    for _, seconds in ipairs(intervals_seconds) do
-        local interval_ms = seconds * 1000
-        if interval_ms >= target_interval_ms then
-            return interval_ms, "seconds", seconds
-        end
+    -- If everything produced too many ticks, pick the largest interval.
+    if best_score == math.huge then
+        best_entry = candidate_intervals[#candidate_intervals]
     end
 
-    -- Try minute-based intervals
-    for _, minutes in ipairs(intervals_minutes) do
-        local interval_ms = minutes * 60000
-        if interval_ms >= target_interval_ms then
-            return interval_ms, "minutes", minutes
-        end
+    local interval_ms = interval_to_ms(best_entry)
+    if best_entry.kind == "frames" then
+        return interval_ms, "frames", best_entry.value
+    elseif best_entry.kind == "seconds" then
+        return interval_ms, "seconds", best_entry.value
+    else
+        return interval_ms, "minutes", best_entry.value
     end
-
-    -- Fall back to 10 minutes
-    return 600000, "minutes", 10
 end
 
 --- Format timecode for ruler display based on zoom level

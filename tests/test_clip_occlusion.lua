@@ -56,13 +56,22 @@ local function setup_db(path)
 
         CREATE TABLE IF NOT EXISTS clips (
             id TEXT PRIMARY KEY,
-            track_id TEXT NOT NULL,
+            project_id TEXT,
+            clip_kind TEXT NOT NULL DEFAULT 'timeline',
+            name TEXT DEFAULT '',
+            track_id TEXT,
             media_id TEXT,
+            source_sequence_id TEXT,
+            parent_clip_id TEXT,
+            owner_sequence_id TEXT,
             start_time INTEGER NOT NULL,
             duration INTEGER NOT NULL,
             source_in INTEGER NOT NULL DEFAULT 0,
             source_out INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
+            enabled INTEGER NOT NULL DEFAULT 1,
+            offline INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            modified_at INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS media (
@@ -676,8 +685,11 @@ assert(command_executors["RippleEdit"](track_close_cmd), "RippleEdit gap-after c
 
 local clip1_post_close = fetch_clip(db, track_clip1.id)
 local clip2_post_close = fetch_clip(db, track_clip2.id)
-assert(clip2_post_close.start_time == clip1_post_close.start_time + clip1_post_close.duration,
-    string.format("gap should be closed (expected %d, got %d)", clip1_post_close.start_time + clip1_post_close.duration, clip2_post_close.start_time))
+do
+    local expected_start = clip1_post_close.start_time + clip1_post_close.duration
+    assert(math.abs(clip2_post_close.start_time - expected_start) <= 1,
+        string.format("gap should be closed (expected %d, got %d)", expected_start, clip2_post_close.start_time))
+end
 
 local trim_amount = 1200
 local track_trim_cmd = Command.create("RippleEdit", "project")

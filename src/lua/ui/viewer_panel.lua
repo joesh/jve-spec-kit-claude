@@ -6,6 +6,7 @@ local frame_utils = require("core.frame_utils")
 local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 local json = require("dkjson")
+local inspectable_factory = require("inspectable")
 
 local M = {}
 
@@ -37,7 +38,11 @@ local function format_duration(media)
     if ok and result then
         return result
     end
-    return string.format("%d ms", media.duration)
+    local fallback_ok, fallback = pcall(frame_utils.format_timecode, media.duration or 0, frame_utils.default_frame_rate)
+    if fallback_ok and fallback then
+        return fallback
+    end
+    return "00:00:00:00"
 end
 
 local function render_text(lines)
@@ -183,6 +188,18 @@ function M.show_source_clip(media)
 
     render_text(lines)
 
+    local inspectable = nil
+    if media.clip_id or media.id then
+        local ok, clip_inspectable = pcall(inspectable_factory.clip, {
+            clip_id = media.clip_id or media.id,
+            project_id = media.project_id,
+            clip = media
+        })
+        if ok then
+            inspectable = clip_inspectable
+        end
+    end
+
     selection_hub.update_selection("viewer", {{
         item_type = "viewer_media",
         id = media.id,
@@ -195,6 +212,10 @@ function M.show_source_clip(media)
         codec = media.codec,
         file_path = media.file_path,
         metadata = normalize_metadata(media.metadata),
+        project_id = media.project_id,
+        inspectable = inspectable,
+        schema = inspectable and inspectable:get_schema_id() or nil,
+        display_name = media.name or media.file_name or media.id or "Untitled"
     }})
 end
 
@@ -223,6 +244,16 @@ function M.show_timeline(sequence)
     render_text(lines)
 
     if sequence then
+        local inspectable = nil
+        local ok, seq_inspectable = pcall(inspectable_factory.sequence, {
+            sequence_id = sequence.id,
+            project_id = sequence.project_id,
+            sequence = sequence
+        })
+        if ok then
+            inspectable = seq_inspectable
+        end
+
         selection_hub.update_selection("viewer", {{
             item_type = "viewer_timeline",
             id = sequence.id,
@@ -231,6 +262,10 @@ function M.show_timeline(sequence)
             frame_rate = sequence.frame_rate,
             width = sequence.width,
             height = sequence.height,
+            inspectable = inspectable,
+            schema = inspectable and inspectable:get_schema_id() or nil,
+            display_name = sequence.name or sequence.id or "Untitled",
+            project_id = sequence.project_id
         }})
     else
         selection_hub.update_selection("viewer", {})

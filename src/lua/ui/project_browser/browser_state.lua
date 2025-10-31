@@ -3,6 +3,7 @@
 
 local json = require("dkjson")
 local selection_hub = require("ui.selection_hub")
+local inspectable_factory = require("inspectable")
 
 local M = {}
 
@@ -57,7 +58,9 @@ local function normalize_master_clip(item, context)
     local source_in = tonumber(clip.source_in) or 0
     local source_out = tonumber(clip.source_out) or duration
 
-    return {
+    local project_id = clip.project_id or context.project_id or (media and media.project_id) or "default_project"
+
+    local entry = {
         id = clip.clip_id,
         clip_id = clip.clip_id,
         media_id = clip.media_id,
@@ -76,7 +79,21 @@ local function normalize_master_clip(item, context)
         master_sequence_id = clip.source_sequence_id,
         item_type = "master_clip",
         view = "project_browser",
+        project_id = project_id,
+        display_name = clip.name or (media and media.name) or clip.clip_id
     }
+
+    local ok, inspectable = pcall(inspectable_factory.clip, {
+        clip_id = clip.clip_id,
+        project_id = project_id or "default_project",
+        clip = clip
+    })
+    if ok and inspectable then
+        entry.inspectable = inspectable
+        entry.schema = inspectable:get_schema_id()
+    end
+
+    return entry
 end
 
 local function normalize_timeline(item, context)
@@ -97,7 +114,7 @@ local function normalize_timeline(item, context)
 
     local duration = tonumber(sequence.duration) or 0
 
-    return {
+    local entry = {
         id = sequence.id,
         name = sequence.name or sequence.id,
         duration = duration,
@@ -110,7 +127,22 @@ local function normalize_timeline(item, context)
         metadata = {},
         item_type = "timeline",
         view = "project_browser",
+        project_id = sequence.project_id,
+        display_name = sequence.name or sequence.id
     }
+
+    local project_id = sequence.project_id or (context and context.project_id)
+    local ok, inspectable = pcall(inspectable_factory.sequence, {
+        sequence_id = sequence.id,
+        project_id = project_id or "default_project",
+        sequence = sequence
+    })
+    if ok and inspectable then
+        entry.inspectable = inspectable
+        entry.schema = inspectable:get_schema_id()
+    end
+
+    return entry
 end
 
 function M.normalize_selection(raw_items, context)

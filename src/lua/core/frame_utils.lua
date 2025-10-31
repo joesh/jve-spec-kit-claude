@@ -71,14 +71,30 @@ function M.snap_delta_to_frame(delta_ms, frame_rate)
 end
 
 -- Format time as timecode string (HH:MM:SS:FF)
-function M.format_timecode(time_ms, frame_rate, drop_frame)
+function M.format_timecode(time_ms, frame_rate, opts)
     frame_rate = frame_rate or M.default_frame_rate
-    drop_frame = drop_frame or false
 
-    local total_frames = math.floor(time_ms / M.frame_duration_ms(frame_rate))
+    local drop_frame = false
+    local separator = ":"
 
-    -- Drop-frame timecode is complex - for now just do non-drop
-    local frames_per_second = math.floor(frame_rate)
+    if type(opts) == "boolean" then
+        drop_frame = opts
+    elseif type(opts) == "table" then
+        drop_frame = opts.drop_frame or false
+        separator = opts.separator or separator
+    end
+
+    local frame_duration = M.frame_duration_ms(frame_rate)
+    local abs_ms = math.abs(time_ms or 0)
+    local sign = ""
+    if time_ms and time_ms < 0 then
+        sign = "-"
+    end
+
+    local total_frames = math.floor(abs_ms / frame_duration + 0.5)
+
+    -- Drop-frame handling would adjust total_frames here. For now we just flag separator.
+    local frames_per_second = math.max(1, math.floor(frame_rate + 0.5))
     local frames_per_minute = frames_per_second * 60
     local frames_per_hour = frames_per_minute * 60
 
@@ -91,32 +107,84 @@ function M.format_timecode(time_ms, frame_rate, drop_frame)
     local seconds = math.floor(remaining / frames_per_second)
     local frames = remaining % frames_per_second
 
-    local separator = drop_frame and ";" or ":"
-    return string.format("%02d:%02d:%02d%s%02d", hours, minutes, seconds, separator, frames)
+    local sep = drop_frame and ";" or separator
+    return string.format("%s%02d%s%02d%s%02d%s%02d", sign, hours, sep, minutes, sep, seconds, sep, frames)
 end
 
 -- Parse timecode string to milliseconds
-function M.parse_timecode(timecode_str, frame_rate)
+function M.parse_timecode(timecode_str, frame_rate, opts)
     frame_rate = frame_rate or M.default_frame_rate
 
-    -- Match HH:MM:SS:FF or HH:MM:SS;FF (drop frame)
-    local hours, minutes, seconds, frames = timecode_str:match("(%d+):(%d+):(%d+)[:;](%d+)")
-
-    if not hours then
+    if not timecode_str then
         return nil, "Invalid timecode format"
     end
 
-    hours = tonumber(hours)
-    minutes = tonumber(minutes)
-    seconds = tonumber(seconds)
-    frames = tonumber(frames)
+    local trimmed = timecode_str:match("^%s*(.-)%s*$")
+    if trimmed == "" then
+        return nil, "Invalid timecode format"
+    end
 
-    local total_frames = frames +
-                        (seconds * frame_rate) +
-                        (minutes * 60 * frame_rate) +
-                        (hours * 60 * 60 * frame_rate)
+    local sign = 1
+    if trimmed:sub(1, 1) == "-" then
+        sign = -1
+        trimmed = trimmed:sub(2)
+    elseif trimmed:sub(1, 1) == "+" then
+        trimmed = trimmed:sub(2)
+    end
 
-    return M.frame_to_time(total_frames, frame_rate)
+    local normalized = trimmed:gsub("[,%;%.]", ":")
+    normalized = normalized:gsub("%s+", ":")
+
+    local parts = {}
+    for token in normalized:gmatch("[^:]+") do
+        table.insert(parts, token)
+    end
+
+    if #parts == 0 or #parts > 4 then
+        return nil, "Invalid timecode format"
+    end
+
+    while #parts < 4 do
+        table.insert(parts, 1, "0")
+    end
+
+    local hours = tonumber(parts[1])
+    local minutes = tonumber(parts[2])
+    local seconds = tonumber(parts[3])
+    local frames = tonumber(parts[4])
+
+    if not (hours and minutes and seconds and frames) then
+        return nil, "Invalid timecode components"
+    end
+
+    if minutes < 0 or minutes >= 60 or seconds < 0 or seconds >= 60 or frames < 0 then
+        return nil, "Invalid timecode components"
+    end
+
+    local frames_per_second = math.max(1, math.floor(frame_rate + 0.5))
+    if frames >= frames_per_second then
+        seconds = seconds + math.floor(frames / frames_per_second)
+        frames = frames % frames_per_second
+    end
+
+    if seconds >= 60 then
+        minutes = minutes + math.floor(seconds / 60)
+        seconds = seconds % 60
+    end
+
+    if minutes >= 60 then
+        hours = hours + math.floor(minutes / 60)
+        minutes = minutes % 60
+    end
+
+    local frame_duration = M.frame_duration_ms(frame_rate)
+    local total_frames = (hours * 3600 * frame_rate) +
+                         (minutes * 60 * frame_rate) +
+                         (seconds * frame_rate) +
+                         frames
+
+    local time_ms = total_frames * frame_duration
+    return sign * math.floor(time_ms + 0.5)
 end
 
 -- Validate that clip boundaries are frame-aligned

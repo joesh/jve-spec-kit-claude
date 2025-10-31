@@ -13,6 +13,7 @@ local M = {}
 local db = nil
 
 local command_scope = require("core.command_scope")
+local frame_utils = require("core.frame_utils")
 
 -- State tracking
 local last_sequence_number = 0
@@ -59,7 +60,8 @@ local command_stack_resolvers = {}
 
 local sequence_initial_state = {
     clips = {},
-    media = {}
+    media = {},
+    master = {}
 }
 
 local function clone_clip_entry(clip)
@@ -110,6 +112,199 @@ local function clone_list(source, cloner)
     return result
 end
 
+local function format_timecode_for_log(time_ms)
+    local ok, formatted = pcall(frame_utils.format_timecode, time_ms or 0)
+    if ok and formatted then
+        return formatted
+    end
+    return tostring(time_ms or 0) .. "ms"
+end
+
+local function gather_master_initial_state(project_id)
+    local master_state = {
+        sequences = {},
+        tracks = {},
+        clips = {}
+    }
+
+    if not project_id then
+        return master_state
+    end
+
+    local database = require('core.database')
+    local conn = database.get_connection()
+    if not conn then
+        return master_state
+    end
+
+    local seq_query = conn:prepare([[
+        SELECT id, project_id, name, kind, frame_rate, width, height,
+               timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
+               viewport_start_time, viewport_duration, mark_in_time, mark_out_time,
+               current_sequence_number
+        FROM sequences
+        WHERE project_id = ? AND kind != 'timeline'
+    ]])
+
+    local sequence_ids = {}
+    if seq_query then
+        seq_query:bind_value(1, project_id)
+        if seq_query:exec() then
+            while seq_query:next() do
+                local seq = {
+                    id = seq_query:value(0),
+                    project_id = seq_query:value(1),
+                    name = seq_query:value(2),
+                    kind = seq_query:value(3),
+                    frame_rate = tonumber(seq_query:value(4)) or 0,
+                    width = tonumber(seq_query:value(5)) or 0,
+                    height = tonumber(seq_query:value(6)) or 0,
+                    timecode_start = tonumber(seq_query:value(7)) or 0,
+                    playhead_time = tonumber(seq_query:value(8)) or 0,
+                    selected_clip_ids = seq_query:value(9),
+                    selected_edge_infos = seq_query:value(10),
+                    viewport_start_time = tonumber(seq_query:value(11)) or 0,
+                    viewport_duration = tonumber(seq_query:value(12)) or 10000,
+                    mark_in_time = seq_query:value(13),
+                    mark_out_time = seq_query:value(14),
+                    current_sequence_number = seq_query:value(15)
+                }
+                table.insert(master_state.sequences, seq)
+                table.insert(sequence_ids, seq.id)
+            end
+        end
+        seq_query:finalize()
+    end
+
+    if #sequence_ids == 0 then
+        return master_state
+    end
+
+    local track_query = conn:prepare([[
+        SELECT id, sequence_id, name, track_type, track_index,
+               enabled, locked, muted, soloed, volume, pan
+        FROM tracks
+        WHERE sequence_id = ?
+    ]])
+
+    if track_query then
+        for _, seq_id in ipairs(sequence_ids) do
+            track_query:bind_value(1, seq_id)
+            if track_query:exec() then
+                while track_query:next() do
+                    local track = {
+                        id = track_query:value(0),
+                        sequence_id = track_query:value(1),
+                        name = track_query:value(2),
+                        track_type = track_query:value(3),
+                        track_index = tonumber(track_query:value(4)) or 0,
+                        enabled = track_query:value(5) == 1 or track_query:value(5) == true,
+                        locked = track_query:value(6) == 1 or track_query:value(6) == true,
+                        muted = track_query:value(7) == 1 or track_query:value(7) == true,
+                        soloed = track_query:value(8) == 1 or track_query:value(8) == true,
+                        volume = tonumber(track_query:value(9)) or 1.0,
+                        pan = tonumber(track_query:value(10)) or 0.0
+                    }
+                    table.insert(master_state.tracks, track)
+                end
+            end
+            track_query:reset()
+            track_query:clear_bindings()
+        end
+        track_query:finalize()
+    end
+
+    local seen_clip_ids = {}
+    local master_clip_query = conn:prepare([[
+        SELECT id, project_id, clip_kind, name, track_id, media_id,
+               source_sequence_id, parent_clip_id, owner_sequence_id,
+               start_time, duration, source_in, source_out, enabled, offline
+        FROM clips
+        WHERE clip_kind = 'master' AND source_sequence_id = ?
+    ]])
+
+    local child_clip_query = conn:prepare([[
+        SELECT id, project_id, clip_kind, name, track_id, media_id,
+               source_sequence_id, parent_clip_id, owner_sequence_id,
+               start_time, duration, source_in, source_out, enabled, offline
+        FROM clips
+        WHERE owner_sequence_id = ?
+    ]])
+
+    if master_clip_query and child_clip_query then
+        for _, seq_id in ipairs(sequence_ids) do
+            master_clip_query:bind_value(1, seq_id)
+            if master_clip_query:exec() then
+                while master_clip_query:next() do
+                    local clip = {
+                        id = master_clip_query:value(0),
+                        project_id = master_clip_query:value(1),
+                        clip_kind = master_clip_query:value(2),
+                        name = master_clip_query:value(3),
+                        track_id = master_clip_query:value(4),
+                        media_id = master_clip_query:value(5),
+                        source_sequence_id = master_clip_query:value(6),
+                        parent_clip_id = master_clip_query:value(7),
+                        owner_sequence_id = master_clip_query:value(8),
+                        start_time = tonumber(master_clip_query:value(9)) or 0,
+                        duration = tonumber(master_clip_query:value(10)) or 0,
+                        source_in = tonumber(master_clip_query:value(11)) or 0,
+                        source_out = tonumber(master_clip_query:value(12)) or 0,
+                        enabled = master_clip_query:value(13) == 1 or master_clip_query:value(13) == true,
+                        offline = master_clip_query:value(14) == 1 or master_clip_query:value(14) == true
+                    }
+                    if not seen_clip_ids[clip.id] then
+                        table.insert(master_state.clips, clip)
+                        seen_clip_ids[clip.id] = true
+                    end
+                end
+            end
+            master_clip_query:reset()
+            master_clip_query:clear_bindings()
+
+            child_clip_query:bind_value(1, seq_id)
+            if child_clip_query:exec() then
+                while child_clip_query:next() do
+                    local clip = {
+                        id = child_clip_query:value(0),
+                        project_id = child_clip_query:value(1),
+                        clip_kind = child_clip_query:value(2),
+                        name = child_clip_query:value(3),
+                        track_id = child_clip_query:value(4),
+                        media_id = child_clip_query:value(5),
+                        source_sequence_id = child_clip_query:value(6),
+                        parent_clip_id = child_clip_query:value(7),
+                        owner_sequence_id = child_clip_query:value(8),
+                        start_time = tonumber(child_clip_query:value(9)) or 0,
+                        duration = tonumber(child_clip_query:value(10)) or 0,
+                        source_in = tonumber(child_clip_query:value(11)) or 0,
+                        source_out = tonumber(child_clip_query:value(12)) or 0,
+                        enabled = child_clip_query:value(13) == 1 or child_clip_query:value(13) == true,
+                        offline = child_clip_query:value(14) == 1 or child_clip_query:value(14) == true
+                    }
+                    if not seen_clip_ids[clip.id] then
+                        table.insert(master_state.clips, clip)
+                        seen_clip_ids[clip.id] = true
+                    end
+                end
+            end
+            child_clip_query:reset()
+            child_clip_query:clear_bindings()
+        end
+        master_clip_query:finalize()
+        child_clip_query:finalize()
+    else
+        if master_clip_query then
+            master_clip_query:finalize()
+        end
+        if child_clip_query then
+            child_clip_query:finalize()
+        end
+    end
+
+    return master_state
+end
+
 local function cache_initial_state(sequence_id, project_id)
     local database = require('core.database')
 
@@ -135,6 +330,10 @@ local function cache_initial_state(sequence_id, project_id)
         else
             sequence_initial_state.media[project_id] = {}
         end
+    end
+
+    if project_id and not sequence_initial_state.master[project_id] then
+        sequence_initial_state.master[project_id] = gather_master_initial_state(project_id)
     end
 end
 
@@ -1334,6 +1533,7 @@ function M.replay_events(sequence_id, target_sequence_number)
 
         local cached_initial_clips = sequence_initial_state.clips[sequence_id]
         local cached_initial_media = sequence_initial_state.media[project_id]
+        local cached_initial_master = sequence_initial_state.master[project_id]
 
         local ClipModel = require('models.clip')
         if cached_initial_clips and #cached_initial_clips > 0 then
@@ -1402,10 +1602,45 @@ function M.replay_events(sequence_id, target_sequence_number)
         -- Also clear all media for the project (ImportMedia commands will recreate them)
         -- Get project_id from sequence
        local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")
-       if delete_media_query then
+        if delete_media_query then
            delete_media_query:bind_value(1, project_id)
            delete_media_query:exec()
            print(string.format("Cleared all media for project '%s' from database for replay", project_id))
+        end
+
+        local delete_master_clips = db:prepare([[
+            DELETE FROM clips
+            WHERE clip_kind = 'master'
+               OR owner_sequence_id IN (
+                    SELECT id FROM sequences WHERE project_id = ? AND kind != 'timeline'
+               )
+        ]])
+        if delete_master_clips then
+            delete_master_clips:bind_value(1, project_id)
+            delete_master_clips:exec()
+            print("Cleared master clips and their children for replay")
+        end
+
+        local delete_master_tracks = db:prepare([[
+            DELETE FROM tracks
+            WHERE sequence_id IN (
+                SELECT id FROM sequences WHERE project_id = ? AND kind != 'timeline'
+            )
+        ]])
+        if delete_master_tracks then
+            delete_master_tracks:bind_value(1, project_id)
+            delete_master_tracks:exec()
+            print("Cleared master tracks for replay")
+        end
+
+        local delete_master_sequences = db:prepare([[
+            DELETE FROM sequences
+            WHERE project_id = ? AND kind != 'timeline'
+        ]])
+        if delete_master_sequences then
+            delete_master_sequences:bind_value(1, project_id)
+            delete_master_sequences:exec()
+            print("Cleared master sequences for replay")
         end
 
         -- Step 4: Restore initial state clips
@@ -1427,6 +1662,123 @@ function M.replay_events(sequence_id, target_sequence_number)
             end
             if restored_count > 0 then
                 print(string.format("Restored %d media as initial state", restored_count))
+            end
+        end
+
+        if cached_initial_master and (
+            (#cached_initial_master.sequences or 0) > 0 or
+            (#cached_initial_master.tracks or 0) > 0 or
+            (#cached_initial_master.clips or 0) > 0
+        ) then
+            if cached_initial_master.sequences and #cached_initial_master.sequences > 0 then
+                local seq_insert = db:prepare([[
+                    INSERT OR REPLACE INTO sequences
+                    (id, project_id, name, kind, frame_rate, width, height,
+                     timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
+                     viewport_start_time, viewport_duration, mark_in_time, mark_out_time,
+                     current_sequence_number)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ]])
+                if seq_insert then
+                    for _, seq in ipairs(cached_initial_master.sequences) do
+                        seq_insert:bind_value(1, seq.id)
+                        seq_insert:bind_value(2, seq.project_id)
+                        seq_insert:bind_value(3, seq.name)
+                        seq_insert:bind_value(4, seq.kind)
+                        seq_insert:bind_value(5, seq.frame_rate or 0)
+                        seq_insert:bind_value(6, seq.width or 0)
+                        seq_insert:bind_value(7, seq.height or 0)
+                        seq_insert:bind_value(8, seq.timecode_start or 0)
+                        seq_insert:bind_value(9, seq.playhead_time or 0)
+                        seq_insert:bind_value(10, seq.selected_clip_ids)
+                        seq_insert:bind_value(11, seq.selected_edge_infos)
+                        seq_insert:bind_value(12, seq.viewport_start_time or 0)
+                        seq_insert:bind_value(13, seq.viewport_duration or 10000)
+                        seq_insert:bind_value(14, seq.mark_in_time)
+                        seq_insert:bind_value(15, seq.mark_out_time)
+                        seq_insert:bind_value(16, seq.current_sequence_number)
+                        seq_insert:exec()
+                        seq_insert:reset()
+                        seq_insert:clear_bindings()
+                    end
+                    seq_insert:finalize()
+                    print(string.format("Restored %d master sequences as initial state", #cached_initial_master.sequences))
+                end
+            end
+
+            if cached_initial_master.tracks and #cached_initial_master.tracks > 0 then
+                local track_insert = db:prepare([[
+                    INSERT OR REPLACE INTO tracks
+                    (id, sequence_id, name, track_type, track_index,
+                     enabled, locked, muted, soloed, volume, pan)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ]])
+                if track_insert then
+                    for _, track in ipairs(cached_initial_master.tracks) do
+                        track_insert:bind_value(1, track.id)
+                        track_insert:bind_value(2, track.sequence_id)
+                        track_insert:bind_value(3, track.name)
+                        track_insert:bind_value(4, track.track_type)
+                        track_insert:bind_value(5, track.track_index or 0)
+                        track_insert:bind_value(6, track.enabled and 1 or 0)
+                        track_insert:bind_value(7, track.locked and 1 or 0)
+                        track_insert:bind_value(8, track.muted and 1 or 0)
+                        track_insert:bind_value(9, track.soloed and 1 or 0)
+                        track_insert:bind_value(10, track.volume or 1.0)
+                        track_insert:bind_value(11, track.pan or 0.0)
+                        track_insert:exec()
+                        track_insert:reset()
+                        track_insert:clear_bindings()
+                    end
+                    track_insert:finalize()
+                    print(string.format("Restored %d master tracks as initial state", #cached_initial_master.tracks))
+                end
+            end
+
+            if cached_initial_master.clips and #cached_initial_master.clips > 0 then
+                local clip_insert = db:prepare([[
+                    INSERT OR REPLACE INTO clips
+                    (id, project_id, clip_kind, name, track_id, media_id,
+                     source_sequence_id, parent_clip_id, owner_sequence_id,
+                     start_time, duration, source_in, source_out, enabled, offline)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ]])
+
+                local function insert_clip_row(clip)
+                    clip_insert:bind_value(1, clip.id)
+                    clip_insert:bind_value(2, clip.project_id)
+                    clip_insert:bind_value(3, clip.clip_kind)
+                    clip_insert:bind_value(4, clip.name or "")
+                    clip_insert:bind_value(5, clip.track_id)
+                    clip_insert:bind_value(6, clip.media_id)
+                    clip_insert:bind_value(7, clip.source_sequence_id)
+                    clip_insert:bind_value(8, clip.parent_clip_id)
+                    clip_insert:bind_value(9, clip.owner_sequence_id)
+                    clip_insert:bind_value(10, clip.start_time or 0)
+                    clip_insert:bind_value(11, clip.duration or 1)
+                    clip_insert:bind_value(12, clip.source_in or 0)
+                    clip_insert:bind_value(13, clip.source_out or ((clip.source_in or 0) + (clip.duration or 1)))
+                    clip_insert:bind_value(14, clip.enabled and 1 or 0)
+                    clip_insert:bind_value(15, clip.offline and 1 or 0)
+                    clip_insert:exec()
+                    clip_insert:reset()
+                    clip_insert:clear_bindings()
+                end
+
+                if clip_insert then
+                    for _, clip in ipairs(cached_initial_master.clips) do
+                        if clip.clip_kind == "master" then
+                            insert_clip_row(clip)
+                        end
+                    end
+                    for _, clip in ipairs(cached_initial_master.clips) do
+                        if clip.clip_kind ~= "master" then
+                            insert_clip_row(clip)
+                        end
+                    end
+                    clip_insert:finalize()
+                    print(string.format("Restored %d master clip rows as initial state", #cached_initial_master.clips))
+                end
             end
         end
 
@@ -1639,13 +1991,9 @@ function M.undo(options)
     if replay_success then
         -- Restore playhead to position BEFORE the undone command (i.e., AFTER the last valid command)
         -- This is stored in current_command.playhead_time
-        if current_command.playhead_time then
-            timeline_state.set_playhead_time(current_command.playhead_time)
-            print(string.format("Restored playhead to %dms", current_command.playhead_time))
-        else
-            timeline_state.set_playhead_time(0)
-            print("Restored playhead to 0ms (default)")
-        end
+        local restored_playhead = current_command.playhead_time or 0
+        timeline_state.set_playhead_time(restored_playhead)
+        print(string.format("Restored playhead to %s", format_timecode_for_log(restored_playhead)))
 
         -- Move current_sequence_number back
         local new_position = target_sequence > 0 and target_sequence or nil

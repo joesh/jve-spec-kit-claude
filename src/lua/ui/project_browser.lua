@@ -9,6 +9,7 @@ local focus_manager = require("ui.focus_manager")
 local command_manager = require("core.command_manager")
 local command_scope = require("core.command_scope")
 local browser_state = require("ui.project_browser.browser_state")
+local frame_utils = require("core.frame_utils")
 
 local handler_seq = 0
 
@@ -107,9 +108,15 @@ local function store_tree_item(tree, tree_id, info)
     M.item_lookup[tostring(tree_id)] = info
 end
 
-local function format_duration(duration_ms)
+local function format_duration(duration_ms, frame_rate)
     if not duration_ms or duration_ms == 0 then
         return "--:--"
+    end
+
+    local rate = frame_rate or frame_utils.default_frame_rate
+    local ok, formatted = pcall(frame_utils.format_timecode, duration_ms, rate)
+    if ok and formatted then
+        return formatted
     end
 
     local total_seconds = math.floor(duration_ms / 1000)
@@ -233,7 +240,7 @@ local function populate_tree()
     -- Root sequences
     for _, sequence in ipairs(sequences) do
         if not sequence.kind or sequence.kind == "timeline" then
-        local duration_str = format_duration(sequence.duration)
+        local duration_str = format_duration(sequence.duration, sequence.frame_rate)
         local resolution_str = (sequence.width and sequence.height and sequence.width > 0)
             and string.format("%dx%d", sequence.width, sequence.height)
             or ""
@@ -297,7 +304,7 @@ local function populate_tree()
     local function add_master_clip_item(parent_id, clip)
         local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
         local duration_ms = clip.duration or media.duration
-        local duration_str = format_duration(duration_ms)
+        local duration_str = format_duration(duration_ms, clip.frame_rate or (media and media.frame_rate))
         local display_width = clip.width or media.width
         local display_height = clip.height or media.height
         local display_fps = clip.frame_rate or media.frame_rate
@@ -523,7 +530,8 @@ function M.create()
         browser_state.update_selection(collected, {
             master_lookup = M.master_clip_map,
             media_lookup = M.media_map,
-            sequence_lookup = M.sequence_map
+            sequence_lookup = M.sequence_map,
+            project_id = M.project_id
         })
 
         if focus_manager and focus_manager.focus_panel then
@@ -691,6 +699,39 @@ function M.insert_selected_to_timeline()
     else
         print(string.format("❌ Failed to insert: %s", result and result.error_message or "unknown"))
     end
+end
+
+function M.delete_selected_items()
+    if not M.selected_items or #M.selected_items == 0 then
+        return false
+    end
+
+    local Command = require("command")
+    local deleted = 0
+
+    for _, item in ipairs(M.selected_items) do
+        if item.type == "master_clip" and item.clip_id then
+            local clip = M.master_clip_map[item.clip_id]
+            if clip then
+                local project_id = clip.project_id or M.project_id or "default_project"
+                local cmd = Command.create("DeleteMasterClip", project_id)
+                cmd:set_parameter("master_clip_id", clip.clip_id)
+                local result = command_manager.execute(cmd)
+                if result and result.success then
+                    deleted = deleted + 1
+                else
+                    print(string.format("⚠️  Delete master clip failed: %s", result and result.error_message or "unknown error"))
+                end
+            end
+        end
+    end
+
+    if deleted > 0 then
+        M.refresh()
+        return true
+    end
+
+    return false
 end
 
 function M.activate_selection()

@@ -111,6 +111,19 @@ end
 package.loaded['ui.timeline.timeline_state'] = mock_timeline_state
 
 local command_manager = require('core.command_manager')
+local Clip = require('models.clip')
+local _original_clip_load_optional = Clip.load_optional
+local clip_catalog = { clip0 = true, clip1 = true, clip2 = true }
+Clip.load_optional = function(clip_id)
+    if not clip_id then
+        return nil
+    end
+    if clip_catalog[clip_id] then
+        return { id = clip_id, clip_kind = 'timeline', owner_sequence_id = 'test_sequence' }
+    end
+    return _original_clip_load_optional(clip_id)
+end
+
 local Command = require('command')
 local database = require('core.database')
 local Media = require('models.media')
@@ -209,14 +222,14 @@ db:exec([[
     VALUES ('track_test_v1', 'test_sequence', 'VIDEO', 1, 1);
     INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
     VALUES ('track_default_v1', 'default_sequence', 'VIDEO', 1, 1);
-    INSERT INTO media (id, project_id, file_path, name)
-    VALUES ('media_clip', 'test_project', '/tmp/media_clip.mov', 'Test Clip');
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip0', 'track_test_v1', 'media_clip', 0, 1000, 0, 1000, 1);
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip1', 'track_test_v1', 'media_clip', 2000, 1000, 0, 1000, 1);
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip2', 'track_test_v1', 'media_clip', 4000, 1000, 0, 1000, 1);
+    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
+    VALUES ('media_clip', 'test_project', 'Test Clip', '/tmp/media_clip.mov', 1000, 30.0, 1920, 1080, 2, 'prores', 0, 0, '{}');
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip0', 'test_project', 'timeline', '', 'track_test_v1', 'media_clip', 'test_sequence', 0, 1000, 0, 1000, 1);
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip1', 'test_project', 'timeline', '', 'track_test_v1', 'media_clip', 'test_sequence', 2000, 1000, 0, 1000, 1);
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, start_time, duration, source_in, source_out, enabled)
+    VALUES ('clip2', 'test_project', 'timeline', '', 'track_test_v1', 'media_clip', 'test_sequence', 4000, 1000, 0, 1000, 1);
 ]])
 
 command_manager.init(db, 'test_sequence', 'test_project')
@@ -329,6 +342,7 @@ local noop_cmd = Command.create("TestNoOp", "test_project")
 assert(command_manager.execute(noop_cmd).success, "Executing no-op command should succeed")
 
 assert(db:exec("DELETE FROM clips WHERE id = 'clip0'"), "Failed to delete clip0 from database")
+clip_catalog["clip0"] = nil
 
 local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo after deleting clip should succeed")

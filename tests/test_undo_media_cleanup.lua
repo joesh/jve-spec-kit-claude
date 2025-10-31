@@ -59,12 +59,17 @@ db:exec([[
         name TEXT DEFAULT '',
         track_id TEXT,
         media_id TEXT,
+        source_sequence_id TEXT,
+        parent_clip_id TEXT,
+        owner_sequence_id TEXT,
         start_time INTEGER NOT NULL,
         duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
+        source_in INTEGER NOT NULL DEFAULT 0,
         source_out INTEGER NOT NULL,
-        enabled BOOLEAN DEFAULT 1,
-        offline BOOLEAN DEFAULT 0
+        enabled INTEGER NOT NULL DEFAULT 1,
+        offline INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT 0,
+        modified_at INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS media (

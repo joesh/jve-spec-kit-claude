@@ -617,8 +617,148 @@ command_undoers["ImportMedia"] = function(command)
         print(string.format("Deleted imported media: %s", media_id))
         return true
     else
-        print(string.format("ERROR: ImportMedia undo: Failed to delete media: %s", media_id))
-        return false
+    print(string.format("ERROR: ImportMedia undo: Failed to delete media: %s", media_id))
+    return false
+end
+
+    -- DeleteMasterClip: Remove master clip if unused by timeline
+    command_executors["DeleteMasterClip"] = function(command)
+        local master_clip_id = command:get_parameter("master_clip_id")
+        if not master_clip_id or master_clip_id == "" then
+            last_error_message = "DeleteMasterClip: Missing master_clip_id"
+            return false
+        end
+
+        local Clip = require('models.clip')
+        local clip = Clip.load_optional(master_clip_id, db)
+        if not clip then
+            last_error_message = "DeleteMasterClip: Master clip not found"
+            return false
+        end
+
+        if clip.clip_kind ~= "master" then
+            last_error_message = "DeleteMasterClip: Clip is not a master clip"
+            return false
+        end
+
+        local ref_query = db:prepare("SELECT COUNT(*) FROM clips WHERE parent_clip_id = ? AND clip_kind = 'timeline'")
+        if not ref_query then
+            last_error_message = "DeleteMasterClip: Failed to prepare reference check"
+            return false
+        end
+        ref_query:bind_value(1, master_clip_id)
+        local in_use = 0
+        if ref_query:exec() and ref_query:next() then
+            in_use = ref_query:value(0) or 0
+        end
+        ref_query:finalize()
+
+        if in_use > 0 then
+            last_error_message = "DeleteMasterClip: Clip still referenced in timeline"
+            return false
+        end
+
+        local snapshot = {
+            id = clip.id,
+            project_id = clip.project_id,
+            clip_kind = clip.clip_kind,
+            name = clip.name,
+            track_id = clip.track_id,
+            media_id = clip.media_id,
+            source_sequence_id = clip.source_sequence_id,
+            parent_clip_id = clip.parent_clip_id,
+            owner_sequence_id = clip.owner_sequence_id,
+            start_time = clip.start_time,
+            duration = clip.duration,
+            source_in = clip.source_in,
+            source_out = clip.source_out,
+            enabled = clip.enabled,
+            offline = clip.offline,
+        }
+        command:set_parameter("master_clip_snapshot", snapshot)
+
+        local properties = {}
+        local prop_query = db:prepare("SELECT id, property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
+        if prop_query then
+            prop_query:bind_value(1, master_clip_id)
+            if prop_query:exec() then
+                while prop_query:next() do
+                    table.insert(properties, {
+                        id = prop_query:value(0),
+                        property_name = prop_query:value(1),
+                        property_value = prop_query:value(2),
+                        property_type = prop_query:value(3),
+                        default_value = prop_query:value(4),
+                    })
+                end
+            end
+            prop_query:finalize()
+        end
+        command:set_parameter("master_clip_properties", properties)
+
+        if not clip:delete(db) then
+            last_error_message = "DeleteMasterClip: Failed to delete clip"
+            return false
+        end
+
+        print(string.format("✅ Deleted master clip %s", clip.name or master_clip_id))
+        return true
+    end
+
+    command_undoers["DeleteMasterClip"] = function(command)
+        local snapshot = command:get_parameter("master_clip_snapshot")
+        if not snapshot then
+            last_error_message = "UndoDeleteMasterClip: Missing snapshot"
+            return false
+        end
+
+        local Clip = require('models.clip')
+        local restored = Clip.create(snapshot.name or "Master Clip", snapshot.media_id, {
+            id = snapshot.id,
+            project_id = snapshot.project_id,
+            clip_kind = snapshot.clip_kind,
+            track_id = snapshot.track_id,
+            parent_clip_id = snapshot.parent_clip_id,
+            owner_sequence_id = snapshot.owner_sequence_id,
+            source_sequence_id = snapshot.source_sequence_id,
+            start_time = snapshot.start_time,
+            duration = snapshot.duration,
+            source_in = snapshot.source_in,
+            source_out = snapshot.source_out,
+            enabled = snapshot.enabled ~= false,
+            offline = snapshot.offline,
+        })
+
+        if not restored:save(db) then
+            last_error_message = "UndoDeleteMasterClip: Failed to restore master clip"
+            return false
+        end
+
+        local properties = command:get_parameter("master_clip_properties") or {}
+        if #properties > 0 then
+            local insert_prop = db:prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)")
+            if not insert_prop then
+                last_error_message = "UndoDeleteMasterClip: Failed to prepare property restore"
+                return false
+            end
+            for _, prop in ipairs(properties) do
+                insert_prop:bind_value(1, prop.id)
+                insert_prop:bind_value(2, snapshot.id)
+                insert_prop:bind_value(3, prop.property_name)
+                insert_prop:bind_value(4, prop.property_value)
+                insert_prop:bind_value(5, prop.property_type)
+                insert_prop:bind_value(6, prop.default_value)
+                if not insert_prop:exec() then
+                    last_error_message = "UndoDeleteMasterClip: Failed to restore property"
+                    insert_prop:finalize()
+                    return false
+                end
+            end
+            insert_prop:finalize()
+        end
+
+        print(string.format("UNDO: Restored master clip %s", snapshot.name or snapshot.id))
+        return true
     end
 end
 
@@ -671,6 +811,145 @@ command_executors["SetClipProperty"] = function(command)
         print("WARNING: Failed to save clip property change")
         return false
     end
+end
+
+local sequence_metadata_columns = {
+    name = {type = "string"},
+    frame_rate = {type = "number"},
+    width = {type = "number"},
+    height = {type = "number"},
+    timecode_start = {type = "number"},
+    playhead_time = {type = "number"},
+    viewport_start_time = {type = "number"},
+    viewport_duration = {type = "number"},
+    mark_in_time = {type = "nullable_number"},
+    mark_out_time = {type = "nullable_number"}
+}
+
+local function normalize_sequence_value(field, value)
+    local config = sequence_metadata_columns[field]
+    if not config then
+        return value
+    end
+
+    if config.type == "string" then
+        return value ~= nil and tostring(value) or ""
+    elseif config.type == "number" then
+        return tonumber(value) or 0
+    elseif config.type == "nullable_number" then
+        if value == nil or value == "" then
+            return nil
+        end
+        return tonumber(value)
+    end
+    return value
+end
+
+command_executors["SetSequenceMetadata"] = function(command)
+    local sequence_id = command:get_parameter("sequence_id")
+    local field = command:get_parameter("field")
+    local new_value = command:get_parameter("value")
+
+    if not sequence_id or sequence_id == "" or not field or field == "" then
+        last_error_message = "SetSequenceMetadata: Missing required parameters"
+        return false
+    end
+
+    local column = sequence_metadata_columns[field]
+    if not column then
+        last_error_message = "SetSequenceMetadata: Field not allowed: " .. tostring(field)
+        return false
+    end
+
+    local select_stmt = db:prepare("SELECT " .. field .. " FROM sequences WHERE id = ?")
+    if not select_stmt then
+        last_error_message = "SetSequenceMetadata: Failed to prepare select statement"
+        return false
+    end
+    select_stmt:bind_value(1, sequence_id)
+    local previous_value = nil
+    if select_stmt:exec() and select_stmt:next() then
+        previous_value = select_stmt:value(0)
+    end
+    select_stmt:finalize()
+
+    local normalized_value = normalize_sequence_value(field, new_value)
+    command:set_parameter("previous_value", previous_value)
+    command:set_parameter("normalized_value", normalized_value)
+
+    local update_stmt = db:prepare("UPDATE sequences SET " .. field .. " = ? WHERE id = ?")
+    if not update_stmt then
+        last_error_message = "SetSequenceMetadata: Failed to prepare update statement"
+        return false
+    end
+
+    if normalized_value == nil then
+        if update_stmt.bind_null then
+            update_stmt:bind_null(1)
+        else
+            update_stmt:bind_value(1, nil)
+        end
+    else
+        update_stmt:bind_value(1, normalized_value)
+    end
+    update_stmt:bind_value(2, sequence_id)
+
+    local ok = update_stmt:exec()
+    update_stmt:finalize()
+
+    if not ok then
+        last_error_message = "SetSequenceMetadata: Update failed"
+        return false
+    end
+
+    print(string.format("Set sequence %s field %s to %s", sequence_id, field, tostring(normalized_value)))
+    return true
+end
+
+command_undoers["SetSequenceMetadata"] = function(command)
+    local sequence_id = command:get_parameter("sequence_id")
+    local field = command:get_parameter("field")
+    local previous_value = command:get_parameter("previous_value")
+
+    if not sequence_id or sequence_id == "" or not field or field == "" then
+        last_error_message = "UndoSetSequenceMetadata: Missing parameters"
+        return false
+    end
+
+    local column = sequence_metadata_columns[field]
+    if not column then
+        last_error_message = "UndoSetSequenceMetadata: Field not allowed: " .. tostring(field)
+        return false
+    end
+
+    local normalized = normalize_sequence_value(field, previous_value)
+    local stmt = db:prepare("UPDATE sequences SET " .. field .. " = ? WHERE id = ?")
+    if not stmt then
+        last_error_message = "UndoSetSequenceMetadata: Failed to prepare update statement"
+        return false
+    end
+
+    if normalized == nil then
+        if stmt.bind_null then
+            stmt:bind_null(1)
+        else
+            stmt:bind_value(1, nil)
+        end
+    else
+        stmt:bind_value(1, normalized)
+    end
+    stmt:bind_value(2, sequence_id)
+
+    local ok = stmt:exec()
+    stmt:finalize()
+
+    if not ok then
+        last_error_message = "UndoSetSequenceMetadata: Update failed"
+        return false
+    end
+
+    print(string.format("Undo sequence %s field %s to %s", sequence_id, field, tostring(normalized)))
+    return true
 end
 
 command_executors["SetProperty"] = function(command)

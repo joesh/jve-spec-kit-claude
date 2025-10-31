@@ -2,6 +2,7 @@
 -- Centralized keyboard shortcut handling for the video editor
 
 local keyboard_shortcuts = {}
+local frame_utils = require("core.frame_utils")
 
 -- Qt key constants (from Qt::Key enum)
 local KEY = {
@@ -61,6 +62,7 @@ local command_manager = nil
 local project_browser = nil
 local timeline_panel = nil
 local focus_manager = require("ui.focus_manager")
+local redo_toggle_state = nil
 
 -- MAGNETIC SNAPPING STATE
 -- Baseline preference (persists across drags)
@@ -68,12 +70,37 @@ local baseline_snapping_enabled = true  -- Default ON
 -- Per-drag inversion (resets when drag ends)
 local drag_snapping_inverted = false
 
+local function clear_redo_toggle()
+    redo_toggle_state = nil
+end
+
+local function get_current_sequence_position()
+    if command_manager and command_manager.get_stack_state then
+        local state = command_manager.get_stack_state()
+        if state and state.current_sequence_number ~= nil then
+            return state.current_sequence_number
+        end
+    end
+    return nil
+end
+
+local function get_active_frame_rate()
+    if timeline_state and timeline_state.get_sequence_frame_rate then
+        local rate = timeline_state.get_sequence_frame_rate()
+        if type(rate) == "number" and rate > 0 then
+            return rate
+        end
+    end
+    return frame_utils.default_frame_rate
+end
+
 -- Initialize with references to other modules
 function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     timeline_state = state
     command_manager = cmd_mgr
     project_browser = proj_browser
     timeline_panel = panel
+    redo_toggle_state = nil
 end
 
 -- Get effective snapping state (baseline XOR drag_inverted)
@@ -134,25 +161,77 @@ function keyboard_shortcuts.handle_key(event)
     local modifiers = event.modifiers
     local text = event.text
 
+    local modifier_meta = has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)
+    local modifier_shift = has_modifier(modifiers, MOD.Shift)
+    local modifier_alt = has_modifier(modifiers, MOD.Alt)
+
     -- Cmd/Ctrl + Z: Undo
-    -- Cmd/Ctrl + Shift + Z: Redo
-    if key == KEY.Z and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
-        if has_modifier(modifiers, MOD.Shift) then
-            -- Redo
+    -- Cmd/Ctrl + Shift + Z: Redo toggle
+    if key == KEY.Z and modifier_meta then
+        if modifier_shift then
             if command_manager then
-                local result = command_manager.redo()
-                if result.success then
-                    print("Redo complete")
+                local current_pos = get_current_sequence_position()
+
+                if redo_toggle_state
+                    and redo_toggle_state.undo_position ~= nil
+                    and redo_toggle_state.redo_position ~= nil
+                    and current_pos == redo_toggle_state.redo_position then
+                    local undo_result = command_manager.undo()
+                    if not undo_result.success then
+                        clear_redo_toggle()
+                        if undo_result.error_message then
+                            print("ERROR: Toggle redo failed - " .. undo_result.error_message)
+                        else
+                            print("ERROR: Toggle redo failed")
+                        end
+                    else
+                        local after_pos = get_current_sequence_position()
+                        if after_pos ~= redo_toggle_state.undo_position then
+                            clear_redo_toggle()
+                        else
+                            redo_toggle_state.last_action = "undo"
+                            print("Redo toggle: returned to pre-redo state")
+                        end
+                    end
+                else
+                    if redo_toggle_state then
+                        local undo_pos = redo_toggle_state.undo_position
+                        if undo_pos ~= current_pos then
+                            clear_redo_toggle()
+                        end
+                    end
+
+                    local before_pos = current_pos
+                    local redo_result = command_manager.redo()
+                    if redo_result.success then
+                        local after_pos = get_current_sequence_position()
+                        if after_pos and after_pos ~= before_pos then
+                            redo_toggle_state = {
+                                undo_position = before_pos,
+                                redo_position = after_pos,
+                                last_action = "redo",
+                            }
+                            print("Redo complete")
+                        else
+                            clear_redo_toggle()
+                        end
+                    else
+                        clear_redo_toggle()
+                        if redo_result.error_message then
+                            print("Nothing to redo (" .. redo_result.error_message .. ")")
+                        else
+                            print("Nothing to redo")
+                        end
+                    end
                 end
             end
         else
-            -- Undo
             if command_manager then
+                clear_redo_toggle()
                 local result = command_manager.undo()
                 if result.success then
                     print("Undo complete")
                 else
-                    -- Provide clear feedback on why undo failed
                     if result.error_message then
                         print("ERROR: Undo failed - " .. result.error_message)
                     else
@@ -161,13 +240,112 @@ function keyboard_shortcuts.handle_key(event)
                 end
             end
         end
-        return true  -- Event handled
+        return true
     end
 
-    -- Delete/Backspace: Delete selected clips via command system
-    if (key == KEY.Delete or key == KEY.Backspace) and timeline_state and command_manager then
+    -- Left/Right arrows: Move playhead (frame or 1-second jumps with Shift)
+    if (key == KEY.Left or key == KEY.Right) and timeline_state then
+        if not modifier_meta and not modifier_alt then
+            local frame_rate = get_active_frame_rate()
+            local current_time = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+            local current_frame = frame_utils.time_to_frame(current_time, frame_rate)
+            local step_frames = modifier_shift and math.max(1, math.floor(frame_rate + 0.5)) or 1
+            if key == KEY.Left then
+                current_frame = math.max(0, current_frame - step_frames)
+            else
+                current_frame = current_frame + step_frames
+            end
+            local new_time = frame_utils.frame_to_time(current_frame, frame_rate)
+            timeline_state.set_playhead_time(new_time)
+            return true
+        end
+    end
+
+    -- Mark In/Out controls
+    if key == KEY.I and timeline_state then
+        if not modifier_meta and not modifier_alt then
+            if modifier_shift then
+                local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
+                if mark_in then
+                    timeline_state.set_playhead_time(mark_in)
+                end
+            else
+                local playhead = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+                timeline_state.set_mark_in(playhead)
+            end
+            return true
+        end
+    end
+
+    if key == KEY.O and timeline_state then
+        if not modifier_meta and not modifier_alt then
+            if modifier_shift then
+                local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
+                if mark_out then
+                    timeline_state.set_playhead_time(mark_out)
+                end
+            else
+                local playhead = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+                timeline_state.set_mark_out(playhead)
+            end
+            return true
+        end
+    end
+
+    if key == KEY.X and timeline_state then
+        if modifier_alt and not modifier_meta then
+            timeline_state.clear_marks()
+            return true
+        elseif not modifier_meta and not modifier_alt then
+            local playhead = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+            local clips = timeline_state.get_clips and timeline_state.get_clips() or {}
+            local best_clip = nil
+            local best_priority = nil
+
+            for _, clip in ipairs(clips) do
+                local clip_start = clip.start_time or 0
+                local clip_end = clip_start + (clip.duration or 0)
+                if playhead >= clip_start and playhead <= clip_end then
+                    local track = timeline_state.get_track_by_id and timeline_state.get_track_by_id(clip.track_id)
+                    if track then
+                        local type_priority = (track.track_type == "VIDEO") and 0 or 1
+                        local track_index = track.track_index or timeline_state.get_track_index(clip.track_id) or math.huge
+                        local priority = type_priority * 1000 + track_index
+                        if not best_priority or priority < best_priority then
+                            best_priority = priority
+                            best_clip = clip
+                        end
+                    end
+                end
+            end
+
+            if best_clip then
+                local clip_start = best_clip.start_time or 0
+                local clip_out = clip_start + (best_clip.duration or 0)
+                timeline_state.set_mark_in(clip_start)
+                timeline_state.set_mark_out(clip_out)
+            end
+            return true
+        end
+    end
+
+    -- Delete/Backspace: contextual delete (project browser or timeline)
+    if key == KEY.Delete or key == KEY.Backspace then
+        local focused_panel = focus_manager and focus_manager.get_focused_panel and focus_manager.get_focused_panel()
+        if project_browser and focused_panel == "project_browser" then
+            if project_browser.delete_selected_items and project_browser.delete_selected_items() then
+                clear_redo_toggle()
+            end
+            return true
+        end
+
+        if not (timeline_state and command_manager) then
+            return false
+        end
+
         local selected_clips = timeline_state.get_selected_clips()
         local shift_held = has_modifier(modifiers, MOD.Shift)
+        clear_redo_toggle()
 
         if shift_held and selected_clips and #selected_clips > 0 then
             local clip_ids = {}
@@ -305,98 +483,95 @@ function keyboard_shortcuts.handle_key(event)
 
     -- Comma/Period: Frame-accurate nudge for clips and edges
     -- Comma (,) = left, Period (.) = right
-    -- Without Shift: 1 frame, With Shift: 1 second (30 frames @ 30fps)
-    if key == KEY.Comma or key == KEY.Period then
-        if timeline_state and command_manager then
-            -- Get frame rate from sequence (TODO: load from database, for now assume 30fps)
-            local frame_rate = 30.0
-            local frame_duration_ms = math.floor(1000.0 / frame_rate)  -- ~33ms per frame at 30fps
-
-            -- Calculate nudge amount
-            local nudge_frames = 1
-            if has_modifier(modifiers, MOD.Shift) then
-                nudge_frames = 30  -- 1 second = 30 frames
-            end
-            local nudge_ms = nudge_frames * frame_duration_ms
-            if key == KEY.Comma then
-                nudge_ms = -nudge_ms  -- Left = negative
-            end
-
-            -- Check what's selected: clips or edges
-            local selected_clips = timeline_state.get_selected_clips()
-            local selected_edges = timeline_state.get_selected_edges()
-
-            local Command = require("command")
-
-            -- Edges use RippleEdit (trim with timeline shift)
-            -- Clips use Nudge (simple move)
-            if #selected_edges > 0 then
-                -- Gather edge info with track_id
-                local all_clips = timeline_state.get_clips()
-                local edge_infos = {}
-
-                for _, edge in ipairs(selected_edges) do
-                    local clip = nil
-                    for _, c in ipairs(all_clips) do
-                        if c.id == edge.clip_id then
-                            clip = c
-                            break
-                        end
-                    end
-                    if clip then
-                        table.insert(edge_infos, {
-                            clip_id = edge.clip_id,
-                            edge_type = edge.edge_type,
-                            track_id = clip.track_id
-                        })
-                    end
-                end
-
-                -- Use BatchRippleEdit for multiple edges (prevents cascading shifts)
-                -- Use regular RippleEdit for single edge (simpler undo history)
-                local result
-                if #edge_infos > 1 then
-                    local batch_cmd = Command.create("BatchRippleEdit", "default_project")
-                    batch_cmd:set_parameter("edge_infos", edge_infos)
-                    batch_cmd:set_parameter("delta_ms", nudge_ms)
-                    batch_cmd:set_parameter("sequence_id", "default_sequence")
-                    result = command_manager.execute(batch_cmd)
-                elseif #edge_infos == 1 then
-                    local ripple_cmd = Command.create("RippleEdit", "default_project")
-                    ripple_cmd:set_parameter("edge_info", edge_infos[1])
-                    ripple_cmd:set_parameter("delta_ms", nudge_ms)
-                    ripple_cmd:set_parameter("sequence_id", "default_sequence")
-                    result = command_manager.execute(ripple_cmd)
-                end
-
-                if result and result.success then
-                    print(string.format("Ripple edited %d edge(s) by %d frames (%dms)", #edge_infos, nudge_frames, nudge_ms))
-                else
-                    print("ERROR: Ripple edit failed")
-                end
-            elseif #selected_clips > 0 then
-                -- Nudge clips
-                local clip_ids = {}
-                for _, clip in ipairs(selected_clips) do
-                    table.insert(clip_ids, clip.id)
-                end
-
-                local nudge_cmd = Command.create("Nudge", "default_project")
-                nudge_cmd:set_parameter("nudge_amount_ms", nudge_ms)
-                nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
-
-                local result = command_manager.execute(nudge_cmd)
-                if result.success then
-                    print(string.format("Nudged %d clips by %d frames (%dms)", #selected_clips, nudge_frames, nudge_ms))
-                else
-                    print("ERROR: Nudge failed: " .. (result.error_message or "unknown error"))
-                end
-            else
-                print("Nothing selected to nudge/ripple")
-            end
-
-            return true
+    -- Without Shift: 1 frame, With Shift: 5 frames
+    if (key == KEY.Comma or key == KEY.Period) and timeline_state and command_manager and not modifier_meta and not modifier_alt then
+        local frame_rate = get_active_frame_rate()
+        local nudge_frames = modifier_shift and 5 or 1
+        local nudge_ms = frame_utils.frame_to_time(nudge_frames, frame_rate)
+        if key == KEY.Comma then
+            nudge_ms = -nudge_ms
         end
+        clear_redo_toggle()
+
+        local direction = (nudge_ms < 0) and "left" or "right"
+        local frame_count = math.abs(nudge_frames)
+        local timecode_str
+        do
+            local ok, formatted = pcall(frame_utils.format_timecode, math.abs(nudge_ms), frame_rate)
+            if ok and formatted then
+                timecode_str = formatted
+            else
+                timecode_str = string.format("%d frame(s)", frame_count)
+            end
+        end
+
+        local selected_clips = timeline_state.get_selected_clips()
+        local selected_edges = timeline_state.get_selected_edges()
+
+        local Command = require("command")
+
+        if #selected_edges > 0 then
+            local all_clips = timeline_state.get_clips()
+            local edge_infos = {}
+
+            for _, edge in ipairs(selected_edges) do
+                local clip = nil
+                for _, c in ipairs(all_clips) do
+                    if c.id == edge.clip_id then
+                        clip = c
+                        break
+                    end
+                end
+                if clip then
+                    table.insert(edge_infos, {
+                        clip_id = edge.clip_id,
+                        edge_type = edge.edge_type,
+                        track_id = clip.track_id
+                    })
+                end
+            end
+
+            local result
+            if #edge_infos > 1 then
+                local batch_cmd = Command.create("BatchRippleEdit", "default_project")
+                batch_cmd:set_parameter("edge_infos", edge_infos)
+                batch_cmd:set_parameter("delta_ms", nudge_ms)
+                batch_cmd:set_parameter("sequence_id", "default_sequence")
+                result = command_manager.execute(batch_cmd)
+            elseif #edge_infos == 1 then
+                local ripple_cmd = Command.create("RippleEdit", "default_project")
+                ripple_cmd:set_parameter("edge_info", edge_infos[1])
+                ripple_cmd:set_parameter("delta_ms", nudge_ms)
+                ripple_cmd:set_parameter("sequence_id", "default_sequence")
+                result = command_manager.execute(ripple_cmd)
+            end
+
+            if result and result.success then
+                print(string.format("Ripple edited %d edge(s) %s by %d frame(s) (%s)", #edge_infos, direction, frame_count, timecode_str))
+            else
+                print("ERROR: Ripple edit failed")
+            end
+        elseif #selected_clips > 0 then
+            local clip_ids = {}
+            for _, clip in ipairs(selected_clips) do
+                table.insert(clip_ids, clip.id)
+            end
+
+            local nudge_cmd = Command.create("Nudge", "default_project")
+            nudge_cmd:set_parameter("nudge_amount_ms", nudge_ms)
+            nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
+
+            local result = command_manager.execute(nudge_cmd)
+            if result and result.success then
+                print(string.format("Nudged %d clip(s) %s by %d frame(s) (%s)", #selected_clips, direction, frame_count, timecode_str))
+            else
+                print("ERROR: Nudge failed: " .. ((result and result.error_message) or "unknown error"))
+            end
+        else
+            print("Nothing selected to nudge/ripple")
+        end
+
+        return true
     end
 
     -- Space: Play/Pause (placeholder - actual playback not implemented yet)

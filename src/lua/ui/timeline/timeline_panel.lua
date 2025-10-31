@@ -9,6 +9,7 @@ local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 local database = require("core.database")
 local command_manager = require("core.command_manager")
+local inspectable_factory = require("inspectable")
 
 local M = {}
 
@@ -21,18 +22,47 @@ local video_view_ref = nil
 local audio_view_ref = nil
 
 local function normalize_timeline_selection(clips)
+    local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
+    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+
     if not clips or #clips == 0 then
+        local ok, inspectable = pcall(inspectable_factory.sequence, {
+            sequence_id = sequence_id,
+            project_id = project_id
+        })
+        if ok and inspectable then
+            return {{
+                item_type = "timeline_sequence",
+                sequence_id = sequence_id,
+                inspectable = inspectable,
+                schema = inspectable:get_schema_id(),
+                display_name = inspectable:get("name") or "Timeline",
+                project_id = project_id
+            }}
+        end
         return {}
     end
+
     local normalized = {}
     for _, clip in ipairs(clips) do
-        if clip then
-            local copy = {}
-            for k, v in pairs(clip) do
-                copy[k] = v
+        if clip and clip.id then
+            local ok, inspectable = pcall(inspectable_factory.clip, {
+                clip_id = clip.id,
+                project_id = project_id,
+                sequence_id = sequence_id,
+                clip = clip
+            })
+            if ok and inspectable then
+                table.insert(normalized, {
+                    item_type = "timeline_clip",
+                    clip = clip,
+                    inspectable = inspectable,
+                    schema = inspectable:get_schema_id(),
+                    display_name = clip.label or clip.name or clip.id,
+                    project_id = project_id,
+                    sequence_id = sequence_id
+                })
             end
-            copy.item_type = "timeline_clip"
-            table.insert(normalized, copy)
         end
     end
     return normalized
@@ -49,6 +79,17 @@ end
 
 function M.get_state()
     return timeline_state  -- Return the module, not the local state variable
+end
+
+local function build_track_header_stylesheet(background_color)
+    return string.format([[
+        QLabel {
+            background: %s;
+            color: #cccccc;
+            padding-left: 10px;
+            border: 1px solid #222232;
+        }
+    ]], background_color or "#111111")
 end
 
 -- Helper function to create video headers with splitters
@@ -74,14 +115,7 @@ local function create_video_headers()
     for i = #video_tracks, 1, -1 do
         local track = video_tracks[i]
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(header, [[
-            QLabel {
-                background: #3a3a5a;
-                color: #cccccc;
-                padding-left: 10px;
-                border: 1px solid #222232;
-            }
-        ]])
+        qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.video_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
@@ -231,14 +265,7 @@ local function create_audio_headers()
     -- Add tracks in normal order (A1, A2, A3)
     for i, track in ipairs(audio_tracks) do
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(header, [[
-            QLabel {
-                background: #3a4a3a;
-                color: #cccccc;
-                padding-left: 10px;
-                border: 1px solid #222222;
-            }
-        ]])
+        qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.audio_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
@@ -438,6 +465,29 @@ function M.create()
     end)
     local initial_selection = state.get_selected_clips and state.get_selected_clips() or {}
     selection_hub.update_selection("timeline", normalize_timeline_selection(initial_selection))
+
+    local last_mark_signature = nil
+    if #initial_selection == 0 then
+        local mark_in = state.get_mark_in and state.get_mark_in() or nil
+        local mark_out = state.get_mark_out and state.get_mark_out() or nil
+        last_mark_signature = tostring(mark_in) .. ":" .. tostring(mark_out)
+    end
+    state.add_listener(function()
+        local selected = state.get_selected_clips and state.get_selected_clips() or {}
+
+        -- Re-broadcast selection when only the timeline itself is selected and marks change.
+        if #selected == 0 then
+            local mark_in = state.get_mark_in and state.get_mark_in() or nil
+            local mark_out = state.get_mark_out and state.get_mark_out() or nil
+            local signature = tostring(mark_in) .. ":" .. tostring(mark_out)
+            if signature ~= last_mark_signature then
+                last_mark_signature = signature
+                selection_hub.update_selection("timeline", normalize_timeline_selection(selected))
+            end
+        else
+            last_mark_signature = nil
+        end
+    end)
 
     -- Main container
     local container = qt_constants.WIDGET.CREATE()

@@ -22,19 +22,25 @@ db:exec([[
         settings TEXT NOT NULL DEFAULT '{}'
     );
 
-    CREATE TABLE sequences (
+            CREATE TABLE IF NOT EXISTS sequences (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         timecode_start INTEGER NOT NULL DEFAULT 0,
         playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
+        viewport_start_time INTEGER NOT NULL DEFAULT 0,
+        viewport_duration INTEGER NOT NULL DEFAULT 10000,
+        mark_in_time INTEGER,
+        mark_out_time INTEGER,
         current_sequence_number INTEGER
     );
+
 
     CREATE TABLE tracks (
         id TEXT PRIMARY KEY,
@@ -46,21 +52,41 @@ db:exec([[
 
     CREATE TABLE media (
         id TEXT PRIMARY KEY,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER NOT NULL DEFAULT 0,
-        frame_rate REAL
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        duration INTEGER NOT NULL,
+        frame_rate REAL NOT NULL,
+        width INTEGER DEFAULT 0,
+        height INTEGER DEFAULT 0,
+        audio_channels INTEGER DEFAULT 0,
+        codec TEXT DEFAULT '',
+        created_at INTEGER DEFAULT 0,
+        modified_at INTEGER DEFAULT 0,
+        metadata TEXT DEFAULT '{}'
     );
 
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
+                    CREATE TABLE clips (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            clip_kind TEXT NOT NULL DEFAULT 'timeline',
+            name TEXT DEFAULT '',
+            track_id TEXT,
+            media_id TEXT,
+            source_sequence_id TEXT,
+            parent_clip_id TEXT,
+            owner_sequence_id TEXT,
+            start_time INTEGER NOT NULL,
+            duration INTEGER NOT NULL,
+            source_in INTEGER NOT NULL DEFAULT 0,
+            source_out INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            offline INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            modified_at INTEGER NOT NULL DEFAULT 0
+        );
+
+
 
     CREATE TABLE commands (
         id TEXT PRIMARY KEY,
@@ -89,10 +115,10 @@ db:exec([[
 ]])
 
 db:exec([[
-    INSERT INTO media (id, name, file_path, duration, frame_rate)
-    VALUES ('media_clip_a', 'clip_a.mov', '/tmp/clip_a.mov', 1000, 30.0);
-    INSERT INTO media (id, name, file_path, duration, frame_rate)
-    VALUES ('media_clip_b', 'clip_b.mov', '/tmp/clip_b.mov', 1500, 30.0);
+    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
+    VALUES ('media_clip_a', 'default_project', 'clip_a.mov', '/tmp/clip_a.mov', 1000, 30.0, 0, 0, '{}');
+    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
+    VALUES ('media_clip_b', 'default_project', 'clip_b.mov', '/tmp/clip_b.mov', 1500, 30.0, 0, 0, '{}');
 
     INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
     VALUES ('clip_a', 'track_v1', 'media_clip_a', 0, 1000, 0, 1000, 1);

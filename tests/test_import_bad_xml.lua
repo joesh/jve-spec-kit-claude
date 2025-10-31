@@ -58,19 +58,25 @@ local function init_db(path)
         settings TEXT NOT NULL DEFAULT '{}'
     );]])
 
-    db:exec([[CREATE TABLE sequences (
+    db:exec([[        CREATE TABLE IF NOT EXISTS sequences (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         timecode_start INTEGER NOT NULL DEFAULT 0,
         playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
+        viewport_start_time INTEGER NOT NULL DEFAULT 0,
+        viewport_duration INTEGER NOT NULL DEFAULT 10000,
+        mark_in_time INTEGER,
+        mark_out_time INTEGER,
         current_sequence_number INTEGER
-    );]])
+    );
+]])
 
     db:exec([[CREATE TABLE tracks (
         id TEXT PRIMARY KEY,
@@ -102,16 +108,27 @@ local function init_db(path)
         metadata TEXT NOT NULL DEFAULT '{}'
     );]])
 
-    db:exec([[CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
-        media_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );]])
+    db:exec([[                CREATE TABLE clips (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            clip_kind TEXT NOT NULL DEFAULT 'timeline',
+            name TEXT DEFAULT '',
+            track_id TEXT,
+            media_id TEXT,
+            source_sequence_id TEXT,
+            parent_clip_id TEXT,
+            owner_sequence_id TEXT,
+            start_time INTEGER NOT NULL,
+            duration INTEGER NOT NULL,
+            source_in INTEGER NOT NULL DEFAULT 0,
+            source_out INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            offline INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            modified_at INTEGER NOT NULL DEFAULT 0
+        );
+
+]])
 
     db:exec([[CREATE TABLE commands (
         id TEXT PRIMARY KEY,

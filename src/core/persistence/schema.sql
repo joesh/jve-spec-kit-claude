@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS sequences (
     selected_edge_infos TEXT,                                              -- JSON array of selected edge descriptors
     viewport_start_time INTEGER NOT NULL DEFAULT 0 CHECK(viewport_start_time >= 0),
     viewport_duration INTEGER NOT NULL DEFAULT 10000 CHECK(viewport_duration >= 1000),
+    mark_in_time INTEGER CHECK(mark_in_time IS NULL OR mark_in_time >= 0),
+    mark_out_time INTEGER CHECK(mark_out_time IS NULL OR mark_out_time >= 0),
     current_sequence_number INTEGER,                                       -- Current position in undo tree (NULL = at HEAD)
 
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE

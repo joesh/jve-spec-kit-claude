@@ -5,6 +5,7 @@
 local M = {}
 local ui_constants = require("core.ui_constants")
 local focus_manager = require("ui.focus_manager")
+local frame_utils = require("core.frame_utils")
 
 -- Create a new timeline view
 -- Parameters:
@@ -187,7 +188,38 @@ function M.create(widget, state_module, track_filter_fn, options)
         -- Get viewport state
         local viewport_start = state_module.get_viewport_start_time()
         local viewport_duration = state_module.get_viewport_duration()
+        local viewport_end = viewport_start + viewport_duration
         local playhead_time = state_module.get_playhead_time()
+        local mark_in = state_module.get_mark_in and state_module.get_mark_in()
+        local mark_out = state_module.get_mark_out and state_module.get_mark_out()
+
+        local function draw_mark_overlays()
+            if (not mark_in) and (not mark_out) then
+                return
+            end
+
+            local fill_color = state_module.colors.mark_range_fill
+            if not fill_color then
+                error("timeline_state.colors.mark_range_fill is nil; expected translucent color for mark range overlay")
+            end
+
+            if mark_in and mark_out and mark_out > mark_in then
+                local visible_start = math.max(mark_in, viewport_start)
+                local visible_end = math.min(mark_out, viewport_end)
+                if visible_end > visible_start then
+                    local start_x = state_module.time_to_pixel(visible_start, width)
+                    local end_x = state_module.time_to_pixel(visible_end, width)
+                    if end_x <= start_x then
+                        end_x = start_x + 1
+                    end
+                    local region_width = end_x - start_x
+                    if region_width <= 0 then
+                        region_width = 1
+                    end
+                    timeline.add_rect(view.widget, start_x, 0, region_width, height, fill_color)
+                end
+            end
+        end
 
         -- Draw tracks
         -- print(string.format("Rendering %d tracks (widget height: %d, viewport height: %d)", #view.filtered_tracks, height, height))
@@ -251,6 +283,28 @@ function M.create(widget, state_module, track_filter_fn, options)
     return track_id
 end
 
+    local function truncate_label(label, max_width)
+        if not label or label == "" or max_width <= 0 then
+            return ""
+        end
+
+        local approx_char_width = 7
+        local max_chars = math.floor(max_width / approx_char_width)
+        if max_chars <= 0 then
+            return ""
+        end
+
+        if #label <= max_chars then
+            return label
+        end
+
+        if max_chars <= 3 then
+            return label:sub(1, max_chars)
+        end
+
+        return label:sub(1, max_chars - 3) .. "..."
+    end
+
     local function draw_clips(time_offset_ms, outline_only, clip_filter, preview_hint)
         local clips = state_module.get_clips()
         local selected_clips = state_module.get_selected_clips()
@@ -281,13 +335,29 @@ end
                 if y >= 0 then  -- Clip is on a track in this view
                     local track_height = state_module.get_track_height(render_track_id or clip.track_id)
                     local clip_start = clip.start_time + time_offset_ms
+                    local clip_end = clip_start + clip.duration
                     local x = state_module.time_to_pixel(clip_start, width)
+                    local clip_end_px = state_module.time_to_pixel(clip_end, width)
                     y = y + 5  -- Add padding from track top
-                    local clip_width = math.floor((clip.duration / viewport_duration) * width) - 1
+                    local clip_width = clip_end_px - x
+                    if clip_width < 1 then
+                        clip_width = 1
+                    end
                     local clip_height = track_height - 10
 
+                    local visible_x = x
+                    local visible_width = clip_width
+                    if visible_x < 0 then
+                        visible_width = visible_width + visible_x
+                        visible_x = 0
+                    end
+                    if visible_x + visible_width > width then
+                        visible_width = width - visible_x
+                    end
+
                     -- Only draw if visible
-                    if x + clip_width >= 0 and x <= width and
+                    if visible_width > 0 and
+                       x + clip_width >= 0 and x <= width and
                        y + clip_height > 0 and y < height then
 
                         if not outline_only and time_offset_ms == 0 and target_track_id == nil then
@@ -306,30 +376,63 @@ end
                         local outline_thickness = 2
 
                         local clip_enabled = clip.enabled ~= false
-                        local body_color = clip_enabled and state_module.colors.clip or state_module.colors.clip_disabled
+                        local track_info = state_module.get_track_by_id(render_track_id or clip.track_id)
+                        local is_audio_track = track_info and track_info.track_type == "AUDIO"
+                        local body_color
+                        if clip_enabled then
+                            if is_audio_track then
+                                body_color = state_module.colors.clip_audio or state_module.colors.clip
+                            else
+                                body_color = state_module.colors.clip_video or state_module.colors.clip
+                            end
+                        else
+                            body_color = state_module.colors.clip_disabled
+                        end
                         local text_color = clip_enabled and state_module.colors.text or state_module.colors.clip_disabled_text
 
                         if not outline_only then
                             -- Draw filled clip
-                            timeline.add_rect(view.widget, x, y, clip_width, clip_height, body_color)
+                            timeline.add_rect(view.widget, visible_x, y, visible_width, clip_height, body_color)
 
                             -- Clip name (if there's enough space)
-                            if clip_width > 60 then
+                            local label_padding = 10
+                            local max_label_width = visible_width - label_padding
+                            if max_label_width > 40 then
                                 local clip_label = clip.label or clip.name or clip.id or ""
-                                timeline.add_text(view.widget, x + 5, y + 25, clip_label, text_color)
+                                local display_label = truncate_label(clip_label, max_label_width)
+                                if display_label ~= "" then
+                                    local label_baseline = y + math.min(clip_height - 10, 22)
+                                    timeline.add_text(view.widget, visible_x + 5, label_baseline, display_label, text_color)
+                                end
                             end
                         end
 
                         -- Draw outline if selected or if outline_only mode
                         if is_selected or outline_only then
                             -- Top
-                            timeline.add_rect(view.widget, x, y, clip_width, outline_thickness, state_module.colors.clip_selected)
+                            local outline_width = visible_width
+                            local outline_x = visible_x
+                            timeline.add_rect(view.widget, outline_x, y, outline_width, outline_thickness, state_module.colors.clip_selected)
                             -- Bottom
-                            timeline.add_rect(view.widget, x, y + clip_height - outline_thickness, clip_width, outline_thickness, state_module.colors.clip_selected)
+                            timeline.add_rect(view.widget, outline_x, y + clip_height - outline_thickness, outline_width, outline_thickness, state_module.colors.clip_selected)
                             -- Left
-                            timeline.add_rect(view.widget, x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
+                            timeline.add_rect(view.widget, outline_x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
                             -- Right
-                            timeline.add_rect(view.widget, x + clip_width - outline_thickness, y, outline_thickness, clip_height, state_module.colors.clip_selected)
+                            timeline.add_rect(view.widget, outline_x + outline_width - outline_thickness, y, outline_thickness, clip_height, state_module.colors.clip_selected)
+                        elseif visible_width ~= clip_width or visible_x ~= x then
+                            local dash_height = math.min(clip_height, 12)
+                            if x < 0 then
+                                timeline.add_rect(view.widget, 0, y + (clip_height - dash_height) / 2, outline_thickness, dash_height, state_module.colors.clip_selected)
+                            end
+                            if x + clip_width > width then
+                                timeline.add_rect(view.widget, width - outline_thickness, y + (clip_height - dash_height) / 2, outline_thickness, dash_height, state_module.colors.clip_selected)
+                            end
+                        end
+
+                        if not outline_only and visible_width > 0 then
+                            local boundary_x = visible_x + visible_width - 1
+                            local boundary_color = state_module.colors.clip_boundary or state_module.colors.background or "#1a1a1a"
+                            timeline.add_rect(view.widget, boundary_x, y, 1, clip_height, boundary_color)
                         end
                     end
                 end
@@ -813,6 +916,8 @@ end
                 end
             end
         end
+
+        draw_mark_overlays()
 
         -- Draw playhead line (vertical line only, triangle is in ruler)
         if playhead_time >= viewport_start and playhead_time <= viewport_start + viewport_duration then
@@ -1321,6 +1426,19 @@ end
                 view.drag_state.current_y = y
                 view.drag_state.current_time = current_time
                 view.drag_state.delta_ms = math.floor(current_time - view.drag_state.start_time)
+
+                if modifiers and modifiers.shift then
+                    view.drag_state.current_y = view.drag_state.start_y
+                    view.drag_state.shift_constrained = true
+                else
+                    view.drag_state.shift_constrained = false
+                end
+
+                if modifiers and modifiers.alt then
+                    view.drag_state.alt_copy = true
+                else
+                    view.drag_state.alt_copy = false
+                end
                 render()  -- Show drag preview
             elseif state_module.is_dragging_playhead() then
                 local time = state_module.pixel_to_time(x, width)
@@ -1412,6 +1530,8 @@ end
                 print(string.format("DEBUG: Drag release - delta_ms=%d, current_y=%d, target_track=%s",
                     delta_ms, current_y, tostring(target_track_id)))
 
+                local alt_copy = (modifiers and modifiers.alt) or (view.drag_state and view.drag_state.alt_copy)
+                local shift_constrained = view.drag_state and view.drag_state.shift_constrained
                 local anchor_clip_id = view.drag_state and view.drag_state.anchor_clip_id
                 view.drag_state = nil
                 view.potential_drag = nil
@@ -1503,40 +1623,88 @@ end
 
                     -- Build command list for BatchCommand (single undo for entire drag)
                     local command_specs = {}
-
-                    -- Add track changes
-                    if #clips_to_move > 0 then
-                        for _, move_info in ipairs(clips_to_move) do
-                            local move_params = {
-                                clip_id = move_info.clip.id,
-                                target_track_id = move_info.target_track_id
-                            }
-                            if delta_ms ~= 0 then
-                                move_params.skip_occlusion = true
-                                move_params.pending_new_start_time = move_info.clip.start_time + delta_ms
-                                move_params.pending_duration = move_info.clip.duration
-                            end
-                            table.insert(command_specs, {
-                                command_type = "MoveClipToTrack",
-                                parameters = move_params
-                            })
-                        end
+                    local clip_targets = {}
+                    for _, clip in ipairs(current_clips) do
+                        clip_targets[clip.id] = clip.track_id
+                    end
+                    for _, move_info in ipairs(clips_to_move) do
+                        clip_targets[move_info.clip.id] = move_info.target_track_id
                     end
 
-                    -- Add time nudge (if moved horizontally)
-                    if delta_ms ~= 0 then
-                        local clip_ids = {}
-                        for _, clip in ipairs(drag_clips) do
-                            table.insert(clip_ids, clip.id)
+                    if alt_copy then
+                        local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id() or "default_sequence"
+                        for _, clip in ipairs(current_clips) do
+                            local target_track_id = clip_targets[clip.id] or clip.track_id
+                            local insert_time = clip.start_time + delta_ms
+                            local source_in = clip.source_in or 0
+                            local source_out = clip.source_out or (source_in + (clip.duration or 0))
+                            local has_media = clip.media_id and clip.media_id ~= ""
+                            local has_master = clip.parent_clip_id and clip.parent_clip_id ~= ""
+
+                            if not has_media and not has_master then
+                                print(string.format("WARNING: Option-drag copy skipped clip %s (no media or master)", clip.id or "unknown"))
+                            else
+                                table.insert(command_specs, {
+                                    command_type = "Insert",
+                                    parameters = {
+                                        media_id = clip.media_id,
+                                        track_id = target_track_id,
+                                        insert_time = insert_time,
+                                        duration = clip.duration,
+                                        source_in = source_in,
+                                        source_out = source_out,
+                                        master_clip_id = clip.parent_clip_id,
+                                        project_id = clip.project_id,
+                                        sequence_id = sequence_id,
+                                        advance_playhead = false,
+                                    }
+                                })
+                            end
                         end
 
-                        table.insert(command_specs, {
-                            command_type = "Nudge",
-                            parameters = {
-                                nudge_amount_ms = delta_ms,
-                                selected_clip_ids = clip_ids
-                            }
-                        })
+                        table.sort(command_specs, function(a, b)
+                            local ta = a.parameters.insert_time or 0
+                            local tb = b.parameters.insert_time or 0
+                            if ta == tb then
+                                return (a.parameters.track_id or "") < (b.parameters.track_id or "")
+                            end
+                            return ta < tb
+                        end)
+                    else
+                        -- Add track changes
+                        if #clips_to_move > 0 then
+                            for _, move_info in ipairs(clips_to_move) do
+                                local move_params = {
+                                    clip_id = move_info.clip.id,
+                                    target_track_id = move_info.target_track_id
+                                }
+                                if delta_ms ~= 0 then
+                                    move_params.skip_occlusion = true
+                                    move_params.pending_new_start_time = move_info.clip.start_time + delta_ms
+                                    move_params.pending_duration = move_info.clip.duration
+                                end
+                                table.insert(command_specs, {
+                                    command_type = "MoveClipToTrack",
+                                    parameters = move_params
+                                })
+                            end
+                        end
+
+                        -- Add time nudge (if moved horizontally)
+                        if delta_ms ~= 0 then
+                            local clip_ids = {}
+                            for _, clip in ipairs(drag_clips) do
+                                table.insert(clip_ids, clip.id)
+                            end
+
+                            table.insert(command_specs, {
+                                command_type = "Nudge",
+                                parameters = {
+                                    nudge_amount_ms = delta_ms,
+                                    selected_clip_ids = clip_ids
+                                }
+                            })
+                        end
                     end
 
                     -- Execute all as single batch command (single undo entry)
@@ -1567,15 +1735,50 @@ end
                     end
 
                     -- Summary message
-                    local moved_count = #clips_to_move
-                    local nudged_count = delta_ms ~= 0 and #drag_clips or 0
-                    if moved_count > 0 and nudged_count > 0 then
-                        print(string.format("✅ Drag: Moved %d clip(s) + nudged by %dms (single undo)",
-                            moved_count, delta_ms))
-                    elseif moved_count > 0 then
-                        print(string.format("✅ Moved %d clip(s) to different track", moved_count))
-                    elseif nudged_count > 0 then
-                        print(string.format("✅ Nudged %d clip(s) by %dms", nudged_count, delta_ms))
+                    local frame_rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or frame_utils.default_frame_rate
+                    local function format_delta()
+                        if delta_ms == 0 then
+                            return nil
+                        end
+                        local ok, formatted = pcall(frame_utils.format_timecode, math.abs(delta_ms), frame_rate)
+                        if ok and formatted then
+                            return formatted
+                        end
+                        return string.format("%dms", math.abs(delta_ms))
+                    end
+
+                    if alt_copy then
+                        local copied_count = 0
+                        for _, spec in ipairs(command_specs) do
+                            if spec.command_type == "Insert" then
+                                copied_count = copied_count + 1
+                            end
+                        end
+                        if copied_count > 0 then
+                            local delta_text = format_delta()
+                            if delta_text then
+                                local direction = delta_ms < 0 and "left" or "right"
+                                print(string.format("✅ Copied %d clip(s) %s by %s", copied_count, direction, delta_text))
+                            else
+                                print(string.format("✅ Copied %d clip(s)", copied_count))
+                            end
+                        end
+                    else
+                        local moved_count = #clips_to_move
+                        local nudged_count = delta_ms ~= 0 and #drag_clips or 0
+                        if moved_count > 0 or nudged_count > 0 then
+                            local delta_text = format_delta()
+                            local direction = delta_ms < 0 and "left" or "right"
+                            if moved_count > 0 and nudged_count > 0 and delta_text then
+                                print(string.format("✅ Drag: Moved %d clip(s) and nudged %s by %s",
+                                    moved_count, direction, delta_text))
+                            elseif moved_count > 0 then
+                                print(string.format("✅ Moved %d clip(s) to different track", moved_count))
+                            elseif nudged_count > 0 and delta_text then
+                                print(string.format("✅ Nudged %d clip(s) %s by %s",
+                                    nudged_count, direction, delta_text))
+                            end
+                        end
                     end
 
                 elseif drag_type == "edges" then

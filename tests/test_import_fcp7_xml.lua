@@ -21,21 +21,25 @@ db:exec([[
         settings TEXT NOT NULL DEFAULT '{}'
     );
 
-    CREATE TABLE sequences (
+            CREATE TABLE IF NOT EXISTS sequences (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         timecode_start INTEGER NOT NULL DEFAULT 0,
         playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        current_sequence_number INTEGER,
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
         viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000
+        viewport_duration INTEGER NOT NULL DEFAULT 10000,
+        mark_in_time INTEGER,
+        mark_out_time INTEGER,
+        current_sequence_number INTEGER
     );
+
 
     CREATE TABLE tracks (
         id TEXT PRIMARY KEY,
@@ -51,16 +55,27 @@ db:exec([[
         pan REAL NOT NULL DEFAULT 0.0
     );
 
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
-        media_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
+                    CREATE TABLE clips (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            clip_kind TEXT NOT NULL DEFAULT 'timeline',
+            name TEXT DEFAULT '',
+            track_id TEXT,
+            media_id TEXT,
+            source_sequence_id TEXT,
+            parent_clip_id TEXT,
+            owner_sequence_id TEXT,
+            start_time INTEGER NOT NULL,
+            duration INTEGER NOT NULL,
+            source_in INTEGER NOT NULL DEFAULT 0,
+            source_out INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            offline INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT 0,
+            modified_at INTEGER NOT NULL DEFAULT 0
+        );
+
+
 
     CREATE TABLE media (
         id TEXT PRIMARY KEY,
