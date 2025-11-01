@@ -33,6 +33,7 @@
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QVariant>
+#include <QByteArray>
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -49,6 +50,7 @@ static const char* WIDGET_METATABLE = "JVE.Widget";
 // Forward declarations
 int lua_create_scriptable_timeline(lua_State* L);
 int lua_set_line_edit_text_changed_handler(lua_State* L);
+int lua_set_line_edit_editing_finished_handler(lua_State* L);
 int lua_update_widget(lua_State* L);
 int lua_get_widget_size(lua_State* L);
 int lua_get_geometry(lua_State* L);
@@ -832,6 +834,8 @@ void registerQtBindings(lua_State* L)
     lua_setglobal(L, "qt_set_widget_click_handler");
     lua_pushcfunction(L, lua_set_line_edit_text_changed_handler);
     lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
+    lua_pushcfunction(L, lua_set_line_edit_editing_finished_handler);
+    lua_setglobal(L, "qt_set_line_edit_editing_finished_handler");
     lua_pushcfunction(L, lua_set_tree_selection_changed_handler);
     lua_setglobal(L, "qt_set_tree_selection_handler");
     lua_pushcfunction(L, lua_set_tree_selection_mode);
@@ -2252,6 +2256,37 @@ int lua_set_focus(lua_State* L)
 }
 
 // Global key event filter class
+static bool widget_accepts_text_input(QWidget* widget)
+{
+    if (!widget) {
+        return false;
+    }
+
+    QWidget* current = widget;
+    int guard = 0;
+    while (current && guard < 8) {
+        if (current->inherits("QLineEdit") ||
+            current->inherits("QTextEdit") ||
+            current->inherits("QPlainTextEdit") ||
+            current->inherits("QSpinBox") ||
+            current->inherits("QDoubleSpinBox") ||
+            current->inherits("QAbstractSpinBox") ||
+            current->inherits("QComboBox")) {
+            return true;
+        }
+
+        QWidget* proxy = current->focusProxy();
+        if (proxy && proxy != current) {
+            current = proxy;
+        } else {
+            current = current->parentWidget();
+        }
+        ++guard;
+    }
+
+    return false;
+}
+
 class GlobalKeyFilter : public QObject
 {
 public:
@@ -2278,6 +2313,30 @@ protected:
                 lua_pushstring(lua_state, "modifiers");
                 lua_pushinteger(lua_state, (int)keyEvent->modifiers());
                 lua_settable(lua_state, -3);
+
+                QWidget* focus_widget = QApplication::focusWidget();
+                if (focus_widget) {
+                    lua_pushstring(lua_state, "focus_widget");
+                    lua_push_widget(lua_state, focus_widget);
+                    lua_settable(lua_state, -3);
+
+                    lua_pushstring(lua_state, "focus_widget_class");
+                    lua_pushstring(lua_state, focus_widget->metaObject()->className());
+                    lua_settable(lua_state, -3);
+
+                    lua_pushstring(lua_state, "focus_widget_object_name");
+                    QByteArray name_bytes = focus_widget->objectName().toUtf8();
+                    lua_pushstring(lua_state, name_bytes.constData());
+                    lua_settable(lua_state, -3);
+
+                    lua_pushstring(lua_state, "focus_widget_is_text_input");
+                    lua_pushboolean(lua_state, widget_accepts_text_input(focus_widget));
+                    lua_settable(lua_state, -3);
+                } else {
+                    lua_pushstring(lua_state, "focus_widget_is_text_input");
+                    lua_pushboolean(lua_state, 0);
+                    lua_settable(lua_state, -3);
+                }
 
                 if (lua_pcall(lua_state, 1, 1, 0) == LUA_OK) {
                     bool handled = lua_toboolean(lua_state, -1);
@@ -3514,6 +3573,40 @@ int lua_set_line_edit_text_changed_handler(lua_State* L)
     });
 
     return 0;
+}
+
+int lua_set_line_edit_editing_finished_handler(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    if (!widget) {
+        qWarning() << "Invalid widget in lua_set_line_edit_editing_finished_handler";
+        return 0;
+    }
+
+    QLineEdit* lineEdit = qobject_cast<QLineEdit*>(widget);
+    if (!lineEdit) {
+        qWarning() << "Widget is not a QLineEdit in lua_set_line_edit_editing_finished_handler";
+        return 0;
+    }
+
+    const char* handler_name = luaL_checkstring(L, 2);
+    std::string handler_str(handler_name);
+
+    QObject::connect(lineEdit, &QLineEdit::editingFinished, [L, handler_str]() {
+        lua_getglobal(L, handler_str.c_str());
+        if (lua_isfunction(L, -1)) {
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                qWarning() << "Error calling" << QString::fromStdString(handler_str)
+                          << ":" << lua_tostring(L, -1);
+                lua_pop(L, 1);
+            }
+        } else {
+            lua_pop(L, 1);
+        }
+    });
+
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 // Update widget geometry and force repaint

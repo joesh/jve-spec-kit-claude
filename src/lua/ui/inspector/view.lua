@@ -15,6 +15,58 @@ local collapsible_section = require("ui.collapsible_section")
 
 local FIELD_TYPES = metadata_schemas.FIELD_TYPES
 
+local PROPERTY_TYPE_MAP = {
+  [FIELD_TYPES.STRING] = "STRING",
+  [FIELD_TYPES.TEXT_AREA] = "STRING",
+  [FIELD_TYPES.DROPDOWN] = "ENUM",
+  [FIELD_TYPES.INTEGER] = "NUMBER",
+  [FIELD_TYPES.DOUBLE] = "NUMBER",
+  [FIELD_TYPES.BOOLEAN] = "BOOLEAN",
+  [FIELD_TYPES.TIMECODE] = "NUMBER",
+}
+
+local function normalize_default_value(field_type, raw_value)
+  if raw_value == nil then
+    return nil
+  end
+
+  if field_type == FIELD_TYPES.INTEGER then
+    local num = tonumber(raw_value)
+    return num and math.floor(num) or nil
+  elseif field_type == FIELD_TYPES.DOUBLE then
+    return tonumber(raw_value)
+  elseif field_type == FIELD_TYPES.BOOLEAN then
+    if type(raw_value) == "boolean" then
+      return raw_value
+    end
+    if type(raw_value) == "number" then
+      return raw_value ~= 0
+    end
+    if type(raw_value) == "string" then
+      local lowered = raw_value:lower()
+      if lowered == "true" or lowered == "yes" or lowered == "on" then
+        return true
+      elseif lowered == "false" or lowered == "no" or lowered == "off" then
+        return false
+      end
+    end
+    return nil
+  elseif field_type == FIELD_TYPES.TIMECODE then
+    if type(raw_value) == "number" then
+      return raw_value
+    elseif type(raw_value) == "string" and raw_value ~= "" then
+      local parsed = frame_utils.parse_timecode(raw_value, current_frame_rate())
+      return parsed
+    end
+    return nil
+  else
+    if raw_value == nil then
+      return nil
+    end
+    return tostring(raw_value)
+  end
+end
+
 -- Helper for detailed error logging
 local log_detailed_error = error_system.log_detailed_error
 
@@ -395,7 +447,8 @@ local function create_inspector_field(section, field, field_widgets)
     widget = control_widget,
     widget_type = widget_type,
     mixed = false,
-    options = field.options
+    options = field.options,
+    pending_value = nil,
   }
 
   function entry:set_placeholder(text)
@@ -427,6 +480,7 @@ local function create_inspector_field(section, field, field_widgets)
 
   function entry:set_value(value)
     self.mixed = false
+    self.pending_value = nil
     if self.widget_type == "checkbox" then
       pcall(qt_constants.PROPERTIES.SET_CHECKED, self.widget, value and true or false)
       return
@@ -498,15 +552,50 @@ local function create_inspector_field(section, field, field_widgets)
   field_widgets[field_key] = entry
 
   if widget_type == "checkbox" then
-    widget_pool.connect_signal(control_widget, "clicked", function()
+    local click_connection, click_err = widget_pool.connect_signal(control_widget, "clicked", function()
       if field_updates_suppressed() or M._multi_edit_mode then
         return
       end
       entry:set_mixed(false)
       M.save_field_value(field_key)
     end)
-  else
-    widget_pool.connect_signal(control_widget, "textChanged", function()
+    if not click_connection then
+      local message = string.format(
+        "[inspector][view] Failed to connect checkbox click handler for field '%s': %s",
+        field_key,
+        click_err and (click_err.message or tostring(click_err)) or "unknown error"
+      )
+      error(message)
+    end
+  elseif widget_type == "line_edit" then
+    local editing_connection, editing_err = widget_pool.connect_signal(control_widget, "editingFinished", function()
+      if field_updates_suppressed() then
+        return
+      end
+      entry:set_mixed(false)
+      if M._multi_edit_mode then
+        entry.pending_value = nil
+        return
+      end
+
+      local value = entry.pending_value
+      if value == nil then
+        value = read_widget_value(entry)
+      end
+      entry.pending_value = nil
+      M.save_field_value(field_key, value)
+    end)
+
+    if not editing_connection then
+      local message = string.format(
+        "[inspector][view] Failed to connect editingFinished for field '%s': %s",
+        field_key,
+        editing_err and (editing_err.message or tostring(editing_err)) or "unknown error"
+      )
+      error(message)
+    end
+
+    local text_connection, text_err = widget_pool.connect_signal(control_widget, "textChanged", function()
       if field_updates_suppressed() then
         return
       end
@@ -514,8 +603,19 @@ local function create_inspector_field(section, field, field_widgets)
       if M._multi_edit_mode then
         return
       end
-      M.save_field_value(field_key)
+      entry.pending_value = read_widget_value(entry)
     end)
+
+    if not text_connection then
+      local message = string.format(
+        "[inspector][view] Failed to connect textChanged for field '%s': %s",
+        field_key,
+        text_err and (text_err.message or tostring(text_err)) or "unknown error"
+      )
+      error(message)
+    end
+  else
+    error(string.format("[inspector][view] Unsupported widget type '%s' for field '%s'", widget_type, field_key))
   end
 
   if section and section.addContentWidget then
@@ -903,6 +1003,13 @@ function M.save_field_value(field_key, explicit_value)
     return
   end
 
+  local property_type = PROPERTY_TYPE_MAP[entry.field_type]
+  if not property_type then
+    logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      string.format("[inspector][view] Unsupported field type '%s' for field '%s'", tostring(entry.field_type), tostring(field_key)))
+    return
+  end
+
   local inspectable = M._current_inspectable
   if not inspectable then
     return
@@ -918,8 +1025,16 @@ function M.save_field_value(field_key, explicit_value)
     return
   end
 
+  local normalized_default = normalize_default_value(entry.field_type, entry.field and entry.field.default)
+
+  local payload = {
+    value = value,
+    property_type = property_type,
+    default_value = normalized_default
+  }
+
   suppress_field_updates()
-  local ok, err = inspectable:set(field_key, value)
+  local ok, err = inspectable:set(field_key, payload)
   if ok then
     if entry.set_mixed then
       entry:set_mixed(false)
@@ -949,7 +1064,14 @@ function M.save_all_fields()
   for field_key, entry in pairs(M._field_widgets) do
     local value = read_widget_value(entry)
     if value ~= nil then
-      M._current_inspectable:set(field_key, value)
+      local property_type = PROPERTY_TYPE_MAP[entry.field_type]
+      if property_type then
+        M._current_inspectable:set(field_key, {
+          value = value,
+          property_type = property_type,
+          default_value = entry.field and entry.field.default
+        })
+      end
     end
   end
 end

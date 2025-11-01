@@ -698,6 +698,13 @@ local function restore_selection_from_serialized(clips_json, edges_json)
     timeline_state.set_selection({})
 end
 
+function M.set_last_error(message)
+    if type(message) == "string" and message ~= "" then
+        last_error_message = message
+    else
+        last_error_message = ""
+    end
+end
 
 -- Initialize CommandManager with database connection
 function M.init(database, sequence_id, project_id)
@@ -711,7 +718,7 @@ function M.init(database, sequence_id, project_id)
 
     -- Register all command executors and undoers
     local command_implementations = require("core.command_implementations")
-    command_implementations.register_commands(command_executors, command_undoers, db)
+    command_implementations.register_commands(command_executors, command_undoers, db, M.set_last_error)
 
     -- Query last sequence number from database
     local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
@@ -1643,6 +1650,16 @@ function M.replay_events(sequence_id, target_sequence_number)
             print("Cleared master sequences for replay")
         end
 
+        local purge_orphan_properties = db:prepare([[
+            DELETE FROM properties
+            WHERE clip_id NOT IN (SELECT id FROM clips)
+        ]])
+        if purge_orphan_properties then
+            purge_orphan_properties:exec()
+            purge_orphan_properties:finalize()
+            print("Cleared orphan clip properties for replay")
+        end
+
         -- Step 4: Restore initial state clips
         if #initial_media > 0 then
             local Media = require('models.media')
@@ -2156,6 +2173,25 @@ function M.activate_timeline_stack(sequence_id)
     local seq = sequence_id or active_sequence_id
     local stack_id = stack_id_for_sequence(seq)
     set_active_stack(stack_id, {sequence_id = seq})
+
+    if db and seq and seq ~= "" then
+        local project_id = nil
+        local query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+        if query then
+            query:bind_value(1, seq)
+            if query:exec() and query:next() then
+                project_id = query:value(0)
+            end
+            query:finalize()
+        end
+
+        if project_id and project_id ~= "" then
+            cache_initial_state(seq, project_id)
+        else
+            cache_initial_state(seq, active_project_id)
+        end
+    end
+
     return stack_id
 end
 

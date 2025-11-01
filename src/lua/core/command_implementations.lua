@@ -12,9 +12,184 @@ local M = {}
 --   command_executors: table to populate with executor functions
 --   command_undoers: table to populate with undoer functions
 --   db: database connection reference (captured by closures)
-function M.register_commands(command_executors, command_undoers, db)
+function M.register_commands(command_executors, command_undoers, db, set_last_error_fn)
 
     local frame_utils = require('core.frame_utils')
+    local json = require("dkjson")
+    local uuid = require("uuid")
+    local set_last_error = set_last_error_fn or function(_) end
+
+    local function encode_property_json(raw)
+        if raw == nil or raw == "" then
+            local encoded = json.encode({ value = nil })
+            return encoded
+        end
+        if type(raw) == "string" then
+            return raw
+        end
+        local encoded, err = json.encode({ value = raw })
+        if not encoded then
+            return json.encode({ value = nil })
+        end
+        return encoded
+    end
+
+    local function fetch_clip_properties_for_copy(clip_id)
+        local props = {}
+        if not clip_id or clip_id == "" then
+            return props
+        end
+
+        local query = db:prepare("SELECT property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
+        if not query then
+            return props
+        end
+        query:bind_value(1, clip_id)
+
+        if query:exec() then
+            while query:next() do
+                local property_name = query:value(0)
+                local property_value = encode_property_json(query:value(1))
+                local property_type = query:value(2) or "STRING"
+                local default_value = query:value(3)
+                if default_value == nil or default_value == "" then
+                    default_value = json.encode({ value = nil })
+                end
+
+                table.insert(props, {
+                    id = uuid.generate(),
+                    property_name = property_name,
+                    property_value = property_value,
+                    property_type = property_type,
+                    default_value = default_value
+                })
+            end
+        end
+        query:finalize()
+        return props
+    end
+
+    local function snapshot_properties_for_clip(clip_id)
+        local props = {}
+        if not clip_id or clip_id == "" then
+            return props
+        end
+
+        local query = db:prepare("SELECT id, property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
+        if not query then
+            return props
+        end
+        query:bind_value(1, clip_id)
+
+        if query:exec() then
+            while query:next() do
+                table.insert(props, {
+                    id = query:value(0),
+                    property_name = query:value(1),
+                    property_value = query:value(2),
+                    property_type = query:value(3),
+                    default_value = query:value(4)
+                })
+            end
+        end
+        query:finalize()
+        return props
+    end
+
+    local function ensure_copied_properties(command, master_clip_id)
+        if not master_clip_id or master_clip_id == "" then
+            return {}
+        end
+        local stored = command:get_parameter("copied_properties")
+        if type(stored) == "table" and #stored > 0 then
+            return stored
+        end
+        local props = fetch_clip_properties_for_copy(master_clip_id)
+        command:set_parameter("copied_properties", props)
+        return props
+    end
+
+    local function insert_properties_for_clip(clip_id, properties)
+        if not properties or #properties == 0 then
+            return true
+        end
+
+        local stmt = db:prepare([[
+            INSERT OR REPLACE INTO properties
+            (id, clip_id, property_name, property_value, property_type, default_value)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ]])
+
+        if not stmt then
+            print(string.format("WARNING: Failed to prepare property insert for clip %s", tostring(clip_id)))
+            return false
+        end
+
+        for _, prop in ipairs(properties) do
+            stmt:bind_value(1, prop.id or uuid.generate())
+            stmt:bind_value(2, clip_id)
+            stmt:bind_value(3, prop.property_name)
+            stmt:bind_value(4, encode_property_json(prop.property_value))
+            stmt:bind_value(5, prop.property_type or "STRING")
+            stmt:bind_value(6, encode_property_json(prop.default_value))
+
+            if not stmt:exec() then
+                local err = "unknown"
+                if stmt.last_error then
+                    local ok, msg = pcall(stmt.last_error, stmt)
+                    if ok and msg and msg ~= "" then
+                        err = msg
+                    end
+                end
+                print(string.format("WARNING: Failed to insert property %s for clip %s: %s",
+                    tostring(prop.property_name), tostring(clip_id), tostring(err)))
+                stmt:finalize()
+                return false
+            end
+            stmt:reset()
+            stmt:clear_bindings()
+        end
+
+        stmt:finalize()
+        return true
+    end
+
+    local function delete_properties_for_clip(clip_id)
+        if not clip_id or clip_id == "" then
+            return true
+        end
+        local stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
+        if not stmt then
+            return false
+        end
+        stmt:bind_value(1, clip_id)
+        local ok = stmt:exec()
+        stmt:finalize()
+        return ok
+    end
+
+    local function delete_properties_by_list(properties)
+        if not properties or #properties == 0 then
+            return true
+        end
+        local stmt = db:prepare("DELETE FROM properties WHERE id = ?")
+        if not stmt then
+            return false
+        end
+        for _, prop in ipairs(properties) do
+            if prop.id then
+                stmt:bind_value(1, prop.id)
+                if not stmt:exec() then
+                    stmt:finalize()
+                    return false
+                end
+                stmt:reset()
+                stmt:clear_bindings()
+            end
+        end
+        stmt:finalize()
+        return true
+    end
 
     local function restore_clip_state(state)
         if not state then
@@ -355,6 +530,9 @@ command_executors["DeleteClip"] = function(command)
         enabled = clip.enabled
     }
     command:set_parameter("deleted_clip_state", clip_state)
+    command:set_parameter("deleted_clip_properties", snapshot_properties_for_clip(clip_id))
+
+    delete_properties_for_clip(clip_id)
 
     if not clip:delete(db) then
         print(string.format("WARNING: DeleteClip: Failed to delete clip %s", clip_id))
@@ -373,6 +551,10 @@ command_undoers["DeleteClip"] = function(command)
     end
 
     restore_clip_state(clip_state)
+    local properties = command:get_parameter("deleted_clip_properties") or {}
+    if #properties > 0 then
+        insert_properties_for_clip(clip_state.id, properties)
+    end
     print(string.format("✅ Undo DeleteClip: Restored clip %s", clip_state.id))
     return true
 end
@@ -625,25 +807,25 @@ end
     command_executors["DeleteMasterClip"] = function(command)
         local master_clip_id = command:get_parameter("master_clip_id")
         if not master_clip_id or master_clip_id == "" then
-            last_error_message = "DeleteMasterClip: Missing master_clip_id"
+            set_last_error("DeleteMasterClip: Missing master_clip_id")
             return false
         end
 
         local Clip = require('models.clip')
         local clip = Clip.load_optional(master_clip_id, db)
         if not clip then
-            last_error_message = "DeleteMasterClip: Master clip not found"
+            set_last_error("DeleteMasterClip: Master clip not found")
             return false
         end
 
         if clip.clip_kind ~= "master" then
-            last_error_message = "DeleteMasterClip: Clip is not a master clip"
+            set_last_error("DeleteMasterClip: Clip is not a master clip")
             return false
         end
 
         local ref_query = db:prepare("SELECT COUNT(*) FROM clips WHERE parent_clip_id = ? AND clip_kind = 'timeline'")
         if not ref_query then
-            last_error_message = "DeleteMasterClip: Failed to prepare reference check"
+            set_last_error("DeleteMasterClip: Failed to prepare reference check")
             return false
         end
         ref_query:bind_value(1, master_clip_id)
@@ -654,7 +836,7 @@ end
         ref_query:finalize()
 
         if in_use > 0 then
-            last_error_message = "DeleteMasterClip: Clip still referenced in timeline"
+            set_last_error("DeleteMasterClip: Clip still referenced in timeline")
             return false
         end
 
@@ -697,7 +879,7 @@ end
         command:set_parameter("master_clip_properties", properties)
 
         if not clip:delete(db) then
-            last_error_message = "DeleteMasterClip: Failed to delete clip"
+            set_last_error("DeleteMasterClip: Failed to delete clip")
             return false
         end
 
@@ -708,7 +890,7 @@ end
     command_undoers["DeleteMasterClip"] = function(command)
         local snapshot = command:get_parameter("master_clip_snapshot")
         if not snapshot then
-            last_error_message = "UndoDeleteMasterClip: Missing snapshot"
+            set_last_error("UndoDeleteMasterClip: Missing snapshot")
             return false
         end
 
@@ -730,7 +912,7 @@ end
         })
 
         if not restored:save(db) then
-            last_error_message = "UndoDeleteMasterClip: Failed to restore master clip"
+            set_last_error("UndoDeleteMasterClip: Failed to restore master clip")
             return false
         end
 
@@ -738,7 +920,7 @@ end
         if #properties > 0 then
             local insert_prop = db:prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)")
             if not insert_prop then
-                last_error_message = "UndoDeleteMasterClip: Failed to prepare property restore"
+                set_last_error("UndoDeleteMasterClip: Failed to prepare property restore")
                 return false
             end
             for _, prop in ipairs(properties) do
@@ -749,7 +931,7 @@ end
                 insert_prop:bind_value(5, prop.property_type)
                 insert_prop:bind_value(6, prop.default_value)
                 if not insert_prop:exec() then
-                    last_error_message = "UndoDeleteMasterClip: Failed to restore property"
+                    set_last_error("UndoDeleteMasterClip: Failed to restore property")
                     insert_prop:finalize()
                     return false
                 end
@@ -768,9 +950,20 @@ command_executors["SetClipProperty"] = function(command)
     local clip_id = command:get_parameter("clip_id")
     local property_name = command:get_parameter("property_name")
     local new_value = command:get_parameter("value")
+    local property_type = command:get_parameter("property_type")
+    local default_value_param = command:get_parameter("default_value")
 
     if not clip_id or clip_id == "" or not property_name or property_name == "" then
-        print("WARNING: SetClipProperty: Missing required parameters")
+        local message = "SetClipProperty: Missing required parameters"
+        set_last_error(message)
+        print("WARNING: " .. message)
+        return false
+    end
+
+    if not property_type or property_type == "" then
+        local message = "SetClipProperty: Missing property_type parameter"
+        set_last_error(message)
+        print("WARNING: " .. message)
         return false
     end
 
@@ -779,38 +972,252 @@ command_executors["SetClipProperty"] = function(command)
     if not clip or clip.id == "" then
         local executed_with_clip = command:get_parameter("executed_with_clip")
         if executed_with_clip then
-            -- If the clip was deleted later (e.g., via Delete command), skip gracefully.
             print(string.format("INFO: SetClipProperty: Clip %s missing during replay; property update skipped", clip_id))
             return true
         end
 
-        -- If we don't know whether the command ever executed, try to infer from parameters.
-        -- Commands that executed successfully will have stored the previous_value snapshot.
         if command:get_parameter("previous_value") ~= nil then
             print(string.format("INFO: SetClipProperty: Clip %s missing but previous_value present; assuming clip deleted and skipping", clip_id))
             return true
         end
 
-        -- Final fallback: if the clip is still missing, treat it as deleted but warn for diagnostics.
         print(string.format("WARNING: SetClipProperty: Clip not found during replay: %s; skipping property update", clip_id))
         return true
     end
 
-    -- Get current value for undo
-    local previous_value = clip:get_property(property_name)
+    local select_stmt = db:prepare("SELECT id, property_value, property_type, default_value FROM properties WHERE clip_id = ? AND property_name = ?")
+    if not select_stmt then
+        local message = "SetClipProperty: Failed to prepare property lookup query"
+        set_last_error(message)
+        print("WARNING: " .. message)
+        return false
+    end
+    select_stmt:bind_value(1, clip_id)
+    select_stmt:bind_value(2, property_name)
+
+    local property_id = nil
+    local previous_value = nil
+    local previous_type = nil
+    local previous_default = nil
+    local existing_property = false
+
+    local function decode_property(raw)
+        if not raw or raw == "" then
+            return nil
+        end
+        local decoded, _, err = json.decode(raw)
+        if err or decoded == nil then
+            return raw
+        end
+        if type(decoded) == "table" and decoded.value ~= nil then
+            return decoded.value
+        end
+        return decoded
+    end
+
+    if select_stmt:exec() and select_stmt:next() then
+        existing_property = true
+        property_id = select_stmt:value(0)
+        previous_value = decode_property(select_stmt:value(1))
+        previous_type = select_stmt:value(2)
+        previous_default = select_stmt:value(3)
+    else
+        property_id = uuid.generate()
+    end
+    select_stmt:finalize()
+
+    local encoded_value, encode_err = json.encode({ value = new_value })
+    if not encoded_value then
+        local message = "SetClipProperty: Failed to encode property value: " .. tostring(encode_err)
+        set_last_error(message)
+        print("WARNING: " .. message)
+        return false
+    end
+
+    local default_json = nil
+    do
+        local encoded_default, default_err = json.encode({ value = default_value_param })
+        if not encoded_default then
+            local message = "SetClipProperty: Failed to encode default value: " .. tostring(default_err)
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        default_json = encoded_default
+    end
+
     command:set_parameter("previous_value", previous_value)
+    command:set_parameter("previous_type", previous_type)
+    command:set_parameter("previous_default", previous_default)
+    command:set_parameter("property_id", property_id)
+    command:set_parameter("created_new", not existing_property)
     command:set_parameter("executed_with_clip", true)
 
-    -- Set new value
+    if existing_property then
+        local update_sql
+        if default_json ~= nil then
+            update_sql = "UPDATE properties SET property_value = ?, property_type = ?, default_value = ? WHERE id = ?"
+        else
+            update_sql = "UPDATE properties SET property_value = ?, property_type = ? WHERE id = ?"
+        end
+        local update_stmt = db:prepare(update_sql)
+        if not update_stmt then
+            local message = "SetClipProperty: Failed to prepare property update"
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        update_stmt:bind_value(1, encoded_value)
+        update_stmt:bind_value(2, property_type)
+        if default_json ~= nil then
+            update_stmt:bind_value(3, default_json)
+            update_stmt:bind_value(4, property_id)
+        else
+            update_stmt:bind_value(3, property_id)
+        end
+        if not update_stmt:exec() then
+            local err = "unknown"
+            if update_stmt.last_error then
+                local ok, msg = pcall(update_stmt.last_error, update_stmt)
+                if ok and msg and msg ~= "" then
+                    err = msg
+                end
+            end
+            local message = "SetClipProperty: Failed to update property row: " .. tostring(err)
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        update_stmt:finalize()
+    else
+        local insert_stmt = db:prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)")
+        if not insert_stmt then
+            local message = "SetClipProperty: Failed to prepare property insert"
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        insert_stmt:bind_value(1, property_id)
+        insert_stmt:bind_value(2, clip_id)
+        insert_stmt:bind_value(3, property_name)
+        insert_stmt:bind_value(4, encoded_value)
+        insert_stmt:bind_value(5, property_type)
+        insert_stmt:bind_value(6, default_json or json.encode({ value = nil }))
+        if not insert_stmt:exec() then
+            local err = "unknown"
+            if insert_stmt.last_error then
+                local ok, msg = pcall(insert_stmt.last_error, insert_stmt)
+                if ok and msg and msg ~= "" then
+                    err = msg
+                end
+            end
+            local message = "SetClipProperty: Failed to insert property row: " .. tostring(err)
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        insert_stmt:finalize()
+    end
+
     clip:set_property(property_name, new_value)
 
     if clip:save(db) then
         print(string.format("Set clip property %s to %s for clip %s", property_name, tostring(new_value), clip_id))
         return true
     else
-        print("WARNING: Failed to save clip property change")
+        local message = "Failed to save clip property change"
+        set_last_error(message)
+        print("WARNING: " .. message)
         return false
     end
+end
+
+command_undoers["SetClipProperty"] = function(command)
+    print("Undoing SetClipProperty command")
+
+    local clip_id = command:get_parameter("clip_id")
+    local property_name = command:get_parameter("property_name")
+    local property_id = command:get_parameter("property_id")
+    local previous_value = command:get_parameter("previous_value")
+    local previous_type = command:get_parameter("previous_type")
+    local previous_default = command:get_parameter("previous_default")
+    local created_new = command:get_parameter("created_new") and true or false
+
+    if not property_id or property_id == "" then
+        local message = "Undo SetClipProperty: Missing property_id parameter"
+        set_last_error(message)
+        print("WARNING: " .. message)
+        return false
+    end
+
+    if created_new then
+        local delete_stmt = db:prepare("DELETE FROM properties WHERE id = ?")
+        if not delete_stmt then
+            local message = "Undo SetClipProperty: Failed to prepare delete statement"
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        delete_stmt:bind_value(1, property_id)
+        if not delete_stmt:exec() then
+            local message = "Undo SetClipProperty: Failed to delete newly created property row"
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        delete_stmt:finalize()
+    else
+        if not previous_type or previous_type == "" then
+            local message = "Undo SetClipProperty: Missing previous_type for existing property restore"
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        local encoded_prev, encode_err = json.encode({ value = previous_value })
+        if not encoded_prev then
+            local message = "Undo SetClipProperty: Failed to encode previous property value: " .. tostring(encode_err)
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        local update_sql
+        if previous_default ~= nil then
+            update_sql = "UPDATE properties SET property_value = ?, property_type = ?, default_value = ? WHERE id = ?"
+        else
+            update_sql = "UPDATE properties SET property_value = ?, property_type = ? WHERE id = ?"
+        end
+        local update_stmt = db:prepare(update_sql)
+        if not update_stmt then
+            local message = "Undo SetClipProperty: Failed to prepare update statement"
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        update_stmt:bind_value(1, encoded_prev)
+        update_stmt:bind_value(2, previous_type)
+        if previous_default ~= nil then
+            update_stmt:bind_value(3, previous_default)
+            update_stmt:bind_value(4, property_id)
+        else
+            update_stmt:bind_value(3, property_id)
+        end
+        if not update_stmt:exec() then
+            local message = "Undo SetClipProperty: Failed to restore property row"
+            set_last_error(message)
+            print("WARNING: " .. message)
+            return false
+        end
+        update_stmt:finalize()
+    end
+
+    local Clip = require('models.clip')
+    local clip = Clip.load_optional(clip_id, db)
+    if clip then
+        clip:set_property(property_name, previous_value)
+        clip:save(db)
+    end
+
+    return true
 end
 
 local sequence_metadata_columns = {
@@ -851,19 +1258,19 @@ command_executors["SetSequenceMetadata"] = function(command)
     local new_value = command:get_parameter("value")
 
     if not sequence_id or sequence_id == "" or not field or field == "" then
-        last_error_message = "SetSequenceMetadata: Missing required parameters"
+        set_last_error("SetSequenceMetadata: Missing required parameters")
         return false
     end
 
     local column = sequence_metadata_columns[field]
     if not column then
-        last_error_message = "SetSequenceMetadata: Field not allowed: " .. tostring(field)
+        set_last_error("SetSequenceMetadata: Field not allowed: " .. tostring(field))
         return false
     end
 
     local select_stmt = db:prepare("SELECT " .. field .. " FROM sequences WHERE id = ?")
     if not select_stmt then
-        last_error_message = "SetSequenceMetadata: Failed to prepare select statement"
+        set_last_error("SetSequenceMetadata: Failed to prepare select statement")
         return false
     end
     select_stmt:bind_value(1, sequence_id)
@@ -879,7 +1286,7 @@ command_executors["SetSequenceMetadata"] = function(command)
 
     local update_stmt = db:prepare("UPDATE sequences SET " .. field .. " = ? WHERE id = ?")
     if not update_stmt then
-        last_error_message = "SetSequenceMetadata: Failed to prepare update statement"
+        set_last_error("SetSequenceMetadata: Failed to prepare update statement")
         return false
     end
 
@@ -898,7 +1305,7 @@ command_executors["SetSequenceMetadata"] = function(command)
     update_stmt:finalize()
 
     if not ok then
-        last_error_message = "SetSequenceMetadata: Update failed"
+        set_last_error("SetSequenceMetadata: Update failed")
         return false
     end
 
@@ -912,20 +1319,20 @@ command_undoers["SetSequenceMetadata"] = function(command)
     local previous_value = command:get_parameter("previous_value")
 
     if not sequence_id or sequence_id == "" or not field or field == "" then
-        last_error_message = "UndoSetSequenceMetadata: Missing parameters"
+        set_last_error("UndoSetSequenceMetadata: Missing parameters")
         return false
     end
 
     local column = sequence_metadata_columns[field]
     if not column then
-        last_error_message = "UndoSetSequenceMetadata: Field not allowed: " .. tostring(field)
+        set_last_error("UndoSetSequenceMetadata: Field not allowed: " .. tostring(field))
         return false
     end
 
     local normalized = normalize_sequence_value(field, previous_value)
     local stmt = db:prepare("UPDATE sequences SET " .. field .. " = ? WHERE id = ?")
     if not stmt then
-        last_error_message = "UndoSetSequenceMetadata: Failed to prepare update statement"
+        set_last_error("UndoSetSequenceMetadata: Failed to prepare update statement")
         return false
     end
 
@@ -944,7 +1351,7 @@ command_undoers["SetSequenceMetadata"] = function(command)
     stmt:finalize()
 
     if not ok then
-        last_error_message = "UndoSetSequenceMetadata: Update failed"
+        set_last_error("UndoSetSequenceMetadata: Update failed")
         return false
     end
 
@@ -1034,6 +1441,7 @@ command_executors["CreateClip"] = function(command)
 
     local Clip = require('models.clip')
     local master_clip = nil
+    local copied_properties = {}
     if master_clip_id and master_clip_id ~= "" then
         master_clip = Clip.load_optional(master_clip_id, db)
         if not master_clip then
@@ -1188,6 +1596,7 @@ command_executors["InsertClipToTimeline"] = function(command)
         if duration <= 0 then
             duration = media_duration
         end
+        copied_properties = ensure_copied_properties(command, master_clip_id)
     end
 
     local clip = Clip.create("Clip", media_id, {
@@ -1215,6 +1624,12 @@ command_executors["InsertClipToTimeline"] = function(command)
     end
 
     if clip:save(db) then
+        if #copied_properties > 0 then
+            delete_properties_for_clip(clip.id)
+            if not insert_properties_for_clip(clip.id, copied_properties) then
+                print(string.format("WARNING: InsertClipToTimeline: Failed to copy properties from master clip %s", tostring(master_clip_id)))
+            end
+        end
         print(string.format("✅ Inserted clip %s to track %s at time %d", clip.id, track_id, start_time))
         return true
     else
@@ -1242,6 +1657,7 @@ command_executors["UndoInsertClipToTimeline"] = function(command)
         return false
     end
 
+    delete_properties_for_clip(clip_id)
     if clip:delete(db) then
         print(string.format("✅ Removed clip %s from timeline", clip_id))
         return true
@@ -1504,6 +1920,7 @@ command_executors["Insert"] = function(command)
         end
     end
 
+    local copied_properties = {}
     if master_clip then
         if (not media_id or media_id == "") and master_clip.media_id then
             media_id = master_clip.media_id
@@ -1518,6 +1935,7 @@ command_executors["Insert"] = function(command)
             source_in = master_source_in
             source_out = master_source_out
         end
+        copied_properties = ensure_copied_properties(command, master_clip_id)
     end
 
     if not media_id or media_id == "" or not track_id or track_id == "" then
@@ -1663,6 +2081,12 @@ command_executors["Insert"] = function(command)
     end
 
     if clip:save(db) then
+        if #copied_properties > 0 then
+            delete_properties_for_clip(clip.id)
+            if not insert_properties_for_clip(clip.id, copied_properties) then
+                print(string.format("WARNING: Insert: Failed to copy properties from master clip %s", tostring(master_clip_id)))
+            end
+        end
         -- Advance playhead to end of inserted clip (if requested)
         local advance_playhead = command:get_parameter("advance_playhead")
         if advance_playhead then
@@ -1697,6 +2121,7 @@ command_executors["Overwrite"] = function(command)
 
     local Clip = require('models.clip')
     local master_clip = nil
+    local copied_properties = {}
     if master_clip_id and master_clip_id ~= "" then
         master_clip = Clip.load_optional(master_clip_id, db)
         if not master_clip then
@@ -1722,6 +2147,7 @@ command_executors["Overwrite"] = function(command)
             source_in = master_clip.source_in or source_in
             source_out = master_clip.source_out or (source_in + duration)
         end
+        copied_properties = ensure_copied_properties(command, master_clip_id)
     end
 
     if not overwrite_time or not duration or duration <= 0 or not source_out or source_out <= source_in then
@@ -1803,6 +2229,12 @@ command_executors["Overwrite"] = function(command)
     end
 
     if clip:save(db) then
+        if #copied_properties > 0 then
+            delete_properties_for_clip(clip.id)
+            if not insert_properties_for_clip(clip.id, copied_properties) then
+                print(string.format("WARNING: Overwrite: Failed to copy properties from master clip %s", tostring(master_clip_id)))
+            end
+        end
         -- Advance playhead to end of overwritten clip (if requested)
         local advance_playhead = command:get_parameter("advance_playhead")
         if advance_playhead then

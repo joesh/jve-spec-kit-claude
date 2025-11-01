@@ -85,10 +85,33 @@ function ClipInspectable:set(field, value)
         return false, "Field is required"
     end
 
+    local property_type = nil
+    local default_value = nil
+    local payload_value = value
+
+    if type(value) == "table" then
+        payload_value = value.value
+        property_type = value.property_type or value.field_type
+        default_value = value.default_value
+    end
+
+    if property_type == nil or property_type == "" then
+        return false, "property_type is required"
+    end
+
+    local current = self:get(field)
+    if current == payload_value then
+        return true
+    end
+
     local cmd = Command.create("SetClipProperty", self.project_id)
     cmd:set_parameter("clip_id", self.clip_id)
     cmd:set_parameter("property_name", field)
-    cmd:set_parameter("value", value)
+    cmd:set_parameter("value", payload_value)
+    cmd:set_parameter("property_type", property_type)
+    if default_value ~= nil then
+        cmd:set_parameter("default_value", default_value)
+    end
 
     local result = command_manager.execute(cmd)
     if not result.success then
@@ -96,11 +119,12 @@ function ClipInspectable:set(field, value)
     end
 
     if self.clip_ref then
-        self.clip_ref[field] = value
+        self.clip_ref[field] = payload_value
     end
     if self._property_cache then
-        self._property_cache[field] = value
+        self._property_cache[field] = payload_value
     end
+    self.metadata_overrides[field] = payload_value
     return true
 end
 

@@ -92,6 +92,19 @@ local function create_schema(db)
             modified_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
 
+        CREATE TABLE IF NOT EXISTS properties (
+            id TEXT PRIMARY KEY,
+            clip_id TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            property_value TEXT NOT NULL,
+            property_type TEXT NOT NULL CHECK(property_type IN ('STRING', 'NUMBER', 'BOOLEAN', 'COLOR', 'ENUM')),
+            default_value TEXT NOT NULL,
+            FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE CASCADE,
+            UNIQUE(clip_id, property_name)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_properties_clip ON properties(clip_id);
+
         CREATE TABLE IF NOT EXISTS commands (
             id TEXT PRIMARY KEY,
             parent_id TEXT,

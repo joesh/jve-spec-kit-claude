@@ -15,6 +15,7 @@ local qt_connections = {} -- widget -> {signal_name -> connection_id}
 local qt_signal_map = {
     clicked = "qt_set_button_click_handler",
     textChanged = "qt_set_line_edit_text_changed_handler",
+    editingFinished = "qt_set_line_edit_editing_finished_handler",
     click = "qt_set_widget_click_handler"
 }
 

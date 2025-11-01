@@ -3,6 +3,7 @@
 
 local keyboard_shortcuts = {}
 local frame_utils = require("core.frame_utils")
+local shortcut_registry = require("core.keyboard_shortcut_registry")
 
 -- Qt key constants (from Qt::Key enum)
 local KEY = {
@@ -64,6 +65,33 @@ local timeline_panel = nil
 local focus_manager = require("ui.focus_manager")
 local redo_toggle_state = nil
 
+local ACTIVATE_BROWSER_COMMAND = "ActivateBrowserSelection"
+
+local function ensure_browser_shortcuts_registered()
+    if not shortcut_registry.commands[ACTIVATE_BROWSER_COMMAND] then
+        shortcut_registry.register_command({
+            id = ACTIVATE_BROWSER_COMMAND,
+            category = "Project Browser",
+            name = "Open Selection",
+            description = "Open the selected browser item",
+            default_shortcuts = {"Return"},
+            context = "project_browser",
+            handler = function()
+                if command_manager then
+                    local result = command_manager.execute(ACTIVATE_BROWSER_COMMAND)
+                    if not result.success then
+                        print(string.format("⚠️  %s returned error: %s", ACTIVATE_BROWSER_COMMAND, result.error_message or "unknown"))
+                    end
+                end
+            end
+        })
+        local assigned, assign_err = shortcut_registry.assign_shortcut(ACTIVATE_BROWSER_COMMAND, "Return")
+        if not assigned then
+            print(string.format("⚠️  Failed to assign default shortcut for %s: %s", ACTIVATE_BROWSER_COMMAND, tostring(assign_err)))
+        end
+    end
+end
+
 -- MAGNETIC SNAPPING STATE
 -- Baseline preference (persists across drags)
 local baseline_snapping_enabled = true  -- Default ON
@@ -101,6 +129,7 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     project_browser = proj_browser
     timeline_panel = panel
     redo_toggle_state = nil
+    ensure_browser_shortcuts_registered()
 end
 
 -- Get effective snapping state (baseline XOR drag_inverted)
@@ -108,18 +137,6 @@ function keyboard_shortcuts.is_snapping_enabled()
     local effective = baseline_snapping_enabled
     if drag_snapping_inverted then
         effective = not effective
-    end
-
-    if (key == KEY.Return or key == KEY.Enter) then
-        if focus_manager and focus_manager.get_focused_panel and focus_manager.get_focused_panel() == "project_browser" then
-            if command_manager then
-                local result = command_manager.execute("ActivateBrowserSelection")
-                if not result.success then
-                    print(string.format("⚠️  ActivateBrowserSelection returned error: %s", result.error_message or "unknown"))
-                end
-            end
-            return true
-        end
     end
     return effective
 end
@@ -149,6 +166,20 @@ function keyboard_shortcuts.is_dragging()
     return false
 end
 
+local function get_focused_panel_id()
+    if focus_manager and focus_manager.get_focused_panel then
+        return focus_manager.get_focused_panel()
+    end
+    return nil
+end
+
+local function panel_is_active(required_panel, focused_panel)
+    if not required_panel or required_panel == "global" then
+        return true
+    end
+    return focused_panel == required_panel
+end
+
 -- Check if a modifier is active (LuaJIT compatible bitwise AND)
 local function has_modifier(modifiers, mod)
     local bit = require("bit")
@@ -164,6 +195,20 @@ function keyboard_shortcuts.handle_key(event)
     local modifier_meta = has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)
     local modifier_shift = has_modifier(modifiers, MOD.Shift)
     local modifier_alt = has_modifier(modifiers, MOD.Alt)
+
+    local focused_panel = get_focused_panel_id()
+    local panel_active_timeline = panel_is_active("timeline", focused_panel)
+    local panel_active_browser = panel_is_active("project_browser", focused_panel)
+    local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
+
+    if focus_is_text_input and not modifier_meta then
+        return false
+    end
+
+    local context = focused_panel or "global"
+    if shortcut_registry.handle_key_event(key, modifiers, context) then
+        return true
+    end
 
     -- Cmd/Ctrl + Z: Undo
     -- Cmd/Ctrl + Shift + Z: Redo toggle
@@ -244,7 +289,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- Left/Right arrows: Move playhead (frame or 1-second jumps with Shift)
-    if (key == KEY.Left or key == KEY.Right) and timeline_state then
+    if (key == KEY.Left or key == KEY.Right) and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
             local frame_rate = get_active_frame_rate()
             local current_time = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
@@ -262,7 +307,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- Mark In/Out controls
-    if key == KEY.I and timeline_state then
+    if key == KEY.I and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
                 local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
@@ -277,7 +322,7 @@ function keyboard_shortcuts.handle_key(event)
         end
     end
 
-    if key == KEY.O and timeline_state then
+    if key == KEY.O and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
                 local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
@@ -292,7 +337,7 @@ function keyboard_shortcuts.handle_key(event)
         end
     end
 
-    if key == KEY.X and timeline_state then
+    if key == KEY.X and timeline_state and panel_active_timeline then
         if modifier_alt and not modifier_meta then
             timeline_state.clear_marks()
             return true
@@ -331,15 +376,14 @@ function keyboard_shortcuts.handle_key(event)
 
     -- Delete/Backspace: contextual delete (project browser or timeline)
     if key == KEY.Delete or key == KEY.Backspace then
-        local focused_panel = focus_manager and focus_manager.get_focused_panel and focus_manager.get_focused_panel()
-        if project_browser and focused_panel == "project_browser" then
+        if project_browser and panel_active_browser then
             if project_browser.delete_selected_items and project_browser.delete_selected_items() then
                 clear_redo_toggle()
             end
             return true
         end
 
-        if not (timeline_state and command_manager) then
+        if not (timeline_state and command_manager) or not panel_active_timeline then
             return false
         end
 
@@ -432,24 +476,26 @@ function keyboard_shortcuts.handle_key(event)
 
     -- Cmd/Ctrl + A: Select all clips
     -- Shift + Cmd/Ctrl + A: Deselect all
-    if key == KEY.A and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
-        if command_manager then
-            local command_name
-            if has_modifier(modifiers, MOD.Shift) then
-                command_name = "DeselectAll"
-            else
-                command_name = "SelectAll"
-            end
-
-            local result = command_manager.execute(command_name)
-            if not result.success then
-                print(string.format("⚠️  %s returned error: %s", command_name, result.error_message or "unknown"))
-            end
-            return true
+    if key == KEY.A and modifier_meta then
+        if not command_manager or not panel_active_timeline then
+            return false
         end
+
+        local command_name
+        if has_modifier(modifiers, MOD.Shift) then
+            command_name = "DeselectAll"
+        else
+            command_name = "SelectAll"
+        end
+
+        local result = command_manager.execute(command_name)
+        if not result.success then
+            print(string.format("⚠️  %s returned error: %s", command_name, result.error_message or "unknown"))
+        end
+        return true
     end
 
-    if key == KEY.Up and command_manager then
+    if key == KEY.Up and command_manager and panel_active_timeline then
         local result = command_manager.execute("GoToPrevEdit")
         if not result.success then
             print(string.format("⚠️  GoToPrevEdit returned error: %s", result.error_message or "unknown"))
@@ -457,7 +503,7 @@ function keyboard_shortcuts.handle_key(event)
         return true
     end
 
-    if key == KEY.Down and command_manager then
+    if key == KEY.Down and command_manager and panel_active_timeline then
         local result = command_manager.execute("GoToNextEdit")
         if not result.success then
             print(string.format("⚠️  GoToNextEdit returned error: %s", result.error_message or "unknown"))
@@ -465,7 +511,7 @@ function keyboard_shortcuts.handle_key(event)
         return true
     end
 
-    if key == KEY.Home and command_manager then
+    if key == KEY.Home and command_manager and panel_active_timeline then
         local result = command_manager.execute("GoToStart")
         if not result.success then
             print(string.format("⚠️  GoToStart returned error: %s", result.error_message or "unknown"))
@@ -473,7 +519,7 @@ function keyboard_shortcuts.handle_key(event)
         return true
     end
 
-    if key == KEY.End and command_manager then
+    if key == KEY.End and command_manager and panel_active_timeline then
         local result = command_manager.execute("GoToEnd")
         if not result.success then
             print(string.format("⚠️  GoToEnd returned error: %s", result.error_message or "unknown"))
@@ -484,7 +530,7 @@ function keyboard_shortcuts.handle_key(event)
     -- Comma/Period: Frame-accurate nudge for clips and edges
     -- Comma (,) = left, Period (.) = right
     -- Without Shift: 1 frame, With Shift: 5 frames
-    if (key == KEY.Comma or key == KEY.Period) and timeline_state and command_manager and not modifier_meta and not modifier_alt then
+    if (key == KEY.Comma or key == KEY.Period) and timeline_state and command_manager and panel_active_timeline and not modifier_meta and not modifier_alt then
         local frame_rate = get_active_frame_rate()
         local nudge_frames = modifier_shift and 5 or 1
         local nudge_ms = frame_utils.frame_to_time(nudge_frames, frame_rate)
@@ -574,27 +620,9 @@ function keyboard_shortcuts.handle_key(event)
         return true
     end
 
-    -- Space: Play/Pause (placeholder - actual playback not implemented yet)
-    if key == KEY.Space then
-        print("Play/Pause (not implemented yet)")
-        return true
-    end
-
-    -- I: Mark in point (placeholder)
-    if key == KEY.I then
-        print("Mark In (not implemented yet)")
-        return true
-    end
-
-    -- O: Mark out point (placeholder)
-    if key == KEY.O then
-        print("Mark Out (not implemented yet)")
-        return true
-    end
-
     -- Cmd/Ctrl + B: Blade tool - split clips at playhead
-    if key == KEY.B and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
-        if timeline_state and command_manager then
+    if key == KEY.B and modifier_meta then
+        if timeline_state and command_manager and panel_active_timeline then
             local selected_clips = timeline_state.get_selected_clips()
             local playhead_time = timeline_state.get_playhead_time()
 
@@ -651,43 +679,43 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- J/K/L: Playback controls (industry standard)
-    if key == KEY.J then
+    if key == KEY.J and panel_active_timeline then
         print("Reverse playback (not implemented yet)")
         return true
     end
-    if key == KEY.K then
+    if key == KEY.K and panel_active_timeline then
         print("Pause (not implemented yet)")
         return true
     end
-    if key == KEY.L then
+    if key == KEY.L and panel_active_timeline then
         print("Forward playback (not implemented yet)")
         return true
     end
 
     -- Q/W/E/R/T: Tool switching
-    if key == KEY.Q then
+    if key == KEY.Q and panel_active_timeline then
         print("Select tool (not implemented yet)")
         return true
     end
-    if key == KEY.W then
+    if key == KEY.W and panel_active_timeline then
         print("Track select tool (not implemented yet)")
         return true
     end
-    if key == KEY.E then
+    if key == KEY.E and panel_active_timeline then
         print("Trim tool (not implemented yet)")
         return true
     end
-    if key == KEY.R then
+    if key == KEY.R and panel_active_timeline then
         print("Ripple tool (not implemented yet)")
         return true
     end
-    if key == KEY.T then
+    if key == KEY.T and panel_active_timeline then
         print("Roll tool (not implemented yet)")
         return true
     end
 
     -- F9: INSERT at playhead (ripple subsequent clips forward)
-    if key == KEY.F9 then
+    if key == KEY.F9 and panel_active_timeline then
         if command_manager and timeline_state and project_browser then
             -- Get selected media from project browser
             local selected_clip = project_browser.get_selected_media()
@@ -736,7 +764,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- F10: OVERWRITE at playhead (trim/replace existing clips)
-    if key == KEY.F10 then
+    if key == KEY.F10 and panel_active_timeline then
         if command_manager and timeline_state and project_browser then
             -- Get selected media from project browser
             local selected_clip = project_browser.get_selected_media()
@@ -785,7 +813,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- Shift + Z: Scale timeline to fit (zoom to show all content)
-    if key == KEY.Z and has_modifier(modifiers, MOD.Shift) then
+    if key == KEY.Z and has_modifier(modifiers, MOD.Shift) and panel_active_timeline then
         if timeline_state then
             -- Calculate total timeline duration needed to show all clips
             local clips = timeline_state.get_clips()
@@ -811,7 +839,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- Cmd/Ctrl + Plus/Equal: Zoom in
-    if (key == KEY.Plus or key == KEY.Equal) and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
+    if (key == KEY.Plus or key == KEY.Equal) and modifier_meta and panel_active_timeline then
         if timeline_state then
             local current_duration = timeline_state.get_viewport_duration()
             local new_duration = math.floor(current_duration / 1.5)  -- Zoom in by 50%
@@ -825,7 +853,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- Cmd/Ctrl + Minus: Zoom out
-    if key == KEY.Minus and (has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)) then
+    if key == KEY.Minus and modifier_meta and panel_active_timeline then
         if timeline_state then
             local current_duration = timeline_state.get_viewport_duration()
             local new_duration = math.floor(current_duration * 1.5)  -- Zoom out by 50%
@@ -838,7 +866,7 @@ function keyboard_shortcuts.handle_key(event)
     -- Option/Alt + Up: Move selected clips up one track
     -- Video: up means higher track number (V1→V2→V3)
     -- Audio: up means lower track number (A3→A2→A1)
-    if key == KEY.Up and has_modifier(modifiers, MOD.Alt) then
+    if key == KEY.Up and has_modifier(modifiers, MOD.Alt) and panel_active_timeline then
         if timeline_state and command_manager then
             local selected_clips = timeline_state.get_selected_clips()
             if #selected_clips > 0 then
@@ -945,7 +973,7 @@ function keyboard_shortcuts.handle_key(event)
     -- Option/Alt + Down: Move selected clips down one track
     -- Video: down means lower track number (V3→V2→V1)
     -- Audio: down means higher track number (A1→A2→A3)
-    if key == KEY.Down and has_modifier(modifiers, MOD.Alt) then
+    if key == KEY.Down and has_modifier(modifiers, MOD.Alt) and panel_active_timeline then
         if timeline_state and command_manager then
             local selected_clips = timeline_state.get_selected_clips()
             if #selected_clips > 0 then
@@ -1049,7 +1077,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- N: Toggle magnetic snapping (context-aware)
-    if key == KEY.N and not has_modifier(modifiers, MOD.Shift) and
+    if key == KEY.N and panel_active_timeline and not has_modifier(modifiers, MOD.Shift) and
        not has_modifier(modifiers, MOD.Control) and not has_modifier(modifiers, MOD.Meta) then
         if keyboard_shortcuts.is_dragging() then
             -- During drag: invert snapping for this drag only
