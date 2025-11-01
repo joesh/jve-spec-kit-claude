@@ -11,6 +11,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QAbstractItemView>
+#include <QItemSelectionModel>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QSplitter>
@@ -821,10 +822,12 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "SET_TREE_SELECTION_HANDLER");
     lua_pushcfunction(L, lua_set_tree_selection_mode);
     lua_setfield(L, -2, "SET_TREE_SELECTION_MODE");
-    lua_pushcfunction(L, lua_set_tree_item_icon);
-    lua_setfield(L, -2, "SET_TREE_ITEM_ICON");
-    lua_pushcfunction(L, lua_set_tree_item_double_click_handler);
-    lua_setfield(L, -2, "SET_TREE_DOUBLE_CLICK_HANDLER");
+lua_pushcfunction(L, lua_set_tree_item_icon);
+lua_setfield(L, -2, "SET_TREE_ITEM_ICON");
+lua_pushcfunction(L, lua_set_tree_item_double_click_handler);
+lua_setfield(L, -2, "SET_TREE_DOUBLE_CLICK_HANDLER");
+lua_pushcfunction(L, lua_set_tree_current_item);
+lua_setfield(L, -2, "SET_TREE_CURRENT_ITEM");
     lua_setfield(L, -2, "CONTROL");
     
     // Register signal handler functions globally for qt_signals module
@@ -3314,6 +3317,62 @@ int lua_get_tree_item_data(lua_State* L)
 
     QByteArray bytes = data.toString().toUtf8();
     lua_pushlstring(L, bytes.constData(), bytes.size());
+    return 1;
+}
+
+int lua_set_tree_current_item(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    if (!widget) {
+        qWarning() << "Invalid tree widget in set_tree_current_item";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in set_tree_current_item";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    int top = lua_gettop(L);
+    if (top < 2 || lua_isnil(L, 2)) {
+        tree->clearSelection();
+        tree->setCurrentItem(nullptr);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    lua_Integer item_id = luaL_checkinteger(L, 2);
+    bool select_item = true;
+    bool clear_previous = true;
+
+    if (top >= 3 && !lua_isnil(L, 3)) {
+        select_item = lua_toboolean(L, 3);
+    }
+    if (top >= 4 && !lua_isnil(L, 4)) {
+        clear_previous = lua_toboolean(L, 4);
+    }
+
+    QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+    if (!item) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QItemSelectionModel::SelectionFlag flag;
+    if (select_item) {
+        flag = clear_previous ? QItemSelectionModel::ClearAndSelect : QItemSelectionModel::Select;
+    } else {
+        flag = clear_previous ? QItemSelectionModel::Clear : QItemSelectionModel::Deselect;
+    }
+
+    tree->setCurrentItem(item, 0, flag);
+    item->setSelected(select_item);
+    tree->scrollToItem(item);
+
+    lua_pushboolean(L, 1);
     return 1;
 }
 

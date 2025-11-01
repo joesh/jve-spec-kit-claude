@@ -10,8 +10,44 @@ local command_manager = require("core.command_manager")
 local command_scope = require("core.command_scope")
 local browser_state = require("ui.project_browser.browser_state")
 local frame_utils = require("core.frame_utils")
+local qt_constants = require("core.qt_constants")
 
 local handler_seq = 0
+
+local REFRESH_COMMANDS = {
+    ImportMedia = true,
+    ImportFCP7XML = true,
+    DeleteMasterClip = true,
+    ImportResolveProject = true,
+    ImportResolveDatabase = true,
+}
+
+local command_listener_registered = false
+local is_restoring_selection = false
+
+local function should_refresh_command(command_type)
+    return command_type and REFRESH_COMMANDS[command_type] == true
+end
+
+local function handle_command_event(event)
+    if not event or not event.command then
+        return
+    end
+    local command_type = event.command.type or event.command.command_type
+    if should_refresh_command(command_type) then
+        M.refresh()
+    end
+end
+
+local function ensure_command_listener()
+    if command_listener_registered then
+        return
+    end
+    if command_manager and command_manager.add_listener then
+        command_manager.add_listener(handle_command_event)
+        command_listener_registered = true
+    end
+end
 
 local function register_handler(callback)
     handler_seq = handler_seq + 1
@@ -162,6 +198,18 @@ local function populate_tree()
         return
     end
 
+    local previous_selection = nil
+    if M.selected_items and #M.selected_items > 0 then
+        previous_selection = {}
+        for _, item in ipairs(M.selected_items) do
+            if item.type == "timeline" and item.id then
+                table.insert(previous_selection, {type = "timeline", id = item.id})
+            elseif item.type == "master_clip" and item.clip_id then
+                table.insert(previous_selection, {type = "master_clip", clip_id = item.clip_id})
+            end
+        end
+    end
+
     qt_constants.CONTROL.CLEAR_TREE(M.tree)
     M.item_lookup = {}
     M.media_map = {}
@@ -169,7 +217,6 @@ local function populate_tree()
     M.sequence_map = {}
     M.selected_item = nil
     M.selected_items = {}
-    browser_state.clear_selection()
 
     local project_id = M.project_id or db.get_current_project_id()
     M.project_id = project_id
@@ -352,6 +399,7 @@ local function populate_tree()
             local icon = clip.offline and "clip_offline" or "clip"
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, icon)
         end
+        clip.tree_id = tree_id
     end
 
     -- Root master clips
@@ -377,6 +425,79 @@ local function populate_tree()
             end
         end
     end
+
+    local function restore_previous_selection_from_cache(previous)
+        if not previous or #previous == 0 then
+            browser_state.clear_selection()
+            return
+        end
+
+        local matches = {}
+        for _, prev in ipairs(previous) do
+            if prev.type == "timeline" then
+                local seq = M.sequence_map[prev.id]
+                if seq and seq.tree_id then
+                    local info = M.item_lookup and M.item_lookup[tostring(seq.tree_id)]
+                    if info then
+                        table.insert(matches, {tree_id = seq.tree_id, info = info})
+                    end
+                end
+            elseif prev.type == "master_clip" then
+                local clip = M.master_clip_map[prev.clip_id]
+                if clip and clip.tree_id then
+                    local info = M.item_lookup and M.item_lookup[tostring(clip.tree_id)]
+                    if info then
+                        table.insert(matches, {tree_id = clip.tree_id, info = info})
+                    end
+                end
+            end
+        end
+
+        if #matches == 0 then
+            browser_state.clear_selection()
+            return
+        end
+
+        if qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
+            is_restoring_selection = true
+            local clear_previous = true
+            for _, match in ipairs(matches) do
+                qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, match.tree_id, true, clear_previous)
+                clear_previous = false
+            end
+            is_restoring_selection = false
+
+            if not M.selected_items or #M.selected_items == 0 then
+                local collected = {}
+                for _, match in ipairs(matches) do
+                    table.insert(collected, match.info)
+                end
+                M.selected_items = collected
+                M.selected_item = collected[1]
+                browser_state.update_selection(collected, {
+                    master_lookup = M.master_clip_map,
+                    media_lookup = M.media_map,
+                    sequence_lookup = M.sequence_map,
+                    project_id = M.project_id
+                })
+            end
+        else
+            local collected = {}
+            for _, match in ipairs(matches) do
+                table.insert(collected, match.info)
+            end
+            M.selected_items = collected
+            M.selected_item = collected[1]
+            browser_state.update_selection(collected, {
+                master_lookup = M.master_clip_map,
+                media_lookup = M.media_map,
+                sequence_lookup = M.sequence_map,
+                project_id = M.project_id
+            })
+        end
+    end
+
+    restore_previous_selection_from_cache(previous_selection)
 end
 
 -- Create project browser widget
@@ -503,6 +624,7 @@ function M.create()
 
     M.tree = tree
     M.project_id = db.get_current_project_id()
+    ensure_command_listener()
     populate_tree()
 
     local selection_handler = register_handler(function(event)
@@ -534,10 +656,12 @@ function M.create()
             project_id = M.project_id
         })
 
-        if focus_manager and focus_manager.focus_panel then
-            focus_manager.focus_panel("project_browser")
-        else
-            focus_manager.set_focused_panel("project_browser")
+        if not is_restoring_selection then
+            if focus_manager and focus_manager.focus_panel then
+                focus_manager.focus_panel("project_browser")
+            else
+                focus_manager.set_focused_panel("project_browser")
+            end
         end
     end)
     if qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER then
@@ -638,6 +762,7 @@ end
 
 -- Refresh media list from database
 function M.refresh()
+    ensure_command_listener()
     populate_tree()
 end
 

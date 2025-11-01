@@ -87,6 +87,7 @@ int lua_set_tree_selection_mode(lua_State* L);
 int lua_set_tree_selection_changed_handler(lua_State* L);
 int lua_set_tree_item_icon(lua_State* L);
 int lua_set_tree_item_double_click_handler(lua_State* L);
+int lua_set_tree_current_item(lua_State* L);
 
 // Signal handling functions
 int lua_set_button_click_handler(lua_State* L);

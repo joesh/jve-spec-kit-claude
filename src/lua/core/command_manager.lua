@@ -35,6 +35,20 @@ local non_recording_commands = {
    ActivateBrowserSelection = true,
 }
 
+local command_event_listeners = {}
+
+local function notify_command_event(event)
+    if not event then
+        return
+    end
+    for _, listener in ipairs(command_event_listeners) do
+        local ok, err = pcall(listener, event)
+        if not ok then
+            print(string.format("WARNING: Command listener failed: %s", tostring(err)))
+        end
+    end
+end
+
 local GLOBAL_STACK_ID = "global"
 local TIMELINE_STACK_PREFIX = "timeline:"
 
@@ -1208,6 +1222,14 @@ function M.execute(command_or_name, params)
             if not skip_timeline_reload then
                 timeline_state.reload_clips()
             end
+
+            notify_command_event({
+                event = "execute",
+                command = command,
+                project_id = command.project_id,
+                stack_id = stack_id,
+                sequence_number = sequence_number
+            })
         else
             result.error_message = "Failed to save command to database"
             -- ROLLBACK: Command execution succeeded but save failed
@@ -1441,6 +1463,24 @@ end
 function M.unregister_executor(command_type)
     command_executors[command_type] = nil
     command_undoers[command_type] = nil
+end
+
+function M.add_listener(callback)
+    if type(callback) ~= "function" then
+        error("CommandManager.add_listener requires a callback function")
+    end
+    table.insert(command_event_listeners, callback)
+    return callback
+end
+
+function M.remove_listener(callback)
+    for index = #command_event_listeners, 1, -1 do
+        if command_event_listeners[index] == callback then
+            table.remove(command_event_listeners, index)
+            return true
+        end
+    end
+    return false
 end
 
 -- Validate sequence integrity
@@ -2056,6 +2096,13 @@ function M.undo(options)
         if not skip_selection_restore then
             restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre)
         end
+        notify_command_event({
+            event = "undo",
+            command = current_command,
+            project_id = active_project_id,
+            stack_id = get_current_stack_id(),
+            sequence_number = current_command.sequence_number
+        })
         print(string.format("Undo complete - moved to position %s", tostring(current_sequence_number)))
         return {success = true}
     else
@@ -2177,6 +2224,14 @@ function M.redo(options)
                 restore_selection_from_serialized(restored_command.selected_clip_ids, restored_command.selected_edge_infos)
             end
         end
+
+        notify_command_event({
+            event = "redo",
+            command = restored_command or {type = command_type},
+            project_id = active_project_id,
+            stack_id = get_current_stack_id(),
+            sequence_number = current_sequence_number
+        })
 
         print(string.format("Redo complete - moved to position %d", current_sequence_number))
 
