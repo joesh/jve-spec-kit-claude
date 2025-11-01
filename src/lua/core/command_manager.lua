@@ -2015,6 +2015,9 @@ function M.undo(options)
         current_command.sequence_number,
         tostring(current_command.parent_sequence_number)))
 
+    local skip_timeline_reload = command_flag(current_command, "skip_timeline_reload", "__skip_timeline_reload")
+    local skip_selection_restore = command_flag(current_command, "skip_selection_snapshot", "__skip_selection_snapshot")
+
     -- Calculate target sequence (parent of current command for branching support)
     -- In a branching history, undo follows the parent link, not sequence_number - 1
     local target_sequence = current_command.parent_sequence_number or 0
@@ -2033,7 +2036,9 @@ function M.undo(options)
         -- Restore playhead to position BEFORE the undone command (i.e., AFTER the last valid command)
         -- This is stored in current_command.playhead_time
         local restored_playhead = current_command.playhead_time or 0
-        timeline_state.set_playhead_time(restored_playhead)
+        if not skip_timeline_reload then
+            timeline_state.set_playhead_time(restored_playhead)
+        end
         print(string.format("Restored playhead to %s", format_timecode_for_log(restored_playhead)))
 
         -- Move current_sequence_number back
@@ -2045,8 +2050,12 @@ function M.undo(options)
 
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
-        timeline_state.reload_clips()
-        restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre)
+        if not skip_timeline_reload then
+            timeline_state.reload_clips()
+        end
+        if not skip_selection_restore then
+            restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre)
+        end
         print(string.format("Undo complete - moved to position %s", tostring(current_sequence_number)))
         return {success = true}
     else
@@ -2124,13 +2133,17 @@ function M.redo(options)
         save_undo_position()
 
         local restored_command = M.get_last_command(active_project_id)
+        local skip_timeline_reload = restored_command and command_flag(restored_command, "skip_timeline_reload", "__skip_timeline_reload") or false
+        local skip_selection_restore = restored_command and command_flag(restored_command, "skip_selection_snapshot", "__skip_selection_snapshot") or false
 
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
         local timeline_state = require('ui.timeline.timeline_state')
-        timeline_state.reload_clips()
+        if not skip_timeline_reload then
+            timeline_state.reload_clips()
+        end
 
-        if restored_command then
+        if restored_command and not skip_selection_restore then
             local selection_restored = false
 
             if db and current_sequence_number then
