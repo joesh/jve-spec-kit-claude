@@ -698,6 +698,19 @@ local function restore_selection_from_serialized(clips_json, edges_json)
     timeline_state.set_selection({})
 end
 
+local function command_flag(command, property, param_key)
+    if command[property] ~= nil then
+        return command[property] and true or false
+    end
+    if command.get_parameter and param_key then
+        local value = command:get_parameter(param_key)
+        if value ~= nil then
+            return value and true or false
+        end
+    end
+    return false
+end
+
 function M.set_last_error(message)
     if type(message) == "string" and message ~= "" then
         last_error_message = message
@@ -1070,7 +1083,10 @@ function M.execute(command_or_name, params)
     command.stack_id = stack_id
 
     local active_sequence = get_current_stack_sequence_id(true)
-    cache_initial_state(active_sequence, command.project_id or active_project_id)
+    local skip_timeline_cache = command_flag(command, "skip_timeline_cache", "__skip_timeline_cache")
+    if not skip_timeline_cache then
+        cache_initial_state(active_sequence, command.project_id or active_project_id)
+    end
 
     -- BEGIN TRANSACTION: All database changes (command save + state changes) are atomic
     -- If anything fails, everything rolls back automatically
@@ -1141,7 +1157,10 @@ function M.execute(command_or_name, params)
     -- Capture playhead and selection state BEFORE command execution (pre-state model)
     local timeline_state = require('ui.timeline.timeline_state')
     command.playhead_time = timeline_state.get_playhead_time()
-    capture_pre_selection_for_command(command)
+    local skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
+    if not skip_selection_snapshot then
+        capture_pre_selection_for_command(command)
+    end
 
     -- Execute the actual command logic
     local execution_success = execute_command_implementation(command)
@@ -1150,7 +1169,9 @@ function M.execute(command_or_name, params)
         command.status = "Executed"
         command.executed_at = os.time()
 
-        capture_post_selection_for_command(command)
+        if not skip_selection_snapshot then
+            capture_post_selection_for_command(command)
+        end
 
         -- Calculate post-execution hash
         local post_hash = calculate_state_hash(command.project_id)
@@ -1183,7 +1204,10 @@ function M.execute(command_or_name, params)
 
             -- Reload timeline state to pick up database changes
             -- This triggers listener notifications → automatic view redraws
-            timeline_state.reload_clips()
+            local skip_timeline_reload = command_flag(command, "skip_timeline_reload", "__skip_timeline_reload")
+            if not skip_timeline_reload then
+                timeline_state.reload_clips()
+            end
         else
             result.error_message = "Failed to save command to database"
             -- ROLLBACK: Command execution succeeded but save failed

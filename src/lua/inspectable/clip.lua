@@ -112,6 +112,13 @@ function ClipInspectable:set(field, value)
     if default_value ~= nil then
         cmd:set_parameter("default_value", default_value)
     end
+    cmd:set_parameter("__skip_selection_snapshot", true)
+    cmd:set_parameter("__skip_timeline_cache", true)
+    cmd:set_parameter("__skip_timeline_reload", true)
+    cmd.stack_id = "global"
+    cmd.skip_selection_snapshot = true
+    cmd.skip_timeline_cache = true
+    cmd.skip_timeline_reload = true
 
     local result = command_manager.execute(cmd)
     if not result.success then
