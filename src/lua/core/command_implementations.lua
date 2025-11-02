@@ -3522,11 +3522,23 @@ command_executors["RippleEdit"] = function(command)
     local original_start_time
     local original_duration
     if edge_info.edge_type == "gap_after" or edge_info.edge_type == "gap_before" then
-        -- Find the real clip that defines this gap
-        local reference_clip = Clip.load(edge_info.clip_id, db)
+        local reference_clip = Clip.load_optional(edge_info.clip_id, db)
+        local reference_missing = false
         if not reference_clip then
-            print("ERROR: RippleEdit: Reference clip not found")
-            return {success = false, error_message = "Reference clip not found"}
+            local stored_start = command:get_parameter("gap_start_time")
+            local stored_duration = command:get_parameter("gap_duration")
+            if stored_start and stored_duration and edge_info.track_id and edge_info.track_id ~= "" then
+                reference_clip = {
+                    id = edge_info.clip_id or "",
+                    track_id = edge_info.track_id,
+                    start_time = stored_start,
+                    duration = stored_duration
+                }
+                reference_missing = true
+            else
+                print("ERROR: RippleEdit: Reference clip not found and no stored gap bounds")
+                return {success = false, error_message = "Reference clip not found"}
+            end
         end
         gap_reference_clip = reference_clip
 
@@ -3535,10 +3547,15 @@ command_executors["RippleEdit"] = function(command)
         local gap_start = command:get_parameter("gap_start_time")
         local gap_duration = command:get_parameter("gap_duration")
         if not gap_start or not gap_duration then
-            gap_start, gap_duration = compute_gap_bounds(reference_clip, edge_info.edge_type, all_clips)
-            if not dry_run then
-                command:set_parameter("gap_start_time", gap_start)
-                command:set_parameter("gap_duration", gap_duration)
+            if not reference_missing then
+                gap_start, gap_duration = compute_gap_bounds(reference_clip, edge_info.edge_type, all_clips)
+                if not dry_run then
+                    command:set_parameter("gap_start_time", gap_start)
+                    command:set_parameter("gap_duration", gap_duration)
+                end
+            else
+                print("ERROR: RippleEdit: Missing gap bounds for replay")
+                return {success = false, error_message = "Missing gap bounds"}
             end
         end
         original_start_time = gap_start
