@@ -456,13 +456,17 @@ end
                     if gap_width > 0 then
                         local gap_top = gap_track_y + 5
                         local gap_height = track_height - 10
-                        timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, gap_height, state_module.colors.gap_selected_fill)
                         local outline = state_module.colors.gap_selected_outline or state_module.colors.clip_selected
-                        local outline_thickness = 2
-                        timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, outline_thickness, outline)
-                        timeline.add_rect(view.widget, gap_start_x, gap_top + gap_height - outline_thickness, gap_width, outline_thickness, outline)
-                        timeline.add_rect(view.widget, gap_start_x, gap_top, outline_thickness, gap_height, outline)
-                        timeline.add_rect(view.widget, gap_start_x + gap_width - outline_thickness, gap_top, outline_thickness, gap_height, outline)
+                        local outline_thickness = state_module.dimensions and state_module.dimensions.clip_outline_thickness or 4
+                        if gap_height > outline_thickness * 2 and gap_width > outline_thickness * 2 then
+                            timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, outline_thickness, outline)
+                            timeline.add_rect(view.widget, gap_start_x, gap_top + gap_height - outline_thickness, gap_width, outline_thickness, outline)
+                            timeline.add_rect(view.widget, gap_start_x, gap_top, outline_thickness, gap_height, outline)
+                            timeline.add_rect(view.widget, gap_start_x + gap_width - outline_thickness, gap_top, outline_thickness, gap_height, outline)
+                        else
+                            -- Fallback for very small gaps: draw a single outline block so selection stays visible.
+                            timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, math.max(outline_thickness, gap_height), outline)
+                        end
                     end
                 end
             end
