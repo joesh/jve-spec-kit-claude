@@ -2687,8 +2687,17 @@ command_executors["RippleDeleteSelection"] = function(command)
     end
 
     local deleted_states = {}
+    local selected_by_track = {}
+    local total_removed_duration = 0
+
     for _, clip in ipairs(clips) do
         table.insert(deleted_states, capture_clip_state(clip))
+        total_removed_duration = total_removed_duration + (clip.duration or 0)
+        selected_by_track[clip.track_id] = selected_by_track[clip.track_id] or {}
+        table.insert(selected_by_track[clip.track_id], {
+            start_time = clip.start_time or 0,
+            duration = clip.duration or 0
+        })
     end
 
     for _, clip in ipairs(clips) do
@@ -2699,52 +2708,69 @@ command_executors["RippleDeleteSelection"] = function(command)
     end
 
     local shifted_clips = {}
-    if shift_amount > 0 then
-        local shift_query = db:prepare([[
-            SELECT c.id, c.start_time
-            FROM clips c
-            INNER JOIN tracks t ON c.track_id = t.id
-            WHERE t.sequence_id = ? AND c.start_time >= ?
-            ORDER BY c.start_time ASC
-        ]])
-        if not shift_query then
-            print("ERROR: RippleDeleteSelection: Failed to prepare shift query")
-            return false
-        end
 
-        shift_query:bind_value(1, sequence_id)
-        shift_query:bind_value(2, window_end)
+    for track_id, segments in pairs(selected_by_track) do
+        if segments and #segments > 0 then
+            table.sort(segments, function(a, b)
+                if a.start_time == b.start_time then
+                    return a.duration < b.duration
+                end
+                return a.start_time < b.start_time
+            end)
 
-        if shift_query:exec() then
-            while shift_query:next() do
-                local shifted_id = shift_query:value(0)
-                local original_start = shift_query:value(1)
-                local shift_clip = Clip.load_optional(shifted_id, db)
-                if shift_clip then
-                    shift_clip.start_time = math.max(0, original_start - shift_amount)
-                    if shift_clip:save(db, {skip_occlusion = true}) then
-                        table.insert(shifted_clips, {
-                            clip_id = shifted_id,
-                            original_start = original_start,
-                        })
-                    else
-                        shift_query:finalize()
-                        print(string.format("ERROR: RippleDeleteSelection: Failed to save shifted clip %s", tostring(shifted_id)))
-                        return false
+            local seg_index = 1
+            local cumulative_removed = 0
+
+            local shift_query = db:prepare([[SELECT id, start_time FROM clips WHERE track_id = ? ORDER BY start_time ASC]])
+            if not shift_query then
+                print("ERROR: RippleDeleteSelection: Failed to prepare per-track shift query")
+                return false
+            end
+            shift_query:bind_value(1, track_id)
+
+            if shift_query:exec() then
+                while shift_query:next() do
+                    local shifted_id = shift_query:value(0)
+                    local original_start = shift_query:value(1) or 0
+
+                    while seg_index <= #segments and segments[seg_index].start_time < original_start do
+                        cumulative_removed = cumulative_removed + (segments[seg_index].duration or 0)
+                        seg_index = seg_index + 1
+                    end
+
+                    if cumulative_removed > 0 then
+                        local shift_clip = Clip.load_optional(shifted_id, db)
+                        if shift_clip then
+                            local new_start = math.max(0, original_start - cumulative_removed)
+                            shift_clip.start_time = new_start
+                            if shift_clip:save(db, {skip_occlusion = true}) then
+                                table.insert(shifted_clips, {
+                                    clip_id = shifted_id,
+                                    original_start = original_start,
+                                    new_start = new_start,
+                                })
+                            else
+                                shift_query:finalize()
+                                print(string.format("ERROR: RippleDeleteSelection: Failed to save shifted clip %s", tostring(shifted_id)))
+                                return false
+                            end
+                        end
                     end
                 end
+            else
+                shift_query:finalize()
+                print("ERROR: RippleDeleteSelection: Failed to execute per-track shift query")
+                return false
             end
-        else
+
             shift_query:finalize()
-            print("ERROR: RippleDeleteSelection: Failed to execute shift query")
-            return false
         end
-        shift_query:finalize()
     end
 
     command:set_parameter("ripple_selection_deleted_clips", deleted_states)
     command:set_parameter("ripple_selection_shifted", shifted_clips)
-    command:set_parameter("ripple_selection_shift_amount", shift_amount)
+    command:set_parameter("ripple_selection_shift_amount", total_removed_duration)
+    command:set_parameter("ripple_selection_total_removed", total_removed_duration)
     command:set_parameter("ripple_selection_window_start", window_start)
     command:set_parameter("ripple_selection_window_end", window_end)
     command:set_parameter("ripple_selection_sequence_id", sequence_id)
@@ -2775,18 +2801,16 @@ end
 command_undoers["RippleDeleteSelection"] = function(command)
     local deleted_states = command:get_parameter("ripple_selection_deleted_clips") or {}
     local shifted_clips = command:get_parameter("ripple_selection_shifted") or {}
-    local shift_amount = command:get_parameter("ripple_selection_shift_amount") or 0
+    local shift_amount = command:get_parameter("ripple_selection_shift_amount") or command:get_parameter("ripple_selection_total_removed") or 0
 
     local Clip = require('models.clip')
 
-    if shift_amount > 0 then
-        for _, info in ipairs(shifted_clips) do
-            local clip = Clip.load_optional(info.clip_id, db)
-            if clip then
-                clip.start_time = (clip.start_time or 0) + shift_amount
-                if not clip:save(db, {skip_occlusion = true}) then
-                    print(string.format("WARNING: RippleDeleteSelection undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
-                end
+    for _, info in ipairs(shifted_clips) do
+        local clip = Clip.load_optional(info.clip_id, db)
+        if clip and info.original_start then
+            clip.start_time = info.original_start
+            if not clip:save(db, {skip_occlusion = true}) then
+                print(string.format("WARNING: RippleDeleteSelection undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
             end
         end
     end

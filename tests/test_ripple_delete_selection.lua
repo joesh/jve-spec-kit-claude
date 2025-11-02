@@ -283,4 +283,55 @@ local clip_c_after_redo = after_redo[2]
 assert(clip_c_after_redo.id == "clip_c", "Clip C should still be present after redo")
 assert(clip_c_after_redo.start_time == 1000, string.format("Clip C start_time expected 1000 after redo, got %d", clip_c_after_redo.start_time))
 
+-- Regression setup: reset timeline with non-adjacent selection
+assert(command_manager.undo().success, "Failed to undo ripple delete before regression setup")
+db:exec("DELETE FROM clips;")
+db:exec("DELETE FROM media;")
+timeline_state.selected_clips = {}
+timeline_state.selected_edges = {}
+timeline_state.selected_gaps = {}
+timeline_state.playhead_time = 0
+
+local regression_specs = {
+    {id = "clip_1", start = 0, duration = 500},   -- selected
+    {id = "clip_2", start = 500, duration = 2000}, -- not selected, sits between selections
+    {id = "clip_3", start = 2500, duration = 1000},-- selected (non-adjacent to clip_1)
+    {id = "clip_4", start = 3500, duration = 800}, -- trailing clip to verify shifts
+}
+
+for _, spec in ipairs(regression_specs) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_time", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+
+reload_state_clips()
+
+timeline_state.selected_clips = {
+    {id = "clip_1"},
+    {id = "clip_3"},
+}
+
+execute_ripple_delete({"clip_1", "clip_3"})
+
+local regression_after_delete = clips_snapshot()
+assert(#regression_after_delete == 2, "Expected 2 clips after ripple delete of non-adjacent selection")
+
+local first_clip = regression_after_delete[1]
+local second_clip = regression_after_delete[2]
+
+assert(first_clip.id == "clip_2", "Clip 2 should remain and shift to the start")
+assert(first_clip.start_time == 0, string.format("Clip 2 expected to start at 0, got %d", first_clip.start_time))
+
+assert(second_clip.id == "clip_4", "Clip 4 should remain after ripple delete")
+local expected_second_start = first_clip.start_time + first_clip.duration
+assert(second_clip.start_time == expected_second_start,
+    string.format("Clip 4 expected to start at %d, got %d", expected_second_start, second_clip.start_time))
+
+local gap_between = second_clip.start_time - (first_clip.start_time + first_clip.duration)
+assert(gap_between >= 0, "Clips should not overlap after ripple delete")
+
 print("✅ test_ripple_delete_selection.lua passed")
