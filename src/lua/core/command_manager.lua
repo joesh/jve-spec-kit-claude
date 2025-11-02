@@ -76,7 +76,8 @@ local command_stack_resolvers = {}
 local sequence_initial_state = {
     clips = {},
     media = {},
-    master = {}
+    master = {},
+    timeline = {}
 }
 
 local function clone_clip_entry(clip)
@@ -349,6 +350,19 @@ local function cache_initial_state(sequence_id, project_id)
 
     if project_id and not sequence_initial_state.master[project_id] then
         sequence_initial_state.master[project_id] = gather_master_initial_state(project_id)
+    end
+
+    if project_id and not sequence_initial_state.timeline[project_id] then
+        local initial_set = {}
+        local ok, sequences = pcall(database.load_sequences, project_id)
+        if ok and type(sequences) == "table" then
+            for _, seq in ipairs(sequences) do
+                if not seq.kind or seq.kind == "timeline" then
+                    initial_set[seq.id] = true
+                end
+            end
+        end
+        sequence_initial_state.timeline[project_id] = initial_set
     end
 end
 
@@ -1798,38 +1812,60 @@ function M.replay_events(sequence_id, target_sequence_number)
             print("Cleared master sequences for replay")
         end
 
-        local delete_other_timeline_clips = db:prepare([[
-            DELETE FROM clips
-            WHERE owner_sequence_id IN (
-                SELECT id FROM sequences WHERE project_id = ? AND id != ?
-            )
-        ]])
-        if delete_other_timeline_clips then
-            delete_other_timeline_clips:bind_value(1, project_id)
-            delete_other_timeline_clips:bind_value(2, sequence_id)
-            delete_other_timeline_clips:exec()
+        local initial_timelines = sequence_initial_state.timeline[project_id] or {}
+        local timeline_query = db:prepare([[ 
+            SELECT id 
+            FROM sequences 
+            WHERE project_id = ? AND kind = 'timeline' AND id != ? 
+        ]]) 
+        local timelines_to_delete = {}
+        if timeline_query then
+            timeline_query:bind_value(1, project_id)
+            timeline_query:bind_value(2, sequence_id)
+            if timeline_query:exec() then
+                while timeline_query:next() do
+                    local seq_id = timeline_query:value(0)
+                    if not initial_timelines[seq_id] then
+                        table.insert(timelines_to_delete, seq_id)
+                    end
+                end
+            end
+            timeline_query:finalize()
         end
 
-        local delete_other_timeline_tracks = db:prepare([[
-            DELETE FROM tracks
-            WHERE sequence_id IN (
-                SELECT id FROM sequences WHERE project_id = ? AND id != ?
-            )
-        ]])
-        if delete_other_timeline_tracks then
-            delete_other_timeline_tracks:bind_value(1, project_id)
-            delete_other_timeline_tracks:bind_value(2, sequence_id)
-            delete_other_timeline_tracks:exec()
-        end
+        if #timelines_to_delete > 0 then
+            local delete_clips_stmt = db:prepare([[DELETE FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id = ?)]])
+            local delete_tracks_stmt = db:prepare([[DELETE FROM tracks WHERE sequence_id = ?]])
+            local delete_sequences_stmt = db:prepare([[DELETE FROM sequences WHERE id = ?]])
 
-        local delete_other_timeline_sequences = db:prepare([[
-            DELETE FROM sequences
-            WHERE project_id = ? AND id != ?
-        ]])
-        if delete_other_timeline_sequences then
-            delete_other_timeline_sequences:bind_value(1, project_id)
-            delete_other_timeline_sequences:bind_value(2, sequence_id)
-            delete_other_timeline_sequences:exec()
+            for _, seq_id in ipairs(timelines_to_delete) do
+                if delete_clips_stmt then
+                    delete_clips_stmt:bind_value(1, seq_id)
+                    delete_clips_stmt:exec()
+                    delete_clips_stmt:reset()
+                    delete_clips_stmt:clear_bindings()
+                end
+
+                if delete_tracks_stmt then
+                    delete_tracks_stmt:bind_value(1, seq_id)
+                    delete_tracks_stmt:exec()
+                    delete_tracks_stmt:reset()
+                    delete_tracks_stmt:clear_bindings()
+                end
+
+                if delete_sequences_stmt then
+                    delete_sequences_stmt:bind_value(1, seq_id)
+                    delete_sequences_stmt:exec()
+                    delete_sequences_stmt:reset()
+                    delete_sequences_stmt:clear_bindings()
+                end
+            end
+
+            if delete_clips_stmt then delete_clips_stmt:finalize() end
+            if delete_tracks_stmt then delete_tracks_stmt:finalize() end
+            if delete_sequences_stmt then delete_sequences_stmt:finalize() end
+
+            print(string.format("Removed %d timeline sequence(s) introduced after snapshot", #timelines_to_delete))
         end
 
         local purge_orphan_properties = db:prepare([[
