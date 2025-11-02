@@ -409,16 +409,18 @@ end
 
                         -- Draw outline if selected or if outline_only mode
                         if is_selected or outline_only then
-                            -- Top
                             local outline_width = visible_width
                             local outline_x = visible_x
-                            timeline.add_rect(view.widget, outline_x, y, outline_width, outline_thickness, state_module.colors.clip_selected)
-                            -- Bottom
-                            timeline.add_rect(view.widget, outline_x, y + clip_height - outline_thickness, outline_width, outline_thickness, state_module.colors.clip_selected)
-                            -- Left
+                            local trim = 1
+                            local top_width = outline_width > trim and (outline_width - trim) or outline_width
+                            timeline.add_rect(view.widget, outline_x, y, top_width, outline_thickness, state_module.colors.clip_selected)
+                            timeline.add_rect(view.widget, outline_x, y + clip_height - outline_thickness, top_width, outline_thickness, state_module.colors.clip_selected)
                             timeline.add_rect(view.widget, outline_x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
-                            -- Right
-                            timeline.add_rect(view.widget, outline_x + outline_width - outline_thickness, y, outline_thickness, clip_height, state_module.colors.clip_selected)
+                            local right_x = outline_x + outline_width - outline_thickness - trim
+                            if right_x < outline_x then
+                                right_x = outline_x
+                            end
+                            timeline.add_rect(view.widget, right_x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
                         elseif visible_width ~= clip_width or visible_x ~= x then
                             local dash_height = math.min(clip_height, 12)
                             if x < 0 then
@@ -458,14 +460,15 @@ end
                         local gap_height = track_height - 10
                         local outline = state_module.colors.gap_selected_outline or state_module.colors.clip_selected
                         local outline_thickness = state_module.dimensions and state_module.dimensions.clip_outline_thickness or 4
+                        local gap_outline_thickness =  math.max(1, math.floor(outline_thickness / 2))
                         if gap_height > outline_thickness * 2 and gap_width > outline_thickness * 2 then
-                            timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, outline_thickness, outline)
-                            timeline.add_rect(view.widget, gap_start_x, gap_top + gap_height - outline_thickness, gap_width, outline_thickness, outline)
-                            timeline.add_rect(view.widget, gap_start_x, gap_top, outline_thickness, gap_height, outline)
-                            timeline.add_rect(view.widget, gap_start_x + gap_width - outline_thickness, gap_top, outline_thickness, gap_height, outline)
+                            timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, gap_outline_thickness, outline)
+                            timeline.add_rect(view.widget, gap_start_x, gap_top + gap_height - gap_outline_thickness, gap_width, gap_outline_thickness, outline)
+                            timeline.add_rect(view.widget, gap_start_x, gap_top, gap_outline_thickness, gap_height, outline)
+                            timeline.add_rect(view.widget, gap_start_x + gap_width - gap_outline_thickness, gap_top, gap_outline_thickness, gap_height, outline)
                         else
                             -- Fallback for very small gaps: draw a single outline block so selection stays visible.
-                            timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, math.max(outline_thickness, gap_height), outline)
+                            timeline.add_rect(view.widget, gap_start_x, gap_top, gap_width, math.max(gap_outline_thickness, gap_height), outline)
                         end
                     end
                 end
