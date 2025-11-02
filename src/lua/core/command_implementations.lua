@@ -191,6 +191,59 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
         return true
     end
 
+    local function resolve_sequence_id_for_edges(command, primary_edge, edge_list)
+        local provided = command:get_parameter("sequence_id")
+
+        local function lookup_sequence_id(edge)
+            if not edge or not edge.clip_id or edge.clip_id == "" then
+                return nil
+            end
+
+            local stmt = db:prepare([[
+                SELECT t.sequence_id
+                FROM clips c
+                JOIN tracks t ON c.track_id = t.id
+                WHERE c.id = ?
+            ]])
+
+            if not stmt then
+                return nil
+            end
+
+            stmt:bind_value(1, edge.clip_id)
+            local sequence_id = nil
+            if stmt:exec() and stmt:next() then
+                sequence_id = stmt:value(0)
+            end
+            stmt:finalize()
+            return sequence_id
+        end
+
+        local resolved = lookup_sequence_id(primary_edge)
+        if not resolved and edge_list then
+            for _, edge in ipairs(edge_list) do
+                resolved = lookup_sequence_id(edge)
+                if resolved then
+                    break
+                end
+            end
+        end
+
+        if not resolved or resolved == "" then
+            resolved = provided
+        end
+
+        if not resolved or resolved == "" then
+            resolved = "default_sequence"
+        end
+
+        if resolved ~= provided then
+            command:set_parameter("sequence_id", resolved)
+        end
+
+        return resolved
+    end
+
     local function restore_clip_state(state)
         if not state then
             return
@@ -3447,7 +3500,7 @@ command_executors["RippleEdit"] = function(command)
 
     local Clip = require('models.clip')
     local database = require('core.database')
-    local sequence_id = command:get_parameter("sequence_id") or "default_sequence"
+    local sequence_id = resolve_sequence_id_for_edges(command, edge_info)
     local frame_rate = frame_utils.default_frame_rate
     local seq_stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
     if seq_stmt then
@@ -3793,7 +3846,8 @@ command_executors["BatchRippleEdit"] = function(command)
 
     local edge_infos = command:get_parameter("edge_infos")  -- Array of {clip_id, edge_type, track_id}
     local delta_ms = command:get_parameter("delta_ms")
-    local sequence_id = command:get_parameter("sequence_id") or "default_sequence"
+    local primary_edge = edge_infos and edge_infos[1] or nil
+    local sequence_id = resolve_sequence_id_for_edges(command, primary_edge, edge_infos)
 
     if not edge_infos or not delta_ms or #edge_infos == 0 then
         print("ERROR: BatchRippleEdit missing parameters")

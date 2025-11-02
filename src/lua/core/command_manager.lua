@@ -842,7 +842,7 @@ function M.init(database, sequence_id, project_id)
             set_current_sequence_number(saved_position)
         elseif saved_position == 0 then
             -- 0 means at beginning (all commands undone)
-            set_current_sequence_number(0)
+            set_current_sequence_number(nil)
         else
             -- NULL means no position saved yet - default to HEAD
             if last_sequence_number > 0 then
@@ -961,7 +961,11 @@ local function save_undo_position()
         return false
     end
 
-    update:bind_value(1, current_sequence_number)
+    local stored_position = current_sequence_number
+    if stored_position == nil then
+        stored_position = 0
+    end
+    update:bind_value(1, stored_position)
     update:bind_value(2, sequence_id)
     local success = update:exec()
 

@@ -1642,7 +1642,7 @@ end
                         local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id() or "default_sequence"
                         for _, clip in ipairs(current_clips) do
                             local target_track_id = clip_targets[clip.id] or clip.track_id
-                            local insert_time = clip.start_time + delta_ms
+                            local overwrite_time = clip.start_time + delta_ms
                             local source_in = clip.source_in or 0
                             local source_out = clip.source_out or (source_in + (clip.duration or 0))
                             local has_media = clip.media_id and clip.media_id ~= ""
@@ -1652,11 +1652,11 @@ end
                                 print(string.format("WARNING: Option-drag copy skipped clip %s (no media or master)", clip.id or "unknown"))
                             else
                                 table.insert(command_specs, {
-                                    command_type = "Insert",
+                                    command_type = "Overwrite",
                                     parameters = {
                                         media_id = clip.media_id,
                                         track_id = target_track_id,
-                                        insert_time = insert_time,
+                                        overwrite_time = overwrite_time,
                                         duration = clip.duration,
                                         source_in = source_in,
                                         source_out = source_out,
@@ -1670,8 +1670,8 @@ end
                         end
 
                         table.sort(command_specs, function(a, b)
-                            local ta = a.parameters.insert_time or 0
-                            local tb = b.parameters.insert_time or 0
+                            local ta = a.parameters.overwrite_time or 0
+                            local tb = b.parameters.overwrite_time or 0
                             if ta == tb then
                                 return (a.parameters.track_id or "") < (b.parameters.track_id or "")
                             end
