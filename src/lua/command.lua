@@ -126,6 +126,13 @@ function M:save(db)
         exists = exists_query:value(0) > 0
     end
 
+    local selected_clip_ids_json = self.selected_clip_ids or "[]"
+    local selected_edge_infos_json = self.selected_edge_infos or "[]"
+    local selected_gap_infos_json = self.selected_gap_infos or "[]"
+    local selected_clip_ids_pre_json = self.selected_clip_ids_pre or "[]"
+    local selected_edge_infos_pre_json = self.selected_edge_infos_pre or "[]"
+    local selected_gap_infos_pre_json = self.selected_gap_infos_pre or "[]"
+
     local query
     if exists then
         -- UPDATE
@@ -133,8 +140,8 @@ function M:save(db)
             UPDATE commands
             SET command_type = ?, sequence_number = ?, command_args = ?,
                 pre_hash = ?, post_hash = ?, timestamp = ?, playhead_time = ?,
-                selected_clip_ids = ?, selected_edge_infos = ?,
-                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?
+                selected_clip_ids = ?, selected_edge_infos = ?, selected_gap_infos = ?,
+                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?
             WHERE id = ?
         ]])
         if not query then
@@ -153,16 +160,18 @@ function M:save(db)
         query:bind_value(5, self.post_hash)
         query:bind_value(6, self.executed_at or os.time())
         query:bind_value(7, self.playhead_time or 0)
-        query:bind_value(8, self.selected_clip_ids or "[]")
-        query:bind_value(9, self.selected_edge_infos or "[]")
-        query:bind_value(10, self.selected_clip_ids_pre or "[]")
-        query:bind_value(11, self.selected_edge_infos_pre or "[]")
-        query:bind_value(12, self.id)
+        query:bind_value(8, selected_clip_ids_json)
+        query:bind_value(9, selected_edge_infos_json)
+        query:bind_value(10, selected_gap_infos_json)
+        query:bind_value(11, selected_clip_ids_pre_json)
+        query:bind_value(12, selected_edge_infos_pre_json)
+        query:bind_value(13, selected_gap_infos_pre_json)
+        query:bind_value(14, self.id)
     else
         -- INSERT
         query = db:prepare([[
-            INSERT INTO commands (id, parent_id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos, selected_clip_ids_pre, selected_edge_infos_pre)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO commands (id, parent_id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not query then
             local err = "unknown error"
@@ -183,10 +192,12 @@ function M:save(db)
         query:bind_value(8, self.post_hash)
         query:bind_value(9, self.executed_at or os.time())
         query:bind_value(10, self.playhead_time or 0)
-        query:bind_value(11, self.selected_clip_ids or "[]")
-        query:bind_value(12, self.selected_edge_infos or "[]")
-        query:bind_value(13, self.selected_clip_ids_pre or "[]")
-        query:bind_value(14, self.selected_edge_infos_pre or "[]")
+        query:bind_value(11, selected_clip_ids_json)
+        query:bind_value(12, selected_edge_infos_json)
+        query:bind_value(13, selected_gap_infos_json)
+        query:bind_value(14, selected_clip_ids_pre_json)
+        query:bind_value(15, selected_edge_infos_pre_json)
+        query:bind_value(16, selected_gap_infos_pre_json)
     end
 
     if not query:exec() then

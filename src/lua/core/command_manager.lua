@@ -588,7 +588,24 @@ local function capture_selection_snapshot()
         edges_json = "[]"
     end
 
-    return clips_json, edges_json
+    local selected_gaps = timeline_state.get_selected_gaps and timeline_state.get_selected_gaps() or {}
+    local gap_descriptors = {}
+    for _, gap in ipairs(selected_gaps) do
+        if gap and gap.track_id and gap.start_time and gap.duration then
+            table.insert(gap_descriptors, {
+                track_id = gap.track_id,
+                start_time = gap.start_time,
+                duration = gap.duration
+            })
+        end
+    end
+
+    local success_gaps, gaps_json = pcall(qt_json_encode, gap_descriptors)
+    if not success_gaps then
+        gaps_json = "[]"
+    end
+
+    return clips_json, edges_json, gaps_json
 end
 
 
@@ -605,6 +622,8 @@ local function ensure_command_selection_columns()
 
     local has_clip_pre = false
     local has_edge_pre = false
+    local has_gap = false
+    local has_gap_pre = false
 
     if pragma:exec() then
         while pragma:next() do
@@ -613,6 +632,10 @@ local function ensure_command_selection_columns()
                 has_clip_pre = true
             elseif column_name == "selected_edge_infos_pre" then
                 has_edge_pre = true
+            elseif column_name == "selected_gap_infos" then
+                has_gap = true
+            elseif column_name == "selected_gap_infos_pre" then
+                has_gap_pre = true
             end
         end
     end
@@ -632,21 +655,37 @@ local function ensure_command_selection_columns()
             print("WARNING: Failed to add selected_edge_infos_pre column: " .. tostring(err or "unknown error"))
         end
     end
+
+    if not has_gap then
+        local ok, err = db:exec("ALTER TABLE commands ADD COLUMN selected_gap_infos TEXT DEFAULT '[]'")
+        if not ok then
+            print("WARNING: Failed to add selected_gap_infos column: " .. tostring(err or "unknown error"))
+        end
+    end
+
+    if not has_gap_pre then
+        local ok, err = db:exec("ALTER TABLE commands ADD COLUMN selected_gap_infos_pre TEXT DEFAULT '[]'")
+        if not ok then
+            print("WARNING: Failed to add selected_gap_infos_pre column: " .. tostring(err or "unknown error"))
+        end
+    end
 end
 
 local function capture_pre_selection_for_command(command)
-    local clips_json, edges_json = capture_selection_snapshot()
+    local clips_json, edges_json, gaps_json = capture_selection_snapshot()
     command.selected_clip_ids_pre = clips_json
     command.selected_edge_infos_pre = edges_json
+    command.selected_gap_infos_pre = gaps_json
 end
 
 local function capture_post_selection_for_command(command)
-    local clips_json, edges_json = capture_selection_snapshot()
+    local clips_json, edges_json, gaps_json = capture_selection_snapshot()
     command.selected_clip_ids = clips_json
     command.selected_edge_infos = edges_json
+    command.selected_gap_infos = gaps_json
 end
 
-local function restore_selection_from_serialized(clips_json, edges_json)
+local function restore_selection_from_serialized(clips_json, edges_json, gaps_json)
     local timeline_state = require('ui.timeline.timeline_state')
     local Clip = require('models.clip')
 
@@ -710,7 +749,28 @@ local function restore_selection_from_serialized(clips_json, edges_json)
         end
     end
 
+    local gap_infos = decode(gaps_json)
+    if #gap_infos > 0 and timeline_state.set_gap_selection then
+        local restored_gaps = {}
+        for _, gap in ipairs(gap_infos) do
+            if type(gap) == "table" and gap.track_id and gap.start_time and gap.duration then
+                table.insert(restored_gaps, {
+                    track_id = gap.track_id,
+                    start_time = gap.start_time,
+                    duration = gap.duration
+                })
+            end
+        end
+        if #restored_gaps > 0 then
+            timeline_state.set_gap_selection(restored_gaps)
+            return
+        end
+    end
+
     timeline_state.set_selection({})
+    if timeline_state.set_gap_selection then
+        timeline_state.set_gap_selection({})
+    end
 end
 
 local function command_flag(command, property, param_key)
@@ -739,6 +799,8 @@ function M.init(database, sequence_id, project_id)
     db = database
     active_sequence_id = sequence_id or "default_sequence"
     active_project_id = project_id or "default_project"
+
+    ensure_command_selection_columns()
 
     local global_state = ensure_stack_state(GLOBAL_STACK_ID)
     global_state.sequence_id = active_sequence_id
@@ -1284,7 +1346,8 @@ function M.get_last_command(project_id)
     -- Get command at current position
     local query = db:prepare([[
         SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time,
-               selected_clip_ids, selected_edge_infos, selected_clip_ids_pre, selected_edge_infos_pre
+               selected_clip_ids, selected_edge_infos, selected_gap_infos,
+               selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre
         FROM commands
         WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
     ]])
@@ -1311,8 +1374,10 @@ function M.get_last_command(project_id)
             playhead_time = query:value(8) or 0,  -- Playhead position BEFORE this command
             selected_clip_ids = query:value(9) or "[]",
             selected_edge_infos = query:value(10) or "[]",
-            selected_clip_ids_pre = query:value(11) or "[]",
-            selected_edge_infos_pre = query:value(12) or "[]",
+            selected_gap_infos = query:value(11) or "[]",
+            selected_clip_ids_pre = query:value(12) or "[]",
+            selected_edge_infos_pre = query:value(13) or "[]",
+            selected_gap_infos_pre = query:value(14) or "[]",
         }
 
         -- Parse command_args JSON to populate parameters
@@ -1942,7 +2007,9 @@ function M.replay_events(sequence_id, target_sequence_number)
 
             while current_seq > start_sequence do
                 local find_query = db:prepare([[
-                    SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos, selected_clip_ids_pre, selected_edge_infos_pre
+                    SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time,
+                           selected_clip_ids, selected_edge_infos, selected_gap_infos,
+                           selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre
                     FROM commands
                     WHERE sequence_number = ?
                 ]])
@@ -1968,8 +2035,10 @@ function M.replay_events(sequence_id, target_sequence_number)
                         playhead_time = find_query:value(8),
                         selected_clip_ids = find_query:value(9),
                         selected_edge_infos = find_query:value(10),
-                        selected_clip_ids_pre = find_query:value(11),
-                        selected_edge_infos_pre = find_query:value(12)
+                        selected_gap_infos = find_query:value(11),
+                        selected_clip_ids_pre = find_query:value(12),
+                        selected_edge_infos_pre = find_query:value(13),
+                        selected_gap_infos_pre = find_query:value(14)
                     })
 
                     -- Move to parent
@@ -2007,10 +2076,11 @@ function M.replay_events(sequence_id, target_sequence_number)
             local final_playhead_time = 0
             local final_selected_clip_ids = "[]"
             local final_selected_edge_infos = "[]"
+            local final_selected_gap_infos = "[]"
 
             for _, cmd_data in ipairs(command_chain) do
                 -- Restore selection state prior to executing this command
-                restore_selection_from_serialized(cmd_data.selected_clip_ids_pre, cmd_data.selected_edge_infos_pre)
+                restore_selection_from_serialized(cmd_data.selected_clip_ids_pre, cmd_data.selected_edge_infos_pre, cmd_data.selected_gap_infos_pre)
 
                 -- Create command object from stored data
                 local command = Command.create(cmd_data.command_type, active_project_id)
@@ -2049,10 +2119,11 @@ function M.replay_events(sequence_id, target_sequence_number)
                 final_playhead_time = cmd_data.playhead_time or 0
                 final_selected_clip_ids = cmd_data.selected_clip_ids or "[]"
                 final_selected_edge_infos = cmd_data.selected_edge_infos or "[]"
+                final_selected_gap_infos = cmd_data.selected_gap_infos or "[]"
             end
 
             print(string.format("✅ Replayed %d commands successfully", commands_replayed))
-            restore_selection_from_serialized(final_selected_clip_ids, final_selected_edge_infos)
+            restore_selection_from_serialized(final_selected_clip_ids, final_selected_edge_infos, final_selected_gap_infos)
         else
             -- No commands to replay - reset to initial state
             timeline_state.set_playhead_time(0)
@@ -2147,7 +2218,7 @@ function M.undo(options)
             timeline_state.reload_clips()
         end
         if not skip_selection_restore then
-            restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre)
+            restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre, current_command.selected_gap_infos_pre)
         end
         notify_command_event({
             event = "undo",
@@ -2248,7 +2319,7 @@ function M.redo(options)
 
             if db and current_sequence_number then
                 local next_query = db:prepare([[
-                    SELECT sequence_number, selected_clip_ids_pre, selected_edge_infos_pre
+                    SELECT sequence_number, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre
                     FROM commands
                     WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
                     ORDER BY sequence_number DESC
@@ -2264,8 +2335,9 @@ function M.redo(options)
                         if next_sequence and next_sequence > current_sequence_number then
                             local next_clip_ids_pre = next_query:value(1)
                             local next_edge_infos_pre = next_query:value(2)
-                            if next_clip_ids_pre ~= nil or next_edge_infos_pre ~= nil then
-                                restore_selection_from_serialized(next_clip_ids_pre, next_edge_infos_pre)
+                            local next_gap_infos_pre = next_query:value(3)
+                            if next_clip_ids_pre ~= nil or next_edge_infos_pre ~= nil or next_gap_infos_pre ~= nil then
+                                restore_selection_from_serialized(next_clip_ids_pre, next_edge_infos_pre, next_gap_infos_pre)
                                 selection_restored = true
                             end
                         end
@@ -2274,7 +2346,7 @@ function M.redo(options)
             end
 
             if not selection_restored then
-                restore_selection_from_serialized(restored_command.selected_clip_ids, restored_command.selected_edge_infos)
+                restore_selection_from_serialized(restored_command.selected_clip_ids, restored_command.selected_edge_infos, restored_command.selected_gap_infos)
             end
         end
 

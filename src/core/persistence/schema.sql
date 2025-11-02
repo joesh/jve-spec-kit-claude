@@ -163,8 +163,10 @@ CREATE TABLE IF NOT EXISTS commands (
     playhead_time INTEGER NOT NULL DEFAULT 0,  -- Playhead position after this command (for undo/redo)
     selected_clip_ids TEXT,                     -- JSON array of selected clip IDs after this command
     selected_edge_infos TEXT,                   -- JSON array of selected edge descriptors after this command
+    selected_gap_infos TEXT,                    -- JSON array of selected gap descriptors after this command
     selected_clip_ids_pre TEXT,                 -- JSON array of selected clip IDs before this command
     selected_edge_infos_pre TEXT,               -- JSON array of selected edge descriptors before this command
+    selected_gap_infos_pre TEXT,                -- JSON array of selected gap descriptors before this command
 
     FOREIGN KEY (parent_id) REFERENCES commands(id) ON DELETE SET NULL,
 
