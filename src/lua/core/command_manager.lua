@@ -1304,11 +1304,22 @@ function M.execute(command_or_name, params)
 
             -- Create snapshot every N commands for fast event replay
             local snapshot_mgr = require('core.snapshot_manager')
-            local snapshot_sequence_id = get_current_stack_sequence_id(true)
-            if snapshot_sequence_id and snapshot_mgr.should_snapshot(sequence_number) then
+            local force_snapshot = command_flag(command, "force_snapshot", "__force_snapshot")
+            local snapshot_targets = command:get_parameter("__snapshot_sequence_ids")
+            if type(snapshot_targets) ~= "table" or #snapshot_targets == 0 then
+                snapshot_targets = {}
+                local default_sequence_id = get_current_stack_sequence_id(true)
+                if default_sequence_id then
+                    table.insert(snapshot_targets, default_sequence_id)
+                end
+            end
+
+            if #snapshot_targets > 0 and (force_snapshot or snapshot_mgr.should_snapshot(sequence_number)) then
                 local db_module = require('core.database')
-                local clips = db_module.load_clips(snapshot_sequence_id)
-                snapshot_mgr.create_snapshot(db, snapshot_sequence_id, sequence_number, clips)
+                for _, seq_id in ipairs(snapshot_targets) do
+                    local clips = db_module.load_clips(seq_id)
+                    snapshot_mgr.create_snapshot(db, seq_id, sequence_number, clips)
+                end
             end
 
             -- COMMIT TRANSACTION: Everything succeeded
@@ -2718,6 +2729,9 @@ command_executors["ImportFCP7XML"] = function(command)
         #create_result.sequence_ids,
         #create_result.track_ids,
         #create_result.clip_ids))
+
+    command:set_parameter("__force_snapshot", true)
+    command:set_parameter("__snapshot_sequence_ids", create_result.sequence_ids)
 
     return true
 end

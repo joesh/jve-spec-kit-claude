@@ -3827,6 +3827,7 @@ command_executors["RippleEdit"] = function(command)
     print(string.format("✅ Ripple edit: trimmed %s edge by %dms, shifted %d downstream clips",
         edge_info.edge_type, delta_ms, #clips_to_shift))
 
+    command:set_parameter("__force_snapshot", true)
     return true
 end
 
@@ -4258,6 +4259,7 @@ command_executors["BatchRippleEdit"] = function(command)
     print(string.format("✅ Batch ripple: trimmed %d edges, shifted %d downstream clips by %dms",
         #edge_infos, #clips_to_shift, downstream_shift_amount or 0))
 
+    command:set_parameter("__force_snapshot", true)
     return true
 end
 
