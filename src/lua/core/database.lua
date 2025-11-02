@@ -4,6 +4,7 @@
 local M = {}
 local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
+local event_log = require("core.event_log")
 
 -- Database connection
 local db_connection = nil
@@ -35,6 +36,11 @@ function M.set_path(path)
     end
 
     db_connection = db
+
+    local ok, err = pcall(event_log.init, path)
+    if not ok then
+        error("FATAL: Failed to initialize event log: " .. tostring(err))
+    end
 
     -- Configure busy timeout so we wait for locks instead of failing immediately
     if db_connection.busy_timeout then

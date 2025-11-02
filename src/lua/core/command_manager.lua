@@ -14,6 +14,7 @@ local db = nil
 
 local command_scope = require("core.command_scope")
 local frame_utils = require("core.frame_utils")
+local event_log = require("core.event_log")
 
 -- State tracking
 local last_sequence_number = 0
@@ -1193,6 +1194,24 @@ function M.execute(command_or_name, params)
 
         -- Save command to database
         if command:save(db) then
+            local event_context = {
+                sequence_number = sequence_number,
+                stack_id = stack_id,
+                sequence_id = active_sequence,
+                project_id = command.project_id or active_project_id,
+                scope = nil,
+            }
+            local record_ok, record_err = event_log.record_command(command, event_context)
+            if not record_ok then
+                print("ERROR: Failed to append event log entry: " .. tostring(record_err))
+                local rollback_tx = db:prepare("ROLLBACK")
+                if rollback_tx then rollback_tx:exec() end
+                last_sequence_number = last_sequence_number - 1
+                result.success = false
+                result.error_message = "Failed to append event log entry"
+                return result
+            end
+
             result.success = true
             result.result_data = command:serialize()
             current_state_hash = post_hash
@@ -1712,6 +1731,40 @@ function M.replay_events(sequence_id, target_sequence_number)
             delete_master_sequences:bind_value(1, project_id)
             delete_master_sequences:exec()
             print("Cleared master sequences for replay")
+        end
+
+        local delete_other_timeline_clips = db:prepare([[
+            DELETE FROM clips
+            WHERE owner_sequence_id IN (
+                SELECT id FROM sequences WHERE project_id = ? AND id != ?
+            )
+        ]])
+        if delete_other_timeline_clips then
+            delete_other_timeline_clips:bind_value(1, project_id)
+            delete_other_timeline_clips:bind_value(2, sequence_id)
+            delete_other_timeline_clips:exec()
+        end
+
+        local delete_other_timeline_tracks = db:prepare([[
+            DELETE FROM tracks
+            WHERE sequence_id IN (
+                SELECT id FROM sequences WHERE project_id = ? AND id != ?
+            )
+        ]])
+        if delete_other_timeline_tracks then
+            delete_other_timeline_tracks:bind_value(1, project_id)
+            delete_other_timeline_tracks:bind_value(2, sequence_id)
+            delete_other_timeline_tracks:exec()
+        end
+
+        local delete_other_timeline_sequences = db:prepare([[
+            DELETE FROM sequences
+            WHERE project_id = ? AND id != ?
+        ]])
+        if delete_other_timeline_sequences then
+            delete_other_timeline_sequences:bind_value(1, project_id)
+            delete_other_timeline_sequences:bind_value(2, sequence_id)
+            delete_other_timeline_sequences:exec()
         end
 
         local purge_orphan_properties = db:prepare([[

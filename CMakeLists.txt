@@ -31,6 +31,8 @@ find_package(Qt6 REQUIRED COMPONENTS
 
 # Find SQLite (usually comes with Qt6::Sql)
 find_package(SQLite3 REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(nlohmann_json REQUIRED)
 
 # LuaJIT for scripting
 find_package(PkgConfig REQUIRED)
@@ -44,6 +46,23 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+# Event log library
+set(EVENTLOG_SOURCES
+    src/eventlog/Event.cpp
+    src/eventlog/SqliteStore.cpp
+    src/eventlog/Reducer.cpp
+)
+
+add_library(JVEEventLog STATIC ${EVENTLOG_SOURCES})
+target_include_directories(JVEEventLog PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(JVEEventLog
+    PUBLIC
+        SQLite::SQLite3
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
 )
 
 # Source files organization
@@ -114,6 +133,7 @@ target_link_libraries(JVECore
     Qt6::Sql
     Qt6::Gui
     SQLite::SQLite3
+    JVEEventLog
     ${LUAJIT_LIBRARIES}
 )
 
@@ -153,6 +173,23 @@ target_link_directories(JVEEditor PRIVATE
 
 # Testing
 enable_testing()
+
+add_executable(test_eventlog_golden_replay
+    tests/eventlog/test_golden_replay.cpp
+)
+target_link_libraries(test_eventlog_golden_replay
+    PRIVATE
+        JVEEventLog
+)
+target_include_directories(test_eventlog_golden_replay PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(
+    NAME test_eventlog_golden_replay
+    COMMAND test_eventlog_golden_replay
+        --db ${CMAKE_BINARY_DIR}/eventlog/test_readmodels.sqlite
+        --schema-dir ${CMAKE_SOURCE_DIR}/schema/eventlog
+        --log ${CMAKE_SOURCE_DIR}/tests/eventlog/data/logs/sample.jsonl
+        --expect ${CMAKE_SOURCE_DIR}/tests/eventlog/data/logs/sample.checksum
+)
 
 # Enable automatic MOC, UIC and RCC processing
 set(CMAKE_AUTOMOC ON)
