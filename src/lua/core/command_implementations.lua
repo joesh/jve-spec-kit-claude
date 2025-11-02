@@ -3704,13 +3704,7 @@ command_executors["RippleEdit"] = function(command)
     end
 
     -- Calculate actual shift amount for downstream clips based on the updated duration
-    local original_end
-    if is_gap_clip then
-        original_end = original_start_time + original_duration
-    else
-        local original_state = original_clip_state or capture_clip_state(clip)
-        original_end = (original_state.start_time or clip.start_time) + (original_state.duration or clip.duration)
-    end
+    local original_end = original_start_time + original_duration
 
     local new_end = clip.start_time + clip.duration
     local shift_amount = new_end - original_end
