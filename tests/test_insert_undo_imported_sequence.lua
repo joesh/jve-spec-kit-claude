@@ -45,14 +45,19 @@ db:exec([[
     );
 
 
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
+CREATE TABLE tracks (
+    id TEXT PRIMARY KEY,
+    sequence_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    track_type TEXT NOT NULL,
+    track_index INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    locked INTEGER NOT NULL DEFAULT 0,
+    muted INTEGER NOT NULL DEFAULT 0,
+    soloed INTEGER NOT NULL DEFAULT 0,
+    volume REAL NOT NULL DEFAULT 1.0,
+    pan REAL NOT NULL DEFAULT 0.0
+);
 
     CREATE TABLE media (
         id TEXT PRIMARY KEY,

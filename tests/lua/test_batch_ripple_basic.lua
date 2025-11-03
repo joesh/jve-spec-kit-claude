@@ -46,7 +46,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
         current_sequence_number INTEGER
     );
 
-        CREATE TABLE tracks (id TEXT PRIMARY KEY, sequence_id TEXT, name TEXT, track_type TEXT, track_index INTEGER, enabled INTEGER);
+        CREATE TABLE tracks (id TEXT PRIMARY KEY, sequence_id TEXT, name TEXT, track_type TEXT, track_index INTEGER, enabled INTEGER, locked INTEGER, muted INTEGER, soloed INTEGER, volume REAL, pan REAL);
         CREATE TABLE media (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, file_path TEXT, duration INTEGER, frame_rate REAL, width INTEGER, height INTEGER, audio_channels INTEGER, codec TEXT, created_at INTEGER, modified_at INTEGER);
                         CREATE TABLE clips (
             id TEXT PRIMARY KEY,
@@ -86,7 +86,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     for _, track in ipairs(layout.tracks) do
         table.insert(inserts, string.format(
-            "INSERT INTO tracks VALUES ('%s','default_sequence','%s','VIDEO',%d,1)",
+            "INSERT INTO tracks VALUES ('%s', 'default_sequence', 'Track', '%s', 'VIDEO', %d, 1)",
             track.id, track.name or track.id, track.index
         ))
     end

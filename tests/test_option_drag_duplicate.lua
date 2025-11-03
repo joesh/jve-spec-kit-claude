@@ -38,9 +38,15 @@ local SCHEMA_SQL = [[
     CREATE TABLE tracks (
         id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
+        name TEXT NOT NULL,
         track_type TEXT NOT NULL,
         track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
+        enabled INTEGER NOT NULL DEFAULT 1,
+        locked INTEGER NOT NULL DEFAULT 0,
+        muted INTEGER NOT NULL DEFAULT 0,
+        soloed INTEGER NOT NULL DEFAULT 0,
+        volume REAL NOT NULL DEFAULT 1.0,
+        pan REAL NOT NULL DEFAULT 0.0
     );
 
     CREATE TABLE clips (
@@ -103,10 +109,8 @@ local BASE_DATA_SQL = [[
     INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('video1', 'default_sequence', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('video2', 'default_sequence', 'VIDEO', 2, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('video1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('video2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
 ]]
 
 local db = nil

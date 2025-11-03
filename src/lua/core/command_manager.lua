@@ -261,7 +261,7 @@ local function gather_master_initial_state(project_id)
                         media_id = master_clip_query:value(5),
                         source_sequence_id = master_clip_query:value(6),
                         parent_clip_id = master_clip_query:value(7),
-                        owner_sequence_id = master_clip_query:value(8),
+                        owner_sequence_id = master_clip_query:value(8) or seq_id,
                         start_time = tonumber(master_clip_query:value(9)) or 0,
                         duration = tonumber(master_clip_query:value(10)) or 0,
                         source_in = tonumber(master_clip_query:value(11)) or 0,
@@ -290,7 +290,7 @@ local function gather_master_initial_state(project_id)
                         media_id = child_clip_query:value(5),
                         source_sequence_id = child_clip_query:value(6),
                         parent_clip_id = child_clip_query:value(7),
-                        owner_sequence_id = child_clip_query:value(8),
+                        owner_sequence_id = child_clip_query:value(8) or seq_id,
                         start_time = tonumber(child_clip_query:value(9)) or 0,
                         duration = tonumber(child_clip_query:value(10)) or 0,
                         source_in = tonumber(child_clip_query:value(11)) or 0,
@@ -324,11 +324,39 @@ end
 local function cache_initial_state(sequence_id, project_id)
     local database = require('core.database')
 
-    if sequence_id and not sequence_initial_state.clips[sequence_id] then
-        local ok, clips = pcall(database.load_clips, sequence_id)
-        if ok and type(clips) == "table" then
-            sequence_initial_state.clips[sequence_id] = clone_list(clips, clone_clip_entry)
+    if project_id and not sequence_initial_state.timeline[project_id] then
+        local initial_set = {}
+        local ok, sequences = pcall(database.load_sequences, project_id)
+        if ok and type(sequences) == "table" then
+            for _, seq in ipairs(sequences) do
+                if not seq.kind or seq.kind == "timeline" then
+                    initial_set[seq.id] = true
+                end
+            end
+        end
+        sequence_initial_state.timeline[project_id] = initial_set
+        if sequence_id and sequence_id ~= '' then
+            initial_set[sequence_id] = true
+        end
+        for k in pairs(initial_set) do
+        end
+    end
+
+    local initial_timelines = project_id and sequence_initial_state.timeline[project_id] or nil
+
+    if sequence_id then
+        local preexisting = initial_timelines and initial_timelines[sequence_id]
+        if preexisting then
+            if not sequence_initial_state.clips[sequence_id] then
+                local ok, clips = pcall(database.load_clips, sequence_id)
+                if ok and type(clips) == "table" then
+                    sequence_initial_state.clips[sequence_id] = clone_list(clips, clone_clip_entry)
+                else
+                    sequence_initial_state.clips[sequence_id] = {}
+                end
+            end
         else
+            -- Sequence did not exist at startup: always treat baseline as empty.
             sequence_initial_state.clips[sequence_id] = {}
         end
     end
@@ -350,19 +378,6 @@ local function cache_initial_state(sequence_id, project_id)
 
     if project_id and not sequence_initial_state.master[project_id] then
         sequence_initial_state.master[project_id] = gather_master_initial_state(project_id)
-    end
-
-    if project_id and not sequence_initial_state.timeline[project_id] then
-        local initial_set = {}
-        local ok, sequences = pcall(database.load_sequences, project_id)
-        if ok and type(sequences) == "table" then
-            for _, seq in ipairs(sequences) do
-                if not seq.kind or seq.kind == "timeline" then
-                    initial_set[seq.id] = true
-                end
-            end
-        end
-        sequence_initial_state.timeline[project_id] = initial_set
     end
 end
 
@@ -800,6 +815,41 @@ local function command_flag(command, property, param_key)
     return false
 end
 
+local function sequence_exists(sequence_id)
+    if not db or not sequence_id or sequence_id == "" then
+        return false
+    end
+    local query = db:prepare("SELECT 1 FROM sequences WHERE id = ? LIMIT 1")
+    if not query then
+        return false
+    end
+    query:bind_value(1, sequence_id)
+    local exists = query:exec() and query:next()
+    query:finalize()
+    return exists
+end
+
+local function fetch_first_timeline_sequence(project_id)
+    if not db or not project_id or project_id == "" then
+        return nil
+    end
+    local query = db:prepare([[
+        SELECT id FROM sequences
+        WHERE project_id = ? AND kind = 'timeline'
+        ORDER BY name LIMIT 1
+    ]])
+    if not query then
+        return nil
+    end
+    query:bind_value(1, project_id)
+    local sequence_id = nil
+    if query:exec() and query:next() then
+        sequence_id = query:value(0)
+    end
+    query:finalize()
+    return sequence_id
+end
+
 function M.set_last_error(message)
     if type(message) == "string" and message ~= "" then
         last_error_message = message
@@ -860,6 +910,8 @@ function M.init(database, sequence_id, project_id)
 
     print(string.format("CommandManager initialized, last sequence: %d, current position: %s",
         last_sequence_number, tostring(current_sequence_number)))
+
+    cache_initial_state(active_sequence_id, active_project_id)
 
     -- Validate and repair broken parent chains (defensive data integrity check)
     -- DISABLED: repair_broken_parent_chains()
@@ -1202,15 +1254,6 @@ function M.execute(command_or_name, params)
     -- This creates branches when executing after undo
     command.parent_sequence_number = current_sequence_number
 
-    -- If we appear to be at the root (nil) but there is existing history,
-    -- default to chaining off the latest command so we don't orphan the new entry.
-    if not command.parent_sequence_number then
-        local candidate_parent = sequence_number - 1
-        if candidate_parent > 0 then
-            command.parent_sequence_number = candidate_parent
-        end
-    end
-
     -- VALIDATION: parent_sequence_number should never be NULL after first command
     -- NULL parent is only valid for the very first command (sequence 1)
     if not command.parent_sequence_number then
@@ -1330,7 +1373,10 @@ function M.execute(command_or_name, params)
             -- This triggers listener notifications → automatic view redraws
             local skip_timeline_reload = command_flag(command, "skip_timeline_reload", "__skip_timeline_reload")
             if not skip_timeline_reload then
-                timeline_state.reload_clips()
+                local reload_sequence_id = extract_sequence_id(command)
+                if reload_sequence_id and reload_sequence_id ~= "" then
+                    timeline_state.reload_clips(reload_sequence_id)
+                end
             end
 
             notify_command_event({
@@ -1693,6 +1739,13 @@ function M.replay_events(sequence_id, target_sequence_number)
         print(string.format("Replaying events for sequence '%s' up to command %d",
             sequence_id, target_sequence_number))
 
+        local function require_snapshot_field(context, field, value)
+            if value == nil then
+                error(string.format("FATAL: %s missing required field '%s'", context, field))
+            end
+            return value
+        end
+
         local project_id = nil
         do
             local project_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
@@ -1705,15 +1758,38 @@ function M.replay_events(sequence_id, target_sequence_number)
         end
 
         if not project_id then
-            error(string.format("FATAL: Cannot determine project_id for sequence '%s' - cannot safely clear media table", sequence_id))
+            project_id = active_project_id
+            if not project_id then
+                error(string.format("FATAL: Cannot determine project_id for sequence '%s' - cannot safely clear media table", sequence_id))
+            else
+                print(string.format("WARNING: Sequence '%s' missing project_id row; defaulting to active project '%s'", tostring(sequence_id), tostring(project_id)))
+            end
         end
 
-        -- Step 1: Load snapshot if available
+        -- Step 1: Load snapshot data (active + project-wide) if available
         local snapshot_mgr = require('core.snapshot_manager')
+        local db_module = require('core.database')
+        local snapshots_by_sequence = {}
+
         local snapshot = snapshot_mgr.load_snapshot(db, sequence_id)
 
         local start_sequence = 0
-        local clips = {}
+
+        if snapshot and snapshot.sequence_number <= target_sequence_number then
+            snapshots_by_sequence[sequence_id] = snapshot
+            start_sequence = snapshot.sequence_number
+            local clip_count = snapshot.clips and #snapshot.clips or 0
+            print(string.format("Starting from snapshot at sequence %d with %d clips",
+                start_sequence, clip_count))
+        else
+            print("No snapshot available, replaying from beginning")
+            start_sequence = 0
+        end
+
+        local additional_snapshots = snapshot_mgr.load_project_snapshots(db, project_id, target_sequence_number, sequence_id)
+        for seq_id, snap in pairs(additional_snapshots) do
+            snapshots_by_sequence[seq_id] = snap
+        end
 
         local cached_initial_clips = sequence_initial_state.clips[sequence_id]
         local cached_initial_media = sequence_initial_state.media[project_id]
@@ -1731,31 +1807,14 @@ function M.replay_events(sequence_id, target_sequence_number)
             cached_initial_clips = filtered
         end
 
-        if snapshot and snapshot.sequence_number <= target_sequence_number then
-            -- Start from snapshot
-            start_sequence = snapshot.sequence_number
-            clips = snapshot.clips
-            print(string.format("Starting from snapshot at sequence %d with %d clips",
-                start_sequence, #clips))
-        else
-            -- No snapshot or snapshot is ahead of target, start from beginning
-            print("No snapshot available, replaying from beginning")
-            start_sequence = 0
-            clips = {}
-        end
+        local using_snapshot = snapshots_by_sequence[sequence_id] ~= nil
 
         -- Step 2: Determine which clips to preserve (initial state before any commands)
-        -- If we have a snapshot, use it. Otherwise, start from EMPTY state.
         local initial_clips = {}
-        local initial_media = {}
-
-        if snapshot and #clips > 0 then
-            -- We have a snapshot - use it as the base state
-            initial_clips = clips
+        if using_snapshot then
+            initial_clips = snapshots_by_sequence[sequence_id].clips or {}
             print(string.format("Using snapshot with %d clips as initial state", #initial_clips))
         elseif start_sequence > 0 then
-            -- Fallback: reuse persisted clips if we have prior commands but no snapshot
-            local db_module = require('core.database')
             initial_clips = db_module.load_clips(sequence_id) or {}
             if #initial_clips > 0 then
                 print(string.format("Using current database state with %d clips as baseline", #initial_clips))
@@ -1766,13 +1825,55 @@ function M.replay_events(sequence_id, target_sequence_number)
             initial_clips = clone_list(cached_initial_clips, clone_clip_entry)
             print(string.format("Using cached initial clip state with %d clip(s)", #initial_clips))
         else
-            -- No snapshot and we're replaying from the very beginning; start empty
             print("Starting from empty initial state (no snapshot)")
         end
 
-        if cached_initial_media then
-            initial_media = clone_list(cached_initial_media, clone_media_entry)
-            print(string.format("Using cached initial media state with %d item(s)", #initial_media))
+        local initial_media = {}
+        local media_seen = {}
+
+        local function add_media_entries(media_list)
+            if not media_list then
+                return
+            end
+            for _, media in ipairs(media_list) do
+                if media.id and not media_seen[media.id] then
+                    media_seen[media.id] = true
+                    initial_media[#initial_media + 1] = clone_media_entry(media)
+                end
+            end
+        end
+
+        if using_snapshot then
+            for _, snap in pairs(snapshots_by_sequence) do
+                add_media_entries(snap.media)
+            end
+        end
+
+        add_media_entries(cached_initial_media)
+
+        if #initial_media > 0 then
+            print(string.format("Prepared initial media state with %d item(s)", #initial_media))
+        end
+
+        if using_snapshot then
+            for _, clip in ipairs(initial_clips) do
+                if clip.media_id and clip.media_id ~= "" then
+                    assert(media_seen[clip.media_id], string.format(
+                        "FATAL: Replay snapshot missing media record for clip %s (media_id=%s)",
+                        tostring(clip.id), tostring(clip.media_id)))
+                end
+            end
+        end
+
+        local snapshot_timeline_restores = {}
+        if using_snapshot then
+            for seq_id, snap in pairs(snapshots_by_sequence) do
+                snapshot_timeline_restores[seq_id] = {
+                    sequence = snap.sequence,
+                    tracks = snap.tracks or {},
+                    clips = snap.clips or {}
+                }
+            end
         end
 
         -- Step 3: Clear ALL clips and media (we'll restore initial state + replay commands)
@@ -1828,19 +1929,35 @@ function M.replay_events(sequence_id, target_sequence_number)
         end
 
         local initial_timelines = sequence_initial_state.timeline[project_id] or {}
-        local timeline_query = db:prepare([[ 
-            SELECT id 
-            FROM sequences 
-            WHERE project_id = ? AND kind = 'timeline' AND id != ? 
-        ]]) 
+        local retain_timelines = {}
+        for seq_id in pairs(initial_timelines) do
+            retain_timelines[seq_id] = true
+        end
+        for k,v in pairs(retain_timelines) do
+        end
+
+        if using_snapshot then
+            for seq_id, restore in pairs(snapshot_timeline_restores) do
+                if restore.sequence then
+                    local kind = restore.sequence.kind or "timeline"
+                    if kind == "timeline" then
+                        retain_timelines[seq_id] = true
+                    end
+                end
+            end
+        end
+        local timeline_query = db:prepare([[
+            SELECT id
+            FROM sequences
+            WHERE project_id = ? AND kind = 'timeline'
+        ]])
         local timelines_to_delete = {}
         if timeline_query then
             timeline_query:bind_value(1, project_id)
-            timeline_query:bind_value(2, sequence_id)
             if timeline_query:exec() then
                 while timeline_query:next() do
                     local seq_id = timeline_query:value(0)
-                    if not initial_timelines[seq_id] then
+                    if not retain_timelines[seq_id] then
                         table.insert(timelines_to_delete, seq_id)
                     end
                 end
@@ -1897,15 +2014,37 @@ function M.replay_events(sequence_id, target_sequence_number)
         if #initial_media > 0 then
             local Media = require('models.media')
             local restored_count = 0
+            local restored_ids = {}
             for _, media in ipairs(initial_media) do
                 local duration = tonumber(media.duration) or 0
                 if duration > 0 then
-                    local restored_media = Media.create(media)
-                    if restored_media then
-                        restored_media.id = media.id
-                        restored_media.project_id = media.project_id
-                        if restored_media:save(db) then
-                            restored_count = restored_count + 1
+                    require_snapshot_field("snapshot_media", "id", media.id)
+                    require_snapshot_field("snapshot_media", "project_id", media.project_id)
+                    require_snapshot_field("snapshot_media", "name", media.name)
+                    require_snapshot_field("snapshot_media", "file_path", media.file_path)
+                    if not restored_ids[media.id] then
+                        local restored_media = Media.create({
+                            id = media.id,
+                            project_id = media.project_id,
+                            name = media.name,
+                            file_path = media.file_path,
+                            duration = duration,
+                            frame_rate = media.frame_rate,
+                            width = media.width,
+                            height = media.height,
+                            audio_channels = media.audio_channels,
+                            codec = media.codec,
+                            metadata = media.metadata,
+                            created_at = media.created_at,
+                            modified_at = media.modified_at
+                        })
+                        if restored_media then
+                            restored_media.id = media.id
+                            restored_media.project_id = media.project_id
+                            if restored_media:save(db) then
+                                restored_count = restored_count + 1
+                                restored_ids[media.id] = true
+                            end
                         end
                     end
                 end
@@ -1929,31 +2068,43 @@ function M.replay_events(sequence_id, target_sequence_number)
                      current_sequence_number)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
-                if seq_insert then
-                    for _, seq in ipairs(cached_initial_master.sequences) do
-                        seq_insert:bind_value(1, seq.id)
-                        seq_insert:bind_value(2, seq.project_id)
-                        seq_insert:bind_value(3, seq.name)
-                        seq_insert:bind_value(4, seq.kind)
-                        seq_insert:bind_value(5, seq.frame_rate or 0)
-                        seq_insert:bind_value(6, seq.width or 0)
-                        seq_insert:bind_value(7, seq.height or 0)
-                        seq_insert:bind_value(8, seq.timecode_start or 0)
-                        seq_insert:bind_value(9, seq.playhead_time or 0)
-                        seq_insert:bind_value(10, seq.selected_clip_ids)
-                        seq_insert:bind_value(11, seq.selected_edge_infos)
-                        seq_insert:bind_value(12, seq.viewport_start_time or 0)
-                        seq_insert:bind_value(13, seq.viewport_duration or 10000)
-                        seq_insert:bind_value(14, seq.mark_in_time)
-                        seq_insert:bind_value(15, seq.mark_out_time)
-                        seq_insert:bind_value(16, seq.current_sequence_number)
-                        seq_insert:exec()
-                        seq_insert:reset()
-                        seq_insert:clear_bindings()
-                    end
-                    seq_insert:finalize()
-                    print(string.format("Restored %d master sequences as initial state", #cached_initial_master.sequences))
+                if not seq_insert then
+                    error("FATAL: Failed to prepare master sequence restore statement")
                 end
+                for _, seq in ipairs(cached_initial_master.sequences) do
+                    require_snapshot_field("master_sequence", "id", seq.id)
+                    require_snapshot_field("master_sequence", "project_id", seq.project_id)
+                    require_snapshot_field("master_sequence", "name", seq.name)
+                    require_snapshot_field("master_sequence", "kind", seq.kind)
+                    require_snapshot_field("master_sequence", "frame_rate", seq.frame_rate)
+                    require_snapshot_field("master_sequence", "width", seq.width)
+                    require_snapshot_field("master_sequence", "height", seq.height)
+                    require_snapshot_field("master_sequence", "timecode_start", seq.timecode_start)
+                    require_snapshot_field("master_sequence", "playhead_time", seq.playhead_time)
+                    require_snapshot_field("master_sequence", "viewport_start_time", seq.viewport_start_time)
+                    require_snapshot_field("master_sequence", "viewport_duration", seq.viewport_duration)
+                    seq_insert:bind_value(1, seq.id)
+                    seq_insert:bind_value(2, seq.project_id)
+                    seq_insert:bind_value(3, seq.name)
+                    seq_insert:bind_value(4, seq.kind)
+                    seq_insert:bind_value(5, seq.frame_rate)
+                    seq_insert:bind_value(6, seq.width)
+                    seq_insert:bind_value(7, seq.height)
+                    seq_insert:bind_value(8, seq.timecode_start)
+                    seq_insert:bind_value(9, seq.playhead_time)
+                    seq_insert:bind_value(10, seq.selected_clip_ids)
+                    seq_insert:bind_value(11, seq.selected_edge_infos)
+                    seq_insert:bind_value(12, seq.viewport_start_time)
+                    seq_insert:bind_value(13, seq.viewport_duration)
+                    seq_insert:bind_value(14, seq.mark_in_time)
+                    seq_insert:bind_value(15, seq.mark_out_time)
+                    seq_insert:bind_value(16, seq.current_sequence_number)
+                    seq_insert:exec()
+                    seq_insert:reset()
+                    seq_insert:clear_bindings()
+                end
+                seq_insert:finalize()
+                print(string.format("Restored %d master sequences as initial state", #cached_initial_master.sequences))
             end
 
             if cached_initial_master.tracks and #cached_initial_master.tracks > 0 then
@@ -1963,26 +2114,38 @@ function M.replay_events(sequence_id, target_sequence_number)
                      enabled, locked, muted, soloed, volume, pan)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
-                if track_insert then
-                    for _, track in ipairs(cached_initial_master.tracks) do
-                        track_insert:bind_value(1, track.id)
-                        track_insert:bind_value(2, track.sequence_id)
-                        track_insert:bind_value(3, track.name)
-                        track_insert:bind_value(4, track.track_type)
-                        track_insert:bind_value(5, track.track_index or 0)
-                        track_insert:bind_value(6, track.enabled and 1 or 0)
-                        track_insert:bind_value(7, track.locked and 1 or 0)
-                        track_insert:bind_value(8, track.muted and 1 or 0)
-                        track_insert:bind_value(9, track.soloed and 1 or 0)
-                        track_insert:bind_value(10, track.volume or 1.0)
-                        track_insert:bind_value(11, track.pan or 0.0)
-                        track_insert:exec()
-                        track_insert:reset()
-                        track_insert:clear_bindings()
-                    end
-                    track_insert:finalize()
-                    print(string.format("Restored %d master tracks as initial state", #cached_initial_master.tracks))
+                if not track_insert then
+                    error("FATAL: Failed to prepare master track restore statement")
                 end
+                for _, track in ipairs(cached_initial_master.tracks) do
+                    require_snapshot_field("master_track", "id", track.id)
+                    require_snapshot_field("master_track", "sequence_id", track.sequence_id)
+                    require_snapshot_field("master_track", "name", track.name)
+                    require_snapshot_field("master_track", "track_type", track.track_type)
+                    require_snapshot_field("master_track", "track_index", track.track_index)
+                    require_snapshot_field("master_track", "enabled", track.enabled)
+                    require_snapshot_field("master_track", "locked", track.locked)
+                    require_snapshot_field("master_track", "muted", track.muted)
+                    require_snapshot_field("master_track", "soloed", track.soloed)
+                    require_snapshot_field("master_track", "volume", track.volume)
+                    require_snapshot_field("master_track", "pan", track.pan)
+                    track_insert:bind_value(1, track.id)
+                    track_insert:bind_value(2, track.sequence_id)
+                    track_insert:bind_value(3, track.name)
+                    track_insert:bind_value(4, track.track_type)
+                    track_insert:bind_value(5, track.track_index)
+                    track_insert:bind_value(6, (track.enabled == true or track.enabled == 1) and 1 or 0)
+                    track_insert:bind_value(7, (track.locked == true or track.locked == 1) and 1 or 0)
+                    track_insert:bind_value(8, (track.muted == true or track.muted == 1) and 1 or 0)
+                    track_insert:bind_value(9, (track.soloed == true or track.soloed == 1) and 1 or 0)
+                    track_insert:bind_value(10, track.volume)
+                    track_insert:bind_value(11, track.pan)
+                    track_insert:exec()
+                    track_insert:reset()
+                    track_insert:clear_bindings()
+                end
+                track_insert:finalize()
+                print(string.format("Restored %d master tracks as initial state", #cached_initial_master.tracks))
             end
 
             if cached_initial_master.clips and #cached_initial_master.clips > 0 then
@@ -1994,7 +2157,24 @@ function M.replay_events(sequence_id, target_sequence_number)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
 
+                if not clip_insert then
+                    error("FATAL: Failed to prepare master clip restore statement")
+                end
+
                 local function insert_clip_row(clip)
+                    local context = string.format("master_clip[%s]", tostring(clip.id))
+                    require_snapshot_field(context, "id", clip.id)
+                    require_snapshot_field(context, "project_id", clip.project_id)
+                    require_snapshot_field(context, "clip_kind", clip.clip_kind)
+                    require_snapshot_field(context, "owner_sequence_id", clip.owner_sequence_id)
+                    require_snapshot_field(context, "start_time", clip.start_time)
+                    require_snapshot_field(context, "duration", clip.duration)
+                    require_snapshot_field(context, "source_in", clip.source_in)
+                    require_snapshot_field(context, "source_out", clip.source_out)
+                    require_snapshot_field(context, "enabled", clip.enabled)
+                    require_snapshot_field(context, "offline", clip.offline)
+                    local enabled_flag = (clip.enabled == true) or (clip.enabled == 1)
+                    local offline_flag = (clip.offline == true) or (clip.offline == 1)
                     clip_insert:bind_value(1, clip.id)
                     clip_insert:bind_value(2, clip.project_id)
                     clip_insert:bind_value(3, clip.clip_kind)
@@ -2004,48 +2184,215 @@ function M.replay_events(sequence_id, target_sequence_number)
                     clip_insert:bind_value(7, clip.source_sequence_id)
                     clip_insert:bind_value(8, clip.parent_clip_id)
                     clip_insert:bind_value(9, clip.owner_sequence_id)
-                    clip_insert:bind_value(10, clip.start_time or 0)
-                    clip_insert:bind_value(11, clip.duration or 1)
-                    clip_insert:bind_value(12, clip.source_in or 0)
-                    clip_insert:bind_value(13, clip.source_out or ((clip.source_in or 0) + (clip.duration or 1)))
-                    clip_insert:bind_value(14, clip.enabled and 1 or 0)
-                    clip_insert:bind_value(15, clip.offline and 1 or 0)
+                    clip_insert:bind_value(10, clip.start_time)
+                    clip_insert:bind_value(11, clip.duration)
+                    clip_insert:bind_value(12, clip.source_in)
+                    clip_insert:bind_value(13, clip.source_out)
+                    clip_insert:bind_value(14, enabled_flag and 1 or 0)
+                    clip_insert:bind_value(15, offline_flag and 1 or 0)
                     clip_insert:exec()
                     clip_insert:reset()
                     clip_insert:clear_bindings()
                 end
 
-                if clip_insert then
-                    for _, clip in ipairs(cached_initial_master.clips) do
-                        if clip.clip_kind == "master" then
-                            insert_clip_row(clip)
-                        end
+                for _, clip in ipairs(cached_initial_master.clips) do
+                    if clip.clip_kind == "master" then
+                        insert_clip_row(clip)
                     end
-                    for _, clip in ipairs(cached_initial_master.clips) do
-                        if clip.clip_kind ~= "master" then
-                            insert_clip_row(clip)
-                        end
-                    end
-                    clip_insert:finalize()
-                    print(string.format("Restored %d master clip rows as initial state", #cached_initial_master.clips))
                 end
+                for _, clip in ipairs(cached_initial_master.clips) do
+                    if clip.clip_kind ~= "master" then
+                        insert_clip_row(clip)
+                    end
+                end
+                clip_insert:finalize()
+                print(string.format("Restored %d master clip rows as initial state", #cached_initial_master.clips))
             end
         end
 
-        if #initial_clips > 0 then
-            local Clip = require('models.clip')
-            for _, clip in ipairs(initial_clips) do
-                -- Recreate clip in database
-                local restored_clip = Clip.create(clip.name or "", clip.media_id)
-                restored_clip.id = clip.id  -- Preserve original ID
-                restored_clip.track_id = clip.track_id
-                restored_clip.start_time = clip.start_time
-                restored_clip.duration = clip.duration
-                restored_clip.source_in = clip.source_in
-                restored_clip.source_out = clip.source_out
-                restored_clip.enabled = clip.enabled
-                restored_clip:save(db)
+        if using_snapshot and next(snapshot_timeline_restores) ~= nil then
+            local seq_insert = db:prepare([[
+                INSERT OR REPLACE INTO sequences
+                (id, project_id, name, kind, frame_rate, width, height,
+                 timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
+                 viewport_start_time, viewport_duration, mark_in_time, mark_out_time,
+                 current_sequence_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]])
+            local track_insert = db:prepare([[
+                INSERT OR REPLACE INTO tracks
+                (id, sequence_id, name, track_type, track_index,
+                 enabled, locked, muted, soloed, volume, pan)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]])
+            local clip_insert = db:prepare([[
+                INSERT OR REPLACE INTO clips
+                (id, project_id, clip_kind, name, track_id, media_id,
+                 source_sequence_id, parent_clip_id, owner_sequence_id,
+                 start_time, duration, source_in, source_out,
+                 enabled, offline)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]])
+
+            if not seq_insert or not track_insert or not clip_insert then
+                error("FATAL: Failed to prepare snapshot timeline restore statements")
             end
+
+            local restored_sequences = 0
+
+            for seq_id, restore in pairs(snapshot_timeline_restores) do
+                local seq_info = restore.sequence
+                if seq_info then
+                    local context = string.format("snapshot_sequence[%s]", tostring(seq_info.id))
+                    require_snapshot_field(context, "id", seq_info.id)
+                    require_snapshot_field(context, "project_id", seq_info.project_id)
+                    require_snapshot_field(context, "name", seq_info.name)
+                    require_snapshot_field(context, "kind", seq_info.kind)
+                    require_snapshot_field(context, "frame_rate", seq_info.frame_rate)
+                    require_snapshot_field(context, "width", seq_info.width)
+                    require_snapshot_field(context, "height", seq_info.height)
+                    require_snapshot_field(context, "timecode_start", seq_info.timecode_start)
+                    require_snapshot_field(context, "playhead_time", seq_info.playhead_time)
+                    require_snapshot_field(context, "viewport_start_time", seq_info.viewport_start_time)
+                    require_snapshot_field(context, "viewport_duration", seq_info.viewport_duration)
+                    seq_insert:bind_value(1, seq_info.id)
+                    seq_insert:bind_value(2, seq_info.project_id)
+                    seq_insert:bind_value(3, seq_info.name)
+                    seq_insert:bind_value(4, seq_info.kind)
+                    seq_insert:bind_value(5, seq_info.frame_rate or 0)
+                    seq_insert:bind_value(6, seq_info.width or 0)
+                    seq_insert:bind_value(7, seq_info.height or 0)
+                    seq_insert:bind_value(8, seq_info.timecode_start or 0)
+                    seq_insert:bind_value(9, seq_info.playhead_time or 0)
+                    seq_insert:bind_value(10, seq_info.selected_clip_ids or "[]")
+                    seq_insert:bind_value(11, seq_info.selected_edge_infos or "[]")
+                    seq_insert:bind_value(12, seq_info.viewport_start_time or 0)
+                    seq_insert:bind_value(13, seq_info.viewport_duration or 10000)
+                    seq_insert:bind_value(14, seq_info.mark_in_time)
+                    seq_insert:bind_value(15, seq_info.mark_out_time)
+                    seq_insert:bind_value(16, seq_info.current_sequence_number)
+                    seq_insert:exec()
+                    seq_insert:reset()
+                    seq_insert:clear_bindings()
+                    restored_sequences = restored_sequences + 1
+                end
+            end
+
+            for seq_id, restore in pairs(snapshot_timeline_restores) do
+                for _, track in ipairs(restore.tracks) do
+                    local context = string.format("snapshot_track[%s]", tostring(track.id))
+                    require_snapshot_field(context, "id", track.id)
+                    require_snapshot_field(context, "sequence_id", track.sequence_id)
+                    require_snapshot_field(context, "name", track.name)
+                    require_snapshot_field(context, "track_type", track.track_type)
+                    require_snapshot_field(context, "track_index", track.track_index)
+                    track_insert:bind_value(1, track.id)
+                    track_insert:bind_value(2, track.sequence_id)
+                    track_insert:bind_value(3, track.name)
+                    track_insert:bind_value(4, track.track_type)
+                    track_insert:bind_value(5, track.track_index or 0)
+                    track_insert:bind_value(6, (track.enabled == true or track.enabled == 1) and 1 or 0)
+                    track_insert:bind_value(7, (track.locked == true or track.locked == 1) and 1 or 0)
+                    track_insert:bind_value(8, (track.muted == true or track.muted == 1) and 1 or 0)
+                    track_insert:bind_value(9, (track.soloed == true or track.soloed == 1) and 1 or 0)
+                    track_insert:bind_value(10, track.volume or 1.0)
+                    track_insert:bind_value(11, track.pan or 0.0)
+                    track_insert:exec()
+                    track_insert:reset()
+                    track_insert:clear_bindings()
+                end
+            end
+
+            for seq_id, restore in pairs(snapshot_timeline_restores) do
+                for _, clip in ipairs(restore.clips) do
+                    local context = string.format("snapshot_clip[%s]", tostring(clip.id))
+                    require_snapshot_field(context, "id", clip.id)
+                    require_snapshot_field(context, "project_id", clip.project_id)
+                    require_snapshot_field(context, "clip_kind", clip.clip_kind)
+                    require_snapshot_field(context, "owner_sequence_id", clip.owner_sequence_id)
+                    require_snapshot_field(context, "start_time", clip.start_time)
+                    require_snapshot_field(context, "duration", clip.duration)
+                    require_snapshot_field(context, "source_in", clip.source_in)
+                    require_snapshot_field(context, "source_out", clip.source_out)
+                    require_snapshot_field(context, "enabled", clip.enabled)
+                    require_snapshot_field(context, "offline", clip.offline)
+                    local enabled_flag = (clip.enabled == true) or (clip.enabled == 1)
+                    local offline_flag = (clip.offline == true) or (clip.offline == 1)
+                    clip_insert:bind_value(1, clip.id)
+                    clip_insert:bind_value(2, clip.project_id)
+                    clip_insert:bind_value(3, clip.clip_kind)
+                    clip_insert:bind_value(4, clip.name or "")
+                    clip_insert:bind_value(5, clip.track_id)
+                    clip_insert:bind_value(6, clip.media_id)
+                    clip_insert:bind_value(7, clip.source_sequence_id)
+                    clip_insert:bind_value(8, clip.parent_clip_id)
+                    clip_insert:bind_value(9, clip.owner_sequence_id)
+                    clip_insert:bind_value(10, clip.start_time)
+                    clip_insert:bind_value(11, clip.duration)
+                    clip_insert:bind_value(12, clip.source_in)
+                    clip_insert:bind_value(13, clip.source_out)
+                    clip_insert:bind_value(14, enabled_flag and 1 or 0)
+                    clip_insert:bind_value(15, offline_flag and 1 or 0)
+                    clip_insert:exec()
+                    clip_insert:reset()
+                    clip_insert:clear_bindings()
+                end
+            end
+
+            seq_insert:finalize()
+            track_insert:finalize()
+            clip_insert:finalize()
+
+            print(string.format("Restored %d timeline sequence(s) from snapshot", restored_sequences))
+        elseif #initial_clips > 0 then
+            local clip_insert = db:prepare([[
+                INSERT OR REPLACE INTO clips
+                (id, project_id, clip_kind, name, track_id, media_id,
+                 source_sequence_id, parent_clip_id, owner_sequence_id,
+                 start_time, duration, source_in, source_out,
+                 enabled, offline)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]])
+
+            if not clip_insert then
+                error("FATAL: Failed to prepare clip restore statement")
+            end
+
+            for _, clip in ipairs(initial_clips) do
+                local context = string.format("snapshot_clip[%s]", tostring(clip.id))
+                require_snapshot_field(context, "id", clip.id)
+                require_snapshot_field(context, "project_id", clip.project_id)
+                require_snapshot_field(context, "clip_kind", clip.clip_kind)
+                require_snapshot_field(context, "owner_sequence_id", clip.owner_sequence_id)
+                require_snapshot_field(context, "start_time", clip.start_time)
+                require_snapshot_field(context, "duration", clip.duration)
+                require_snapshot_field(context, "source_in", clip.source_in)
+                require_snapshot_field(context, "source_out", clip.source_out)
+                require_snapshot_field(context, "enabled", clip.enabled)
+                require_snapshot_field(context, "offline", clip.offline)
+                local enabled_flag = (clip.enabled == true) or (clip.enabled == 1)
+                local offline_flag = (clip.offline == true) or (clip.offline == 1)
+                clip_insert:bind_value(1, clip.id)
+                clip_insert:bind_value(2, clip.project_id)
+                clip_insert:bind_value(3, clip.clip_kind)
+                clip_insert:bind_value(4, clip.name or "")
+                clip_insert:bind_value(5, clip.track_id)
+                clip_insert:bind_value(6, clip.media_id)
+                clip_insert:bind_value(7, clip.source_sequence_id)
+                clip_insert:bind_value(8, clip.parent_clip_id)
+                clip_insert:bind_value(9, clip.owner_sequence_id)
+                clip_insert:bind_value(10, clip.start_time)
+                clip_insert:bind_value(11, clip.duration)
+                clip_insert:bind_value(12, clip.source_in)
+                clip_insert:bind_value(13, clip.source_out)
+                clip_insert:bind_value(14, enabled_flag and 1 or 0)
+                clip_insert:bind_value(15, offline_flag and 1 or 0)
+                clip_insert:exec()
+                clip_insert:reset()
+                clip_insert:clear_bindings()
+            end
+            clip_insert:finalize()
+
             print(string.format("Restored %d clips as initial state", #initial_clips))
         end
 
@@ -2096,8 +2443,9 @@ function M.replay_events(sequence_id, target_sequence_number)
                     local parent = find_query:value(4)
                     -- Check for NULL parent (only error if not the first command)
                     if not parent then
-                        if current_seq == 1 then
-                            -- First command with NULL parent is valid
+                        local replaying_from_root = start_sequence == 0
+                        if current_seq == 1 or replaying_from_root then
+                            -- First command or new branch root from the beginning
                             current_seq = 0
                         elseif current_seq > start_sequence then
                             -- Found NULL parent in middle of chain - treating as root command
@@ -2176,10 +2524,38 @@ function M.replay_events(sequence_id, target_sequence_number)
             print(string.format("✅ Replayed %d commands successfully", commands_replayed))
             restore_selection_from_serialized(final_selected_clip_ids, final_selected_edge_infos, final_selected_gap_infos)
         else
-            -- No commands to replay - reset to initial state
-            timeline_state.set_playhead_time(0)
-            timeline_state.set_selection({})
-            print("No commands to replay - reset playhead and selection to initial state")
+            -- No commands to replay; restore snapshot-derived timeline state instead of clearing to zero
+            local restored_playhead = 0
+            local sequence_record = nil
+            if db_module and sequence_id then
+                sequence_record = db_module.load_sequence_record(sequence_id)
+            end
+            if sequence_record and sequence_record.playhead_time then
+                restored_playhead = sequence_record.playhead_time
+            end
+
+            if timeline_state.reload_clips then
+                timeline_state.reload_clips(sequence_id)
+            end
+
+            local selected_clip_ids = nil
+            local selected_edge_infos = nil
+            local selected_gap_infos = nil
+
+            if sequence_record then
+                timeline_state.restore_viewport({
+                    start_time = sequence_record.viewport_start_time,
+                    duration = sequence_record.viewport_duration
+                })
+                selected_clip_ids = sequence_record.selected_clip_ids
+                selected_edge_infos = sequence_record.selected_edge_infos
+                selected_gap_infos = sequence_record.selected_gap_infos
+            end
+
+            restore_selection_from_serialized(selected_clip_ids, selected_edge_infos, selected_gap_infos)
+
+            timeline_state.set_playhead_time(restored_playhead)
+            print(string.format("No commands to replay - restored playhead to %s", format_timecode_for_log(restored_playhead)))
         end
 
         return true
@@ -2251,7 +2627,26 @@ function M.undo(options)
         -- Restore playhead to position BEFORE the undone command (i.e., AFTER the last valid command)
         -- This is stored in current_command.playhead_time
         local restored_playhead = current_command.playhead_time or 0
-        if not skip_timeline_reload then
+
+        local pending_reload_sequence = nil
+        if target_sequence == 0 then
+            local remains = sequence_exists(sequence_id)
+            if not remains then
+                local fallback_sequence = fetch_first_timeline_sequence(active_project_id)
+                if fallback_sequence and fallback_sequence ~= sequence_id then
+                    local fallback_stack = stack_id_for_sequence(fallback_sequence)
+                    set_active_stack(fallback_stack, {sequence_id = fallback_sequence})
+                    active_sequence_id = fallback_sequence
+                    sequence_id = fallback_sequence
+                    pending_reload_sequence = fallback_sequence
+                end
+            end
+        end
+
+        if pending_reload_sequence and timeline_state.reload_clips then
+            timeline_state.reload_clips(pending_reload_sequence)
+            timeline_state.set_playhead_time(restored_playhead)
+        elseif not skip_timeline_reload then
             timeline_state.set_playhead_time(restored_playhead)
         end
         print(string.format("Restored playhead to %s", format_timecode_for_log(restored_playhead)))
@@ -2266,7 +2661,7 @@ function M.undo(options)
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
         if not skip_timeline_reload then
-            timeline_state.reload_clips()
+            timeline_state.reload_clips(sequence_id)
         end
         if not skip_selection_restore then
             restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre, current_command.selected_gap_infos_pre)
@@ -2362,7 +2757,7 @@ function M.redo(options)
         -- This triggers listener notifications → automatic view redraws
         local timeline_state = require('ui.timeline.timeline_state')
         if not skip_timeline_reload then
-            timeline_state.reload_clips()
+            timeline_state.reload_clips(sequence_id)
         end
 
         if restored_command and not skip_selection_restore then

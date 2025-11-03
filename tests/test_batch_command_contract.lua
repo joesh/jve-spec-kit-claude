@@ -40,15 +40,25 @@ db:exec([[
         playhead_time INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
+        viewport_start_time INTEGER NOT NULL DEFAULT 0,
+        viewport_duration INTEGER NOT NULL DEFAULT 10000,
+        mark_in_time INTEGER,
+        mark_out_time INTEGER,
         current_sequence_number INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS tracks (
         id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
+        name TEXT NOT NULL,
         track_type TEXT NOT NULL,
         track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
+        enabled INTEGER NOT NULL DEFAULT 1,
+        locked INTEGER NOT NULL DEFAULT 0,
+        muted INTEGER NOT NULL DEFAULT 0,
+        soloed INTEGER NOT NULL DEFAULT 0,
+        volume REAL NOT NULL DEFAULT 1.0,
+        pan REAL NOT NULL DEFAULT 0.0
     );
 
     CREATE TABLE IF NOT EXISTS clips (
@@ -106,10 +116,8 @@ db:exec([[
     VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_v1', 'test_sequence', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_default_v1', 'default_sequence', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
 ]])
 
 command_manager.init(db, 'test_sequence')

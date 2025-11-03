@@ -587,8 +587,16 @@ function M.init(sequence_id)
 end
 
 -- Reload clips from database (for after commands that modify database)
-function M.reload_clips()
-    local sequence_id = state.sequence_id or "default_sequence"
+function M.reload_clips(target_sequence_id)
+    if target_sequence_id and target_sequence_id ~= state.sequence_id then
+        -- Full re-initialization keeps tracks, marks, and persisted metadata in sync.
+        return M.init(target_sequence_id)
+    end
+
+    local sequence_id = state.sequence_id or target_sequence_id or "default_sequence"
+    if not state.sequence_id then
+        state.sequence_id = sequence_id
+    end
     state.clips = db.load_clips(sequence_id)
 
     -- Increment version and stamp all clips

@@ -43,6 +43,7 @@ local function setup_db(path)
         CREATE TABLE tracks (
             id TEXT PRIMARY KEY,
             sequence_id TEXT NOT NULL,
+            name TEXT NOT NULL,
             track_type TEXT NOT NULL,
             track_index INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
@@ -107,10 +108,8 @@ local function setup_db(path)
         INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
         INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
         VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-        VALUES ('track_v1', 'default_sequence', 'VIDEO', 1, 1);
-        INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-        VALUES ('track_v2', 'default_sequence', 'VIDEO', 2, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
     ]])
 
     return db

@@ -209,10 +209,36 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
             if media_info then
                 clip_info.file_id = media_info.id
                 clip_info.media_key = media_info.key
-                clip_info.media = media_info
                 if sequence_info and media_info.key then
+                    local existing = sequence_info.media_files[media_info.key]
+                    if existing then
+                        local function copy_if_present(field, allow_zero)
+                            local value = media_info[field]
+                            local is_string = type(value) == "string"
+                            local is_number = type(value) == "number"
+                            local keep =
+                                (is_string and value ~= nil and value ~= "") or
+                                (is_number and (allow_zero or value ~= 0)) or
+                                (value ~= nil and not is_string and not is_number)
+                            if keep then
+                                existing[field] = value
+                            end
+                        end
+                        copy_if_present("path", false)
+                        copy_if_present("name", false)
+                        copy_if_present("duration", false)
+                        copy_if_present("frame_rate", false)
+                        copy_if_present("width", false)
+                        copy_if_present("height", false)
+                        copy_if_present("audio_channels", false)
+                        media_info = existing
+                    else
+                        sequence_info.media_files[media_info.key] = media_info
+                    end
+                elseif sequence_info then
                     sequence_info.media_files[media_info.key] = media_info
                 end
+                clip_info.media = media_info
             end
         elseif name == "start" then
             clip_info.start_time = parse_time(child:text(), clip_info.frame_rate)

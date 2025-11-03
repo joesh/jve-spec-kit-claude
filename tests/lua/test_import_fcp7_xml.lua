@@ -255,9 +255,17 @@ do
 end
 
 do
-    local row, stmt = fetch_one(db, "SELECT COUNT(*) FROM media WHERE file_path LIKE '%FogTL.mp4%'")
-    assert_true("fog media count row", row ~= nil)
-    assert_eq("fog clip with missing path omitted", row:value(0), 0)
+    local row, stmt = fetch_one(
+        db,
+        "SELECT file_path FROM media WHERE name = ?",
+        "FogTL.mp4"
+    )
+    assert_true("FogTL media present", row ~= nil)
+    assert_eq(
+        "FogTL path persisted",
+        row:value(0),
+        "/Users/Shared/Adobe/Premiere Pro/24.0/Tutorial/Going Home project/Footage/FogTL.mp4"
+    )
     stmt:finalize()
 end
 

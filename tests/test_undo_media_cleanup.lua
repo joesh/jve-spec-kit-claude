@@ -41,15 +41,25 @@ db:exec([[
         playhead_time INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
+        viewport_start_time INTEGER NOT NULL DEFAULT 0,
+        viewport_duration INTEGER NOT NULL DEFAULT 10000,
+        mark_in_time INTEGER,
+        mark_out_time INTEGER,
         current_sequence_number INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS tracks (
         id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
+        name TEXT NOT NULL,
         track_type TEXT NOT NULL,
         track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
+        enabled INTEGER NOT NULL DEFAULT 1,
+        locked INTEGER NOT NULL DEFAULT 0,
+        muted INTEGER NOT NULL DEFAULT 0,
+        soloed INTEGER NOT NULL DEFAULT 0,
+        volume REAL NOT NULL DEFAULT 1.0,
+        pan REAL NOT NULL DEFAULT 0.0
     );
 
     CREATE TABLE IF NOT EXISTS clips (
@@ -113,10 +123,8 @@ db:exec([[
     VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'test_project', 'Default Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_v1', 'test_sequence', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_default_v1', 'default_sequence', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
 ]])
 
 command_manager.init(db, 'default_sequence', 'test_project')
@@ -217,20 +225,29 @@ print("✓ After redo: 2 media files restored")
 print("✅ PASS: Media cleanup prevents UNIQUE constraint violations\n")
 
 -- Test 2: project_id query failure detection
-print("Test 2: Project ID query failure is detected")
+print("Test 2: Replay gracefully handles missing sequence row")
 
--- Try to replay with invalid sequence_id
 local success, err = pcall(function()
-    command_manager.replay_events('nonexistent_sequence', 0)
+    return command_manager.replay_events('nonexistent_sequence', 0)
 end)
 
-if not success and err:match("Cannot determine project_id") then
-    print("✅ PASS: Missing project_id correctly throws error\n")
-else
-    print("❌ FAIL: Should have thrown error for missing project_id")
+if not success or err == false then
+    print("❌ FAIL: Replay should succeed even when sequence row is missing")
     print("   Got: " .. tostring(err) .. "\n")
     os.exit(1)
 end
+
+local verify_stmt = db:prepare("SELECT COUNT(*) FROM sequences WHERE id = 'nonexistent_sequence'")
+if verify_stmt and verify_stmt:exec() and verify_stmt:next() then
+    local count = verify_stmt:value(0)
+    if count ~= 0 then
+        print("❌ FAIL: Replay should not create missing sequence rows")
+        os.exit(1)
+    end
+end
+verify_stmt:finalize()
+
+print("✅ PASS: Missing sequence row no longer aborts replay\n")
 
 command_manager.unregister_executor("ImportMedia")
 

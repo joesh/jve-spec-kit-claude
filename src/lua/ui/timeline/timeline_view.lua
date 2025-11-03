@@ -569,15 +569,25 @@ end
 
             -- Single edge: use RippleEdit
             if #view.drag_state.edges == 1 then
+                local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id()
+                if not sequence_id or sequence_id == "" then
+                    print("ERROR: Ripple preview aborted - missing sequence id")
+                    return
+                end
+                local project_id = state_module.get_project_id and state_module.get_project_id()
+                if not project_id or project_id == "" then
+                    print("ERROR: Ripple preview aborted - missing project id")
+                    return
+                end
                 local edge = view.drag_state.edges[1]
-                local ripple_cmd = Command.create("RippleEdit", "default_project")
+                local ripple_cmd = Command.create("RippleEdit", project_id)
                 ripple_cmd:set_parameter("edge_info", {
                     clip_id = edge.clip_id,
                     edge_type = edge.edge_type,
                     track_id = edge.track_id
                 })
                 ripple_cmd:set_parameter("delta_ms", edge_drag_offset_ms)
-                ripple_cmd:set_parameter("sequence_id", "default_sequence")
+                ripple_cmd:set_parameter("sequence_id", sequence_id)
                 ripple_cmd:set_parameter("dry_run", true)
 
                 local executor = command_manager.get_executor("RippleEdit")
@@ -586,6 +596,16 @@ end
                 end
             -- Multiple edges: use BatchRippleEdit
             elseif #view.drag_state.edges > 1 then
+                local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id()
+                if not sequence_id or sequence_id == "" then
+                    print("ERROR: Batch ripple preview aborted - missing sequence id")
+                    return
+                end
+                local project_id = state_module.get_project_id and state_module.get_project_id()
+                if not project_id or project_id == "" then
+                    print("ERROR: Batch ripple preview aborted - missing project id")
+                    return
+                end
                 local edge_infos = {}
                 for _, edge in ipairs(view.drag_state.edges) do
                     table.insert(edge_infos, {
@@ -595,10 +615,10 @@ end
                     })
                 end
 
-                local batch_cmd = Command.create("BatchRippleEdit", "default_project")
+                local batch_cmd = Command.create("BatchRippleEdit", project_id)
                 batch_cmd:set_parameter("edge_infos", edge_infos)
                 batch_cmd:set_parameter("delta_ms", edge_drag_offset_ms)
-                batch_cmd:set_parameter("sequence_id", "default_sequence")
+                batch_cmd:set_parameter("sequence_id", sequence_id)
                 batch_cmd:set_parameter("dry_run", true)
 
                 local executor = command_manager.get_executor("BatchRippleEdit")
@@ -1628,6 +1648,19 @@ end
                         end
                     end
 
+                    -- Determine active sequence; drag should never proceed without it
+                    local active_sequence_id = state_module.get_sequence_id and state_module.get_sequence_id()
+                    if not active_sequence_id or active_sequence_id == "" then
+                        print("ERROR: timeline drag aborted - no active sequence id")
+                        return
+                    end
+
+                    local active_project_id = state_module.get_project_id and state_module.get_project_id()
+                    if not active_project_id or active_project_id == "" then
+                        print("ERROR: timeline drag aborted - missing project id")
+                        return
+                    end
+
                     -- Build command list for BatchCommand (single undo for entire drag)
                     local command_specs = {}
                     local clip_targets = {}
@@ -1639,7 +1672,6 @@ end
                     end
 
                     if alt_copy then
-                        local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id() or "default_sequence"
                         for _, clip in ipairs(current_clips) do
                             local target_track_id = clip_targets[clip.id] or clip.track_id
                             local overwrite_time = clip.start_time + delta_ms
@@ -1661,8 +1693,8 @@ end
                                         source_in = source_in,
                                         source_out = source_out,
                                         master_clip_id = clip.parent_clip_id,
-                                        project_id = clip.project_id,
-                                        sequence_id = sequence_id,
+                                        project_id = clip.project_id or active_project_id,
+                                        sequence_id = active_sequence_id,
                                         advance_playhead = false,
                                     }
                                 })
@@ -1690,6 +1722,8 @@ end
                                     move_params.pending_new_start_time = move_info.clip.start_time + delta_ms
                                     move_params.pending_duration = move_info.clip.duration
                                 end
+                                move_params.project_id = move_info.clip.project_id or active_project_id
+                                move_params.sequence_id = active_sequence_id
                                 table.insert(command_specs, {
                                     command_type = "MoveClipToTrack",
                                     parameters = move_params
@@ -1707,10 +1741,23 @@ end
                             table.insert(command_specs, {
                                 command_type = "Nudge",
                                 parameters = {
+                                    sequence_id = active_sequence_id,
+                                    project_id = active_project_id,
                                     nudge_amount_ms = delta_ms,
                                     selected_clip_ids = clip_ids
                                 }
                             })
+                        end
+                    end
+
+                    -- Normalize command parameters before execution
+                    for _, spec in ipairs(command_specs) do
+                        spec.parameters = spec.parameters or {}
+                        if not spec.parameters.project_id or spec.parameters.project_id == "" then
+                            spec.parameters.project_id = active_project_id
+                        end
+                        if not spec.parameters.sequence_id or spec.parameters.sequence_id == "" then
+                            spec.parameters.sequence_id = active_sequence_id
                         end
                     end
 
@@ -1719,7 +1766,7 @@ end
                         if #command_specs == 1 then
                             -- Only one operation - execute directly (no batch overhead)
                             local spec = command_specs[1]
-                            local cmd = Command.create(spec.command_type, "default_project")
+                            local cmd = Command.create(spec.command_type, active_project_id)
                             for key, value in pairs(spec.parameters) do
                                 cmd:set_parameter(key, value)
                             end
@@ -1731,8 +1778,9 @@ end
                             -- Multiple operations - use BatchCommand for single undo
                             local json = require("dkjson")
                             local commands_json = json.encode(command_specs)
-                            local batch_cmd = Command.create("BatchCommand", "default_project")
+                            local batch_cmd = Command.create("BatchCommand", active_project_id)
                             batch_cmd:set_parameter("commands_json", commands_json)
+                            batch_cmd:set_parameter("sequence_id", active_sequence_id)
 
                             local result = command_manager.execute(batch_cmd)
                             if not result.success then
@@ -1790,6 +1838,17 @@ end
 
                 elseif drag_type == "edges" then
                     -- Ripple edit edges by delta
+                    local active_sequence_id = state_module.get_sequence_id and state_module.get_sequence_id()
+                    if not active_sequence_id or active_sequence_id == "" then
+                        print("ERROR: Edge drag aborted - missing sequence id")
+                        return
+                    end
+                    local active_project_id = state_module.get_project_id and state_module.get_project_id()
+                    if not active_project_id or active_project_id == "" then
+                        print("ERROR: Edge drag aborted - missing project id")
+                        return
+                    end
+
                     local edge_infos = {}
                     local all_clips = state_module.get_clips()
 
@@ -1816,16 +1875,16 @@ end
 
                     local result
                     if #edge_infos > 1 then
-                        local batch_cmd = Command.create("BatchRippleEdit", "default_project")
+                        local batch_cmd = Command.create("BatchRippleEdit", active_project_id)
                         batch_cmd:set_parameter("edge_infos", edge_infos)
                         batch_cmd:set_parameter("delta_ms", delta_ms)
-                        batch_cmd:set_parameter("sequence_id", "default_sequence")
+                        batch_cmd:set_parameter("sequence_id", active_sequence_id)
                         result = command_manager.execute(batch_cmd)
                     elseif #edge_infos == 1 then
-                        local ripple_cmd = Command.create("RippleEdit", "default_project")
+                        local ripple_cmd = Command.create("RippleEdit", active_project_id)
                         ripple_cmd:set_parameter("edge_info", edge_infos[1])
                         ripple_cmd:set_parameter("delta_ms", delta_ms)
-                        ripple_cmd:set_parameter("sequence_id", "default_sequence")
+                        ripple_cmd:set_parameter("sequence_id", active_sequence_id)
                         result = command_manager.execute(ripple_cmd)
                     end
 

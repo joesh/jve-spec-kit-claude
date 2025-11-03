@@ -128,6 +128,7 @@ db:exec([[
     CREATE TABLE IF NOT EXISTS tracks (
         id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
+        name TEXT NOT NULL,
         track_type TEXT NOT NULL,
         track_index INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1
@@ -181,11 +182,16 @@ db:exec([[
     VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_v1', 'test_sequence', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_default_v1', 'default_sequence', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
 ]])
+
+do
+    local stmt = db:prepare("SELECT COUNT(*) FROM sequences WHERE project_id = 'test_project'")
+    assert(stmt:exec() and stmt:next())
+    print("DEBUG pre-init sequences", stmt:value(0))
+    stmt:finalize()
+end
 
 command_manager.init(db, 'test_sequence', 'test_project')
 

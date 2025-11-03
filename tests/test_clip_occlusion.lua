@@ -35,6 +35,7 @@ local function setup_db(path)
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
             name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'timeline',
             frame_rate REAL NOT NULL,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
@@ -42,6 +43,10 @@ local function setup_db(path)
             playhead_time INTEGER NOT NULL DEFAULT 0,
             selected_clip_ids TEXT DEFAULT '[]',
             selected_edge_infos TEXT DEFAULT '[]',
+            viewport_start_time INTEGER NOT NULL DEFAULT 0,
+            viewport_duration INTEGER NOT NULL DEFAULT 10000,
+            mark_in_time INTEGER,
+            mark_out_time INTEGER,
             current_sequence_number INTEGER
         );
 
@@ -51,7 +56,12 @@ local function setup_db(path)
             name TEXT,
             track_type TEXT NOT NULL,
             track_index INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
+            enabled INTEGER NOT NULL DEFAULT 1,
+            locked INTEGER NOT NULL DEFAULT 0,
+            muted INTEGER NOT NULL DEFAULT 0,
+            soloed INTEGER NOT NULL DEFAULT 0,
+            volume REAL NOT NULL DEFAULT 1.0,
+            pan REAL NOT NULL DEFAULT 0.0
         );
 
         CREATE TABLE IF NOT EXISTS clips (

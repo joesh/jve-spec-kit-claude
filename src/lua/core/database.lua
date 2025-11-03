@@ -178,7 +178,8 @@ function M.load_tracks(sequence_id)
     ]])
 
     if not query then
-        error("FATAL: Failed to prepare track query")
+        local err = db_connection.errmsg and db_connection:errmsg() or "unknown error"
+        error("FATAL: Failed to prepare track query: " .. tostring(err))
     end
 
     query:bind_value(1, sequence_id)
@@ -211,12 +212,14 @@ function M.load_clips(sequence_id)
     end
 
     local query = db_connection:prepare([[
-        SELECT c.id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.parent_clip_id, c.owner_sequence_id, c.start_time, c.duration,
-               c.source_in, c.source_out, c.enabled, c.offline,
+        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+               c.start_time, c.duration, c.source_in, c.source_out,
+               c.enabled, c.offline, t.sequence_id,
                m.name, m.file_path
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
+        JOIN sequences s ON t.sequence_id = s.id
         LEFT JOIN media m ON c.media_id = m.id
         WHERE t.sequence_id = ?
         ORDER BY c.start_time ASC
@@ -245,31 +248,55 @@ function M.load_clips(sequence_id)
     if query:exec() then
         while query:next() do
             local clip_id = query:value(0)
-            local media_name = query:value(13)
-            local media_path = query:value(14)
+            local raw_project_id = query:value(1)
+            local sequence_project_id = query:value(2)
+            local clip_project_id = raw_project_id or sequence_project_id
+            if not clip_project_id then
+                error(string.format("FATAL: load_clips: clip %s missing project_id (sequence %s)", tostring(clip_id), tostring(sequence_id)))
+            end
+
+            local track_sequence_id = query:value(16)
+            local owner_sequence_id = query:value(9) or track_sequence_id
+            if not owner_sequence_id then
+                error(string.format("FATAL: load_clips: clip %s missing owner_sequence_id", tostring(clip_id)))
+            end
+
+            local media_name = query:value(17)
+            local media_path = query:value(18)
+            local media_id = query:value(6)
+            if media_id and media_id ~= "" then
+                local has_name = media_name and media_name ~= ""
+                local has_path = media_path and media_path ~= ""
+                if not has_name and not has_path then
+                    error(string.format("FATAL: load_clips: media metadata missing for clip %s (media_id=%s)", tostring(clip_id), tostring(media_id)))
+                end
+            end
+
             local label = media_name
-            if label == nil or label == "" then
+            if not label or label == "" then
                 label = extract_filename(media_path)
             end
-            if label == nil or label == "" then
+            if not label or label == "" then
                 label = clip_id and ("Clip " .. clip_id:sub(1, 8)) or ""
-                print(string.format("WARNING: Clip %s missing media metadata (media_id=%s); using generated label '%s'", tostring(clip_id), tostring(query:value(2)), label))
             end
 
             local clip = {
                 id = clip_id,
-                clip_kind = query:value(1),
-                name = query:value(2),
-                track_id = query:value(3),
-                media_id = query:value(4),
-                parent_clip_id = query:value(5),
-                owner_sequence_id = query:value(6),
-                start_time = query:value(7),
-                duration = query:value(8),
-                source_in = query:value(9),
-                source_out = query:value(10),
-                enabled = query:value(11) == 1,
-                offline = query:value(12) == 1,
+                project_id = clip_project_id,
+                clip_kind = query:value(3),
+                name = query:value(4),
+                track_id = query:value(5),
+                media_id = query:value(6),
+                source_sequence_id = query:value(7),
+                parent_clip_id = query:value(8),
+                owner_sequence_id = owner_sequence_id,
+                track_sequence_id = track_sequence_id,
+                start_time = query:value(10),
+                duration = query:value(11),
+                source_in = query:value(12),
+                source_out = query:value(13),
+                enabled = query:value(14) == 1,
+                offline = query:value(15) == 1,
                 media_name = media_name,
                 media_path = media_path,
                 label = label
@@ -642,7 +669,8 @@ function M.load_sequence_record(sequence_id)
     local query = db_connection:prepare([[
         SELECT id, project_id, name, kind, frame_rate, width, height,
                timecode_start, playhead_time, viewport_start_time,
-               viewport_duration, mark_in_time, mark_out_time
+               viewport_duration, mark_in_time, mark_out_time,
+               selected_clip_ids, selected_edge_infos
         FROM sequences
         WHERE id = ?
     ]])
@@ -669,7 +697,9 @@ function M.load_sequence_record(sequence_id)
             viewport_start_time = tonumber(query:value(9)) or 0,
             viewport_duration = tonumber(query:value(10)) or 0,
             mark_in_time = tonumber(query:value(11)),
-            mark_out_time = tonumber(query:value(12))
+            mark_out_time = tonumber(query:value(12)),
+            selected_clip_ids = query:value(13),
+            selected_edge_infos = query:value(14)
         }
     end
 
