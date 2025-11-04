@@ -29,6 +29,10 @@ function M.create(widget, state_module, track_filter_fn, options)
         on_drag_start = options.on_drag_start,  -- Panel callback for drag coordination
         filtered_tracks = {},  -- Cached filtered track list
         potential_drag = nil,  -- Stores info about a click that might become a drag
+        drag_state = nil,
+        panel_drag_move = nil,
+        panel_drag_end = nil,
+        pending_gap_click = nil,
         debug_id = options.debug_id or tostring(widget),
     }
 
@@ -988,6 +992,7 @@ end
         local width, height = timeline.get_dimensions(view.widget)
 
         if event_type == "press" then
+            view.pending_gap_click = nil
             if focus_manager and focus_manager.set_focused_panel then
                 pcall(focus_manager.set_focused_panel, "timeline")
             end
@@ -1075,6 +1080,7 @@ end
 
                 if clicking_selected_edge then
                     -- Clicking on selected edge
+                    view.pending_gap_click = nil
                     if modifiers and modifiers.command then
                         -- Cmd+click on selected edge - toggle it (deselect)
                         for _, edge_info in ipairs(clips_at_position) do
@@ -1122,6 +1128,7 @@ end
                     end
                 else
                     -- Clicking unselected edge - select it
+                    view.pending_gap_click = nil
                     if not (modifiers and modifiers.command) then
                         -- Without Cmd key, clear previous edge selection
                         state_module.clear_edge_selection()
@@ -1186,6 +1193,7 @@ end
 
             if clicked_clip then
                 -- Check if this clip is in the selection
+                view.pending_gap_click = nil
                 local is_selected = false
                 for _, sel in ipairs(selected_clips) do
                     if sel.id == clicked_clip.id then
@@ -1265,14 +1273,16 @@ end
                     local click_time = state_module.pixel_to_time(x, width)
                     local gap = find_gap_at_time(track_id, click_time)
                     if gap and gap.duration > 0 then
-                        if modifiers and modifiers.command then
-                            state_module.toggle_gap_selection(gap)
-                        else
-                            state_module.set_gap_selection({gap})
-                        end
-                        render()
-                        return
+                        view.pending_gap_click = {
+                            initial_gap = gap,
+                            command_modifier = modifiers and modifiers.command or false,
+                            press_track_id = track_id,
+                        }
+                    else
+                        view.pending_gap_click = nil
                     end
+                else
+                    view.pending_gap_click = nil
                 end
             end
 
@@ -1301,6 +1311,7 @@ end
 
                 if dx >= DRAG_THRESHOLD or dy >= DRAG_THRESHOLD then
                     -- Movement exceeded threshold - start actual drag
+                    view.pending_gap_click = nil
                     view.drag_state = {
                         type = view.potential_drag.type,
                         start_x = view.potential_drag.start_x,
@@ -1354,6 +1365,7 @@ end
                     render()
                 end
             elseif view.drag_state then
+                view.pending_gap_click = nil
                 -- Dragging clips or edges - show visual feedback
                 local current_time = state_module.pixel_to_time(x, width)
 
@@ -1449,15 +1461,17 @@ end
                     end
                 end
 
-                view.drag_state.current_x = x
                 view.drag_state.current_y = y
-                view.drag_state.current_time = current_time
-                view.drag_state.delta_ms = math.floor(current_time - view.drag_state.start_time)
 
                 if modifiers and modifiers.shift then
-                    view.drag_state.current_y = view.drag_state.start_y
+                    view.drag_state.current_x = view.drag_state.start_x
+                    view.drag_state.current_time = view.drag_state.start_time
+                    view.drag_state.delta_ms = 0
                     view.drag_state.shift_constrained = true
                 else
+                    view.drag_state.current_x = x
+                    view.drag_state.current_time = current_time
+                    view.drag_state.delta_ms = math.floor(current_time - view.drag_state.start_time)
                     view.drag_state.shift_constrained = false
                 end
 
@@ -1472,6 +1486,7 @@ end
                 state_module.set_playhead_time(time)
             elseif view.panel_drag_move then
                 -- Forward move events to panel during drag selection
+                view.pending_gap_click = nil
                 view.panel_drag_move(view.widget, x, y)
             else
                 -- Update cursor based on what's under the mouse
@@ -1693,6 +1708,7 @@ end
                                         source_in = source_in,
                                         source_out = source_out,
                                         master_clip_id = clip.parent_clip_id,
+                                        clip_name = clip.name,
                                         project_id = clip.project_id or active_project_id,
                                         sequence_id = active_sequence_id,
                                         advance_playhead = false,
@@ -1905,6 +1921,23 @@ end
                 view.panel_drag_end(view.widget, x, y)
                 view.panel_drag_move = nil
                 view.panel_drag_end = nil
+            end
+
+            if view.pending_gap_click then
+                local gap_click = view.pending_gap_click
+                view.pending_gap_click = nil
+                local release_track = get_track_id_at_y(y, height)
+                if release_track then
+                    local release_time = state_module.pixel_to_time(x, width)
+                    local gap = find_gap_at_time(release_track, release_time)
+                    if gap and gap.duration > 0 then
+                        if gap_click.command_modifier then
+                            state_module.toggle_gap_selection(gap)
+                        else
+                            state_module.set_gap_selection({gap})
+                        end
+                    end
+                end
             end
             state_module.set_dragging_playhead(false)
         end

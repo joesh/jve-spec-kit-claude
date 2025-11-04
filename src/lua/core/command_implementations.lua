@@ -2269,7 +2269,8 @@ command_executors["Overwrite"] = function(command)
         enabled = true,
         offline = master_clip and master_clip.offline,
     }
-    local clip = Clip.create("Overwrite Clip", media_id, clip_opts)
+    local clip_name = command:get_parameter("clip_name") or (master_clip and master_clip.name) or "Overwrite Clip"
+    local clip = Clip.create(clip_name, media_id, clip_opts)
 
     command:set_parameter("clip_id", clip.id)
     if master_clip_id and master_clip_id ~= "" then
@@ -2384,21 +2385,43 @@ command_executors["RippleDelete"] = function(command)
     local track_id = command:get_parameter("track_id")
     local gap_start = command:get_parameter("gap_start")
     local gap_duration = command:get_parameter("gap_duration")
+    local sequence_id = command:get_parameter("sequence_id")
 
     if not track_id or gap_start == nil or not gap_duration or gap_duration <= 0 then
         print("WARNING: RippleDelete: Missing or invalid parameters")
         return false
     end
 
+    if not sequence_id or sequence_id == "" then
+        local seq_query = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
+        if seq_query then
+            seq_query:bind_value(1, track_id)
+            if seq_query:exec() and seq_query:next() then
+                sequence_id = seq_query:value(0)
+            end
+            seq_query:finalize()
+        end
+    end
+
+    if not sequence_id or sequence_id == "" then
+        print("WARNING: RippleDelete: Unable to determine sequence for track " .. tostring(track_id))
+        return false
+    end
+
     local gap_end = gap_start + gap_duration
 
     local moved_clips = {}
-    local query = db:prepare([[SELECT id, start_time FROM clips WHERE track_id = ? AND start_time >= ? ORDER BY start_time ASC]])
+    local query = db:prepare([[
+        SELECT id, start_time, track_id
+        FROM clips
+        WHERE owner_sequence_id = ? AND start_time >= ?
+        ORDER BY start_time ASC
+    ]])
     if not query then
         print("ERROR: RippleDelete: Failed to prepare clip query")
         return false
     end
-    query:bind_value(1, track_id)
+    query:bind_value(1, sequence_id)
     query:bind_value(2, gap_end)
 
     local clip_ids = {}
@@ -2406,7 +2429,8 @@ command_executors["RippleDelete"] = function(command)
         while query:next() do
             table.insert(clip_ids, {
                 id = query:value(0),
-                start_time = query:value(1)
+                start_time = query:value(1),
+                track_id = query:value(2)
             })
         end
     end
@@ -2430,7 +2454,7 @@ command_executors["RippleDelete"] = function(command)
         end
 
         local original_start = clip.start_time
-        clip.start_time = math.max(0, clip.start_time - gap_duration)
+            clip.start_time = math.max(0, clip.start_time - gap_duration)
 
         local saved = clip:save(db, {skip_occlusion = true})
         if not saved then
@@ -2441,15 +2465,17 @@ command_executors["RippleDelete"] = function(command)
         table.insert(moved_clips, {
             clip_id = info.id,
             original_start = original_start,
+            track_id = info.track_id,
         })
     end
 
     command:set_parameter("ripple_track_id", track_id)
     command:set_parameter("ripple_gap_start", gap_start)
+    command:set_parameter("ripple_sequence_id", sequence_id)
     command:set_parameter("ripple_gap_duration", gap_duration)
     command:set_parameter("ripple_moved_clips", moved_clips)
 
-    print(string.format("✅ Ripple deleted gap on track %s (moved %d clip(s))", tostring(track_id), #moved_clips))
+    print(string.format("✅ Ripple deleted gap on track %s (moved %d clip(s) across sequence %s)", tostring(track_id), #moved_clips, tostring(sequence_id)))
     return true
 end
 

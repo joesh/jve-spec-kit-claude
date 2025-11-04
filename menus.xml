@@ -48,8 +48,8 @@
     <item name="Link Clips" command="LinkClips" shortcut="Cmd+L"/>
     <item name="Unlink Clips" command="UnlinkClips" shortcut="Cmd+Shift+L"/>
     <separator/>
-    <item name="Nudge Left" command="Nudge" params="{delta_ms=-33}" shortcut="Left"/>
-    <item name="Nudge Right" command="Nudge" params="{delta_ms=33}" shortcut="Right"/>
+    <item name="Nudge Left" command="Nudge" params="{delta_ms=-33}"/>
+    <item name="Nudge Right" command="Nudge" params="{delta_ms=33}"/>
     <separator/>
     <item name="Enable/Disable" command="ToggleClipEnabled" shortcut="D"/>
     <separator/>

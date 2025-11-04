@@ -261,6 +261,7 @@ function M.create(widget, state_module)
                 local time = state_module.pixel_to_time(x, width)
                 local snapped_time = snap_to_frame(time)
                 state_module.set_playhead_time(snapped_time)
+                state_module.set_dragging_playhead(true)
             end
 
         elseif event_type == "move" then

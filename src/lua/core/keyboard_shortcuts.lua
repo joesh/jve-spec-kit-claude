@@ -33,6 +33,9 @@ local KEY = {
     E = 69,
     R = 82,
     T = 84,
+    Key2 = 50,
+    Key3 = 51,
+    Key4 = 52,
     Plus = 43,       -- '+'
     Minus = 45,      -- '-'
     Equal = 61,      -- '=' (also + on US keyboards)
@@ -64,8 +67,118 @@ local project_browser = nil
 local timeline_panel = nil
 local focus_manager = require("ui.focus_manager")
 local redo_toggle_state = nil
+local zoom_fit_toggle_state = nil
 
 local ACTIVATE_BROWSER_COMMAND = "ActivateBrowserSelection"
+
+local function clear_zoom_fit_toggle()
+    zoom_fit_toggle_state = nil
+end
+
+function keyboard_shortcuts.clear_zoom_toggle()
+    clear_zoom_fit_toggle()
+end
+
+local function snapshot_viewport(state)
+    if not state then
+        return {start_time = 0, duration = 10000}
+    end
+
+    if state.capture_viewport then
+        local ok, viewport = pcall(state.capture_viewport)
+        if ok and type(viewport) == "table" then
+            return {
+                start_time = viewport.start_time,
+                duration = viewport.duration,
+            }
+        end
+    end
+
+    local start_time = 0
+    local duration = frame_utils.default_frame_rate * 1000  -- fallback of ~1s
+    if state.get_viewport_start_time then
+        local ok, value = pcall(state.get_viewport_start_time)
+        if ok then
+            start_time = value or start_time
+        end
+    end
+    if state.get_viewport_duration then
+        local ok, value = pcall(state.get_viewport_duration)
+        if ok then
+            duration = value or duration
+        end
+    end
+    return {start_time = start_time, duration = duration}
+end
+
+function keyboard_shortcuts.toggle_zoom_fit(target_state)
+    local state = target_state or timeline_state
+    if not state then
+        print("⚠️  Zoom to fit unavailable (timeline state missing)")
+        return false
+    end
+
+    local snapshot = snapshot_viewport(state)
+
+    if zoom_fit_toggle_state and zoom_fit_toggle_state.previous_view then
+        local prev = zoom_fit_toggle_state.previous_view
+        if state.restore_viewport then
+            pcall(state.restore_viewport, prev)
+        else
+            if prev.duration and state.set_viewport_duration then
+                state.set_viewport_duration(prev.duration)
+            end
+            if prev.start_time and state.set_viewport_start_time then
+                state.set_viewport_start_time(prev.start_time)
+            end
+        end
+        zoom_fit_toggle_state = nil
+        print("🔄 Zoom fit toggle: restored previous view")
+        return true
+    end
+
+    local clips = {}
+    if state.get_clips then
+        local ok, clip_list = pcall(state.get_clips)
+        if ok and type(clip_list) == "table" then
+            clips = clip_list
+        end
+    end
+
+    local max_end_time = 0
+    for _, clip in ipairs(clips) do
+        local start_time = tonumber(clip.start_time) or 0
+        local duration = tonumber(clip.duration) or 0
+        local clip_end = start_time + duration
+        if clip_end > max_end_time then
+            max_end_time = clip_end
+        end
+    end
+
+    if max_end_time <= 0 then
+        zoom_fit_toggle_state = nil
+        print("⚠️  No clips to scale to")
+        return false
+    end
+
+    local viewport_duration = math.floor(max_end_time * 1.1)
+
+    if state.set_viewport_start_time then
+        state.set_viewport_start_time(0)
+    end
+    if state.set_viewport_duration then
+        state.set_viewport_duration(viewport_duration)
+    end
+
+    zoom_fit_toggle_state = {
+        previous_view = {
+            start_time = snapshot.start_time,
+            duration = snapshot.duration,
+        }
+    }
+    print(string.format("🔍 Zoomed to fit: %.2fs visible", viewport_duration / 1000))
+    return true
+end
 
 local function ensure_browser_shortcuts_registered()
     if not shortcut_registry.commands[ACTIVATE_BROWSER_COMMAND] then
@@ -129,6 +242,7 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     project_browser = proj_browser
     timeline_panel = panel
     redo_toggle_state = nil
+    zoom_fit_toggle_state = nil
     ensure_browser_shortcuts_registered()
 end
 
@@ -174,10 +288,25 @@ local function get_focused_panel_id()
 end
 
 local function panel_is_active(required_panel, focused_panel)
-    if not required_panel or required_panel == "global" then
-        return true
+   if not required_panel or required_panel == "global" then
+       return true
+   end
+   return focused_panel == required_panel
+end
+
+local function focus_panel(panel_id)
+    if not focus_manager then
+        return false
     end
-    return focused_panel == required_panel
+    local focused = false
+    if focus_manager.focus_panel then
+        focused = focus_manager.focus_panel(panel_id) or focused
+    end
+    if focus_manager.set_focused_panel then
+        focus_manager.set_focused_panel(panel_id)
+        focused = true
+    end
+    return focused
 end
 
 -- Check if a modifier is active (LuaJIT compatible bitwise AND)
@@ -221,6 +350,10 @@ function keyboard_shortcuts.handle_key(event)
                     and redo_toggle_state.undo_position ~= nil
                     and redo_toggle_state.redo_position ~= nil
                     and current_pos == redo_toggle_state.redo_position then
+                    if command_manager.can_undo and not command_manager.can_undo() then
+                        clear_redo_toggle()
+                        return true
+                    end
                     local undo_result = command_manager.undo()
                     if not undo_result.success then
                         clear_redo_toggle()
@@ -247,6 +380,10 @@ function keyboard_shortcuts.handle_key(event)
                     end
 
                     local before_pos = current_pos
+                    if command_manager.can_redo and not command_manager.can_redo() then
+                        clear_redo_toggle()
+                        return true
+                    end
                     local redo_result = command_manager.redo()
                     if redo_result.success then
                         local after_pos = get_current_sequence_position()
@@ -273,6 +410,9 @@ function keyboard_shortcuts.handle_key(event)
         else
             if command_manager then
                 clear_redo_toggle()
+                if command_manager.can_undo and not command_manager.can_undo() then
+                    return true
+                end
                 local result = command_manager.undo()
                 if result.success then
                     print("Undo complete")
@@ -286,6 +426,22 @@ function keyboard_shortcuts.handle_key(event)
             end
         end
         return true
+    end
+
+    if modifier_meta and not modifier_alt and not modifier_shift then
+        if key == KEY.Key3 then
+            if focus_panel("timeline") then
+                return true
+            end
+        elseif key == KEY.Key4 then
+            if focus_panel("project_browser") then
+                return true
+            end
+        elseif key == KEY.Key2 then
+            if focus_panel("inspector") then
+                return true
+            end
+        end
     end
 
     -- Left/Right arrows: Move playhead (frame or 1-second jumps with Shift)
@@ -477,20 +633,28 @@ function keyboard_shortcuts.handle_key(event)
     -- Cmd/Ctrl + A: Select all clips
     -- Shift + Cmd/Ctrl + A: Deselect all
     if key == KEY.A and modifier_meta then
-        if not command_manager or not panel_active_timeline then
+        if not panel_active_timeline then
             return false
         end
 
-        local command_name
-        if has_modifier(modifiers, MOD.Shift) then
-            command_name = "DeselectAll"
-        else
-            command_name = "SelectAll"
+        if timeline_state and timeline_state.set_selection and timeline_state.get_clips then
+            if has_modifier(modifiers, MOD.Shift) then
+                timeline_state.set_selection({})
+                print("Deselected all clips")
+            else
+                local clips = timeline_state.get_clips()
+                timeline_state.set_selection(clips)
+                print(string.format("Selected %d clip(s)", #clips))
+            end
         end
-
-        local result = command_manager.execute(command_name)
-        if not result.success then
-            print(string.format("⚠️  %s returned error: %s", command_name, result.error_message or "unknown"))
+        if command_manager then
+            local command_name
+            if has_modifier(modifiers, MOD.Shift) then
+                command_name = "DeselectAll"
+            else
+                command_name = "SelectAll"
+            end
+            command_manager.execute(command_name)
         end
         return true
     end
@@ -812,35 +976,16 @@ function keyboard_shortcuts.handle_key(event)
         return true
     end
 
-    -- Shift + Z: Scale timeline to fit (zoom to show all content)
+    -- Shift + Z: Scale timeline to fit (zoom to show all content) with toggle
     if key == KEY.Z and has_modifier(modifiers, MOD.Shift) and panel_active_timeline then
-        if timeline_state then
-            -- Calculate total timeline duration needed to show all clips
-            local clips = timeline_state.get_clips()
-            local max_end_time = 0
-            for _, clip in ipairs(clips) do
-                local clip_end = clip.start_time + clip.duration
-                if clip_end > max_end_time then
-                    max_end_time = clip_end
-                end
-            end
-
-            if max_end_time > 0 then
-                -- Add 10% padding on the right side for breathing room
-                local viewport_duration = math.floor(max_end_time * 1.1)
-                timeline_state.set_viewport_duration(viewport_duration)
-                timeline_state.set_viewport_start_time(0)
-                print(string.format("Scaled to fit: showing 0 - %dms", viewport_duration))
-            else
-                print("No clips to scale to")
-            end
-        end
+        keyboard_shortcuts.toggle_zoom_fit()
         return true
     end
 
     -- Cmd/Ctrl + Plus/Equal: Zoom in
     if (key == KEY.Plus or key == KEY.Equal) and modifier_meta and panel_active_timeline then
         if timeline_state then
+            clear_zoom_fit_toggle()
             local current_duration = timeline_state.get_viewport_duration()
             local new_duration = math.floor(current_duration / 1.5)  -- Zoom in by 50%
             if new_duration < 100 then
@@ -855,6 +1000,7 @@ function keyboard_shortcuts.handle_key(event)
     -- Cmd/Ctrl + Minus: Zoom out
     if key == KEY.Minus and modifier_meta and panel_active_timeline then
         if timeline_state then
+            clear_zoom_fit_toggle()
             local current_duration = timeline_state.get_viewport_duration()
             local new_duration = math.floor(current_duration * 1.5)  -- Zoom out by 50%
             timeline_state.set_viewport_duration(new_duration)

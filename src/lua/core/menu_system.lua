@@ -21,6 +21,7 @@ local M = {}
 
 local lxp = require("lxp")
 local keyboard_shortcut_registry = require("core.keyboard_shortcut_registry")
+local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local command_manager = nil
 local main_window = nil
 local project_browser = nil
@@ -28,6 +29,9 @@ local timeline_panel = nil
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
+local actions_by_command = {}
+local undo_listener_token = nil
+local update_undo_redo_actions  -- forward declaration
 
 -- Qt bindings (loaded from qt_constants global)
 local qt = {
@@ -50,6 +54,24 @@ function M.init(window, cmd_mgr, proj_browser)
     main_window = window
     command_manager = cmd_mgr
     project_browser = proj_browser
+
+    if undo_listener_token and command_manager and command_manager.remove_listener then
+        command_manager.remove_listener(undo_listener_token)
+        undo_listener_token = nil
+    end
+
+    if command_manager and command_manager.add_listener then
+        undo_listener_token = command_manager.add_listener(function(event)
+            if not event or not event.event then
+                return
+            end
+            if event.event == "execute" or event.event == "undo" or event.event == "redo" then
+                update_undo_redo_actions()
+            end
+        end)
+    end
+
+    update_undo_redo_actions()
 end
 
 --- Set timeline panel reference (called after timeline is created)
@@ -250,6 +272,38 @@ local function parse_params(params_str)
     return params
 end
 
+local function register_action_for_command(command_name, action)
+    if not command_name or command_name == "" or not action then
+        return
+    end
+    local actions = actions_by_command[command_name]
+    if not actions then
+        actions = {}
+        actions_by_command[command_name] = actions
+    end
+    table.insert(actions, action)
+end
+
+local function set_actions_enabled_for_command(command_name, enabled)
+    local actions = actions_by_command[command_name]
+    if not actions then
+        return
+    end
+    for _, action in ipairs(actions) do
+        qt.SET_ACTION_ENABLED(action, enabled and true or false)
+    end
+end
+
+update_undo_redo_actions = function()
+    if not command_manager or not command_manager.can_undo or not command_manager.can_redo then
+        set_actions_enabled_for_command("Undo", false)
+        set_actions_enabled_for_command("Redo", false)
+        return
+    end
+    set_actions_enabled_for_command("Undo", command_manager.can_undo())
+    set_actions_enabled_for_command("Redo", command_manager.can_redo())
+end
+
 --- Create menu action callback
 -- @param command_name string: Command to execute
 -- @param params table: Command parameters
@@ -265,11 +319,19 @@ local function create_action_callback(command_name, params)
 
         -- Handle special commands that aren't normal execute() calls
         if command_name == "Undo" then
+            if command_manager.can_undo and not command_manager.can_undo() then
+                return
+            end
             print("⏪ Calling command_manager.undo()")
             command_manager.undo()
+            update_undo_redo_actions()
         elseif command_name == "Redo" then
+            if command_manager.can_redo and not command_manager.can_redo() then
+                return
+            end
             print("⏩ Calling command_manager.redo()")
             command_manager.redo()
+            update_undo_redo_actions()
         elseif command_name == "Quit" then
             print("👋 Quitting application")
             os.exit(0)
@@ -627,6 +689,9 @@ local function create_action_callback(command_name, params)
             local timeline_state = timeline_panel.get_state()
             local current_duration = timeline_state.get_viewport_duration()
             local new_duration = math.max(1000, current_duration * 0.8)  -- Zoom in 20%, min 1 second
+            if keyboard_shortcuts.clear_zoom_toggle then
+                keyboard_shortcuts.clear_zoom_toggle()
+            end
             timeline_state.set_viewport_duration(new_duration)
             print(string.format("🔍 Zoomed in: %.2fs visible", new_duration / 1000))
 
@@ -640,6 +705,9 @@ local function create_action_callback(command_name, params)
             local timeline_state = timeline_panel.get_state()
             local current_duration = timeline_state.get_viewport_duration()
             local new_duration = current_duration * 1.25  -- Zoom out 25%
+            if keyboard_shortcuts.clear_zoom_toggle then
+                keyboard_shortcuts.clear_zoom_toggle()
+            end
             timeline_state.set_viewport_duration(new_duration)
             print(string.format("🔍 Zoomed out: %.2fs visible", new_duration / 1000))
 
@@ -651,25 +719,10 @@ local function create_action_callback(command_name, params)
             end
 
             local timeline_state = timeline_panel.get_state()
-            local clips = timeline_state.get_clips()
-
-            -- Find rightmost clip edge
-            local max_time = 0
-            for _, clip in ipairs(clips) do
-                local clip_end = clip.start_time + clip.duration
-                if clip_end > max_time then
-                    max_time = clip_end
-                end
-            end
-
-            if max_time > 0 then
-                -- Add 10% padding
-                local new_duration = max_time * 1.1
-                timeline_state.set_viewport_duration(new_duration)
-                timeline_state.set_viewport_start_time(0)
-                print(string.format("🔍 Zoomed to fit: %.2fs visible", new_duration / 1000))
-            else
-                print("⚠️  No clips to fit")
+            local ok = keyboard_shortcuts.toggle_zoom_fit(timeline_state)
+            if not ok then
+                -- toggle function already printed warning
+                return
             end
 
         elseif command_name == "Cut" then
@@ -736,6 +789,7 @@ local function build_menu(menu_elem, parent_menu, menu_path)
 
             if command_name then
                 qt.CONNECT_MENU_ACTION(action, create_action_callback(command_name, params))
+                register_action_for_command(command_name, action)
             end
 
         elseif child.tag == "separator" then
@@ -758,6 +812,8 @@ function M.load_from_file(xml_path)
     if not main_window then
         return false, "Menu system not initialized - call init() first"
     end
+
+    actions_by_command = {}
 
     -- Parse XML
     local root, err = parse_xml_file(xml_path)
@@ -785,6 +841,7 @@ function M.load_from_file(xml_path)
     end
 
     print(string.format("Menu system: Loaded %d menus from %s", #menus_elem.children, xml_path))
+    update_undo_redo_actions()
     return true
 end
 
@@ -792,14 +849,20 @@ end
 -- @param command_name string: Command name
 -- @param enabled boolean: Whether item should be enabled
 function M.set_item_enabled(command_name, enabled)
-    -- TODO: Track action objects by command name for state updates
+    set_actions_enabled_for_command(command_name, enabled ~= false)
 end
 
 --- Update menu item checked state
 -- @param command_name string: Command name
 -- @param checked boolean: Whether item should be checked
 function M.set_item_checked(command_name, checked)
-    -- TODO: Track action objects by command name for state updates
+    local actions = actions_by_command[command_name]
+    if not actions then
+        return
+    end
+    for _, action in ipairs(actions) do
+        qt.SET_ACTION_CHECKED(action, checked and true or false)
+    end
 end
 
 return M

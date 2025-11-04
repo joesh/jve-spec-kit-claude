@@ -415,6 +415,38 @@ local function set_current_sequence_number(value)
     ensure_stack_state(active_stack_id).current_sequence_number = value
 end
 
+local function find_latest_child_command(parent_sequence)
+    if not db then
+        return nil
+    end
+
+    local query = db:prepare([[
+        SELECT sequence_number, command_type
+        FROM commands
+        WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
+        ORDER BY sequence_number DESC
+        LIMIT 1
+    ]])
+
+    if not query then
+        return nil
+    end
+
+    query:bind_value(1, parent_sequence)
+    query:bind_value(2, parent_sequence)
+
+    local command = nil
+    local ok = query:exec()
+    if ok and query:next() then
+        command = {
+            sequence_number = query:value(0),
+            command_type = query:value(1)
+        }
+    end
+    query:finalize()
+    return command
+end
+
 local function get_current_stack_id()
     return active_stack_id
 end
@@ -1470,6 +1502,21 @@ function M.get_last_command(project_id)
     end
 
     return nil
+end
+
+function M.can_undo()
+    if not db then
+        return false
+    end
+    return M.get_last_command(active_project_id) ~= nil
+end
+
+function M.can_redo()
+    if not db then
+        return false
+    end
+    local parent_sequence = current_sequence_number or 0
+    return find_latest_child_command(parent_sequence) ~= nil
 end
 
 -- Execute undo
@@ -2713,31 +2760,15 @@ function M.redo(options)
     -- (highest sequence_number with parent = current_sequence_number)
     local current_pos = current_sequence_number or 0
 
-    -- Find all children of current position and pick the most recent one
-    local query = db:prepare([[
-        SELECT sequence_number, command_type
-        FROM commands
-        WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
-        ORDER BY sequence_number DESC
-        LIMIT 1
-    ]])
-
-    if not query then
-        print("Failed to prepare redo query")
-        return {success = false, error_message = "Failed to prepare redo query"}
-    end
-
-    query:bind_value(1, current_pos)
-    query:bind_value(2, current_pos)
-
-    if not query:exec() or not query:next() then
+    local next_command = find_latest_child_command(current_pos)
+    if not next_command then
         print("Nothing to redo")
         return {success = false, error_message = "Nothing to redo"}
     end
 
-    local target_sequence = query:value(0)
-   local command_type = query:value(1)
-   print(string.format("Redoing command: %s (seq %d)", command_type, target_sequence))
+    local target_sequence = next_command.sequence_number
+    local command_type = next_command.command_type
+    print(string.format("Redoing command: %s (seq %d)", command_type, target_sequence))
 
     -- Replay events up to target sequence
     local replay_success = M.replay_events(sequence_id, target_sequence)
