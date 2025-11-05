@@ -14,7 +14,24 @@ local inspectable_factory = require("inspectable")
 local M = {}
 
 -- Constants
-local SPLITTER_HANDLE_HEIGHT = ui_constants.TIMELINE.SPLITTER_HANDLE_HEIGHT
+local DEFAULT_TRACK_HEIGHT = timeline_state.dimensions.default_track_height or ui_constants.TIMELINE.TRACK_HEIGHT or 50
+local MIN_TRACK_HEIGHT = 30
+local HEADER_BORDER_THICKNESS = 2
+local MIN_HEADER_HEIGHT = math.max(12, MIN_TRACK_HEIGHT - HEADER_BORDER_THICKNESS)
+
+local function clamp_track_height(height)
+    return math.max(MIN_TRACK_HEIGHT, height or DEFAULT_TRACK_HEIGHT)
+end
+
+local function content_to_header(track_height)
+    local clamped = clamp_track_height(track_height)
+    return math.max(MIN_HEADER_HEIGHT, clamped - HEADER_BORDER_THICKNESS)
+end
+
+local function header_to_content(header_height)
+    local clamped_header = math.max(MIN_HEADER_HEIGHT, header_height or content_to_header(DEFAULT_TRACK_HEIGHT))
+    return clamp_track_height(clamped_header + HEADER_BORDER_THICKNESS)
+end
 
 -- Store references
 local state = nil
@@ -87,7 +104,10 @@ local function build_track_header_stylesheet(background_color)
             background: %s;
             color: #cccccc;
             padding-left: 10px;
-            border: 1px solid #222232;
+            border-left: 1px solid #222232;
+            border-right: 1px solid #222232;
+            border-top: 0px;
+            border-bottom: 0px;
         }
     ]], background_color or "#111111")
 end
@@ -112,17 +132,22 @@ local function create_video_headers()
     qt_constants.LAYOUT.ADD_WIDGET(video_splitter, stretch_widget)
 
     -- Add tracks in REVERSE order (V3, V2, V1)
+    local video_header_heights = {}
     for i = #video_tracks, 1, -1 do
         local track = video_tracks[i]
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
+        local track_height = clamp_track_height(state.get_track_height and state.get_track_height(track.id) or DEFAULT_TRACK_HEIGHT)
+        local header_height = content_to_header(track_height)
+
         qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.video_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
-        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
-        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.default_track_height)
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
+        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
         video_headers[i] = header
+        video_header_heights[i] = header_height
     end
 
     -- Install handlers: Handle N resizes Track N
@@ -180,7 +205,7 @@ local function create_video_headers()
                 print(string.format("Handler %s called: event_type=%s", this_handler_name, event_type))
                 if event_type == "press" then
                     print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], 20)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], MIN_HEADER_HEIGHT)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], 16777215)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(video_splitter)
@@ -189,19 +214,20 @@ local function create_video_headers()
                     print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
                     -- Lock at exact height to prevent unwanted resizing during main boundary drag
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], new_height)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], new_height)
+                    local clamped_header = math.max(MIN_HEADER_HEIGHT, new_height)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], clamped_header)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], clamped_header)
                     -- Reset: stretch widget absorbs space, tracks fixed
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, 0, 1)
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_below, 0)
 
-                    -- Add handle height to track height so timeline renders track + handle space
-                    state.set_track_height(captured_track_id, new_height + SPLITTER_HANDLE_HEIGHT)
+                    local new_track_height = header_to_content(clamped_header)
+                    state.set_track_height(captured_track_id, new_track_height)
 
                     -- Update splitter minimum height to accommodate new track sizes
                     local total_height = 0
                     for _, track in ipairs(state.get_video_tracks()) do
-                        total_height = total_height + state.get_track_height(track.id)
+                        total_height = total_height + content_to_header(state.get_track_height(track.id))
                     end
                     qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_splitter, total_height)
                     print(string.format("  Updated video_splitter min height to %dpx", total_height))
@@ -216,7 +242,9 @@ local function create_video_headers()
     -- Set initial sizes: stretch widget gets 0, tracks get their natural height
     local initial_sizes = {0}  -- Stretch widget starts at 0
     for i = 1, #video_tracks do
-        table.insert(initial_sizes, timeline_state.dimensions.default_track_height)
+        local source_index = #video_tracks - i + 1
+        local header_height = video_header_heights[source_index] or content_to_header(DEFAULT_TRACK_HEIGHT)
+        table.insert(initial_sizes, header_height)
     end
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(video_splitter, initial_sizes)
 
@@ -232,7 +260,7 @@ local function create_video_headers()
         -- Calculate total height needed for all video tracks
         local total_height = 0
         for _, track in ipairs(state.get_video_tracks()) do
-            total_height = total_height + state.get_track_height(track.id)
+            total_height = total_height + content_to_header(state.get_track_height(track.id))
         end
         print(string.format("  Setting video_splitter min height to %dpx", total_height))
         -- Set splitter minimum height to accommodate all tracks
@@ -241,11 +269,6 @@ local function create_video_headers()
     print("Registering video_splitter_moved handler...")
     qt_set_splitter_moved_handler(video_splitter, "video_splitter_moved")
     print("  Handler registered")
-
-    -- Initialize track heights in state (header height + handle height)
-    for _, track in ipairs(video_tracks) do
-        state.set_track_height(track.id, timeline_state.dimensions.default_track_height + SPLITTER_HANDLE_HEIGHT)
-    end
 
     -- Hide the handle above V3 (between stretch widget and V3) - handle index 0
     qt_hide_splitter_handle(video_splitter, 0)
@@ -263,16 +286,21 @@ local function create_audio_headers()
     local handler_name = "audio_splitter_event_" .. tostring(audio_splitter):gsub("[^%w]", "_")
 
     -- Add tracks in normal order (A1, A2, A3)
+    local audio_header_heights = {}
     for i, track in ipairs(audio_tracks) do
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
+        local track_height = clamp_track_height(state.get_track_height and state.get_track_height(track.id) or DEFAULT_TRACK_HEIGHT)
+        local header_height = content_to_header(track_height)
+
         qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.audio_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
-        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
-        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.default_track_height)
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
+        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
         audio_headers[i] = header
+        audio_header_heights[i] = header_height
     end
 
     -- Add stretch widget at bottom to push tracks up (A1 is anchor at top)
@@ -327,7 +355,7 @@ local function create_audio_headers()
             _G[this_handler_name] = function(event_type, y)
                 if event_type == "press" then
                     print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], 20)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], MIN_HEADER_HEIGHT)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], 16777215)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(audio_splitter)
@@ -336,16 +364,17 @@ local function create_audio_headers()
                     print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
                     -- Lock at exact height to prevent unwanted resizing during main boundary drag
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], new_height)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], new_height)
+                    local clamped_header = math.max(MIN_HEADER_HEIGHT, new_height)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], clamped_header)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], clamped_header)
                     -- Reset stretch factors: stretch widget absorbs, tracks fixed
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, #audio_tracks, 1)  -- Stretch widget
                     for i = 0, #audio_tracks - 1 do
                         qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, i, 0)  -- Tracks fixed
                     end
 
-                    -- Add handle height to track height so timeline renders track + handle space
-                    state.set_track_height(captured_track_id, new_height + SPLITTER_HANDLE_HEIGHT)
+                    local new_track_height = header_to_content(clamped_header)
+                    state.set_track_height(captured_track_id, new_track_height)
                 end
             end
             print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
@@ -357,7 +386,8 @@ local function create_audio_headers()
     -- Set initial sizes: tracks get their natural height, stretch widget gets 0
     local initial_sizes = {}
     for i = 1, #audio_tracks do
-        table.insert(initial_sizes, timeline_state.dimensions.default_track_height)
+        local header_height = audio_header_heights[i] or content_to_header(DEFAULT_TRACK_HEIGHT)
+        table.insert(initial_sizes, header_height)
     end
     table.insert(initial_sizes, 0)  -- Stretch widget starts at 0
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(audio_splitter, initial_sizes)
@@ -373,17 +403,12 @@ local function create_audio_headers()
         -- Calculate total height needed for all audio tracks
         local total_height = 0
         for _, track in ipairs(state.get_audio_tracks()) do
-            total_height = total_height + state.get_track_height(track.id)
+            total_height = total_height + content_to_header(state.get_track_height(track.id))
         end
         -- Set splitter minimum height to accommodate all tracks
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_splitter, total_height)
     end
     qt_set_splitter_moved_handler(audio_splitter, "audio_splitter_moved")
-
-    -- Initialize track heights in state (header height + handle height)
-    for _, track in ipairs(audio_tracks) do
-        state.set_track_height(track.id, timeline_state.dimensions.default_track_height + SPLITTER_HANDLE_HEIGHT)
-    end
 
     -- Hide the handle below A3 (between A3 and stretch widget) - last handle index
     qt_hide_splitter_handle(audio_splitter, #audio_tracks)

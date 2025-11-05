@@ -28,8 +28,8 @@ local on_selection_changed_callback = nil
 
 -- Dimensions (shared across all views)
 M.dimensions = {
-    default_track_height = ui_constants.TIMELINE.TRACK_HEIGHT,
-    track_height = ui_constants.TIMELINE.TRACK_HEIGHT,  -- Legacy field for unit tests expecting track_height
+    default_track_height = ui_constants.TIMELINE.TRACK_HEIGHT or 50,
+    track_height = ui_constants.TIMELINE.TRACK_HEIGHT or 50,  -- Legacy field for unit tests expecting track_height
     track_header_width = ui_constants.TIMELINE.TRACK_HEADER_WIDTH,
     ruler_height = ui_constants.TIMELINE.RULER_HEIGHT,  -- Height of the timeline ruler in pixels
 }
@@ -1373,7 +1373,8 @@ end
 function M.set_track_height(track_id, height)
     for _, track in ipairs(state.tracks) do
         if track.id == track_id then
-            track.height = height
+            local new_height = math.max(24, height or M.dimensions.default_track_height)
+            track.height = new_height
             notify_listeners()
             return true
         end

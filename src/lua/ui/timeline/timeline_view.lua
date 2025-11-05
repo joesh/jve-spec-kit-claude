@@ -37,6 +37,10 @@ function M.create(widget, state_module, track_filter_fn, options)
     }
 
     local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
+    local function get_track_visual_height(track_id)
+        local height = state_module.get_track_height and state_module.get_track_height(track_id) or state_module.dimensions.default_track_height
+        return math.max(0, height or 0)
+    end
 
     -- Filter tracks and cache result
     local function update_filtered_tracks()
@@ -52,7 +56,7 @@ function M.create(widget, state_module, track_filter_fn, options)
     local function update_widget_height()
         local total_height = 0
         for _, track in ipairs(view.filtered_tracks) do
-            local track_height = state_module.get_track_height(track.id)
+            local track_height = get_track_visual_height(track.id)
             total_height = total_height + track_height
         end
 
@@ -69,7 +73,7 @@ function M.create(widget, state_module, track_filter_fn, options)
             local y = widget_height
             for i = 0, track_index do
                 if view.filtered_tracks[i + 1] then
-                    local track_height = state_module.get_track_height(view.filtered_tracks[i + 1].id)
+                    local track_height = get_track_visual_height(view.filtered_tracks[i + 1].id)
                     y = y - track_height
                 end
             end
@@ -79,7 +83,7 @@ function M.create(widget, state_module, track_filter_fn, options)
             local y = 0
             for i = 0, track_index - 1 do
                 if view.filtered_tracks[i + 1] then
-                    local track_height = state_module.get_track_height(view.filtered_tracks[i + 1].id)
+                    local track_height = get_track_visual_height(view.filtered_tracks[i + 1].id)
                     y = y + track_height
                 end
             end
@@ -101,7 +105,7 @@ function M.create(widget, state_module, track_filter_fn, options)
     local function get_track_id_at_y(y, widget_height)
         for i, track in ipairs(view.filtered_tracks) do
             local track_y = get_track_y(i - 1, widget_height)
-            local track_height = state_module.get_track_height(track.id)
+            local track_height = get_track_visual_height(track.id)
             if y >= track_y and y < track_y + track_height then
                 return track.id
             end
@@ -229,7 +233,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         -- print(string.format("Rendering %d tracks (widget height: %d, viewport height: %d)", #view.filtered_tracks, height, height))
         for i, track in ipairs(view.filtered_tracks) do
             local y = get_track_y(i - 1, height)
-            local track_height = state_module.get_track_height(track.id)
+        local track_height = get_track_visual_height(track.id)
             state_module.debug_record_track_layout(view.debug_id, track.id, y, track_height)
             -- print(string.format("  Track %d (%s): y=%d height=%d", i, track.name, y, track_height))
 
@@ -337,7 +341,7 @@ end
             local y = get_track_y_by_id(render_track_id, height)
 
                 if y >= 0 then  -- Clip is on a track in this view
-                    local track_height = state_module.get_track_height(render_track_id or clip.track_id)
+                    local track_height = get_track_visual_height(render_track_id or clip.track_id)
                     local clip_start = clip.start_time + time_offset_ms
                     local clip_end = clip_start + clip.duration
                     local x = state_module.time_to_pixel(clip_start, width)
@@ -455,7 +459,7 @@ end
             for _, gap in ipairs(selected_gaps) do
                 local gap_track_y = get_track_y_by_id(gap.track_id, height)
                 if gap_track_y >= 0 then
-                    local track_height = state_module.get_track_height(gap.track_id)
+                    local track_height = get_track_visual_height(gap.track_id)
                     local gap_start_x = state_module.time_to_pixel(gap.start_time, width)
                     local gap_end_x = state_module.time_to_pixel(gap.start_time + gap.duration, width)
                     local gap_width = gap_end_x - gap_start_x
@@ -642,7 +646,7 @@ end
                         if clip.id == affected_clip.clip_id then
                             local y = get_track_y_by_id(clip.track_id, height)
                             if y >= 0 then
-                                local track_height = state_module.get_track_height(clip.track_id)
+                                local track_height = get_track_visual_height(clip.track_id)
                                 local x = state_module.time_to_pixel(affected_clip.new_start_time, width)
                                 y = y + 5
                                 local clip_width = math.floor((affected_clip.new_duration / viewport_duration) * width) - 1
@@ -667,7 +671,7 @@ end
                         if clip.id == shift_info.clip_id then
                             local y = get_track_y_by_id(clip.track_id, height)
                             if y >= 0 then
-                                local track_height = state_module.get_track_height(clip.track_id)
+                                local track_height = get_track_visual_height(clip.track_id)
                                 local x = state_module.time_to_pixel(shift_info.new_start_time, width)
                                 y = y + 5
                                 local clip_width = math.floor((clip.duration / viewport_duration) * width) - 1
@@ -724,7 +728,7 @@ end
                 local y = get_track_y_by_id(clip.track_id, height)
 
                 if y >= 0 then
-                    local track_height = state_module.get_track_height(clip.track_id)
+                    local track_height = get_track_visual_height(clip.track_id)
                     local x = state_module.time_to_pixel(new_start, width)
                     y = y + 5
                     local clip_width = math.floor((new_duration / viewport_duration) * width) - 1
@@ -818,7 +822,7 @@ end
                 local clip_y = get_track_y_by_id(edge_clip.track_id, height)
 
                 if clip_y >= 0 then  -- Clip is on a track in this view
-                    local track_height = state_module.get_track_height(edge_clip.track_id)
+                    local track_height = get_track_visual_height(edge_clip.track_id)
 
                     -- Apply drag offset to clip boundaries if this edge is being dragged
                     local edge_key = edge.clip_id .. ":" .. edge.edge_type
@@ -1022,7 +1026,7 @@ end
             for _, clip in ipairs(state_module.get_clips()) do
                 local clip_y = get_track_y_by_id(clip.track_id, height)
                 if clip_y >= 0 then
-                    local track_height = state_module.get_track_height(clip.track_id)
+                    local track_height = get_track_visual_height(clip.track_id)
                     local clip_height = track_height - 10
 
                     -- Check if Y is within track bounds (full track, not just clip height)
@@ -1175,7 +1179,7 @@ end
             for _, clip in ipairs(state_module.get_clips()) do
                 local clip_y = get_track_y_by_id(clip.track_id, height)
                 if clip_y >= 0 then
-                    local track_height = state_module.get_track_height(clip.track_id)
+                    local track_height = get_track_visual_height(clip.track_id)
                     local clip_x = state_module.time_to_pixel(clip.start_time, width)
                     local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
 
@@ -1499,7 +1503,7 @@ end
                 for _, clip in ipairs(state_module.get_clips()) do
                     local clip_y = get_track_y_by_id(clip.track_id, height)
                     if clip_y >= 0 then
-                        local track_height = state_module.get_track_height(clip.track_id)
+                        local track_height = get_track_visual_height(clip.track_id)
                         local clip_height = track_height - 10
 
                         if y >= clip_y + 5 and y <= clip_y + 5 + clip_height then
