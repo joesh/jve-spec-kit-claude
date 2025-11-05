@@ -16,6 +16,10 @@ local listeners = {}
 -- Batches rapid state changes to prevent excessive redraws
 local notify_timer = nil
 local NOTIFY_DEBOUNCE_MS = ui_constants.TIMELINE.NOTIFY_DEBOUNCE_MS
+local PERSIST_DEBOUNCE_MS = ui_constants.TIMELINE.PERSIST_DEBOUNCE_MS or 75
+
+local persist_timer = nil
+local persist_dirty = false
 
 -- Project browser reference (for media insertion)
 local project_browser = nil
@@ -1388,7 +1392,16 @@ function M.is_dragging_playhead()
 end
 
 function M.set_dragging_playhead(dragging)
-    state.dragging_playhead = dragging
+    local normalized = dragging and true or false
+    if state.dragging_playhead == normalized then
+        return
+    end
+
+    state.dragging_playhead = normalized
+
+    if not normalized and persist_dirty then
+        schedule_state_persist(true)
+    end
 end
 
 function M.get_dragging_clip()
@@ -1425,7 +1438,7 @@ function M.set_drag_selection_bounds(start_time, end_time, start_track, end_trac
 end
 
 --- Persist playhead and selection state to sequences table (for session restoration)
-function M.persist_state_to_db()
+local function flush_state_to_db()
     local db_conn = db.get_connection()
     if not db_conn then
         return
@@ -1478,6 +1491,37 @@ function M.persist_state_to_db()
         query:bind_value(7, state.mark_out_time)
         query:bind_value(8, sequence_id)
         query:exec()
+    end
+end
+
+local function schedule_state_persist(immediate)
+    persist_dirty = true
+
+    if immediate then
+        persist_dirty = false
+        flush_state_to_db()
+        return
+    end
+
+    if persist_timer then
+        return
+    end
+
+    persist_timer = qt_create_single_shot_timer(PERSIST_DEBOUNCE_MS, function()
+        persist_timer = nil
+        if not persist_dirty then
+            return
+        end
+        persist_dirty = false
+        flush_state_to_db()
+    end)
+end
+
+function M.persist_state_to_db(force)
+    if force == true then
+        schedule_state_persist(true)
+    else
+        schedule_state_persist(false)
     end
 end
 
