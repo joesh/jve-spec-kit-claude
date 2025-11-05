@@ -180,12 +180,15 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         file_id = nil,
         media_key = nil,
         track_id = track_id,
-        start_time = 0,
+        timeline_start = nil,
+        timeline_end = nil,
+        start_time = nil,
         duration = 0,
         source_in = 0,
         source_out = 0,
         enabled = true,
-        frame_rate = frame_rate
+        frame_rate = frame_rate,
+        raw_duration = nil
     }
 
     local children = collect_children(clipitem_node)
@@ -240,11 +243,15 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
                 end
                 clip_info.media = media_info
             end
+        elseif name == "duration" then
+            local raw_duration = parse_time(child:text(), clip_info.frame_rate)
+            if raw_duration and raw_duration > 0 then
+                clip_info.raw_duration = raw_duration
+            end
         elseif name == "start" then
-            clip_info.start_time = parse_time(child:text(), clip_info.frame_rate)
+            clip_info.timeline_start = parse_time(child:text(), clip_info.frame_rate)
         elseif name == "end" then
-            local end_time = parse_time(child:text(), clip_info.frame_rate)
-            clip_info.duration = end_time - clip_info.start_time
+            clip_info.timeline_end = parse_time(child:text(), clip_info.frame_rate)
         elseif name == "in" then
             clip_info.source_in = parse_time(child:text(), clip_info.frame_rate)
         elseif name == "out" then
@@ -256,6 +263,12 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
 
     if clip_info.duration <= 0 and clip_info.source_out > clip_info.source_in then
         clip_info.duration = clip_info.source_out - clip_info.source_in
+    end
+    if clip_info.duration <= 0 and clip_info.raw_duration and clip_info.raw_duration > 0 then
+        clip_info.duration = clip_info.raw_duration
+    end
+    if clip_info.duration <= 0 and clip_info.timeline_start and clip_info.timeline_end and clip_info.timeline_end > clip_info.timeline_start then
+        clip_info.duration = clip_info.timeline_end - clip_info.timeline_start
     end
 
     return clip_info
@@ -273,12 +286,82 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
         clips = {}
     }
 
+    local prev_end_time = nil
+
+    local function finalize_clip_timing(clip_info)
+        local start = clip_info.timeline_start
+        if start and start < 0 then
+            start = nil
+        end
+
+        local finish = clip_info.timeline_end
+        if finish and finish < 0 then
+            finish = nil
+        end
+
+        local duration = clip_info.duration
+        if duration and duration <= 0 then
+            duration = nil
+        end
+
+        if not duration and clip_info.source_out > clip_info.source_in then
+            duration = clip_info.source_out - clip_info.source_in
+            if duration <= 0 then
+                duration = nil
+            end
+        end
+
+        if not start and finish and duration then
+            start = finish - duration
+        end
+
+        if not finish and start and duration then
+            finish = start + duration
+        end
+
+        if not start and prev_end_time then
+            start = prev_end_time
+            if duration and not finish then
+                finish = start + duration
+            end
+        end
+
+        if not duration and start and finish then
+            duration = finish - start
+        end
+
+        if not start or not duration or duration <= 0 then
+            error(string.format(
+                "FCP7 XML importer: unable to determine timing for clip '%s'",
+                clip_info.name or clip_info.original_id or "<unnamed clip>"
+            ))
+        end
+
+        if not finish then
+            finish = start + duration
+        end
+
+        if finish < start then
+            error(string.format(
+                "FCP7 XML importer: invalid timing for clip '%s' (finish < start)",
+                clip_info.name or clip_info.original_id or "<unnamed clip>"
+            ))
+        end
+
+        clip_info.timeline_start = start
+        clip_info.timeline_end = finish
+        clip_info.start_time = start
+        clip_info.duration = duration
+        prev_end_time = finish
+    end
+
     local children = collect_children(track_node)
     for _, child in ipairs(children) do
         if child:name() == "clipitem" then
             -- Generate track ID (will be created in database)
             local track_id = string.format("%s%d", track_type:sub(1,1):lower(), track_index)
             local clip = parse_clipitem(child, frame_rate, track_id, sequence_info)
+            finalize_clip_timing(clip)
             table.insert(track_info.clips, clip)
         elseif child:name() == "enabled" then
             track_info.enabled = (child:text():upper() == "TRUE")
