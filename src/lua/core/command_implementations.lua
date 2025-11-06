@@ -2372,6 +2372,27 @@ command_executors["MoveClipToTrack"] = function(command)
         return false
     end
 
+    local update = {
+        clip_id = clip.id,
+        track_id = clip.track_id,
+        track_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
+        start_time = clip.start_time,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out
+    }
+
+    local sink = command.__timeline_update_sink
+    if type(sink) == "table" then
+        table.insert(sink, update)
+    else
+        local timeline_state = require('ui.timeline.timeline_state')
+        if timeline_state and timeline_state._internal_apply_clip_updates then
+            timeline_state._internal_apply_clip_updates({update})
+            command.__skip_timeline_reload = true
+        end
+    end
+
     print(string.format("✅ Moved clip %s to track %s", clip_id, target_track_id))
     return true
 end
@@ -3117,6 +3138,27 @@ command_executors["UndoMoveClipToTrack"] = function(command)
         return false
     end
 
+    local update = {
+        clip_id = clip.id,
+        track_id = clip.track_id,
+        track_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
+        start_time = clip.start_time,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out
+    }
+
+    local sink = command.__timeline_update_sink
+    if type(sink) == "table" then
+        table.insert(sink, update)
+    else
+        local timeline_state = require('ui.timeline.timeline_state')
+        if timeline_state and timeline_state._internal_apply_clip_updates then
+            timeline_state._internal_apply_clip_updates({update})
+            command.__skip_timeline_reload = true
+        end
+    end
+
     print(string.format("✅ Restored clip %s to original track %s", clip_id, original_track_id))
     return true
 end
@@ -3135,6 +3177,46 @@ command_executors["Nudge"] = function(command)
 
     -- Determine what we're nudging
     local nudge_type = "none"
+    local updates_by_clip = {}
+
+    local function register_update(clip)
+        if not clip or not clip.id then
+            return
+        end
+        updates_by_clip[clip.id] = {
+            clip_id = clip.id,
+            track_id = clip.track_id,
+            track_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
+            start_time = clip.start_time,
+            duration = clip.duration,
+            source_in = clip.source_in,
+            source_out = clip.source_out
+        }
+    end
+
+    local function apply_updates_if_needed()
+        if next(updates_by_clip) == nil then
+            return
+        end
+
+        local updates = {}
+        for _, update in pairs(updates_by_clip) do
+            table.insert(updates, update)
+        end
+
+        local sink = command.__timeline_update_sink
+        if type(sink) == "table" then
+            for _, update in ipairs(updates) do
+                table.insert(sink, update)
+            end
+        else
+            local timeline_state = require('ui.timeline.timeline_state')
+            if timeline_state and timeline_state._internal_apply_clip_updates then
+                timeline_state._internal_apply_clip_updates(updates)
+                command.__skip_timeline_reload = true
+            end
+        end
+    end
 
     if selected_edges and #selected_edges > 0 then
         nudge_type = "edges"
@@ -3175,6 +3257,7 @@ command_executors["Nudge"] = function(command)
                     print(string.format("ERROR: Nudge: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
                     return false
                 end
+                register_update(clip)
             end
 
             ::continue::
@@ -3268,6 +3351,7 @@ command_executors["Nudge"] = function(command)
             end
 
             pending_moves[clip.id] = nil
+            register_update(clip)
         end
 
         -- Count total clips moved
@@ -3290,6 +3374,8 @@ command_executors["Nudge"] = function(command)
 
     -- Store what we nudged for undo
     command:set_parameter("nudge_type", nudge_type)
+
+    apply_updates_if_needed()
 
     return true
 end

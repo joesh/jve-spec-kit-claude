@@ -1283,13 +1283,21 @@ function M.detect_roll_between_clips(clip1, clip2, click_x, viewport_width)
     if not clip1 or not clip2 then return false end
 
     local ROLL_ZONE_PX = ui_constants.TIMELINE.ROLL_ZONE_PX
+    local EDGE_ZONE_PX = ui_constants.TIMELINE.EDGE_ZONE_PX or 0
     local gap_start_x = M.time_to_pixel(clip1.start_time + clip1.duration, viewport_width)
     local gap_end_x = M.time_to_pixel(clip2.start_time, viewport_width)
 
     -- If clips are adjacent or close enough, check if click is near the edit point
     if gap_end_x - gap_start_x < ROLL_ZONE_PX then
         local edit_point_x = (gap_start_x + gap_end_x) / 2
-        if math.abs(click_x - edit_point_x) <= ROLL_ZONE_PX / 2 then
+        local half_roll_zone = ROLL_ZONE_PX / 2
+        if EDGE_ZONE_PX and EDGE_ZONE_PX > 0 then
+            half_roll_zone = math.min(half_roll_zone, EDGE_ZONE_PX / 2)
+        end
+        if half_roll_zone < 1 then
+            half_roll_zone = 1
+        end
+        if math.abs(click_x - edit_point_x) <= half_roll_zone then
             return true
         end
     end
@@ -1335,6 +1343,104 @@ function M._internal_remove_clip_from_command(clip_id)
             return
         end
     end
+end
+
+function M._internal_apply_clip_updates(updates)
+    if not updates or #updates == 0 then
+        return
+    end
+
+    local clip_lookup = nil
+    local function find_clip(clip_id)
+        if not clip_lookup then
+            clip_lookup = {}
+            for _, clip in ipairs(state.clips) do
+                clip_lookup[clip.id] = clip
+            end
+        end
+        return clip_lookup[clip_id]
+    end
+
+    local changed = false
+    local needs_resort = false
+    for _, update in ipairs(updates) do
+        local clip_id = update.clip_id or update.id
+        if clip_id then
+            local clip = find_clip(clip_id)
+            if not clip then
+                M.reload_clips(state.sequence_id)
+                return
+            end
+
+            if update.track_id and update.track_id ~= clip.track_id then
+                clip.track_id = update.track_id
+                clip.track_sequence_id = update.track_sequence_id or clip.track_sequence_id
+                needs_resort = true
+                changed = true
+            end
+
+            if update.start_time and update.start_time ~= clip.start_time then
+                clip.start_time = update.start_time
+                needs_resort = true
+                changed = true
+            end
+
+            if update.duration and update.duration ~= clip.duration then
+                clip.duration = update.duration
+                changed = true
+            end
+
+            if update.source_in and update.source_in ~= clip.source_in then
+                clip.source_in = update.source_in
+                changed = true
+            end
+
+            if update.source_out and update.source_out ~= clip.source_out then
+                clip.source_out = update.source_out
+                changed = true
+            end
+        end
+    end
+
+    if not changed then
+        return
+    end
+
+    state_version = state_version + 1
+
+    if needs_resort then
+        local track_order = {}
+        for index, track in ipairs(state.tracks) do
+            track_order[track.id] = index
+        end
+
+        table.sort(state.clips, function(a, b)
+            local ta = track_order[a.track_id] or math.huge
+            local tb = track_order[b.track_id] or math.huge
+            if ta == tb then
+                local sa = a.start_time or 0
+                local sb = b.start_time or 0
+                if sa == sb then
+                    return (a.id or "") < (b.id or "")
+                end
+                return sa < sb
+            end
+            return ta < tb
+        end)
+    end
+
+    if clip_lookup and #state.selected_clips > 0 then
+        local refreshed = {}
+        for _, selected in ipairs(state.selected_clips) do
+            local clip = clip_lookup[selected.id]
+            if clip then
+                table.insert(refreshed, clip)
+            end
+        end
+        state.selected_clips = refreshed
+    end
+
+    notify_listeners()
 end
 
 function M.update_clip(clip_id, updates)

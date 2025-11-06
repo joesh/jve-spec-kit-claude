@@ -156,6 +156,80 @@ function M.create(widget, state_module, track_filter_fn, options)
         return nil
     end
 
+    local function normalize_edge_type(edge_type)
+        if edge_type == "gap_after" then
+            return "out"
+        elseif edge_type == "gap_before" then
+            return "in"
+        end
+        return edge_type
+    end
+
+    local function find_best_roll_pair(entries, x, width)
+        if not entries or #entries < 2 then
+            return nil, nil, math.huge
+        end
+
+        local best_selection = nil
+        local best_pair = nil
+        local best_score = math.huge
+
+        for i = 1, #entries do
+            local first = entries[i]
+            local clip_a = first.clip
+            local norm_a = normalize_edge_type(first.edge)
+            if clip_a and norm_a and (norm_a == "in" or norm_a == "out") then
+                for j = i + 1, #entries do
+                    local second = entries[j]
+                    local clip_b = second.clip
+                    local norm_b = normalize_edge_type(second.edge)
+                    if clip_b and norm_b and clip_a.track_id == clip_b.track_id and clip_a.id ~= clip_b.id then
+                        local left_clip, right_clip = nil, nil
+                        local left_distance, right_distance = nil, nil
+
+                        if norm_a == "out" and norm_b == "in" then
+                            left_clip = clip_a
+                            right_clip = clip_b
+                            left_distance = first.distance
+                            right_distance = second.distance
+                        elseif norm_a == "in" and norm_b == "out" then
+                            left_clip = clip_b
+                            right_clip = clip_a
+                            left_distance = second.distance
+                            right_distance = first.distance
+                        end
+
+                        if left_clip and right_clip then
+                            if left_clip.start_time > right_clip.start_time then
+                                left_clip, right_clip = right_clip, left_clip
+                                left_distance, right_distance = right_distance, left_distance
+                            end
+
+                            if state_module.detect_roll_between_clips(left_clip, right_clip, x, width) then
+                                local score = math.max(left_distance or 0, right_distance or 0)
+                                if score < best_score then
+                                    best_score = score
+                                    best_selection = {
+                                        {clip_id = left_clip.id, edge_type = "out", trim_type = "roll"},
+                                        {clip_id = right_clip.id, edge_type = "in", trim_type = "roll"}
+                                    }
+                                    best_pair = {
+                                        left_clip = left_clip,
+                                        right_clip = right_clip,
+                                        left_edge_type = "out",
+                                        right_edge_type = "in"
+                                    }
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        return best_selection, best_pair, best_score
+    end
+
     -- Convert local track index to global track index
     local function local_to_global_track_index(local_index)
         if local_index >= 0 and local_index < #view.filtered_tracks then
@@ -592,7 +666,8 @@ end
                 ripple_cmd:set_parameter("edge_info", {
                     clip_id = edge.clip_id,
                     edge_type = edge.edge_type,
-                    track_id = edge.track_id
+                    track_id = edge.track_id,
+                    trim_type = edge.trim_type
                 })
                 ripple_cmd:set_parameter("delta_ms", edge_drag_offset_ms)
                 ripple_cmd:set_parameter("sequence_id", sequence_id)
@@ -619,7 +694,8 @@ end
                     table.insert(edge_infos, {
                         clip_id = edge.clip_id,
                         edge_type = edge.edge_type,
-                        track_id = edge.track_id
+                        track_id = edge.track_id,
+                        trim_type = edge.trim_type
                     })
                 end
 
@@ -1019,6 +1095,8 @@ end
             --   4. Click in middle of clip → no edge selection (future: select clip body for dragging)
 
             local EDGE_ZONE = ui_constants.TIMELINE.EDGE_ZONE_PX
+            local ROLL_ZONE = ui_constants.TIMELINE.ROLL_ZONE_PX or (EDGE_ZONE * 2)
+            local EDGE_DETECTION_THRESHOLD = EDGE_ZONE
             local EDIT_POINT_ZONE = ui_constants.TIMELINE.EDIT_POINT_ZONE
             local clips_at_position = {}
 
@@ -1037,7 +1115,7 @@ end
 
                         -- Left edge: distinguish between clip's in-point and gap's out-point
                         local dist_from_left = math.abs(x - clip_x)
-                        if dist_from_left <= EDGE_ZONE then
+                        if dist_from_left <= EDGE_DETECTION_THRESHOLD then
                             local inside_clip = x >= clip_x
                             table.insert(clips_at_position, {
                                 clip = clip,
@@ -1048,7 +1126,7 @@ end
 
                         -- Right edge: distinguish between clip's out-point and gap's in-point
                         local dist_from_right = math.abs(x - clip_end_x)
-                        if dist_from_right <= EDGE_ZONE then
+                        if dist_from_right <= EDGE_DETECTION_THRESHOLD then
                             local inside_clip = x <= clip_end_x
                             table.insert(clips_at_position, {
                                 clip = clip,
@@ -1069,20 +1147,26 @@ end
 
             -- Second pass: determine what to select or drag based on detected edges
             if #clips_at_position > 0 then
-                -- Check if any detected edge is already selected
+                -- Check selection state
                 local selected_edges = state_module.get_selected_edges()
-                local clicking_selected_edge = false
+                local closest_edge = clips_at_position[1]
                 for _, edge_info in ipairs(clips_at_position) do
-                    for _, selected in ipairs(selected_edges) do
-                        if selected.clip_id == edge_info.clip.id and selected.edge_type == edge_info.edge then
-                            clicking_selected_edge = true
-                            break
-                        end
+                    if edge_info.distance < closest_edge.distance then
+                        closest_edge = edge_info
                     end
-                    if clicking_selected_edge then break end
                 end
 
-                if clicking_selected_edge then
+                local clicked_is_selected = false
+                for _, selected in ipairs(selected_edges) do
+                    if selected.clip_id == closest_edge.clip.id and selected.edge_type == closest_edge.edge then
+                        clicked_is_selected = true
+                        break
+                    end
+                end
+
+                local use_direct_selection = not (modifiers and modifiers.command) or #selected_edges == 0
+
+                if not use_direct_selection and clicked_is_selected then
                     -- Clicking on selected edge
                     view.pending_gap_click = nil
                     if modifiers and modifiers.command then
@@ -1131,15 +1215,48 @@ end
                         return
                     end
                 else
-                    -- Clicking unselected edge - select it
+                    -- Clicking unselected edge OR we want fresh selection regardless
                     view.pending_gap_click = nil
                     if not (modifiers and modifiers.command) then
                         -- Without Cmd key, clear previous edge selection
                         state_module.clear_edge_selection()
-                        -- Select only the CLOSEST edge (for ripple edit)
-                        -- If you want to select both edges for roll edit, use Cmd+click
-                        if #clips_at_position > 0 then
-                            -- Find closest edge
+
+                        local function normalize_edge_type(name)
+                            if name == "gap_after" then
+                                return "in"
+                            elseif name == "gap_before" then
+                                return "out"
+                            end
+                            return name
+                        end
+
+                        local best_roll_selection, best_roll_pair = find_best_roll_pair(clips_at_position, x, width)
+
+                        if best_roll_selection and best_roll_pair then
+                            local roll_zone_px = ui_constants.TIMELINE.ROLL_ZONE_PX or (EDGE_ZONE * 2)
+                            if roll_zone_px < EDGE_ZONE then
+                                roll_zone_px = EDGE_ZONE
+                            end
+                            local half_roll_zone = roll_zone_px / 2
+                            local edit_time = best_roll_pair.left_clip.start_time + best_roll_pair.left_clip.duration
+                            local edit_x = state_module.time_to_pixel(edit_time, width)
+
+                            if edit_x and math.abs(x - edit_x) <= half_roll_zone then
+                                state_module.set_edge_selection(best_roll_selection)
+                            else
+                                local target_edge_clip_id
+                                local target_edge_type
+                                if not edit_x or x < edit_x then
+                                    target_edge_clip_id = best_roll_pair.left_clip.id
+                                    target_edge_type = best_roll_pair.left_edge_type
+                                else
+                                    target_edge_clip_id = best_roll_pair.right_clip.id
+                                    target_edge_type = best_roll_pair.right_edge_type
+                                end
+                                state_module.toggle_edge_selection(target_edge_clip_id, target_edge_type, "ripple")
+                            end
+                        elseif #clips_at_position > 0 then
+                            -- Select only the CLOSEST edge (ripple trim)
                             local closest = clips_at_position[1]
                             for _, edge_info in ipairs(clips_at_position) do
                                 if edge_info.distance < closest.distance then
@@ -1151,7 +1268,7 @@ end
                     else
                         -- With Cmd key, add all edges to selection (for multi-edge operations)
                         for _, edge_info in ipairs(clips_at_position) do
-                            state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, "ripple")
+                            state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, edge_info.trim_type or "ripple")
                         end
                     end
 
@@ -1495,6 +1612,8 @@ end
             else
                 -- Update cursor based on what's under the mouse
                 local EDGE_ZONE = ui_constants.TIMELINE.EDGE_ZONE_PX
+                local ROLL_ZONE = ui_constants.TIMELINE.ROLL_ZONE_PX or (EDGE_ZONE * 2)
+                local EDGE_DETECTION_THRESHOLD = EDGE_ZONE
                 local EDIT_POINT_ZONE = ui_constants.TIMELINE.EDIT_POINT_ZONE
                 local cursor_type = "arrow"  -- Default
                 local clips_at_position = {}
@@ -1513,14 +1632,16 @@ end
                             local dist_from_left = math.abs(x - clip_x)
                             local dist_from_right = math.abs(x - (clip_x + clip_width))
 
-                            if dist_from_left <= EDGE_ZONE then
+                            if dist_from_left <= EDGE_DETECTION_THRESHOLD then
                                 table.insert(clips_at_position, {
+                                    clip = clip,
                                     edge = "in",
                                     distance = dist_from_left
                                 })
                             end
-                            if dist_from_right <= EDGE_ZONE then
+                            if dist_from_right <= EDGE_DETECTION_THRESHOLD then
                                 table.insert(clips_at_position, {
+                                    clip = clip,
                                     edge = "out",
                                     distance = dist_from_right
                                 })
@@ -1530,18 +1651,35 @@ end
                 end
 
                 -- Determine cursor based on edge proximity
-                if #clips_at_position == 2 then
-                    -- Two edges detected - check if it's an edit point
-                    local max_distance = math.max(clips_at_position[1].distance, clips_at_position[2].distance)
-                    if max_distance <= EDIT_POINT_ZONE then
-                        cursor_type = "split_h"  -- Edit point: ][ uses split cursor
-                    else
-                        -- Select closest edge only
-                        local closest = clips_at_position[1]
-                        if clips_at_position[2].distance < closest.distance then
-                            closest = clips_at_position[2]
+                if #clips_at_position >= 2 then
+                    local best_selection, best_pair, best_score = find_best_roll_pair(clips_at_position, x, width)
+                    if best_selection and best_pair then
+                        local roll_zone_px = ui_constants.TIMELINE.ROLL_ZONE_PX or (EDGE_ZONE * 2)
+                        if roll_zone_px <= 0 then
+                            roll_zone_px = EDGE_ZONE * 2
                         end
-                        -- Single edge cursor
+                        local half_roll_zone = roll_zone_px / 2
+                        if half_roll_zone < 1 then
+                            half_roll_zone = 1
+                        end
+                        half_roll_zone = math.min(half_roll_zone, EDGE_ZONE / 2)
+                        local edit_time = best_pair.left_clip.start_time + best_pair.left_clip.duration
+                        local edit_x = state_module.time_to_pixel(edit_time, width)
+                        if edit_x and math.abs(x - edit_x) <= half_roll_zone then
+                            cursor_type = "split_h"
+                        elseif not edit_x or x < edit_x then
+                            cursor_type = "size_horz"
+                        else
+                            cursor_type = "size_all"
+                        end
+                    else
+                        -- Fallback to individual edge detection
+                        local closest = clips_at_position[1]
+                        for i = 2, #clips_at_position do
+                            if clips_at_position[i].distance < closest.distance then
+                                closest = clips_at_position[i]
+                            end
+                        end
                         cursor_type = "size_horz"
                     end
                 elseif #clips_at_position == 1 then
@@ -1885,7 +2023,8 @@ end
                             table.insert(edge_infos, {
                                 clip_id = edge.clip_id,
                                 edge_type = edge.edge_type,
-                                track_id = clip.track_id
+                                track_id = clip.track_id,
+                                trim_type = edge.trim_type
                             })
                         else
                             print(string.format("WARNING: Drag release - clip %s not found for edge %s",
