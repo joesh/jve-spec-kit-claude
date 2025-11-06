@@ -303,6 +303,31 @@ set_target_properties(test_scriptable_timeline_widget PROPERTIES
 )
 add_test(NAME test_scriptable_timeline_widget COMMAND test_scriptable_timeline_widget)
 
+add_executable(test_project_browser_widget
+    tests/unit/test_project_browser_rename.cpp
+)
+target_link_libraries(test_project_browser_widget
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Gui
+    Qt6::Sql
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_project_browser_widget PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_project_browser_widget PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_project_browser_widget PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_project_browser_widget COMMAND test_project_browser_widget)
+
 add_custom_target(lua_tests ALL
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

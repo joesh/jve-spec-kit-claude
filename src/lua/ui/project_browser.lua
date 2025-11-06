@@ -8,6 +8,7 @@ local ui_constants = require("core.ui_constants")
 local focus_manager = require("ui.focus_manager")
 local command_manager = require("core.command_manager")
 local command_scope = require("core.command_scope")
+local Command = require("command")
 local browser_state = require("ui.project_browser.browser_state")
 local frame_utils = require("core.frame_utils")
 local qt_constants = require("core.qt_constants")
@@ -18,8 +19,10 @@ local REFRESH_COMMANDS = {
     ImportMedia = true,
     ImportFCP7XML = true,
     DeleteMasterClip = true,
+    DeleteSequence = true,
     ImportResolveProject = true,
     ImportResolveDatabase = true,
+    RenameItem = true,
 }
 
 local command_listener_registered = false
@@ -58,12 +61,207 @@ local function register_handler(callback)
     return name
 end
 
+local function trim(value)
+    if type(value) ~= "string" then
+        return ""
+    end
+    local stripped = value:match("^%s*(.-)%s*$")
+    if stripped == nil then
+        return ""
+    end
+    return stripped
+end
+
+local function finalize_pending_rename(new_name)
+    local pending = M.pending_rename
+    if not pending then
+        return
+    end
+
+    if qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE then
+        qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE(M.tree, pending.tree_id, false)
+    end
+
+    local trimmed_name = trim(new_name or "")
+    if trimmed_name == "" then
+        if qt_constants.CONTROL.SET_TREE_ITEM_TEXT then
+            qt_constants.CONTROL.SET_TREE_ITEM_TEXT(M.tree, pending.tree_id, pending.original_name or "", 0)
+        end
+        pending.preview_name = nil
+        M.pending_rename = nil
+        return
+    end
+
+    if trimmed_name == (pending.original_name or "") then
+        pending.preview_name = nil
+        M.pending_rename = nil
+        return
+    end
+
+    local project_id = M.project_id or db.get_current_project_id()
+    local cmd = Command.create("RenameItem", project_id)
+    cmd:set_parameter("project_id", project_id)
+    cmd:set_parameter("target_type", pending.target_type)
+    cmd:set_parameter("target_id", pending.target_id)
+    cmd:set_parameter("new_name", trimmed_name)
+    cmd:set_parameter("previous_name", pending.original_name)
+
+    local result = command_manager.execute(cmd)
+    if result and result.success then
+        print(string.format("RenameItem executed for %s → %s", tostring(pending.target_id), trimmed_name))
+    else
+        print(string.format("RenameItem failed for %s → %s (%s)", tostring(pending.target_id), trimmed_name, result and result.error_message or "unknown error"))
+        if qt_constants.CONTROL.SET_TREE_ITEM_TEXT then
+            qt_constants.CONTROL.SET_TREE_ITEM_TEXT(M.tree, pending.tree_id, pending.original_name or "", 0)
+        end
+        M.pending_rename = nil
+        return
+    end
+
+    local info = M.item_lookup and M.item_lookup[tostring(pending.tree_id)]
+    if info then
+        info.name = trimmed_name
+        info.display_name = trimmed_name
+    end
+
+    if pending.target_type == "master_clip" then
+        local clip = M.master_clip_map and M.master_clip_map[pending.target_id]
+        if clip then
+            clip.name = trimmed_name
+        end
+    elseif pending.target_type == "sequence" then
+        local seq = M.sequence_map and M.sequence_map[pending.target_id]
+        if seq then
+            seq.name = trimmed_name
+        end
+    elseif pending.target_type == "bin" then
+        local bin = M.bin_map and M.bin_map[pending.target_id]
+        if bin then
+            bin.name = trimmed_name
+        end
+    end
+
+    if M.selected_item and M.selected_item.tree_id == pending.tree_id then
+        M.selected_item.name = trimmed_name
+        M.selected_item.display_name = trimmed_name
+    end
+    if M.selected_items then
+        for _, item in ipairs(M.selected_items) do
+            if item.tree_id == pending.tree_id then
+                item.name = trimmed_name
+                item.display_name = trimmed_name
+            end
+        end
+    end
+
+    if pending.target_type ~= "bin" then
+        browser_state.update_selection(M.selected_items or {}, {
+            master_lookup = M.master_clip_map,
+            media_lookup = M.media_map,
+            sequence_lookup = M.sequence_map,
+            project_id = M.project_id
+        })
+    end
+
+    local ok_state, timeline_state = pcall(require, 'ui.timeline.timeline_state')
+    if ok_state and timeline_state then
+        if pending.target_type == "master_clip" then
+            if timeline_state.get_sequence_id and timeline_state.reload_clips then
+                local active_sequence_id = timeline_state.get_sequence_id()
+                if active_sequence_id and active_sequence_id ~= "" then
+                    timeline_state.reload_clips(active_sequence_id)
+                end
+            end
+        elseif pending.target_type == "sequence" then
+            if timeline_state.reload_clips then
+                timeline_state.reload_clips(pending.target_id)
+            end
+        end
+    end
+
+    pending.preview_name = nil
+    M.pending_rename = nil
+end
+
+M._test_finalize_pending_rename = finalize_pending_rename
+
+local function handle_tree_editor_closed(event)
+    if not M.pending_rename then
+        return
+    end
+
+    print(string.format("Rename close event: item=%s accepted=%s text=%s",
+        tostring(event and event.item_id), tostring(event and event.accepted), tostring(event and event.text)))
+
+    local pending = M.pending_rename
+    if event and event.item_id and event.item_id ~= pending.tree_id then
+        return
+    end
+
+    if event and event.accepted == false then
+        if qt_constants.CONTROL.SET_TREE_ITEM_TEXT then
+            qt_constants.CONTROL.SET_TREE_ITEM_TEXT(M.tree, pending.tree_id, pending.original_name or "", 0)
+        end
+        M.pending_rename = nil
+        return
+    end
+
+    local new_text = (event and event.text) or pending.preview_name or pending.original_name
+    M.ignore_tree_item_change = true
+    finalize_pending_rename(new_text)
+    M.ignore_tree_item_change = false
+end
+
+local function handle_tree_item_changed(event)
+    if M.ignore_tree_item_change then
+        return
+    end
+
+    local pending = M.pending_rename
+    if not pending or type(event) ~= "table" then
+        return
+    end
+
+    print(string.format("Rename change event: item=%s column=%s text=%s pending_tree=%s",
+        tostring(event.item_id), tostring(event.column), tostring(event.text), tostring(pending.tree_id)))
+    if event.item_id ~= pending.tree_id then
+        return
+    end
+
+    if event.column and event.column ~= 0 then
+        return
+    end
+
+    M.ignore_tree_item_change = true
+    local new_name = trim(event.text or "")
+    if new_name == "" then
+        if qt_constants.CONTROL.SET_TREE_ITEM_TEXT then
+            qt_constants.CONTROL.SET_TREE_ITEM_TEXT(M.tree, pending.tree_id, pending.original_name or "", 0)
+        end
+        M.ignore_tree_item_change = false
+        return
+    end
+
+    if new_name == (pending.original_name or "") then
+        M.ignore_tree_item_change = false
+        return
+    end
+
+    pending.preview_name = new_name
+    M.ignore_tree_item_change = false
+end
+
 M.item_lookup = {}
 M.media_map = {}
 M.master_clip_map = {}
 M.sequence_map = {}
+M.bin_map = {}
+M.bin_tree_map = {}
+M.bins = {}
 M.selected_item = nil
 M.selected_items = {}
+M.pending_rename = nil
+M.ignore_tree_item_change = false
 M.project_id = nil
 M.viewer_panel = nil
 M.inspector_view = nil
@@ -137,6 +335,7 @@ local function store_tree_item(tree, tree_id, info)
     if not tree_id or not info then
         return
     end
+    info.tree_id = tree_id
     local ok, encoded = pcall(qt_json_encode, info)
     if ok and qt_constants.CONTROL.SET_TREE_ITEM_DATA then
         qt_constants.CONTROL.SET_TREE_ITEM_DATA(tree, tree_id, encoded)
@@ -215,13 +414,19 @@ local function populate_tree()
     M.media_map = {}
     M.master_clip_map = {}
     M.sequence_map = {}
+    M.bin_map = {}
+    M.bin_tree_map = {}
+    M.bins = {}
     M.selected_item = nil
     M.selected_items = {}
+    M.pending_rename = nil
+    M.ignore_tree_item_change = false
 
     local project_id = M.project_id or db.get_current_project_id()
     M.project_id = project_id
 
     local bins = db.load_bins()
+    M.bins = bins
     local media_items = db.load_media()
     local master_clips = db.load_master_clips(project_id)
     local sequences = db.load_sequences(project_id)
@@ -266,6 +471,11 @@ local function populate_tree()
     local bin_path_lookup = {}
     for _, bin in ipairs(bins) do
         bin_path_lookup[build_bin_path(bin)] = bin.id
+        M.bin_map[bin.id] = {
+            id = bin.id,
+            name = bin.name,
+            parent_id = bin.parent_id
+        }
     end
 
     local function add_bin(bin, parent_id)
@@ -276,11 +486,19 @@ local function populate_tree()
         else
             tree_id = qt_constants.CONTROL.ADD_TREE_ITEM(M.tree, {display_name, "", "", "", "", ""})
         end
-        store_tree_item(M.tree, tree_id, {type = "bin", id = bin.id})
+        store_tree_item(M.tree, tree_id, {
+            type = "bin",
+            id = bin.id,
+            name = bin.name,
+            parent_id = bin.parent_id
+        })
         if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "bin")
         end
         bin_tree_map[bin.id] = tree_id
+        if M.bin_map[bin.id] then
+            M.bin_map[bin.id].tree_id = tree_id
+        end
         return tree_id
     end
 
@@ -385,6 +603,7 @@ local function populate_tree()
             clip_id = clip.clip_id,
             media_id = clip.media_id,
             sequence_id = clip.source_sequence_id,
+            bin_id = clip.bin_id,
             name = clip.name or media.name or clip.clip_id,
             file_path = clip.file_path or media.file_path,
             duration = duration_ms,
@@ -404,6 +623,7 @@ local function populate_tree()
 
     -- Root master clips
     for _, clip in ipairs(master_clips) do
+        clip.bin_id = nil
         local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
         local bin_tag = get_bin_tag(media)
         if not bin_tag then
@@ -418,6 +638,7 @@ local function populate_tree()
         if bin_tag then
             local bin_id = bin_path_lookup[bin_tag]
             local parent_tree = bin_id and bin_tree_map[bin_id]
+            clip.bin_id = bin_id
             if parent_tree then
                 add_master_clip_item(parent_tree, clip)
             else
@@ -448,6 +669,14 @@ local function populate_tree()
                     local info = M.item_lookup and M.item_lookup[tostring(clip.tree_id)]
                     if info then
                         table.insert(matches, {tree_id = clip.tree_id, info = info})
+                    end
+                end
+            elseif prev.type == "bin" then
+                local bin = M.bin_map[prev.id]
+                if bin and bin.tree_id then
+                    local info = M.item_lookup and M.item_lookup[tostring(bin.tree_id)]
+                    if info then
+                        table.insert(matches, {tree_id = bin.tree_id, info = info})
                     end
                 end
             end
@@ -498,6 +727,8 @@ local function populate_tree()
     end
 
     restore_previous_selection_from_cache(previous_selection)
+
+    M.bin_tree_map = bin_tree_map
 end
 
 -- Create project browser widget
@@ -649,6 +880,22 @@ function M.create()
         M.selected_items = collected
         M.selected_item = collected[1]
 
+        if M.pending_rename and qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE then
+            local rename_tree_id = M.pending_rename.tree_id
+            local still_selected = false
+            for _, info in ipairs(collected) do
+                if info.tree_id == rename_tree_id then
+                    still_selected = true
+                    break
+                end
+            end
+
+            if not still_selected then
+                qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE(M.tree, rename_tree_id, false)
+                M.pending_rename = nil
+            end
+        end
+
         browser_state.update_selection(collected, {
             master_lookup = M.master_clip_map,
             media_lookup = M.media_map,
@@ -666,6 +913,20 @@ function M.create()
     end)
     if qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER then
         qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER(tree, selection_handler)
+    end
+
+    local changed_handler = register_handler(function(event)
+        handle_tree_item_changed(event)
+    end)
+    if qt_constants.CONTROL.SET_TREE_ITEM_CHANGED_HANDLER then
+        qt_constants.CONTROL.SET_TREE_ITEM_CHANGED_HANDLER(tree, changed_handler)
+    end
+
+    local close_handler = register_handler(function(event)
+        handle_tree_editor_closed(event)
+    end)
+    if qt_constants.CONTROL.SET_TREE_CLOSE_EDITOR_HANDLER then
+        qt_constants.CONTROL.SET_TREE_CLOSE_EDITOR_HANDLER(tree, close_handler)
     end
 
     local double_click_handler = register_handler(function(event)
@@ -833,7 +1094,10 @@ function M.delete_selected_items()
 
     local Command = require("command")
     local deleted = 0
+    local clip_failures = 0
+    local sequence_failures = 0
 
+    local handled_sequences = {}
     for _, item in ipairs(M.selected_items) do
         if item.type == "master_clip" and item.clip_id then
             local clip = M.master_clip_map[item.clip_id]
@@ -846,7 +1110,30 @@ function M.delete_selected_items()
                     deleted = deleted + 1
                 else
                     print(string.format("⚠️  Delete master clip failed: %s", result and result.error_message or "unknown error"))
+                    clip_failures = clip_failures + 1
                 end
+            end
+        elseif item.type == "timeline" and item.id then
+            local sequence_id = item.id
+            if not handled_sequences[sequence_id] then
+                handled_sequences[sequence_id] = true
+                if sequence_id == "default_sequence" then
+                    sequence_failures = sequence_failures + 1
+                    print("⚠️  Delete sequence default_sequence skipped: primary timeline cannot be removed")
+                    goto continue_delete_loop
+                end
+
+                local project_id = M.project_id or "default_project"
+                local cmd = Command.create("DeleteSequence", project_id)
+                cmd:set_parameter("sequence_id", sequence_id)
+                local result = command_manager.execute(cmd)
+                if result and result.success then
+                    deleted = deleted + 1
+                else
+                    sequence_failures = sequence_failures + 1
+                    print(string.format("⚠️  Delete sequence %s failed: %s", tostring(sequence_id), result and result.error_message or "unknown error"))
+                end
+                ::continue_delete_loop::
             end
         end
     end
@@ -854,6 +1141,10 @@ function M.delete_selected_items()
     if deleted > 0 then
         M.refresh()
         return true
+    end
+
+    if clip_failures > 0 or sequence_failures > 0 then
+        return false
     end
 
     return false
@@ -864,6 +1155,221 @@ function M.activate_selection()
         return false, "No selection"
     end
     return activate_item(M.selected_item)
+end
+
+function M.get_selected_bin()
+    if not M.selected_item or M.selected_item.type ~= "bin" then
+        return nil
+    end
+    local bin = M.bin_map and M.bin_map[M.selected_item.id]
+    if bin then
+        return bin
+    end
+    return {
+        id = M.selected_item.id,
+        name = M.selected_item.name,
+        parent_id = M.selected_item.parent_id
+    }
+end
+
+local function expand_bin_chain(bin_id)
+    if not bin_id then
+        return
+    end
+    if not qt_constants or not qt_constants.CONTROL or not qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED then
+        return
+    end
+    local current = bin_id
+    while current do
+        local bin_info = M.bin_map and M.bin_map[current]
+        if not bin_info then
+            break
+        end
+        if bin_info.tree_id then
+            qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED(M.tree, bin_info.tree_id, true)
+        end
+        current = bin_info.parent_id
+    end
+end
+
+local function update_selection_state(info)
+    if not info then
+        return
+    end
+    M.selected_item = info
+    M.selected_items = {info}
+    browser_state.update_selection({info}, {
+        master_lookup = M.master_clip_map,
+        media_lookup = M.media_map,
+        sequence_lookup = M.sequence_map,
+        project_id = M.project_id
+    })
+end
+
+function M.focus_master_clip(master_clip_id, opts)
+    opts = opts or {}
+    if not master_clip_id or master_clip_id == "" then
+        return false, "Invalid master clip id"
+    end
+
+    local clip = M.master_clip_map and M.master_clip_map[master_clip_id]
+    if not clip then
+        return false, "Master clip not found"
+    end
+
+    if clip.bin_id then
+        expand_bin_chain(clip.bin_id)
+    end
+
+    if not clip.tree_id then
+        return false, "Master clip not present in browser"
+    end
+
+    if qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
+        is_restoring_selection = true
+        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip.tree_id, true, true)
+        is_restoring_selection = false
+    end
+
+    local info = M.item_lookup and M.item_lookup[tostring(clip.tree_id)]
+    if not info then
+        return false, "Master clip metadata unavailable"
+    end
+
+    update_selection_state(info)
+
+    if not opts.skip_focus then
+        if focus_manager and focus_manager.focus_panel then
+            focus_manager.focus_panel("project_browser")
+        else
+            focus_manager.set_focused_panel("project_browser")
+        end
+    end
+
+    if not opts.skip_activate then
+        activate_item(info)
+    end
+
+    return true
+end
+
+function M.focus_bin(bin_id, opts)
+    opts = opts or {}
+    if not bin_id or bin_id == "" then
+        M.selected_item = nil
+        M.selected_items = {}
+        browser_state.clear_selection()
+        return true
+    end
+
+    local bin = M.bin_map and M.bin_map[bin_id]
+    if not bin then
+        return false, "Bin not found"
+    end
+
+    expand_bin_chain(bin_id)
+
+    if not bin.tree_id then
+        return false, "Bin not present in browser"
+    end
+
+    if qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
+        is_restoring_selection = true
+        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, bin.tree_id, true, true)
+        is_restoring_selection = false
+    end
+
+    local info = M.item_lookup and M.item_lookup[tostring(bin.tree_id)]
+    if not info then
+        return false, "Bin metadata unavailable"
+    end
+
+    update_selection_state(info)
+
+    if not opts.skip_focus then
+        if focus_manager and focus_manager.focus_panel then
+            focus_manager.focus_panel("project_browser")
+        else
+            focus_manager.set_focused_panel("project_browser")
+        end
+    end
+
+    return true
+end
+
+function M.start_inline_rename()
+    if not M.tree or not M.selected_item then
+        print("⚠️  Rename: No selection to rename")
+        return false
+    end
+
+    if M.pending_rename and qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE then
+        qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE(M.tree, M.pending_rename.tree_id, false)
+    end
+
+    local item = M.selected_item
+    local target_type = nil
+    local target_id = nil
+    local tree_id = item.tree_id
+    local current_name = item.name or item.display_name or ""
+
+    if item.type == "master_clip" then
+        target_type = "master_clip"
+        target_id = item.clip_id
+        local clip = target_id and M.master_clip_map and M.master_clip_map[target_id]
+        if clip then
+            tree_id = clip.tree_id or tree_id
+            current_name = clip.name or current_name
+        end
+    elseif item.type == "timeline" then
+        target_type = "sequence"
+        target_id = item.id
+        local seq = target_id and M.sequence_map and M.sequence_map[target_id]
+        if seq then
+            tree_id = seq.tree_id or tree_id
+            current_name = seq.name or current_name
+        end
+    elseif item.type == "bin" then
+        target_type = "bin"
+        target_id = item.id
+        local bin = target_id and M.bin_map and M.bin_map[target_id]
+        if bin then
+            tree_id = bin.tree_id or tree_id
+            current_name = bin.name or current_name
+        end
+    else
+        print(string.format("⚠️  Rename: Unsupported selection type '%s'", tostring(item.type)))
+        return false
+    end
+
+    if not tree_id or not target_id then
+        print("⚠️  Rename: Unable to locate selected item in tree")
+        return false
+    end
+
+    M.pending_rename = {
+        tree_id = tree_id,
+        target_type = target_type,
+        target_id = target_id,
+        original_name = current_name
+    }
+
+    local editable_ok = false
+    if qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE then
+        editable_ok = qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE(M.tree, tree_id, true)
+        print(string.format("Rename: SET_TREE_ITEM_EDITABLE result=%s", tostring(editable_ok)))
+    else
+        print("Rename: SET_TREE_ITEM_EDITABLE missing")
+    end
+
+    local edit_started = false
+    if qt_constants.CONTROL.EDIT_TREE_ITEM then
+        edit_started = qt_constants.CONTROL.EDIT_TREE_ITEM(M.tree, tree_id, 0)
+        print(string.format("Rename: EDIT_TREE_ITEM result=%s", tostring(edit_started)))
+    else
+        print("Rename: EDIT_TREE_ITEM missing")
+    end
+    return edit_started
 end
 
 function M.focus_sequence(sequence_id, opts)
