@@ -1147,146 +1147,85 @@ end
 
             -- Second pass: determine what to select or drag based on detected edges
             if #clips_at_position > 0 then
-                -- Check selection state
-                local selected_edges = state_module.get_selected_edges()
-                local closest_edge = clips_at_position[1]
-                for _, edge_info in ipairs(clips_at_position) do
-                    if edge_info.distance < closest_edge.distance then
-                        closest_edge = edge_info
+                view.pending_gap_click = nil
+
+                local function normalize_edge_type(name)
+                    if name == "gap_after" then
+                        return "out"
+                    elseif name == "gap_before" then
+                        return "in"
                     end
+                    return name
                 end
 
-                local clicked_is_selected = false
-                for _, selected in ipairs(selected_edges) do
-                    if selected.clip_id == closest_edge.clip.id and selected.edge_type == closest_edge.edge then
-                        clicked_is_selected = true
-                        break
+                local best_roll_selection, best_roll_pair = find_best_roll_pair(clips_at_position, x, width)
+
+                local target_edges = {}
+                if best_roll_selection and best_roll_pair then
+                    local roll_zone_px = ui_constants.TIMELINE.ROLL_ZONE_PX or (EDGE_ZONE * 2)
+                    if roll_zone_px <= 0 then
+                        roll_zone_px = EDGE_ZONE * 2
                     end
-                end
+                    local half_roll_zone = roll_zone_px / 2
+                    if half_roll_zone < 1 then
+                        half_roll_zone = 1
+                    end
+                    half_roll_zone = math.min(half_roll_zone, EDGE_ZONE / 2)
 
-                local use_direct_selection = not (modifiers and modifiers.command) or #selected_edges == 0
-
-                if not use_direct_selection and clicked_is_selected then
-                    -- Clicking on selected edge
-                    view.pending_gap_click = nil
-                    if modifiers and modifiers.command then
-                        -- Cmd+click on selected edge - toggle it (deselect)
-                        for _, edge_info in ipairs(clips_at_position) do
-                            state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, "ripple")
-                        end
-                        render()
-                        return
+                    local edit_time = best_roll_pair.left_clip.start_time + best_roll_pair.left_clip.duration
+                    local edit_x = state_module.time_to_pixel(edit_time, width)
+                    if edit_x and math.abs(x - edit_x) <= half_roll_zone then
+                        target_edges = best_roll_selection
                     else
-                        -- Regular click on selected edge - prepare for potential drag
-                        -- Find the specific edge that was clicked (closest one)
-                        local dragged_edge = clips_at_position[1]
-                        for _, edge_info in ipairs(clips_at_position) do
-                            if edge_info.distance < dragged_edge.distance then
-                                dragged_edge = edge_info
-                            end
+                        if not edit_x or x < edit_x then
+                            table.insert(target_edges, {
+                                clip_id = best_roll_pair.left_clip.id,
+                                edge_type = best_roll_pair.left_edge_type,
+                                trim_type = "ripple"
+                            })
+                        else
+                            table.insert(target_edges, {
+                                clip_id = best_roll_pair.right_clip.id,
+                                edge_type = best_roll_pair.right_edge_type,
+                                trim_type = "ripple"
+                            })
                         end
+                    end
+                end
 
-                        -- Reorder edges to put dragged edge first
-                        local reordered_edges = {}
-                        -- Add dragged edge first
-                        for _, selected in ipairs(selected_edges) do
-                            if selected.clip_id == dragged_edge.clip.id and selected.edge_type == dragged_edge.edge then
-                                table.insert(reordered_edges, selected)
-                                break
-                            end
+                if #target_edges == 0 then
+                    local closest = clips_at_position[1]
+                    for _, edge_info in ipairs(clips_at_position) do
+                        if edge_info.distance < closest.distance then
+                            closest = edge_info
                         end
-                        -- Add remaining edges
-                        for _, selected in ipairs(selected_edges) do
-                            if selected.clip_id ~= dragged_edge.clip.id or selected.edge_type ~= dragged_edge.edge then
-                                table.insert(reordered_edges, selected)
-                            end
-                        end
+                    end
+                    table.insert(target_edges, {
+                        clip_id = closest.clip.id,
+                        edge_type = normalize_edge_type(closest.edge),
+                        trim_type = "ripple"
+                    })
+                end
 
-                        view.potential_drag = {
-                            type = "edges",
-                            start_x = x,
-                            start_y = y,
-                            start_time = state_module.pixel_to_time(x, width),
-                            edges = reordered_edges,  -- Dragged edge is first
-                            modifiers = modifiers
-                        }
-                        print(string.format("Clicked %d selected edge(s), dragging: %s %s",
-                            #reordered_edges, dragged_edge.clip.id:sub(1,8), dragged_edge.edge))
-                        return
+                if modifiers and modifiers.command then
+                    for _, edge_info in ipairs(target_edges) do
+                        state_module.toggle_edge_selection(edge_info.clip_id, edge_info.edge_type, edge_info.trim_type or "ripple")
                     end
                 else
-                    -- Clicking unselected edge OR we want fresh selection regardless
-                    view.pending_gap_click = nil
-                    if not (modifiers and modifiers.command) then
-                        -- Without Cmd key, clear previous edge selection
-                        state_module.clear_edge_selection()
-
-                        local function normalize_edge_type(name)
-                            if name == "gap_after" then
-                                return "in"
-                            elseif name == "gap_before" then
-                                return "out"
-                            end
-                            return name
-                        end
-
-                        local best_roll_selection, best_roll_pair = find_best_roll_pair(clips_at_position, x, width)
-
-                        if best_roll_selection and best_roll_pair then
-                            local roll_zone_px = ui_constants.TIMELINE.ROLL_ZONE_PX or (EDGE_ZONE * 2)
-                            if roll_zone_px < EDGE_ZONE then
-                                roll_zone_px = EDGE_ZONE
-                            end
-                            local half_roll_zone = roll_zone_px / 2
-                            local edit_time = best_roll_pair.left_clip.start_time + best_roll_pair.left_clip.duration
-                            local edit_x = state_module.time_to_pixel(edit_time, width)
-
-                            if edit_x and math.abs(x - edit_x) <= half_roll_zone then
-                                state_module.set_edge_selection(best_roll_selection)
-                            else
-                                local target_edge_clip_id
-                                local target_edge_type
-                                if not edit_x or x < edit_x then
-                                    target_edge_clip_id = best_roll_pair.left_clip.id
-                                    target_edge_type = best_roll_pair.left_edge_type
-                                else
-                                    target_edge_clip_id = best_roll_pair.right_clip.id
-                                    target_edge_type = best_roll_pair.right_edge_type
-                                end
-                                state_module.toggle_edge_selection(target_edge_clip_id, target_edge_type, "ripple")
-                            end
-                        elseif #clips_at_position > 0 then
-                            -- Select only the CLOSEST edge (ripple trim)
-                            local closest = clips_at_position[1]
-                            for _, edge_info in ipairs(clips_at_position) do
-                                if edge_info.distance < closest.distance then
-                                    closest = edge_info
-                                end
-                            end
-                            state_module.toggle_edge_selection(closest.clip.id, closest.edge, "ripple")
-                        end
-                    else
-                        -- With Cmd key, add all edges to selection (for multi-edge operations)
-                        for _, edge_info in ipairs(clips_at_position) do
-                            state_module.toggle_edge_selection(edge_info.clip.id, edge_info.edge, edge_info.trim_type or "ripple")
-                        end
-                    end
-
-                    -- Note: toggle_edge_selection() already clears clip selection (mutual exclusion)
-
-                    -- Prepare for potential drag (after selection is updated)
-                    view.potential_drag = {
-                        type = "edges",
-                        start_x = x,
-                        start_y = y,
-                        start_time = state_module.pixel_to_time(x, width),
-                        edges = state_module.get_selected_edges(),
-                        modifiers = modifiers
-                    }
-                    print(string.format("Selected %d edge(s)", #view.potential_drag.edges))
-                    render()
-                    return
+                    state_module.set_edge_selection(target_edges)
                 end
+
+                view.potential_drag = {
+                    type = "edges",
+                    start_x = x,
+                    start_y = y,
+                    start_time = state_module.pixel_to_time(x, width),
+                    edges = state_module.get_selected_edges(),
+                    modifiers = modifiers
+                }
+                print(string.format("Selected %d edge(s)", #view.potential_drag.edges))
+                render()
+                return
             end
 
             -- No edge clicked - check if clicking on selected clip body for dragging
