@@ -720,6 +720,34 @@ local function decode_settings_json(raw)
     return {}
 end
 
+local function ensure_project_record(project_id)
+    if not project_id or project_id == "" or not db_connection then
+        return false
+    end
+
+    local stmt = db_connection:prepare("SELECT 1 FROM projects WHERE id = ?")
+    if stmt then
+        stmt:bind_value(1, project_id)
+        local exists = stmt:exec() and stmt:next()
+        stmt:finalize()
+        if exists then
+            return true
+        end
+    end
+
+    local Project = require("models.project")
+    local project = Project.create_with_id(project_id, "Untitled Project")
+    if not project then
+        print("WARNING: ensure_project_record: Failed to create project object")
+        return false
+    end
+    if not project:save(db_connection) then
+        print("WARNING: ensure_project_record: Failed to save project " .. tostring(project_id))
+        return false
+    end
+    return true
+end
+
 function M.get_project_settings(project_id)
     project_id = project_id or M.get_current_project_id()
     if not db_connection then
@@ -762,6 +790,7 @@ function M.set_project_setting(project_id, key, value)
         return false
     end
 
+    ensure_project_record(project_id)
     local settings = M.get_project_settings(project_id)
     if value == nil then
         settings[key] = nil
@@ -855,28 +884,64 @@ function M.get_tag_namespaces()
 end
 
 -- Legacy compatibility: load bins from "bin" namespace tags
-function M.load_bins()
+local function normalize_bins(bins)
+    if type(bins) ~= "table" then
+        return {}
+    end
+
+    local normalized = {}
+    local seen = {}
+
+    for _, bin in ipairs(bins) do
+        if type(bin) == "table" then
+            local id = bin.id
+            local name = bin.name
+            if type(id) == "string" and id ~= "" and type(name) == "string" and name ~= "" and not seen[id] then
+                table.insert(normalized, {
+                    id = id,
+                    name = name,
+                    parent_id = bin.parent_id ~= "" and bin.parent_id or nil
+                })
+                seen[id] = true
+            end
+        end
+    end
+
+    table.sort(normalized, function(a, b)
+        return a.name:lower() < b.name:lower()
+    end)
+
+    return normalized
+end
+
+function M.load_bins(project_id)
+    project_id = project_id or M.get_current_project_id()
+    local settings = M.get_project_settings(project_id)
+    local settings_bins = settings and settings.bin_hierarchy
+
+    if type(settings_bins) == "table" and #settings_bins > 0 then
+        return normalize_bins(settings_bins)
+    end
+
+    -- Legacy compatibility: derive bins from tag namespace when no hierarchy stored
     print("Loading bins from tag namespace")
     local bins = {}
     local bin_map = {}
 
-    -- Extract all unique bin tag paths
     local media_items = M.load_media()
     for _, media in ipairs(media_items) do
         if media.tags then
             for _, tag in ipairs(media.tags) do
                 if tag.namespace == "bin" and tag.tag_path then
-                    -- Parse hierarchical path (e.g., "Footage/Interviews")
                     local parts = {}
                     for part in tag.tag_path:gmatch("[^/]+") do
                         table.insert(parts, part)
                     end
 
-                    -- Create bin entries for each level
                     local current_path = ""
                     local parent_path = nil
-                    for i, part in ipairs(parts) do
-                        if i == 1 then
+                    for index, part in ipairs(parts) do
+                        if index == 1 then
                             current_path = part
                         else
                             current_path = current_path .. "/" .. part
@@ -897,17 +962,21 @@ function M.load_bins()
         end
     end
 
-    -- Convert to list
     for _, bin in pairs(bin_map) do
         table.insert(bins, bin)
     end
 
-    -- Sort bins alphabetically by name
     table.sort(bins, function(a, b)
-        return a.name < b.name
+        return a.name:lower() < b.name:lower()
     end)
 
     return bins
+end
+
+function M.save_bins(project_id, bins)
+    project_id = project_id or M.get_current_project_id()
+    local normalized = normalize_bins(bins)
+    return M.set_project_setting(project_id, "bin_hierarchy", normalized)
 end
 
 -- REMOVED: import_media() - Stub function that returned dummy data

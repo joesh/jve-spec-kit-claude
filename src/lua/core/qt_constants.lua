@@ -34,6 +34,7 @@ if qt_constants then
     qt_constants.PROPERTIES.ALIGN_LEFT = "AlignLeft"
     qt_constants.PROPERTIES.ALIGN_CENTER = "AlignCenter"
     qt_constants.PROPERTIES.ALIGN_TOP = "AlignTop"
+    qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE = qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE or require_global_function("qt_set_window_appearance")
 
     -- Widget Functions - add parent relationship support
     qt_constants.WIDGET = qt_constants.WIDGET or {}
@@ -55,6 +56,10 @@ if qt_constants then
         print("DEBUG qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER missing")
     end
     qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER = qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER or require_global_function("qt_set_widget_click_handler")
+    if not qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER then
+        print("DEBUG qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER missing")
+    end
+    qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER = qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER or require_global_function("qt_set_context_menu_handler")
     if not qt_constants.CONTROL.SET_TREE_ITEM_ICON then
         print("DEBUG qt_constants.CONTROL.SET_TREE_ITEM_ICON missing")
     end
@@ -71,9 +76,18 @@ if qt_constants then
         print("DEBUG qt_constants.CONTROL.SET_TREE_SELECTION_MODE missing")
     end
     qt_constants.CONTROL.SET_TREE_SELECTION_MODE = qt_constants.CONTROL.SET_TREE_SELECTION_MODE or require_global_function("qt_set_tree_selection_mode")
+    qt_constants.CONTROL.SET_TREE_EXPANDS_ON_DOUBLE_CLICK = qt_constants.CONTROL.SET_TREE_EXPANDS_ON_DOUBLE_CLICK or require_global_function("qt_set_tree_expands_on_double_click")
+    qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE = qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE or require_global_function("qt_set_tree_drag_drop_mode")
+    qt_constants.CONTROL.SET_TREE_DROP_HANDLER = qt_constants.CONTROL.SET_TREE_DROP_HANDLER or require_global_function("qt_set_tree_drop_handler")
+    qt_constants.CONTROL.SET_TREE_KEY_HANDLER = qt_constants.CONTROL.SET_TREE_KEY_HANDLER or require_global_function("qt_set_tree_key_handler")
+    qt_constants.CONTROL.GET_TREE_ITEM_AT = qt_constants.CONTROL.GET_TREE_ITEM_AT or require_global_function("qt_get_tree_item_at")
 
     -- Note: CONTROL section is now provided by the real qt_constants from C++
     -- SET_SCROLL_AREA_WIDGET is implemented as lua_set_scroll_area_widget
+end
+
+if qt_constants and qt_constants.MENU then
+    qt_constants.MENU.SHOW_POPUP = qt_constants.MENU.SHOW_POPUP or require_global_function("qt_show_menu_popup")
 end
 
 -- Return the global qt_constants table that's injected by the C++ application

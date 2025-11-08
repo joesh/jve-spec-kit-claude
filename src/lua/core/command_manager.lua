@@ -28,12 +28,15 @@ local active_project_id = "default_project"
 
 local non_recording_commands = {
     SelectAll = true,
-   DeselectAll = true,
-   GoToStart = true,
-   GoToEnd = true,
-   GoToPrevEdit = true,
-   GoToNextEdit = true,
-   ActivateBrowserSelection = true,
+    DeselectAll = true,
+    GoToStart = true,
+    GoToEnd = true,
+    GoToPrevEdit = true,
+    GoToNextEdit = true,
+    ActivateBrowserSelection = true,
+    ToggleMaximizePanel = true,
+    MatchFrame = true,
+    RevealInFilesystem = true,
 }
 
 local command_event_listeners = {}
@@ -906,6 +909,28 @@ function M.init(database, sequence_id, project_id)
     local command_implementations = require("core.command_implementations")
     command_implementations.register_commands(command_executors, command_undoers, db, M.set_last_error)
 
+    local exported = command_implementations.exported_commands or {}
+    for command_type, export in pairs(exported) do
+        local executor, undoer
+        if type(export) == "table" and export.register then
+            local ok, result = pcall(export.register, command_executors, command_undoers, db, M.set_last_error)
+            if ok and result then
+                executor = result.executor
+                undoer = result.undoer
+                exported[command_type] = result
+            elseif not ok then
+                print(string.format("WARNING: Failed to register %s executor: %s", tostring(command_type), tostring(result)))
+            end
+        elseif type(export) == "table" then
+            executor = export.executor
+            undoer = export.undoer
+        end
+
+        if executor then
+            M.register_executor(command_type, executor, undoer)
+        end
+    end
+
     -- Query last sequence number from database
     local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
     if query and query:exec() and query:next() then
@@ -1174,7 +1199,7 @@ local function execute_command_implementation(command)
         return true
     else
         local error_msg = string.format("Unknown command type: %s", command.type)
-        print("WARNING: " .. error_msg)
+        print("ERROR: " .. error_msg)
         last_error_message = error_msg
         return false
     end
@@ -2671,6 +2696,13 @@ function M.undo(options)
     end
 
     if replay_success then
+        if current_command.type == "DeleteSequence" and target_sequence == 0 then
+            local payload = current_command:get_parameter("delete_sequence_snapshot")
+            if payload then
+                local delete_module = require('core.commands.delete_sequence')
+                delete_module.restore_from_payload(db, payload, M.set_last_error)
+            end
+        end
         -- Restore playhead to position BEFORE the undone command (i.e., AFTER the last valid command)
         -- This is stored in current_command.playhead_time
         local restored_playhead = current_command.playhead_time or 0
@@ -3076,6 +3108,16 @@ end
 -- Alias plural menu command to singular implementation
 command_executors["UnlinkClips"] = command_executors["UnlinkClip"]
 command_undoers["UnlinkClips"] = command_undoers["UnlinkClip"]
+
+command_executors["ToggleMaximizePanel"] = function(command)
+    local panel_manager = require("ui.panel_manager")
+    local panel_id = command:get_parameter("panel_id")
+    local ok, err = panel_manager.toggle_maximize(panel_id)
+    if not ok and err then
+        print(string.format("WARNING: ToggleMaximizePanel: %s", err))
+    end
+    return true
+end
 
 -- ImportFCP7XML: Import Final Cut Pro 7 XML sequence
 command_executors["ImportFCP7XML"] = function(command)

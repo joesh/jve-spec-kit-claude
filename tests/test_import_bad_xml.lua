@@ -55,7 +55,9 @@ local function init_db(path)
     db:exec([[CREATE TABLE projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
+        settings TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER DEFAULT 0,
+        modified_at INTEGER DEFAULT 0
     );]])
 
     db:exec([[        CREATE TABLE IF NOT EXISTS sequences (

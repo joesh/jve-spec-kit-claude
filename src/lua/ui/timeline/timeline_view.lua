@@ -6,6 +6,13 @@ local M = {}
 local ui_constants = require("core.ui_constants")
 local focus_manager = require("ui.focus_manager")
 local frame_utils = require("core.frame_utils")
+local keyboard_shortcuts = require("core.keyboard_shortcuts")
+local edge_utils = require("ui.timeline.edge_utils")
+
+local INPUT = ui_constants.INPUT or {}
+local LEFT_MOUSE_BUTTON = INPUT.MOUSE_LEFT_BUTTON or 1
+local RIGHT_MOUSE_BUTTON = INPUT.MOUSE_RIGHT_BUTTON or 2
+local is_macos = jit and jit.os == "OSX"
 
 -- Create a new timeline view
 -- Parameters:
@@ -53,6 +60,8 @@ function M.create(widget, state_module, track_filter_fn, options)
     end
 
     -- Calculate and set widget height based on track heights
+    local get_track_y_by_id
+
     local function update_widget_height()
         local total_height = 0
         for _, track in ipairs(view.filtered_tracks) do
@@ -62,6 +71,172 @@ function M.create(widget, state_module, track_filter_fn, options)
 
         -- Set the widget's minimum height to accommodate all tracks
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(widget, total_height)
+    end
+
+    local function find_clip_under_cursor(x, y, width, height)
+        for _, clip in ipairs(state_module.get_clips()) do
+            local clip_y = get_track_y_by_id(clip.track_id, height)
+            if clip_y >= 0 then
+                local track_height = get_track_visual_height(clip.track_id)
+                if y >= clip_y and y <= clip_y + track_height then
+                    local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                    local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
+                    if clip_width < 0 then
+                        clip_width = 0
+                    end
+                    if x >= clip_x and x <= clip_x + clip_width then
+                        return clip
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function execute_ripple_delete(selected_clips)
+        if not selected_clips or #selected_clips == 0 then
+            return false
+        end
+
+        local clip_ids = {}
+        for _, clip in ipairs(selected_clips) do
+            if type(clip) == "table" and clip.id then
+                table.insert(clip_ids, clip.id)
+            elseif type(clip) == "string" then
+                table.insert(clip_ids, clip)
+            end
+        end
+
+        if #clip_ids == 0 then
+            return false
+        end
+
+        local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id() or "default_sequence"
+        local project_id = state_module.get_project_id and state_module.get_project_id() or "default_project"
+        local Command = require("command")
+        local command_manager = require("core.command_manager")
+        local cmd = Command.create("RippleDeleteSelection", project_id)
+        cmd:set_parameter("clip_ids", clip_ids)
+        cmd:set_parameter("sequence_id", sequence_id)
+
+        local result = command_manager.execute(cmd)
+        if not result or not result.success then
+            print(string.format("⚠️  Ripple Delete failed: %s", result and result.error_message or "unknown error"))
+            return false
+        end
+        return true
+    end
+
+    local function build_timeline_context_actions(selected_clips)
+        local actions = {}
+        if not selected_clips or #selected_clips == 0 then
+            return actions
+        end
+
+        local command_manager = require("core.command_manager")
+
+        table.insert(actions, {
+            label = "Match Frame",
+            handler = function()
+                local result = command_manager.execute("MatchFrame")
+                if result and not result.success then
+                    print(string.format("⚠️  Match Frame failed: %s", result.error_message or "unknown error"))
+                end
+            end
+        })
+
+        table.insert(actions, {
+            label = "Reveal in Filesystem",
+            handler = function()
+                local result = command_manager.execute("RevealInFilesystem")
+                if result and not result.success then
+                    print(string.format("⚠️  Reveal in Filesystem failed: %s", result.error_message or "unknown error"))
+                end
+            end
+        })
+
+        table.insert(actions, {
+            label = "Ripple Delete",
+            handler = function()
+                local current_selection = state_module.get_selected_clips and state_module.get_selected_clips() or {}
+                execute_ripple_delete(current_selection)
+            end
+        })
+
+        table.insert(actions, {
+            label = "Delete",
+            handler = function()
+                keyboard_shortcuts.perform_delete_action({shift = false})
+            end
+        })
+
+        return actions
+    end
+
+    local function show_context_menu(actions, global_x, global_y)
+        if not qt_constants.MENU or not qt_constants.MENU.CREATE_MENU or not qt_constants.MENU.SHOW_POPUP then
+            print("⚠️  Timeline context menu unavailable: Qt menu bindings missing")
+            return
+        end
+        if not actions or #actions == 0 then
+            return
+        end
+
+        local menu = qt_constants.MENU.CREATE_MENU(view.widget, "TimelineClipContext")
+        for _, action_def in ipairs(actions) do
+            local qt_action = qt_constants.MENU.CREATE_MENU_ACTION(menu, action_def.label or "Action")
+            if action_def.enabled == false then
+                qt_constants.MENU.SET_ACTION_ENABLED(qt_action, false)
+            else
+                qt_constants.MENU.CONNECT_MENU_ACTION(qt_action, function()
+                    action_def.handler()
+                end)
+            end
+        end
+
+        qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x), math.floor(global_y))
+    end
+
+    local function handle_context_menu_press(x, y, width, height, global_x, global_y)
+        if focus_manager and focus_manager.set_focused_panel then
+            pcall(focus_manager.set_focused_panel, "timeline")
+        end
+        if qt_set_focus then
+            pcall(qt_set_focus, view.widget)
+        end
+
+        local clicked_clip = find_clip_under_cursor(x, y, width, height)
+        if clicked_clip then
+            local currently_selected = state_module.get_selected_clips() or {}
+            local already_selected = false
+            for _, existing in ipairs(currently_selected) do
+                if existing.id == clicked_clip.id then
+                    already_selected = true
+                    break
+                end
+            end
+            if not already_selected then
+                state_module.clear_edge_selection()
+                state_module.set_selection({clicked_clip})
+            end
+        end
+
+        local selected_clips = state_module.get_selected_clips()
+        if not selected_clips or #selected_clips == 0 then
+            return false
+        end
+
+        local actions = build_timeline_context_actions(selected_clips)
+        if #actions == 0 then
+            return false
+        end
+
+        local popup_x, popup_y = global_x, global_y
+        if not popup_x or not popup_y then
+            popup_x, popup_y = qt_constants.WIDGET.MAP_TO_GLOBAL(view.widget, x, y)
+        end
+        show_context_menu(actions, popup_x, popup_y)
+        return true
     end
 
     -- Get Y position for a track within this view
@@ -92,7 +267,7 @@ function M.create(widget, state_module, track_filter_fn, options)
     end
 
     -- Get Y position by track ID
-    local function get_track_y_by_id(track_id, widget_height)
+    function get_track_y_by_id(track_id, widget_height)
         for i, track in ipairs(view.filtered_tracks) do
             if track.id == track_id then
                 return get_track_y(i - 1, widget_height)  -- 0-based index
@@ -156,15 +331,6 @@ function M.create(widget, state_module, track_filter_fn, options)
         return nil
     end
 
-    local function normalize_edge_type(edge_type)
-        if edge_type == "gap_after" then
-            return "out"
-        elseif edge_type == "gap_before" then
-            return "in"
-        end
-        return edge_type
-    end
-
     local function find_best_roll_pair(entries, x, width)
         if not entries or #entries < 2 then
             return nil, nil, math.huge
@@ -177,12 +343,12 @@ function M.create(widget, state_module, track_filter_fn, options)
         for i = 1, #entries do
             local first = entries[i]
             local clip_a = first.clip
-            local norm_a = normalize_edge_type(first.edge)
+            local norm_a = edge_utils.normalize_edge_type(first.edge)
             if clip_a and norm_a and (norm_a == "in" or norm_a == "out") then
                 for j = i + 1, #entries do
                     local second = entries[j]
                     local clip_b = second.clip
-                    local norm_b = normalize_edge_type(second.edge)
+                    local norm_b = edge_utils.normalize_edge_type(second.edge)
                     if clip_b and norm_b and clip_a.track_id == clip_b.track_id and clip_a.id ~= clip_b.id then
                         local left_clip, right_clip = nil, nil
                         local left_distance, right_distance = nil, nil
@@ -1062,6 +1228,16 @@ end
         timeline.update(view.widget)
     end
 
+    local function is_context_click(button, modifiers)
+        if button == RIGHT_MOUSE_BUTTON then
+            return true
+        end
+        if is_macos and button == LEFT_MOUSE_BUTTON and modifiers and modifiers.ctrl then
+            return true
+        end
+        return false
+    end
+
     -- Mouse event handler
     local function on_mouse_event(event_type, x, y, button, modifiers)
         if event_type ~= "move" then
@@ -1078,6 +1254,9 @@ end
             end
             if qt_set_focus then
                 pcall(qt_set_focus, view.widget)
+            end
+            if button == RIGHT_MOUSE_BUTTON then
+                return
             end
             -- Check if clicking on playhead
             local playhead_time = state_module.get_playhead_time()
@@ -1149,15 +1328,6 @@ end
             if #clips_at_position > 0 then
                 view.pending_gap_click = nil
 
-                local function normalize_edge_type(name)
-                    if name == "gap_after" then
-                        return "out"
-                    elseif name == "gap_before" then
-                        return "in"
-                    end
-                    return name
-                end
-
                 local best_roll_selection, best_roll_pair = find_best_roll_pair(clips_at_position, x, width)
 
                 local target_edges = {}
@@ -1202,7 +1372,7 @@ end
                     end
                     table.insert(target_edges, {
                         clip_id = closest.clip.id,
-                        edge_type = normalize_edge_type(closest.edge),
+                        edge_type = edge_utils.normalize_edge_type(closest.edge),
                         trim_type = "ripple"
                     })
                 end
@@ -1430,7 +1600,6 @@ end
                 local current_time = state_module.pixel_to_time(x, width)
 
                 -- Apply magnetic snapping if enabled
-                local keyboard_shortcuts = require("core.keyboard_shortcuts")
                 local magnetic_snapping = require("core.magnetic_snapping")
 
                 local snap_enabled = keyboard_shortcuts.is_snapping_enabled()
@@ -1659,7 +1828,6 @@ end
                 view.drag_state = nil
                 view.potential_drag = nil
 
-                local keyboard_shortcuts = require("core.keyboard_shortcuts")
                 keyboard_shortcuts.reset_drag_snapping()
 
                 local Command = require("command")
@@ -1877,7 +2045,10 @@ end
                             local commands_json = json.encode(command_specs)
                             local batch_cmd = Command.create("BatchCommand", active_project_id)
                             batch_cmd:set_parameter("commands_json", commands_json)
-                            batch_cmd:set_parameter("sequence_id", active_sequence_id)
+                            if active_sequence_id and active_sequence_id ~= "" then
+                                batch_cmd:set_parameter("sequence_id", active_sequence_id)
+                                batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+                            end
 
                             local result = command_manager.execute(batch_cmd)
                             if not result.success then
@@ -2062,6 +2233,18 @@ end
         end
     end
     timeline.set_mouse_event_handler(widget, handler_name)
+
+    if qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER then
+        local context_handler_name = "timeline_view_context_menu_" .. tostring(widget)
+        _G[context_handler_name] = function(event)
+            if not event then
+                return
+            end
+            local width, height = timeline.get_dimensions(widget)
+            handle_context_menu_press(event.x or 0, event.y or 0, width, height, event.global_x, event.global_y)
+        end
+        qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER(widget, context_handler_name)
+    end
 
     -- Wire up resize event handler to redraw when widget size changes
     local resize_handler_name = "timeline_view_resize_handler_" .. tostring(widget)

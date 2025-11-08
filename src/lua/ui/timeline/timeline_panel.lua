@@ -37,6 +37,52 @@ end
 local state = nil
 local video_view_ref = nil
 local audio_view_ref = nil
+local tab_order = {}
+local tab_bar_tabs_layout = nil
+local tab_bar_tabs_container = nil
+local recycle_bin = qt_constants.WIDGET.CREATE()
+if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+    qt_constants.DISPLAY.SET_VISIBLE(recycle_bin, false)
+end
+
+local colors = ui_constants.COLORS or {}
+local selection_color = colors.SELECTION_BORDER_COLOR or "#e64b3d"
+local inactive_text_color = colors.GENERAL_LABEL_COLOR or "#9a9a9a"
+local active_text_color = selection_color
+local hover_text_color = colors.WHITE_TEXT_COLOR or "#ffffff"
+
+local function build_tab_button_style(text_color, border_color, font_weight)
+    return string.format([[
+        QPushButton {
+            background: transparent;
+            color: %s;
+            border: none;
+            border-bottom: 2px solid %s;
+            padding: 4px 10px;
+            font-weight: %s;
+        }
+        QPushButton:hover {
+            color: %s;
+        }
+    ]], text_color, border_color, font_weight, hover_text_color)
+end
+
+local function build_close_button_style(text_color)
+    return string.format([[
+        QPushButton {
+            background: transparent;
+            color: %s;
+            border: none;
+            padding: 0 6px;
+        }
+        QPushButton:hover {
+            color: %s;
+        }
+    ]], text_color, selection_color)
+end
+local open_tabs = {}
+local tab_handler_seq = 0
+local tab_command_listener = nil
 
 local function normalize_timeline_selection(clips)
     local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -84,6 +130,19 @@ local function normalize_timeline_selection(clips)
     end
     return normalized
 end
+
+local function apply_tab_style(tab, is_active)
+    if not tab or not tab.button or not qt_constants.PROPERTIES.SET_STYLE then
+        return
+    end
+    local text_color = is_active and active_text_color or inactive_text_color
+    local border_color = is_active and selection_color or "transparent"
+    local font_weight = is_active and "bold" or "normal"
+    qt_constants.PROPERTIES.SET_STYLE(tab.button, build_tab_button_style(text_color, border_color, font_weight))
+    if tab.close_button and qt_constants.PROPERTIES.SET_STYLE then
+        qt_constants.PROPERTIES.SET_STYLE(tab.close_button, build_close_button_style(text_color))
+    end
+end
 function M.set_inspector(_)
     -- Inspector updates are routed through selection_hub in layout wiring.
 end
@@ -96,6 +155,174 @@ end
 
 function M.get_state()
     return timeline_state  -- Return the module, not the local state variable
+end
+
+local function get_sequence_display_name(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return "Untitled Sequence"
+    end
+    local record = database.load_sequence_record(sequence_id)
+    if record and record.name and record.name ~= "" then
+        return record.name
+    end
+    return sequence_id
+end
+
+local function register_tab_handler(callback)
+    tab_handler_seq = tab_handler_seq + 1
+    local name = "__timeline_tab_handler_" .. tostring(tab_handler_seq)
+    _G[name] = function(...)
+        callback(...)
+    end
+    return name
+end
+
+local function update_tab_styles(active_sequence_id)
+    for id, tab in pairs(open_tabs) do
+        apply_tab_style(tab, id == active_sequence_id)
+    end
+end
+
+local function remove_from_tab_order(sequence_id)
+    for index = #tab_order, 1, -1 do
+        if tab_order[index] == sequence_id then
+            table.remove(tab_order, index)
+            break
+        end
+    end
+end
+
+local function close_tab(sequence_id)
+    local tab = open_tabs[sequence_id]
+    if not tab then
+        return
+    end
+
+    if qt_constants.WIDGET.SET_PARENT then
+        qt_constants.WIDGET.SET_PARENT(tab.container, recycle_bin)
+    end
+    if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+        qt_constants.DISPLAY.SET_VISIBLE(tab.container, false)
+    end
+
+    if tab.handler then
+        _G[tab.handler] = nil
+    end
+    if tab.close_handler then
+        _G[tab.close_handler] = nil
+    end
+
+    open_tabs[sequence_id] = nil
+    remove_from_tab_order(sequence_id)
+
+    local current_sequence = state.get_sequence_id and state.get_sequence_id()
+    if current_sequence == sequence_id then
+        local next_id = tab_order[#tab_order] or tab_order[1]
+        if next_id then
+            M.load_sequence(next_id)
+        else
+            local fallback = "default_sequence"
+            ensure_tab_for_sequence(fallback)
+            M.load_sequence(fallback)
+        end
+    else
+        update_tab_styles(current_sequence)
+    end
+end
+
+local function ensure_tab_for_sequence(sequence_id)
+    if not tab_bar_tabs_layout or not sequence_id or sequence_id == "" then
+        return
+    end
+
+    local display_name = get_sequence_display_name(sequence_id)
+    local existing = open_tabs[sequence_id]
+    if existing then
+        if display_name ~= existing.name then
+            qt_constants.PROPERTIES.SET_TEXT(existing.button, display_name)
+            existing.name = display_name
+        end
+        return
+    end
+
+    local container = qt_constants.WIDGET.CREATE()
+    local container_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(container_layout, 0)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(container_layout, 0, 0, 0, 0)
+    qt_constants.LAYOUT.SET_ON_WIDGET(container, container_layout)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(container, "Fixed", "Fixed")
+
+    local text_button = qt_constants.WIDGET.CREATE_BUTTON(display_name)
+    qt_constants.PROPERTIES.SET_STYLE(text_button, build_tab_button_style(inactive_text_color, "transparent", "normal"))
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(text_button, "Fixed", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(container_layout, text_button)
+
+    local close_button = qt_constants.WIDGET.CREATE_BUTTON("×")
+    qt_constants.PROPERTIES.SET_STYLE(close_button, build_close_button_style(inactive_text_color))
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(close_button, "Fixed", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(container_layout, close_button)
+
+    local handler_name = register_tab_handler(function()
+        if state and state.get_sequence_id then
+            local current = state.get_sequence_id()
+            if current ~= sequence_id then
+                M.load_sequence(sequence_id)
+            end
+        end
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(text_button, handler_name)
+
+    local close_handler_name = register_tab_handler(function()
+        close_tab(sequence_id)
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(close_button, close_handler_name)
+
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_tabs_layout, container)
+
+    open_tabs[sequence_id] = {
+        container = container,
+        button = text_button,
+        close_button = close_button,
+        name = display_name,
+        handler = handler_name,
+        close_handler = close_handler_name
+    }
+    table.insert(tab_order, sequence_id)
+end
+
+local function handle_tab_command_event(event)
+    if not event or event.event ~= "execute" then
+        return
+    end
+
+    local command = event.command
+    if not command or command.type ~= "RenameItem" then
+        return
+    end
+
+    local get_param = command.get_parameter
+    local target_type = nil
+    local target_id = nil
+    local new_name = nil
+    if type(get_param) == "function" then
+        target_type = command:get_parameter("target_type")
+        target_id = command:get_parameter("target_id")
+        new_name = command:get_parameter("new_name")
+    elseif command.parameters then
+        target_type = command.parameters.target_type
+        target_id = command.parameters.target_id
+        new_name = command.parameters.new_name
+    end
+
+    if target_type ~= "sequence" or not target_id or new_name == nil then
+        return
+    end
+
+    local tab = open_tabs[target_id]
+    if tab and tab.button and new_name ~= "" then
+        qt_constants.PROPERTIES.SET_TEXT(tab.button, new_name)
+        tab.name = new_name
+    end
 end
 
 local function build_track_header_stylesheet(background_color)
@@ -520,6 +747,26 @@ function M.create()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(main_layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(main_layout, 0, 0, 0, 0)
 
+    -- Tab bar for open sequences
+    local tab_bar_widget = qt_constants.WIDGET.CREATE()
+    local tab_bar_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_bar_layout, 6)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_layout, 12, 6, 12, 0)
+    qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_widget, tab_bar_layout)
+    qt_constants.PROPERTIES.SET_STYLE(tab_bar_widget, string.format(
+        [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
+        colors.PANEL_BACKGROUND_COLOR or "#1f1f1f",
+        colors.SCROLL_BORDER_COLOR or "#111111"
+    ))
+    tab_bar_tabs_container = qt_constants.WIDGET.CREATE()
+    tab_bar_tabs_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_bar_tabs_layout, 4)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_tabs_layout, 0, 0, 0, 0)
+    qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_tabs_container, tab_bar_tabs_layout)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_tabs_container, "Expanding", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_tabs_container)
+    qt_constants.LAYOUT.ADD_STRETCH(tab_bar_layout, 1)
+
     -- Create main horizontal splitter: Headers Column | Timeline Area Column
     local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
@@ -845,6 +1092,7 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(main_splitter, timeline_area)
 
     -- Add main splitter to main layout (gets all available vertical space)
+    qt_constants.LAYOUT.ADD_WIDGET(main_layout, tab_bar_widget)
     qt_constants.LAYOUT.ADD_WIDGET(main_layout, main_splitter)
     qt_set_layout_stretch_factor(main_layout, main_splitter, 1)
 
@@ -935,6 +1183,16 @@ function M.create()
 
     print("Multi-view timeline panel created successfully")
 
+    local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or "default_sequence"
+    ensure_tab_for_sequence(initial_sequence_id)
+    update_tab_styles(initial_sequence_id)
+
+    if not tab_command_listener and command_manager and command_manager.add_listener then
+        tab_command_listener = command_manager.add_listener(function(event)
+            handle_tab_command_event(event)
+        end)
+    end
+
     return container
 end
 
@@ -972,6 +1230,9 @@ function M.load_sequence(sequence_id)
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {1, 1})
         end
     end
+
+    ensure_tab_for_sequence(sequence_id)
+    update_tab_styles(sequence_id)
 end
 
 -- Check if timeline is currently dragging clips or edges

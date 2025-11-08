@@ -18,7 +18,9 @@ db:exec([[
     CREATE TABLE projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
+        settings TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER DEFAULT 0,
+        modified_at INTEGER DEFAULT 0
     );
 
             CREATE TABLE IF NOT EXISTS sequences (
@@ -162,6 +164,27 @@ end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
+local project_browser = {
+    focused_master_clip_id = nil,
+    focus_calls = 0
+}
+
+function project_browser.refresh() end
+
+function project_browser.focus_master_clip(master_clip_id, _opts)
+    project_browser.focused_master_clip_id = master_clip_id
+    project_browser.focus_calls = project_browser.focus_calls + 1
+    return true
+end
+
+function project_browser.get_selected_master_clip()
+    return nil
+end
+
+function project_browser.focus_bin() end
+
+package.loaded['ui.project_browser'] = project_browser
+
 local executors = {}
 local undoers = {}
 command_impl.register_commands(executors, undoers, db)
@@ -201,6 +224,16 @@ local function fetch_clip_ids(limit)
     end
     stmt:finalize()
     return ids
+end
+
+local function fetch_project_settings()
+    local stmt = db:prepare([[SELECT settings FROM projects WHERE id = 'default_project']])
+    assert(stmt:exec() and stmt:next(), "Project settings query should succeed")
+    local raw = stmt:value(0) or "{}"
+    stmt:finalize()
+    local ok, decoded = pcall(json.decode, raw)
+    assert(ok and type(decoded) == "table", "Project settings should decode into a table")
+    return decoded
 end
 
 local initial_counts = {
@@ -247,6 +280,50 @@ assert(after_import_counts.sequences > initial_counts.sequences, "Import should 
 assert(after_import_counts.tracks > initial_counts.tracks, "Import should add tracks")
 assert(after_import_counts.clips > initial_counts.clips, "Import should add clips")
 assert(after_import_counts.media >= initial_counts.media, "Import should add or reuse media")
+
+local master_count_stmt = db:prepare([[SELECT COUNT(*) FROM clips WHERE clip_kind = 'master']])
+assert(master_count_stmt:exec() and master_count_stmt:next(), "Master clip count query should succeed")
+local master_clip_count = master_count_stmt:value(0)
+master_count_stmt:finalize()
+assert(master_clip_count > 0, "Import should create master clips for MatchFrame")
+
+local settings = fetch_project_settings()
+local expected_master_bin_name = "Timeline 1 (Resolve) Master Clips"
+local master_bin_id = nil
+for _, bin in ipairs(settings.bin_hierarchy or {}) do
+    if bin.name == expected_master_bin_name then
+        master_bin_id = bin.id
+        break
+    end
+end
+assert(master_bin_id, "Importer should create a '<sequence name> Master Clips' bin")
+
+local sample_master_stmt = db:prepare([[SELECT id FROM clips WHERE clip_kind = 'master' LIMIT 1]])
+assert(sample_master_stmt:exec() and sample_master_stmt:next(), "Should fetch at least one master clip")
+local sample_master_id = sample_master_stmt:value(0)
+sample_master_stmt:finalize()
+local media_bin_map = settings.media_bin_map or {}
+assert(media_bin_map[sample_master_id] == master_bin_id, "Imported master clips should be assigned to the sequence master bin")
+
+local timeline_parent_stmt = db:prepare([[SELECT id, parent_clip_id FROM clips WHERE clip_kind = 'timeline' AND parent_clip_id IS NOT NULL LIMIT 1]])
+assert(timeline_parent_stmt:exec(), "Timeline clip parent query should run")
+local timeline_clip_id, timeline_parent_id = nil, nil
+if timeline_parent_stmt:next() then
+    timeline_clip_id = timeline_parent_stmt:value(0)
+    timeline_parent_id = timeline_parent_stmt:value(1)
+end
+timeline_parent_stmt:finalize()
+assert(timeline_clip_id and timeline_parent_id, "Importer should assign parent_clip_id for timeline clips")
+
+timeline_state.set_selection({
+    { id = timeline_clip_id, parent_clip_id = timeline_parent_id }
+})
+
+local match_cmd = Command.create("MatchFrame", "default_project")
+local match_result = command_manager.execute(match_cmd)
+assert(match_result.success, "MatchFrame should succeed on imported clips")
+assert(project_browser.focused_master_clip_id == timeline_parent_id,
+    "MatchFrame should focus the parent master clip")
 
 -- Execute a nudge inside the imported sequence and ensure it links to the import command.
 local clip_ids = fetch_clip_ids(5)

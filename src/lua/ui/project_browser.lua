@@ -15,6 +15,24 @@ local qt_constants = require("core.qt_constants")
 
 local handler_seq = 0
 
+local function selection_context()
+    return {
+        master_lookup = M.master_clip_map,
+        media_lookup = M.media_map,
+        sequence_lookup = M.sequence_map,
+        project_id = M.project_id
+    }
+end
+
+local function selection_context()
+    return {
+        master_lookup = M.master_clip_map,
+        media_lookup = M.media_map,
+        sequence_lookup = M.sequence_map,
+        project_id = M.project_id
+    }
+end
+
 local REFRESH_COMMANDS = {
     ImportMedia = true,
     ImportFCP7XML = true,
@@ -23,10 +41,12 @@ local REFRESH_COMMANDS = {
     ImportResolveProject = true,
     ImportResolveDatabase = true,
     RenameItem = true,
+    CreateSequence = true,
 }
 
 local command_listener_registered = false
 local is_restoring_selection = false
+local show_browser_context_menu  -- forward declaration for tree context menu handler
 
 local function should_refresh_command(command_type)
     return command_type and REFRESH_COMMANDS[command_type] == true
@@ -70,6 +90,119 @@ local function trim(value)
         return ""
     end
     return stripped
+end
+
+local function lookup_item_by_tree_id(tree_id)
+    if not tree_id or not M.item_lookup then
+        return nil
+    end
+    return M.item_lookup[tostring(tree_id)]
+end
+
+local function is_descendant(potential_parent_id, target_id)
+    if not potential_parent_id or not target_id then
+        return false
+    end
+    local current = potential_parent_id
+    while current do
+        if current == target_id then
+            return true
+        end
+        local bin = M.bin_map and M.bin_map[current]
+        current = bin and bin.parent_id or nil
+    end
+    return false
+end
+
+local function set_bin_parent(bin_id, new_parent_id)
+    if not bin_id then
+        return false
+    end
+
+    local changed = false
+    if M.bins then
+        for _, bin in ipairs(M.bins) do
+            if bin.id == bin_id then
+                if bin.parent_id ~= new_parent_id then
+                    bin.parent_id = new_parent_id
+                    changed = true
+                end
+                break
+            end
+        end
+    end
+
+    if M.bin_map and M.bin_map[bin_id] then
+        M.bin_map[bin_id].parent_id = new_parent_id
+    end
+
+    return changed
+end
+
+local function defer_to_ui(callback)
+    if type(qt_create_single_shot_timer) == "function" then
+        qt_create_single_shot_timer(0, function()
+            callback()
+        end)
+    else
+        callback()
+    end
+end
+
+local function collect_name_lookup(map)
+    local lookup = {}
+    if map then
+        for _, entry in pairs(map) do
+            local name = entry and entry.name
+            if name and name ~= "" then
+                lookup[name:lower()] = true
+            end
+        end
+    end
+    return lookup
+end
+
+local function generate_sequential_label(prefix, lookup)
+    local suffix = 1
+    while true do
+        local candidate = string.format("%s %d", prefix, suffix)
+        if not lookup[candidate:lower()] then
+            return candidate
+        end
+        suffix = suffix + 1
+    end
+end
+
+local function current_project_id()
+    local ok, value = pcall(function()
+        return M.project_id or db.get_current_project_id()
+    end)
+    if ok and value and value ~= "" then
+        return value
+    end
+    return "default_project"
+end
+
+local function sequence_defaults()
+    local defaults = {
+        frame_rate = 30.0,
+        width = 1920,
+        height = 1080
+    }
+
+    local timeline_panel = M.timeline_panel
+    local timeline_state_module = timeline_panel and timeline_panel.get_state and timeline_panel.get_state()
+    local sequence_id = timeline_state_module and timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id()
+    if sequence_id and sequence_id ~= "" then
+        local ok, record = pcall(db.load_sequence_record, sequence_id)
+        if ok and record then
+            defaults.frame_rate = record.frame_rate or defaults.frame_rate
+            defaults.width = record.width or defaults.width
+            defaults.height = record.height or defaults.height
+        end
+    end
+
+    return defaults
 end
 
 local function finalize_pending_rename(new_name)
@@ -258,6 +391,7 @@ M.sequence_map = {}
 M.bin_map = {}
 M.bin_tree_map = {}
 M.bins = {}
+M.media_bin_map = {}
 M.selected_item = nil
 M.selected_items = {}
 M.pending_rename = nil
@@ -265,6 +399,8 @@ M.ignore_tree_item_change = false
 M.project_id = nil
 M.viewer_panel = nil
 M.inspector_view = nil
+M.project_title_widget = nil
+M.pending_project_title = nil
 
 local ACTIVATE_COMMAND = "ActivateBrowserSelection"
 
@@ -324,6 +460,17 @@ local function activate_item(item_info)
             focus_manager.focus_panel("viewer")
         else
             focus_manager.set_focused_panel("viewer")
+        end
+        return true
+    elseif item_info.type == "bin" then
+        if item_info.id then
+            M.focus_bin(item_info.id, {skip_focus = false, skip_activate = true})
+        end
+        local bin_entry = item_info.id and M.bin_map and M.bin_map[item_info.id]
+        local tree_id = bin_entry and bin_entry.tree_id
+        if tree_id and qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED then
+            -- Always expand on activation; collapse handled via disclosure triangle
+            qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED(M.tree, tree_id, true)
         end
         return true
     end
@@ -392,21 +539,49 @@ local function resolve_tree_item(entry)
     return nil
 end
 
+local function apply_single_selection(info)
+    if not info then
+        return
+    end
+
+    local collected = {info}
+    M.selected_items = collected
+    M.selected_item = info
+    browser_state.update_selection(collected, {
+        master_lookup = M.master_clip_map,
+        media_lookup = M.media_map,
+        sequence_lookup = M.sequence_map,
+        project_id = M.project_id
+    })
+end
+
 local function populate_tree()
     if not M.tree then
         return
+    end
+
+    local function record_previous_selection(target, item)
+        if not item then
+            return
+        end
+        if item.type == "timeline" and item.id then
+            table.insert(target, {type = "timeline", id = item.id})
+        elseif item.type == "master_clip" and item.clip_id then
+            table.insert(target, {type = "master_clip", clip_id = item.clip_id})
+        elseif item.type == "bin" and item.id then
+            table.insert(target, {type = "bin", id = item.id})
+        end
     end
 
     local previous_selection = nil
     if M.selected_items and #M.selected_items > 0 then
         previous_selection = {}
         for _, item in ipairs(M.selected_items) do
-            if item.type == "timeline" and item.id then
-                table.insert(previous_selection, {type = "timeline", id = item.id})
-            elseif item.type == "master_clip" and item.clip_id then
-                table.insert(previous_selection, {type = "master_clip", clip_id = item.clip_id})
-            end
+            record_previous_selection(previous_selection, item)
         end
+    elseif M.selected_item then
+        previous_selection = {}
+        record_previous_selection(previous_selection, M.selected_item)
     end
 
     qt_constants.CONTROL.CLEAR_TREE(M.tree)
@@ -424,6 +599,9 @@ local function populate_tree()
 
     local project_id = M.project_id or db.get_current_project_id()
     M.project_id = project_id
+
+    local settings = db.get_project_settings(M.project_id)
+    M.media_bin_map = (settings and settings.media_bin_map and type(settings.media_bin_map) == "table") and settings.media_bin_map or {}
 
     local bins = db.load_bins()
     M.bins = bins
@@ -479,7 +657,7 @@ local function populate_tree()
     end
 
     local function add_bin(bin, parent_id)
-        local display_name = "▶ " .. bin.name
+        local display_name = bin.name
         local tree_id
         if parent_id then
             tree_id = qt_constants.CONTROL.ADD_TREE_CHILD_ITEM(M.tree, parent_id, {display_name, "", "", "", "", ""})
@@ -623,29 +801,34 @@ local function populate_tree()
 
     -- Root master clips
     for _, clip in ipairs(master_clips) do
-        clip.bin_id = nil
         local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
-        local bin_tag = get_bin_tag(media)
-        if not bin_tag then
+        local assigned_bin = nil
+        if M.media_bin_map then
+            assigned_bin = M.media_bin_map[clip.clip_id]
+        end
+        clip.bin_id = assigned_bin
+        if not clip.bin_id then
+            local bin_tag = get_bin_tag(media)
+            if bin_tag then
+                local derived_bin_id = bin_path_lookup[bin_tag]
+                clip.bin_id = derived_bin_id
+            end
+        end
+        if clip.bin_id then
+            local parent_tree = bin_tree_map[clip.bin_id]
+            if parent_tree then
+                add_master_clip_item(parent_tree, clip)
+            else
+                clip.bin_id = nil
+                add_master_clip_item(nil, clip)
+            end
+        else
             add_master_clip_item(nil, clip)
         end
     end
 
     -- Master clips inside bins
-    for _, clip in ipairs(master_clips) do
-        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
-        local bin_tag = get_bin_tag(media)
-        if bin_tag then
-            local bin_id = bin_path_lookup[bin_tag]
-            local parent_tree = bin_id and bin_tree_map[bin_id]
-            clip.bin_id = bin_id
-            if parent_tree then
-                add_master_clip_item(parent_tree, clip)
-            else
-                add_master_clip_item(nil, clip)
-            end
-        end
-    end
+    -- (handled above via assigned bin IDs)
 
     local function restore_previous_selection_from_cache(previous)
         if not previous or #previous == 0 then
@@ -741,62 +924,54 @@ function M.create()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 0)
 
-    -- Create header with project name tab
-    local header = qt_constants.WIDGET.CREATE()
-    local header_layout = qt_constants.LAYOUT.CREATE_HBOX()
-    qt_constants.LAYOUT.SET_ON_WIDGET(header, header_layout)
+    -- Create tab bar similar to timeline tabs
+    local colors = ui_constants.COLORS or {}
+    local tab_container = qt_constants.WIDGET.CREATE()
+    local tab_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.LAYOUT.SET_ON_WIDGET(tab_container, tab_layout)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_layout, 12, 6, 12, 0)
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_layout, 6)
+    qt_constants.PROPERTIES.SET_STYLE(tab_container, string.format(
+        [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
+        colors.PANEL_BACKGROUND_COLOR or "#1f1f1f",
+        colors.SCROLL_BORDER_COLOR or "#111111"
+    ))
 
-    qt_constants.PROPERTIES.SET_STYLE(header, [[
-        QWidget {
-            background: #2b2b2b;
-            border-bottom: 1px solid #1a1a1a;
-        }
-    ]])
-
-    -- Project name tab (active) - shows current project or "Unsaved"
-    local project_tab = qt_constants.WIDGET.CREATE_LABEL("  Unsaved  ")
-    qt_constants.PROPERTIES.SET_STYLE(project_tab, [[
+    local tab_label = qt_constants.WIDGET.CREATE_LABEL("Untitled Project")
+    qt_constants.PROPERTIES.SET_STYLE(tab_label, string.format([[
         QLabel {
-            background: #3a3a3a;
-            color: white;
-            padding: 6px 12px;
+            background: transparent;
+            color: %s;
+            padding: 4px 10px;
             font-size: 11px;
-            border-top: 2px solid #4a90e2;
+            font-weight: bold;
+            border: none;
+            border-bottom: 2px solid %s;
         }
-    ]])
-    qt_constants.LAYOUT.ADD_WIDGET(header_layout, project_tab)
+    ]], colors.WHITE_TEXT_COLOR or "#ffffff", colors.SELECTION_BORDER_COLOR or "#e64b3d"))
+    qt_constants.LAYOUT.ADD_WIDGET(tab_layout, tab_label)
+    qt_constants.LAYOUT.ADD_STRETCH(tab_layout, 1)
+    qt_constants.LAYOUT.ADD_WIDGET(layout, tab_container)
 
-    qt_constants.LAYOUT.ADD_STRETCH(header_layout, 1)
-
-    -- Add "Insert to Timeline" button
-    local insert_btn = qt_constants.WIDGET.CREATE_BUTTON("Insert to Timeline")
-    qt_constants.PROPERTIES.SET_STYLE(insert_btn, [[
-        QPushButton {
-            background: #4a4a4a;
-            color: white;
-            border: 1px solid #555;
-            padding: 4px 8px;
-            font-size: 11px;
-        }
-        QPushButton:hover {
-            background: #5a5a5a;
-        }
-        QPushButton:pressed {
-            background: #3a3a3a;
-        }
-    ]])
-    qt_constants.LAYOUT.ADD_WIDGET(header_layout, insert_btn)
-
-    qt_constants.LAYOUT.ADD_WIDGET(layout, header)
-
+    M.project_title_widget = tab_label
+    if M.pending_project_title then
+        local pending = M.pending_project_title
+        M.pending_project_title = nil
+        if qt_constants.PROPERTIES.SET_TEXT then
+            qt_constants.PROPERTIES.SET_TEXT(tab_label, pending)
+        end
+    end
     -- Create tree widget for media library (Resolve style)
     local tree = qt_constants.WIDGET.CREATE_TREE()
-    qt_constants.PROPERTIES.SET_STYLE(tree, [[
+    local disclosure_closed_icon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path fill='%238c8c8c' d='M3 2l4 3-4 3z'/></svg>"
+    local disclosure_open_icon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path fill='%238c8c8c' d='M2 3l3 4 3-4z'/></svg>"
+
+    local tree_style = string.format([[
         QTreeWidget {
             background: #262626;
             color: #cccccc;
             border: none;
-            font-size: ]] .. ui_constants.FONTS.DEFAULT_FONT_SIZE .. [[;
+            font-size: %s;
             outline: none;
         }
         QTreeWidget::item {
@@ -811,20 +986,55 @@ function M.create()
         QTreeWidget::item:hover {
             background: #333333;
         }
+        QTreeView::branch {
+            background: #262626;
+            border: none;
+            width: 12px;
+        }
+        QTreeView::branch:has-children {
+            background: #262626;
+            border: none;
+        }
+        QTreeView::branch:has-children:!has-siblings:closed,
+        QTreeView::branch:closed:has-children {
+            image: url("%s");
+            width: 12px;
+            height: 12px;
+        }
+        QTreeView::branch:has-children:!has-siblings:open,
+        QTreeView::branch:open:has-children {
+            image: url("%s");
+            width: 12px;
+            height: 12px;
+        }
+        QTreeView::branch:open:has-children:selected,
+        QTreeView::branch:closed:has-children:selected {
+            image: url("%s");
+        }
         QTreeWidget::branch {
             background: #262626;
             border: none;
+            width: 12px;
         }
         QTreeWidget::branch:has-children {
             background: #262626;
             border: none;
-            image: none;
         }
-        QTreeWidget::branch:selected {
-            background: #262626;
+        QTreeWidget::branch:has-children:!has-siblings:closed,
+        QTreeWidget::branch:closed:has-children {
+            image: url("%s");
+            width: 12px;
+            height: 12px;
         }
-        QTreeWidget::branch:has-children:selected {
-            background: #262626;
+        QTreeWidget::branch:has-children:!has-siblings:open,
+        QTreeWidget::branch:open:has-children {
+            image: url("%s");
+            width: 12px;
+            height: 12px;
+        }
+        QTreeWidget::branch:open:has-children:selected,
+        QTreeWidget::branch:closed:has-children:selected {
+            image: url("%s");
         }
         QHeaderView::section {
             background: #2b2b2b;
@@ -832,10 +1042,14 @@ function M.create()
             padding: 4px;
             border: none;
             border-right: 1px solid #1a1a1a;
-            font-size: ]] .. ui_constants.FONTS.DEFAULT_FONT_SIZE .. [[;
+            font-size: %s;
             font-weight: normal;
         }
-    ]])
+    ]], ui_constants.FONTS.DEFAULT_FONT_SIZE,
+        disclosure_closed_icon, disclosure_open_icon, disclosure_open_icon,
+        disclosure_closed_icon, disclosure_open_icon, disclosure_open_icon,
+        ui_constants.FONTS.DEFAULT_FONT_SIZE)
+    qt_constants.PROPERTIES.SET_STYLE(tree, tree_style)
 
     -- Set tree columns (Professional NLE style: Name, Duration, Resolution, FPS, Codec, Date Modified)
     qt_constants.CONTROL.SET_TREE_HEADERS(tree, {"Clip Name", "Duration", "Resolution", "FPS", "Codec", "Date Modified"})
@@ -848,6 +1062,9 @@ function M.create()
 
     -- Set minimal indentation like Premiere (just enough for nested items)
     qt_constants.CONTROL.SET_TREE_INDENTATION(tree, 12)
+    if qt_constants.CONTROL.SET_TREE_EXPANDS_ON_DOUBLE_CLICK then
+        qt_constants.CONTROL.SET_TREE_EXPANDS_ON_DOUBLE_CLICK(tree, true)
+    end
 
     if qt_constants.CONTROL.SET_TREE_SELECTION_MODE then
         qt_constants.CONTROL.SET_TREE_SELECTION_MODE(tree, "extended")
@@ -909,6 +1126,9 @@ function M.create()
             else
                 focus_manager.set_focused_panel("project_browser")
             end
+            if qt_set_focus then
+                pcall(qt_set_focus, tree)
+            end
         end
     end)
     if qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER then
@@ -953,6 +1173,28 @@ function M.create()
         qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER(tree, double_click_handler)
     end
 
+    if qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER then
+        local context_handler = register_handler(function(evt)
+            show_browser_context_menu(evt)
+        end)
+        qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER(tree, context_handler)
+    end
+
+    if qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE then
+        qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE(tree, "internal")
+    end
+    if qt_constants.CONTROL.SET_TREE_DROP_HANDLER then
+        local drop_handler = register_handler(function(evt)
+            local ok, result = pcall(handle_tree_drop, evt)
+            if not ok then
+                print(string.format("ERROR: Project browser drop handler failed: %s", tostring(result)))
+                return false
+            end
+            return result and true or false
+        end)
+        qt_constants.CONTROL.SET_TREE_DROP_HANDLER(tree, drop_handler)
+    end
+
     qt_constants.LAYOUT.ADD_WIDGET(layout, tree)
 
     -- Set layout on container
@@ -960,7 +1202,6 @@ function M.create()
 
     -- Store references for later access
     M.tree = tree
-    M.insert_button = insert_btn
     M.container = container
 
     local media_count = M.master_clips and #M.master_clips or 0
@@ -988,12 +1229,15 @@ end
 -- Set timeline panel reference (called by layout.lua after both are created)
 function M.set_timeline_panel(timeline_panel_mod)
     M.timeline_panel = timeline_panel_mod
+end
 
-    if M.insert_button then
-        _G.project_browser_insert_handler = function()
-            M.insert_selected_to_timeline()
-        end
-        qt_set_button_click_handler(M.insert_button, "project_browser_insert_handler")
+function M.set_project_title(name)
+    local label = M.project_title_widget
+    local display = name and name ~= "" and name or "Untitled Project"
+    if label and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
+        qt_constants.PROPERTIES.SET_TEXT(label, display)
+    else
+        M.pending_project_title = display
     end
 end
 
@@ -1025,6 +1269,358 @@ end
 function M.refresh()
     ensure_command_listener()
     populate_tree()
+end
+
+local function handle_tree_drop(event)
+    if not event or type(event.sources) ~= "table" or #event.sources == 0 then
+        return false
+    end
+
+    local dragged_bins = {}
+    local dragged_clips = {}
+
+    for _, tree_id in ipairs(event.sources) do
+        local info = lookup_item_by_tree_id(tree_id)
+        if info and info.type == "bin" then
+            table.insert(dragged_bins, info)
+        elseif info and info.type == "master_clip" then
+            table.insert(dragged_clips, info)
+        else
+            print("⚠️  Unsupported drag item")
+            return true
+        end
+    end
+
+    if #dragged_bins > 0 and #dragged_clips > 0 then
+        print("⚠️  Mixed drag selections are not supported")
+        return true
+    end
+
+    local target_info = lookup_item_by_tree_id(event.target_id)
+    local position = (event.position or "viewport"):lower()
+
+    local function resolve_bin_parent(target, pos)
+        if pos == "viewport" then
+            return nil
+        end
+        if target and target.type == "bin" then
+            if pos == "into" then
+                return target.id
+            elseif pos == "above" or pos == "below" then
+                return target.parent_id
+            end
+        elseif target and target.type == "master_clip" then
+            return target.bin_id
+        end
+        return nil
+    end
+
+    if #dragged_bins > 0 then
+        local new_parent_id = resolve_bin_parent(target_info, position)
+        local changed = false
+        for _, bin_info in ipairs(dragged_bins) do
+            if bin_info.id ~= new_parent_id then
+                if is_descendant(new_parent_id, bin_info.id) then
+                    print("⚠️  Cannot move a bin inside one of its descendants")
+                elseif set_bin_parent(bin_info.id, new_parent_id) then
+                    changed = true
+                end
+            end
+        end
+
+        if not changed then
+            return true
+        end
+
+        local project_id = M.project_id or db.get_current_project_id()
+        if not db.save_bins(project_id, M.bins) then
+            print("⚠️  Failed to save bin hierarchy after drag/drop")
+            return true
+        end
+
+        local focus_bin = dragged_bins[1] and dragged_bins[1].id
+        defer_to_ui(function()
+            M.refresh()
+            if focus_bin and M.focus_bin then
+                M.focus_bin(focus_bin, {skip_activate = true})
+            end
+        end)
+        return true
+    end
+
+    if #dragged_clips > 0 then
+        local target_bin_id = resolve_bin_parent(target_info, position)
+        local changed = false
+        for _, clip_info in ipairs(dragged_clips) do
+            if clip_info.bin_id ~= target_bin_id then
+                clip_info.bin_id = target_bin_id
+                M.media_bin_map = M.media_bin_map or {}
+                if target_bin_id then
+                    M.media_bin_map[clip_info.clip_id] = target_bin_id
+                else
+                    M.media_bin_map[clip_info.clip_id] = nil
+                end
+                changed = true
+            end
+        end
+
+        if not changed then
+            return true
+        end
+
+        local project_id = M.project_id or db.get_current_project_id()
+        if not db.set_project_setting(project_id, "media_bin_map", M.media_bin_map) then
+            print("⚠️  Failed to persist media-bin assignments")
+        end
+
+        defer_to_ui(function()
+            local first_clip = dragged_clips[1]
+            local focus_item = nil
+            M.refresh()
+            if target_bin_id then
+                M.focus_bin(target_bin_id, {skip_activate = true})
+            elseif first_clip and first_clip.clip_id then
+                local clip_entry = M.master_clip_map and M.master_clip_map[first_clip.clip_id]
+                if clip_entry and clip_entry.tree_id and qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
+                    qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip_entry.tree_id, true, true)
+                end
+            end
+        end)
+
+        return true
+    end
+
+    return true
+end
+
+M._test_handle_tree_drop = handle_tree_drop
+
+function M._test_get_tree_id(kind, id)
+    if not kind or not id then
+        return nil
+    end
+    if kind == "bin" then
+        local bin = M.bin_map and M.bin_map[id]
+        return bin and bin.tree_id or nil
+    elseif kind == "master_clip" then
+        local clip = M.master_clip_map and M.master_clip_map[id]
+        return clip and clip.tree_id or nil
+    elseif kind == "timeline" then
+        local sequence = M.sequence_map and M.sequence_map[id]
+        return sequence and sequence.tree_id or nil
+    end
+    return nil
+end
+
+local function start_inline_rename_after(focus_fn)
+    defer_to_ui(function()
+        if type(focus_fn) == "function" then
+            focus_fn()
+        end
+        if M.start_inline_rename then
+            M.start_inline_rename()
+        end
+    end)
+end
+
+local function create_bin_in_root()
+    local project_id = current_project_id()
+    local name_lookup = collect_name_lookup(M.bin_map)
+    local temp_name = generate_sequential_label("Bin", name_lookup)
+
+    local cmd = Command.create("NewBin", project_id)
+    cmd:set_parameter("project_id", project_id)
+    cmd:set_parameter("name", temp_name)
+
+    local result = command_manager.execute(cmd)
+    if not result or not result.success then
+        print(string.format("⚠️  New Bin failed: %s", result and result.error_message or "unknown error"))
+        return
+    end
+
+    local bin_definition = cmd:get_parameter("bin_definition")
+    local new_bin_id = bin_definition and bin_definition.id
+    if not new_bin_id then
+        return
+    end
+
+    start_inline_rename_after(function()
+        if M.focus_bin then
+            M.focus_bin(new_bin_id, {skip_activate = true})
+        end
+    end)
+end
+
+local function create_sequence_in_project()
+    local project_id = current_project_id()
+    local name_lookup = collect_name_lookup(M.sequence_map)
+    local temp_name = generate_sequential_label("Sequence", name_lookup)
+    local defaults = sequence_defaults()
+
+    local cmd = Command.create("CreateSequence", project_id)
+    cmd:set_parameter("project_id", project_id)
+    cmd:set_parameter("name", temp_name)
+    cmd:set_parameter("frame_rate", defaults.frame_rate)
+    cmd:set_parameter("width", defaults.width)
+    cmd:set_parameter("height", defaults.height)
+
+    local result = command_manager.execute(cmd)
+    if not result or not result.success then
+        print(string.format("⚠️  New Sequence failed: %s", result and result.error_message or "unknown error"))
+        return
+    end
+
+    local sequence_id = cmd:get_parameter("sequence_id")
+    if not sequence_id then
+        return
+    end
+
+    M.refresh()
+    start_inline_rename_after(function()
+        if M.focus_sequence then
+            M.focus_sequence(sequence_id, {skip_activate = true})
+        end
+    end)
+end
+
+local function show_browser_background_menu(global_x, global_y)
+    if not M.tree then
+        return
+    end
+    if not qt_constants.MENU or not qt_constants.MENU.CREATE_MENU or not qt_constants.MENU.SHOW_POPUP then
+        print("⚠️  Context menu unavailable: Qt menu bindings missing")
+        return
+    end
+
+    local actions = {
+        {label = "New Bin", handler = create_bin_in_root},
+        {label = "New Sequence", handler = create_sequence_in_project},
+    }
+
+    local menu = qt_constants.MENU.CREATE_MENU(M.tree, "ProjectBrowserBackground")
+    for _, action_def in ipairs(actions) do
+        local qt_action = qt_constants.MENU.CREATE_MENU_ACTION(menu, action_def.label)
+        qt_constants.MENU.CONNECT_MENU_ACTION(qt_action, function()
+            action_def.handler()
+        end)
+    end
+    qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
+end
+
+show_browser_context_menu = function(event)
+    if not event or not M.tree then
+        return
+    end
+
+    if not qt_constants.MENU or not qt_constants.MENU.CREATE_MENU or not qt_constants.MENU.SHOW_POPUP then
+        print("⚠️  Context menu unavailable: Qt menu bindings missing")
+        return
+    end
+
+    local local_x = math.floor(event.x or 0)
+    local local_y = math.floor(event.y or 0)
+    local global_x = event.global_x and math.floor(event.global_x) or nil
+    local global_y = event.global_y and math.floor(event.global_y) or nil
+
+    if (not global_x or not global_y) and qt_constants.WIDGET and qt_constants.WIDGET.MAP_TO_GLOBAL then
+        global_x, global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(M.tree, local_x, local_y)
+    end
+
+    local clicked_tree_id = nil
+    if qt_constants.CONTROL.GET_TREE_ITEM_AT then
+        clicked_tree_id = qt_constants.CONTROL.GET_TREE_ITEM_AT(M.tree, local_x, local_y)
+        if not clicked_tree_id then
+            show_browser_background_menu(global_x, global_y)
+            return
+        end
+    end
+
+    if clicked_tree_id then
+        local already_selected = false
+        for _, selected in ipairs(M.selected_items or {}) do
+            if selected.tree_id == clicked_tree_id then
+                already_selected = true
+                break
+            end
+        end
+
+        if not already_selected then
+            if qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
+                qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clicked_tree_id, true, true)
+            end
+            local info = M.item_lookup and M.item_lookup[tostring(clicked_tree_id)]
+            apply_single_selection(info)
+        end
+    end
+
+    local selected_items = M.selected_items or {}
+    if #selected_items == 0 and M.selected_item then
+        selected_items = {M.selected_item}
+    end
+    if #selected_items == 0 then
+        return
+    end
+
+    local selected_master = M.get_selected_master_clip()
+    local primary_info = selected_items[1]
+    local actions = {}
+
+    if selected_master then
+        table.insert(actions, {
+            label = "Insert Into Timeline",
+            handler = function()
+                M.insert_selected_to_timeline()
+            end
+        })
+        table.insert(actions, {
+            label = "Reveal in Filesystem",
+            handler = function()
+                local result = command_manager.execute("RevealInFilesystem")
+                if result and not result.success then
+                    print(string.format("⚠️  Reveal in Filesystem failed: %s", result.error_message or "unknown error"))
+                end
+            end
+        })
+    end
+
+    local rename_supported = primary_info and (primary_info.type == "master_clip"
+        or primary_info.type == "timeline"
+        or primary_info.type == "bin")
+    if rename_supported and M.start_inline_rename then
+        table.insert(actions, {
+            label = "Rename...",
+            handler = function()
+                M.start_inline_rename()
+            end
+        })
+    end
+
+    table.insert(actions, {
+        label = "Delete",
+        handler = function()
+            if not M.delete_selected_items() then
+                print("⚠️  Delete failed: nothing selected")
+            end
+        end
+    })
+
+    if #actions == 0 then
+        return
+    end
+
+    local menu = qt_constants.MENU.CREATE_MENU(M.tree, "ProjectBrowserContext")
+    for _, action_def in ipairs(actions) do
+        local qt_action = qt_constants.MENU.CREATE_MENU_ACTION(menu, action_def.label or "Action")
+        if action_def.enabled == false then
+            qt_constants.MENU.SET_ACTION_ENABLED(qt_action, false)
+        else
+            qt_constants.MENU.CONNECT_MENU_ACTION(qt_action, function()
+                action_def.handler()
+            end)
+        end
+    end
+
+    qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
 end
 
 function M.insert_selected_to_timeline()
@@ -1087,6 +1683,54 @@ function M.insert_selected_to_timeline()
     end
 end
 
+local function collect_all_tree_entries()
+    local entries = {}
+    if not M.item_lookup then
+        return entries
+    end
+    for tree_id_str, info in pairs(M.item_lookup) do
+        if type(info) == "table" then
+            local numeric_id = tonumber(tree_id_str)
+            table.insert(entries, {tree_id = numeric_id, info = info})
+        end
+    end
+    table.sort(entries, function(a, b)
+        return (a.tree_id or math.huge) < (b.tree_id or math.huge)
+    end)
+    return entries
+end
+
+function M.select_all_items()
+    if not M.tree or not M.item_lookup then
+        return false, "Project browser not initialized"
+    end
+
+    local entries = collect_all_tree_entries()
+    if #entries == 0 then
+        browser_state.clear_selection()
+        M.selected_items = {}
+        M.selected_item = nil
+        return false, "No items available to select"
+    end
+
+    if qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
+        is_restoring_selection = true
+        for index, entry in ipairs(entries) do
+            qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, entry.tree_id, true, index == 1)
+        end
+        is_restoring_selection = false
+    end
+
+    local collected = {}
+    for _, entry in ipairs(entries) do
+        table.insert(collected, entry.info)
+    end
+    M.selected_items = collected
+    M.selected_item = collected[1]
+    browser_state.update_selection(collected, selection_context())
+    return true
+end
+
 function M.delete_selected_items()
     if not M.selected_items or #M.selected_items == 0 then
         return false
@@ -1096,6 +1740,8 @@ function M.delete_selected_items()
     local deleted = 0
     local clip_failures = 0
     local sequence_failures = 0
+    local bin_failures = 0
+    local bins_to_remove = {}
 
     local handled_sequences = {}
     for _, item in ipairs(M.selected_items) do
@@ -1135,6 +1781,20 @@ function M.delete_selected_items()
                 end
                 ::continue_delete_loop::
             end
+        elseif item.type == "bin" and item.id then
+            bins_to_remove[item.id] = true
+        elseif item.type == "bin" and item.id then
+            local project_id = M.project_id or "default_project"
+            local cmd = Command.create("DeleteBin", project_id)
+            cmd:set_parameter("project_id", project_id)
+            cmd:set_parameter("bin_id", item.id)
+            local result = command_manager.execute(cmd)
+            if result and result.success then
+                deleted = deleted + 1
+            else
+                bin_failures = bin_failures + 1
+                print(string.format("⚠️  Delete bin %s failed: %s", tostring(item.name or item.id), result and result.error_message or "unknown error"))
+            end
         end
     end
 
@@ -1143,7 +1803,7 @@ function M.delete_selected_items()
         return true
     end
 
-    if clip_failures > 0 or sequence_failures > 0 then
+    if clip_failures > 0 or sequence_failures > 0 or bin_failures > 0 then
         return false
     end
 
@@ -1198,12 +1858,7 @@ local function update_selection_state(info)
     end
     M.selected_item = info
     M.selected_items = {info}
-    browser_state.update_selection({info}, {
-        master_lookup = M.master_clip_map,
-        media_lookup = M.media_map,
-        sequence_lookup = M.sequence_map,
-        project_id = M.project_id
-    })
+    browser_state.update_selection({info}, selection_context())
 end
 
 function M.focus_master_clip(master_clip_id, opts)
@@ -1355,7 +2010,7 @@ function M.start_inline_rename()
     }
 
     local editable_ok = false
-    if qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE then
+    if qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE and tree_id then
         editable_ok = qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE(M.tree, tree_id, true)
         print(string.format("Rename: SET_TREE_ITEM_EDITABLE result=%s", tostring(editable_ok)))
     else
@@ -1363,7 +2018,7 @@ function M.start_inline_rename()
     end
 
     local edit_started = false
-    if qt_constants.CONTROL.EDIT_TREE_ITEM then
+    if qt_constants.CONTROL.EDIT_TREE_ITEM and tree_id then
         edit_started = qt_constants.CONTROL.EDIT_TREE_ITEM(M.tree, tree_id, 0)
         print(string.format("Rename: EDIT_TREE_ITEM result=%s", tostring(edit_started)))
     else

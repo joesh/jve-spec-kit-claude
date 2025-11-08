@@ -4,6 +4,7 @@
 local keyboard_shortcuts = {}
 local frame_utils = require("core.frame_utils")
 local shortcut_registry = require("core.keyboard_shortcut_registry")
+local panel_manager = require("ui.panel_manager")
 
 -- Qt key constants (from Qt::Key enum)
 local KEY = {
@@ -28,6 +29,7 @@ local KEY = {
     J = 74,
     K = 75,
     L = 76,
+    M = 77,
     Q = 81,
     W = 87,
     E = 69,
@@ -41,6 +43,9 @@ local KEY = {
     Equal = 61,      -- '=' (also + on US keyboards)
     Comma = 44,      -- ','
     Period = 46,     -- '.'
+    Grave = 96,      -- '`' (backtick)
+    Tilde = 126,     -- '~'
+    F2 = 16777249,   -- 0x01000031
     F9 = 16777272,   -- 0x01000038
     F10 = 16777273,  -- 0x01000039
     Return = 16777220,
@@ -122,18 +127,31 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
 
     if zoom_fit_toggle_state and zoom_fit_toggle_state.previous_view then
         local prev = zoom_fit_toggle_state.previous_view
-        if state.restore_viewport then
-            pcall(state.restore_viewport, prev)
-        else
-            if prev.duration and state.set_viewport_duration then
-                state.set_viewport_duration(prev.duration)
-            end
-            if prev.start_time and state.set_viewport_start_time then
-                state.set_viewport_start_time(prev.start_time)
+        local restore_duration = prev.duration
+        if not restore_duration and state.get_viewport_duration then
+            local ok, current_duration = pcall(state.get_viewport_duration)
+            if ok then
+                restore_duration = current_duration
             end
         end
+        restore_duration = math.max(1000, restore_duration or 10000)
+
+        if state.set_viewport_duration then
+            state.set_viewport_duration(restore_duration)
+        elseif state.restore_viewport then
+            -- Fallback for legacy state implementations
+            pcall(state.restore_viewport, prev)
+        end
+
+        if state.get_playhead_time and state.set_viewport_start_time then
+            local playhead = state.get_playhead_time()
+            if playhead then
+                state.set_viewport_start_time(playhead - (restore_duration / 2))
+            end
+        end
+
         zoom_fit_toggle_state = nil
-        print("🔄 Zoom fit toggle: restored previous view")
+        print("🔄 Zoom fit toggle: restored view around playhead")
         return true
     end
 
@@ -315,6 +333,119 @@ local function has_modifier(modifiers, mod)
     return bit.band(modifiers, mod) ~= 0
 end
 
+function keyboard_shortcuts.perform_delete_action(opts)
+    opts = opts or {}
+    local shift_held = opts.shift == true
+
+    local focused_panel = get_focused_panel_id()
+    local panel_active_timeline = panel_is_active("timeline", focused_panel)
+    local panel_active_browser = panel_is_active("project_browser", focused_panel)
+
+    if project_browser and panel_active_browser then
+        if project_browser.delete_selected_items and project_browser.delete_selected_items() then
+            clear_redo_toggle()
+        end
+        return true
+    end
+
+    if not (timeline_state and command_manager) or not panel_active_timeline then
+        return false
+    end
+
+    clear_redo_toggle()
+
+    local selected_clips = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
+
+    if shift_held and selected_clips and #selected_clips > 0 then
+        local clip_ids = {}
+        for _, clip in ipairs(selected_clips) do
+            if type(clip) == "table" then
+                if clip.id then
+                    clip_ids[#clip_ids + 1] = clip.id
+                elseif clip.clip_id then
+                    clip_ids[#clip_ids + 1] = clip.clip_id
+                end
+            elseif type(clip) == "string" then
+                clip_ids[#clip_ids + 1] = clip
+            end
+        end
+
+        if #clip_ids > 0 then
+            local params = {clip_ids = clip_ids}
+            if timeline_state.get_sequence_id then
+                params.sequence_id = timeline_state.get_sequence_id()
+            end
+
+            local result = command_manager.execute("RippleDeleteSelection", params)
+            if not result.success then
+                print(string.format("Failed to ripple delete selection: %s", result.error_message or "unknown error"))
+            end
+            return true
+        end
+    end
+
+    if selected_clips and #selected_clips > 0 then
+        local Command = require("command")
+        local json = require("dkjson")
+        local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+
+        local command_specs = {}
+        for _, clip in ipairs(selected_clips) do
+            table.insert(command_specs, {
+                command_type = "DeleteClip",
+                parameters = {
+                    clip_id = clip.id
+                }
+            })
+        end
+
+        local commands_json = json.encode(command_specs)
+        local batch_cmd = Command.create("BatchCommand", "default_project")
+        batch_cmd:set_parameter("commands_json", commands_json)
+        if active_sequence_id and active_sequence_id ~= "" then
+            batch_cmd:set_parameter("sequence_id", active_sequence_id)
+            batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+        end
+
+        local result = command_manager.execute(batch_cmd)
+        if result.success then
+            if timeline_state.set_selection then
+                timeline_state.set_selection({})
+            end
+            print(string.format("Deleted %d clips (single undo)", #selected_clips))
+        else
+            print(string.format("Failed to delete clips: %s", result.error_message or "unknown error"))
+        end
+        return true
+    end
+
+    local selected_gaps = timeline_state.get_selected_gaps and timeline_state.get_selected_gaps() or {}
+    if #selected_gaps > 0 then
+        local gap = selected_gaps[1]
+        local params = {
+            track_id = gap.track_id,
+            gap_start = gap.start_time,
+            gap_duration = gap.duration,
+        }
+        if timeline_state.get_sequence_id then
+            params.sequence_id = timeline_state.get_sequence_id()
+        end
+
+        local result = command_manager.execute("RippleDelete", params)
+        if result.success then
+            if timeline_state.clear_gap_selection then
+                timeline_state.clear_gap_selection()
+            end
+            print(string.format("Ripple deleted gap of %dms on track %s", gap.duration, tostring(gap.track_id)))
+        else
+            print(string.format("Failed to ripple delete gap: %s", result.error_message or "unknown error"))
+        end
+        return true
+    end
+
+    return false
+end
+
 -- Global key handler function (called from Qt event filter)
 function keyboard_shortcuts.handle_key(event)
     local key = event.key
@@ -337,6 +468,20 @@ function keyboard_shortcuts.handle_key(event)
     local context = focused_panel or "global"
     if shortcut_registry.handle_key_event(key, modifiers, context) then
         return true
+    end
+
+    if panel_active_browser and project_browser then
+        if (key == KEY.Return or key == KEY.Enter) and not modifier_meta and not modifier_alt then
+            local ok, err = project_browser.activate_selection()
+            if not ok and err then
+                print(string.format("⚠️  %s", err))
+            end
+            return true
+        elseif key == KEY.F2 and not modifier_meta and not modifier_alt then
+            if project_browser.start_inline_rename and project_browser.start_inline_rename() then
+                return true
+            end
+        end
     end
 
     -- Cmd/Ctrl + Z: Undo
@@ -428,6 +573,16 @@ function keyboard_shortcuts.handle_key(event)
         return true
     end
 
+    local tilde_without_meta = (key == KEY.Tilde or (key == KEY.Grave and modifier_shift)) and not modifier_meta and not modifier_alt
+    if tilde_without_meta then
+        if command_manager then
+            command_manager.execute("ToggleMaximizePanel")
+        else
+            panel_manager.toggle_active_panel()
+        end
+        return true
+    end
+
     if modifier_meta and not modifier_alt and not modifier_shift then
         if key == KEY.Key3 then
             if focus_panel("timeline") then
@@ -445,6 +600,10 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     -- Left/Right arrows: Move playhead (frame or 1-second jumps with Shift)
+    if (key == KEY.Left or key == KEY.Right) and panel_active_browser then
+        return false
+    end
+
     if (key == KEY.Left or key == KEY.Right) and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
             local frame_rate = get_active_frame_rate()
@@ -532,102 +691,13 @@ function keyboard_shortcuts.handle_key(event)
 
     -- Delete/Backspace: contextual delete (project browser or timeline)
     if key == KEY.Delete or key == KEY.Backspace then
-        if project_browser and panel_active_browser then
-            if project_browser.delete_selected_items and project_browser.delete_selected_items() then
-                clear_redo_toggle()
-            end
+        local handled = keyboard_shortcuts.perform_delete_action({
+            shift = has_modifier(modifiers, MOD.Shift)
+        })
+        if handled then
             return true
         end
-
-        if not (timeline_state and command_manager) or not panel_active_timeline then
-            return false
-        end
-
-        local selected_clips = timeline_state.get_selected_clips()
-        local shift_held = has_modifier(modifiers, MOD.Shift)
-        clear_redo_toggle()
-
-        if shift_held and selected_clips and #selected_clips > 0 then
-            local clip_ids = {}
-            for _, clip in ipairs(selected_clips) do
-                if type(clip) == "table" then
-                    if clip.id then
-                        clip_ids[#clip_ids + 1] = clip.id
-                    elseif clip.clip_id then
-                        clip_ids[#clip_ids + 1] = clip.clip_id
-                    end
-                elseif type(clip) == "string" then
-                    clip_ids[#clip_ids + 1] = clip
-                end
-            end
-
-            if #clip_ids > 0 then
-                local params = {clip_ids = clip_ids}
-                if timeline_state.get_sequence_id then
-                    params.sequence_id = timeline_state.get_sequence_id()
-                end
-
-                local result = command_manager.execute("RippleDeleteSelection", params)
-                if not result.success then
-                    print(string.format("Failed to ripple delete selection: %s", result.error_message or "unknown error"))
-                end
-                return true
-            end
-        end
-
-        if selected_clips and #selected_clips > 0 then
-            local Command = require("command")
-            local json = require("dkjson")
-
-            -- Build array of delete command specs for batch operation
-            local command_specs = {}
-            for _, clip in ipairs(selected_clips) do
-                table.insert(command_specs, {
-                    command_type = "DeleteClip",
-                    parameters = {
-                        clip_id = clip.id
-                    }
-                })
-            end
-
-            -- Execute as single batch command (single undo entry)
-            local commands_json = json.encode(command_specs)
-            local batch_cmd = Command.create("BatchCommand", "default_project")
-            batch_cmd:set_parameter("commands_json", commands_json)
-
-            local result = command_manager.execute(batch_cmd)
-            if result.success then
-                timeline_state.set_selection({})
-                print(string.format("Deleted %d clips (single undo)", #selected_clips))
-            else
-                print(string.format("Failed to delete clips: %s", result.error_message or "unknown error"))
-            end
-            return true
-        end
-
-        local selected_gaps = timeline_state.get_selected_gaps and timeline_state.get_selected_gaps() or {}
-        if #selected_gaps > 0 then
-            local gap = selected_gaps[1]
-            local params = {
-                track_id = gap.track_id,
-                gap_start = gap.start_time,
-                gap_duration = gap.duration,
-            }
-            if timeline_state.get_sequence_id then
-                params.sequence_id = timeline_state.get_sequence_id()
-            end
-
-            local result = command_manager.execute("RippleDelete", params)
-            if result.success then
-                if timeline_state.clear_gap_selection then
-                    timeline_state.clear_gap_selection()
-                end
-                print(string.format("Ripple deleted gap of %dms on track %s", gap.duration, tostring(gap.track_id)))
-            else
-                print(string.format("Failed to ripple delete gap: %s", result.error_message or "unknown error"))
-            end
-            return true
-        end
+        return false
     end
 
     -- Cmd/Ctrl + A: Select all clips
@@ -657,6 +727,10 @@ function keyboard_shortcuts.handle_key(event)
             command_manager.execute(command_name)
         end
         return true
+    end
+
+    if (key == KEY.Up or key == KEY.Down) and panel_active_browser then
+        return false
     end
 
     if key == KEY.Up and command_manager and panel_active_timeline then
@@ -831,6 +905,11 @@ function keyboard_shortcuts.handle_key(event)
 
             local batch_cmd = Command.create("BatchCommand", "default_project")
             batch_cmd:set_parameter("commands_json", json.encode(specs))
+            local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+            if active_sequence_id and active_sequence_id ~= "" then
+                batch_cmd:set_parameter("sequence_id", active_sequence_id)
+                batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+            end
 
             local result = command_manager.execute(batch_cmd)
             if result.success then

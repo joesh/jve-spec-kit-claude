@@ -250,6 +250,8 @@ local function execute_ripple_delete(ids)
 end
 
 -- Test: Ripple delete removes clip and shifts downstream clips
+local original_playhead = 43210
+timeline_state.playhead_time = original_playhead
 execute_ripple_delete({"clip_b"})
 
 local after_delete = clips_snapshot()
@@ -265,6 +267,8 @@ assert(clip_c.start_time == 1000, string.format("Clip C start_time expected 1000
 -- Undo restores original state
 local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed for RippleDeleteSelection")
+assert(timeline_state.playhead_time == original_playhead,
+    string.format("Undo should restore playhead to %d, got %d", original_playhead, timeline_state.playhead_time))
 
 local after_undo = clips_snapshot()
 assert(#after_undo == 3, "Expected 3 clips after undo")

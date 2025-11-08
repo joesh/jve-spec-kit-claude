@@ -2,6 +2,7 @@
 #include "qt_bindings.h"
 #include "ui/timeline/scriptable_timeline.h"
 #include "core/resource_paths.h"
+#include "core/sqlite_env.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -9,6 +10,8 @@
 SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
 {
     qDebug() << "SimpleLuaEngine: Initializing LuaJIT engine";
+
+    JVE::EnsureSqliteLibraryEnv();
     
     // Create new Lua state
     L = luaL_newstate();

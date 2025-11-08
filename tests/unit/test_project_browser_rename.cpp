@@ -7,6 +7,9 @@
 #include <QSqlError>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include "src/lua/simple_lua_engine.h"
 #include "src/lua/qt_bindings.h"
@@ -46,6 +49,7 @@ private:
     bool callLuaBool(const char* funcName);
     bool callLuaBoolWithString(const char* funcName, const QString& value);
     bool callLuaBoolWithInt(const char* funcName, int value);
+    bool callLuaBoolWithTwoStrings(const char* funcName, const QString& first, const QString& second);
     QString callLuaString(const char* funcName);
     QWidget* fetchWidgetFromLua(const char* globalName);
     QLineEdit* waitForActiveEditor();
@@ -54,6 +58,10 @@ private:
     QString currentTimelineClipName();
     QString currentTreeItemName() const;
     bool waitForMasterClipName(const QString& expected, int timeoutMs = 5000);
+    QJsonObject projectSettings() const;
+    QString mediaBinForClip(const QString& clipId) const;
+    QString binParentId(const QString& binId) const;
+    int callLuaInt(const char* funcName);
 
 private slots:
     void initTestCase();
@@ -63,6 +71,10 @@ private slots:
 
     void testRenameAppliesImmediately();
     void testRenameCancelRestoresOriginal();
+    void testBinRenameAfterRefresh();
+    void testDragClipPersists();
+    void testDragBinPersists();
+    void testSelectAllAndDelete();
 };
 
 void TestProjectBrowserRename::initTestCase() {
@@ -271,7 +283,9 @@ void TestProjectBrowserRename::setupLuaEnvironment() {
         database.init('%1')
         local db = database.get_connection()
         database.set_project_setting('default_project', 'bin_hierarchy', {
-            { id = 'bin_root', name = 'Test Bin' }
+            { id = 'bin_root', name = 'Test Bin' },
+            { id = 'bin_child', name = 'Child Bin', parent_id = 'bin_root' },
+            { id = 'bin_second', name = 'Second Bin' }
         })
 
         local command_manager = require('core.command_manager')
@@ -333,6 +347,124 @@ void TestProjectBrowserRename::setupLuaEnvironment() {
             stmt:finalize()
             return result
         end)
+
+        rawset(_G, '__test_focus_bin', function(id)
+            local ok, err = project_browser.focus_bin(id, {skip_activate = true, skip_focus = true})
+            if not ok and err then
+                return false, err
+            end
+            return ok
+        end)
+
+        rawset(_G, '__test_refresh_browser', function()
+            project_browser.refresh()
+            return true
+        end)
+
+        rawset(_G, '__test_get_selected_bin_id', function()
+            local bin = project_browser.get_selected_bin()
+            if bin and bin.id then
+                return bin.id
+            end
+            return ''
+        end)
+
+        rawset(_G, '__test_drop_clip_into_bin', function(clip_id, bin_id)
+            if not project_browser._test_get_tree_id or not project_browser._test_handle_tree_drop then
+                return false, 'test hooks unavailable'
+            end
+            local clip_tree = project_browser._test_get_tree_id('master_clip', clip_id)
+            local bin_tree = project_browser._test_get_tree_id('bin', bin_id)
+            if not clip_tree or not bin_tree then
+                return false, 'missing tree id'
+            end
+            return project_browser._test_handle_tree_drop({
+                sources = {clip_tree},
+                target_id = bin_tree,
+                position = 'into'
+            })
+        end)
+
+        rawset(_G, '__test_drop_bin_into_bin', function(source_id, target_id)
+            if not project_browser._test_get_tree_id or not project_browser._test_handle_tree_drop then
+                return false, 'test hooks unavailable'
+            end
+            local source_tree = project_browser._test_get_tree_id('bin', source_id)
+            local target_tree = target_id and project_browser._test_get_tree_id('bin', target_id) or nil
+            if not source_tree then
+                return false, 'missing source tree'
+            end
+            local event = {
+                sources = {source_tree},
+                target_id = target_tree,
+                position = target_tree and 'into' or 'viewport'
+            }
+            return project_browser._test_handle_tree_drop(event)
+        end)
+        rawset(_G, '__test_select_all_browser', function()
+            local focus_manager = require('ui.focus_manager')
+            if focus_manager and focus_manager.focus_panel then
+                focus_manager.focus_panel('project_browser')
+            end
+            local Command = require('command')
+            local cmd = Command.create('SelectAll', 'default_project')
+            local result = command_manager.execute(cmd)
+            return result and result.success
+        end)
+
+        rawset(_G, '__test_browser_selection_count', function()
+            if project_browser.selected_items then
+                return #project_browser.selected_items
+            end
+            return 0
+        end)
+
+        rawset(_G, '__test_delete_selected_browser_items', function()
+            return project_browser.delete_selected_items()
+        end)
+
+        rawset(_G, '__test_master_clip_count', function()
+            local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'master'")
+            if not stmt then
+                return -1
+            end
+            local count = 0
+            if stmt:exec() and stmt:next() then
+                count = stmt:value(0) or 0
+            end
+            stmt:finalize()
+            return count
+        end)
+
+        rawset(_G, '__test_seed_master_clip', function()
+            local master_stmt = db:prepare([[
+                INSERT OR REPLACE INTO clips (
+                    id, project_id, clip_kind, name, track_id, media_id,
+                    parent_clip_id, owner_sequence_id, start_time, duration,
+                    source_in, source_out, enabled, offline, created_at, modified_at
+                ) VALUES (
+                    'master_clip_1', 'default_project', 'master', 'name1', NULL, 'media_1',
+                    NULL, NULL, 0, 1000, 0, 1000, 1, 0, 0, 0
+                )
+            ]])
+            local timeline_stmt = db:prepare([[
+                INSERT OR REPLACE INTO clips (
+                    id, project_id, clip_kind, name, track_id, media_id,
+                    parent_clip_id, owner_sequence_id, start_time, duration,
+                    source_in, source_out, enabled, offline, created_at, modified_at
+                ) VALUES (
+                    'timeline_clip_1', 'default_project', 'timeline', 'name1',
+                    'track_v1', 'media_1', 'master_clip_1', 'default_sequence',
+                    0, 1000, 0, 1000, 1, 0, 0, 0
+                )
+            ]])
+            local ok_master = master_stmt and master_stmt:exec()
+            if master_stmt then master_stmt:finalize() end
+            local ok_timeline = timeline_stmt and timeline_stmt:exec()
+            if timeline_stmt then timeline_stmt:finalize() end
+            project_browser.refresh()
+            return ok_master and ok_timeline
+        end)
     )").arg(m_dbPath.replace('\\', "\\\\"));
 
     QVERIFY2(m_engine->executeString(script), qPrintable(m_engine->getLastError()));
@@ -385,6 +517,28 @@ bool TestProjectBrowserRename::callLuaBoolWithString(const char* funcName, const
     return ok;
 }
 
+int TestProjectBrowserRename::callLuaInt(const char* funcName) {
+    int base = lua_gettop(m_L);
+    lua_getglobal(m_L, "__jve_error_handler");
+    int errFunc = base + 1;
+    lua_getglobal(m_L, funcName);
+    if (!lua_isfunction(m_L, -1)) {
+        lua_settop(m_L, base);
+        return 0;
+    }
+    if (lua_pcall(m_L, 0, 1, errFunc) != LUA_OK) {
+        qWarning() << "Lua error:" << lua_tostring(m_L, -1);
+        lua_settop(m_L, base);
+        return 0;
+    }
+    int value = 0;
+    if (lua_isnumber(m_L, -1)) {
+        value = static_cast<int>(lua_tointeger(m_L, -1));
+    }
+    lua_settop(m_L, base);
+    return value;
+}
+
 bool TestProjectBrowserRename::callLuaBoolWithInt(const char* funcName, int value) {
     int base = lua_gettop(m_L);
     lua_getglobal(m_L, "__jve_error_handler");
@@ -402,6 +556,36 @@ bool TestProjectBrowserRename::callLuaBoolWithInt(const char* funcName, int valu
         return false;
     }
     bool ok = lua_toboolean(m_L, -1);
+    lua_settop(m_L, base);
+    return ok;
+}
+
+bool TestProjectBrowserRename::callLuaBoolWithTwoStrings(const char* funcName, const QString& first, const QString& second) {
+    int base = lua_gettop(m_L);
+    lua_getglobal(m_L, "__jve_error_handler");
+    int errFunc = base + 1;
+    lua_getglobal(m_L, funcName);
+    if (!lua_isfunction(m_L, -1)) {
+        lua_settop(m_L, base);
+        QTest::qFail(qPrintable(QStringLiteral("Missing Lua function: %1").arg(funcName)), __FILE__, __LINE__);
+        return false;
+    }
+    QByteArray firstUtf8 = first.toUtf8();
+    QByteArray secondUtf8 = second.toUtf8();
+    lua_pushlstring(m_L, firstUtf8.constData(), firstUtf8.size());
+    lua_pushlstring(m_L, secondUtf8.constData(), secondUtf8.size());
+    if (lua_pcall(m_L, 2, 2, errFunc) != LUA_OK) {
+        qWarning() << "Lua error:" << lua_tostring(m_L, -1);
+        lua_settop(m_L, base);
+        return false;
+    }
+    bool ok = lua_toboolean(m_L, -2);
+    if (!ok) {
+        const char* err = lua_tostring(m_L, -1);
+        if (err) {
+            qWarning() << "Lua returned error:" << err;
+        }
+    }
     lua_settop(m_L, base);
     return ok;
 }
@@ -489,6 +673,57 @@ bool TestProjectBrowserRename::waitForMasterClipName(const QString& expected, in
     return callLuaString("__test_get_master_clip_name") == expected;
 }
 
+QJsonObject TestProjectBrowserRename::projectSettings() const {
+    static const char* kConnName = "project_browser_settings";
+    if (QSqlDatabase::contains(kConnName)) {
+        QSqlDatabase::removeDatabase(kConnName);
+    }
+    QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", kConnName);
+    db.setDatabaseName(m_dbPath);
+    if (!db.open()) {
+        return {};
+    }
+    QSqlQuery query(db);
+    QJsonObject result;
+    if (query.exec("SELECT settings FROM projects WHERE id = 'default_project'") && query.next()) {
+        const QByteArray jsonBytes = query.value(0).toByteArray();
+        const QJsonDocument doc = QJsonDocument::fromJson(jsonBytes);
+        if (doc.isObject()) {
+            result = doc.object();
+        }
+    }
+    query.finish();
+    db.close();
+    QSqlDatabase::removeDatabase(kConnName);
+    return result;
+}
+
+QString TestProjectBrowserRename::mediaBinForClip(const QString& clipId) const {
+    const QJsonObject settings = projectSettings();
+    const QJsonValue mapValue = settings.value(QStringLiteral("media_bin_map"));
+    if (!mapValue.isObject()) {
+        return {};
+    }
+    const QJsonObject map = mapValue.toObject();
+    return map.value(clipId).toString();
+}
+
+QString TestProjectBrowserRename::binParentId(const QString& binId) const {
+    const QJsonObject settings = projectSettings();
+    const QJsonValue binsValue = settings.value(QStringLiteral("bin_hierarchy"));
+    if (!binsValue.isArray()) {
+        return {};
+    }
+    const QJsonArray bins = binsValue.toArray();
+    for (const QJsonValue& entry : bins) {
+        const QJsonObject obj = entry.toObject();
+        if (obj.value(QStringLiteral("id")).toString() == binId) {
+            return obj.value(QStringLiteral("parent_id")).toString();
+        }
+    }
+    return {};
+}
+
 void TestProjectBrowserRename::testRenameAppliesImmediately() {
     startRenameSession();
     typeIntoEditor("name2");
@@ -511,6 +746,41 @@ void TestProjectBrowserRename::testRenameCancelRestoresOriginal() {
     QVERIFY(waitForMasterClipName(QStringLiteral("name2"), 2000));
     QCOMPARE(currentTreeItemName(), QStringLiteral("name2"));
     QTRY_COMPARE_WITH_TIMEOUT(currentTimelineClipName(), QStringLiteral("name2"), 500);
+}
+
+void TestProjectBrowserRename::testBinRenameAfterRefresh() {
+    QVERIFY(callLuaBoolWithString("__test_focus_bin", QStringLiteral("bin_root")));
+    QVERIFY(callLuaBool("__test_refresh_browser"));
+    QCOMPARE(callLuaString("__test_get_selected_bin_id"), QStringLiteral("bin_root"));
+    QVERIFY(callLuaBool("__test_start_inline_rename"));
+}
+
+void TestProjectBrowserRename::testDragClipPersists() {
+    QCOMPARE(mediaBinForClip(QString::fromLatin1(kMasterClipId)), QString());
+    QVERIFY(callLuaBoolWithTwoStrings(
+        "__test_drop_clip_into_bin",
+        QString::fromLatin1(kMasterClipId),
+        QStringLiteral("bin_child")));
+    QTest::qWait(50);
+    QCOMPARE(mediaBinForClip(QString::fromLatin1(kMasterClipId)), QStringLiteral("bin_child"));
+}
+
+void TestProjectBrowserRename::testDragBinPersists() {
+    QCOMPARE(binParentId(QStringLiteral("bin_second")), QString());
+    QVERIFY(callLuaBoolWithTwoStrings(
+        "__test_drop_bin_into_bin",
+        QStringLiteral("bin_second"),
+        QStringLiteral("bin_root")));
+    QTest::qWait(50);
+    QCOMPARE(binParentId(QStringLiteral("bin_second")), QStringLiteral("bin_root"));
+}
+
+void TestProjectBrowserRename::testSelectAllAndDelete() {
+    QVERIFY(callLuaBool("__test_select_all_browser"));
+    QVERIFY(callLuaInt("__test_browser_selection_count") >= 1);
+    QVERIFY(callLuaBool("__test_delete_selected_browser_items"));
+    QCOMPARE(callLuaInt("__test_master_clip_count"), 0);
+    QVERIFY(callLuaBool("__test_seed_master_clip"));
 }
 
 QTEST_MAIN(TestProjectBrowserRename)

@@ -609,6 +609,44 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
     local media_lookup = {}
     local recorded_media_ids = {}
+    local master_lookup = {}
+    local recorded_master_ids = {}
+
+    local bins = database.load_bins(project_id)
+    local bins_by_name = {}
+    for _, bin in ipairs(bins) do
+        if bin.name and bin.id then
+            bins_by_name[bin.name:lower()] = bin
+        end
+    end
+    local bins_dirty = false
+
+    local project_settings = database.get_project_settings(project_id) or {}
+    local media_bin_map = {}
+    if type(project_settings.media_bin_map) == "table" then
+        for clip_id, bin_id in pairs(project_settings.media_bin_map) do
+            media_bin_map[clip_id] = bin_id
+        end
+    end
+    local media_bin_map_dirty = false
+
+    local sequence_master_bins = {}
+
+    local function ensure_master_bin(sequence_name)
+        local base_name = (sequence_name and sequence_name ~= "") and sequence_name or "Imported Sequence"
+        local bin_label = string.format("%s Master Clips", base_name)
+        local key = bin_label:lower()
+        local existing = bins_by_name[key]
+        if existing then
+            return existing.id
+        end
+        local bin_id = uuid.generate_with_prefix("bin")
+        local bin_entry = {id = bin_id, name = bin_label}
+        table.insert(bins, bin_entry)
+        bins_by_name[key] = bin_entry
+        bins_dirty = true
+        return bin_id
+    end
 
     local function record_media_id(key, id)
         if not key or key == "" or not id then
@@ -621,6 +659,136 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             table.insert(result.media_ids, id)
         end
         result.media_id_map[key] = id
+    end
+
+    local function remember_master_mapping(key, id)
+        if not key or key == "" or not id or id == "" then
+            return
+        end
+        master_lookup[key] = id
+        result.clip_id_map[key] = id
+    end
+
+    local function record_master_clip_id(key, id)
+        if not id or id == "" then
+            return
+        end
+        if key and key ~= "" then
+            remember_master_mapping(key, id)
+        end
+        if not recorded_master_ids[id] then
+            recorded_master_ids[id] = true
+            table.insert(result.clip_ids, id)
+        end
+    end
+
+    local function find_existing_master_clip(media_id)
+        if not media_id or media_id == "" then
+            return nil
+        end
+        local stmt = conn:prepare([[
+            SELECT id
+            FROM clips
+            WHERE clip_kind = 'master'
+              AND media_id = ?
+              AND (project_id = ? OR project_id IS NULL)
+            LIMIT 1
+        ]])
+        if not stmt then
+            return nil
+        end
+        stmt:bind_value(1, media_id)
+        stmt:bind_value(2, project_id)
+        local existing_id = nil
+        if stmt:exec() and stmt:next() then
+            existing_id = stmt:value(0)
+        end
+        stmt:finalize()
+        return existing_id
+    end
+
+    local function build_master_key(clip_info, clip_key)
+        if not clip_info then
+            return nil
+        end
+        local base =
+            clip_info.master_clip_key or
+            clip_info.media_key or
+            clip_info.file_id or
+            clip_info.original_id or
+            clip_info.name or
+            clip_key
+        if not base or base == "" then
+            return nil
+        end
+        return "master::" .. tostring(base)
+    end
+
+    local function ensure_master_clip(clip_info, clip_key, media_id)
+        if not clip_info or not media_id or media_id == "" then
+            return nil
+        end
+
+        local key = build_master_key(clip_info, clip_key)
+        if key and master_lookup[key] then
+            return master_lookup[key]
+        end
+
+        local existing_id = find_existing_master_clip(media_id)
+        if existing_id then
+            if key then
+                remember_master_mapping(key, existing_id)
+            end
+            clip_info.master_clip_id = existing_id
+            return existing_id
+        end
+
+        local reuse_id = key and resolve_reuse_id('clips', key) or nil
+
+        local name = clip_info.name
+        if (not name or name == "") and clip_info.media and clip_info.media.name then
+            name = clip_info.media.name
+        end
+        if not name or name == "" then
+            name = "Imported Master Clip"
+        end
+
+        local duration = math.floor(clip_info.media and clip_info.media.duration or clip_info.duration or 1000)
+        if duration <= 0 then
+            duration = 1000
+        end
+        local source_in = math.floor(clip_info.source_in or 0)
+        local source_out = math.floor(clip_info.source_out or (source_in + duration))
+        if source_out <= source_in then
+            source_out = source_in + duration
+        end
+
+        local master_clip = Clip.create(name, media_id, {
+            id = reuse_id,
+            project_id = project_id,
+            clip_kind = "master",
+            start_time = 0,
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out,
+            enabled = clip_info.enabled ~= false,
+            offline = clip_info.offline == true
+        })
+
+        if not master_clip then
+            return nil
+        end
+
+        if not master_clip:save(conn, {skip_occlusion = true}) then
+            return nil
+        end
+
+        clip_info.master_clip_id = master_clip.id
+        if key then
+            master_lookup[key] = master_clip.id
+        end
+        record_master_clip_id(key, master_clip.id)
+        return master_clip.id
     end
 
     local function find_existing_media_id(file_path)
@@ -749,11 +917,17 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return media.id
     end
 
-    local function create_clip(track_id, clip_info, clip_key)
+    local function create_clip(track_id, clip_info, clip_key, master_bin_id)
         local media_id = ensure_media(clip_info)
+        local master_clip_id = ensure_master_clip(clip_info, clip_key, media_id)
         local clip = Clip.create(clip_info.name or "Clip", media_id)
         if not clip then
             return false, "Failed to allocate clip"
+        end
+
+        if master_bin_id and master_clip_id and media_bin_map[tostring(master_clip_id)] ~= master_bin_id then
+            media_bin_map[tostring(master_clip_id)] = master_bin_id
+            media_bin_map_dirty = true
         end
 
         local reuse_id = resolve_reuse_id('clips', clip_key)
@@ -765,6 +939,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         end
 
         clip.track_id = track_id
+        clip.parent_clip_id = master_clip_id or clip.parent_clip_id
         clip.start_time = math.floor(clip_info.start_time or 0)
         clip.duration = math.max(math.floor(clip_info.duration or 0), 1)
         clip.source_in = math.floor(clip_info.source_in or 0)
@@ -785,10 +960,10 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return true
     end
 
-    local function create_clip_set(sequence_key, track_key, track_id, clips)
+    local function create_clip_set(sequence_key, track_key, track_id, clips, master_bin_id)
         for clip_index, clip_info in ipairs(clips or {}) do
             local clip_key = track_key .. "::" .. (clip_info.original_id or clip_index)
-            local ok, err = create_clip(track_id, clip_info, clip_key)
+            local ok, err = create_clip(track_id, clip_info, clip_key, master_bin_id)
             if not ok then
                 return false, err
             end
@@ -796,7 +971,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return true
     end
 
-    local function create_track(sequence_key, sequence_id, track_info, kind)
+    local function create_track(sequence_key, sequence_id, track_info, kind, master_bin_id)
         local name = track_info.name
         if not name or name == "" then
             if kind == "VIDEO" then
@@ -836,7 +1011,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         table.insert(result.track_ids, track.id)
         result.track_id_map[track_key] = track.id
 
-        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips)
+        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips, master_bin_id)
         if not ok then
             return false, err
         end
@@ -904,16 +1079,18 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
             table.insert(result.sequence_ids, sequence.id)
             result.sequence_id_map[sequence_key] = sequence.id
+            local master_bin_id = ensure_master_bin(seq_info.name)
+            sequence_master_bins[sequence_key] = master_bin_id
 
             for track_index, track_info in ipairs(seq_info.video_tracks or {}) do
-                local success, track_err = create_track(sequence_key, sequence.id, track_info, "VIDEO")
+                local success, track_err = create_track(sequence_key, sequence.id, track_info, "VIDEO", master_bin_id)
                 if not success then
                     error(track_err)
                 end
             end
 
             for track_index, track_info in ipairs(seq_info.audio_tracks or {}) do
-                local success, track_err = create_track(sequence_key, sequence.id, track_info, "AUDIO")
+                local success, track_err = create_track(sequence_key, sequence.id, track_info, "AUDIO", master_bin_id)
                 if not success then
                     error(track_err)
                 end
@@ -924,6 +1101,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     if not ok then
         rollback_partial()
         return {success = false, error = err}
+    end
+
+    if bins_dirty then
+        database.save_bins(project_id, bins)
+    end
+    if media_bin_map_dirty then
+        database.set_project_setting(project_id, "media_bin_map", media_bin_map)
     end
 
     return result

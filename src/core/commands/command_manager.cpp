@@ -1,6 +1,10 @@
 #include "command_manager.h"
+
 #include <QDebug>
 #include <QLoggingCategory>
+
+#include "core/resource_paths.h"
+#include "core/sqlite_env.h"
 
 Q_LOGGING_CATEGORY(jveCommandManager, "jve.command.manager")
 
@@ -10,9 +14,12 @@ CommandManager::CommandManager(QSqlDatabase& database)
     qCDebug(jveCommandManager, "Initializing CommandManager (Lua wrapper)");
     qCDebug(jveCommandManager, "Using database connection '%s'", qPrintable(m_database.connectionName()));
 
+    JVE::EnsureSqliteLibraryEnv();
+
     // Initialize Lua state
     L = luaL_newstate();
     luaL_openlibs(L);
+    JVE::ResourcePaths::setupLuaPackagePaths(L);
 
     initializeLuaCommandManager();
 }

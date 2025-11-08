@@ -65,7 +65,8 @@ local function load_sqlite3_library()
     }
 
     local last_error = nil
-    for _, candidate in ipairs(candidates) do
+    for index = 1, #candidates do
+        local candidate = candidates[index]
         if candidate and candidate ~= "" then
             local ok, lib = pcall(ffi.load, candidate)
             if ok then

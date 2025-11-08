@@ -603,6 +603,23 @@ function M.reload_clips(target_sequence_id)
     end
     state.clips = db.load_clips(sequence_id)
 
+    if state.selected_clips and #state.selected_clips > 0 then
+        local selected_lookup = {}
+        for _, clip in ipairs(state.selected_clips) do
+            selected_lookup[clip.id] = true
+        end
+        local refreshed = {}
+        for _, clip in ipairs(state.clips) do
+            if selected_lookup[clip.id] then
+                table.insert(refreshed, clip)
+            end
+        end
+        state.selected_clips = refreshed
+        if on_selection_changed_callback then
+            on_selection_changed_callback(state.selected_clips)
+        end
+    end
+
     -- Increment version and stamp all clips
     state_version = state_version + 1
     for _, clip in ipairs(state.clips) do

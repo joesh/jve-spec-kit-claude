@@ -163,6 +163,22 @@ ui_constants.STYLES = {
     ENUM_FIELD = "QComboBox { background: " .. BUTTON_BACKGROUND_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; color: white; font-size: " .. DEFAULT_FONT_SIZE .. "; max-height: 22px; }",
     STRING_FIELD_READONLY = "QLineEdit { background: " .. READONLY_BACKGROUND_COLOR .. "; border: 1px solid " .. READONLY_BORDER_COLOR .. "; color: " .. GENERAL_LABEL_COLOR .. "; font-size: " .. DEFAULT_FONT_SIZE .. "; padding: 2px; max-height: 22px; }",
     STRING_FIELD_PLACEHOLDER = "Enter value...",
+
+    -- Main window styling
+    MAIN_WINDOW_TITLE_BAR = table.concat({
+        "QMainWindow { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; }",
+        "QWidget { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; }",
+        "QLabel { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; padding: 8px; }",
+        "QSplitter { background-color: " .. PANEL_BACKGROUND_COLOR .. "; }",
+        "QSplitter::handle { background-color: " .. SCROLL_BORDER_COLOR .. "; width: 2px; height: 2px; }",
+        "QTreeWidget { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; }",
+        "QLineEdit { background-color: " .. BUTTON_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; padding: 4px; }",
+        "QMenuBar { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: none; }",
+        "QMenuBar::item { background: transparent; color: " .. WHITE_TEXT_COLOR .. "; padding: 6px 12px; }",
+        "QMenuBar::item:selected { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }",
+        "QMenu { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; }",
+        "QMenu::item:selected { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }"
+    }, "\n"),
     
     -- Debug system
     DEBUG_COLORS_ENABLED = DEBUG_COLORS_ENABLED,
@@ -269,6 +285,13 @@ ui_constants.TIMELINE = {
     ROLL_ZONE_PX = 32,           -- Pixels centered on edit point that trigger roll selection/preview
     EDIT_POINT_ZONE = 4,         -- Pixels - must be close to center for edit point detection
     SPLITTER_HANDLE_HEIGHT = 7,  -- Qt default vertical splitter handle height in pixels
+}
+
+-- Input constants (mirror Qt::MouseButton bitfield values)
+ui_constants.INPUT = {
+    MOUSE_LEFT_BUTTON = 1,    -- Qt::LeftButton
+    MOUSE_RIGHT_BUTTON = 2,   -- Qt::RightButton
+    MOUSE_MIDDLE_BUTTON = 4,  -- Qt::MiddleButton
 }
 
 return ui_constants

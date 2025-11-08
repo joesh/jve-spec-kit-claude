@@ -6,6 +6,10 @@
 -- handles execution flow, undo/redo, and replay infrastructure.
 
 local M = {}
+M.exported_commands = {
+    DeleteSequence = require("core.commands.delete_sequence"),
+    DeleteMasterClip = require("core.commands.delete_master_clip"),
+}
 
 -- Register all command executors and undoers
 -- Parameters:
@@ -17,7 +21,35 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     local frame_utils = require('core.frame_utils')
     local json = require("dkjson")
     local uuid = require("uuid")
+    local database = require("core.database")
+    local Sequence = require("models.sequence")
+    local Clip = require("models.clip")
     local set_last_error = set_last_error_fn or function(_) end
+
+    local function trim_string(value)
+        if type(value) ~= "string" then
+            return ""
+        end
+        local stripped = value:match("^%s*(.-)%s*$")
+        if stripped == nil then
+            return ""
+        end
+        return stripped
+    end
+
+    local function reload_timeline(sequence_id)
+        local ok, timeline_state = pcall(require, 'ui.timeline.timeline_state')
+        if not ok or not timeline_state or not timeline_state.reload_clips then
+            return
+        end
+        local target_sequence = sequence_id
+        if (not target_sequence or target_sequence == "") and timeline_state.get_sequence_id then
+            target_sequence = timeline_state.get_sequence_id()
+        end
+        if target_sequence and target_sequence ~= "" then
+            timeline_state.reload_clips(target_sequence)
+        end
+    end
 
     local function encode_property_json(raw)
         if raw == nil or raw == "" then
@@ -67,6 +99,246 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
         end
         query:finalize()
         return props
+    end
+
+    local function perform_item_rename(target_type, target_id, new_name, project_id)
+        if not target_type or target_type == "" then
+            return false, "RenameItem: Missing target_type"
+        end
+        if not target_id or target_id == "" then
+            return false, "RenameItem: Missing target_id"
+        end
+
+        new_name = trim_string(new_name)
+        if new_name == "" then
+            return false, "RenameItem: New name cannot be empty"
+        end
+
+        project_id = project_id or "default_project"
+
+        if target_type == "master_clip" then
+            local clip = Clip.load_optional(target_id, db)
+            if not clip then
+                return false, "RenameItem: Master clip not found"
+            end
+            local previous_name = clip.name or ""
+            if previous_name == new_name then
+                return true, previous_name
+            end
+            clip.name = new_name
+            if not clip:save(db, {skip_occlusion = true}) then
+                return false, "RenameItem: Failed to save master clip"
+            end
+            local update_stmt = db:prepare([[
+                UPDATE clips
+                SET name = ?
+                WHERE parent_clip_id = ? AND clip_kind = 'timeline'
+            ]])
+            if not update_stmt then
+                return false, "RenameItem: Failed to prepare timeline rename"
+            end
+            update_stmt:bind_value(1, new_name)
+            update_stmt:bind_value(2, clip.id)
+            if not update_stmt:exec() then
+                update_stmt:finalize()
+                return false, "RenameItem: Failed to update timeline clips"
+            end
+            update_stmt:finalize()
+            reload_timeline(clip.owner_sequence_id or clip.source_sequence_id)
+            return true, previous_name
+        elseif target_type == "sequence" then
+            local sequence = Sequence.load(target_id, db)
+            if not sequence then
+                return false, "RenameItem: Sequence not found"
+            end
+            local previous_name = sequence.name or ""
+            if previous_name == new_name then
+                return true, previous_name
+            end
+            sequence.name = new_name
+            if not sequence:save(db) then
+                return false, "RenameItem: Failed to save sequence"
+            end
+            reload_timeline(sequence.id)
+            return true, previous_name
+        elseif target_type == "bin" then
+            local bins = database.load_bins(project_id)
+            local updated = false
+            for _, bin in ipairs(bins) do
+                if bin.id == target_id then
+                    local previous_name = bin.name or ""
+                    if previous_name == new_name then
+                        return true, previous_name
+                    end
+                    bin.name = new_name
+                    updated = true
+                    if not database.save_bins(project_id, bins) then
+                        return false, "RenameItem: Failed to persist bins"
+                    end
+                    return true, previous_name
+                end
+            end
+            if not updated then
+                return false, "RenameItem: Bin not found"
+            end
+        else
+            return false, "RenameItem: Unsupported target type"
+        end
+
+        return true, new_name
+    end
+
+    command_executors["NewBin"] = function(command)
+        local project_id = command:get_parameter("project_id") or "default_project"
+        local bin_name = trim_string(command:get_parameter("name"))
+        if bin_name == "" then
+            bin_name = "New Bin"
+        end
+
+        local bin_id = command:get_parameter("bin_id")
+        if not bin_id or bin_id == "" then
+            bin_id = uuid.generate()
+            command:set_parameter("bin_id", bin_id)
+        end
+
+        local database = require("core.database")
+        local bins = database.load_bins(project_id)
+        for _, existing in ipairs(bins) do
+            if existing.id == bin_id then
+                set_last_error("NewBin: Duplicate bin identifier")
+                return false
+            end
+        end
+
+        local definition = {
+            id = bin_id,
+            name = bin_name,
+            parent_id = command:get_parameter("parent_id")
+        }
+        table.insert(bins, definition)
+
+        if not database.save_bins(project_id, bins) then
+            set_last_error("NewBin: Failed to persist bin hierarchy")
+            return false
+        end
+
+        command:set_parameter("bin_definition", definition)
+        return true
+    end
+
+    command_undoers["NewBin"] = function(command)
+        local project_id = command:get_parameter("project_id") or "default_project"
+        local bin_id = command:get_parameter("bin_id")
+        if not bin_id or bin_id == "" then
+            set_last_error("UndoNewBin: Missing bin_id parameter")
+            return false
+        end
+
+        local database = require("core.database")
+        local bins = database.load_bins(project_id)
+        local updated = {}
+        local removed = false
+        for _, bin in ipairs(bins) do
+            if bin.id == bin_id then
+                removed = true
+            else
+                table.insert(updated, bin)
+            end
+        end
+
+        if not removed then
+            set_last_error("UndoNewBin: Bin not found")
+            return false
+        end
+
+        if not database.save_bins(project_id, updated) then
+            set_last_error("UndoNewBin: Failed to persist bin hierarchy")
+            return false
+        end
+
+        return true
+    end
+
+    command_executors["DeleteBin"] = function(command)
+        local project_id = command:get_parameter("project_id") or "default_project"
+        local bin_id = command:get_parameter("bin_id")
+        if not bin_id or bin_id == "" then
+            set_last_error("DeleteBin: Missing bin_id")
+            return false
+        end
+
+        local database = require("core.database")
+        local bins = database.load_bins(project_id)
+        local target_index = nil
+        local target_bin = nil
+        for index, bin in ipairs(bins) do
+            if bin.id == bin_id then
+                target_index = index
+                target_bin = bin
+                break
+            end
+        end
+
+        if not target_bin then
+            set_last_error("DeleteBin: Bin not found")
+            return false
+        end
+
+        local child_snapshot = {}
+        for _, bin in ipairs(bins) do
+            if bin.parent_id == bin_id then
+                table.insert(child_snapshot, {id = bin.id, parent_id = bin.parent_id})
+                bin.parent_id = nil
+            end
+        end
+
+        table.remove(bins, target_index)
+        if not database.save_bins(project_id, bins) then
+            set_last_error("DeleteBin: Failed to persist bin hierarchy")
+            return false
+        end
+
+        command:set_parameter("deleted_bin_definition", target_bin)
+        command:set_parameter("child_parent_snapshot", child_snapshot)
+        command:set_parameter("bin_insert_index", target_index or (#bins + 1))
+        return true
+    end
+
+    command_undoers["DeleteBin"] = function(command)
+        local project_id = command:get_parameter("project_id") or "default_project"
+        local target_bin = command:get_parameter("deleted_bin_definition")
+        if not target_bin then
+            set_last_error("UndoDeleteBin: Missing bin definition")
+            return false
+        end
+
+        local database = require("core.database")
+        local bins = database.load_bins(project_id)
+        local insert_index = command:get_parameter("bin_insert_index") or (#bins + 1)
+        if insert_index < 1 then
+            insert_index = 1
+        elseif insert_index > (#bins + 1) then
+            insert_index = #bins + 1
+        end
+        table.insert(bins, insert_index, target_bin)
+
+        local child_snapshot = command:get_parameter("child_parent_snapshot") or {}
+        local restore_lookup = {}
+        for _, entry in ipairs(child_snapshot) do
+            restore_lookup[entry.id] = entry.parent_id
+        end
+        for _, bin in ipairs(bins) do
+            if restore_lookup[bin.id] ~= nil then
+                bin.parent_id = restore_lookup[bin.id]
+            end
+        end
+
+        if not database.save_bins(project_id, bins) then
+            set_last_error("UndoDeleteBin: Failed to persist bin hierarchy")
+            return false
+        end
+
+        return true
     end
 
     local function snapshot_properties_for_clip(clip_id)
@@ -852,150 +1124,64 @@ command_undoers["ImportMedia"] = function(command)
         print(string.format("Deleted imported media: %s", media_id))
         return true
     else
-    print(string.format("ERROR: ImportMedia undo: Failed to delete media: %s", media_id))
-    return false
+        print(string.format("ERROR: ImportMedia undo: Failed to delete media: %s", media_id))
+        return false
+    end
 end
 
-    -- DeleteMasterClip: Remove master clip if unused by timeline
-    command_executors["DeleteMasterClip"] = function(command)
-        local master_clip_id = command:get_parameter("master_clip_id")
-        if not master_clip_id or master_clip_id == "" then
-            set_last_error("DeleteMasterClip: Missing master_clip_id")
+    -- MatchFrame: Focus the master clip for the currently selected timeline clip
+    command_executors["MatchFrame"] = function(command)
+        local timeline_state = require('ui.timeline.timeline_state')
+        local project_browser = require('ui.project_browser')
+
+        local selected = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
+        if not selected or #selected == 0 then
+            set_last_error("MatchFrame: No clips selected")
             return false
         end
 
-        local Clip = require('models.clip')
-        local clip = Clip.load_optional(master_clip_id, db)
-        if not clip then
-            set_last_error("DeleteMasterClip: Master clip not found")
-            return false
-        end
-
-        if clip.clip_kind ~= "master" then
-            set_last_error("DeleteMasterClip: Clip is not a master clip")
-            return false
-        end
-
-        local ref_query = db:prepare("SELECT COUNT(*) FROM clips WHERE parent_clip_id = ? AND clip_kind = 'timeline'")
-        if not ref_query then
-            set_last_error("DeleteMasterClip: Failed to prepare reference check")
-            return false
-        end
-        ref_query:bind_value(1, master_clip_id)
-        local in_use = 0
-        if ref_query:exec() and ref_query:next() then
-            in_use = ref_query:value(0) or 0
-        end
-        ref_query:finalize()
-
-        if in_use > 0 then
-            set_last_error("DeleteMasterClip: Clip still referenced in timeline")
-            return false
-        end
-
-        local snapshot = {
-            id = clip.id,
-            project_id = clip.project_id,
-            clip_kind = clip.clip_kind,
-            name = clip.name,
-            track_id = clip.track_id,
-            media_id = clip.media_id,
-            source_sequence_id = clip.source_sequence_id,
-            parent_clip_id = clip.parent_clip_id,
-            owner_sequence_id = clip.owner_sequence_id,
-            start_time = clip.start_time,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out,
-            enabled = clip.enabled,
-            offline = clip.offline,
-        }
-        command:set_parameter("master_clip_snapshot", snapshot)
-
-        local properties = {}
-        local prop_query = db:prepare("SELECT id, property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
-        if prop_query then
-            prop_query:bind_value(1, master_clip_id)
-            if prop_query:exec() then
-                while prop_query:next() do
-                    table.insert(properties, {
-                        id = prop_query:value(0),
-                        property_name = prop_query:value(1),
-                        property_value = prop_query:value(2),
-                        property_type = prop_query:value(3),
-                        default_value = prop_query:value(4),
-                    })
-                end
+        local function extract_parent_id(entry)
+            if type(entry) ~= "table" then
+                return nil
             end
-            prop_query:finalize()
+            if entry.parent_clip_id and entry.parent_clip_id ~= "" then
+                return entry.parent_clip_id
+            end
+            if entry.parent_id and entry.parent_id ~= "" then
+                return entry.parent_id
+            end
+            return nil
         end
-        command:set_parameter("master_clip_properties", properties)
 
-        if not clip:delete(db) then
-            set_last_error("DeleteMasterClip: Failed to delete clip")
+        local target_master_id = nil
+        for _, clip in ipairs(selected) do
+            target_master_id = extract_parent_id(clip)
+            if target_master_id then
+                break
+            end
+        end
+
+        if not target_master_id then
+            set_last_error("MatchFrame: Selected clip is not linked to a master clip")
             return false
         end
 
-        print(string.format("✅ Deleted master clip %s", clip.name or master_clip_id))
-        return true
-    end
-
-    command_undoers["DeleteMasterClip"] = function(command)
-        local snapshot = command:get_parameter("master_clip_snapshot")
-        if not snapshot then
-            set_last_error("UndoDeleteMasterClip: Missing snapshot")
-            return false
-        end
-
-        local Clip = require('models.clip')
-        local restored = Clip.create(snapshot.name or "Master Clip", snapshot.media_id, {
-            id = snapshot.id,
-            project_id = snapshot.project_id,
-            clip_kind = snapshot.clip_kind,
-            track_id = snapshot.track_id,
-            parent_clip_id = snapshot.parent_clip_id,
-            owner_sequence_id = snapshot.owner_sequence_id,
-            source_sequence_id = snapshot.source_sequence_id,
-            start_time = snapshot.start_time,
-            duration = snapshot.duration,
-            source_in = snapshot.source_in,
-            source_out = snapshot.source_out,
-            enabled = snapshot.enabled ~= false,
-            offline = snapshot.offline,
+        local ok, err = pcall(project_browser.focus_master_clip, target_master_id, {
+            skip_focus = command:get_parameter("skip_focus") == true,
+            skip_activate = command:get_parameter("skip_activate") == true
         })
-
-        if not restored:save(db) then
-            set_last_error("UndoDeleteMasterClip: Failed to restore master clip")
+        if not ok then
+            set_last_error("MatchFrame: " .. tostring(err))
             return false
         end
 
-        local properties = command:get_parameter("master_clip_properties") or {}
-        if #properties > 0 then
-            local insert_prop = db:prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)")
-            if not insert_prop then
-                set_last_error("UndoDeleteMasterClip: Failed to prepare property restore")
-                return false
-            end
-            for _, prop in ipairs(properties) do
-                insert_prop:bind_value(1, prop.id)
-                insert_prop:bind_value(2, snapshot.id)
-                insert_prop:bind_value(3, prop.property_name)
-                insert_prop:bind_value(4, prop.property_value)
-                insert_prop:bind_value(5, prop.property_type)
-                insert_prop:bind_value(6, prop.default_value)
-                if not insert_prop:exec() then
-                    set_last_error("UndoDeleteMasterClip: Failed to restore property")
-                    insert_prop:finalize()
-                    return false
-                end
-            end
-            insert_prop:finalize()
+        if err == false then
+            set_last_error("MatchFrame: Failed to focus master clip")
+            return false
         end
 
-        print(string.format("UNDO: Restored master clip %s", snapshot.name or snapshot.id))
         return true
     end
-end
 
 command_executors["SetClipProperty"] = function(command)
     print("Executing SetClipProperty command")
@@ -2582,6 +2768,31 @@ command_executors["SelectAll"] = function(command)
         print("Executing SelectAll command")
     end
 
+    local focus_manager_ok, focus_manager = pcall(require, "ui.focus_manager")
+    local focused_panel = nil
+    if focus_manager_ok and focus_manager and focus_manager.get_focused_panel then
+        focused_panel = focus_manager.get_focused_panel()
+    end
+
+    if focused_panel == "project_browser" then
+        if dry_run then
+            return true
+        end
+        local ok, result = pcall(function()
+            local project_browser = require("ui.project_browser")
+            if project_browser and project_browser.select_all_items then
+                return project_browser.select_all_items()
+            end
+            return false, "Project browser select_all not available"
+        end)
+        if ok and result then
+            print("✅ Selected all items in Project Browser")
+            return true
+        end
+        print(string.format("SelectAll (Project Browser) failed: %s", result or "unknown error"))
+        return false
+    end
+
     local timeline_state = require('ui.timeline.timeline_state')
     if dry_run then
         return true, {total_clips = #(timeline_state.get_clips() or {})}
@@ -2598,6 +2809,56 @@ command_executors["SelectAll"] = function(command)
     timeline_state.set_selection(all_clips)
     timeline_state.clear_edge_selection()
     print(string.format("✅ Selected all %d clip(s)", #all_clips))
+    return true
+end
+
+command_executors["RenameItem"] = function(command)
+    local target_type = command:get_parameter("target_type")
+    local target_id = command:get_parameter("target_id")
+    local project_id = command:get_parameter("project_id") or command.project_id or "default_project"
+    local new_name = trim_string(command:get_parameter("new_name"))
+
+    if not target_type or target_type == "" then
+        set_last_error("RenameItem: Missing target_type")
+        return false
+    end
+    if not target_id or target_id == "" then
+        set_last_error("RenameItem: Missing target_id")
+        return false
+    end
+    if new_name == "" then
+        set_last_error("RenameItem: New name cannot be empty")
+        return false
+    end
+
+    local success, previous_or_err = perform_item_rename(target_type, target_id, new_name, project_id)
+    if not success then
+        set_last_error(previous_or_err or "RenameItem failed")
+        return false
+    end
+
+    command:set_parameter("target_type", target_type)
+    command:set_parameter("target_id", target_id)
+    command:set_parameter("project_id", project_id)
+    command:set_parameter("previous_name", previous_or_err or "")
+    command:set_parameter("final_name", new_name)
+    return true
+end
+
+command_undoers["RenameItem"] = function(command)
+    local previous_name = command:get_parameter("previous_name")
+    if not previous_name or previous_name == "" then
+        return true
+    end
+    local target_type = command:get_parameter("target_type")
+    local target_id = command:get_parameter("target_id")
+    local project_id = command:get_parameter("project_id") or command.project_id or "default_project"
+
+    local success, err = perform_item_rename(target_type, target_id, previous_name, project_id)
+    if not success then
+        set_last_error(err or "UndoRenameItem failed")
+        return false
+    end
     return true
 end
 
@@ -4031,15 +4292,20 @@ command_executors["BatchRippleEdit"] = function(command)
             is_gap_clip = false
         end
 
-        -- ASYMMETRIC FIX: Negate delta for opposite BRACKET types
+        -- ASYMMETRIC FIX: Negate delta for opposite BRACKET types (non-roll only)
         -- Bracket mapping: in/gap_after → [, out/gap_before → ]
-        -- If dragging [ edge: all ] edges get negated delta
-        -- If dragging ] edge: all [ edges get negated delta
+        -- Roll trims intentionally keep edges in lockstep so they ignore bracket polarity.
         local edge_bracket = (actual_edge_type == "in") and "[" or "]"
         if not reference_bracket and edge_info == edge_infos[1] then
             reference_bracket = edge_bracket
         end
-        local edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
+
+        local edge_delta
+        if is_roll_trim then
+            edge_delta = delta_ms
+        else
+            edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
+        end
 
         -- Calculate constraints using timeline_constraints module
         -- For ripple edits, skip adjacent clip checks since they move downstream
@@ -4065,7 +4331,7 @@ command_executors["BatchRippleEdit"] = function(command)
         end
 
         -- Map edge_delta constraints into delta_ms space
-        local invert_delta = (edge_bracket ~= reference_bracket)
+        local invert_delta = (not is_roll_trim) and (edge_bracket ~= reference_bracket)
         local delta_range_min, delta_range_max
         if invert_delta then
             delta_range_min = -max_delta
@@ -4189,12 +4455,20 @@ command_executors["BatchRippleEdit"] = function(command)
         -- For gaps: clip.id == "temp_gap_..." (won't match any DB clip, so won't exclude reference clip)
         table.insert(edited_clip_ids, clip.id)
 
+        local resolved_trim_type = edge_info.trim_type or edge_info.edge_type or edge_info.type
+        local is_roll_trim = resolved_trim_type == "roll"
+
         -- Apply edge ripple using shared helper
         -- Phase 0 already ensured this will succeed by clamping delta_ms
         -- ASYMMETRIC FIX: Negate delta for opposite BRACKET types (not in/out types!)
         -- Bracket mapping: in/gap_after → [, out/gap_before → ]
         local edge_bracket = (actual_edge_type == "in") and "[" or "]"
-        local edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
+        local edge_delta
+        if is_roll_trim then
+            edge_delta = delta_ms
+        else
+            edge_delta = (edge_bracket == reference_bracket) and delta_ms or -delta_ms
+        end
         local ripple_time, success, deleted_clip = apply_edge_ripple(clip, actual_edge_type, edge_delta)
         if not success then
             -- This should never happen after Phase 0 constraint calculation
@@ -4224,13 +4498,17 @@ command_executors["BatchRippleEdit"] = function(command)
                         return false
                     end
                 else
-                    local ok, actions = clip:save(db)
+                    if resolved_trim_type == "roll" and actual_edge_type == "in" then
+                        clip.start_time = clip.start_time + delta_ms
+                    end
+                    local ok, actions = clip:save(db, {skip_occlusion = true})
                     if not ok then
                         print(string.format("ERROR: BatchRippleEdit: Failed to save clip %s", clip.id:sub(1,8)))
                         return false
                     end
                     append_actions(occlusion_actions, actions)
                 end
+
             end
         end
 
@@ -4249,19 +4527,22 @@ command_executors["BatchRippleEdit"] = function(command)
                     tostring(duration_change), tostring(is_infinite_gap)))
             end
 
-            if downstream_shift_amount == nil and not is_infinite_gap then
-                downstream_shift_amount = duration_change
-                if not dry_run then
-                    print(string.format("  Set downstream_shift_amount = %s", tostring(downstream_shift_amount)))
+            if not is_roll_trim then
+                if downstream_shift_amount == nil and not is_infinite_gap then
+                    downstream_shift_amount = duration_change
+                    if not dry_run then
+                        print(string.format("  Set downstream_shift_amount = %s", tostring(downstream_shift_amount)))
+                    end
+                elseif not dry_run and is_infinite_gap then
+                    print(string.format("  Skipped infinite gap - not setting downstream_shift_amount"))
                 end
-            elseif not dry_run and is_infinite_gap then
-                print(string.format("  Skipped infinite gap - not setting downstream_shift_amount"))
-            end
 
-            -- Track leftmost ripple point (determines which clips shift)
-            -- With asymmetric edits, use EARLIEST ripple time so all downstream clips shift
-            if ripple_time < earliest_ripple_time then
-                earliest_ripple_time = ripple_time
+                -- Track leftmost ripple point (determines which clips shift)
+                if ripple_time < earliest_ripple_time then
+                    earliest_ripple_time = ripple_time
+                end
+            elseif not dry_run then
+                print("  Roll trim detected - skipping downstream ripple contribution")
             end
         end
     end
@@ -4284,13 +4565,14 @@ command_executors["BatchRippleEdit"] = function(command)
     local clips_to_shift = {}
 
     if not dry_run then
-        print(string.format("DOWNSTREAM SHIFT: earliest_ripple_time=%dms, edited_clip_ids=%s",
-            earliest_ripple_time, table.concat(edited_clip_ids, ",")))
+        local display_time = (earliest_ripple_time ~= math.huge) and string.format("%dms", earliest_ripple_time) or "nil"
+        print(string.format("DOWNSTREAM SHIFT: earliest_ripple_time=%s, edited_clip_ids=%s",
+            display_time, table.concat(edited_clip_ids, ",")))
     end
 
     for _, other_clip in ipairs(phase2_clips) do
         local is_edited = edited_lookup[other_clip.id] == true
-        local is_after_ripple = other_clip.start_time >= earliest_ripple_time - 1
+        local is_after_ripple = (earliest_ripple_time ~= math.huge) and (other_clip.start_time >= earliest_ripple_time - 1)
 
         if not is_edited and is_after_ripple then
             table.insert(clips_to_shift, other_clip)
@@ -4360,7 +4642,7 @@ command_executors["BatchRippleEdit"] = function(command)
             print(string.format("  After:  clip %s start_time=%s", shift_clip.id:sub(1,8), tostring(shift_clip.start_time)))
         end
 
-        local ok, actions = shift_clip:save(db)
+        local ok, actions = shift_clip:save(db, {skip_occlusion = true})
         if not ok then
             print(string.format("ERROR: BatchRippleEdit: Failed to save downstream clip %s", downstream_clip.id:sub(1,8)))
             return false

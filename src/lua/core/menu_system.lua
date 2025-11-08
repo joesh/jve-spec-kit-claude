@@ -71,7 +71,9 @@ function M.init(window, cmd_mgr, proj_browser)
         end)
     end
 
-    update_undo_redo_actions()
+    if update_undo_redo_actions then
+        update_undo_redo_actions()
+    end
 end
 
 --- Set timeline panel reference (called after timeline is created)
@@ -543,6 +545,11 @@ local function create_action_callback(command_name, params)
             end
 
             local batch_cmd = Command.create("BatchCommand", "default_project")
+            local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+            if active_sequence_id and active_sequence_id ~= "" then
+                batch_cmd:set_parameter("sequence_id", active_sequence_id)
+                batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+            end
             batch_cmd:set_parameter("commands_json", json.encode(specs))
 
             local success, result = pcall(function()
@@ -725,6 +732,46 @@ local function create_action_callback(command_name, params)
                 return
             end
 
+        elseif command_name == "RenameItem" or command_name == "RenameMedia" then
+            local rename_started = false
+            if project_browser and project_browser.start_inline_rename then
+                -- Ensure project browser has matching selection when timeline clip is focused
+                if focus_manager and focus_manager.get_focused_panel then
+                    local focused_panel = focus_manager.get_focused_panel()
+                    print(string.format("Rename: focused panel=%s", tostring(focused_panel)))
+                    if focused_panel == "timeline" and timeline_panel and timeline_panel.get_state then
+                        local state = timeline_panel.get_state()
+                        if not state then
+                            print("Rename: timeline_panel.get_state() returned nil")
+                        end
+                        if state and state.get_selected_clips then
+                            local selected_clips = state.get_selected_clips()
+                            print(string.format("Rename: timeline selected clips=%d", selected_clips and #selected_clips or 0))
+                            local target_clip = selected_clips and selected_clips[1] or nil
+                            if target_clip then
+                                local master_id = target_clip.parent_clip_id or target_clip.id
+                                print(string.format("Rename: targeting master clip %s", tostring(master_id)))
+                                if master_id and project_browser.focus_master_clip then
+                                    local ok, focus_err = project_browser.focus_master_clip(master_id, {skip_activate = true})
+                                    if not ok then
+                                        print(string.format("Rename: focus_master_clip failed - %s", tostring(focus_err)))
+                                    end
+                                    if not ok then
+                                        -- keep going; inline rename will still attempt current selection
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                rename_started = project_browser.start_inline_rename()
+                print(string.format("Rename: start_inline_rename returned %s", tostring(rename_started)))
+            end
+            if not rename_started then
+                print("⚠️  Rename: No available item to rename")
+            end
+            return
+
         elseif command_name == "Cut" then
             local result = command_manager.execute("Cut")
             if result.success then
@@ -736,9 +783,10 @@ local function create_action_callback(command_name, params)
             print(string.format("⚠️  Command '%s' not implemented yet", command_name))
             print("   TODO: Implement clipboard operations")
         elseif command_name == "Delete" then
-            print("🗑️  Delete command - checking selection...")
-            print("⚠️  Delete command not fully wired to menu yet")
-            print("   For now, use Delete key which calls BatchCommand for selected clips")
+            if keyboard_shortcuts.perform_delete_action({shift = false}) then
+                return
+            end
+            print("⚠️  Delete command: nothing to delete in current context")
         else
             -- Regular command execution
             local command_params = params

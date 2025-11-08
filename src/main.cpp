@@ -9,44 +9,13 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QFile>
-#include <QStringList>
 
 #include "lua/simple_lua_engine.h"
 #include "core/persistence/migrations.h"
 #include "core/resource_paths.h"
+#include "core/sqlite_env.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
-
-static void ensureSqliteLibraryEnv()
-{
-    if (!qEnvironmentVariableIsEmpty("JVE_SQLITE3_PATH")) {
-        return;
-    }
-
-    const QStringList candidates = {
-        QString::fromLatin1(qgetenv("HOMEBREW_PREFIX")) + "/opt/sqlite/lib/libsqlite3.dylib",
-        "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
-        "/usr/local/opt/sqlite/lib/libsqlite3.dylib",
-        "/usr/local/lib/libsqlite3.dylib",
-        "/usr/local/lib/libsqlite3.so",
-        "/usr/lib/libsqlite3.dylib",
-        "/usr/lib/libsqlite3.so",
-        "/lib/x86_64-linux-gnu/libsqlite3.so",
-        "/lib64/libsqlite3.so"
-    };
-
-    for (const QString& candidate : candidates) {
-        if (candidate.isEmpty()) {
-            continue;
-        }
-        QFile file(candidate);
-        if (file.exists()) {
-            qputenv("JVE_SQLITE3_PATH", candidate.toUtf8());
-            qCInfo(jveMain, "Auto-selected SQLite library: %s", qPrintable(candidate));
-            return;
-        }
-    }
-}
 
 int main(int argc, char *argv[])
 {
@@ -121,7 +90,7 @@ int main(int argc, char *argv[])
         qCInfo(jveMain, "Opening default project: %s", qPrintable(projectPath));
     }
 
-    ensureSqliteLibraryEnv();
+    JVE::EnsureSqliteLibraryEnv();
 
     // Initialize database migrations
     Migrations::initialize();
