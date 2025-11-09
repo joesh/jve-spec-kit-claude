@@ -11,11 +11,10 @@ local command_scope = require("core.command_scope")
 local Command = require("command")
 local browser_state = require("ui.project_browser.browser_state")
 local frame_utils = require("core.frame_utils")
+local keymap = require("ui.project_browser.keymap")
 local qt_constants = require("core.qt_constants")
 
 local handler_seq = 0
-local KEY_RETURN = 16777220
-local KEY_ENTER = 16777221
 
 local function selection_context()
     return {
@@ -1425,47 +1424,37 @@ end
 M._test_handle_tree_drop = handle_tree_drop
 
 local function handle_tree_key_event(event)
-    if not event or not event.key then
-        return false
-    end
-
-    local key = tonumber(event.key)
-    if key ~= KEY_RETURN and key ~= KEY_ENTER then
-        return false
-    end
-
-    local selected = M.selected_item
-    if not selected then
-        return false
-    end
-
-    if selected.type == "timeline" then
-        local result = command_manager.execute(ACTIVATE_COMMAND)
-        defer_to_ui(function()
-            focus_tree_widget()
-        end)
-        return result and result.success == true
-    elseif selected.type == "bin" then
-        local bin_entry = selected
-        if selected.type ~= "bin" and selected.id and M.bin_map then
-            bin_entry = M.bin_map[selected.id] or selected
-        end
-        local tree_id = bin_entry and bin_entry.tree_id
-        if tree_id and qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED then
-            local expanded = false
-            if qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED then
-                local ok, value = pcall(qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED, M.tree, tree_id)
-                if ok then
-                    expanded = value and true or false
-                end
+    return keymap.handle(event, {
+        get_selected_item = function()
+            return M.selected_item
+        end,
+        activate_sequence = function()
+            local result = command_manager.execute(ACTIVATE_COMMAND)
+            if not result or not result.success then
+                print(string.format("⚠️  ActivateBrowserSelection failed: %s", result and result.error_message or "unknown error"))
+                return false
             end
-            qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED(M.tree, tree_id, not expanded)
-            focus_tree_widget()
             return true
-        end
-    end
-
-    return false
+        end,
+        focus_tree = focus_tree_widget,
+        controls = qt_constants and qt_constants.CONTROL,
+        tree_widget = function()
+            return M.tree
+        end,
+        resolve_tree_id = function(item)
+            if not item then
+                return nil
+            end
+            if item.tree_id then
+                return item.tree_id
+            end
+            if item.id and M.bin_map then
+                local entry = M.bin_map[item.id]
+                return entry and entry.tree_id or nil
+            end
+            return nil
+        end,
+    })
 end
 
 function M._test_get_tree_id(kind, id)

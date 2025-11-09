@@ -850,11 +850,6 @@ local function command_flag(command, property, param_key)
     return false
 end
 
-local REPLAY_SKIP_TYPES = {
-    NewBin = true,
-    DeleteBin = true,
-}
-
 local function sequence_exists(sequence_id)
     if not db or not sequence_id or sequence_id == "" then
         return false
@@ -2588,7 +2583,6 @@ function M.replay_events(sequence_id, target_sequence_number)
 
                 -- Execute the command (but don't save it again - it's already in commands table)
                 local skip_sequence_replay = command_flag(command, "skip_sequence_replay", "__skip_sequence_replay")
-                    or REPLAY_SKIP_TYPES[command.type] == true
                 local execution_success = true
                 if not skip_sequence_replay then
                     execution_success = execute_command_implementation(command)
@@ -2702,7 +2696,6 @@ function M.undo(options)
     local skip_timeline_reload = command_flag(current_command, "skip_timeline_reload", "__skip_timeline_reload")
     local skip_selection_restore = command_flag(current_command, "skip_selection_snapshot", "__skip_selection_snapshot")
     local skip_sequence_replay = command_flag(current_command, "skip_sequence_replay", "__skip_sequence_replay")
-        or REPLAY_SKIP_TYPES[current_command.type] == true
     if skip_sequence_replay then
         skip_timeline_reload = true
     end
