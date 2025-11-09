@@ -850,6 +850,11 @@ local function command_flag(command, property, param_key)
     return false
 end
 
+local REPLAY_SKIP_TYPES = {
+    NewBin = true,
+    DeleteBin = true,
+}
+
 local function sequence_exists(sequence_id)
     if not db or not sequence_id or sequence_id == "" then
         return false
@@ -2000,6 +2005,14 @@ function M.replay_events(sequence_id, target_sequence_number)
             print("Cleared master sequences for replay")
         end
 
+        -- Reset media bin assignments; commands will rebuild them during replay
+        local database_mod = require("core.database")
+        local project_settings = database_mod.get_project_settings(project_id)
+        if project_settings.media_bin_map then
+            database_mod.set_project_setting(project_id, "media_bin_map", nil)
+            print(string.format("Cleared media bin map for project '%s' for replay", project_id))
+        end
+
         local initial_timelines = sequence_initial_state.timeline[project_id] or {}
         local retain_timelines = {}
         for seq_id in pairs(initial_timelines) do
@@ -2574,7 +2587,15 @@ function M.replay_events(sequence_id, target_sequence_number)
                 timeline_state.set_playhead_time(cmd_data.playhead_time or 0)
 
                 -- Execute the command (but don't save it again - it's already in commands table)
-                local execution_success = execute_command_implementation(command)
+                local skip_sequence_replay = command_flag(command, "skip_sequence_replay", "__skip_sequence_replay")
+                    or REPLAY_SKIP_TYPES[command.type] == true
+                local execution_success = true
+                if not skip_sequence_replay then
+                    execution_success = execute_command_implementation(command)
+                else
+                    print(string.format("Skipping replay for command %d (%s) - marked skip_sequence_replay",
+                        command.sequence_number, command.type))
+                end
 
                 if execution_success then
                     commands_replayed = commands_replayed + 1
@@ -2680,6 +2701,11 @@ function M.undo(options)
 
     local skip_timeline_reload = command_flag(current_command, "skip_timeline_reload", "__skip_timeline_reload")
     local skip_selection_restore = command_flag(current_command, "skip_selection_snapshot", "__skip_selection_snapshot")
+    local skip_sequence_replay = command_flag(current_command, "skip_sequence_replay", "__skip_sequence_replay")
+        or REPLAY_SKIP_TYPES[current_command.type] == true
+    if skip_sequence_replay then
+        skip_timeline_reload = true
+    end
 
     -- Calculate target sequence (parent of current command for branching support)
     -- In a branching history, undo follows the parent link, not sequence_number - 1
@@ -2689,10 +2715,14 @@ function M.undo(options)
 
     -- Replay events up to target (or clear all if target is 0)
     local replay_success = true
-    if target_sequence > 0 then
-        replay_success = M.replay_events(sequence_id, target_sequence)
+    if skip_sequence_replay then
+        replay_success = true
     else
-        replay_success = M.replay_events(sequence_id, 0)
+        if target_sequence > 0 then
+            replay_success = M.replay_events(sequence_id, target_sequence)
+        else
+            replay_success = M.replay_events(sequence_id, 0)
+        end
     end
 
     if replay_success then

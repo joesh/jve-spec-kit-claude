@@ -14,22 +14,16 @@ local frame_utils = require("core.frame_utils")
 local qt_constants = require("core.qt_constants")
 
 local handler_seq = 0
+local KEY_RETURN = 16777220
+local KEY_ENTER = 16777221
 
 local function selection_context()
     return {
         master_lookup = M.master_clip_map,
         media_lookup = M.media_map,
         sequence_lookup = M.sequence_map,
-        project_id = M.project_id
-    }
-end
-
-local function selection_context()
-    return {
-        master_lookup = M.master_clip_map,
-        media_lookup = M.media_map,
-        sequence_lookup = M.sequence_map,
-        project_id = M.project_id
+        project_id = M.project_id,
+        bin_lookup = M.media_bin_map
     }
 end
 
@@ -38,6 +32,7 @@ local REFRESH_COMMANDS = {
     ImportFCP7XML = true,
     DeleteMasterClip = true,
     DeleteSequence = true,
+    DuplicateMasterClip = true,
     ImportResolveProject = true,
     ImportResolveDatabase = true,
     RenameItem = true,
@@ -160,6 +155,12 @@ local function collect_name_lookup(map)
         end
     end
     return lookup
+end
+
+local function focus_tree_widget()
+    if qt_set_focus and M.tree then
+        pcall(qt_set_focus, M.tree)
+    end
 end
 
 local function generate_sequential_label(prefix, lookup)
@@ -464,13 +465,11 @@ local function activate_item(item_info)
         return true
     elseif item_info.type == "bin" then
         if item_info.id then
-            M.focus_bin(item_info.id, {skip_focus = false, skip_activate = true})
-        end
-        local bin_entry = item_info.id and M.bin_map and M.bin_map[item_info.id]
-        local tree_id = bin_entry and bin_entry.tree_id
-        if tree_id and qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED then
-            -- Always expand on activation; collapse handled via disclosure triangle
-            qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED(M.tree, tree_id, true)
+            M.focus_bin(item_info.id, {
+                skip_focus = false,
+                skip_activate = true,
+                skip_expand = true
+            })
         end
         return true
     end
@@ -1185,7 +1184,9 @@ function M.create()
     end
     if qt_constants.CONTROL.SET_TREE_DROP_HANDLER then
         local drop_handler = register_handler(function(evt)
-            local ok, result = pcall(handle_tree_drop, evt)
+            local ok, result = xpcall(function()
+                return handle_tree_drop and handle_tree_drop(evt)
+            end, debug.traceback)
             if not ok then
                 print(string.format("ERROR: Project browser drop handler failed: %s", tostring(result)))
                 return false
@@ -1193,6 +1194,19 @@ function M.create()
             return result and true or false
         end)
         qt_constants.CONTROL.SET_TREE_DROP_HANDLER(tree, drop_handler)
+    end
+    if qt_constants.CONTROL.SET_TREE_KEY_HANDLER then
+        local key_handler = register_handler(function(evt)
+            local ok, handled = xpcall(function()
+                return handle_tree_key_event(evt)
+            end, debug.traceback)
+            if not ok then
+                print(string.format("ERROR: Project browser key handler failed: %s", tostring(handled)))
+                return false
+            end
+            return handled and true or false
+        end)
+        qt_constants.CONTROL.SET_TREE_KEY_HANDLER(tree, key_handler)
     end
 
     qt_constants.LAYOUT.ADD_WIDGET(layout, tree)
@@ -1263,6 +1277,21 @@ end
 
 function M.get_selected_media()
     return M.get_selected_master_clip()
+end
+
+function M.get_selection_snapshot()
+    local snapshot = {}
+    if not M.selected_items then
+        return snapshot
+    end
+    for _, item in ipairs(M.selected_items) do
+        local copy = {}
+        for key, value in pairs(item) do
+            copy[key] = value
+        end
+        snapshot[#snapshot + 1] = copy
+    end
+    return snapshot
 end
 
 -- Refresh media list from database
@@ -1395,6 +1424,50 @@ end
 
 M._test_handle_tree_drop = handle_tree_drop
 
+local function handle_tree_key_event(event)
+    if not event or not event.key then
+        return false
+    end
+
+    local key = tonumber(event.key)
+    if key ~= KEY_RETURN and key ~= KEY_ENTER then
+        return false
+    end
+
+    local selected = M.selected_item
+    if not selected then
+        return false
+    end
+
+    if selected.type == "timeline" then
+        local result = command_manager.execute(ACTIVATE_COMMAND)
+        defer_to_ui(function()
+            focus_tree_widget()
+        end)
+        return result and result.success == true
+    elseif selected.type == "bin" then
+        local bin_entry = selected
+        if selected.type ~= "bin" and selected.id and M.bin_map then
+            bin_entry = M.bin_map[selected.id] or selected
+        end
+        local tree_id = bin_entry and bin_entry.tree_id
+        if tree_id and qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED then
+            local expanded = false
+            if qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED then
+                local ok, value = pcall(qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED, M.tree, tree_id)
+                if ok then
+                    expanded = value and true or false
+                end
+            end
+            qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED(M.tree, tree_id, not expanded)
+            focus_tree_widget()
+            return true
+        end
+    end
+
+    return false
+end
+
 function M._test_get_tree_id(kind, id)
     if not kind or not id then
         return nil
@@ -1444,6 +1517,7 @@ local function create_bin_in_root()
         return
     end
 
+    M.refresh()
     start_inline_rename_after(function()
         if M.focus_bin then
             M.focus_bin(new_bin_id, {skip_activate = true})
@@ -1741,7 +1815,6 @@ function M.delete_selected_items()
     local clip_failures = 0
     local sequence_failures = 0
     local bin_failures = 0
-    local bins_to_remove = {}
 
     local handled_sequences = {}
     for _, item in ipairs(M.selected_items) do
@@ -1781,8 +1854,6 @@ function M.delete_selected_items()
                 end
                 ::continue_delete_loop::
             end
-        elseif item.type == "bin" and item.id then
-            bins_to_remove[item.id] = true
         elseif item.type == "bin" and item.id then
             local project_id = M.project_id or "default_project"
             local cmd = Command.create("DeleteBin", project_id)
@@ -1910,6 +1981,7 @@ end
 
 function M.focus_bin(bin_id, opts)
     opts = opts or {}
+    local skip_expand = opts.skip_expand == true or opts.preserve_expansion == true
     if not bin_id or bin_id == "" then
         M.selected_item = nil
         M.selected_items = {}
@@ -1922,7 +1994,9 @@ function M.focus_bin(bin_id, opts)
         return false, "Bin not found"
     end
 
-    expand_bin_chain(bin_id)
+    if not skip_expand then
+        expand_bin_chain(bin_id)
+    end
 
     if not bin.tree_id then
         return false, "Bin not present in browser"
@@ -1946,6 +2020,9 @@ function M.focus_bin(bin_id, opts)
             focus_manager.focus_panel("project_browser")
         else
             focus_manager.set_focused_panel("project_browser")
+        end
+        if qt_set_focus then
+            pcall(qt_set_focus, M.tree)
         end
     end
 
@@ -2028,6 +2105,7 @@ function M.start_inline_rename()
 end
 
 function M.focus_sequence(sequence_id, opts)
+    opts = opts or {}
     if not sequence_id or sequence_id == "" then
         return false, "Invalid sequence id"
     end
@@ -2045,7 +2123,18 @@ function M.focus_sequence(sequence_id, opts)
         sequence_lookup = M.sequence_map
     })
 
-    if not opts or not opts.skip_activate then
+    if not opts.skip_focus then
+        if focus_manager and focus_manager.focus_panel then
+            focus_manager.focus_panel("project_browser")
+        else
+            focus_manager.set_focused_panel("project_browser")
+        end
+        if qt_set_focus then
+            pcall(qt_set_focus, M.tree)
+        end
+    end
+
+    if not opts.skip_activate then
         activate_item(sequence_info)
     end
 

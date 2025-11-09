@@ -10,6 +10,24 @@ local event_log = require("core.event_log")
 local db_connection = nil
 local db_path = nil
 
+local function ensure_sequence_track_layouts_table()
+    if not db_connection then
+        return
+    end
+
+    local ok, err = db_connection:exec([[
+        CREATE TABLE IF NOT EXISTS sequence_track_layouts (
+            sequence_id TEXT PRIMARY KEY,
+            track_heights_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        )
+    ]])
+
+    if ok == false then
+        print("WARNING: Failed to ensure sequence_track_layouts table: " .. tostring(err or "unknown error"))
+    end
+end
+
 -- Initialize database at given path (legacy helper for tests/tools)
 function M.init(path)
     if not path or path == "" then
@@ -52,6 +70,8 @@ function M.set_path(path)
 
     -- Enable WAL to reduce writer contention when multiple tools touch the DB
     db_connection:exec("PRAGMA journal_mode = WAL;")
+
+    ensure_sequence_track_layouts_table()
 
     print("Database connection opened successfully")
     return true
@@ -705,6 +725,90 @@ function M.load_sequence_record(sequence_id)
 
     query:finalize()
     return sequence
+end
+
+function M.load_sequence_track_heights(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return {}
+    end
+
+    if not db_connection then
+        print("WARNING: load_sequence_track_heights: No database connection")
+        return {}
+    end
+
+    ensure_sequence_track_layouts_table()
+
+    local stmt = db_connection:prepare([[
+        SELECT track_heights_json
+        FROM sequence_track_layouts
+        WHERE sequence_id = ?
+    ]])
+
+    if not stmt then
+        print("WARNING: load_sequence_track_heights: Failed to prepare query")
+        return {}
+    end
+
+    stmt:bind_value(1, sequence_id)
+
+    local payload = {}
+    if stmt:exec() and stmt:next() then
+        local raw = stmt:value(0)
+        if raw and raw ~= "" then
+            local ok, decoded = pcall(json.decode, raw)
+            if ok and type(decoded) == "table" then
+                payload = decoded
+            end
+        end
+    end
+
+    stmt:finalize()
+    return payload
+end
+
+function M.set_sequence_track_heights(sequence_id, track_heights)
+    if not sequence_id or sequence_id == "" then
+        return false
+    end
+
+    if not db_connection then
+        print("WARNING: set_sequence_track_heights: No database connection")
+        return false
+    end
+
+    ensure_sequence_track_layouts_table()
+
+    local normalized = track_heights
+    if type(normalized) ~= "table" then
+        normalized = {}
+    end
+
+    local encoded, encode_err = json.encode(normalized)
+    if not encoded then
+        print("WARNING: set_sequence_track_heights: Failed to encode JSON: " .. tostring(encode_err))
+        return false
+    end
+
+    local stmt = db_connection:prepare([[
+        INSERT INTO sequence_track_layouts (sequence_id, track_heights_json, updated_at)
+        VALUES (?, ?, strftime('%s','now'))
+        ON CONFLICT(sequence_id) DO UPDATE SET
+            track_heights_json = excluded.track_heights_json,
+            updated_at = excluded.updated_at
+    ]])
+
+    if not stmt then
+        print("WARNING: set_sequence_track_heights: Failed to prepare upsert statement")
+        return false
+    end
+
+    stmt:bind_value(1, sequence_id)
+    stmt:bind_value(2, encoded)
+
+    local ok = stmt:exec()
+    stmt:finalize()
+    return ok ~= false
 end
 
 local function decode_settings_json(raw)

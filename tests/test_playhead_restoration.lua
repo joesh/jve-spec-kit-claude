@@ -131,7 +131,12 @@ db:exec([[
         name TEXT NOT NULL,
         track_type TEXT NOT NULL,
         track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
+        enabled INTEGER NOT NULL DEFAULT 1,
+        locked INTEGER NOT NULL DEFAULT 0,
+        muted INTEGER NOT NULL DEFAULT 0,
+        soloed INTEGER NOT NULL DEFAULT 0,
+        volume REAL NOT NULL DEFAULT 1.0,
+        pan REAL NOT NULL DEFAULT 0.0
     );
 
     CREATE TABLE IF NOT EXISTS clips (

@@ -22,6 +22,7 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     local json = require("dkjson")
     local uuid = require("uuid")
     local database = require("core.database")
+    local ui_constants = require("core.ui_constants")
     local Sequence = require("models.sequence")
     local Clip = require("models.clip")
     local set_last_error = set_last_error_fn or function(_) end
@@ -189,6 +190,7 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     end
 
     command_executors["NewBin"] = function(command)
+        command:set_parameter("__skip_sequence_replay", true)
         local project_id = command:get_parameter("project_id") or "default_project"
         local bin_name = trim_string(command:get_parameter("name"))
         if bin_name == "" then
@@ -260,6 +262,7 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     end
 
     command_executors["DeleteBin"] = function(command)
+        command:set_parameter("__skip_sequence_replay", true)
         local project_id = command:get_parameter("project_id") or "default_project"
         local bin_id = command:get_parameter("bin_id")
         if not bin_id or bin_id == "" then
@@ -463,6 +466,111 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
         return true
     end
 
+    command_executors["DuplicateMasterClip"] = function(command)
+        local snapshot = command:get_parameter("clip_snapshot")
+        if type(snapshot) ~= "table" then
+            set_last_error("DuplicateMasterClip: Missing clip_snapshot parameter")
+            return false
+        end
+
+        local media_id = snapshot.media_id
+        if not media_id or media_id == "" then
+            set_last_error("DuplicateMasterClip: Snapshot missing media_id")
+            return false
+        end
+
+        local project_id = command:get_parameter("project_id") or snapshot.project_id or "default_project"
+        local target_bin_id = command:get_parameter("bin_id")
+        if target_bin_id == "" then
+            target_bin_id = nil
+        end
+
+        local new_clip_id = command:get_parameter("new_clip_id")
+        if not new_clip_id or new_clip_id == "" then
+            new_clip_id = uuid.generate()
+            command:set_parameter("new_clip_id", new_clip_id)
+        end
+
+        local clip_name = command:get_parameter("name") or snapshot.name or "Master Clip Copy"
+        local duration = snapshot.duration or ((snapshot.source_out or 0) - (snapshot.source_in or 0))
+        if duration <= 0 then
+            duration = 1
+        end
+
+        local clip_opts = {
+            id = new_clip_id,
+            project_id = project_id,
+            clip_kind = "master",
+            source_sequence_id = snapshot.source_sequence_id,
+            start_time = snapshot.start_time or 0,
+            duration = duration,
+            source_in = snapshot.source_in or 0,
+            source_out = snapshot.source_out or ((snapshot.source_in or 0) + duration),
+            enabled = snapshot.enabled ~= false,
+            offline = snapshot.offline == true,
+        }
+
+        local clip = Clip.create(clip_name, media_id, clip_opts)
+        command:set_parameter("project_id", project_id)
+
+        local ok, actions = clip:save(db, {skip_occlusion = true})
+        if not ok then
+            set_last_error("DuplicateMasterClip: Failed to save duplicated clip")
+            return false
+        end
+        if actions and #actions > 0 then
+            command:set_parameter("occlusion_actions", actions)
+        end
+
+        local copied_properties = command:get_parameter("copied_properties")
+        if type(copied_properties) == "table" and #copied_properties > 0 then
+            delete_properties_for_clip(new_clip_id)
+            insert_properties_for_clip(new_clip_id, copied_properties)
+        end
+
+        if target_bin_id then
+            local settings = database.get_project_settings(project_id)
+            local bin_map = (settings and type(settings.media_bin_map) == "table") and settings.media_bin_map or {}
+            bin_map[new_clip_id] = target_bin_id
+            command:set_parameter("assigned_bin_id", target_bin_id)
+            if not database.set_project_setting(project_id, "media_bin_map", bin_map) then
+                print(string.format("WARNING: DuplicateMasterClip: Failed to persist bin assignment for %s", new_clip_id))
+            end
+        end
+
+        print(string.format("✅ Duplicated master clip '%s' → %s", tostring(snapshot.name or media_id), new_clip_id))
+        return true
+    end
+
+    command_undoers["DuplicateMasterClip"] = function(command)
+        local clip_id = command:get_parameter("new_clip_id")
+        if not clip_id or clip_id == "" then
+            set_last_error("UndoDuplicateMasterClip: Missing new_clip_id")
+            return false
+        end
+
+        local project_id = command:get_parameter("project_id") or "default_project"
+        local clip = Clip.load_optional(clip_id, db)
+        if clip then
+            delete_properties_for_clip(clip_id)
+            if not clip:delete(db) then
+                set_last_error("UndoDuplicateMasterClip: Failed to delete duplicated clip")
+                return false
+            end
+        end
+
+        local settings = database.get_project_settings(project_id)
+        local bin_map = (settings and type(settings.media_bin_map) == "table") and settings.media_bin_map or nil
+        if bin_map and bin_map[clip_id] then
+            bin_map[clip_id] = nil
+            local next_entry = next(bin_map)
+            local value = next_entry and bin_map or nil
+            database.set_project_setting(project_id, "media_bin_map", value)
+        end
+
+        return true
+    end
+
     local function resolve_sequence_id_for_edges(command, primary_edge, edge_list)
         local provided = command:get_parameter("sequence_id")
 
@@ -655,17 +763,80 @@ command_executors["CreateSequence"] = function(command)
     end
 
     local Sequence = require('models.sequence')
+    local Track = require('models.track')
+
+    local MIN_TRACK_HEIGHT = 24
+    local DEFAULT_TRACK_HEIGHT = (ui_constants and ui_constants.TIMELINE and ui_constants.TIMELINE.TRACK_HEIGHT) or 50
+    local TRACK_TEMPLATE_KEY = "track_height_template"
+
+    local function normalize_height(value)
+        if type(value) ~= "number" then
+            return DEFAULT_TRACK_HEIGHT
+        end
+        local clamped = math.floor(value)
+        if clamped < MIN_TRACK_HEIGHT then
+            clamped = MIN_TRACK_HEIGHT
+        end
+        return clamped
+    end
+
+    local function seed_default_tracks(sequence_id, project_id)
+        local template = nil
+        if database.get_project_setting then
+            template = database.get_project_setting(project_id, TRACK_TEMPLATE_KEY)
+        end
+        local template_video = type(template) == "table" and template.video or {}
+        local template_audio = type(template) == "table" and template.audio or {}
+
+        local definitions = {
+            {builder = Track.create_video, label = "V1", index = 1, kind = "video"},
+            {builder = Track.create_video, label = "V2", index = 2, kind = "video"},
+            {builder = Track.create_video, label = "V3", index = 3, kind = "video"},
+            {builder = Track.create_audio, label = "A1", index = 1, kind = "audio"},
+            {builder = Track.create_audio, label = "A2", index = 2, kind = "audio"},
+            {builder = Track.create_audio, label = "A3", index = 3, kind = "audio"},
+        }
+
+        local height_map = {}
+
+        for _, def in ipairs(definitions) do
+            local track = def.builder(def.label, sequence_id, {
+                index = def.index,
+                db = db
+            })
+            if not track or not track:save(db) then
+                return false, string.format("CreateSequence: Failed to create track %s", def.label)
+            end
+
+            local template_source = def.kind == "video" and template_video or template_audio
+            local desired_height = template_source and template_source[def.index] or nil
+            height_map[track.id] = normalize_height(desired_height)
+        end
+
+        if database.set_sequence_track_heights then
+            database.set_sequence_track_heights(sequence_id, height_map)
+        end
+
+        return true
+    end
+
     local sequence = Sequence.create(name, project_id, frame_rate, width, height)
 
     command:set_parameter("sequence_id", sequence.id)
 
-    if sequence:save(db) then
-        print(string.format("Created sequence: %s with ID: %s", name, sequence.id))
-        return true
-    else
+    if not sequence:save(db) then
         print(string.format("Failed to save sequence: %s", name))
         return false
     end
+
+    local seeded, seed_err = seed_default_tracks(sequence.id, project_id)
+    if not seeded then
+        print(string.format("ERROR: %s", seed_err or "CreateSequence: Failed to seed default tracks"))
+        return false
+    end
+
+    print(string.format("Created sequence: %s with ID: %s", name, sequence.id))
+    return true
 end
 
 -- BatchCommand: Execute multiple commands as a single undo unit

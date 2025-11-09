@@ -9,6 +9,10 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local ui_constants = require("core.ui_constants")
 
+local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
+local track_layout_dirty = false
+local track_template_dirty = false
+
 -- State listeners (views register here for notifications)
 local listeners = {}
 
@@ -77,6 +81,66 @@ local state = {
 }
 
 local viewport_guard_count = 0
+
+local function clamp_track_height(height)
+    if type(height) ~= "number" then
+        return nil
+    end
+    local clamped = math.floor(height)
+    if clamped < 24 then
+        clamped = 24
+    end
+    return clamped
+end
+
+local function apply_saved_track_heights(saved_map)
+    if type(saved_map) ~= "table" then
+        return false
+    end
+
+    local applied = false
+    for _, track in ipairs(state.tracks) do
+        local stored = saved_map[track.id]
+        local normalized = clamp_track_height(stored)
+        if normalized then
+            track.height = normalized
+            applied = true
+        end
+    end
+    return applied
+end
+
+local function build_track_height_map()
+    local result = {}
+    for _, track in ipairs(state.tracks) do
+        if track.id and track.id ~= "" then
+            result[track.id] = clamp_track_height(track.height or M.dimensions.default_track_height)
+        end
+    end
+    return result
+end
+
+local function build_track_height_template()
+    if not state.tracks or #state.tracks == 0 then
+        return nil
+    end
+
+    local template = {
+        video = {},
+        audio = {}
+    }
+
+    for _, track in ipairs(state.tracks) do
+        local normalized = clamp_track_height(track.height or M.dimensions.default_track_height)
+        if track.track_type == "VIDEO" then
+            table.insert(template.video, normalized)
+        elseif track.track_type == "AUDIO" then
+            table.insert(template.audio, normalized)
+        end
+    end
+
+    return template
+end
 
 local function ensure_sequence_viewport_columns(db_conn)
     if not db_conn then
@@ -421,11 +485,17 @@ end
 
 -- Initialize state from database
 function M.init(sequence_id)
+    if track_layout_dirty or track_template_dirty then
+        M.persist_state_to_db(true)
+    end
+
     sequence_id = sequence_id or "default_sequence"
     state.sequence_id = sequence_id  -- Store for reload
 
     -- Load data from database
     state.tracks = db.load_tracks(sequence_id)
+    track_layout_dirty = false
+    track_template_dirty = false
     state.clips = db.load_clips(sequence_id)
 
     -- Load playhead and selection state from sequence
@@ -560,9 +630,19 @@ function M.init(sequence_id)
         end
     end
 
-    -- Initialize track heights to default
+    -- Initialize track heights to default first, then override with persisted state/template
     for _, track in ipairs(state.tracks) do
         track.height = M.dimensions.default_track_height
+    end
+
+    local restored_track_layout = false
+    if db.load_sequence_track_heights then
+        local saved_heights = db.load_sequence_track_heights(sequence_id)
+        local has_saved_layout = type(saved_heights) == "table" and next(saved_heights) ~= nil
+        restored_track_layout = apply_saved_track_heights(saved_heights)
+        if not has_saved_layout and db.set_sequence_track_heights then
+            db.set_sequence_track_heights(sequence_id, build_track_height_map())
+        end
     end
 
     print(string.format("Timeline state initialized: %d tracks, %d clips",
@@ -591,16 +671,21 @@ function M.init(sequence_id)
 end
 
 -- Reload clips from database (for after commands that modify database)
-function M.reload_clips(target_sequence_id)
-    if target_sequence_id and target_sequence_id ~= state.sequence_id then
-        -- Full re-initialization keeps tracks, marks, and persisted metadata in sync.
-        return M.init(target_sequence_id)
+function M.reload_clips(target_sequence_id, opts)
+    local active_sequence = state.sequence_id
+    if not active_sequence or active_sequence == "" then
+        local fallback = target_sequence_id or "default_sequence"
+        return M.init(fallback)
     end
 
-    local sequence_id = state.sequence_id or target_sequence_id or "default_sequence"
-    if not state.sequence_id then
-        state.sequence_id = sequence_id
+    if target_sequence_id and target_sequence_id ~= "" and target_sequence_id ~= active_sequence then
+        if opts and opts.allow_sequence_switch then
+            return M.init(target_sequence_id)
+        end
+        return false
     end
+
+    local sequence_id = active_sequence
     state.clips = db.load_clips(sequence_id)
 
     if state.selected_clips and #state.selected_clips > 0 then
@@ -632,6 +717,7 @@ function M.reload_clips(target_sequence_id)
         M.persist_state_to_db()
     end
     notify_listeners()
+    return true
 end
 
 -- Listener management
@@ -1500,9 +1586,14 @@ end
 function M.set_track_height(track_id, height)
     for _, track in ipairs(state.tracks) do
         if track.id == track_id then
-            local new_height = math.max(24, height or M.dimensions.default_track_height)
-            track.height = new_height
-            notify_listeners()
+            local new_height = clamp_track_height(height or track.height or M.dimensions.default_track_height) or M.dimensions.default_track_height
+            if track.height ~= new_height then
+                track.height = new_height
+                track_layout_dirty = true
+                track_template_dirty = true
+                notify_listeners()
+                M.persist_state_to_db()
+            end
             return true
         end
     end
@@ -1614,6 +1705,21 @@ local function flush_state_to_db()
         query:bind_value(7, state.mark_out_time)
         query:bind_value(8, sequence_id)
         query:exec()
+    end
+
+    if track_layout_dirty and db.set_sequence_track_heights then
+        local height_map = build_track_height_map()
+        db.set_sequence_track_heights(sequence_id, height_map)
+        track_layout_dirty = false
+    end
+
+    if track_template_dirty and db.set_project_setting then
+        local template = build_track_height_template()
+        if template then
+            local project_id = state.project_id or "default_project"
+            db.set_project_setting(project_id, TRACK_HEIGHT_TEMPLATE_KEY, template)
+        end
+        track_template_dirty = false
     end
 end
 

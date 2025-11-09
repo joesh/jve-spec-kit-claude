@@ -59,6 +59,13 @@ local function normalize_master_clip(item, context)
     local source_out = tonumber(clip.source_out) or duration
 
     local project_id = clip.project_id or context.project_id or (media and media.project_id) or "default_project"
+    local bin_lookup = context.bin_lookup
+    local bin_id = nil
+    if item.bin_id then
+        bin_id = item.bin_id
+    elseif bin_lookup and clip.clip_id then
+        bin_id = bin_lookup[clip.clip_id]
+    end
 
     local entry = {
         id = clip.clip_id,
@@ -80,7 +87,8 @@ local function normalize_master_clip(item, context)
         item_type = "master_clip",
         view = "project_browser",
         project_id = project_id,
-        display_name = clip.name or (media and media.name) or clip.clip_id
+        display_name = clip.name or (media and media.name) or clip.clip_id,
+        bin_id = bin_id
     }
 
     local ok, inspectable = pcall(inspectable_factory.clip, {

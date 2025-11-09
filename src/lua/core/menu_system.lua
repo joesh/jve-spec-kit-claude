@@ -26,6 +26,7 @@ local command_manager = nil
 local main_window = nil
 local project_browser = nil
 local timeline_panel = nil
+local clipboard_actions = require("core.clipboard_actions")
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
@@ -779,9 +780,16 @@ local function create_action_callback(command_name, params)
             else
                 print(string.format("⚠️  Cut returned error: %s", result.error_message or "unknown"))
             end
-        elseif command_name == "Copy" or command_name == "Paste" then
-            print(string.format("⚠️  Command '%s' not implemented yet", command_name))
-            print("   TODO: Implement clipboard operations")
+        elseif command_name == "Copy" then
+            local ok, err = clipboard_actions.copy()
+            if not ok then
+                print(string.format("⚠️  Copy failed: %s", err or "unknown error"))
+            end
+        elseif command_name == "Paste" then
+            local ok, err = clipboard_actions.paste()
+            if not ok then
+                print(string.format("⚠️  Paste failed: %s", err or "unknown error"))
+            end
         elseif command_name == "Delete" then
             if keyboard_shortcuts.perform_delete_action({shift = false}) then
                 return

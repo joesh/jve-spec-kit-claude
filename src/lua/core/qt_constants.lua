@@ -80,6 +80,7 @@ if qt_constants then
     qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE = qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE or require_global_function("qt_set_tree_drag_drop_mode")
     qt_constants.CONTROL.SET_TREE_DROP_HANDLER = qt_constants.CONTROL.SET_TREE_DROP_HANDLER or require_global_function("qt_set_tree_drop_handler")
     qt_constants.CONTROL.SET_TREE_KEY_HANDLER = qt_constants.CONTROL.SET_TREE_KEY_HANDLER or require_global_function("qt_set_tree_key_handler")
+    qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED = qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED or require_global_function("qt_is_tree_item_expanded")
     qt_constants.CONTROL.GET_TREE_ITEM_AT = qt_constants.CONTROL.GET_TREE_ITEM_AT or require_global_function("qt_get_tree_item_at")
 
     -- Note: CONTROL section is now provided by the real qt_constants from C++

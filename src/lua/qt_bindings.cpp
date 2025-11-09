@@ -106,6 +106,7 @@ int lua_set_widget_cursor(lua_State* L);
 int lua_set_tree_selection_mode(lua_State* L);
 int lua_set_tree_item_editable(lua_State* L);
 int lua_edit_tree_item(lua_State* L);
+int lua_is_tree_item_expanded(lua_State* L);
 int lua_set_tree_item_text(lua_State* L);
 int lua_set_tree_item_changed_handler(lua_State* L);
 int lua_set_tree_close_editor_handler(lua_State* L);
@@ -1151,6 +1152,8 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "CLEAR_TREE");
     lua_pushcfunction(L, lua_set_tree_item_expanded);
     lua_setfield(L, -2, "SET_TREE_ITEM_EXPANDED");
+    lua_pushcfunction(L, lua_is_tree_item_expanded);
+    lua_setfield(L, -2, "IS_TREE_ITEM_EXPANDED");
     lua_pushcfunction(L, lua_set_tree_item_data);
     lua_setfield(L, -2, "SET_TREE_ITEM_DATA");
     lua_pushcfunction(L, lua_get_tree_item_data);
@@ -1206,6 +1209,8 @@ lua_setfield(L, -2, "SET_TREE_DOUBLE_CLICK_HANDLER");
     lua_setglobal(L, "qt_set_tree_drop_handler");
     lua_pushcfunction(L, lua_set_tree_key_handler);
     lua_setglobal(L, "qt_set_tree_key_handler");
+    lua_pushcfunction(L, lua_is_tree_item_expanded);
+    lua_setglobal(L, "qt_is_tree_item_expanded");
     lua_pushcfunction(L, lua_set_tree_item_icon);
     lua_setglobal(L, "qt_set_tree_item_icon");
     lua_pushcfunction(L, lua_set_tree_item_double_click_handler);
@@ -3812,6 +3817,33 @@ int lua_set_tree_item_expanded(lua_State* L)
     item->setText(0, text);
 
     lua_pushboolean(L, 1);
+    return 1;
+}
+
+int lua_is_tree_item_expanded(lua_State* L)
+{
+    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    if (!widget) {
+        qWarning() << "Invalid tree widget in is_tree_item_expanded";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QTreeWidget* tree = qobject_cast<QTreeWidget*>(widget);
+    if (!tree) {
+        qWarning() << "Widget is not a QTreeWidget in is_tree_item_expanded";
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    lua_Integer item_id = lua_tointeger(L, 2);
+    QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+    if (!item) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    lua_pushboolean(L, item->isExpanded());
     return 1;
 }
 
