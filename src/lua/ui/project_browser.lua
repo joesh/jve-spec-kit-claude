@@ -1424,6 +1424,10 @@ end
 M._test_handle_tree_drop = handle_tree_drop
 
 local function handle_tree_key_event(event)
+    if not keymap or not keymap.handle then
+        return false
+    end
+
     return keymap.handle(event, {
         get_selected_item = function()
             return M.selected_item

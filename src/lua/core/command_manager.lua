@@ -2000,14 +2000,6 @@ function M.replay_events(sequence_id, target_sequence_number)
             print("Cleared master sequences for replay")
         end
 
-        -- Reset media bin assignments; commands will rebuild them during replay
-        local database_mod = require("core.database")
-        local project_settings = database_mod.get_project_settings(project_id)
-        if project_settings.media_bin_map then
-            database_mod.set_project_setting(project_id, "media_bin_map", nil)
-            print(string.format("Cleared media bin map for project '%s' for replay", project_id))
-        end
-
         local initial_timelines = sequence_initial_state.timeline[project_id] or {}
         local retain_timelines = {}
         for seq_id in pairs(initial_timelines) do
