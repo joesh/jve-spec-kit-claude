@@ -4,6 +4,7 @@
 
 local M = {}
 local db = require("core.database")
+local tag_service = require("core.tag_service")
 local ui_constants = require("core.ui_constants")
 local focus_manager = require("ui.focus_manager")
 local command_manager = require("core.command_manager")
@@ -41,6 +42,7 @@ local REFRESH_COMMANDS = {
 local command_listener_registered = false
 local is_restoring_selection = false
 local show_browser_context_menu  -- forward declaration for tree context menu handler
+local handle_tree_key_event      -- forward declaration for key handler
 
 local function should_refresh_command(command_type)
     return command_type and REFRESH_COMMANDS[command_type] == true
@@ -599,9 +601,9 @@ local function populate_tree()
     M.project_id = project_id
 
     local settings = db.get_project_settings(M.project_id)
-    M.media_bin_map = (settings and settings.media_bin_map and type(settings.media_bin_map) == "table") and settings.media_bin_map or {}
+    M.media_bin_map = tag_service.list_master_clip_assignments(M.project_id)
 
-    local bins = db.load_bins()
+    local bins = tag_service.list(project_id)
     M.bins = bins
     local media_items = db.load_media()
     local master_clips = db.load_master_clips(project_id)
@@ -1361,7 +1363,7 @@ local function handle_tree_drop(event)
         end
 
         local project_id = M.project_id or db.get_current_project_id()
-        if not db.save_bins(project_id, M.bins) then
+        if not tag_service.save_hierarchy(project_id, M.bins) then
             print("⚠️  Failed to save bin hierarchy after drag/drop")
             return true
         end
@@ -1378,27 +1380,28 @@ local function handle_tree_drop(event)
 
     if #dragged_clips > 0 then
         local target_bin_id = resolve_bin_parent(target_info, position)
-        local changed = false
+        local changed_ids = {}
         for _, clip_info in ipairs(dragged_clips) do
             if clip_info.bin_id ~= target_bin_id then
                 clip_info.bin_id = target_bin_id
-                M.media_bin_map = M.media_bin_map or {}
                 if target_bin_id then
                     M.media_bin_map[clip_info.clip_id] = target_bin_id
                 else
                     M.media_bin_map[clip_info.clip_id] = nil
                 end
-                changed = true
+                table.insert(changed_ids, clip_info.clip_id)
             end
         end
 
-        if not changed then
+        if #changed_ids == 0 then
             return true
         end
 
         local project_id = M.project_id or db.get_current_project_id()
-        if not db.set_project_setting(project_id, "media_bin_map", M.media_bin_map) then
-            print("⚠️  Failed to persist media-bin assignments")
+        local ok, assign_err = tag_service.assign_master_clips(project_id, changed_ids, target_bin_id)
+        if not ok then
+            print(string.format("⚠️  Failed to persist media-bin assignments: %s", tostring(assign_err or "unknown error")))
+            M.media_bin_map = tag_service.list_master_clip_assignments(project_id)
         end
 
         defer_to_ui(function()
@@ -1423,7 +1426,7 @@ end
 
 M._test_handle_tree_drop = handle_tree_drop
 
-local function handle_tree_key_event(event)
+handle_tree_key_event = function(event)
     if not keymap or not keymap.handle then
         return false
     end

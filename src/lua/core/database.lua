@@ -6,9 +6,87 @@ local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
 local event_log = require("core.event_log")
 
+local BIN_NAMESPACE = "bin"
+
 -- Database connection
 local db_connection = nil
 local db_path = nil
+local tag_tables_supported = nil
+
+local function safe_remove(path)
+    if not path or path == "" then
+        return
+    end
+    local ok, err = os.remove(path)
+    if ok == nil and err and not err:match("No such file") then
+        print(string.format("WARNING: Failed to remove %s: %s", path, tostring(err)))
+    end
+end
+
+local function cleanup_wal_sidecars(base_path)
+    if not base_path or base_path == "" then
+        return
+    end
+    safe_remove(base_path .. "-wal")
+    safe_remove(base_path .. "-shm")
+end
+
+local function has_com_apple_macl_label(path)
+    if not path or path == "" then
+        return false
+    end
+    if not jit or jit.os ~= "OSX" then
+        return false
+    end
+    if not io or not io.popen then
+        return false
+    end
+    local handle = io.popen(string.format("/usr/bin/xattr -p com.apple.macl %q 2>/dev/null", path))
+    if not handle then
+        return false
+    end
+    local output = handle:read("*a")
+    handle:close()
+    return output and output ~= ""
+end
+
+local function detect_tag_table_support()
+    if not db_connection then
+        return false
+    end
+    local stmt = db_connection:prepare([[SELECT name FROM sqlite_master WHERE type='table' AND name='tags']])
+    if not stmt then
+        return false
+    end
+    local has_tags = stmt:exec() and stmt:next()
+    stmt:finalize()
+    if not has_tags then
+        return false
+    end
+
+    stmt = db_connection:prepare([[SELECT name FROM sqlite_master WHERE type='table' AND name='tag_assignments']])
+    if not stmt then
+        return false
+    end
+    local has_assignments = stmt:exec() and stmt:next()
+    stmt:finalize()
+    return has_assignments
+end
+
+local function tag_tables_available()
+    if tag_tables_supported == nil then
+        tag_tables_supported = detect_tag_table_support()
+    elseif tag_tables_supported == false then
+        tag_tables_supported = detect_tag_table_support()
+    end
+    return tag_tables_supported
+end
+
+local function require_tag_tables()
+    if not tag_tables_available() then
+        error("FATAL: Tag tables missing (tag_namespaces/tags/tag_assignments). Run schema migrations to create them.")
+    end
+end
 
 local function ensure_sequence_track_layouts_table()
     if not db_connection then
@@ -28,6 +106,80 @@ local function ensure_sequence_track_layouts_table()
     end
 end
 
+local function trim_text(value)
+    if type(value) ~= "string" then
+        return ""
+    end
+    local stripped = value:match("^%s*(.-)%s*$")
+    if not stripped then
+        return ""
+    end
+    return stripped
+end
+
+local function ensure_tag_namespace(namespace_id, display_name)
+    if not db_connection then
+        return false
+    end
+    local stmt = db_connection:prepare("INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES(?, ?)")
+    if not stmt then
+        return false
+    end
+    stmt:bind_value(1, namespace_id)
+    stmt:bind_value(2, display_name or namespace_id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    return ok ~= false
+end
+
+local function resolve_namespace(opts)
+    opts = opts or {}
+    local namespace_id = opts.namespace_id or BIN_NAMESPACE
+    local display_name = opts.display_name
+    if not display_name or display_name == "" then
+        if namespace_id == BIN_NAMESPACE then
+            display_name = "Bins"
+        else
+            display_name = namespace_id
+        end
+    end
+    return namespace_id, display_name
+end
+
+local function begin_write_transaction()
+    if not db_connection then
+        return nil, "No database connection"
+    end
+    local ok, err = db_connection:exec("BEGIN IMMEDIATE;")
+    if ok == false then
+        local message = tostring(err or "")
+        if message:find("within a transaction", 1, true) then
+            return false, nil
+        end
+        return nil, message
+    end
+    return true, nil
+end
+
+local function rollback_transaction(started)
+    if started then
+        db_connection:exec("ROLLBACK;")
+    end
+end
+
+local function commit_transaction(started, context)
+    if not started then
+        return true
+    end
+    local ok, err = db_connection:exec("COMMIT;")
+    if ok == false then
+        print(string.format("WARNING: %s: failed to commit: %s", tostring(context or "database"), tostring(err)))
+        db_connection:exec("ROLLBACK;")
+        return false
+    end
+    return true
+end
+
 -- Initialize database at given path (legacy helper for tests/tools)
 function M.init(path)
     if not path or path == "" then
@@ -42,14 +194,31 @@ function M.set_path(path)
         db_connection:close()
         db_connection = nil
     end
+    tag_tables_supported = nil
 
     db_path = path
     print("Database path set to: " .. path)
 
     -- Open database connection
     local db, err = sqlite3.open(path)
+    if not db and err and err:match("disk I/O error") then
+        print(string.format("WARNING: SQLite reported 'disk I/O error' for %s; removing stale WAL/SHM files and retrying...", path))
+        cleanup_wal_sidecars(path)
+        db, err = sqlite3.open(path)
+        if db then
+            print("✅ Removed stale WAL/SHM files and reopened database")
+        end
+    end
     if not db then
-        print("ERROR: Failed to open database: " .. (err or "unknown error"))
+        local extra = ""
+        if err and err:match("disk I/O error") then
+            if has_com_apple_macl_label(path) then
+                extra = " macOS applied the com.apple.macl label to this file. Add JVEEditor (and helper scripts) to Full Disk Access under System Settings → Privacy & Security or move the project file outside protected folders such as ~/Documents."
+            else
+                extra = " Ensure the path is writable and not locked by another application."
+            end
+        end
+        print("ERROR: Failed to open database: " .. (err or "unknown error") .. extra)
         return false
     end
 
@@ -72,6 +241,7 @@ function M.set_path(path)
     db_connection:exec("PRAGMA journal_mode = WAL;")
 
     ensure_sequence_track_layouts_table()
+    tag_tables_available()
 
     print("Database connection opened successfully")
     return true
@@ -987,100 +1157,436 @@ function M.get_tag_namespaces()
     return namespace_list
 end
 
--- Legacy compatibility: load bins from "bin" namespace tags
-local function normalize_bins(bins)
-    if type(bins) ~= "table" then
-        return {}
-    end
-
-    local normalized = {}
-    local seen = {}
-
-    for _, bin in ipairs(bins) do
+local function build_bin_lookup(bins)
+    local ordered = {}
+    local lookup = {}
+    for index, bin in ipairs(bins or {}) do
         if type(bin) == "table" then
             local id = bin.id
-            local name = bin.name
-            if type(id) == "string" and id ~= "" and type(name) == "string" and name ~= "" and not seen[id] then
-                table.insert(normalized, {
+            local name = trim_text(bin.name)
+            if type(id) == "string" and id ~= "" and name ~= "" then
+                local parent_id = bin.parent_id
+                if type(parent_id) ~= "string" or parent_id == "" then
+                    parent_id = nil
+                end
+                local entry = {
                     id = id,
                     name = name,
-                    parent_id = bin.parent_id ~= "" and bin.parent_id or nil
-                })
-                seen[id] = true
+                    parent_id = parent_id
+                }
+                lookup[id] = entry
+                table.insert(ordered, entry)
             end
         end
     end
-
-    table.sort(normalized, function(a, b)
+    table.sort(ordered, function(a, b)
         return a.name:lower() < b.name:lower()
     end)
-
-    return normalized
+    for sort_index, entry in ipairs(ordered) do
+        entry.sort_index = sort_index
+    end
+    return ordered, lookup
 end
 
-function M.load_bins(project_id)
-    project_id = project_id or M.get_current_project_id()
-    local settings = M.get_project_settings(project_id)
-    local settings_bins = settings and settings.bin_hierarchy
+local function resolve_bin_path(bin_id, lookup, cache, stack)
+    local node = lookup[bin_id]
+    if not node then
+        return nil
+    end
+    if cache[bin_id] then
+        return cache[bin_id]
+    end
+    stack = stack or {}
+    if stack[bin_id] then
+        return nil
+    end
+    stack[bin_id] = true
+    local parent_path = nil
+    local parent_id = node.parent_id
+    if parent_id and lookup[parent_id] then
+        parent_path = resolve_bin_path(parent_id, lookup, cache, stack)
+        if not parent_path then
+            node.parent_id = nil
+        end
+    else
+        node.parent_id = nil
+    end
+    stack[bin_id] = nil
+    local path = parent_path and (parent_path .. "/" .. node.name) or node.name
+    cache[bin_id] = path
+    return path
+end
 
-    if type(settings_bins) == "table" and #settings_bins > 0 then
-        return normalize_bins(settings_bins)
+local function validate_bin_id(project_id, bin_id)
+    if not bin_id or bin_id == "" or not db_connection then
+        return false
+    end
+    local stmt = db_connection:prepare([[
+        SELECT 1 FROM tags
+        WHERE id = ? AND project_id = ? AND namespace_id = ?
+        LIMIT 1
+    ]])
+    if not stmt then
+        return false
+    end
+    stmt:bind_value(1, bin_id)
+    stmt:bind_value(2, project_id)
+    stmt:bind_value(3, BIN_NAMESPACE)
+    local exists = false
+    if stmt:exec() and stmt:next() then
+        exists = true
+    end
+    stmt:finalize()
+    return exists
+end
+
+function M.load_bins(project_id, opts)
+    project_id = project_id or M.get_current_project_id()
+    if not db_connection then
+        error("FATAL: No database connection - cannot load bins")
     end
 
-    -- Legacy compatibility: derive bins from tag namespace when no hierarchy stored
-    print("Loading bins from tag namespace")
+    require_tag_tables()
+
+    local namespace_id, display_name = resolve_namespace(opts)
+    ensure_tag_namespace(namespace_id, display_name)
+
+    local stmt = db_connection:prepare([[
+        SELECT id, name, parent_id
+        FROM tags
+        WHERE project_id = ? AND namespace_id = ?
+        ORDER BY sort_index ASC, path ASC
+    ]])
+    if not stmt then
+        return {}
+    end
+    stmt:bind_value(1, project_id)
+    stmt:bind_value(2, namespace_id)
+
     local bins = {}
-    local bin_map = {}
+    if stmt:exec() then
+        while stmt:next() do
+            table.insert(bins, {
+                id = stmt:value(0),
+                name = stmt:value(1),
+                parent_id = stmt:value(2)
+            })
+        end
+    end
+    stmt:finalize()
+    return bins
+end
 
-    local media_items = M.load_media()
-    for _, media in ipairs(media_items) do
-        if media.tags then
-            for _, tag in ipairs(media.tags) do
-                if tag.namespace == "bin" and tag.tag_path then
-                    local parts = {}
-                    for part in tag.tag_path:gmatch("[^/]+") do
-                        table.insert(parts, part)
-                    end
+function M.save_bins(project_id, bins, opts)
+    project_id = project_id or M.get_current_project_id()
+    if not db_connection then
+        print("WARNING: save_bins: No database connection")
+        return false
+    end
 
-                    local current_path = ""
-                    local parent_path = nil
-                    for index, part in ipairs(parts) do
-                        if index == 1 then
-                            current_path = part
-                        else
-                            current_path = current_path .. "/" .. part
-                        end
+    require_tag_tables()
 
-                        if not bin_map[current_path] then
-                            bin_map[current_path] = {
-                                id = "bin_" .. current_path:gsub("/", "_"),
-                                name = part,
-                                parent_id = parent_path and bin_map[parent_path].id or nil
-                            }
-                        end
+    local namespace_id, display_name = resolve_namespace(opts)
+    ensure_tag_namespace(namespace_id, display_name)
 
-                        parent_path = current_path
-                    end
+    local ordered, lookup = build_bin_lookup(bins)
+    local path_cache = {}
+    for _, bin in ipairs(ordered) do
+        local path = resolve_bin_path(bin.id, lookup, path_cache, {})
+        if not path or path == "" then
+            print(string.format("WARNING: save_bins: invalid hierarchy for bin %s", tostring(bin.id)))
+            return false
+        end
+    end
+
+    local started, begin_err = begin_write_transaction()
+    if started == nil then
+        print("WARNING: save_bins: failed to begin transaction: " .. tostring(begin_err))
+        return false
+    end
+
+    local upsert_stmt = db_connection:prepare([[
+        INSERT INTO tags (id, project_id, namespace_id, name, path, parent_id, sort_index)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            path = excluded.path,
+            parent_id = excluded.parent_id,
+            sort_index = excluded.sort_index,
+            updated_at = strftime('%s','now')
+    ]])
+    if not upsert_stmt then
+        rollback_transaction(started)
+        return false
+    end
+
+    local inserted = {}
+    for _, bin in ipairs(ordered) do
+        local path = path_cache[bin.id]
+        upsert_stmt:bind_value(1, bin.id)
+        upsert_stmt:bind_value(2, project_id)
+        upsert_stmt:bind_value(3, namespace_id)
+        upsert_stmt:bind_value(4, bin.name)
+        upsert_stmt:bind_value(5, path)
+        if bin.parent_id and lookup[bin.parent_id] then
+            upsert_stmt:bind_value(6, bin.parent_id)
+        elseif upsert_stmt.bind_null then
+            upsert_stmt:bind_null(6)
+        else
+            upsert_stmt:bind_value(6, nil)
+        end
+        upsert_stmt:bind_value(7, bin.sort_index or 0)
+        local success = upsert_stmt:exec()
+        upsert_stmt:clear_bindings()
+        if success == false then
+            upsert_stmt:finalize()
+            rollback_transaction(started)
+            return false
+        end
+        inserted[bin.id] = true
+    end
+    upsert_stmt:finalize()
+
+    local select_stmt = db_connection:prepare([[
+        SELECT id
+        FROM tags
+        WHERE project_id = ? AND namespace_id = ?
+    ]])
+        if not select_stmt then
+            rollback_transaction(started)
+            return false
+        end
+    select_stmt:bind_value(1, project_id)
+    select_stmt:bind_value(2, BIN_NAMESPACE)
+
+    local stale_ids = {}
+    if select_stmt:exec() then
+        while select_stmt:next() do
+            local existing_id = select_stmt:value(0)
+            if existing_id and not inserted[existing_id] then
+                table.insert(stale_ids, existing_id)
+            end
+        end
+    end
+    select_stmt:finalize()
+
+    if #stale_ids > 0 then
+        local delete_stmt = db_connection:prepare([[
+            DELETE FROM tags
+            WHERE project_id = ? AND namespace_id = ? AND id = ?
+        ]])
+        if not delete_stmt then
+            rollback_transaction(started)
+            return false
+        end
+        for _, stale_id in ipairs(stale_ids) do
+            delete_stmt:bind_value(1, project_id)
+            delete_stmt:bind_value(2, namespace_id)
+            delete_stmt:bind_value(3, stale_id)
+            local success = delete_stmt:exec()
+            delete_stmt:clear_bindings()
+            if success == false then
+                delete_stmt:finalize()
+                rollback_transaction(started)
+                return false
+            end
+        end
+        delete_stmt:finalize()
+    end
+
+    if not commit_transaction(started, "save_bins") then
+        return false
+    end
+    return true
+end
+
+function M.load_master_clip_bin_map(project_id)
+    project_id = project_id or M.get_current_project_id()
+    local assignments = {}
+    if not db_connection then
+        return assignments
+    end
+
+    require_tag_tables()
+
+    local stmt = db_connection:prepare([[
+        SELECT entity_id, tag_id
+        FROM tag_assignments
+        WHERE project_id = ? AND namespace_id = ? AND entity_type = 'master_clip'
+    ]])
+    if not stmt then
+        return assignments
+    end
+    stmt:bind_value(1, project_id)
+    stmt:bind_value(2, BIN_NAMESPACE)
+
+    if stmt:exec() then
+        while stmt:next() do
+            local entity_id = stmt:value(0)
+            local tag_id = stmt:value(1)
+            if entity_id and tag_id then
+                assignments[entity_id] = tag_id
+            end
+        end
+    end
+    stmt:finalize()
+    return assignments
+end
+
+function M.save_master_clip_bin_map(project_id, bin_map)
+    project_id = project_id or M.get_current_project_id()
+    if not db_connection then
+        return false
+    end
+
+    require_tag_tables()
+
+    ensure_tag_namespace(BIN_NAMESPACE, "Bins")
+
+    local started, begin_err = begin_write_transaction()
+    if started == nil then
+        print("WARNING: save_master_clip_bin_map: failed to begin transaction: " .. tostring(begin_err))
+        return false
+    end
+
+    local delete_stmt = db_connection:prepare([[
+        DELETE FROM tag_assignments
+        WHERE project_id = ? AND namespace_id = ? AND entity_type = 'master_clip'
+    ]])
+    if not delete_stmt then
+        rollback_transaction(started)
+        return false
+    end
+    delete_stmt:bind_value(1, project_id)
+    delete_stmt:bind_value(2, BIN_NAMESPACE)
+    if delete_stmt:exec() == false then
+        delete_stmt:finalize()
+        rollback_transaction(started)
+        return false
+    end
+    delete_stmt:finalize()
+
+    local insert_stmt = db_connection:prepare([[
+        INSERT INTO tag_assignments(tag_id, project_id, namespace_id, entity_type, entity_id)
+        VALUES (?, ?, ?, 'master_clip', ?)
+    ]])
+    if not insert_stmt then
+        rollback_transaction(started)
+        return false
+    end
+
+    for clip_id, bin_id in pairs(bin_map or {}) do
+        if type(clip_id) == "string" and clip_id ~= "" and type(bin_id) == "string" and bin_id ~= "" then
+            if not validate_bin_id(project_id, bin_id) then
+                print(string.format("WARNING: save_master_clip_bin_map: bin %s does not exist", tostring(bin_id)))
+                insert_stmt:finalize()
+                rollback_transaction(started)
+                return false
+            end
+            insert_stmt:bind_value(1, bin_id)
+            insert_stmt:bind_value(2, project_id)
+            insert_stmt:bind_value(3, BIN_NAMESPACE)
+            insert_stmt:bind_value(4, clip_id)
+            local success = insert_stmt:exec()
+            insert_stmt:clear_bindings()
+            if success == false then
+                insert_stmt:finalize()
+                rollback_transaction(started)
+                return false
+            end
+        end
+    end
+    insert_stmt:finalize()
+
+    if not commit_transaction(started, "save_master_clip_bin_map") then
+        return false
+    end
+    return true
+end
+
+function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
+    project_id = project_id or M.get_current_project_id()
+    if not db_connection then
+        return false, "No database connection"
+    end
+    if type(clip_ids) ~= "table" or #clip_ids == 0 then
+        return true
+    end
+
+    require_tag_tables()
+    ensure_tag_namespace(BIN_NAMESPACE, "Bins")
+
+    if bin_id and (type(bin_id) ~= "string" or bin_id == "" or not validate_bin_id(project_id, bin_id)) then
+        local message = string.format("assign_master_clips_to_bin: invalid bin %s", tostring(bin_id))
+        print("WARNING: " .. message)
+        return false, message
+    end
+
+    local started, begin_err = begin_write_transaction()
+    if started == nil then
+        local message = "assign_master_clips_to_bin: failed to begin transaction: " .. tostring(begin_err)
+        print("WARNING: " .. message)
+        return false, message
+    end
+
+    for _, clip_id in ipairs(clip_ids) do
+        if type(clip_id) == "string" and clip_id ~= "" then
+            local delete_stmt = db_connection:prepare([[
+                DELETE FROM tag_assignments
+                WHERE project_id = ? AND namespace_id = ? AND entity_type = 'master_clip' AND entity_id = ?
+            ]])
+            if not delete_stmt then
+                rollback_transaction(started)
+                return false, "assign_master_clips_to_bin: failed to prepare delete statement"
+            end
+            delete_stmt:bind_value(1, project_id)
+            delete_stmt:bind_value(2, BIN_NAMESPACE)
+            delete_stmt:bind_value(3, clip_id)
+            local success = delete_stmt:exec()
+            local delete_detail = delete_stmt:last_error()
+            local delete_rc = delete_stmt:last_result_code()
+            delete_stmt:finalize()
+            if success == false then
+                rollback_transaction(started)
+                return false, string.format("assign_master_clips_to_bin: delete failed for clip %s (%s, rc=%s)", tostring(clip_id), tostring(delete_detail or "unknown error"), tostring(delete_rc))
+            end
+
+            if bin_id then
+                local insert_stmt = db_connection:prepare([[
+                    INSERT INTO tag_assignments(tag_id, project_id, namespace_id, entity_type, entity_id)
+                    VALUES (?, ?, ?, 'master_clip', ?)
+                ]])
+                if not insert_stmt then
+                    rollback_transaction(started)
+                    return false, "assign_master_clips_to_bin: failed to prepare insert statement"
+                end
+                insert_stmt:bind_value(1, bin_id)
+                insert_stmt:bind_value(2, project_id)
+                insert_stmt:bind_value(3, BIN_NAMESPACE)
+                insert_stmt:bind_value(4, clip_id)
+                success = insert_stmt:exec()
+                local insert_detail = insert_stmt:last_error()
+                local insert_rc = insert_stmt:last_result_code()
+                insert_stmt:finalize()
+                if success == false then
+                    rollback_transaction(started)
+                    return false, string.format("assign_master_clips_to_bin: insert failed for clip %s (%s, rc=%s)", tostring(clip_id), tostring(insert_detail or "unknown error"), tostring(insert_rc))
                 end
             end
         end
     end
 
-    for _, bin in pairs(bin_map) do
-        table.insert(bins, bin)
+    if not commit_transaction(started, "assign_master_clips_to_bin") then
+        return false, "assign_master_clips_to_bin: commit failed"
     end
-
-    table.sort(bins, function(a, b)
-        return a.name:lower() < b.name:lower()
-    end)
-
-    return bins
+    return true
 end
 
-function M.save_bins(project_id, bins)
-    project_id = project_id or M.get_current_project_id()
-    local normalized = normalize_bins(bins)
-    return M.set_project_setting(project_id, "bin_hierarchy", normalized)
+function M.assign_master_clip_to_bin(project_id, clip_id, bin_id)
+    if not clip_id or clip_id == "" then
+        return false
+    end
+    return M.assign_master_clips_to_bin(project_id, {clip_id}, bin_id)
 end
 
 -- REMOVED: import_media() - Stub function that returned dummy data

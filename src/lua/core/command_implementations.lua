@@ -22,6 +22,7 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     local json = require("dkjson")
     local uuid = require("uuid")
     local database = require("core.database")
+    local tag_service = require("core.tag_service")
     local ui_constants = require("core.ui_constants")
     local Sequence = require("models.sequence")
     local Clip = require("models.clip")
@@ -163,25 +164,11 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             reload_timeline(sequence.id)
             return true, previous_name
         elseif target_type == "bin" then
-            local bins = database.load_bins(project_id)
-            local updated = false
-            for _, bin in ipairs(bins) do
-                if bin.id == target_id then
-                    local previous_name = bin.name or ""
-                    if previous_name == new_name then
-                        return true, previous_name
-                    end
-                    bin.name = new_name
-                    updated = true
-                    if not database.save_bins(project_id, bins) then
-                        return false, "RenameItem: Failed to persist bins"
-                    end
-                    return true, previous_name
-                end
+            local ok, result = tag_service.rename_bin(project_id, target_id, new_name)
+            if not ok then
+                return false, result
             end
-            if not updated then
-                return false, "RenameItem: Bin not found"
-            end
+            return true, result.previous_name or new_name
         else
             return false, "RenameItem: Unsupported target type"
         end
@@ -203,28 +190,17 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             command:set_parameter("bin_id", bin_id)
         end
 
-        local database = require("core.database")
-        local bins = database.load_bins(project_id)
-        for _, existing in ipairs(bins) do
-            if existing.id == bin_id then
-                set_last_error("NewBin: Duplicate bin identifier")
-                return false
-            end
-        end
-
-        local definition = {
+        local ok, result = tag_service.create_bin(project_id, {
             id = bin_id,
             name = bin_name,
             parent_id = command:get_parameter("parent_id")
-        }
-        table.insert(bins, definition)
-
-        if not database.save_bins(project_id, bins) then
-            set_last_error("NewBin: Failed to persist bin hierarchy")
+        })
+        if not ok then
+            set_last_error("NewBin: " .. tostring(result))
             return false
         end
 
-        command:set_parameter("bin_definition", definition)
+        command:set_parameter("bin_definition", result)
         return true
     end
 
@@ -236,25 +212,9 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             return false
         end
 
-        local database = require("core.database")
-        local bins = database.load_bins(project_id)
-        local updated = {}
-        local removed = false
-        for _, bin in ipairs(bins) do
-            if bin.id == bin_id then
-                removed = true
-            else
-                table.insert(updated, bin)
-            end
-        end
-
-        if not removed then
-            set_last_error("UndoNewBin: Bin not found")
-            return false
-        end
-
-        if not database.save_bins(project_id, updated) then
-            set_last_error("UndoNewBin: Failed to persist bin hierarchy")
+        local ok, err = tag_service.remove_bin(project_id, bin_id)
+        if not ok then
+            set_last_error("UndoNewBin: " .. tostring(err))
             return false
         end
 
@@ -270,40 +230,15 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             return false
         end
 
-        local database = require("core.database")
-        local bins = database.load_bins(project_id)
-        local target_index = nil
-        local target_bin = nil
-        for index, bin in ipairs(bins) do
-            if bin.id == bin_id then
-                target_index = index
-                target_bin = bin
-                break
-            end
-        end
-
-        if not target_bin then
-            set_last_error("DeleteBin: Bin not found")
+        local ok, result = tag_service.remove_bin(project_id, bin_id)
+        if not ok then
+            set_last_error("DeleteBin: " .. tostring(result))
             return false
         end
 
-        local child_snapshot = {}
-        for _, bin in ipairs(bins) do
-            if bin.parent_id == bin_id then
-                table.insert(child_snapshot, {id = bin.id, parent_id = bin.parent_id})
-                bin.parent_id = nil
-            end
-        end
-
-        table.remove(bins, target_index)
-        if not database.save_bins(project_id, bins) then
-            set_last_error("DeleteBin: Failed to persist bin hierarchy")
-            return false
-        end
-
-        command:set_parameter("deleted_bin_definition", target_bin)
-        command:set_parameter("child_parent_snapshot", child_snapshot)
-        command:set_parameter("bin_insert_index", target_index or (#bins + 1))
+        command:set_parameter("deleted_bin_definition", result.definition)
+        command:set_parameter("child_parent_snapshot", result.child_snapshot)
+        command:set_parameter("bin_insert_index", result.insert_index)
         return true
     end
 
@@ -315,29 +250,12 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             return false
         end
 
-        local database = require("core.database")
-        local bins = database.load_bins(project_id)
-        local insert_index = command:get_parameter("bin_insert_index") or (#bins + 1)
-        if insert_index < 1 then
-            insert_index = 1
-        elseif insert_index > (#bins + 1) then
-            insert_index = #bins + 1
-        end
-        table.insert(bins, insert_index, target_bin)
-
         local child_snapshot = command:get_parameter("child_parent_snapshot") or {}
-        local restore_lookup = {}
-        for _, entry in ipairs(child_snapshot) do
-            restore_lookup[entry.id] = entry.parent_id
-        end
-        for _, bin in ipairs(bins) do
-            if restore_lookup[bin.id] ~= nil then
-                bin.parent_id = restore_lookup[bin.id]
-            end
-        end
+        local insert_index = command:get_parameter("bin_insert_index")
 
-        if not database.save_bins(project_id, bins) then
-            set_last_error("UndoDeleteBin: Failed to persist bin hierarchy")
+        local ok, err = tag_service.restore_bin(project_id, target_bin, insert_index, child_snapshot)
+        if not ok then
+            set_last_error("UndoDeleteBin: " .. tostring(err))
             return false
         end
 
@@ -528,14 +446,8 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             insert_properties_for_clip(new_clip_id, copied_properties)
         end
 
-        if target_bin_id then
-            local settings = database.get_project_settings(project_id)
-            local bin_map = (settings and type(settings.media_bin_map) == "table") and settings.media_bin_map or {}
-            bin_map[new_clip_id] = target_bin_id
-            command:set_parameter("assigned_bin_id", target_bin_id)
-            if not database.set_project_setting(project_id, "media_bin_map", bin_map) then
-                print(string.format("WARNING: DuplicateMasterClip: Failed to persist bin assignment for %s", new_clip_id))
-            end
+        if target_bin_id and not database.assign_master_clip_to_bin(project_id, new_clip_id, target_bin_id) then
+            print(string.format("WARNING: DuplicateMasterClip: Failed to persist bin assignment for %s", new_clip_id))
         end
 
         print(string.format("✅ Duplicated master clip '%s' → %s", tostring(snapshot.name or media_id), new_clip_id))
@@ -559,14 +471,7 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             end
         end
 
-        local settings = database.get_project_settings(project_id)
-        local bin_map = (settings and type(settings.media_bin_map) == "table") and settings.media_bin_map or nil
-        if bin_map and bin_map[clip_id] then
-            bin_map[clip_id] = nil
-            local next_entry = next(bin_map)
-            local value = next_entry and bin_map or nil
-            database.set_project_setting(project_id, "media_bin_map", value)
-        end
+        database.assign_master_clip_to_bin(project_id, clip_id, nil)
 
         return true
     end
@@ -2787,6 +2692,56 @@ command_executors["RippleDelete"] = function(command)
     end
 
     local gap_end = gap_start + gap_duration
+
+    local function ensure_global_gap_is_clear()
+        local gap_query = db:prepare([[
+            SELECT id, track_id, start_time, start_time + duration AS end_time
+            FROM clips
+            WHERE owner_sequence_id = ?
+              AND NOT (start_time >= ? OR (start_time + duration) <= ?)
+        ]])
+        if not gap_query then
+            print("ERROR: RippleDelete: Failed to prepare gap validation query")
+            return false
+        end
+        gap_query:bind_value(1, sequence_id)
+        gap_query:bind_value(2, gap_end)
+        gap_query:bind_value(3, gap_start)
+
+        local blocking_clips = {}
+        if gap_query:exec() then
+            while gap_query:next() do
+                table.insert(blocking_clips, {
+                    clip_id = gap_query:value(0),
+                    track_id = gap_query:value(1),
+                    start_time = gap_query:value(2),
+                    end_time = gap_query:value(3)
+                })
+            end
+        end
+        gap_query:finalize()
+
+        if #blocking_clips > 0 then
+            local messages = {}
+            for index, info in ipairs(blocking_clips) do
+                messages[index] = string.format(
+                    "clip %s on track %s (%d–%dms)",
+                    tostring(info.clip_id),
+                    tostring(info.track_id),
+                    tonumber(info.start_time) or 0,
+                    tonumber(info.end_time) or 0
+                )
+            end
+            print("WARNING: RippleDelete blocked because the gap is not clear across all tracks: " .. table.concat(messages, "; "))
+            return false
+        end
+
+        return true
+    end
+
+    if not ensure_global_gap_is_clear() then
+        return false
+    end
 
     local moved_clips = {}
     local query = db:prepare([[

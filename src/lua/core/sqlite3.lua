@@ -212,6 +212,7 @@ function Statement:exec()
 
     -- Execute first step
     local rc = sqlite3_lib.sqlite3_step(self._stmt)
+    self._last_rc = rc
 
     if rc == SQLITE_ROW then
         self._has_row = true
@@ -277,6 +278,10 @@ end
 
 function Statement:last_error()
     return self._db:last_error()
+end
+
+function Statement:last_result_code()
+    return self._last_rc
 end
 
 function Statement:finalize()
