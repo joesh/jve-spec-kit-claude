@@ -529,7 +529,7 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
         return resolved
     end
 
-    local function restore_clip_state(state)
+local function restore_clip_state(state)
         if not state then
             return
         end
@@ -567,6 +567,25 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     end
     clip.media_id = state.media_id
     clip:restore_without_occlusion(db)
+end
+
+local function load_sequence_track_ids(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return {}
+    end
+    local ids = {}
+    local query = db:prepare("SELECT id FROM tracks WHERE sequence_id = ?")
+    if not query then
+        return ids
+    end
+    query:bind_value(1, sequence_id)
+    if query:exec() then
+        while query:next() do
+            table.insert(ids, query:value(0))
+        end
+    end
+    query:finalize()
+    return ids
 end
 
     local function revert_occlusion_actions(actions)
@@ -607,6 +626,43 @@ local function capture_clip_state(clip)
         source_out = clip.source_out,
         enabled = clip.enabled
     }
+end
+
+local function normalize_segments(segments)
+    if not segments or #segments == 0 then
+        return {}
+    end
+
+    table.sort(segments, function(a, b)
+        if a.start_time == b.start_time then
+            return (a.duration or 0) < (b.duration or 0)
+        end
+        return (a.start_time or 0) < (b.start_time or 0)
+    end)
+
+    local merged = {}
+    for _, seg in ipairs(segments) do
+        local start_time = seg.start_time or 0
+        local duration = math.max(0, seg.duration or 0)
+        local end_time = start_time + duration
+        if end_time > start_time then
+            local last = merged[#merged]
+            if last and start_time <= last.end_time then
+                if end_time > last.end_time then
+                    last.end_time = end_time
+                    last.duration = last.end_time - last.start_time
+                end
+            else
+                table.insert(merged, {
+                    start_time = start_time,
+                    end_time = end_time,
+                    duration = duration
+                })
+            end
+        end
+    end
+
+    return merged
 end
 
 -- Command type implementations
@@ -3175,6 +3231,7 @@ command_executors["RippleDeleteSelection"] = function(command)
 
     local deleted_states = {}
     local selected_by_track = {}
+    local global_segments_raw = {}
     local total_removed_duration = 0
 
     for _, clip in ipairs(clips) do
@@ -3182,6 +3239,10 @@ command_executors["RippleDeleteSelection"] = function(command)
         total_removed_duration = total_removed_duration + (clip.duration or 0)
         selected_by_track[clip.track_id] = selected_by_track[clip.track_id] or {}
         table.insert(selected_by_track[clip.track_id], {
+            start_time = clip.start_time or 0,
+            duration = clip.duration or 0
+        })
+        table.insert(global_segments_raw, {
             start_time = clip.start_time or 0,
             duration = clip.duration or 0
         })
@@ -3194,17 +3255,27 @@ command_executors["RippleDeleteSelection"] = function(command)
         end
     end
 
+    local normalized_segments_by_track = {}
+    for track_id, segments in pairs(selected_by_track) do
+        normalized_segments_by_track[track_id] = normalize_segments(segments)
+    end
+    local global_segments = normalize_segments(global_segments_raw)
+    local track_ids = load_sequence_track_ids(sequence_id)
+    if (#track_ids == 0) then
+        for track_id in pairs(selected_by_track) do
+            table.insert(track_ids, track_id)
+        end
+    end
+
     local shifted_clips = {}
 
-    for track_id, segments in pairs(selected_by_track) do
-        if segments and #segments > 0 then
-            table.sort(segments, function(a, b)
-                if a.start_time == b.start_time then
-                    return a.duration < b.duration
-                end
-                return a.start_time < b.start_time
-            end)
+    for _, track_id in ipairs(track_ids) do
+        local segments = normalized_segments_by_track[track_id]
+        if (not segments or #segments == 0) and global_segments and #global_segments > 0 then
+            segments = global_segments
+        end
 
+        if segments and #segments > 0 then
             local seg_index = 1
             local cumulative_removed = 0
 
@@ -3220,7 +3291,7 @@ command_executors["RippleDeleteSelection"] = function(command)
                     local shifted_id = shift_query:value(0)
                     local original_start = shift_query:value(1) or 0
 
-                    while seg_index <= #segments and segments[seg_index].start_time < original_start do
+                    while seg_index <= #segments and (segments[seg_index].end_time or (segments[seg_index].start_time + (segments[seg_index].duration or 0))) <= original_start do
                         cumulative_removed = cumulative_removed + (segments[seg_index].duration or 0)
                         seg_index = seg_index + 1
                     end
@@ -3309,15 +3380,6 @@ command_undoers["RippleDeleteSelection"] = function(command)
     local timeline_state = require('ui.timeline.timeline_state')
     if timeline_state.reload_clips then
         timeline_state.reload_clips()
-    end
-    if timeline_state.set_selection then
-        timeline_state.set_selection({})
-    end
-    if timeline_state.clear_edge_selection then
-        timeline_state.clear_edge_selection()
-    end
-    if timeline_state.clear_gap_selection then
-        timeline_state.clear_gap_selection()
     end
 
     print(string.format("✅ Undo RippleDeleteSelection: restored %d clip(s)", #deleted_states))

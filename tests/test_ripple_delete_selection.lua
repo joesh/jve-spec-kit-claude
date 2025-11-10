@@ -115,7 +115,10 @@ db:exec([[
     INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+    VALUES ('track_v2', 'default_sequence', 'Video 2', 'VIDEO', 2, 1);
 ]])
 
 local function clips_snapshot()
@@ -131,6 +134,15 @@ local function clips_snapshot()
         }
     end
     return clips
+end
+
+local function find_clip(id)
+    for _, clip in ipairs(clips_snapshot()) do
+        if clip.id == id then
+            return clip
+        end
+    end
+    return nil
 end
 
 local timeline_state = {
@@ -174,6 +186,21 @@ function timeline_state.restore_viewport(snapshot)
     if not snapshot then return end
     timeline_state.viewport_start_time = snapshot.start_time or timeline_state.viewport_start_time
     timeline_state.viewport_duration = snapshot.duration or timeline_state.viewport_duration
+end
+
+local function reset_timeline_state()
+    while command_manager.can_undo and command_manager.can_undo() do
+        local result = command_manager.undo()
+        if not result.success then
+            break
+        end
+    end
+    db:exec("DELETE FROM clips;")
+    db:exec("DELETE FROM media;")
+    timeline_state.selected_clips = {}
+    timeline_state.selected_edges = {}
+    timeline_state.selected_gaps = {}
+    timeline_state.playhead_time = 0
 end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
@@ -342,5 +369,54 @@ assert(second_clip.start_time == expected_second_start,
 
 local gap_between = second_clip.start_time - (first_clip.start_time + first_clip.duration)
 assert(gap_between >= 0, "Clips should not overlap after ripple delete")
+
+-- Multi-track regression: ripple delete shifts other tracks + restores selection on undo
+reset_timeline_state()
+
+local multi_specs = {
+    {id = "mt_v1_pre", track_id = "track_v1", start = 0, duration = 500},
+    {id = "mt_v1_target", track_id = "track_v1", start = 500, duration = 500},
+    {id = "mt_v1_post", track_id = "track_v1", start = 1500, duration = 500},
+    {id = "mt_v2_pre", track_id = "track_v2", start = 0, duration = 500},
+    {id = "mt_v2_post", track_id = "track_v2", start = 2000, duration = 500},
+}
+
+for _, spec in ipairs(multi_specs) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", spec.track_id)
+    cmd:set_parameter("start_time", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+
+reload_state_clips()
+
+local selection_before = {{id = "mt_v1_target"}}
+timeline_state.selected_clips = selection_before
+local selection_playhead = 24680
+timeline_state.playhead_time = selection_playhead
+
+execute_ripple_delete({"mt_v1_target"})
+
+local shifted_v2 = find_clip("mt_v2_post")
+local expected_shift = 1500  -- downstream clip should move left by target duration (500ms)
+assert(shifted_v2.start_time == expected_shift,
+    string.format("Multi-track ripple should shift downstream clips on other tracks. Expected %d, got %d",
+        expected_shift, shifted_v2.start_time))
+
+local undo_multi = command_manager.undo()
+assert(undo_multi.success, undo_multi.error_message or "Undo failed for multi-track ripple")
+assert(timeline_state.selected_clips and timeline_state.selected_clips[1]
+    and timeline_state.selected_clips[1].id == "mt_v1_target",
+    "Undo should restore original selection for ripple delete")
+assert(timeline_state.playhead_time == selection_playhead,
+    string.format("Undo should restore playhead to %d, got %d",
+        selection_playhead, timeline_state.playhead_time))
+
+local restored_v2 = find_clip("mt_v2_post")
+assert(restored_v2.start_time == 2000,
+    string.format("Undo should restore downstream clip position on other tracks (expected 2000, got %d)",
+        restored_v2.start_time))
 
 print("✅ test_ripple_delete_selection.lua passed")
