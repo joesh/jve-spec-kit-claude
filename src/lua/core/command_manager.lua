@@ -61,6 +61,7 @@ local undo_stack_states = {
         current_sequence_number = nil,
         current_branch_path = {},
         sequence_id = nil,
+        position_initialized = false,
     }
 }
 
@@ -72,6 +73,8 @@ local multi_stack_enabled = false
 if os and os.getenv then
     multi_stack_enabled = os.getenv("JVE_ENABLE_MULTI_STACK_UNDO") == "1"
 end
+
+local initialize_stack_position_from_db
 
 -- Registry that callers can use to route commands to specific undo stacks.
 local command_stack_resolvers = {}
@@ -392,6 +395,7 @@ local function ensure_stack_state(stack_id)
             current_sequence_number = nil,
             current_branch_path = {},
             sequence_id = nil,
+            position_initialized = false,
         }
         undo_stack_states[stack_id] = state
     end
@@ -411,11 +415,16 @@ local function set_active_stack(stack_id, opts)
     if opts and opts.sequence_id then
         state.sequence_id = opts.sequence_id
     end
+    if state.sequence_id and not state.position_initialized then
+        initialize_stack_position_from_db(stack_id, state.sequence_id)
+    end
 end
 
 local function set_current_sequence_number(value)
     current_sequence_number = value
-    ensure_stack_state(active_stack_id).current_sequence_number = value
+    local state = ensure_stack_state(active_stack_id)
+    state.current_sequence_number = value
+    state.position_initialized = true
 end
 
 local function find_latest_child_command(parent_sequence)
@@ -899,7 +908,25 @@ function M.init(database, sequence_id, project_id)
     active_sequence_id = sequence_id or "default_sequence"
     active_project_id = project_id or "default_project"
 
+    undo_stack_states = {
+        [GLOBAL_STACK_ID] = {
+            current_sequence_number = nil,
+            current_branch_path = {},
+            sequence_id = nil,
+            position_initialized = false,
+        }
+    }
+    active_stack_id = GLOBAL_STACK_ID
+    current_sequence_number = nil
+    current_branch_path = undo_stack_states[GLOBAL_STACK_ID].current_branch_path
+
     ensure_command_selection_columns()
+
+    -- Query last sequence number from database
+    local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
+    if query and query:exec() and query:next() then
+        last_sequence_number = query:value(0) or 0
+    end
 
     local global_state = ensure_stack_state(GLOBAL_STACK_ID)
     global_state.sequence_id = active_sequence_id
@@ -928,40 +955,6 @@ function M.init(database, sequence_id, project_id)
 
         if executor then
             M.register_executor(command_type, executor, undoer)
-        end
-    end
-
-    -- Query last sequence number from database
-    local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
-    if query and query:exec() and query:next() then
-        last_sequence_number = query:value(0) or 0
-    end
-
-    -- Load current undo position from sequences table (persisted across sessions)
-    local pos_query = db:prepare("SELECT current_sequence_number FROM sequences WHERE id = ?")
-    if pos_query then
-        pos_query:bind_value(1, active_sequence_id)
-    end
-
-    if pos_query and pos_query:exec() and pos_query:next() then
-        local saved_position = pos_query:value(0)
-        if saved_position and saved_position > 0 then
-            set_current_sequence_number(saved_position)
-        elseif saved_position == 0 then
-            -- 0 means at beginning (all commands undone)
-            set_current_sequence_number(nil)
-        else
-            -- NULL means no position saved yet - default to HEAD
-            if last_sequence_number > 0 then
-                set_current_sequence_number(last_sequence_number)
-            else
-                set_current_sequence_number(nil)  -- No commands exist yet
-            end
-        end
-    else
-        -- If no saved position row exists, default to HEAD if we have commands
-        if last_sequence_number > 0 then
-            set_current_sequence_number(last_sequence_number)
         end
     end
 
@@ -1084,6 +1077,57 @@ local function save_undo_position()
     end
 
     return true
+end
+
+local function load_sequence_undo_position(sequence_id)
+    if not db or not sequence_id or sequence_id == "" then
+        return nil, false
+    end
+
+    local query = db:prepare([[
+        SELECT current_sequence_number
+        FROM sequences
+        WHERE id = ?
+    ]])
+
+    if not query then
+        return nil, false
+    end
+
+    query:bind_value(1, sequence_id)
+    local has_row = false
+    local value = nil
+    if query:exec() and query:next() then
+        has_row = true
+        value = query:value(0)
+    end
+    query:finalize()
+    return value, has_row
+end
+
+initialize_stack_position_from_db = function(stack_id, sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return
+    end
+
+    local saved_value, has_row = load_sequence_undo_position(sequence_id)
+    local state = ensure_stack_state(stack_id)
+
+    if saved_value and saved_value > 0 then
+        set_current_sequence_number(saved_value)
+    elseif saved_value == 0 then
+        set_current_sequence_number(nil)
+    elseif has_row then
+        if last_sequence_number > 0 then
+            set_current_sequence_number(last_sequence_number)
+        else
+            set_current_sequence_number(nil)
+        end
+    else
+        set_current_sequence_number(nil)
+    end
+
+    state.position_initialized = true
 end
 
 -- Calculate state hash for a project
@@ -2920,6 +2964,7 @@ end
 
 function M.activate_timeline_stack(sequence_id)
     local seq = sequence_id or active_sequence_id
+    active_sequence_id = seq
     local stack_id = stack_id_for_sequence(seq)
     set_active_stack(stack_id, {sequence_id = seq})
 
