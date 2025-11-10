@@ -1019,6 +1019,42 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return true
     end
 
+    local transaction_active = false
+    local savepoint_name = string.format("import_fcp7_%s", uuid.generate():gsub("-", ""))
+
+    local function begin_transaction()
+        if transaction_active then
+            return true
+        end
+        local ok, err = conn:exec(string.format("SAVEPOINT %s;", savepoint_name))
+        if ok == false then
+            return false, err or "SAVEPOINT failed"
+        end
+        transaction_active = true
+        return true
+    end
+
+    local function commit_transaction()
+        if not transaction_active then
+            return true
+        end
+        local ok, err = conn:exec(string.format("RELEASE SAVEPOINT %s;", savepoint_name))
+        if ok == false then
+            return false, err or "RELEASE SAVEPOINT failed"
+        end
+        transaction_active = false
+        return true
+    end
+
+    local function rollback_transaction()
+        if not transaction_active then
+            return
+        end
+        conn:exec(string.format("ROLLBACK TO SAVEPOINT %s;", savepoint_name))
+        conn:exec(string.format("RELEASE SAVEPOINT %s;", savepoint_name))
+        transaction_active = false
+    end
+
     local function rollback_partial()
         for _, clip_id in ipairs(result.clip_ids or {}) do
             local stmt = conn:prepare("DELETE FROM clips WHERE id = ?")
@@ -1055,6 +1091,11 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 stmt:finalize()
             end
         end
+    end
+
+    local txn_ok, txn_err = begin_transaction()
+    if not txn_ok then
+        return {success = false, error = string.format("Failed to begin import transaction: %s", tostring(txn_err))}
     end
 
     local ok, err = pcall(function()
@@ -1099,8 +1140,16 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     end)
 
     if not ok then
+        rollback_transaction()
         rollback_partial()
         return {success = false, error = err}
+    end
+
+    local commit_ok, commit_err = commit_transaction()
+    if commit_ok == false then
+        rollback_transaction()
+        rollback_partial()
+        return {success = false, error = string.format("Failed to commit import transaction: %s", tostring(commit_err))}
     end
 
     if bins_dirty then

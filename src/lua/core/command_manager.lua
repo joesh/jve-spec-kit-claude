@@ -2760,6 +2760,14 @@ function M.undo(options)
         if not skip_selection_restore then
             restore_selection_from_serialized(current_command.selected_clip_ids_pre, current_command.selected_edge_infos_pre, current_command.selected_gap_infos_pre)
         end
+
+        local manual_undo = command_undoers[current_command.type]
+        if manual_undo then
+            local ok, err = pcall(manual_undo, current_command)
+            if not ok then
+                print(string.format("WARNING: Manual undo for %s failed: %s", tostring(current_command.type), tostring(err)))
+            end
+        end
         notify_command_event({
             event = "undo",
             command = current_command,
