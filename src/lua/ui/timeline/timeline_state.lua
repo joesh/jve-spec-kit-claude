@@ -8,6 +8,8 @@ local frame_utils = require("core.frame_utils")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local ui_constants = require("core.ui_constants")
+local profile_scope = require("core.profile_scope")
+local krono_ok, krono = pcall(require, "core.krono")
 
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
 local track_layout_dirty = false
@@ -19,6 +21,7 @@ local listeners = {}
 -- Debouncing configuration
 -- Batches rapid state changes to prevent excessive redraws
 local notify_timer = nil
+local notify_profile_seq = 0
 local NOTIFY_DEBOUNCE_MS = ui_constants.TIMELINE.NOTIFY_DEBOUNCE_MS
 local PERSIST_DEBOUNCE_MS = ui_constants.TIMELINE.PERSIST_DEBOUNCE_MS or 75
 
@@ -79,6 +82,84 @@ local state = {
     drag_select_start_track_index = 0,  -- global track index
     drag_select_end_track_index = 0,
 }
+
+-- Accelerated lookup tables for clips/tracks
+local clip_lookup = {}
+local track_clip_index = {}
+local clip_track_positions = {}
+local clip_indexes_dirty = true
+
+local function invalidate_clip_indexes()
+    clip_indexes_dirty = true
+end
+
+local function rebuild_clip_indexes()
+    clip_lookup = {}
+    track_clip_index = {}
+    clip_track_positions = {}
+
+    for _, clip in ipairs(state.clips) do
+        if clip.id then
+            clip_lookup[clip.id] = clip
+        end
+        if clip.track_id then
+            local list = track_clip_index[clip.track_id]
+            if not list then
+                list = {}
+                track_clip_index[clip.track_id] = list
+            end
+            table.insert(list, clip)
+        end
+    end
+
+    for _, list in pairs(track_clip_index) do
+        table.sort(list, function(a, b)
+            local a_start = a.start_time or 0
+            local b_start = b.start_time or 0
+            if a_start == b_start then
+                return (a.id or "") < (b.id or "")
+            end
+            return a_start < b_start
+        end)
+        for index, clip in ipairs(list) do
+            if clip.id then
+                clip_track_positions[clip.id] = {list = list, index = index}
+            end
+        end
+    end
+
+    clip_indexes_dirty = false
+end
+
+local function ensure_clip_indexes()
+    if clip_indexes_dirty then
+        rebuild_clip_indexes()
+    end
+end
+
+local function lookup_clip(clip_id)
+    if not clip_id then
+        return nil
+    end
+    ensure_clip_indexes()
+    return clip_lookup[clip_id]
+end
+
+local function locate_neighbor(clip, offset)
+    if not clip or not clip.id then
+        return nil
+    end
+    ensure_clip_indexes()
+    local info = clip_track_positions[clip.id]
+    if not info then
+        return nil
+    end
+    local neighbor_index = info.index + offset
+    if neighbor_index < 1 or neighbor_index > #info.list then
+        return nil
+    end
+    return info.list[neighbor_index]
+end
 
 local viewport_guard_count = 0
 
@@ -282,81 +363,44 @@ end
 local debug_layouts = {}
 
 local function compute_gap_after(clip)
-    local clip_end = clip.start_time + clip.duration
-    local min_gap = nil
-
-    for _, other in ipairs(state.clips) do
-        if other.track_id == clip.track_id and other.id ~= clip.id then
-            if other.start_time >= clip_end then
-                local gap = other.start_time - clip_end
-                if gap <= 1 then
-                    return 0
-                end
-                if not min_gap or gap < min_gap then
-                    min_gap = gap
-                end
-            end
-        end
+    if not clip then
+        return nil
     end
-
-    return min_gap
+    local next_clip = locate_neighbor(clip, 1)
+    if not next_clip then
+        return nil
+    end
+    local clip_end = (clip.start_time or 0) + (clip.duration or 0)
+    local gap = (next_clip.start_time or 0) - clip_end
+    if gap <= 1 then
+        return 0
+    end
+    return gap
 end
 
 local function compute_gap_before(clip)
-    local clip_start = clip.start_time
-    local min_gap = nil
-
-    for _, other in ipairs(state.clips) do
-        if other.track_id == clip.track_id and other.id ~= clip.id then
-            local other_end = other.start_time + other.duration
-            if other_end <= clip_start then
-                local gap = clip_start - other_end
-                if gap <= 1 then
-                    return 0
-                end
-                if not min_gap or gap < min_gap then
-                    min_gap = gap
-                end
-            end
-        end
+    if not clip then
+        return nil
     end
-
-    return min_gap
+    local prev_clip = locate_neighbor(clip, -1)
+    if not prev_clip then
+        return nil
+    end
+    local clip_start = clip.start_time or 0
+    local prev_end = (prev_clip.start_time or 0) + (prev_clip.duration or 0)
+    local gap = clip_start - prev_end
+    if gap <= 1 then
+        return 0
+    end
+    return gap
 end
 
 local function find_next_clip(clip)
-    local clip_end = clip.start_time + clip.duration
-    local closest = nil
-    local closest_start = nil
-    for _, other in ipairs(state.clips) do
-        if other.track_id == clip.track_id and other.id ~= clip.id then
-            if other.start_time >= clip_end then
-                if not closest_start or other.start_time < closest_start then
-                    closest = other
-                    closest_start = other.start_time
-                end
-            end
-        end
-    end
-    return closest
+    return locate_neighbor(clip, 1)
 end
 
 local function find_previous_clip(clip)
-    local clip_start = clip.start_time
-    local closest = nil
-    local closest_end = nil
-    for _, other in ipairs(state.clips) do
-        if other.track_id == clip.track_id and other.id ~= clip.id then
-            local other_end = other.start_time + other.duration
-            if other_end <= clip_start then
-                if not closest_end or other_end > closest_end then
-                    closest = other
-                    closest_end = other_end
-                end
-            end
-        end
-    end
-    return closest
+    return locate_neighbor(clip, -1)
 end
 
 local function normalize_edge_selection()
@@ -368,14 +412,9 @@ local function normalize_edge_selection()
     local seen = {}
     local changed = false
 
+    ensure_clip_indexes()
     for _, edge in ipairs(state.selected_edges) do
-        local clip = nil
-        for _, candidate in ipairs(state.clips) do
-            if candidate.id == edge.clip_id then
-                clip = candidate
-                break
-            end
-        end
+        local clip = lookup_clip(edge.clip_id)
 
         if clip then
             local new_edge_type = edge.edge_type
@@ -448,6 +487,8 @@ M.colors = {
     clip = "#548bb5",
     clip_video = "#548bb5",
     clip_audio = "#32986b",
+    clip_audio_disabled = "#555555",
+    clip_video_disabled = "#555555",
     clip_selected = "#ff8c42",
     clip_disabled = "#3f7fcc",
     clip_disabled_text = "#c3d6ff",
@@ -472,13 +513,50 @@ local function notify_listeners()
         return
     end
 
+    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
+    local krono_now_fn = (krono_enabled and krono and krono.now) and krono.now or nil
+    local schedule_ts = krono_now_fn and krono_now_fn() or nil
+    local profile_id = nil
+    if krono_enabled then
+        notify_profile_seq = notify_profile_seq + 1
+        profile_id = notify_profile_seq
+    end
+
     -- Create Qt timer to batch notifications
     notify_timer = qt_create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
         notify_timer = nil
 
+        local dispatch_start = krono_now_fn and krono_now_fn() or nil
+        local listener_count = #listeners
+        if profile_id and schedule_ts and dispatch_start then
+            print(string.format(
+                "timeline_state.notify[%d]: wait %.2fms (%d listener(s))",
+                profile_id,
+                dispatch_start - schedule_ts,
+                listener_count))
+        end
+
         -- Call all listeners
-        for _, listener in ipairs(listeners) do
+        for index, listener in ipairs(listeners) do
+            local listener_start = krono_now_fn and krono_now_fn() or nil
             listener()
+            if profile_id and listener_start and krono_now_fn then
+                local listener_end = krono_now_fn()
+                print(string.format(
+                    "timeline_state.notify[%d]: listener %d (%s) %.2fms",
+                    profile_id,
+                    index,
+                    tostring(listener),
+                    listener_end - listener_start))
+            end
+        end
+
+        if profile_id and dispatch_start and krono_now_fn then
+            local dispatch_end = krono_now_fn()
+            print(string.format(
+                "timeline_state.notify[%d]: dispatch %.2fms",
+                profile_id,
+                dispatch_end - dispatch_start))
         end
     end)
 end
@@ -497,6 +575,8 @@ function M.init(sequence_id)
     track_layout_dirty = false
     track_template_dirty = false
     state.clips = db.load_clips(sequence_id)
+    invalidate_clip_indexes()
+    ensure_clip_indexes()
 
     -- Load playhead and selection state from sequence
     local db_conn = db.get_connection()
@@ -535,11 +615,9 @@ function M.init(sequence_id)
                         -- Load clip objects for saved IDs
                         state.selected_clips = {}
                         for _, clip_id in ipairs(selected_ids) do
-                            for _, clip in ipairs(state.clips) do
-                                if clip.id == clip_id then
-                                    table.insert(state.selected_clips, clip)
-                                    break
-                                end
+                            local clip = lookup_clip(clip_id)
+                            if clip then
+                                table.insert(state.selected_clips, clip)
                             end
                         end
                         if #state.selected_clips > 0 then
@@ -557,15 +635,7 @@ function M.init(sequence_id)
                         state.selected_edges = {}
                         for _, edge_info in ipairs(edge_infos) do
                             if type(edge_info) == "table" and edge_info.clip_id and edge_info.edge_type then
-                                local clip_exists = false
-                                for _, clip in ipairs(state.clips) do
-                                    if clip.id == edge_info.clip_id then
-                                        clip_exists = true
-                                        break
-                                    end
-                                end
-
-                                if clip_exists then
+                                if lookup_clip(edge_info.clip_id) then
                                     table.insert(state.selected_edges, {
                                         clip_id = edge_info.clip_id,
                                         edge_type = edge_info.edge_type,
@@ -672,6 +742,10 @@ end
 
 -- Reload clips from database (for after commands that modify database)
 function M.reload_clips(target_sequence_id, opts)
+    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
+    local krono_now_fn = (krono_enabled and krono and krono.now) and krono.now or nil
+    local start_ts = krono_now_fn and krono_now_fn() or nil
+
     local active_sequence = state.sequence_id
     if not active_sequence or active_sequence == "" then
         local fallback = target_sequence_id or "default_sequence"
@@ -686,17 +760,18 @@ function M.reload_clips(target_sequence_id, opts)
     end
 
     local sequence_id = active_sequence
+    local selected_before = state.selected_clips and #state.selected_clips or 0
     state.clips = db.load_clips(sequence_id)
+    invalidate_clip_indexes()
+    ensure_clip_indexes()
+    local load_done = krono_now_fn and krono_now_fn() or nil
 
     if state.selected_clips and #state.selected_clips > 0 then
-        local selected_lookup = {}
-        for _, clip in ipairs(state.selected_clips) do
-            selected_lookup[clip.id] = true
-        end
         local refreshed = {}
-        for _, clip in ipairs(state.clips) do
-            if selected_lookup[clip.id] then
-                table.insert(refreshed, clip)
+        for _, clip in ipairs(state.selected_clips) do
+            local latest = lookup_clip(clip.id)
+            if latest then
+                table.insert(refreshed, latest)
             end
         end
         state.selected_clips = refreshed
@@ -704,6 +779,7 @@ function M.reload_clips(target_sequence_id, opts)
             on_selection_changed_callback(state.selected_clips)
         end
     end
+    local selected_after = state.selected_clips and #state.selected_clips or 0
 
     -- Increment version and stamp all clips
     state_version = state_version + 1
@@ -712,9 +788,31 @@ function M.reload_clips(target_sequence_id, opts)
     end
 
     local selection_adjusted = normalize_edge_selection()
+    local refresh_done = krono_now_fn and krono_now_fn() or nil
     print(string.format("Reloaded %d clips from database (version %d)", #state.clips, state_version))
     if selection_adjusted then
         M.persist_state_to_db()
+    end
+    local finalize_ts = krono_now_fn and krono_now_fn() or nil
+    if krono_enabled and start_ts and finalize_ts then
+        local load_ms = load_done and (load_done - start_ts) or 0
+        local refresh_ms = 0
+        if refresh_done and load_done then
+            refresh_ms = refresh_done - load_done
+        end
+        local finalize_ms = finalize_ts - (refresh_done or load_done or start_ts)
+        print(string.format(
+            "timeline_state.reload_clips[%s]: total=%.2fms load=%.2fms refresh=%.2fms finalize=%.2fms clips=%d selection %d→%d edges=%d (adjusted=%s)",
+            sequence_id,
+            finalize_ts - start_ts,
+            load_ms,
+            refresh_ms,
+            finalize_ms,
+            #state.clips,
+            selected_before,
+            selected_after,
+            state.selected_edges and #state.selected_edges or 0,
+            tostring(selection_adjusted)))
     end
     notify_listeners()
     return true
@@ -1426,6 +1524,7 @@ end
 -- Internal helpers for command executors (bypass event sourcing check)
 function M._internal_add_clip_from_command(clip)
     table.insert(state.clips, clip)
+    invalidate_clip_indexes()
     notify_listeners()
 end
 
@@ -1433,6 +1532,7 @@ function M._internal_remove_clip_from_command(clip_id)
     for i, clip in ipairs(state.clips) do
         if clip.id == clip_id then
             table.remove(state.clips, i)
+            invalidate_clip_indexes()
 
             -- Remove from selection if selected
             for j, selected in ipairs(state.selected_clips) do
@@ -1448,28 +1548,75 @@ function M._internal_remove_clip_from_command(clip_id)
     end
 end
 
+local function apply_mutation_table(mutations)
+    if not mutations then
+        return false
+    end
+
+    local changed = false
+
+    if mutations.deletes then
+        for _, clip_id in ipairs(mutations.deletes) do
+            if clip_id then
+                M._internal_remove_clip_from_command(clip_id)
+                changed = true
+            end
+        end
+    end
+
+    if mutations.updates and #mutations.updates > 0 then
+        M._internal_apply_clip_updates(mutations.updates)
+        changed = true
+    end
+
+    if mutations.inserts then
+        for _, clip in ipairs(mutations.inserts) do
+            if clip and clip.id then
+                M._internal_add_clip_from_command(clip)
+                changed = true
+            end
+        end
+    end
+
+    return changed
+end
+
+function M.apply_mutations(sequence_id, mutations)
+    if not mutations then
+        return false
+    end
+    local mutation_scope = profile_scope.begin("timeline_state.apply_mutations", {
+        details_fn = function()
+            return string.format("sequence=%s", tostring(sequence_id or state.sequence_id))
+        end
+    })
+    sequence_id = sequence_id or (mutations.sequence_id)
+    if sequence_id and state.sequence_id and sequence_id ~= state.sequence_id then
+        if mutation_scope then mutation_scope:finish("sequence_mismatch") end
+        return false
+    end
+
+    local changed = apply_mutation_table(mutations)
+    if changed then
+        M.persist_state_to_db()
+    end
+    mutation_scope:finish(string.format("changed=%s", tostring(changed)))
+    return changed
+end
+
 function M._internal_apply_clip_updates(updates)
     if not updates or #updates == 0 then
         return
     end
 
-    local clip_lookup = nil
-    local function find_clip(clip_id)
-        if not clip_lookup then
-            clip_lookup = {}
-            for _, clip in ipairs(state.clips) do
-                clip_lookup[clip.id] = clip
-            end
-        end
-        return clip_lookup[clip_id]
-    end
+    ensure_clip_indexes()
 
     local changed = false
     local needs_resort = false
     for _, update in ipairs(updates) do
         local clip_id = update.clip_id or update.id
         if clip_id then
-            local clip = find_clip(clip_id)
+            local clip = lookup_clip(clip_id)
             if not clip then
                 M.reload_clips(state.sequence_id)
                 return
@@ -1532,10 +1679,10 @@ function M._internal_apply_clip_updates(updates)
         end)
     end
 
-    if clip_lookup and #state.selected_clips > 0 then
+    if #state.selected_clips > 0 then
         local refreshed = {}
         for _, selected in ipairs(state.selected_clips) do
-            local clip = clip_lookup[selected.id]
+            local clip = lookup_clip(selected.id)
             if clip then
                 table.insert(refreshed, clip)
             end
@@ -1543,6 +1690,12 @@ function M._internal_apply_clip_updates(updates)
         state.selected_clips = refreshed
     end
 
+    invalidate_clip_indexes()
+    if needs_resort then
+        ensure_clip_indexes()
+    end
+
+    invalidate_clip_indexes()
     notify_listeners()
 end
 

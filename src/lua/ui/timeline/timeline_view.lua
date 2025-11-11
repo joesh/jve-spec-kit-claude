@@ -9,6 +9,19 @@ local frame_utils = require("core.frame_utils")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local edge_utils = require("ui.timeline.edge_utils")
 
+local function timeline_scroll_debug_now()
+    return os.clock() * 1000
+end
+
+local function timeline_scroll_debug_enabled()
+    local flag = os.getenv("JVE_TIMELINE_SCROLL_DEBUG")
+    if not flag or flag == "" then
+        return false
+    end
+    flag = flag:lower()
+    return flag == "1" or flag == "true" or flag == "yes"
+end
+
 local INPUT = ui_constants.INPUT or {}
 local LEFT_MOUSE_BUTTON = INPUT.MOUSE_LEFT_BUTTON or 1
 local RIGHT_MOUSE_BUTTON = INPUT.MOUSE_RIGHT_BUTTON or 2
@@ -35,6 +48,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         render_bottom_to_top = options.render_bottom_to_top or false,
         on_drag_start = options.on_drag_start,  -- Panel callback for drag coordination
         filtered_tracks = {},  -- Cached filtered track list
+        track_layout_cache = nil,
         potential_drag = nil,  -- Stores info about a click that might become a drag
         drag_state = nil,
         panel_drag_move = nil,
@@ -52,9 +66,13 @@ function M.create(widget, state_module, track_filter_fn, options)
     -- Filter tracks and cache result
     local function update_filtered_tracks()
         view.filtered_tracks = {}
+        view.filtered_track_lookup = {}
         for _, track in ipairs(state_module.get_all_tracks()) do
             if track_filter_fn(track) then
                 table.insert(view.filtered_tracks, track)
+                if track.id then
+                    view.filtered_track_lookup[track.id] = true
+                end
             end
         end
     end
@@ -242,6 +260,13 @@ function M.create(widget, state_module, track_filter_fn, options)
     -- Get Y position for a track within this view
     -- Calculates cumulative Y position based on actual track heights
     local function get_track_y(track_index, widget_height)
+        local cache = view.track_layout_cache
+        if cache and cache.by_index then
+            local entry = cache.by_index[track_index + 1]
+            if entry then
+                return entry.y
+            end
+        end
         if view.render_bottom_to_top then
             -- For video tracks: render from bottom up (track 0 at bottom)
             -- Calculate Y by subtracting cumulative heights from widget height
@@ -268,6 +293,13 @@ function M.create(widget, state_module, track_filter_fn, options)
 
     -- Get Y position by track ID
     function get_track_y_by_id(track_id, widget_height)
+        local cache = view.track_layout_cache
+        if cache and cache.by_id then
+            local entry = cache.by_id[track_id]
+            if entry then
+                return entry.y
+            end
+        end
         for i, track in ipairs(view.filtered_tracks) do
             if track.id == track_id then
                 return get_track_y(i - 1, widget_height)  -- 0-based index
@@ -278,6 +310,14 @@ function M.create(widget, state_module, track_filter_fn, options)
 
     -- Get track ID at a given Y coordinate
     local function get_track_id_at_y(y, widget_height)
+        local cache = view.track_layout_cache
+        if cache and cache.by_index then
+            for _, entry in ipairs(cache.by_index) do
+                if y >= entry.y and y < entry.y + entry.height then
+                    return entry.id
+                end
+            end
+        end
         for i, track in ipairs(view.filtered_tracks) do
             local track_y = get_track_y(i - 1, widget_height)
             local track_height = get_track_visual_height(track.id)
@@ -425,6 +465,8 @@ function M.create(widget, state_module, track_filter_fn, options)
             return
         end
 
+        local scroll_debug_active = timeline_scroll_debug_enabled()
+
         -- Get widget dimensions
         local width, height = timeline.get_dimensions(view.widget)
 
@@ -469,13 +511,48 @@ function M.create(widget, state_module, track_filter_fn, options)
             end
         end
 
+        -- Precompute track layout (y positions/heights) for fast lookup during rendering
+        local layout_by_index = {}
+        local layout_by_id = {}
+        if view.render_bottom_to_top then
+            local cursor = height
+            for idx, track in ipairs(view.filtered_tracks) do
+                local track_height = get_track_visual_height(track.id)
+                cursor = cursor - track_height
+                local entry = {
+                    id = track.id,
+                    y = cursor - view.vertical_scroll_offset,
+                    height = track_height,
+                    track_type = track.track_type
+                }
+                layout_by_index[idx] = entry
+                layout_by_id[track.id] = entry
+            end
+        else
+            local cursor = 0
+            for idx, track in ipairs(view.filtered_tracks) do
+                local track_height = get_track_visual_height(track.id)
+                local entry = {
+                    id = track.id,
+                    y = cursor - view.vertical_scroll_offset,
+                    height = track_height,
+                    track_type = track.track_type
+                }
+                layout_by_index[idx] = entry
+                layout_by_id[track.id] = entry
+                cursor = cursor + track_height
+            end
+        end
+        view.track_layout_cache = {by_index = layout_by_index, by_id = layout_by_id}
+
         -- Draw tracks
         -- print(string.format("Rendering %d tracks (widget height: %d, viewport height: %d)", #view.filtered_tracks, height, height))
         for i, track in ipairs(view.filtered_tracks) do
-            local y = get_track_y(i - 1, height)
-        local track_height = get_track_visual_height(track.id)
+            local layout_entry = layout_by_index[i]
+            assert(layout_entry, string.format("Missing layout entry for track %s at index %d", tostring(track and track.id), i))
+            local y = layout_entry.y
+            local track_height = layout_entry.height
             state_module.debug_record_track_layout(view.debug_id, track.id, y, track_height)
-            -- print(string.format("  Track %d (%s): y=%d height=%d", i, track.name, y, track_height))
 
             -- Only draw if visible
             if y + track_height > 0 and y < height then
@@ -554,22 +631,52 @@ end
     end
 
     local function draw_clips(time_offset_ms, outline_only, clip_filter, preview_hint)
+        local stats = {processed = 0, visible = 0, selected = 0, drawn = 0}
         local clips = state_module.get_clips()
         local selected_clips = state_module.get_selected_clips()
+        local selected_lookup = nil
+        if selected_clips and #selected_clips > 0 then
+            selected_lookup = {}
+            for _, selected in ipairs(selected_clips) do
+                if selected.id then
+                    selected_lookup[selected.id] = true
+                end
+            end
+        end
+        local layout_cache = view.track_layout_cache
+        local layout_by_id = layout_cache and layout_cache.by_id
+        local perf_enabled = scroll_debug_active
+            and (time_offset_ms or 0) == 0
+            and not outline_only
+            and not clip_filter
+            and not preview_hint
+        local perf_now = perf_enabled and timeline_scroll_debug_now or nil
+        local perf_stats = perf_now and {
+            track_time = 0,
+            geometry_time = 0,
+            selection_time = 0,
+            draw_time = 0,
+            track_calls = 0,
+            rects = 0,
+            texts = 0,
+        } or nil
 
         local preview_target_id = nil
         local preview_track_offset = nil
-        if type(preview_hint) == 'string' then
+        if type(preview_hint) == "string" then
             preview_target_id = preview_hint
-        elseif type(preview_hint) == 'table' then
+        elseif type(preview_hint) == "table" then
             preview_target_id = preview_hint.target_track_id
             preview_track_offset = preview_hint.track_offset
         end
 
+        local MIN_VISIBLE_WIDTH = 1
+
         for _, clip in ipairs(clips) do
             if clip_filter and not clip_filter(clip) then
-                goto continue
+                goto continue_clip
             end
+            stats.processed = stats.processed + 1
 
             local render_track_id = clip.track_id
             if preview_track_offset then
@@ -578,117 +685,201 @@ end
                 render_track_id = preview_target_id
             end
 
-            local y = get_track_y_by_id(render_track_id, height)
-
-                if y >= 0 then  -- Clip is on a track in this view
-                    local track_height = get_track_visual_height(render_track_id or clip.track_id)
-                    local clip_start = clip.start_time + time_offset_ms
-                    local clip_end = clip_start + clip.duration
-                    local x = state_module.time_to_pixel(clip_start, width)
-                    local clip_end_px = state_module.time_to_pixel(clip_end, width)
-                    y = y + 5  -- Add padding from track top
-                    local clip_width = clip_end_px - x
-                    if clip_width < 1 then
-                        clip_width = 1
-                    end
-                    local clip_height = track_height - 10
-
-                    local visible_x = x
-                    local visible_width = clip_width
-                    if visible_x < 0 then
-                        visible_width = visible_width + visible_x
-                        visible_x = 0
-                    end
-                    if visible_x + visible_width > width then
-                        visible_width = width - visible_x
-                    end
-
-                    -- Only draw if visible
-                    if visible_width > 0 and
-                       x + clip_width >= 0 and x <= width and
-                       y + clip_height > 0 and y < height then
-
-                        if not outline_only and time_offset_ms == 0 and target_track_id == nil then
-                            state_module.debug_record_clip_layout(view.debug_id, clip.id, clip.track_id, x, y, clip_width, clip_height)
-                        end
-
-                        -- Check if selected
-                        local is_selected = false
-                        for _, selected in ipairs(selected_clips) do
-                            if selected.id == clip.id then
-                                is_selected = true
-                                break
-                            end
-                        end
-
-                        local outline_thickness = 2
-
-                        local clip_enabled = clip.enabled ~= false
-                        local track_info = state_module.get_track_by_id(render_track_id or clip.track_id)
-                        local is_audio_track = track_info and track_info.track_type == "AUDIO"
-                        local body_color
-                        if clip_enabled then
-                            if is_audio_track then
-                                body_color = state_module.colors.clip_audio or state_module.colors.clip
-                            else
-                                body_color = state_module.colors.clip_video or state_module.colors.clip
-                            end
-                        else
-                            body_color = state_module.colors.clip_disabled
-                        end
-                        local text_color = clip_enabled and state_module.colors.text or state_module.colors.clip_disabled_text
-
-                        if not outline_only then
-                            -- Draw filled clip
-                            timeline.add_rect(view.widget, visible_x, y, visible_width, clip_height, body_color)
-
-                            -- Clip name (if there's enough space)
-                            local label_padding = 10
-                            local max_label_width = visible_width - label_padding
-                            if max_label_width > 40 then
-                                local clip_label = clip.label or clip.name or clip.id or ""
-                                local display_label = truncate_label(clip_label, max_label_width)
-                                if display_label ~= "" then
-                                    local label_baseline = y + math.min(clip_height - 10, 22)
-                                    timeline.add_text(view.widget, visible_x + 5, label_baseline, display_label, text_color)
-                                end
-                            end
-                        end
-
-                        -- Draw outline if selected or if outline_only mode
-                        if is_selected or outline_only then
-                            local outline_width = visible_width
-                            local outline_x = visible_x
-                            local trim = 1
-                            local top_width = outline_width > trim and (outline_width - trim) or outline_width
-                            timeline.add_rect(view.widget, outline_x, y, top_width, outline_thickness, state_module.colors.clip_selected)
-                            timeline.add_rect(view.widget, outline_x, y + clip_height - outline_thickness, top_width, outline_thickness, state_module.colors.clip_selected)
-                            timeline.add_rect(view.widget, outline_x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
-                            local right_x = outline_x + outline_width - outline_thickness - trim
-                            if right_x < outline_x then
-                                right_x = outline_x
-                            end
-                            timeline.add_rect(view.widget, right_x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
-                        elseif visible_width ~= clip_width or visible_x ~= x then
-                            local dash_height = math.min(clip_height, 12)
-                            if x < 0 then
-                                timeline.add_rect(view.widget, 0, y + (clip_height - dash_height) / 2, outline_thickness, dash_height, state_module.colors.clip_selected)
-                            end
-                            if x + clip_width > width then
-                                timeline.add_rect(view.widget, width - outline_thickness, y + (clip_height - dash_height) / 2, outline_thickness, dash_height, state_module.colors.clip_selected)
-                            end
-                        end
-
-                        if not outline_only and visible_width > 0 then
-                            local boundary_x = visible_x + visible_width - 1
-                            local boundary_color = state_module.colors.clip_boundary or state_module.colors.background or "#1a1a1a"
-                            timeline.add_rect(view.widget, boundary_x, y, 1, clip_height, boundary_color)
-                        end
-                    end
+            local track_layout = layout_by_id and layout_by_id[render_track_id]
+            local track_timer = perf_stats and perf_now() or nil
+            if not track_layout then
+                if view.filtered_track_lookup and view.filtered_track_lookup[render_track_id] then
+                    error(string.format("Missing layout entry for filtered track %s", tostring(render_track_id)))
                 end
-                ::continue::
+                goto continue_clip
             end
+            local y = track_layout.y
+            if perf_stats and track_timer then
+                perf_stats.track_time = perf_stats.track_time + (perf_now() - track_timer)
+                perf_stats.track_calls = perf_stats.track_calls + 1
+            end
+
+            if y >= 0 then
+                local track_height = track_layout.height
+                local geometry_start = perf_stats and perf_now() or nil
+                local clip_start = clip.start_time + time_offset_ms
+                local clip_end = clip_start + clip.duration
+                local x = state_module.time_to_pixel(clip_start, width)
+                local clip_end_px = state_module.time_to_pixel(clip_end, width)
+                y = y + 5
+                local clip_width = clip_end_px - x
+                if clip_width < 1 then
+                    clip_width = 1
+                end
+                local clip_height = track_height - 10
+
+                local visible_x = x
+                local visible_width = clip_width
+                if visible_x < 0 then
+                    visible_width = visible_width + visible_x
+                    visible_x = 0
+                end
+                if visible_x + visible_width > width then
+                    visible_width = width - visible_x
+                end
+                if perf_stats and geometry_start then
+                    perf_stats.geometry_time = perf_stats.geometry_time + (perf_now() - geometry_start)
+                end
+
+                if visible_width > 0 and x + clip_width >= 0 and x <= width and y + clip_height > 0 and y < height then
+                    stats.visible = stats.visible + 1
+                    local draw_width = math.max(MIN_VISIBLE_WIDTH, visible_width)
+
+                    local clip_enabled = clip.enabled ~= false
+
+                    local resolved_track_type = nil
+                    if track_layout and track_layout.track_type then
+                        resolved_track_type = track_layout.track_type
+                    else
+                        local track_info = state_module.get_track_by_id(render_track_id or clip.track_id)
+                        if track_info and track_info.track_type then
+                            resolved_track_type = track_info.track_type
+                        end
+                    end
+
+                    if not resolved_track_type or resolved_track_type == "" then
+                        error(string.format(
+                            "timeline_view: missing track_type for track %s (clip %s, original track %s)",
+                            tostring(render_track_id or clip.track_id),
+                            tostring(clip.id),
+                            tostring(clip.track_id)
+                        ))
+                    end
+
+                    resolved_track_type = resolved_track_type:upper()
+                    if resolved_track_type ~= "AUDIO" and resolved_track_type ~= "VIDEO" then
+                        error(string.format(
+                            "timeline_view: invalid track_type '%s' for track %s (clip %s)",
+                            tostring(resolved_track_type),
+                            tostring(render_track_id or clip.track_id),
+                            tostring(clip.id)
+                        ))
+                    end
+
+                    local is_audio_track = resolved_track_type == "AUDIO"
+                    local body_color
+                    if clip_enabled then
+                        if is_audio_track then
+                            body_color = state_module.colors.clip_audio or state_module.colors.clip
+                        else
+                            body_color = state_module.colors.clip_video or state_module.colors.clip
+                        end
+                    else
+                        if is_audio_track then
+                            body_color = state_module.colors.clip_audio_disabled
+                                or state_module.colors.clip_disabled
+                                or state_module.colors.clip
+                        else
+                            body_color = state_module.colors.clip_video_disabled
+                                or state_module.colors.clip_disabled
+                                or state_module.colors.clip
+                        end
+                    end
+                    local text_color = clip_enabled and state_module.colors.text or state_module.colors.clip_disabled_text
+
+                    if not outline_only and time_offset_ms == 0 and target_track_id == nil then
+                        state_module.debug_record_clip_layout(view.debug_id, clip.id, clip.track_id, x, y, clip_width, clip_height)
+                    end
+
+                    local selection_start = perf_stats and selected_lookup and perf_now() or nil
+                    local is_selected = false
+                    if selected_lookup then
+                        is_selected = selected_lookup[clip.id] == true
+                    end
+                    if selection_start then
+                        perf_stats.selection_time = perf_stats.selection_time + (perf_now() - selection_start)
+                    end
+                    if is_selected then
+                        stats.selected = stats.selected + 1
+                    end
+
+                    local outline_thickness = 2
+                    local draw_start = perf_stats and perf_now() or nil
+                    if not outline_only then
+                        if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                        timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
+
+                        local label_padding = 10
+                        local max_label_width = visible_width - label_padding
+                        local approx_char_width = 7
+                        if max_label_width > approx_char_width * 5 then
+                            local clip_label = clip.label or clip.name or clip.id or ""
+                            local display_label = truncate_label(clip_label, max_label_width)
+                            if display_label ~= "" then
+                                local label_baseline = y + math.min(clip_height - 10, 22)
+                                if perf_stats then perf_stats.texts = perf_stats.texts + 1 end
+                                timeline.add_text(view.widget, visible_x + 5, label_baseline, display_label, text_color)
+                            end
+                        end
+                    end
+
+                    if is_selected or outline_only then
+                        local outline_width = draw_width
+                        local outline_x = visible_x
+                        local trim = 1
+                        local top_width = outline_width > trim and (outline_width - trim) or outline_width
+                        if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                        timeline.add_rect(view.widget, outline_x, y, top_width, outline_thickness, state_module.colors.clip_selected)
+                        if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                        timeline.add_rect(view.widget, outline_x, y + clip_height - outline_thickness, top_width, outline_thickness, state_module.colors.clip_selected)
+                        if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                        timeline.add_rect(view.widget, outline_x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
+                        local right_x = outline_x + outline_width - outline_thickness - trim
+                        if right_x < outline_x then
+                            right_x = outline_x
+                        end
+                        if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                        timeline.add_rect(view.widget, right_x, y, outline_thickness, clip_height, state_module.colors.clip_selected)
+                    elseif draw_width ~= clip_width or visible_x ~= x then
+                        local dash_height = math.min(clip_height, 12)
+                        if x < 0 then
+                            if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                            timeline.add_rect(view.widget, 0, y + (clip_height - dash_height) / 2, outline_thickness, dash_height, state_module.colors.clip_selected)
+                        end
+                        if x + clip_width > width then
+                            if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                            timeline.add_rect(view.widget, width - outline_thickness, y + (clip_height - dash_height) / 2, outline_thickness, dash_height, state_module.colors.clip_selected)
+                        end
+                    end
+
+                    if not outline_only and draw_width > 0 then
+                        local boundary_x = visible_x + draw_width - 1
+                        local boundary_color = state_module.colors.clip_boundary or state_module.colors.background or "#1a1a1a"
+                        if perf_stats then perf_stats.rects = perf_stats.rects + 1 end
+                        timeline.add_rect(view.widget, boundary_x, y, 1, clip_height, boundary_color)
+                    end
+
+                    if perf_stats and draw_start then
+                        perf_stats.draw_time = perf_stats.draw_time + (perf_now() - draw_start)
+                    end
+
+                    stats.drawn = stats.drawn + 1
+                end
+            end
+            ::continue_clip::
         end
+
+        if perf_stats then
+            print(string.format(
+                "timeline_view[%s].draw_clips.stats processed=%d visible=%d selected=%d drawn=%d track=%.2fms geom=%.2fms select=%.2fms draw=%.2fms rects=%d text=%d",
+                view.debug_id or tostring(view.widget),
+                stats.processed,
+                stats.visible,
+                stats.selected,
+                stats.drawn,
+                perf_stats.track_time,
+                perf_stats.geometry_time,
+                perf_stats.selection_time,
+                perf_stats.draw_time,
+                perf_stats.rects,
+                perf_stats.texts))
+        end
+    end
 
         -- Draw clips at their normal positions
         draw_clips(0, false, nil)
