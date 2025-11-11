@@ -1571,18 +1571,20 @@ local function apply_mutation_table(mutations)
 
     local changed = false
     local failure_reason = nil
+    local deleted_lookup = {}
 
     if mutations.deletes then
         for _, clip_id in ipairs(mutations.deletes) do
             if clip_id then
                 M._internal_remove_clip_from_command(clip_id)
+                deleted_lookup[clip_id] = true
                 changed = true
             end
         end
     end
 
     if mutations.updates and #mutations.updates > 0 then
-        local ok, updates_changed = M._internal_apply_clip_updates(mutations.updates)
+        local ok, updates_changed = M._internal_apply_clip_updates(mutations.updates, deleted_lookup)
         if ok == false then
             failure_reason = "missing_clip"
             return false, failure_reason
@@ -1624,14 +1626,15 @@ function M.apply_mutations(sequence_id, mutations)
         mutation_scope:finish("failure:" .. failure_reason)
         return false
     end
-    if changed then
+    local selection_adjusted = normalize_edge_selection()
+    if changed or selection_adjusted then
         M.persist_state_to_db()
     end
-    mutation_scope:finish(string.format("changed=%s", tostring(changed)))
+    mutation_scope:finish(string.format("changed=%s selection_adjusted=%s", tostring(changed), tostring(selection_adjusted)))
     return changed
 end
 
-function M._internal_apply_clip_updates(updates)
+function M._internal_apply_clip_updates(updates, deleted_lookup)
     if not updates or #updates == 0 then
         return true, false
     end
@@ -1645,6 +1648,9 @@ function M._internal_apply_clip_updates(updates)
         if clip_id then
             local clip = lookup_clip(clip_id)
             if not clip then
+                if deleted_lookup and deleted_lookup[clip_id] then
+                    goto continue_update_loop
+                end
                 local update_keys = {}
                 for key in pairs(update) do
                     table.insert(update_keys, tostring(key))
@@ -1692,6 +1698,7 @@ function M._internal_apply_clip_updates(updates)
                 changed = true
             end
         end
+        ::continue_update_loop::
     end
 
     if not changed then

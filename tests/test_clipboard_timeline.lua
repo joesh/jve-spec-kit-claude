@@ -311,7 +311,11 @@ timeline_state.set_selection({})
 local paste_ok, paste_err = clipboard_actions.paste()
 assert(paste_ok, paste_err or "paste failed")
 
-local verify_stmt = db:prepare("SELECT COUNT(*) AS cnt, MIN(start_time) FROM clips WHERE id != 'clip_original'")
+local verify_stmt = db:prepare([[
+    SELECT COUNT(*) AS cnt, MIN(start_time)
+    FROM clips
+    WHERE clip_kind = 'timeline' AND id != 'clip_original'
+]])
 assert(verify_stmt:exec() and verify_stmt:next())
 local pasted_count = verify_stmt:value(0)
 local pasted_start = verify_stmt:value(1)
@@ -323,7 +327,7 @@ assert(pasted_start == 4000, string.format("pasted clip start_time should be 400
 local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo Paste should succeed")
 
-local count_stmt = db:prepare("SELECT COUNT(*) FROM clips")
+local count_stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
 assert(count_stmt:exec() and count_stmt:next())
 assert(count_stmt:value(0) == 1, "undo should restore original clip only")
 count_stmt:finalize()

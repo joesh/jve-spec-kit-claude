@@ -150,7 +150,7 @@ local function exec(cmd)
 end
 
 local function clip_count()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
     assert(stmt:exec(), "Failed to count clips")
     assert(stmt:next(), "Count query produced no rows")
     local count = stmt:value(0)
@@ -180,7 +180,12 @@ ripple_cmd:set_parameter("sequence_id", "default_sequence")
 exec(ripple_cmd)
 
 local function snapshot_clips()
-    local stmt = db:prepare("SELECT id, track_id, start_time, duration, source_in, source_out FROM clips ORDER BY track_id, start_time")
+    local stmt = db:prepare([[
+        SELECT id, track_id, start_time, duration, source_in, source_out
+        FROM clips
+        WHERE clip_kind = 'timeline'
+        ORDER BY track_id, start_time
+    ]])
     assert(stmt:exec(), "Failed to fetch clips for snapshot")
 
     local clips = {}
@@ -263,7 +268,12 @@ insert_clip(0, 1713800, 0)
 insert_clip(1713800, 2332838, 1713800)
 
 local function fetch_clips_ordered()
-    local stmt = db:prepare("SELECT id, start_time, duration FROM clips ORDER BY start_time")
+    local stmt = db:prepare([[
+        SELECT id, start_time, duration
+        FROM clips
+        WHERE clip_kind = 'timeline'
+        ORDER BY start_time
+    ]])
     assert(stmt:exec(), "Failed to fetch clip ordering")
     local clips = {}
     while stmt:next() do

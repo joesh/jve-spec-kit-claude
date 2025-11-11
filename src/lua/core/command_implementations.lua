@@ -16,7 +16,17 @@ M.exported_commands = {
 --   command_executors: table to populate with executor functions
 --   command_undoers: table to populate with undoer functions
 --   db: database connection reference (captured by closures)
-function M.register_commands(command_executors, command_undoers, db, set_last_error_fn)
+function M.register_commands(command_executors, command_undoers, command_redoers_or_db, db_or_setter, set_last_error_fn)
+    local command_redoers
+    local db
+    if type(command_redoers_or_db) == "table" and (db_or_setter ~= nil or set_last_error_fn ~= nil) then
+        command_redoers = command_redoers_or_db
+        db = db_or_setter
+    else
+        command_redoers = {}
+        db = command_redoers_or_db
+        set_last_error_fn = db_or_setter
+    end
 
     local frame_utils = require('core.frame_utils')
     local json = require("dkjson")
@@ -28,6 +38,8 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     local Clip = require("models.clip")
     local clip_mutator = require("core.clip_mutator")
     local set_last_error = set_last_error_fn or function(_) end
+    command_redoers = command_redoers or {}
+    local TIMELINE_CLIP_KIND = "timeline"
 
     local function trim_string(value)
         if type(value) ~= "string" then
@@ -164,6 +176,51 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             table.insert(bucket.updates, update)
         end
         command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
+    end
+
+    local function iter_mutation_buckets(mutations)
+        if not mutations then
+            return {}
+        end
+        if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+            return {mutations}
+        end
+        local buckets = {}
+        for _, bucket in pairs(mutations) do
+            if type(bucket) == "table" and (bucket.sequence_id or bucket.inserts or bucket.updates or bucket.deletes) then
+                table.insert(buckets, bucket)
+            end
+        end
+        return buckets
+    end
+
+    local function flush_timeline_mutations(command, default_sequence_id)
+        if not command then
+            return
+        end
+        local mutations = command:get_parameter("__timeline_mutations")
+        if not mutations then
+            return
+        end
+        local timeline_state = require('ui.timeline.timeline_state')
+        if not timeline_state or not timeline_state.apply_mutations then
+            return
+        end
+        local buckets = iter_mutation_buckets(mutations)
+        for _, bucket in ipairs(buckets) do
+            local sequence_id = bucket.sequence_id
+                or command:get_parameter("sequence_id")
+                or default_sequence_id
+                or (timeline_state.get_sequence_id and timeline_state.get_sequence_id())
+            if sequence_id then
+                bucket.sequence_id = sequence_id
+            end
+            local applied = timeline_state.apply_mutations(sequence_id, bucket)
+            if not applied and timeline_state.reload_clips then
+                timeline_state.reload_clips(sequence_id)
+            end
+        end
+        command:clear_parameter("__timeline_mutations")
     end
 
     local function record_clip_enabled_mutation(command, clip)
@@ -3495,8 +3552,39 @@ command_undoers["ToggleClipEnabled"] = function(command)
         end
     end
 
+    flush_timeline_mutations(command, command:get_parameter("sequence_id"))
+
     print(string.format("✅ Undo ToggleClipEnabled: Restored %d clip(s)", restored))
     return true
+end
+
+if command_redoers then
+    command_redoers["ToggleClipEnabled"] = function(command)
+        local toggles = command:get_parameter("clip_toggles")
+        if not toggles or #toggles == 0 then
+            return true
+        end
+
+        local Clip = require('models.clip')
+        local reapplied = 0
+        for _, toggle in ipairs(toggles) do
+            local clip = Clip.load_optional(toggle.clip_id, db)
+            if clip then
+                clip.enabled = toggle.enabled_after and true or false
+                if clip:save(db, {skip_occlusion = true}) then
+                    record_clip_enabled_mutation(command, clip)
+                    reapplied = reapplied + 1
+                else
+                    print(string.format("WARNING: ToggleClipEnabled redo: Failed to reapply clip %s", tostring(toggle.clip_id)))
+                end
+            end
+        end
+
+        flush_timeline_mutations(command, command:get_parameter("sequence_id"))
+
+        print(string.format("✅ Redo ToggleClipEnabled: Reapplied %d clip(s)", reapplied))
+        return true
+    end
 end
 
 command_executors["RippleDeleteSelection"] = function(command)
@@ -4181,7 +4269,7 @@ command_executors["Nudge"] = function(command)
                 goto continue_collect_block
             end
 
-            if clip.clip_kind and clip.clip_kind ~= DEFAULT_CLIP_KIND then
+            if clip.clip_kind and clip.clip_kind ~= TIMELINE_CLIP_KIND then
                 clips_to_move[clip_id] = nil
                 goto continue_collect_block
             end

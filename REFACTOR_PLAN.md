@@ -14,7 +14,7 @@
 - [x] Add timers around `timeline_state.apply_mutations`, `notify_listeners`, and `timeline_state.reload_clips` to measure repaint cost.
   - Evidence: `profile_scope` wrappers already surround these hotspots (`src/lua/ui/timeline/timeline_state.lua:509-548,754-820,1607-1650`) and `command_manager.notify_listeners` (`src/lua/core/command_manager.lua:1618-1629`).
 - [ ] Eliminate reload fallbacks by extending mutation coverage so no timeline reload is needed after drag.
-  - Current state: `command_manager.execute` still prints “Timeline reload fallback...” whenever commands omit mutations (`src/lua/core/command_manager.lua:1588-1595`). Regression `tests/test_import_fcp7_xml.lua:400-520` documents Toggle/Nudge progress but Insert/Overwrite still hit the fallback.
+  - Current state: `command_manager.execute` still prints “Timeline reload fallback...” whenever commands omit mutations (`src/lua/core/command_manager.lua:1588-1595`). Regression `tests/test_import_fcp7_xml.lua:400-520` documents Toggle/Nudge progress but Insert/Overwrite still hit the fallback. `ToggleClipEnabled` undo/redo now emits mutation buckets directly, so it no longer forces timeline reloads (`src/lua/core/command_implementations.lua:3360-3458`).
 - [ ] Inventory every command that mutates the timeline but never sets `__timeline_mutations` (Insert, Overwrite, RippleEdit, importer-generated actions, etc.) and add test coverage proving each one keeps the cache hot before moving on to Phase 3.
 
 ## Phase 3: Occlusion Optimization

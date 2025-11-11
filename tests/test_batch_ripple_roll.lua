@@ -157,6 +157,15 @@ local function stub_timeline_state()
     timeline_state.get_project_id = function() return "default_project" end
     timeline_state.get_sequence_id = function() return "default_sequence" end
     timeline_state.reload_clips = function(_) end
+    timeline_state.consume_mutation_failure = function() return nil end
+    timeline_state.apply_mutations = function(_, mutations)
+        timeline_state.last_mutations_attempt = {
+            sequence_id = mutations and mutations.sequence_id,
+            bucket = mutations
+        }
+        timeline_state.last_mutations = mutations
+        return true
+    end
 end
 
 stub_timeline_state()

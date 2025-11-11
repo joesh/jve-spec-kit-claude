@@ -632,6 +632,7 @@ end
 -- Command type implementations
 local command_executors = {}
 local command_undoers = {}
+local command_redoers = {}
 
 local function capture_selection_snapshot()
     local timeline_state = require('ui.timeline.timeline_state')
@@ -945,7 +946,7 @@ function M.init(database, sequence_id, project_id)
 
     -- Register all command executors and undoers
     local command_implementations = require("core.command_implementations")
-    command_implementations.register_commands(command_executors, command_undoers, db, M.set_last_error)
+    command_implementations.register_commands(command_executors, command_undoers, command_redoers, db, M.set_last_error)
 
     local exported = command_implementations.exported_commands or {}
     for command_type, export in pairs(exported) do
@@ -3006,6 +3007,10 @@ function M.redo(options)
         local restored_command = M.get_last_command(active_project_id)
         local skip_timeline_reload = restored_command and command_flag(restored_command, "skip_timeline_reload", "__skip_timeline_reload") or false
         local skip_selection_restore = restored_command and command_flag(restored_command, "skip_selection_snapshot", "__skip_selection_snapshot") or false
+        local skip_sequence_replay = restored_command and command_flag(restored_command, "skip_sequence_replay", "__skip_sequence_replay") or false
+        if skip_sequence_replay then
+            skip_timeline_reload = true
+        end
 
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
@@ -3047,6 +3052,17 @@ function M.redo(options)
 
             if not selection_restored then
                 restore_selection_from_serialized(restored_command.selected_clip_ids, restored_command.selected_edge_infos, restored_command.selected_gap_infos)
+            end
+        end
+
+        if skip_sequence_replay and restored_command then
+            local manual_redo = command_redoers[restored_command.type]
+            if manual_redo then
+                local ok, err = pcall(manual_redo, restored_command)
+                if not ok then
+                    print(string.format("WARNING: Manual redo for %s failed: %s",
+                        tostring(restored_command.type), tostring(err)))
+                end
             end
         end
 
