@@ -27,6 +27,7 @@ local main_window = nil
 local project_browser = nil
 local timeline_panel = nil
 local clipboard_actions = require("core.clipboard_actions")
+local profile_scope = require("core.profile_scope")
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
@@ -62,14 +63,14 @@ function M.init(window, cmd_mgr, proj_browser)
     end
 
     if command_manager and command_manager.add_listener then
-        undo_listener_token = command_manager.add_listener(function(event)
+        undo_listener_token = command_manager.add_listener(profile_scope.wrap("menu_system.undo_listener", function(event)
             if not event or not event.event then
                 return
             end
             if event.event == "execute" or event.event == "undo" or event.event == "redo" then
                 update_undo_redo_actions()
             end
-        end)
+        end))
     end
 
     if update_undo_redo_actions then

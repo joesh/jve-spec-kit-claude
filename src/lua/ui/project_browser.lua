@@ -14,6 +14,7 @@ local browser_state = require("ui.project_browser.browser_state")
 local frame_utils = require("core.frame_utils")
 local keymap = require("ui.project_browser.keymap")
 local qt_constants = require("core.qt_constants")
+local profile_scope = require("core.profile_scope")
 
 local handler_seq = 0
 
@@ -63,7 +64,7 @@ local function ensure_command_listener()
         return
     end
     if command_manager and command_manager.add_listener then
-        command_manager.add_listener(handle_command_event)
+        command_manager.add_listener(profile_scope.wrap("project_browser.command_listener", handle_command_event))
         command_listener_registered = true
     end
 end
@@ -624,31 +625,46 @@ local function populate_tree()
     end
 
     local bin_tree_map = {}
-
-    local function build_bin_path(bin)
-        local parts = {}
-        local current = bin
-        while current do
-            table.insert(parts, 1, current.name)
-            if current.parent_id then
-                local parent = nil
-                for _, candidate in ipairs(bins) do
-                    if candidate.id == current.parent_id then
-                        parent = candidate
-                        break
-                    end
-                end
-                current = parent
-            else
-                current = nil
-            end
+    local bin_lookup = {}
+    for _, bin in ipairs(bins) do
+        if bin.id then
+            bin_lookup[bin.id] = bin
         end
-        return table.concat(parts, "/")
+    end
+
+    local bin_path_cache = {}
+    local function build_bin_path(bin)
+        if not bin or not bin.id then
+            return nil
+        end
+        if bin_path_cache[bin.id] then
+            return bin_path_cache[bin.id]
+        end
+
+        local parent_id = bin.parent_id
+        local path = bin.name
+        if parent_id and parent_id ~= "" then
+            local parent = bin_lookup[parent_id]
+            local parent_path = parent and build_bin_path(parent) or nil
+            if parent_path and parent_path ~= "" then
+                path = parent_path .. "/" .. bin.name
+            else
+                bin.parent_id = nil
+            end
+        else
+            bin.parent_id = nil
+        end
+
+        bin_path_cache[bin.id] = path
+        return path
     end
 
     local bin_path_lookup = {}
     for _, bin in ipairs(bins) do
-        bin_path_lookup[build_bin_path(bin)] = bin.id
+        local path = build_bin_path(bin)
+        if path then
+            bin_path_lookup[path] = bin.id
+        end
         M.bin_map[bin.id] = {
             id = bin.id,
             name = bin.name,
@@ -1363,8 +1379,9 @@ local function handle_tree_drop(event)
         end
 
         local project_id = M.project_id or db.get_current_project_id()
-        if not tag_service.save_hierarchy(project_id, M.bins) then
-            print("⚠️  Failed to save bin hierarchy after drag/drop")
+        local ok, err = tag_service.save_hierarchy(project_id, M.bins)
+        if not ok then
+            print(string.format("⚠️  Failed to save bin hierarchy after drag/drop: %s", tostring(err or "unknown error")))
             return true
         end
 

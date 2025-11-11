@@ -12,6 +12,7 @@ local timeline_state = require("ui.timeline.timeline_state")
 local inspectable_factory = require("inspectable")
 local metadata_schemas = require("ui.metadata_schemas")
 local collapsible_section = require("ui.collapsible_section")
+local profile_scope = require("core.profile_scope")
 
 local FIELD_TYPES = metadata_schemas.FIELD_TYPES
 
@@ -82,7 +83,7 @@ local function ensure_timeline_listener()
     return
   end
   if timeline_state and timeline_state.add_listener then
-    timeline_state.add_listener(function()
+    timeline_state.add_listener(profile_scope.wrap("inspector.timeline_listener", function()
       if not M.root then
         return
       end
@@ -91,7 +92,7 @@ local function ensure_timeline_listener()
       end
       refresh_active_inspection()
       refresh_selection_label()
-    end)
+    end))
     timeline_listener_registered = true
   end
 end

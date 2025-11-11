@@ -79,6 +79,82 @@ local function scan_directory(root_dir, extensions, max_depth)
     return results
 end
 
+local function build_candidate_cache(search_paths, extensions, max_depth)
+    local candidate_files = {}
+    local candidate_index = {}
+
+    if not search_paths or not extensions or next(extensions) == nil then
+        return candidate_files, candidate_index
+    end
+
+    for _, search_path in ipairs(search_paths) do
+        local files = scan_directory(search_path, extensions, max_depth)
+        for _, file_path in ipairs(files) do
+            table.insert(candidate_files, file_path)
+            local filename = get_filename(file_path)
+            if filename then
+                local key = filename:lower()
+                local bucket = candidate_index[key]
+                if not bucket then
+                    bucket = {}
+                    candidate_index[key] = bucket
+                end
+                table.insert(bucket, file_path)
+            end
+        end
+    end
+
+    return candidate_files, candidate_index
+end
+
+local function ensure_candidate_cache(options, extensions)
+    if not options or not options.search_paths then
+        return
+    end
+
+    options._candidate_extensions = options._candidate_extensions or {}
+    local pending = {}
+
+    if type(extensions) == "table" then
+        for ext, include in pairs(extensions) do
+            if include and ext and ext ~= "" and not options._candidate_extensions[ext] then
+                pending[ext] = true
+            end
+        end
+    elseif type(extensions) == "string" and extensions ~= "" then
+        if not options._candidate_extensions[extensions] then
+            pending[extensions] = true
+        end
+    end
+
+    if next(pending) == nil then
+        return
+    end
+
+    local files, index = build_candidate_cache(options.search_paths, pending, options.max_scan_depth or 5)
+    options.candidate_files = options.candidate_files or {}
+    options.candidate_index = options.candidate_index or {}
+
+    for _, path in ipairs(files) do
+        table.insert(options.candidate_files, path)
+    end
+
+    for key, paths in pairs(index) do
+        local bucket = options.candidate_index[key]
+        if not bucket then
+            bucket = {}
+            options.candidate_index[key] = bucket
+        end
+        for _, path in ipairs(paths) do
+            table.insert(bucket, path)
+        end
+    end
+
+    for ext in pairs(pending) do
+        options._candidate_extensions[ext] = true
+    end
+end
+
 --- Calculate similarity score between two strings (0-1)
 -- Uses Levenshtein-like algorithm for fuzzy matching
 -- @param str1 string First string
@@ -143,9 +219,19 @@ end
 -- @param search_paths table Array of directories to search
 -- @param candidate_files table Pre-scanned file list (optional)
 -- @return string|nil New absolute path if found, nil otherwise
-local function relink_by_filename(media, search_paths, candidate_files)
+local function relink_by_filename(media, search_paths, candidate_files, candidate_index)
     local old_filename = get_filename(media.file_path)
     local old_ext = get_extension(media.file_path)
+    local lookup_key = old_filename and old_filename:lower() or nil
+
+    if candidate_index and lookup_key and candidate_index[lookup_key] then
+        for _, file_path in ipairs(candidate_index[lookup_key]) do
+            local ext = get_extension(file_path)
+            if ext == old_ext and file_exists(file_path) then
+                return file_path
+            end
+        end
+    end
 
     -- If candidate files provided, search them
     if candidate_files then
@@ -483,7 +569,9 @@ function M.relink_media(media, options)
 
     -- Strategy 2: Filename-based (medium speed, good reliability)
     if options.search_paths then
-        local new_path = relink_by_filename(media, options.search_paths, options.candidate_files)
+        ensure_candidate_cache(options, {[get_extension(media.file_path)] = true})
+        local new_path = relink_by_filename(
+            media, options.search_paths, options.candidate_files, options.candidate_index)
         if new_path then
             return new_path, "filename", 0.95
         end
@@ -511,27 +599,16 @@ function M.batch_relink(media_list, options)
         failed = {}
     }
 
-    -- Pre-scan directories if needed (more efficient than scanning per-file)
-    local candidate_files = nil
-    if options.search_paths and #media_list > 5 then
-        candidate_files = {}
+    -- Pre-scan directories once per extension set
+    if options.search_paths and #media_list > 0 then
         local extensions = {}
-
-        -- Collect all extensions from offline media
         for _, media in ipairs(media_list) do
             local ext = get_extension(media.file_path)
-            extensions[ext] = true
-        end
-
-        -- Scan once
-        for _, search_path in ipairs(options.search_paths) do
-            local files = scan_directory(search_path, extensions, 5)
-            for _, file_path in ipairs(files) do
-                table.insert(candidate_files, file_path)
+            if ext and ext ~= "" then
+                extensions[ext] = true
             end
         end
-
-        options.candidate_files = candidate_files
+        ensure_candidate_cache(options, extensions)
     end
 
     -- Attempt relinking for each media file

@@ -102,6 +102,14 @@ function TimelineRenderer:draw_clips(instances, selection)
     for i, track in ipairs(self.tracks) do
         track_indices[track] = i
     end
+
+    local selected_lookup = nil
+    if selection and selection.instances then
+        selected_lookup = {}
+        for _, selected_id in ipairs(selection.instances) do
+            selected_lookup[selected_id] = true
+        end
+    end
     
     -- Draw clips for each instance
     for instance_id, instance in pairs(instances) do
@@ -117,13 +125,8 @@ function TimelineRenderer:draw_clips(instances, selection)
                 
                 -- Choose color based on selection
                 local clip_color = CLIP_COLOR
-                if selection and selection.instances then
-                    for _, selected_id in ipairs(selection.instances) do
-                        if selected_id == instance_id then
-                            clip_color = SELECTED_CLIP_COLOR
-                            break
-                        end
-                    end
+                if selected_lookup and selected_lookup[instance_id] then
+                    clip_color = SELECTED_CLIP_COLOR
                 end
                 
                 -- Draw clip rectangle

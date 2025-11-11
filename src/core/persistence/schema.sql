@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT OR IGNORE INTO schema_version (version) VALUES (1);
+INSERT OR IGNORE INTO schema_version (version) VALUES (2);
 
 -- Projects table: Top-level container for all editing session data
 CREATE TABLE IF NOT EXISTS projects (
@@ -24,6 +24,62 @@ CREATE TABLE IF NOT EXISTS projects (
     
     CONSTRAINT valid_timestamps CHECK(created_at <= modified_at)
 );
+
+-- Tag namespaces define logical folders (bins, status, etc.)
+CREATE TABLE IF NOT EXISTS tag_namespaces (
+    id TEXT PRIMARY KEY,                    -- e.g., "bin", "status"
+    display_name TEXT NOT NULL
+);
+
+INSERT OR IGNORE INTO tag_namespaces (id, display_name) VALUES ('bin', 'Bins');
+
+-- Tags table: hierarchical labels scoped per project + namespace
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,                    -- UUID
+    project_id TEXT NOT NULL,
+    namespace_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,                     -- cached "A/B/C" path for ordering
+    parent_id TEXT,
+    sort_index INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (namespace_id) REFERENCES tag_namespaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_id) REFERENCES tags(id) ON DELETE CASCADE,
+    UNIQUE(project_id, namespace_id, path)
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_tags_updated_at
+AFTER UPDATE ON tags
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE tags SET updated_at = strftime('%s','now')
+    WHERE id = NEW.id;
+END;
+
+-- Tag assignments: map entities (media/master clips/sequences) to tags
+CREATE TABLE IF NOT EXISTS tag_assignments (
+    tag_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    namespace_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('media','master_clip','sequence','timeline_clip')),
+    entity_id TEXT NOT NULL,
+    assigned_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+
+    PRIMARY KEY(tag_id, entity_type, entity_id),
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (namespace_id) REFERENCES tag_namespaces(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tags_project_namespace
+    ON tags(project_id, namespace_id, sort_index, path);
+
+CREATE INDEX IF NOT EXISTS idx_tag_assignments_lookup
+    ON tag_assignments(project_id, namespace_id, entity_type, entity_id);
 
 -- Sequences table: Timeline containers with canvas settings
 CREATE TABLE IF NOT EXISTS sequences (

@@ -2,6 +2,7 @@
 -- Provides CRUD operations for clips following the Lua-for-logic, C++-for-performance architecture
 
 local uuid = require("uuid")
+local krono_ok, krono = pcall(require, "core.krono")
 
 local M = {}
 
@@ -205,6 +206,8 @@ local function save_internal(self, db, opts)
     self.offline = self.offline and true or false
     self.name = derive_display_name(self.id, self.name)
 
+    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
+    local krono_start = krono_enabled and krono.now and krono.now() or nil
     local exists_query = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
     exists_query:bind_value(1, self.id)
 
@@ -233,6 +236,7 @@ local function save_internal(self, db, opts)
     end
 
     local query
+    local krono_exists = (krono_enabled and krono_start and krono.now and krono.now()) or nil
     if exists then
         query = db:prepare([[
             UPDATE clips
@@ -292,9 +296,17 @@ local function save_internal(self, db, opts)
         query:bind_value(15, self.offline and 1 or 0)
     end
 
+    local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil
     if not query:exec() then
         print(string.format("WARNING: Clip.save: Failed to save clip: %s", query:last_error()))
         return false
+    end
+
+    if krono_enabled and krono_start and krono_exists and krono_exec then
+        local total_ms = (krono_exec - krono_start)
+        print(string.format("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
+            tostring(self.id:sub(1,8)), total_ms,
+            krono_exists - krono_start, krono_exec - krono_exists))
     end
 
     return true, occlusion_actions

@@ -2,6 +2,7 @@
 -- Centralised helpers for enforcing clip occlusion policies on save.
 
 local uuid = require("uuid")
+local krono_ok, krono = pcall(require, "core.krono")
 
 local ClipMutator = {}
 
@@ -88,6 +89,98 @@ end
 -- Params:
 --   track_id, start_time, duration
 --   exclude_clip_id: clip id to ignore while checking overlaps (e.g., the clip being updated)
+local function load_track_clips(db, track_id)
+    local stmt = db:prepare([[
+        SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled
+        FROM clips
+        WHERE track_id = ?
+        ORDER BY start_time
+    ]])
+    if not stmt then
+        return nil, "Failed to prepare track clip query"
+    end
+    stmt:bind_value(1, track_id)
+
+    local results = {}
+    if not stmt:exec() then
+        local err = stmt:last_error()
+        stmt:finalize()
+        return nil, err
+    end
+
+    while stmt:next() do
+        table.insert(results, {
+            id = stmt:value(0),
+            track_id = stmt:value(1),
+            media_id = stmt:value(2),
+            start_time = stmt:value(3),
+            duration = stmt:value(4),
+            source_in = stmt:value(5),
+            source_out = stmt:value(6),
+            enabled = stmt:value(7) == 1 or stmt:value(7) == true
+        })
+    end
+    stmt:finalize()
+    return results
+end
+
+local function normalize_pending_lookup(pending_clips, exclude_id)
+    local lookup = {}
+    if type(pending_clips) ~= "table" then
+        return lookup
+    end
+
+    local function ingest(clip_id, pending)
+        if not clip_id or clip_id == exclude_id then
+            return
+        end
+        if pending == false or pending.deleted then
+            return
+        end
+        lookup[clip_id] = {
+            start_time = pending.start_time,
+            duration = pending.duration,
+            tolerance = pending.tolerance,
+            _seen = false,
+            _virtual = false
+        }
+    end
+
+    for key, value in pairs(pending_clips) do
+        if type(key) == "string" and type(value) == "table" then
+            ingest(key, value)
+        elseif type(value) == "table" and type(value.id) == "string" then
+            ingest(value.id, value)
+            if lookup[value.id] then
+                lookup[value.id]._virtual = value.virtual == true
+            end
+        end
+    end
+
+    return lookup
+end
+
+local function iter_overlaps(clip_list, start_time, end_time)
+    local index = 1
+    local count = #clip_list
+
+    return function()
+        while index <= count do
+            local item = clip_list[index]
+            index = index + 1
+            local clip_start = item.start_time or 0
+            local clip_end = clip_start + (item.duration or 0)
+            if clip_end > start_time and clip_start < end_time then
+                return item
+            end
+            if clip_start >= end_time then
+                break
+            end
+        end
+        return nil
+    end
+end
+
 function ClipMutator.resolve_occlusions(db, params)
     if not db or not params then
         return true
@@ -103,92 +196,42 @@ function ClipMutator.resolve_occlusions(db, params)
     local end_time = start_time + duration
     local exclude_id = params.exclude_clip_id
 
-    local pending_clips = {}
-    if params.pending_clips and type(params.pending_clips) == "table" then
-        for key, value in pairs(params.pending_clips) do
-            if type(key) == "string" and type(value) == "table" then
-                pending_clips[key] = value
-            elseif type(value) == "table" and type(value.id) == "string" then
-                pending_clips[value.id] = value
-            end
-        end
+    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
+    local krono_start = krono_enabled and krono.now and krono.now() or nil
+    local track_clips, load_err = load_track_clips(db, track_id)
+    if not track_clips then
+        return false, load_err
     end
 
-    local select_stmt = db:prepare([[
-        SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled
-        FROM clips
-        WHERE track_id = ?
-          AND start_time < ?
-          AND (start_time + duration) > ?
-          AND (? IS NULL OR id != ?)
-        ORDER BY start_time
-    ]])
-
-    if not select_stmt then
-        return false, "Failed to prepare overlap query"
-    end
-
-    select_stmt:bind_value(1, track_id)
-    select_stmt:bind_value(2, end_time)
-    select_stmt:bind_value(3, start_time)
-    select_stmt:bind_value(4, exclude_id)
-    select_stmt:bind_value(5, exclude_id)
-
-    if not select_stmt:exec() then
-        return false, select_stmt:last_error()
-    end
+    local pending_lookup = normalize_pending_lookup(params.pending_clips, exclude_id)
+    local overlaps = iter_overlaps(track_clips, start_time, end_time)
 
     local actions = {}
 
-    while select_stmt:next() do
-        local row = {
-            id = select_stmt:value(0),
-            track_id = select_stmt:value(1),
-            media_id = select_stmt:value(2),
-            start_time = select_stmt:value(3),
-            duration = select_stmt:value(4),
-            source_in = select_stmt:value(5),
-            source_out = select_stmt:value(6),
-            enabled = select_stmt:value(7) == 1 or select_stmt:value(7) == true
-        }
-
-        local pending_state = pending_clips[row.id]
-        if pending_state ~= nil then
-            if pending_state == false or pending_state.deleted then
-                goto continue
-            end
-
-            local pending_start = pending_state.start_time
-            if pending_start == nil then
-                pending_start = row.start_time
-            end
-            local pending_duration = pending_state.duration or row.duration
-            local pending_end = pending_start + pending_duration
-
-            local pending_overlap_start = math.max(pending_start, start_time)
-            local pending_overlap_end = math.min(pending_end, end_time)
-            if pending_overlap_end > pending_overlap_start then
-                local overlap_amount = pending_overlap_end - pending_overlap_start
-                local tolerance = pending_state.tolerance or 0
-                if overlap_amount > tolerance then
-                    select_stmt:finalize()
-                    return false, string.format(
-                        "Pending clip %s would overlap target range (%d-%d vs %d-%d)",
-                        row.id, pending_start, pending_end, start_time, end_time
-                    )
-                end
-            end
-
-            goto continue
+    local krono_prepare_done = krono_enabled and krono.now and krono.now() or nil
+    while true do
+        local row = overlaps()
+        if not row then
+            break
         end
 
-        local clip_start = row.start_time
-        local clip_end = row.start_time + row.duration
+        if row.id == exclude_id then
+            goto continue_loop
+        end
+
+        local pending_state = pending_lookup[row.id]
+        if pending_state then
+            pending_state._seen = true
+            goto continue_loop
+        end
+
+        local clip_start = row.start_time or 0
+        local clip_end = clip_start + (row.duration or 0)
         local overlap_start = math.max(clip_start, start_time)
         local overlap_end = math.min(clip_end, end_time)
 
         if overlap_end <= overlap_start then
-            goto continue
+            goto continue_loop
         end
 
         local original = clone_state(row)
@@ -203,7 +246,7 @@ function ClipMutator.resolve_occlusions(db, params)
             if not ok then
                 return false, err
             end
-            goto continue
+            goto continue_loop
         end
 
         -- Overlap on tail (trim right side)
@@ -219,7 +262,7 @@ function ClipMutator.resolve_occlusions(db, params)
                 if not ok then
                     return false, err
                 end
-                goto continue
+                goto continue_loop
             end
 
             if row.source_out then
@@ -238,7 +281,7 @@ function ClipMutator.resolve_occlusions(db, params)
                 before = original,
                 after = clone_state(row)
             })
-            goto continue
+            goto continue_loop
         end
 
         -- Overlap on head (trim left side)
@@ -255,7 +298,7 @@ function ClipMutator.resolve_occlusions(db, params)
                 if not ok then
                     return false, err
                 end
-                goto continue
+                goto continue_loop
             end
 
             if row.source_in then
@@ -278,7 +321,7 @@ function ClipMutator.resolve_occlusions(db, params)
                 before = original,
                 after = clone_state(row)
             })
-            goto continue
+            goto continue_loop
         end
 
         -- Straddles new clip → split existing clip
@@ -328,10 +371,22 @@ function ClipMutator.resolve_occlusions(db, params)
                     clip = clone_state(right_clip)
                 })
             end
-            goto continue
+            goto continue_loop
         end
 
-        ::continue::
+        ::continue_loop::
+    end
+
+    for clip_id, pending_state in pairs(pending_lookup) do
+        pending_state._seen = true
+    end
+
+    local krono_end = krono_enabled and krono.now and krono.now() or nil
+    if krono_enabled and krono_start and krono_prepare_done and krono_end then
+        local total = krono_end - krono_start
+        print(string.format("clip_mutator.resolve[%s]: %.2fms (load=%.2fms body=%.2fms)",
+            tostring(track_id or "unknown"), total,
+            krono_prepare_done - krono_start, krono_end - krono_prepare_done))
     end
 
     return true, nil, actions

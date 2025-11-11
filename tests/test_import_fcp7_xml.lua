@@ -7,6 +7,8 @@ local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 local Command = require('command')
 local json = require("dkjson")
+local sqlite3 = require("core.sqlite3")
+local fcp7_importer = require("importers.fcp7_xml_importer")
 
 local TEST_DB = "/tmp/test_import_fcp7_xml.db"
 os.remove(TEST_DB)
@@ -14,7 +16,9 @@ os.remove(TEST_DB)
 database.init(TEST_DB)
 local db = database.get_connection()
 
-db:exec([[
+local function bootstrap_schema(conn)
+    assert(conn, "bootstrap_schema requires a database connection")
+    assert(conn:exec([[
     CREATE TABLE projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -111,13 +115,45 @@ db:exec([[
         selected_clip_ids_pre TEXT DEFAULT '[]',
         selected_edge_infos_pre TEXT DEFAULT '[]'
     );
-]])
 
-db:exec([[
+    CREATE TABLE tag_namespaces (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL
+    );
+
+    INSERT OR IGNORE INTO tag_namespaces(id, display_name)
+    VALUES('bin', 'Bins');
+
+    CREATE TABLE tags (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        namespace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        parent_id TEXT,
+        sort_index INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+
+    CREATE TABLE tag_assignments (
+        tag_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        namespace_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        assigned_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(tag_id, entity_type, entity_id)
+    );
+]]), "Failed to create schema tables")
+    assert(conn:exec([[
     INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-]])
+]]), "Failed to seed default project/sequence")
+end
+
+bootstrap_schema(db)
 
 -- Minimal timeline_state stub to satisfy command replay requirements.
 local timeline_state = {
@@ -125,12 +161,15 @@ local timeline_state = {
     selected_clips = {},
     selected_edges = {},
     viewport_start_time = 0,
-    viewport_duration = 10000
+    viewport_duration = 10000,
+    sequence_id = "default_sequence",
+    last_mutations = nil,
+    last_mutations_attempt = nil
 }
 
 local viewport_guard = 0
 
-function timeline_state.get_sequence_id() return 'default_sequence' end
+function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.get_playhead_time() return timeline_state.playhead_time end
 function timeline_state.set_playhead_time(time_ms) timeline_state.playhead_time = time_ms end
 function timeline_state.get_selected_clips() return timeline_state.selected_clips end
@@ -140,6 +179,29 @@ function timeline_state.set_edge_selection(edges) timeline_state.selected_edges 
 function timeline_state.normalize_edge_selection() end
 function timeline_state.reload_clips() end
 function timeline_state.persist_state_to_db() end
+local function has_entries(list)
+    return type(list) == "table" and next(list) ~= nil
+end
+
+function timeline_state.apply_mutations(sequence_id, mutations)
+    timeline_state.applied_calls = (timeline_state.applied_calls or 0) + 1
+    local target_sequence = sequence_id or (mutations and mutations.sequence_id) or timeline_state.sequence_id
+    if not mutations then
+        return false
+    end
+    if target_sequence and target_sequence ~= "" then
+        timeline_state.sequence_id = target_sequence
+    end
+    timeline_state.last_mutations_attempt = {
+        sequence_id = target_sequence,
+        bucket = mutations
+    }
+    local changed = has_entries(mutations.updates) or has_entries(mutations.inserts) or has_entries(mutations.deletes)
+    if changed then
+        timeline_state.last_mutations = mutations
+    end
+    return changed
+end
 function timeline_state.set_viewport_start_time(ms) timeline_state.viewport_start_time = ms end
 function timeline_state.set_viewport_duration(ms) timeline_state.viewport_duration = ms end
 function timeline_state.capture_viewport()
@@ -216,7 +278,7 @@ end
 
 local function fetch_clip_ids(limit)
     local ids = {}
-    local stmt = db:prepare("SELECT id FROM clips ORDER BY id")
+    local stmt = db:prepare("SELECT id FROM clips WHERE clip_kind = 'timeline' ORDER BY id")
     assert(stmt:exec())
     while stmt:next() do
         table.insert(ids, stmt:value(0))
@@ -287,10 +349,9 @@ local master_clip_count = master_count_stmt:value(0)
 master_count_stmt:finalize()
 assert(master_clip_count > 0, "Import should create master clips for MatchFrame")
 
-local settings = fetch_project_settings()
 local expected_master_bin_name = "Timeline 1 (Resolve) Master Clips"
 local master_bin_id = nil
-for _, bin in ipairs(settings.bin_hierarchy or {}) do
+for _, bin in ipairs(database.load_bins("default_project")) do
     if bin.name == expected_master_bin_name then
         master_bin_id = bin.id
         break
@@ -298,12 +359,43 @@ for _, bin in ipairs(settings.bin_hierarchy or {}) do
 end
 assert(master_bin_id, "Importer should create a '<sequence name> Master Clips' bin")
 
-local sample_master_stmt = db:prepare([[SELECT id FROM clips WHERE clip_kind = 'master' LIMIT 1]])
+local sample_master_stmt = db:prepare([[SELECT id FROM clips WHERE clip_kind = 'master' ORDER BY id LIMIT 1]])
 assert(sample_master_stmt:exec() and sample_master_stmt:next(), "Should fetch at least one master clip")
 local sample_master_id = sample_master_stmt:value(0)
 sample_master_stmt:finalize()
-local media_bin_map = settings.media_bin_map or {}
-assert(media_bin_map[sample_master_id] == master_bin_id, "Imported master clips should be assigned to the sequence master bin")
+local media_bin_map = database.load_master_clip_bin_map("default_project")
+local assigned_count = 0
+for _, bin_id in pairs(media_bin_map) do
+    if bin_id == master_bin_id then
+        assigned_count = assigned_count + 1
+    end
+end
+assert(assigned_count == master_clip_count,
+    string.format("Expected %d master clips assigned to %s, got %d",
+        master_clip_count, expected_master_bin_name, assigned_count))
+
+-- Regression: importing the anamnesis fixture must assign AUDIO/VIDEO track types.
+local anamnesis_fixture = "fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
+local anamnesis_path = resolve_fixture(anamnesis_fixture)
+local scratch_db_path = "/tmp/test_import_fcp7_xml_anamnesis.db"
+os.remove(scratch_db_path)
+local scratch_db = sqlite3.open(scratch_db_path)
+assert(scratch_db, "Failed to open scratch database copy")
+bootstrap_schema(scratch_db)
+local parsed_anamnesis = fcp7_importer.import_xml(anamnesis_path, "default_project")
+assert(parsed_anamnesis.success, parsed_anamnesis.errors and parsed_anamnesis.errors[1] or "Anamnesis fixture parsing failed")
+local anamnesis_entities = fcp7_importer.create_entities(parsed_anamnesis, scratch_db, "default_project")
+assert(anamnesis_entities.success, anamnesis_entities.error or "Anamnesis fixture entity creation failed")
+local invalid_track_stmt = scratch_db:prepare([[
+    SELECT COUNT(*) FROM tracks
+    WHERE track_type IS NULL OR track_type NOT IN ('AUDIO', 'VIDEO')
+]])
+assert(invalid_track_stmt:exec() and invalid_track_stmt:next(), "Track type validation query should succeed")
+local invalid_track_count = invalid_track_stmt:value(0)
+invalid_track_stmt:finalize()
+assert(invalid_track_count == 0, "All imported tracks must have explicit AUDIO/VIDEO track_type values")
+scratch_db:close()
+os.remove(scratch_db_path)
 
 local timeline_parent_stmt = db:prepare([[SELECT id, parent_clip_id FROM clips WHERE clip_kind = 'timeline' AND parent_clip_id IS NOT NULL LIMIT 1]])
 assert(timeline_parent_stmt:exec(), "Timeline clip parent query should run")
@@ -335,15 +427,51 @@ nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
 
 local nudge_result = command_manager.execute(nudge_cmd)
 assert(nudge_result.success, "Nudge command should succeed after import")
+assert(nudge_cmd:get_parameter("sequence_id"), "Nudge should capture the active sequence for timeline cache updates")
+local attempt_serialized = timeline_state.last_mutations_attempt and json.encode({
+    sequence_id = timeline_state.last_mutations_attempt.sequence_id,
+    has_updates = has_entries(timeline_state.last_mutations_attempt.bucket and timeline_state.last_mutations_attempt.bucket.updates),
+    has_inserts = has_entries(timeline_state.last_mutations_attempt.bucket and timeline_state.last_mutations_attempt.bucket.inserts),
+    has_deletes = has_entries(timeline_state.last_mutations_attempt.bucket and timeline_state.last_mutations_attempt.bucket.deletes)
+}) or "nil"
+assert(timeline_state.last_mutations_attempt, "Nudge should attempt timeline mutations")
+assert(timeline_state.last_mutations, "Nudge should apply timeline mutations. Attempt: " .. attempt_serialized)
+timeline_state.last_mutations = nil
+timeline_state.last_mutations_attempt = nil
 
-local commands_after_nudge = fetch_commands()
-assert(#commands_after_nudge >= 2, "Command log should contain import and nudge commands")
-local last_cmd = commands_after_nudge[#commands_after_nudge]
-local prev_cmd = commands_after_nudge[#commands_after_nudge - 1]
-assert(last_cmd.command_type == "Nudge", "Last command should be the nudge we just executed")
-assert(last_cmd.parent_sequence_number == prev_cmd.sequence_number,
-    string.format("Nudge parent should be %d (import), got %s", prev_cmd.sequence_number, tostring(last_cmd.parent_sequence_number)))
-local import_sequence = prev_cmd.sequence_number
+local toggle_cmd = Command.create("ToggleClipEnabled", "default_project")
+toggle_cmd:set_parameter("clip_ids", { clip_ids[1] })
+local toggle_apply_calls = timeline_state.applied_calls or 0
+local toggle_result = command_manager.execute(toggle_cmd)
+assert(toggle_result.success, "ToggleClipEnabled should succeed on imported clip")
+assert((timeline_state.applied_calls or 0) > toggle_apply_calls, "ToggleClipEnabled should apply timeline mutations")
+local toggle_update = timeline_state.last_mutations and timeline_state.last_mutations.updates and
+    timeline_state.last_mutations.updates[1]
+assert(toggle_update and toggle_update.enabled ~= nil, "ToggleClipEnabled updates must include enabled state")
+timeline_state.last_mutations = nil
+
+timeline_state.last_mutations = nil
+timeline_state.last_mutations_attempt = nil
+local undo_toggle = command_manager.undo()
+assert(undo_toggle.success, "Undo ToggleClipEnabled should succeed")
+assert(timeline_state.last_mutations, "Undo ToggleClipEnabled should emit timeline mutations")
+timeline_state.last_mutations = nil
+timeline_state.last_mutations_attempt = nil
+local redo_toggle = command_manager.redo()
+assert(redo_toggle.success, "Redo ToggleClipEnabled should succeed")
+assert(timeline_state.last_mutations, "Redo ToggleClipEnabled should emit timeline mutations")
+timeline_state.last_mutations = nil
+
+local commands_after_toggle = fetch_commands()
+assert(#commands_after_toggle >= 3, "Command log should contain import, nudge, and toggle commands")
+local toggle_entry = commands_after_toggle[#commands_after_toggle]
+local nudge_entry = commands_after_toggle[#commands_after_toggle - 1]
+local import_entry = commands_after_toggle[#commands_after_toggle - 2]
+assert(toggle_entry.command_type == "ToggleClipEnabled", "Toggle command should be last in the log")
+assert(nudge_entry.command_type == "Nudge", "Nudge command should precede the toggle")
+assert(nudge_entry.parent_sequence_number == import_entry.sequence_number,
+    string.format("Nudge parent should be %d (import), got %s", import_entry.sequence_number, tostring(nudge_entry.parent_sequence_number)))
+local import_sequence = import_entry.sequence_number
 
 local after_nudge_counts = {
     sequences = count_rows("sequences"),
@@ -556,7 +684,11 @@ assert(clip_to_delete, "There should be a clip to delete")
 local delete_spec = json.encode({
     {
         command_type = "DeleteClip",
-        parameters = { clip_id = clip_to_delete }
+        parameters = {
+            clip_id = clip_to_delete,
+            sequence_id = "default_sequence",
+            project_id = "default_project"
+        }
     }
 })
 

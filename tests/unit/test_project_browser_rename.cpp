@@ -136,6 +136,43 @@ void TestProjectBrowserRename::setupDatabase() {
     )"_s);
 
     execSql(uR"(
+        CREATE TABLE tag_namespaces (
+            id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL
+        );
+    )"_s);
+    execSql(uR"(
+        INSERT OR IGNORE INTO tag_namespaces(id, display_name)
+        VALUES('bin', 'Bins');
+    )"_s);
+
+    execSql(uR"(
+        CREATE TABLE tags (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            namespace_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL,
+            parent_id TEXT,
+            sort_index INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+    )"_s);
+
+    execSql(uR"(
+        CREATE TABLE tag_assignments (
+            tag_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            namespace_id TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            assigned_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(tag_id, entity_type, entity_id)
+        );
+    )"_s);
+
+    execSql(uR"(
         CREATE TABLE sequences (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
@@ -282,7 +319,7 @@ void TestProjectBrowserRename::setupLuaEnvironment() {
         local database = require('core.database')
         database.init('%1')
         local db = database.get_connection()
-        database.set_project_setting('default_project', 'bin_hierarchy', {
+        database.save_bins('default_project', {
             { id = 'bin_root', name = 'Test Bin' },
             { id = 'bin_child', name = 'Child Bin', parent_id = 'bin_root' },
             { id = 'bin_second', name = 'Second Bin' }
@@ -699,29 +736,56 @@ QJsonObject TestProjectBrowserRename::projectSettings() const {
 }
 
 QString TestProjectBrowserRename::mediaBinForClip(const QString& clipId) const {
-    const QJsonObject settings = projectSettings();
-    const QJsonValue mapValue = settings.value(QStringLiteral("media_bin_map"));
-    if (!mapValue.isObject()) {
+    static const char* kConnName = "project_browser_media_bin";
+    if (QSqlDatabase::contains(kConnName)) {
+        QSqlDatabase::removeDatabase(kConnName);
+    }
+    QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", kConnName);
+    db.setDatabaseName(m_dbPath);
+    if (!db.open()) {
         return {};
     }
-    const QJsonObject map = mapValue.toObject();
-    return map.value(clipId).toString();
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT tag_id FROM tag_assignments "
+        "WHERE project_id = 'default_project' "
+        "AND namespace_id = 'bin' "
+        "AND entity_type = 'master_clip' "
+        "AND entity_id = ?"));
+    query.addBindValue(clipId);
+    QString result;
+    if (query.exec() && query.next()) {
+        result = query.value(0).toString();
+    }
+    query.finish();
+    db.close();
+    QSqlDatabase::removeDatabase(kConnName);
+    return result;
 }
 
 QString TestProjectBrowserRename::binParentId(const QString& binId) const {
-    const QJsonObject settings = projectSettings();
-    const QJsonValue binsValue = settings.value(QStringLiteral("bin_hierarchy"));
-    if (!binsValue.isArray()) {
+    static const char* kConnName = "project_browser_bin_parent";
+    if (QSqlDatabase::contains(kConnName)) {
+        QSqlDatabase::removeDatabase(kConnName);
+    }
+    QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", kConnName);
+    db.setDatabaseName(m_dbPath);
+    if (!db.open()) {
         return {};
     }
-    const QJsonArray bins = binsValue.toArray();
-    for (const QJsonValue& entry : bins) {
-        const QJsonObject obj = entry.toObject();
-        if (obj.value(QStringLiteral("id")).toString() == binId) {
-            return obj.value(QStringLiteral("parent_id")).toString();
-        }
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT parent_id FROM tags "
+        "WHERE id = ? AND namespace_id = 'bin' AND project_id = 'default_project'"));
+    query.addBindValue(binId);
+    QString parentId;
+    if (query.exec() && query.next()) {
+        parentId = query.value(0).toString();
     }
-    return {};
+    query.finish();
+    db.close();
+    QSqlDatabase::removeDatabase(kConnName);
+    return parentId;
 }
 
 void TestProjectBrowserRename::testRenameAppliesImmediately() {

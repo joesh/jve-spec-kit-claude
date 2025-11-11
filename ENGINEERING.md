@@ -36,6 +36,7 @@
 - **1.10**: Stay in Your Layer - Lua scripts call Qt bindings - never direct Qt; Use widget registry RAII handles - never manual memory management; Go through command dispatcher - never direct function calls
 - **1.11**: Never Change Architecture Without Permission - NEVER modify function calling patterns without explicit user approval; NEVER reorganize modules or interfaces without user consultation; NEVER replace one system with another without user decision; ALWAYS ask first before changing how components interact
 - **1.12**: External inputs must NEVER crash the system - all imported data (XML, DB, files) must be validated; degrade gracefully when metadata is missing; record warnings, extract whatever can be trusted, and keep the app running
+- **1.13**: Tags Are Canonical Organization - Bins are just the default `bin` tag namespace; every UI tree, importer, and command must talk to `tag_service`/`tag_assignments` (never `project_settings.bin_hierarchy` or `media_bin_map`); if tag tables are missing the build must fail loudly—absolutely no fallbacks or legacy shims unless Joe says otherwise.
 
 ### **2.x Development Standards**
 - **2.1**: Clear technical tone, no excessive enthusiasm/emojis
@@ -53,7 +54,7 @@
 - **2.12**: Follow the Error System - ALWAYS propagate errors through ErrorContext system; NEVER write ad-hoc error handling; EVERY operation must return success/error state
 - **2.13**: No Fallbacks or Default Values - NEVER use fallback values - they hide errors and mask problems; ALWAYS fail explicitly when required data is missing; NEVER assume defaults - get actual values or error; Surface all errors immediately - no silent failures
 - **2.14**: No Hardcoded Constants - NEVER hardcode magic numbers - create symbolic constants instead; CENTRALIZE all constants in dedicated header/module files; USE meaningful names that explain what the constant represents; DOCUMENT the purpose and units of each constant
-- **2.15**: No Backward Compatibility Without Permission - NEVER maintain backward compatibility without explicitly asking the user first; ALWAYS remove deprecated APIs immediately when creating new ones; NO legacy global exports - use proper module returns only; BREAK things cleanly rather than maintain confusing dual APIs
+- **2.15**: No Backward Compatibility - Default assumption: we DO NOT maintain backward compatibility for schemas, APIs, data stores, or workflows; delete legacy paths as soon as replacements exist; never add shims, migrations, or old-code preservation unless Joe explicitly reverses this rule
 - **2.16**: No Shortcuts - NEVER take shortcuts to avoid thorough implementation; Do the complete work required even if it takes longer; Shortcuts lead to broken implementations that take more time to fix than doing it right initially; Always implement the full solution properly
 - **2.17**: No Stub Functions - NEVER create stub functions that return dummy values or print messages instead of implementing real functionality; Stub functions mask architectural problems and prevent proper solutions; ALWAYS implement the complete functionality or fix the underlying architecture issue; Stub functions are forbidden - they hide real problems
 - **2.18**: FFI vs Business Logic Separation - FFI functions are one-to-one mappings with C++ Qt functions; FFI functions contain parameter validation (not business logic) and no application logic; Business logic functions contain application logic and call FFI functions when they need Qt functionality; NEVER have business logic functions call C++ directly - they must go through FFI functions; NEVER have FFI functions contain business logic - they are pure interfaces to C++
@@ -72,7 +73,7 @@
 - **2.30**: Persist Track Heights Per Sequence - Every timeline sequence must write its track heights to SQLite (`sequence_track_layouts.track_heights_json`) whenever a header is resized, and that same height map must be reloaded verbatim on init. The most recently modified sequence becomes the project-wide template (`project_settings.track_height_template`), and any brand-new sequence must immediately adopt that template before saving its own layout. No fallbacks: if persistence fails, surface the error rather than silently using defaults.
 
 ### **3.x Design Principles**
-- **3.1**: Protocol versioning - backward compatibility for all persistent artifacts
+- **3.1**: Protocol versioning - support only the current protocol/schema; when formats change, bump the version and migrate forward without keeping the old behavior
 - **3.2**: Principle of least amazement - predictable behavior
 - **3.3**: Orthogonality - composable commands
 - **3.4**: Progressive disclosure - core workflow ≤3 clicks
@@ -81,6 +82,7 @@
 - **3.11**: Discoverable UI - tooltips on all non-obvious controls
 - **3.13**: No mysterious disabled controls without explanatory tooltips
 - **3.14**: No Marketing Speak - NEVER use marketing terms - no "professional", "enterprise", "robust", "powerful"; USE technical language - clear, direct, factual descriptions only; NO superlatives - describe what IS, not what's "amazing" or "best"; AVOID aspirational language - document verified reality, not goals
+- **3.15**: Tag-Driven Organization - Tags are the authoritative organization system; bins are simply the default tag namespace; the tree view is just one visualization of tags, so all organization features must operate on tag namespaces first and render them however the UI requires
 
 ---
 

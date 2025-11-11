@@ -15,6 +15,7 @@ local db = nil
 local command_scope = require("core.command_scope")
 local frame_utils = require("core.frame_utils")
 local event_log = require("core.event_log")
+local profile_scope = require("core.profile_scope")
 
 -- State tracking
 local last_sequence_number = 0
@@ -328,6 +329,11 @@ local function gather_master_initial_state(project_id)
 end
 
 local function cache_initial_state(sequence_id, project_id)
+    local scope = profile_scope.begin("command_manager.cache_initial_state", {
+        details_fn = function()
+            return string.format("sequence=%s project=%s", tostring(sequence_id), tostring(project_id))
+        end
+    })
     local database = require('core.database')
 
     if project_id and not sequence_initial_state.timeline[project_id] then
@@ -385,6 +391,7 @@ local function cache_initial_state(sequence_id, project_id)
     if project_id and not sequence_initial_state.master[project_id] then
         sequence_initial_state.master[project_id] = gather_master_initial_state(project_id)
     end
+    scope:finish()
 end
 
 local function ensure_stack_state(stack_id)
@@ -745,17 +752,21 @@ local function ensure_command_selection_columns()
 end
 
 local function capture_pre_selection_for_command(command)
+    local scope = profile_scope.begin("command_manager.capture_selection_pre")
     local clips_json, edges_json, gaps_json = capture_selection_snapshot()
     command.selected_clip_ids_pre = clips_json
     command.selected_edge_infos_pre = edges_json
     command.selected_gap_infos_pre = gaps_json
+    scope:finish()
 end
 
 local function capture_post_selection_for_command(command)
+    local scope = profile_scope.begin("command_manager.capture_selection_post")
     local clips_json, edges_json, gaps_json = capture_selection_snapshot()
     command.selected_clip_ids = clips_json
     command.selected_edge_infos = edges_json
     command.selected_gap_infos = gaps_json
+    scope:finish()
 end
 
 local function restore_selection_from_serialized(clips_json, edges_json, gaps_json)
@@ -1137,48 +1148,76 @@ local function calculate_state_hash(project_id)
         return "00000000"
     end
 
-    -- Query all relevant project state data
-    local query = db:prepare([[
-        SELECT p.name, p.settings,
-               s.name, s.frame_rate, s.width, s.height,
-               t.track_type, t.track_index, t.enabled,
-               c.start_time, c.duration, c.enabled,
-               m.file_path, m.duration, m.frame_rate
-        FROM projects p
-        LEFT JOIN sequences s ON p.id = s.project_id
-        LEFT JOIN tracks t ON s.id = t.sequence_id
-        LEFT JOIN clips c ON t.id = c.track_id
-        LEFT JOIN media m ON c.media_id = m.id
-        WHERE p.id = ?
-        ORDER BY s.id, t.track_type, t.track_index, c.start_time
-    ]])
+    local scope = profile_scope.begin("command_manager.state_hash_query")
+    local parts = {}
 
-    if not query then
-        local err = "unknown error"
-        if db.last_error then
-            err = db:last_error()
+    local function append_query(sql, bind_values, column_count, label)
+        local stmt = db:prepare(sql)
+        if not stmt then
+            print(string.format("WARNING: Failed to prepare %s query for state hash", label or sql:sub(1, 32)))
+            return
         end
-        print("WARNING: Failed to prepare state hash query: " .. err)
-        return "00000000"
-    end
-
-    query:bind_value(1, project_id)
-
-    local state_string = ""
-    if query:exec() then
-        while query:next() do
-            -- Build deterministic state string
-            for i = 0, 13 do  -- We select 14 columns (0-13): p.name, p.settings, s.name, s.frame_rate, s.width, s.height, t.track_type, t.track_index, t.enabled, c.start_time, c.duration, c.enabled, m.file_path, m.duration
-                local value = query:value(i)
-                state_string = state_string .. tostring(value) .. "|"
+        if bind_values then
+            for index, value in ipairs(bind_values) do
+                stmt:bind_value(index, value)
             end
-            state_string = state_string .. "\n"
         end
+
+        local ok = stmt:exec()
+        if ok then
+            while stmt:next() do
+                for column = 0, column_count - 1 do
+                    local value = stmt:value(column)
+                    parts[#parts + 1] = tostring(value)
+                    parts[#parts + 1] = "|"
+                end
+                parts[#parts + 1] = "\n"
+            end
+        end
+        stmt:finalize()
     end
 
-    -- Calculate simple hash (TODO: implement proper SHA256 via Qt bindings)
-    -- For now, use Lua's string hash as a simple checksum
-    local hash = string.format("%08x", #state_string)  -- Simple length-based hash
+    append_query([[
+        SELECT id, name, settings
+        FROM projects
+        WHERE id = ?
+    ]], {project_id}, 3, "project")
+
+    append_query([[
+        SELECT id, name, frame_rate, width, height, timecode_start
+        FROM sequences
+        WHERE project_id = ?
+        ORDER BY id
+    ]], {project_id}, 6, "sequences")
+
+    append_query([[
+        SELECT t.sequence_id, t.id, t.track_type, t.track_index, t.enabled
+        FROM tracks t
+        JOIN sequences s ON t.sequence_id = s.id
+        WHERE s.project_id = ?
+        ORDER BY t.sequence_id, t.track_index, t.id
+    ]], {project_id}, 5, "tracks")
+
+    append_query([[
+        SELECT t.sequence_id, c.track_id, c.id, c.start_time, c.duration,
+               c.enabled, c.source_in, c.source_out, c.media_id
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        JOIN sequences s ON t.sequence_id = s.id
+        WHERE s.project_id = ?
+        ORDER BY t.sequence_id, t.track_index, c.start_time, c.id
+    ]], {project_id}, 9, "clips")
+
+    append_query([[
+        SELECT id, file_path, duration, frame_rate, name
+        FROM media
+        WHERE project_id = ?
+        ORDER BY id
+    ]], {project_id}, 5, "media")
+
+    local state_string = table.concat(parts)
+    local hash = string.format("%08x", #state_string)
+    scope:finish(string.format("rows=%d", #parts))
     return hash
 end
 
@@ -1227,24 +1266,34 @@ end
 
 -- Execute command implementation (routes to specific handlers)
 local function execute_command_implementation(command)
+    local scope = profile_scope.begin("command_manager.exec_impl", {
+        details_fn = function()
+            return string.format("command=%s status=%s", command and command.type or "unknown", tostring(last_error_message == "" and "ok" or "error"))
+        end
+    })
+
     local executor = command_executors[command.type]
 
     if executor then
         local success, result = pcall(executor, command)
         if not success then
             print(string.format("ERROR: Executor failed: %s", tostring(result)))
+            last_error_message = tostring(result)
+            scope:finish("executor_error")
             return false
         end
+        scope:finish(result and "executor_success" or "executor_false")
         return result
     elseif command.type == "FastOperation" or
            command.type == "BatchOperation" or
            command.type == "ComplexOperation" then
-        -- Test commands that should succeed
+        scope:finish("test_command")
         return true
     else
         local error_msg = string.format("Unknown command type: %s", command.type)
         print("ERROR: " .. error_msg)
         last_error_message = error_msg
+        scope:finish("unknown_command")
         return false
     end
 end
@@ -1294,6 +1343,11 @@ function M.execute(command_or_name, params)
         }
     end
 
+    local exec_scope = profile_scope.begin("command_manager.execute", {
+        details_fn = function()
+            return string.format("command=%s", command and command.type or tostring(command_or_name))
+        end
+    })
     local result = {
         success = false,
         error_message = "",
@@ -1302,17 +1356,21 @@ function M.execute(command_or_name, params)
 
     if not validate_command_parameters(command) then
         result.error_message = "Invalid command parameters"
+        exec_scope:finish("invalid_params")
         return result
     end
 
     local scope_ok, scope_err = command_scope.check(command)
     if not scope_ok then
         result.error_message = scope_err or "Command cannot execute in current scope"
+        exec_scope:finish("scope_violation")
         return result
     end
 
     if non_recording_commands[command.type] then
-        return execute_non_recording(command)
+        local non_record_result = execute_non_recording(command)
+        exec_scope:finish("non_recording")
+        return non_record_result
     end
 
     local stack_id, stack_info = resolve_stack_for_command(command)
@@ -1341,6 +1399,7 @@ function M.execute(command_or_name, params)
     local begin_tx = db:prepare("BEGIN TRANSACTION")
     if not (begin_tx and begin_tx:exec()) then
         result.error_message = "Failed to begin transaction"
+        exec_scope:finish("begin_tx_failed")
         return result
     end
 
@@ -1368,6 +1427,7 @@ function M.execute(command_or_name, params)
             if rollback_tx then rollback_tx:exec() end
             last_sequence_number = last_sequence_number - 1
             result.error_message = "FATAL: Cannot execute command with NULL parent (would break undo tree)"
+            exec_scope:finish("null_parent")
             return result
         end
     end
@@ -1385,6 +1445,7 @@ function M.execute(command_or_name, params)
                 if rollback_tx then rollback_tx:exec() end
                 last_sequence_number = last_sequence_number - 1
                 result.error_message = "FATAL: Cannot execute command with non-existent parent (would break undo tree)"
+                exec_scope:finish("missing_parent")
                 return result
             end
         end
@@ -1417,7 +1478,10 @@ function M.execute(command_or_name, params)
         command.post_hash = post_hash
 
         -- Save command to database
-        if command:save(db) then
+        local save_scope = profile_scope.begin("command_manager.command_save")
+        local saved = command:save(db)
+        save_scope:finish()
+        if saved then
             local event_context = {
                 sequence_number = sequence_number,
                 stack_id = stack_id,
@@ -1425,7 +1489,9 @@ function M.execute(command_or_name, params)
                 project_id = command.project_id or active_project_id,
                 scope = nil,
             }
+            local event_scope = profile_scope.begin("command_manager.event_log")
             local record_ok, record_err = event_log.record_command(command, event_context)
+            event_scope:finish()
             if not record_ok then
                 print("ERROR: Failed to append event log entry: " .. tostring(record_err))
                 local rollback_tx = db:prepare("ROLLBACK")
@@ -1433,6 +1499,7 @@ function M.execute(command_or_name, params)
                 last_sequence_number = last_sequence_number - 1
                 result.success = false
                 result.error_message = "Failed to append event log entry"
+                exec_scope:finish("event_log_failure")
                 return result
             end
 
@@ -1459,27 +1526,82 @@ function M.execute(command_or_name, params)
             end
 
             if #snapshot_targets > 0 and (force_snapshot or snapshot_mgr.should_snapshot(sequence_number)) then
+                local snapshot_scope = profile_scope.begin("command_manager.snapshot", {
+                    details_fn = function()
+                        return string.format("targets=%d", #snapshot_targets)
+                    end
+                })
                 local db_module = require('core.database')
                 for _, seq_id in ipairs(snapshot_targets) do
                     local clips = db_module.load_clips(seq_id)
                     snapshot_mgr.create_snapshot(db, seq_id, sequence_number, clips)
                 end
+                snapshot_scope:finish()
             end
 
             -- COMMIT TRANSACTION: Everything succeeded
+            local commit_scope = profile_scope.begin("command_manager.commit_tx")
             local commit_tx = db:prepare("COMMIT")
             if commit_tx then commit_tx:exec() end
+            commit_scope:finish()
 
             -- Reload timeline state to pick up database changes
             -- This triggers listener notifications → automatic view redraws
             local skip_timeline_reload = command_flag(command, "skip_timeline_reload", "__skip_timeline_reload")
             if not skip_timeline_reload then
                 local reload_sequence_id = extract_sequence_id(command)
-                if reload_sequence_id and reload_sequence_id ~= "" then
+                local applied_mutations = false
+                local mutations = command:get_parameter("__timeline_mutations")
+                if mutations and timeline_state.apply_mutations then
+                    local mutation_scope = profile_scope.begin("command_manager.apply_mutations")
+                    local function apply_mutation_bucket(bucket)
+                        if not bucket then
+                            return false
+                        end
+                        local target_sequence = bucket.sequence_id or reload_sequence_id
+                        return timeline_state.apply_mutations(target_sequence, bucket)
+                    end
+
+                    if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+                        applied_mutations = apply_mutation_bucket(mutations)
+                    else
+                        for _, bucket in pairs(mutations) do
+                            if apply_mutation_bucket(bucket) then
+                                applied_mutations = true
+                            end
+                        end
+                    end
+                    command:clear_parameter("__timeline_mutations")
+                    mutation_scope:finish(string.format("applied=%s", tostring(applied_mutations)))
+                end
+                local mutation_failure_info = nil
+                if timeline_state.consume_mutation_failure then
+                    mutation_failure_info = timeline_state.consume_mutation_failure()
+                end
+                if mutation_failure_info and not applied_mutations then
+                    local context = mutation_failure_info.context or {}
+                    local keys = context.update_keys and table.concat(context.update_keys, ", ") or "n/a"
+                    print(string.format(
+                        "Timeline mutation failure (%s): clip=%s keys=[%s] idx=%s/%s",
+                        tostring(mutation_failure_info.kind),
+                        tostring(context.clip_id or "unknown"),
+                        keys,
+                        tostring(context.update_index or "?"),
+                        tostring(context.total_updates or "?")))
+                    if mutation_failure_info.stack then
+                        print(mutation_failure_info.stack)
+                    end
+                end
+
+                if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
+                    print(string.format("Timeline reload fallback for %s (no mutations applied)", tostring(reload_sequence_id)))
+                    local reload_scope = profile_scope.begin("command_manager.reload_clips")
                     timeline_state.reload_clips(reload_sequence_id)
+                    reload_scope:finish()
                 end
             end
 
+            local notify_scope = profile_scope.begin("command_manager.notify_listeners")
             notify_command_event({
                 event = "execute",
                 command = command,
@@ -1487,6 +1609,7 @@ function M.execute(command_or_name, params)
                 stack_id = stack_id,
                 sequence_number = sequence_number
             })
+            notify_scope:finish()
         else
             result.error_message = "Failed to save command to database"
             -- ROLLBACK: Command execution succeeded but save failed
@@ -1504,6 +1627,7 @@ function M.execute(command_or_name, params)
         last_sequence_number = last_sequence_number - 1  -- Revert sequence number
     end
 
+    exec_scope:finish(result.success and "success" or "failure")
     return result
 end
 

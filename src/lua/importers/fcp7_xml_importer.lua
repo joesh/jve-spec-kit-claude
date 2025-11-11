@@ -544,6 +544,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     replay_context = replay_context or {}
 
     local database = require("core.database")
+    local tag_service = require("core.tag_service")
     local Sequence = require("models.sequence")
     local Track = require("models.track")
     local Clip = require("models.clip")
@@ -612,7 +613,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     local master_lookup = {}
     local recorded_master_ids = {}
 
-    local bins = database.load_bins(project_id)
+    local bins = tag_service.list(project_id)
     local bins_by_name = {}
     for _, bin in ipairs(bins) do
         if bin.name and bin.id then
@@ -622,13 +623,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     local bins_dirty = false
 
     local project_settings = database.get_project_settings(project_id) or {}
-    local media_bin_map = {}
-    if type(project_settings.media_bin_map) == "table" then
-        for clip_id, bin_id in pairs(project_settings.media_bin_map) do
-            media_bin_map[clip_id] = bin_id
-        end
-    end
-    local media_bin_map_dirty = false
+    local pending_bin_assignments = {}
+    local bin_assignment_dirty = false
 
     local sequence_master_bins = {}
 
@@ -925,9 +921,16 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             return false, "Failed to allocate clip"
         end
 
-        if master_bin_id and master_clip_id and media_bin_map[tostring(master_clip_id)] ~= master_bin_id then
-            media_bin_map[tostring(master_clip_id)] = master_bin_id
-            media_bin_map_dirty = true
+        if master_bin_id and master_bin_id ~= "" and master_clip_id then
+            local bucket = pending_bin_assignments[master_bin_id]
+            if not bucket then
+                bucket = {}
+                pending_bin_assignments[master_bin_id] = bucket
+            end
+            if not bucket[master_clip_id] then
+                bucket[master_clip_id] = true
+                bin_assignment_dirty = true
+            end
         end
 
         local reuse_id = resolve_reuse_id('clips', clip_key)
@@ -1152,11 +1155,33 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return {success = false, error = string.format("Failed to commit import transaction: %s", tostring(commit_err))}
     end
 
+    local bins_saved = true
     if bins_dirty then
-        database.save_bins(project_id, bins)
+        local ok, err = tag_service.save_hierarchy(project_id, bins)
+        if not ok then
+            bins_saved = false
+            print("WARNING: Failed to persist bin hierarchy: " .. tostring(err))
+        end
     end
-    if media_bin_map_dirty then
-        database.set_project_setting(project_id, "media_bin_map", media_bin_map)
+    if bin_assignment_dirty and bins_saved then
+        for bin_id, clip_lookup in pairs(pending_bin_assignments) do
+            if type(bin_id) == "string" and bin_id ~= "" then
+                local clip_ids = {}
+                for clip_id in pairs(clip_lookup) do
+                    table.insert(clip_ids, clip_id)
+                end
+                if #clip_ids > 0 then
+                    local ok, assign_err = tag_service.assign_master_clips(project_id, clip_ids, bin_id)
+                    if not ok then
+                        print(string.format(
+                            "WARNING: Failed to persist %d master clip assignments for bin %s: %s",
+                            #clip_ids, tostring(bin_id), tostring(assign_err or "unknown error")))
+                    end
+                end
+            end
+        end
+    elseif bin_assignment_dirty and not bins_saved then
+        print("WARNING: Skipping master clip bin assignment because bin hierarchy could not be saved")
     end
 
     return result

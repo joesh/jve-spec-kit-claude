@@ -2217,6 +2217,36 @@ end
                         end
                     end
 
+                    local drag_mutations = nil
+                    if not alt_copy then
+                        local mutation_updates = {}
+                        for _, clip in ipairs(current_clips) do
+                            local target_track_for_clip = clip_targets[clip.id] or clip.track_id
+                            local new_start = clip.start_time + delta_ms
+                            local track_changed = target_track_for_clip ~= clip.track_id
+                            local time_changed = delta_ms ~= 0
+                            if track_changed or time_changed then
+                                table.insert(mutation_updates, {
+                                    clip_id = clip.id,
+                                    track_id = target_track_for_clip,
+                                    track_sequence_id = active_sequence_id,
+                                    start_time = new_start,
+                                    duration = clip.duration,
+                                    source_in = clip.source_in,
+                                    source_out = clip.source_out
+                                })
+                            end
+                        end
+                        if #mutation_updates > 0 then
+                            drag_mutations = {
+                                sequence_id = active_sequence_id,
+                                inserts = {},
+                                updates = mutation_updates,
+                                deletes = {}
+                            }
+                        end
+                    end
+
                     -- Execute all as single batch command (single undo entry)
                     if #command_specs > 0 then
                         if #command_specs == 1 then
@@ -2225,6 +2255,9 @@ end
                             local cmd = Command.create(spec.command_type, active_project_id)
                             for key, value in pairs(spec.parameters) do
                                 cmd:set_parameter(key, value)
+                            end
+                            if drag_mutations then
+                                cmd:set_parameter("__timeline_mutations", drag_mutations)
                             end
                             local result = command_manager.execute(cmd)
                             if not result.success then
@@ -2239,6 +2272,9 @@ end
                             if active_sequence_id and active_sequence_id ~= "" then
                                 batch_cmd:set_parameter("sequence_id", active_sequence_id)
                                 batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+                            end
+                            if drag_mutations then
+                                batch_cmd:set_parameter("__timeline_mutations", drag_mutations)
                             end
 
                             local result = command_manager.execute(batch_cmd)

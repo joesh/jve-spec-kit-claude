@@ -390,11 +390,14 @@ function keyboard_shortcuts.perform_delete_action(opts)
         local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
 
         local command_specs = {}
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
         for _, clip in ipairs(selected_clips) do
             table.insert(command_specs, {
                 command_type = "DeleteClip",
                 parameters = {
-                    clip_id = clip.id
+                    clip_id = clip.id,
+                    sequence_id = active_sequence_id,
+                    project_id = project_id
                 }
             })
         end

@@ -1279,9 +1279,15 @@ end
 
 function M.save_bins(project_id, bins, opts)
     project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        local reason = "save_bins: Missing project_id"
+        print("WARNING: " .. reason)
+        return false, reason
+    end
     if not db_connection then
-        print("WARNING: save_bins: No database connection")
-        return false
+        local reason = "save_bins: No database connection"
+        print("WARNING: " .. reason)
+        return false, reason
     end
 
     require_tag_tables()
@@ -1294,34 +1300,45 @@ function M.save_bins(project_id, bins, opts)
     for _, bin in ipairs(ordered) do
         local path = resolve_bin_path(bin.id, lookup, path_cache, {})
         if not path or path == "" then
-            print(string.format("WARNING: save_bins: invalid hierarchy for bin %s", tostring(bin.id)))
-            return false
+            local reason = string.format("save_bins: invalid hierarchy for bin %s", tostring(bin.id))
+            print("WARNING: " .. reason)
+            return false, reason
         end
     end
 
     local started, begin_err = begin_write_transaction()
     if started == nil then
-        print("WARNING: save_bins: failed to begin transaction: " .. tostring(begin_err))
-        return false
+        local reason = "save_bins: failed to begin transaction: " .. tostring(begin_err)
+        print("WARNING: " .. reason)
+        return false, reason
+    end
+
+    local purge_stmt = db_connection:prepare([[
+        DELETE FROM tags
+        WHERE project_id = ? AND namespace_id = ?
+    ]])
+    if purge_stmt then
+        purge_stmt:bind_value(1, project_id)
+        purge_stmt:bind_value(2, namespace_id)
+        purge_stmt:exec()
+        purge_stmt:finalize()
     end
 
     local upsert_stmt = db_connection:prepare([[
         INSERT INTO tags (id, project_id, namespace_id, name, path, parent_id, sort_index)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            path = excluded.path,
-            parent_id = excluded.parent_id,
-            sort_index = excluded.sort_index,
-            updated_at = strftime('%s','now')
     ]])
     if not upsert_stmt then
         rollback_transaction(started)
-        return false
+        return false, "save_bins: failed to prepare upsert statement"
     end
 
     local inserted = {}
     for _, bin in ipairs(ordered) do
+        if upsert_stmt.reset then
+            upsert_stmt:reset()
+        end
+        upsert_stmt:clear_bindings()
         local path = path_cache[bin.id]
         upsert_stmt:bind_value(1, bin.id)
         upsert_stmt:bind_value(2, project_id)
@@ -1337,11 +1354,18 @@ function M.save_bins(project_id, bins, opts)
         end
         upsert_stmt:bind_value(7, bin.sort_index or 0)
         local success = upsert_stmt:exec()
-        upsert_stmt:clear_bindings()
         if success == false then
+            local reason = string.format(
+                "save_bins: failed to upsert bin %s (project_id=%s, ns=%s, error=%s, rc=%s)",
+                tostring(bin.id),
+                tostring(project_id),
+                tostring(namespace_id),
+                tostring(upsert_stmt:last_error() or "unknown error"),
+                tostring(upsert_stmt:last_result_code() or "?")
+            )
             upsert_stmt:finalize()
             rollback_transaction(started)
-            return false
+            return false, reason
         end
         inserted[bin.id] = true
     end
@@ -1354,7 +1378,7 @@ function M.save_bins(project_id, bins, opts)
     ]])
         if not select_stmt then
             rollback_transaction(started)
-            return false
+            return false, "save_bins: failed to prepare select statement"
         end
     select_stmt:bind_value(1, project_id)
     select_stmt:bind_value(2, BIN_NAMESPACE)
@@ -1377,7 +1401,7 @@ function M.save_bins(project_id, bins, opts)
         ]])
         if not delete_stmt then
             rollback_transaction(started)
-            return false
+            return false, "save_bins: failed to prepare stale delete statement"
         end
         for _, stale_id in ipairs(stale_ids) do
             delete_stmt:bind_value(1, project_id)
@@ -1385,17 +1409,23 @@ function M.save_bins(project_id, bins, opts)
             delete_stmt:bind_value(3, stale_id)
             local success = delete_stmt:exec()
             delete_stmt:clear_bindings()
-            if success == false then
-                delete_stmt:finalize()
-                rollback_transaction(started)
-                return false
+        if success == false then
+            local reason = string.format(
+                "save_bins: failed to delete stale bin %s (%s, rc=%s)",
+                tostring(stale_id),
+                tostring(delete_stmt:last_error() or "unknown error"),
+                tostring(delete_stmt:last_result_code() or "?")
+            )
+            delete_stmt:finalize()
+            rollback_transaction(started)
+            return false, reason
             end
         end
         delete_stmt:finalize()
     end
 
     if not commit_transaction(started, "save_bins") then
-        return false
+        return false, "save_bins: commit failed"
     end
     return true
 end

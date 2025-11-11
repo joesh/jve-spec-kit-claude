@@ -8,8 +8,8 @@
 namespace schema {
 
 // Schema versioning
-static const int INITIAL_SCHEMA_VERSION = 1;
-static const int CURRENT_SCHEMA_VERSION = 1;
+static const int INITIAL_SCHEMA_VERSION = 2;
+static const int CURRENT_SCHEMA_VERSION = 2;
 
 // Database configuration
 static const char* const WAL_JOURNAL_MODE = "WAL";
@@ -25,7 +25,10 @@ static const char* const REQUIRED_TABLES[] = {
     "clips", 
     "properties",
     "commands",
-    "snapshots"
+    "snapshots",
+    "tag_namespaces",
+    "tags",
+    "tag_assignments"
 };
 
 static const int REQUIRED_TABLES_COUNT = sizeof(REQUIRED_TABLES) / sizeof(REQUIRED_TABLES[0]);

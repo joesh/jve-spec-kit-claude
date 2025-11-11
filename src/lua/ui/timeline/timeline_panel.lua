@@ -10,6 +10,7 @@ local selection_hub = require("ui.selection_hub")
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 local inspectable_factory = require("inspectable")
+local profile_scope = require("core.profile_scope")
 
 local M = {}
 
@@ -724,7 +725,7 @@ function M.create()
         local mark_out = state.get_mark_out and state.get_mark_out() or nil
         last_mark_signature = tostring(mark_in) .. ":" .. tostring(mark_out)
     end
-    state.add_listener(function()
+    state.add_listener(profile_scope.wrap("timeline_panel.selection_listener", function()
         local selected = state.get_selected_clips and state.get_selected_clips() or {}
 
         -- Re-broadcast selection when only the timeline itself is selected and marks change.
@@ -739,7 +740,7 @@ function M.create()
         else
             last_mark_signature = nil
         end
-    end)
+    end))
 
     -- Main container
     local container = qt_constants.WIDGET.CREATE()
@@ -1188,9 +1189,12 @@ function M.create()
     update_tab_styles(initial_sequence_id)
 
     if not tab_command_listener and command_manager and command_manager.add_listener then
-        tab_command_listener = command_manager.add_listener(function(event)
-            handle_tab_command_event(event)
-        end)
+        tab_command_listener = command_manager.add_listener(profile_scope.wrap(
+            "timeline_panel.command_listener",
+            function(event)
+                handle_tab_command_event(event)
+            end
+        ))
     end
 
     return container

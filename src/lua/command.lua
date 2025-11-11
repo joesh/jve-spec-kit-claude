@@ -59,6 +59,10 @@ function M:get_parameter(key)
     return self.parameters[key]
 end
 
+function M:clear_parameter(key)
+    self.parameters[key] = nil
+end
+
 -- Get all parameters
 function M:get_all_parameters()
     return self.parameters

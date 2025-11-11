@@ -26,6 +26,7 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
     local ui_constants = require("core.ui_constants")
     local Sequence = require("models.sequence")
     local Clip = require("models.clip")
+    local clip_mutator = require("core.clip_mutator")
     local set_last_error = set_last_error_fn or function(_) end
 
     local function trim_string(value)
@@ -66,6 +67,275 @@ function M.register_commands(command_executors, command_undoers, db, set_last_er
             return json.encode({ value = nil })
         end
         return encoded
+    end
+
+    local function ensure_timeline_mutation_bucket(command, sequence_id)
+        if not sequence_id then
+            return nil
+        end
+        local mutations = command:get_parameter("__timeline_mutations")
+        if not mutations then
+            mutations = {}
+            command:set_parameter("__timeline_mutations", mutations)
+        elseif mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+            local existing_bucket = mutations
+            mutations = {[existing_bucket.sequence_id or sequence_id] = existing_bucket}
+            command:set_parameter("__timeline_mutations", mutations)
+        end
+
+        if not mutations[sequence_id] then
+            mutations[sequence_id] = {
+                sequence_id = sequence_id,
+                inserts = {},
+                updates = {},
+                deletes = {}
+            }
+        end
+        return mutations[sequence_id]
+    end
+
+    local function clip_update_payload(source, fallback_sequence_id)
+        if not source or not source.id then
+            return nil
+        end
+        local track_sequence_id = source.owner_sequence_id or source.track_sequence_id or fallback_sequence_id
+        if not track_sequence_id then
+            return nil
+        end
+        return {
+            clip_id = source.id,
+            track_id = source.track_id,
+            track_sequence_id = track_sequence_id,
+            start_time = source.start_time,
+            duration = source.duration,
+            source_in = source.source_in,
+            source_out = source.source_out,
+            enabled = source.enabled ~= false
+        }
+    end
+
+    local function clip_insert_payload(source, fallback_sequence_id)
+        if not source or not source.id then
+            return nil
+        end
+        local track_sequence_id = source.owner_sequence_id or source.track_sequence_id or fallback_sequence_id
+        if not track_sequence_id then
+            return nil
+        end
+        local label = source.label or source.name
+        if (not label or label == "") and source.id then
+            label = "Clip " .. source.id:sub(1, 8)
+        end
+        return {
+            id = source.id,
+            clip_id = source.id,
+            project_id = source.project_id,
+            clip_kind = source.clip_kind,
+            name = source.name,
+            label = label,
+            track_id = source.track_id,
+            track_sequence_id = track_sequence_id,
+            owner_sequence_id = source.owner_sequence_id or track_sequence_id,
+            media_id = source.media_id,
+            source_sequence_id = source.source_sequence_id,
+            parent_clip_id = source.parent_clip_id,
+            start_time = source.start_time,
+            duration = source.duration,
+            source_in = source.source_in,
+            source_out = source.source_out,
+            enabled = source.enabled ~= false,
+            offline = source.offline == true
+        }
+    end
+
+    local function add_update_mutation(command, sequence_id, update)
+        if not update then
+            return
+        end
+        local bucket = ensure_timeline_mutation_bucket(command, sequence_id)
+        if not bucket then
+            return
+        end
+        if update[1] then
+            for _, entry in ipairs(update) do
+                table.insert(bucket.updates, entry)
+            end
+        else
+            table.insert(bucket.updates, update)
+        end
+        command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
+    end
+
+    local function record_clip_enabled_mutation(command, clip)
+        if not clip then
+            return
+        end
+        local mutation_sequence = command:get_parameter("sequence_id") or clip.owner_sequence_id or clip.track_sequence_id
+        local update_payload = clip_update_payload(clip, mutation_sequence)
+        if update_payload then
+            add_update_mutation(command, update_payload.track_sequence_id or mutation_sequence, update_payload)
+        end
+    end
+
+    local function add_insert_mutation(command, sequence_id, clip)
+        if not clip then
+            return
+        end
+        local bucket = ensure_timeline_mutation_bucket(command, sequence_id)
+        if not bucket then
+            return
+        end
+        if clip[1] then
+            for _, entry in ipairs(clip) do
+                table.insert(bucket.inserts, entry)
+            end
+        else
+            table.insert(bucket.inserts, clip)
+        end
+        command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
+    end
+
+    local function add_delete_mutation(command, sequence_id, clip_ids)
+        if not clip_ids then
+            return
+        end
+        local bucket = ensure_timeline_mutation_bucket(command, sequence_id)
+        if not bucket then
+            return
+        end
+        if type(clip_ids) == "table" then
+            for _, clip_id in ipairs(clip_ids) do
+                table.insert(bucket.deletes, clip_id)
+            end
+        else
+            table.insert(bucket.deletes, clip_ids)
+        end
+        command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
+    end
+
+    local function merge_timeline_mutations(target_command, source_mutations)
+        if not target_command or not source_mutations then
+            return
+        end
+
+        local function merge_bucket(bucket)
+            if not bucket or not bucket.sequence_id then
+                return
+            end
+            if bucket.inserts and #bucket.inserts > 0 then
+                add_insert_mutation(target_command, bucket.sequence_id, bucket.inserts)
+            end
+            if bucket.updates and #bucket.updates > 0 then
+                add_update_mutation(target_command, bucket.sequence_id, bucket.updates)
+            end
+            if bucket.deletes and #bucket.deletes > 0 then
+                add_delete_mutation(target_command, bucket.sequence_id, bucket.deletes)
+            end
+        end
+
+        if source_mutations.sequence_id or source_mutations.inserts or source_mutations.updates or source_mutations.deletes then
+            merge_bucket(source_mutations)
+        else
+            for _, bucket in pairs(source_mutations) do
+                merge_bucket(bucket)
+            end
+        end
+    end
+
+    local function ensure_master_clip_for_media(command, media_id, opts)
+        if not media_id or media_id == "" then
+            return nil
+        end
+        opts = opts or {}
+        local project_id_value = opts.project_id
+            or command:get_parameter("project_id")
+            or command.project_id
+            or "default_project"
+
+        local lookup = db:prepare([[
+            SELECT id
+            FROM clips
+            WHERE clip_kind = 'master'
+              AND media_id = ?
+              AND (project_id = ? OR project_id IS NULL)
+            LIMIT 1
+        ]])
+        if lookup then
+            lookup:bind_value(1, media_id)
+            lookup:bind_value(2, project_id_value)
+            if lookup:exec() and lookup:next() then
+                local existing_id = lookup:value(0)
+                lookup:finalize()
+                return existing_id
+            end
+            lookup:finalize()
+        end
+
+        local duration = math.max(opts.duration or 1000, 1)
+        local source_in = opts.source_in or 0
+        local source_out = opts.source_out or (source_in + duration)
+        if source_out <= source_in then
+            source_out = source_in + duration
+        end
+
+        local master_clip = Clip.create(opts.name or "Master Clip", media_id, {
+            project_id = project_id_value,
+            clip_kind = "master",
+            start_time = 0,
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out,
+            enabled = true,
+            offline = false
+        })
+        if not master_clip then
+            return nil
+        end
+        if not master_clip:save(db, {skip_occlusion = true}) then
+            return nil
+        end
+        return master_clip.id
+    end
+
+    local function record_occlusion_actions(command, sequence_id, actions)
+        if not actions or #actions == 0 then
+            return
+        end
+        for _, action in ipairs(actions) do
+            if action.type == "delete" and action.clip and action.clip.id then
+                add_delete_mutation(command, sequence_id, action.clip.id)
+            elseif action.type == "trim" and action.after then
+                local update = clip_update_payload(action.after, sequence_id)
+                if update then
+                    add_update_mutation(command, update.track_sequence_id or sequence_id, update)
+                end
+            elseif action.type == "insert" and action.clip then
+                local insert_payload = clip_insert_payload(action.clip, sequence_id)
+                if insert_payload then
+                    add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
+                end
+            end
+        end
+    end
+
+    local function resolve_sequence_for_track(sequence_id_param, track_id)
+        local resolved = sequence_id_param
+        if resolved and resolved ~= "" then
+            return resolved
+        end
+        if not track_id or track_id == "" then
+            return resolved
+        end
+        local stmt = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
+        if not stmt then
+            return resolved
+        end
+        stmt:bind_value(1, track_id)
+        if stmt:exec() and stmt:next() then
+            resolved = stmt:value(0) or resolved
+        end
+        stmt:finalize()
+        return resolved
     end
 
     local function fetch_clip_properties_for_copy(clip_id)
@@ -888,6 +1158,7 @@ command_executors["BatchCommand"] = function(command)
             spec.parameters = deep_copy(mutated)
         end
         spec.project_id = cmd.project_id
+        merge_timeline_mutations(command, cmd:get_parameter("__timeline_mutations"))
     end
 
     -- Store executed commands for undo
@@ -947,6 +1218,7 @@ command_undoers["BatchCommand"] = function(command)
                 print(string.format("WARNING: BatchCommand undo: Failed to undo command %d (%s)", i, spec.command_type))
             end
         end
+        merge_timeline_mutations(command, cmd:get_parameter("__timeline_mutations"))
     end
 
     print(string.format("BatchCommand: Undid %d commands", #command_specs))
@@ -994,6 +1266,14 @@ command_executors["DeleteClip"] = function(command)
     if not clip:delete(db) then
         print(string.format("WARNING: DeleteClip: Failed to delete clip %s", clip_id))
         return false
+    end
+
+    local sequence_id = command:get_parameter("sequence_id")
+        or clip.owner_sequence_id
+        or clip.track_sequence_id
+        or (clip.track and clip.track.sequence_id)
+    if sequence_id then
+        add_delete_mutation(command, sequence_id, clip.id)
     end
 
     print(string.format("✅ Deleted clip %s from timeline", clip_id))
@@ -2324,7 +2604,10 @@ command_executors["Insert"] = function(command)
 
     -- Step 1: Ripple all clips on this track that start at or after insert_time
     local db_module = require('core.database')
-    local sequence_id = command:get_parameter("sequence_id") or "default_sequence"
+    local sequence_id = resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id) or "default_sequence"
+    if sequence_id and sequence_id ~= "" then
+        command:set_parameter("sequence_id", sequence_id)
+    end
 
     -- Load all clips on this track
     local query = db:prepare([[
@@ -2409,11 +2692,20 @@ command_executors["Insert"] = function(command)
             save_opts = {pending_clips = pending_moves}
         end
 
-        if not clip:save(db, save_opts) then
+        local saved, occlusion_actions = clip:save(db, save_opts)
+        if not saved then
             print(string.format("WARNING: Insert: Failed to ripple clip %s", clip_info.id))
             return false
         end
         pending_moves[clip.id] = nil
+        if occlusion_actions and #occlusion_actions > 0 then
+            record_occlusion_actions(command, clip.owner_sequence_id or sequence_id, occlusion_actions)
+        end
+
+        local update_payload = clip_update_payload(clip, sequence_id)
+        if update_payload then
+            add_update_mutation(command, update_payload.track_sequence_id, update_payload)
+        end
 
         ::continue_ripple::
     end
@@ -2425,6 +2717,18 @@ command_executors["Insert"] = function(command)
     -- Reuse clip_id if this is a replay (to preserve selection references)
     local existing_clip_id = command:get_parameter("clip_id")
     local clip_name = (master_clip and master_clip.name) or "Inserted Clip"
+    if (not master_clip_id or master_clip_id == "") then
+        master_clip_id = ensure_master_clip_for_media(command, media_id, {
+            name = clip_name,
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out,
+            project_id = project_id_param
+        }) or master_clip_id
+        if master_clip_id and master_clip_id ~= "" then
+            command:set_parameter("master_clip_id", master_clip_id)
+        end
+    end
     local clip_opts = {
         id = existing_clip_id,
         project_id = project_id_param or (master_clip and master_clip.project_id),
@@ -2451,7 +2755,11 @@ command_executors["Insert"] = function(command)
         command:set_parameter("project_id", master_clip.project_id)
     end
 
-    if clip:save(db) then
+    local saved, clip_occlusion_actions = clip:save(db)
+    if saved then
+        if clip_occlusion_actions and #clip_occlusion_actions > 0 then
+            record_occlusion_actions(command, clip.owner_sequence_id or sequence_id, clip_occlusion_actions)
+        end
         if #copied_properties > 0 then
             delete_properties_for_clip(clip.id)
             if not insert_properties_for_clip(clip.id, copied_properties) then
@@ -2463,6 +2771,11 @@ command_executors["Insert"] = function(command)
         if advance_playhead then
             local timeline_state = require('ui.timeline.timeline_state')
             timeline_state.set_playhead_time(insert_time + duration)
+        end
+
+        local insert_payload = clip_insert_payload(clip, sequence_id)
+        if insert_payload then
+            add_insert_mutation(command, insert_payload.track_sequence_id, insert_payload)
         end
 
         print(string.format("✅ Inserted clip at %dms, rippled %d clips forward by %dms",
@@ -2489,6 +2802,10 @@ command_executors["Overwrite"] = function(command)
     local source_out = command:get_parameter("source_out")
     local master_clip_id = command:get_parameter("master_clip_id")
     local project_id_param = command:get_parameter("project_id")
+    local sequence_id = resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id)
+    if sequence_id and sequence_id ~= "" then
+        command:set_parameter("sequence_id", sequence_id)
+    end
 
     local Clip = require('models.clip')
     local master_clip = nil
@@ -2519,6 +2836,20 @@ command_executors["Overwrite"] = function(command)
             source_out = master_clip.source_out or (source_in + duration)
         end
         copied_properties = ensure_copied_properties(command, master_clip_id)
+    end
+
+    if (not master_clip_id or master_clip_id == "") then
+        local fallback_master = ensure_master_clip_for_media(command, media_id, {
+            name = command:get_parameter("clip_name"),
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out,
+            project_id = project_id_param
+        })
+        if fallback_master then
+            master_clip_id = fallback_master
+            command:set_parameter("master_clip_id", master_clip_id)
+        end
     end
 
     if not overwrite_time or not duration or duration <= 0 or not source_out or source_out <= source_in then
@@ -2577,7 +2908,7 @@ command_executors["Overwrite"] = function(command)
         id = existing_clip_id or reuse_clip_id,
         project_id = project_id_param or (master_clip and master_clip.project_id),
         track_id = track_id,
-        owner_sequence_id = command:get_parameter("sequence_id"),
+        owner_sequence_id = sequence_id or command:get_parameter("sequence_id"),
         parent_clip_id = master_clip_id,
         source_sequence_id = master_clip and master_clip.source_sequence_id,
         start_time = overwrite_time,
@@ -2600,7 +2931,11 @@ command_executors["Overwrite"] = function(command)
         command:set_parameter("project_id", master_clip.project_id)
     end
 
-    if clip:save(db) then
+    local saved, actions = clip:save(db)
+    if saved then
+        if actions and #actions > 0 then
+            record_occlusion_actions(command, clip.owner_sequence_id or sequence_id, actions)
+        end
         if #copied_properties > 0 then
             delete_properties_for_clip(clip.id)
             if not insert_properties_for_clip(clip.id, copied_properties) then
@@ -2612,6 +2947,20 @@ command_executors["Overwrite"] = function(command)
         if advance_playhead then
             local timeline_state = require('ui.timeline.timeline_state')
             timeline_state.set_playhead_time(overwrite_time + duration)
+        end
+
+        local mutation_sequence = clip.owner_sequence_id or sequence_id
+        local inserted = (reuse_clip_id == nil)
+        if inserted then
+            local insert_payload = clip_insert_payload(clip, mutation_sequence)
+            if insert_payload then
+                add_insert_mutation(command, insert_payload.track_sequence_id, insert_payload)
+            end
+        else
+            local update_payload = clip_update_payload(clip, mutation_sequence)
+            if update_payload then
+                add_update_mutation(command, update_payload.track_sequence_id, update_payload)
+            end
         end
 
         print(string.format("✅ Overwrote at %dms", overwrite_time))
@@ -2700,16 +3049,7 @@ command_executors["MoveClipToTrack"] = function(command)
         source_out = clip.source_out
     }
 
-    local sink = command.__timeline_update_sink
-    if type(sink) == "table" then
-        table.insert(sink, update)
-    else
-        local timeline_state = require('ui.timeline.timeline_state')
-        if timeline_state and timeline_state._internal_apply_clip_updates then
-            timeline_state._internal_apply_clip_updates({update})
-            command.__skip_timeline_reload = true
-        end
-    end
+    add_update_mutation(command, clip.owner_sequence_id or clip.track_sequence_id, update)
 
     print(string.format("✅ Moved clip %s to track %s", clip_id, target_track_id))
     return true
@@ -2849,6 +3189,10 @@ command_executors["RippleDelete"] = function(command)
         if not saved then
             print(string.format("ERROR: RippleDelete: Failed to save clip %s", tostring(info.id)))
             return false
+        end
+        local update_payload = clip_update_payload(clip, sequence_id)
+        if update_payload then
+            add_update_mutation(command, update_payload.track_sequence_id, update_payload)
         end
 
         table.insert(moved_clips, {
@@ -3050,12 +3394,20 @@ command_executors["ToggleClipEnabled"] = function(command)
         print("Executing ToggleClipEnabled command")
     end
 
+    local timeline_state = require('ui.timeline.timeline_state')
+    local active_sequence_id = command:get_parameter("sequence_id")
+    if (not active_sequence_id or active_sequence_id == "") and timeline_state and timeline_state.get_sequence_id then
+        active_sequence_id = timeline_state.get_sequence_id()
+        if active_sequence_id and active_sequence_id ~= "" then
+            command:set_parameter("sequence_id", active_sequence_id)
+        end
+    end
+
     local toggles = command:get_parameter("clip_toggles")
     if not toggles or #toggles == 0 then
         local clip_ids = command:get_parameter("clip_ids")
 
         if not clip_ids or #clip_ids == 0 then
-            local timeline_state = require('ui.timeline.timeline_state')
             local selected_clips = timeline_state.get_selected_clips() or {}
             clip_ids = {}
             for _, clip in ipairs(selected_clips) do
@@ -3098,6 +3450,8 @@ command_executors["ToggleClipEnabled"] = function(command)
         return true, {clip_toggles = toggles}
     end
 
+    command:set_parameter("__skip_sequence_replay", true)
+
     local Clip = require('models.clip')
     local toggled = 0
     for _, toggle in ipairs(toggles) do
@@ -3105,6 +3459,7 @@ command_executors["ToggleClipEnabled"] = function(command)
         if clip then
             clip.enabled = toggle.enabled_after and true or false
             if clip:save(db, {skip_occlusion = true}) then
+                record_clip_enabled_mutation(command, clip)
                 toggled = toggled + 1
             else
                 print(string.format("ERROR: ToggleClipEnabled: Failed to save clip %s", tostring(toggle.clip_id)))
@@ -3132,6 +3487,7 @@ command_undoers["ToggleClipEnabled"] = function(command)
         if clip then
             clip.enabled = toggle.enabled_before and true or false
             if clip:save(db, {skip_occlusion = true}) then
+                record_clip_enabled_mutation(command, clip)
                 restored = restored + 1
             else
                 print(string.format("WARNING: ToggleClipEnabled undo: Failed to restore clip %s", tostring(toggle.clip_id)))
@@ -3597,16 +3953,7 @@ command_executors["UndoMoveClipToTrack"] = function(command)
         source_out = clip.source_out
     }
 
-    local sink = command.__timeline_update_sink
-    if type(sink) == "table" then
-        table.insert(sink, update)
-    else
-        local timeline_state = require('ui.timeline.timeline_state')
-        if timeline_state and timeline_state._internal_apply_clip_updates then
-            timeline_state._internal_apply_clip_updates({update})
-            command.__skip_timeline_reload = true
-        end
-    end
+    add_update_mutation(command, clip.owner_sequence_id or clip.track_sequence_id, update)
 
     print(string.format("✅ Restored clip %s to original track %s", clip_id, original_track_id))
     return true
@@ -3623,15 +3970,26 @@ command_executors["Nudge"] = function(command)
     local nudge_amount_ms = command:get_parameter("nudge_amount_ms")  -- Can be negative
     local selected_clip_ids = command:get_parameter("selected_clip_ids")
     local selected_edges = command:get_parameter("selected_edges")  -- Array of {clip_id, edge_type}
+    local clip_module = require('models.clip')
 
     -- Determine what we're nudging
     local nudge_type = "none"
     local updates_by_clip = {}
+    local mutated_clip_ids = {}
+    local timeline_state = require('ui.timeline.timeline_state')
+    local active_sequence_id = command:get_parameter("sequence_id")
+    if (not active_sequence_id or active_sequence_id == "") and timeline_state and timeline_state.get_sequence_id then
+        active_sequence_id = timeline_state.get_sequence_id()
+        if active_sequence_id and active_sequence_id ~= "" then
+            command:set_parameter("sequence_id", active_sequence_id)
+        end
+    end
 
     local function register_update(clip)
         if not clip or not clip.id then
             return
         end
+        mutated_clip_ids[clip.id] = true
         updates_by_clip[clip.id] = {
             clip_id = clip.id,
             track_id = clip.track_id,
@@ -3643,28 +4001,94 @@ command_executors["Nudge"] = function(command)
         }
     end
 
-    local function apply_updates_if_needed()
+    local function apply_updates_if_needed(default_sequence_id)
         if next(updates_by_clip) == nil then
-            return
+            return false
         end
 
         local updates = {}
+        local sequence_id = default_sequence_id
         for _, update in pairs(updates_by_clip) do
             table.insert(updates, update)
+            sequence_id = sequence_id or update.track_sequence_id
         end
 
-        local sink = command.__timeline_update_sink
-        if type(sink) == "table" then
-            for _, update in ipairs(updates) do
-                table.insert(sink, update)
-            end
-        else
-            local timeline_state = require('ui.timeline.timeline_state')
-            if timeline_state and timeline_state._internal_apply_clip_updates then
-                timeline_state._internal_apply_clip_updates(updates)
-                command.__skip_timeline_reload = true
+        add_update_mutation(command, sequence_id, updates)
+        return true
+    end
+
+    local function capture_updates_via_reload(default_sequence_id)
+        if next(mutated_clip_ids) == nil then
+            return false
+        end
+        local fallback_updates = {}
+        local sequence_id = default_sequence_id
+        local mutated_count = 0
+        for clip_id in pairs(mutated_clip_ids) do
+            mutated_count = mutated_count + 1
+            local clip = clip_module.load_optional(clip_id, db)
+            if clip then
+                local update_payload = clip_update_payload(clip, sequence_id)
+                if update_payload then
+                    sequence_id = sequence_id or update_payload.track_sequence_id
+                    table.insert(fallback_updates, update_payload)
+                end
             end
         end
+        if mutated_count == 0 then
+            return false
+        end
+        if #fallback_updates == 0 then
+            return false
+        end
+        sequence_id = sequence_id or fallback_updates[1].track_sequence_id
+        if not sequence_id then
+            return false
+        end
+        add_update_mutation(command, sequence_id, fallback_updates)
+        return true
+    end
+
+    local function capture_updates_from_selection(default_sequence_id)
+        local collected_ids = {}
+        if type(selected_clip_ids) == "table" then
+            for _, clip_id in ipairs(selected_clip_ids) do
+                if clip_id then
+                    collected_ids[clip_id] = true
+                end
+            end
+        end
+        if type(selected_edges) == "table" then
+            for _, edge_info in ipairs(selected_edges) do
+                if edge_info and edge_info.clip_id then
+                    collected_ids[edge_info.clip_id] = true
+                end
+            end
+        end
+        if next(collected_ids) == nil then
+            return false
+        end
+        local updates = {}
+        local sequence_id = default_sequence_id
+        for clip_id in pairs(collected_ids) do
+            local clip = clip_module.load_optional(clip_id, db)
+            if clip then
+                local update_payload = clip_update_payload(clip, sequence_id)
+                if update_payload then
+                    sequence_id = sequence_id or update_payload.track_sequence_id
+                    table.insert(updates, update_payload)
+                end
+            end
+        end
+        if #updates == 0 then
+            return false
+        end
+        sequence_id = sequence_id or updates[1].track_sequence_id
+        if not sequence_id then
+            return false
+        end
+        add_update_mutation(command, sequence_id, updates)
+        return true
     end
 
     if selected_edges and #selected_edges > 0 then
@@ -3701,6 +4125,7 @@ command_executors["Nudge"] = function(command)
                     edge_type = edge_info.edge_type
                 })
             else
+                mutated_clip_ids[clip.id] = true
                 -- EXECUTE: Save changes
                 if not clip:save(db) then
                     print(string.format("ERROR: Nudge: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
@@ -3723,15 +4148,12 @@ command_executors["Nudge"] = function(command)
         print(string.format("✅ Nudged %d edge(s) by %dms", #selected_edges, nudge_amount_ms))
     elseif selected_clip_ids and #selected_clip_ids > 0 then
         nudge_type = "clips"
-        -- Expand selection to include linked clips
         local clip_links = require('core.clip_links')
-        local clips_to_move = {}  -- Set of clip IDs to move (avoid duplicates)
-        local processed_groups = {}  -- Track processed link groups
+        local clips_to_move = {}
+        local processed_groups = {}
 
         for _, clip_id in ipairs(selected_clip_ids) do
             clips_to_move[clip_id] = true
-
-            -- Find linked clips
             local link_group = clip_links.get_link_group(clip_id, db)
             if link_group then
                 local link_group_id = clip_links.get_link_group_id(clip_id, db)
@@ -3746,64 +4168,109 @@ command_executors["Nudge"] = function(command)
             end
         end
 
-        local clip_module = require('models.clip')
         local move_targets = {}
-        local pending_moves = {}
-        local pending_tolerance = frame_utils.frame_duration_ms()
+        local track_groups = {}
+        local any_change = false
+        local preview_clips = {}
 
         for clip_id, _ in pairs(clips_to_move) do
             local clip = clip_module.load(clip_id, db)
             if not clip then
                 print(string.format("WARNING: Nudge: Clip %s not found", clip_id:sub(1,8)))
                 clips_to_move[clip_id] = nil
-                goto continue_collect
+                goto continue_collect_block
+            end
+
+            if clip.clip_kind and clip.clip_kind ~= DEFAULT_CLIP_KIND then
+                clips_to_move[clip_id] = nil
+                goto continue_collect_block
             end
 
             local new_start = math.max(0, clip.start_time + nudge_amount_ms)
-            table.insert(move_targets, {clip = clip, new_start = new_start})
-            pending_moves[clip.id] = {
+            if new_start ~= clip.start_time then
+                any_change = true
+            end
+            clip.__new_start = new_start
+            mutated_clip_ids[clip.id] = true
+            table.insert(move_targets, clip)
+            table.insert(preview_clips, {
+                clip_id = clip.id,
+                new_start_time = new_start,
+                new_duration = clip.duration
+            })
+
+            local track_id = clip.track_id or clip.track_sequence_id
+            if not track_id then
+                print(string.format("WARNING: Nudge: Clip %s missing track_id", clip.id or "unknown"))
+                goto continue_collect_block
+            end
+            local group = track_groups[track_id]
+            if not group then
+                group = {
+                    clips = {},
+                    pending = {},
+                    before_min = nil,
+                    before_max = nil,
+                    after_min = nil,
+                    after_max = nil,
+                    sequence_id = clip.owner_sequence_id or clip.track_sequence_id or active_sequence_id
+                }
+                track_groups[track_id] = group
+            end
+
+            local clip_end = clip.start_time + clip.duration
+            group.before_min = group.before_min and math.min(group.before_min, clip.start_time) or clip.start_time
+            group.before_max = group.before_max and math.max(group.before_max, clip_end) or clip_end
+
+            local new_end = new_start + clip.duration
+            group.after_min = group.after_min and math.min(group.after_min, new_start) or new_start
+            group.after_max = group.after_max and math.max(group.after_max, new_end) or new_end
+
+            group.pending[clip.id] = {
                 start_time = new_start,
-                duration = clip.duration,
-                tolerance = pending_tolerance
+                duration = clip.duration
             }
 
-            ::continue_collect::
+            table.insert(group.clips, clip)
+
+            ::continue_collect_block::
         end
 
         if dry_run then
-            local preview_clips = {}
-            for _, target in ipairs(move_targets) do
-                table.insert(preview_clips, {
-                    clip_id = target.clip.id,
-                    new_start_time = target.new_start,
-                    new_duration = target.clip.duration
-                })
-            end
             return true, {
                 nudge_type = "clips",
                 affected_clips = preview_clips
             }
         end
 
-        for _, target in ipairs(move_targets) do
-            local clip = target.clip
-            clip.start_time = target.new_start
-
-            local save_opts = nil
-            if next(pending_moves) ~= nil then
-                save_opts = {pending_clips = pending_moves}
+        if any_change then
+            for track_id, group in pairs(track_groups) do
+                if group.after_max and group.after_min then
+                    local block_duration = math.max(group.after_max - group.after_min, group.before_max - group.before_min)
+                    local ok, err, actions = clip_mutator.resolve_occlusions(db, {
+                        track_id = track_id,
+                        start_time = group.after_min,
+                        duration = block_duration,
+                        pending_clips = group.pending
+                    })
+                    if not ok then
+                        print(string.format("ERROR: Nudge: Failed to resolve occlusions on track %s: %s", tostring(track_id), tostring(err)))
+                        return false
+                    end
+                    record_occlusion_actions(command, group.sequence_id, actions)
+                end
             end
 
-            if not clip:save(db, save_opts) then
-                print(string.format("ERROR: Nudge: Failed to save clip %s", clip.id:sub(1,8)))
-                return false
+            for _, clip in ipairs(move_targets) do
+                clip.start_time = clip.__new_start or clip.start_time
+                if not clip:save(db, {skip_occlusion = true}) then
+                    print(string.format("ERROR: Nudge: Failed to save clip %s", clip.id:sub(1,8)))
+                    return false
+                end
+                register_update(clip)
             end
-
-            pending_moves[clip.id] = nil
-            register_update(clip)
         end
 
-        -- Count total clips moved
         local total_moved = 0
         for _ in pairs(clips_to_move) do
             total_moved = total_moved + 1
@@ -3824,7 +4291,18 @@ command_executors["Nudge"] = function(command)
     -- Store what we nudged for undo
     command:set_parameter("nudge_type", nudge_type)
 
-    apply_updates_if_needed()
+    local captured_mutations = apply_updates_if_needed(active_sequence_id)
+    if not captured_mutations then
+        local recovered = capture_updates_via_reload(active_sequence_id)
+        if not recovered then
+            recovered = capture_updates_from_selection(active_sequence_id)
+        end
+        if not recovered then
+            print(string.format(
+                "WARNING: Nudge: Failed to capture timeline mutations for timeline cache (sequence=%s)",
+                tostring(active_sequence_id or "nil")))
+        end
+    end
 
     return true
 end
@@ -4010,7 +4488,7 @@ local function collect_downstream_clips(all_clips, excluded_ids, ripple_time)
     return clips
 end
 
-local function shift_clips(clips_to_shift, shift_amount, Clip, occlusion_actions, pending_moves, label)
+local function shift_clips(command, sequence_id, clips_to_shift, shift_amount, Clip, occlusion_actions, pending_moves, label)
     local context = label or "RippleEdit"
     for _, downstream_clip in ipairs(clips_to_shift) do
         local shift_clip = Clip.load(downstream_clip.id, db)
@@ -4031,6 +4509,11 @@ local function shift_clips(clips_to_shift, shift_amount, Clip, occlusion_actions
             return false, downstream_clip.id
         end
         append_actions(occlusion_actions, actions)
+
+        local update_payload = clip_update_payload(shift_clip, sequence_id)
+        if update_payload then
+            add_update_mutation(command, update_payload.track_sequence_id, update_payload)
+        end
 
         if pending_moves then
             pending_moves[shift_clip.id] = nil
@@ -4347,35 +4830,40 @@ command_executors["RippleEdit"] = function(command)
     end
 
     -- EXECUTE: Actually save changes (skip for gap clips - they're not persisted)
-    if not is_gap_clip then
-        if deleted_clip then
-            if not clip:delete(db) then
-                print(string.format("ERROR: RippleEdit: Failed to delete clip %s", edge_info.clip_id:sub(1,8)))
-                return {success = false, error_message = "Failed to delete clip"}
-            end
-        else
-            local save_opts = nil
-            if pending_moves and next(pending_moves) ~= nil then
-                save_opts = {pending_clips = pending_moves}
-            end
+        if not is_gap_clip then
+            if deleted_clip then
+                if not clip:delete(db) then
+                    print(string.format("ERROR: RippleEdit: Failed to delete clip %s", edge_info.clip_id:sub(1,8)))
+                    return {success = false, error_message = "Failed to delete clip"}
+                end
+                add_delete_mutation(command, sequence_id, clip.id)
+            else
+                local save_opts = nil
+                if pending_moves and next(pending_moves) ~= nil then
+                    save_opts = {pending_clips = pending_moves}
+                end
 
-            local ok, actions = clip:save(db, save_opts)
-            if not ok then
-                print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
-                return {success = false, error_message = "Failed to save clip"}
-            end
-            append_actions(occlusion_actions, actions)
+                local ok, actions = clip:save(db, save_opts)
+                if not ok then
+                    print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
+                    return {success = false, error_message = "Failed to save clip"}
+                end
+                append_actions(occlusion_actions, actions)
+                local update_payload = clip_update_payload(clip, sequence_id)
+                if update_payload then
+                    add_update_mutation(command, update_payload.track_sequence_id, update_payload)
+                end
 
-            if pending_moves then
-                local snapped_new_end = clip.start_time + clip.duration
-                shift_amount = snapped_new_end - original_end
-                pending_moves = build_pending_moves(shift_amount)
+                if pending_moves then
+                    local snapped_new_end = clip.start_time + clip.duration
+                    shift_amount = snapped_new_end - original_end
+                    pending_moves = build_pending_moves(shift_amount)
             end
         end
     end
 
     -- Shift all downstream clips
-    local shift_ok, failing_clip_id = shift_clips(clips_to_shift, shift_amount, Clip, occlusion_actions, pending_moves, "RippleEdit")
+    local shift_ok, failing_clip_id = shift_clips(command, sequence_id, clips_to_shift, shift_amount, Clip, occlusion_actions, pending_moves, "RippleEdit")
     if not shift_ok then
         print(string.format("ERROR: RippleEdit: Failed to save downstream clip %s", failing_clip_id:sub(1,8)))
         return {success = false, error_message = "Failed to save downstream clip"}
@@ -4390,6 +4878,7 @@ command_executors["RippleEdit"] = function(command)
     end)())
 
     if #occlusion_actions > 0 then
+        record_occlusion_actions(command, sequence_id, occlusion_actions)
         command:set_parameter("occlusion_actions", occlusion_actions)
     end
     if #deleted_clip_ids > 0 then
@@ -4685,6 +5174,7 @@ command_executors["BatchRippleEdit"] = function(command)
                         print(string.format("ERROR: BatchRippleEdit: Failed to delete clip %s", clip.id:sub(1,8)))
                         return false
                     end
+                    add_delete_mutation(command, sequence_id, clip.id)
                 else
                     if resolved_trim_type == "roll" and actual_edge_type == "in" then
                         clip.start_time = clip.start_time + delta_ms
@@ -4695,6 +5185,10 @@ command_executors["BatchRippleEdit"] = function(command)
                         return false
                     end
                     append_actions(occlusion_actions, actions)
+                    local update_payload = clip_update_payload(clip, sequence_id)
+                    if update_payload then
+                        add_update_mutation(command, update_payload.track_sequence_id, update_payload)
+                    end
                 end
 
             end
@@ -4836,6 +5330,10 @@ command_executors["BatchRippleEdit"] = function(command)
             return false
         end
         append_actions(occlusion_actions, actions)
+        local update_payload = clip_update_payload(shift_clip, sequence_id)
+        if update_payload then
+            add_update_mutation(command, update_payload.track_sequence_id, update_payload)
+        end
 
         ::continue_batch_shift::
     end
@@ -4849,6 +5347,7 @@ command_executors["BatchRippleEdit"] = function(command)
     end)())
     command:set_parameter("shift_amount", downstream_shift_amount or 0)  -- Store shift for undo
     if #occlusion_actions > 0 then
+        record_occlusion_actions(command, sequence_id, occlusion_actions)
         command:set_parameter("occlusion_actions", occlusion_actions)
     end
     if #deleted_clip_ids > 0 then

@@ -5,6 +5,8 @@
 -- - Dragging thumb = scroll
 -- - Stretching thumb edges = zoom
 
+local profile_scope = require("core.profile_scope")
+
 local M = {}
 
 M.SCROLLBAR_HEIGHT = 20
@@ -180,7 +182,7 @@ function M.create(widget, state_module)
     timeline.set_mouse_event_handler(widget, handler_name)
 
     -- Listen to state changes
-    state_module.add_listener(render)
+    state_module.add_listener(profile_scope.wrap("timeline_scrollbar.render", render))
 
     -- Initial render
     render()

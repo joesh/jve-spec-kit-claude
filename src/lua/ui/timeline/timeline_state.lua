@@ -14,6 +14,16 @@ local krono_ok, krono = pcall(require, "core.krono")
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
 local track_layout_dirty = false
 local track_template_dirty = false
+local last_mutation_failure = nil
+
+local function record_mutation_failure(kind, context)
+    last_mutation_failure = {
+        kind = kind,
+        context = context,
+        stack = debug.traceback("", 3),
+        timestamp = os.time()
+    }
+end
 
 -- State listeners (views register here for notifications)
 local listeners = {}
@@ -1548,12 +1558,19 @@ function M._internal_remove_clip_from_command(clip_id)
     end
 end
 
+function M.consume_mutation_failure()
+    local failure = last_mutation_failure
+    last_mutation_failure = nil
+    return failure
+end
+
 local function apply_mutation_table(mutations)
     if not mutations then
         return false
     end
 
     local changed = false
+    local failure_reason = nil
 
     if mutations.deletes then
         for _, clip_id in ipairs(mutations.deletes) do
@@ -1565,8 +1582,14 @@ local function apply_mutation_table(mutations)
     end
 
     if mutations.updates and #mutations.updates > 0 then
-        M._internal_apply_clip_updates(mutations.updates)
-        changed = true
+        local ok, updates_changed = M._internal_apply_clip_updates(mutations.updates)
+        if ok == false then
+            failure_reason = "missing_clip"
+            return false, failure_reason
+        end
+        if updates_changed then
+            changed = true
+        end
     end
 
     if mutations.inserts then
@@ -1578,7 +1601,7 @@ local function apply_mutation_table(mutations)
         end
     end
 
-    return changed
+    return changed, failure_reason
 end
 
 function M.apply_mutations(sequence_id, mutations)
@@ -1596,7 +1619,11 @@ function M.apply_mutations(sequence_id, mutations)
         return false
     end
 
-    local changed = apply_mutation_table(mutations)
+    local changed, failure_reason = apply_mutation_table(mutations)
+    if failure_reason then
+        mutation_scope:finish("failure:" .. failure_reason)
+        return false
+    end
     if changed then
         M.persist_state_to_db()
     end
@@ -1606,20 +1633,30 @@ end
 
 function M._internal_apply_clip_updates(updates)
     if not updates or #updates == 0 then
-        return
+        return true, false
     end
 
     ensure_clip_indexes()
 
     local changed = false
     local needs_resort = false
-    for _, update in ipairs(updates) do
+    for index, update in ipairs(updates) do
         local clip_id = update.clip_id or update.id
         if clip_id then
             local clip = lookup_clip(clip_id)
             if not clip then
-                M.reload_clips(state.sequence_id)
-                return
+                local update_keys = {}
+                for key in pairs(update) do
+                    table.insert(update_keys, tostring(key))
+                end
+                table.sort(update_keys)
+                record_mutation_failure("missing_clip", {
+                    clip_id = clip_id,
+                    update_keys = update_keys,
+                    update_index = index,
+                    total_updates = #updates
+                })
+                return false
             end
 
             if update.track_id and update.track_id ~= clip.track_id then
@@ -1649,19 +1686,24 @@ function M._internal_apply_clip_updates(updates)
                 clip.source_out = update.source_out
                 changed = true
             end
+
+            if update.enabled ~= nil and update.enabled ~= clip.enabled then
+                clip.enabled = update.enabled and true or false
+                changed = true
+            end
         end
     end
 
     if not changed then
-        return
+        return true, false
     end
 
     state_version = state_version + 1
 
     if needs_resort then
         local track_order = {}
-        for index, track in ipairs(state.tracks) do
-            track_order[track.id] = index
+        for idx, track in ipairs(state.tracks) do
+            track_order[track.id] = idx
         end
 
         table.sort(state.clips, function(a, b)
@@ -1679,7 +1721,7 @@ function M._internal_apply_clip_updates(updates)
         end)
     end
 
-    if #state.selected_clips > 0 then
+    if state.selected_clips and #state.selected_clips > 0 then
         local refreshed = {}
         for _, selected in ipairs(state.selected_clips) do
             local clip = lookup_clip(selected.id)
@@ -1695,8 +1737,8 @@ function M._internal_apply_clip_updates(updates)
         ensure_clip_indexes()
     end
 
-    invalidate_clip_indexes()
     notify_listeners()
+    return true, true
 end
 
 function M.update_clip(clip_id, updates)

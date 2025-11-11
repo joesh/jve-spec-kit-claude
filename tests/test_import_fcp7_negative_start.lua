@@ -94,6 +94,41 @@ db:exec([[
     VALUES ('default_project', 'Default Project');
 ]])
 
+db:exec([[
+    CREATE TABLE tag_namespaces (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL
+    );
+]])
+
+db:exec([[INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');]])
+
+db:exec([[
+    CREATE TABLE tags (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        namespace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        parent_id TEXT,
+        sort_index INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+]])
+
+db:exec([[
+    CREATE TABLE tag_assignments (
+        tag_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        namespace_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        assigned_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(tag_id, entity_type, entity_id)
+    );
+]])
+
 local FIXTURE_PATH = "fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
 
 local parsed = importer.import_xml(FIXTURE_PATH, 'default_project')

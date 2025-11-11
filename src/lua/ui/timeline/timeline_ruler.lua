@@ -6,6 +6,7 @@
 local M = {}
 local timecode = require("core.timecode")
 local frame_utils = require("core.frame_utils")
+local profile_scope = require("core.profile_scope")
 
 M.RULER_HEIGHT = 32
 local MIN_LABEL_SPACING = 20
@@ -311,7 +312,7 @@ function M.create(widget, state_module)
     timeline.set_mouse_event_handler(widget, handler_name)
 
     -- Listen to state changes
-    state_module.add_listener(render)
+    state_module.add_listener(profile_scope.wrap("timeline_ruler.render", render))
 
     -- Initial render
     render()
