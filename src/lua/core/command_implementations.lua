@@ -894,6 +894,7 @@ local function restore_clip_state(state)
     end
     clip.media_id = state.media_id
     clip:restore_without_occlusion(db)
+    return clip
 end
 
 local function load_sequence_track_ids(sequence_id)
@@ -3619,6 +3620,7 @@ command_executors["RippleDeleteSelection"] = function(command)
 
     local Clip = require('models.clip')
     local clips = {}
+    local clip_ids_for_delete = {}
     local window_start = nil
     local window_end = nil
 
@@ -3630,6 +3632,7 @@ command_executors["RippleDeleteSelection"] = function(command)
             local clip_end = clip_start + (clip.duration or 0)
             window_start = window_start and math.min(window_start, clip_start) or clip_start
             window_end = window_end and math.max(window_end, clip_end) or clip_end
+            table.insert(clip_ids_for_delete, clip.id)
         else
             print(string.format("WARNING: RippleDeleteSelection: Clip %s not found", tostring(clip_id)))
         end
@@ -3698,6 +3701,9 @@ command_executors["RippleDeleteSelection"] = function(command)
             return false
         end
     end
+    if #clip_ids_for_delete > 0 then
+        add_delete_mutation(command, sequence_id, clip_ids_for_delete)
+    end
 
     local normalized_segments_by_track = {}
     for track_id, segments in pairs(selected_by_track) do
@@ -3751,6 +3757,10 @@ command_executors["RippleDeleteSelection"] = function(command)
                                     original_start = original_start,
                                     new_start = new_start,
                                 })
+                                local update_payload = clip_update_payload(shift_clip, sequence_id)
+                                if update_payload then
+                                    add_update_mutation(command, update_payload.track_sequence_id or sequence_id, update_payload)
+                                end
                             else
                                 shift_query:finalize()
                                 print(string.format("ERROR: RippleDeleteSelection: Failed to save shifted clip %s", tostring(shifted_id)))
@@ -3787,9 +3797,6 @@ command_executors["RippleDeleteSelection"] = function(command)
         if timeline_state.clear_gap_selection then
             timeline_state.clear_gap_selection()
         end
-        if timeline_state.reload_clips then
-            timeline_state.reload_clips()
-        end
         if timeline_state.persist_state_to_db then
             timeline_state.persist_state_to_db()
         end
@@ -3804,6 +3811,7 @@ command_undoers["RippleDeleteSelection"] = function(command)
     local deleted_states = command:get_parameter("ripple_selection_deleted_clips") or {}
     local shifted_clips = command:get_parameter("ripple_selection_shifted") or {}
     local shift_amount = command:get_parameter("ripple_selection_shift_amount") or command:get_parameter("ripple_selection_total_removed") or 0
+    local sequence_id = command:get_parameter("ripple_selection_sequence_id")
 
     local Clip = require('models.clip')
 
@@ -3813,18 +3821,26 @@ command_undoers["RippleDeleteSelection"] = function(command)
             clip.start_time = info.original_start
             if not clip:save(db, {skip_occlusion = true}) then
                 print(string.format("WARNING: RippleDeleteSelection undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
+            else
+                local update_payload = clip_update_payload(clip, sequence_id)
+                if update_payload then
+                    add_update_mutation(command, update_payload.track_sequence_id or sequence_id, update_payload)
+                end
             end
         end
     end
 
     for _, state in ipairs(deleted_states) do
-        restore_clip_state(state)
+        local restored = restore_clip_state(state)
+        if restored then
+            local insert_payload = clip_insert_payload(restored, sequence_id or restored.owner_sequence_id)
+            if insert_payload then
+                add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
+            end
+        end
     end
 
-    local timeline_state = require('ui.timeline.timeline_state')
-    if timeline_state.reload_clips then
-        timeline_state.reload_clips()
-    end
+    flush_timeline_mutations(command, sequence_id)
 
     print(string.format("✅ Undo RippleDeleteSelection: restored %d clip(s)", #deleted_states))
     return true
@@ -3914,10 +3930,19 @@ command_executors["Cut"] = function(command)
         return true, { clip_count = #clip_ids }
     end
 
+    local sequence_id = command:get_parameter("sequence_id")
+    if (not sequence_id or sequence_id == "") and timeline_state and timeline_state.get_sequence_id then
+        sequence_id = timeline_state.get_sequence_id()
+    end
+    if sequence_id and sequence_id ~= "" then
+        command:set_parameter("sequence_id", sequence_id)
+    end
+
     local deleted_count = 0
     for _, clip_id in ipairs(clip_ids) do
         local clip = Clip.load_optional(clip_id, db)
         if clip then
+            sequence_id = sequence_id or clip.owner_sequence_id or clip.track_sequence_id
             if clip:delete(db) then
                 deleted_count = deleted_count + 1
             else
@@ -3929,11 +3954,12 @@ command_executors["Cut"] = function(command)
     end
 
     command:set_parameter("cut_clip_ids", clip_ids)
+    if not sequence_id or sequence_id == "" then
+        sequence_id = (timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or "default_sequence"
+    end
+    add_delete_mutation(command, sequence_id, clip_ids)
 
     timeline_state.set_selection({})
-    if timeline_state.reload_clips then
-        timeline_state.reload_clips()
-    end
     if timeline_state.clear_edge_selection then
         timeline_state.clear_edge_selection()
     end

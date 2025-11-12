@@ -160,7 +160,9 @@ local timeline_state = {
     selected_clips = {},
     clip_lookup = {},
     project_id = "default_project",
-    sequence_id = "default_sequence"
+    sequence_id = "default_sequence",
+    last_mutations = nil,
+    last_mutations_attempt = nil
 }
 
 function timeline_state.get_selected_clips() return timeline_state.selected_clips end
@@ -171,12 +173,22 @@ function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.get_project_id() return timeline_state.project_id end
 function timeline_state.get_playhead_time() return timeline_state.playhead_time end
 function timeline_state.set_playhead_time(ms) timeline_state.playhead_time = ms end
-function timeline_state.reload_clips() reload_clips_into_state(timeline_state) end
+function timeline_state.reload_clips()
+    reload_clips_into_state(timeline_state)
+end
 function timeline_state.get_clips()
     timeline_state.reload_clips()
     return timeline_state.clips
 end
 function timeline_state.persist_state_to_db() end
+function timeline_state.apply_mutations(sequence_id, mutations)
+    timeline_state.last_mutations_attempt = {
+        sequence_id = sequence_id or timeline_state.sequence_id,
+        bucket = mutations
+    }
+    timeline_state.last_mutations = mutations
+    return true
+end
 function timeline_state.capture_viewport()
     return {
         start_time = 0,
@@ -400,3 +412,76 @@ assert(
 )
 
 print("✅ Redo after timeline clipboard paste preserves downstream clips on other tracks")
+
+----------------------------------------------------------------------
+-- Test 3: Cut emits timeline mutations without forcing reload
+----------------------------------------------------------------------
+
+local CUT_DB = "/tmp/test_clipboard_cut_mutations.db"
+setup_database(CUT_DB)
+
+insert_clip_via_command({
+    clip_id = "cut_clip",
+    media_id = "cut_media",
+    track_id = "video1",
+    start_time = 5000,
+    duration = 1200
+})
+
+timeline_state.reload_clips()
+local cut_clip = timeline_state.clip_lookup["cut_clip"]
+timeline_state.set_selection({cut_clip})
+timeline_state.last_mutations = nil
+
+local cut_cmd = Command.create("Cut", "default_project")
+assert(command_manager.execute(cut_cmd).success, "Cut command should succeed")
+assert(timeline_state.last_mutations, "Cut should emit timeline mutations")
+assert(timeline_state.last_mutations.deletes and timeline_state.last_mutations.deletes[1] == "cut_clip",
+    "Cut mutations must include deleted clip id")
+
+print("✅ Cut emits delete mutations and keeps timeline cache hot")
+
+----------------------------------------------------------------------
+-- Test 4: RippleDeleteSelection emits delete/update mutations + undo inserts
+----------------------------------------------------------------------
+
+local RIPPLE_DB = "/tmp/test_clipboard_ripple_delete.db"
+setup_database(RIPPLE_DB)
+
+insert_clip_via_command({
+    clip_id = "ripple_clip_a",
+    media_id = "ripple_media_a",
+    track_id = "video1",
+    start_time = 0,
+    duration = 1000
+})
+insert_clip_via_command({
+    clip_id = "ripple_clip_b",
+    media_id = "ripple_media_b",
+    track_id = "video1",
+    start_time = 2000,
+    duration = 1500
+})
+
+timeline_state.reload_clips()
+timeline_state.last_mutations = nil
+
+local ripple_cmd = Command.create("RippleDeleteSelection", "default_project")
+ripple_cmd:set_parameter("clip_ids", {"ripple_clip_a"})
+ripple_cmd:set_parameter("sequence_id", "default_sequence")
+assert(command_manager.execute(ripple_cmd).success, "RippleDeleteSelection command failed")
+
+local ripple_mutations = timeline_state.last_mutations
+assert(ripple_mutations, "Ripple delete should emit timeline mutations")
+assert(ripple_mutations.deletes and ripple_mutations.deletes[1] == "ripple_clip_a",
+    "Ripple delete mutations must include deleted clip id")
+assert(ripple_mutations.updates and #ripple_mutations.updates > 0,
+    "Ripple delete mutations must include shifted clips")
+
+timeline_state.last_mutations = nil
+assert(command_manager.undo().success, "Undo RippleDeleteSelection should succeed")
+local undo_mutations = timeline_state.last_mutations
+assert(undo_mutations and undo_mutations.inserts and #undo_mutations.inserts > 0,
+    "Undo ripple delete should emit insert mutations")
+
+print("✅ RippleDeleteSelection emits mutations for delete/update and undo insert")
