@@ -4915,6 +4915,13 @@ command_executors["RippleEdit"] = function(command)
 
     local pending_moves = build_pending_moves(shift_amount)
 
+    if not dry_run and delta_ms == 0 and not deleted_clip then
+        print("RippleEdit: Delta clamped to 0ms – no timeline changes, skipping reload")
+        command:set_parameter("__skip_timeline_reload", true)
+        command:set_parameter("__skip_sequence_replay", true)
+        return true
+    end
+
     if not dry_run then
         for _, other_clip in ipairs(clips_to_shift) do
             print(string.format("  Will shift clip %s from %d to %d", other_clip.id:sub(1,8), other_clip.start_time, other_clip.start_time + shift_amount))
