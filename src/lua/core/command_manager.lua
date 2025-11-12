@@ -1467,6 +1467,17 @@ function M.execute(command_or_name, params)
     local execution_success = execute_command_implementation(command)
 
     if execution_success then
+        local is_no_op = command_flag(command, "no_op", "__no_op")
+        if is_no_op then
+            local rollback_tx = db:prepare("ROLLBACK")
+            if rollback_tx then rollback_tx:exec() end
+            last_sequence_number = last_sequence_number - 1
+            current_state_hash = pre_hash
+            result.success = true
+            result.result_data = ""
+            exec_scope:finish("no_op")
+            return result
+        end
         command.status = "Executed"
         command.executed_at = os.time()
 

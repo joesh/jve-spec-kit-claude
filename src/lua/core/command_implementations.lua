@@ -4917,6 +4917,8 @@ command_executors["RippleEdit"] = function(command)
 
     if not dry_run and delta_ms == 0 and not deleted_clip then
         print("RippleEdit: Delta clamped to 0ms – no timeline changes, skipping reload")
+        command.no_op = true
+        command:set_parameter("__no_op", true)
         command:set_parameter("__skip_timeline_reload", true)
         command:set_parameter("__skip_sequence_replay", true)
         return true

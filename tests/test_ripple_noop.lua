@@ -149,5 +149,6 @@ ripple_cmd:set_parameter("sequence_id", "default_sequence")
 local result = command_manager.execute(ripple_cmd)
 assert(result.success, result.error_message or "RippleEdit no-op should succeed")
 assert(timeline_state.reload_calls == 0, "No-op ripple should not trigger timeline reload fallback")
+assert(not command_manager.can_undo(), "No-op ripple should not add undo history")
 
-print("✅ RippleEdit no-op skips timeline reload")
+print("✅ RippleEdit no-op skips timeline reload and undo recording")
