@@ -132,6 +132,99 @@ local function ensure_tag_namespace(namespace_id, display_name)
     return ok ~= false
 end
 
+local function extract_filename(path)
+    if not path or path == "" then
+        return nil
+    end
+    return path:match("([^/\\]+)$")
+end
+
+local function build_clip_from_query_row(query, requested_sequence_id)
+    if not query then
+        return nil
+    end
+
+    local clip_id = query:value(0)
+    local raw_project_id = query:value(1)
+    local sequence_project_id = query:value(2)
+    local clip_project_id = raw_project_id or sequence_project_id
+    if not clip_project_id then
+        error(string.format(
+            "FATAL: load_clips: clip %s missing project_id (sequence %s)",
+            tostring(clip_id),
+            tostring(requested_sequence_id)
+        ))
+    end
+
+    local track_sequence_id = query:value(16)
+    local owner_sequence_id = query:value(9) or track_sequence_id
+    if not owner_sequence_id then
+        error(string.format(
+            "FATAL: load_clips: clip %s missing owner_sequence_id",
+            tostring(clip_id)
+        ))
+    end
+
+    local media_name = query:value(17)
+    local media_path = query:value(18)
+    local media_id = query:value(6)
+    if media_id and media_id ~= "" then
+        local has_name = media_name and media_name ~= ""
+        local has_path = media_path and media_path ~= ""
+        if not has_name and not has_path then
+            error(string.format(
+                "FATAL: load_clips: media metadata missing for clip %s (media_id=%s)",
+                tostring(clip_id),
+                tostring(media_id)
+            ))
+        end
+    end
+
+    local clip = {
+        id = clip_id,
+        project_id = clip_project_id,
+        clip_kind = query:value(3),
+        name = query:value(4),
+        track_id = query:value(5),
+        media_id = media_id,
+        source_sequence_id = query:value(7),
+        parent_clip_id = query:value(8),
+        owner_sequence_id = owner_sequence_id,
+        track_sequence_id = track_sequence_id,
+        start_time = query:value(10),
+        duration = query:value(11),
+        source_in = query:value(12),
+        source_out = query:value(13),
+        enabled = query:value(14) == 1,
+        offline = query:value(15) == 1,
+        media_name = media_name,
+        media_path = media_path
+    }
+
+    if not clip.name or clip.name == "" then
+        clip.name = "Clip " .. (clip_id and clip_id:sub(1, 8) or "")
+    end
+
+    local label = media_name
+    if not label or label == "" then
+        label = extract_filename(media_path)
+    end
+    if not label or label == "" then
+        label = clip_id and ("Clip " .. clip_id:sub(1, 8)) or ""
+    end
+
+    local display_label = clip.name
+    if (not display_label or display_label == "") and media_name and media_name ~= "" then
+        display_label = media_name
+    end
+    if (not display_label or display_label == "") and label and label ~= "" then
+        display_label = label
+    end
+    clip.label = display_label
+
+    return clip
+end
+
 local function resolve_namespace(opts)
     opts = opts or {}
     local namespace_id = opts.namespace_id or BIN_NAMESPACE
@@ -427,86 +520,54 @@ function M.load_clips(sequence_id)
     query:bind_value(1, sequence_id)
 
     local clips = {}
-    local function extract_filename(path)
-        if not path or path == "" then
-            return nil
-        end
-        local filename = path:match("([^/\\]+)$")
-        return filename
-    end
-
     if query:exec() then
         while query:next() do
-            local clip_id = query:value(0)
-            local raw_project_id = query:value(1)
-            local sequence_project_id = query:value(2)
-            local clip_project_id = raw_project_id or sequence_project_id
-            if not clip_project_id then
-                error(string.format("FATAL: load_clips: clip %s missing project_id (sequence %s)", tostring(clip_id), tostring(sequence_id)))
+            local clip = build_clip_from_query_row(query, sequence_id)
+            if clip then
+                table.insert(clips, clip)
             end
-
-            local track_sequence_id = query:value(16)
-            local owner_sequence_id = query:value(9) or track_sequence_id
-            if not owner_sequence_id then
-                error(string.format("FATAL: load_clips: clip %s missing owner_sequence_id", tostring(clip_id)))
-            end
-
-            local media_name = query:value(17)
-            local media_path = query:value(18)
-            local media_id = query:value(6)
-            if media_id and media_id ~= "" then
-                local has_name = media_name and media_name ~= ""
-                local has_path = media_path and media_path ~= ""
-                if not has_name and not has_path then
-                    error(string.format("FATAL: load_clips: media metadata missing for clip %s (media_id=%s)", tostring(clip_id), tostring(media_id)))
-                end
-            end
-
-            local label = media_name
-            if not label or label == "" then
-                label = extract_filename(media_path)
-            end
-            if not label or label == "" then
-                label = clip_id and ("Clip " .. clip_id:sub(1, 8)) or ""
-            end
-
-            local clip = {
-                id = clip_id,
-                project_id = clip_project_id,
-                clip_kind = query:value(3),
-                name = query:value(4),
-                track_id = query:value(5),
-                media_id = query:value(6),
-                source_sequence_id = query:value(7),
-                parent_clip_id = query:value(8),
-                owner_sequence_id = owner_sequence_id,
-                track_sequence_id = track_sequence_id,
-                start_time = query:value(10),
-                duration = query:value(11),
-                source_in = query:value(12),
-                source_out = query:value(13),
-                enabled = query:value(14) == 1,
-                offline = query:value(15) == 1,
-                media_name = media_name,
-                media_path = media_path,
-                label = label
-            }
-            if not clip.name or clip.name == "" then
-                clip.name = "Clip " .. (clip_id and clip_id:sub(1, 8) or "")
-            end
-            local display_label = clip.name
-            if (not display_label or display_label == "") and media_name and media_name ~= "" then
-                display_label = media_name
-            end
-            if (not display_label or display_label == "") and label and label ~= "" then
-                display_label = label
-            end
-            clip.label = display_label
-            table.insert(clips, clip)
         end
     end
 
     return clips
+end
+
+function M.load_clip_entry(clip_id)
+    if not clip_id or clip_id == "" then
+        return nil
+    end
+
+    if not db_connection then
+        error("FATAL: No database connection - cannot load clip entry")
+    end
+
+    local query = db_connection:prepare([[
+        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+               c.start_time, c.duration, c.source_in, c.source_out,
+               c.enabled, c.offline, t.sequence_id,
+               m.name, m.file_path
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        JOIN sequences s ON t.sequence_id = s.id
+        LEFT JOIN media m ON c.media_id = m.id
+        WHERE c.id = ?
+        LIMIT 1
+    ]])
+
+    if not query then
+        error("FATAL: Failed to prepare clip entry query")
+    end
+
+    query:bind_value(1, clip_id)
+
+    local clip = nil
+    if query:exec() and query:next() then
+        clip = build_clip_from_query_row(query, query:value(16))
+    end
+
+    query:finalize()
+    return clip
 end
 
 function M.load_clip_properties(clip_id)

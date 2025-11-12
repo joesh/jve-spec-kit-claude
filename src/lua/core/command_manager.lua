@@ -1217,7 +1217,11 @@ local function calculate_state_hash(project_id)
     ]], {project_id}, 5, "media")
 
     local state_string = table.concat(parts)
-    local hash = string.format("%08x", #state_string)
+    local hash_value = 5381
+    for i = 1, #state_string do
+        hash_value = ((hash_value * 33) + state_string:byte(i)) % 0x100000000
+    end
+    local hash = string.format("%08x", hash_value)
     scope:finish(string.format("rows=%d", #parts))
     return hash
 end
@@ -1467,17 +1471,6 @@ function M.execute(command_or_name, params)
     local execution_success = execute_command_implementation(command)
 
     if execution_success then
-        local is_no_op = command_flag(command, "no_op", "__no_op")
-        if is_no_op then
-            local rollback_tx = db:prepare("ROLLBACK")
-            if rollback_tx then rollback_tx:exec() end
-            last_sequence_number = last_sequence_number - 1
-            current_state_hash = pre_hash
-            result.success = true
-            result.result_data = ""
-            exec_scope:finish("no_op")
-            return result
-        end
         command.status = "Executed"
         command.executed_at = os.time()
 
@@ -1488,6 +1481,19 @@ function M.execute(command_or_name, params)
         -- Calculate post-execution hash
         local post_hash = calculate_state_hash(command.project_id)
         command.post_hash = post_hash
+
+        -- Detect no-op commands (state hash unchanged); suppress undo entry
+        local suppress_noop = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
+        if suppress_noop and post_hash == pre_hash then
+            local rollback_tx = db:prepare("ROLLBACK")
+            if rollback_tx then rollback_tx:exec() end
+            last_sequence_number = last_sequence_number - 1
+            current_state_hash = pre_hash
+            result.success = true
+            result.result_data = ""
+            exec_scope:finish("no_state_change")
+            return result
+        end
 
         -- Save command to database
         local save_scope = profile_scope.begin("command_manager.command_save")

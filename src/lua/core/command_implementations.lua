@@ -4866,6 +4866,24 @@ command_executors["RippleEdit"] = function(command)
 
     delta_ms = clamped_delta
 
+    if delta_ms == 0 then
+        if dry_run then
+            return true, {
+                affected_clip = {
+                    clip_id = clip.id,
+                    new_start_time = clip.start_time,
+                    new_duration = clip.duration
+                },
+                shifted_clips = {}
+            }
+        end
+        print("RippleEdit: Delta clamped to 0ms – no timeline changes, skipping reload")
+        command:set_parameter("__skip_timeline_reload", true)
+        command:set_parameter("__skip_sequence_replay", true)
+        command:set_parameter("__suppress_if_unchanged", true)
+        return true
+    end
+
     -- Save original state for undo (not needed for dry-run or gap clips)
     local original_clip_state = nil
     if not dry_run and not is_gap_clip then
@@ -4914,15 +4932,6 @@ command_executors["RippleEdit"] = function(command)
     end
 
     local pending_moves = build_pending_moves(shift_amount)
-
-    if not dry_run and delta_ms == 0 and not deleted_clip then
-        print("RippleEdit: Delta clamped to 0ms – no timeline changes, skipping reload")
-        command.no_op = true
-        command:set_parameter("__no_op", true)
-        command:set_parameter("__skip_timeline_reload", true)
-        command:set_parameter("__skip_sequence_replay", true)
-        return true
-    end
 
     if not dry_run then
         for _, other_clip in ipairs(clips_to_shift) do

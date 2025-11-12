@@ -141,6 +141,30 @@ local function rebuild_clip_indexes()
     clip_indexes_dirty = false
 end
 
+local function hydrate_clip_from_database(clip_id, expected_sequence_id)
+    if not clip_id or not db or not db.load_clip_entry then
+        return nil
+    end
+    local ok, clip = pcall(db.load_clip_entry, clip_id)
+    if not ok then
+        return nil
+    end
+    if not clip then
+        return nil
+    end
+
+    local target_sequence = expected_sequence_id or state.sequence_id
+    if target_sequence and clip.track_sequence_id and clip.track_sequence_id ~= target_sequence then
+        return nil
+    end
+
+    clip._version = state_version
+    table.insert(state.clips, clip)
+    invalidate_clip_indexes()
+    print(string.format("timeline_state: Hydrated missing clip %s from database", tostring(clip_id)))
+    return clip
+end
+
 local function ensure_clip_indexes()
     if clip_indexes_dirty then
         rebuild_clip_indexes()
@@ -1647,6 +1671,13 @@ function M._internal_apply_clip_updates(updates, deleted_lookup)
         local clip_id = update.clip_id or update.id
         if clip_id then
             local clip = lookup_clip(clip_id)
+            if not clip then
+                clip = hydrate_clip_from_database(clip_id, update.track_sequence_id)
+                if clip then
+                    needs_resort = true
+                    changed = true
+                end
+            end
             if not clip then
                 if deleted_lookup and deleted_lookup[clip_id] then
                     goto continue_update_loop

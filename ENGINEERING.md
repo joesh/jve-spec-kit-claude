@@ -47,7 +47,7 @@
 - **2.5**: MANDATORY milestone commits - never leave progress uncommitted
 - **2.7**: Auto-approved dev commands (make/cmake/git status) - execute immediately
 - **2.7.1**: ALWAYS use make -j4 for parallel builds - never use plain make
-- **2.8**: Proper attribution: "Authored-By: Joe Shapiro <joe@shapiro.net> With-Help-From: Claude"
+- **2.8**: Proper attribution: "Authored-By: Joe Shapiro <joe@shapiro.net> With-Help-From: Codex"
 - **2.9**: ASSUME FAILURE UNTIL PROVEN OTHERWISE - Default assumption: Nothing is working until specifically verified
 - **2.10**: VERIFY THAT YOU DIDN'T BREAK ANYTHING - Always test existing functionality after making changes
 - **2.11**: Use decimal notation for rule numbering with logical categories - Rules numbered within categories (0.x Todo/Documentation, 1.x Core Development, 2.x Development Standards, 3.x Design Principles); count existing rules in category first; never renumber existing rules as they're referenced in commit messages
