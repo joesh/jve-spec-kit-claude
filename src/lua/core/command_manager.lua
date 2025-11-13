@@ -440,7 +440,7 @@ local function find_latest_child_command(parent_sequence)
     end
 
     local query = db:prepare([[
-        SELECT sequence_number, command_type
+        SELECT sequence_number, command_type, command_args
         FROM commands
         WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
         ORDER BY sequence_number DESC
@@ -459,8 +459,21 @@ local function find_latest_child_command(parent_sequence)
     if ok and query:next() then
         command = {
             sequence_number = query:value(0),
-            command_type = query:value(1)
+            command_type = query:value(1),
+            command_args = query:value(2)
         }
+        if command.command_args and command.command_args ~= "" then
+            local success, params = pcall(qt_json_decode, command.command_args)
+            if success and type(params) == "table" then
+                command.parameters = params
+            end
+        end
+        command.get_parameter = function(self, key)
+            if not self.parameters then
+                return nil
+            end
+            return self.parameters[key]
+        end
     end
     query:finalize()
     return command
@@ -486,6 +499,34 @@ local function stack_id_for_sequence(sequence_id)
         return GLOBAL_STACK_ID
     end
     return TIMELINE_STACK_PREFIX .. sequence_id
+end
+
+local function sequence_exists(sequence_id)
+    if not db or not sequence_id or sequence_id == "" then
+        return false
+    end
+    local stmt = db:prepare("SELECT 1 FROM sequences WHERE id = ? LIMIT 1")
+    if not stmt then
+        return false
+    end
+    stmt:bind_value(1, sequence_id)
+    local exists = stmt:exec() and stmt:next()
+    stmt:finalize()
+    return exists
+end
+
+local function invalidate_sequence_stack(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return
+    end
+    local stack_id = stack_id_for_sequence(sequence_id)
+    local state = undo_stack_states[stack_id]
+    if state then
+        state.current_sequence_number = nil
+        state.current_branch_path = {}
+        state.position_initialized = false
+        state.sequence_id = nil
+    end
 end
 
 local function extract_sequence_id(command)
@@ -1245,6 +1286,40 @@ local function update_command_hashes(command, pre_hash)
 end
 
 -- Load commands from sequence number
+local function mutation_summary_string(mutations)
+    if not mutations then
+        return "none"
+    end
+    local function collect_buckets(source)
+        if not source then
+            return {}
+        end
+        if source.sequence_id or source.inserts or source.updates or source.deletes then
+            return {source}
+        end
+        local buckets = {}
+        for _, bucket in pairs(source) do
+            if type(bucket) == "table" and (bucket.sequence_id or bucket.inserts or bucket.updates or bucket.deletes) then
+                table.insert(buckets, bucket)
+            end
+        end
+        return buckets
+    end
+
+    local buckets = collect_buckets(mutations)
+    if #buckets == 0 then
+        return "empty"
+    end
+    local parts = {}
+    for _, bucket in ipairs(buckets) do
+        local inserts = (bucket.inserts and #bucket.inserts) or 0
+        local updates = (bucket.updates and #bucket.updates) or 0
+        local deletes = (bucket.deletes and #bucket.deletes) or 0
+        table.insert(parts, string.format("%s:ins=%d upd=%d del=%d", tostring(bucket.sequence_id or "nil"), inserts, updates, deletes))
+    end
+    return table.concat(parts, "; ")
+end
+
 local function load_commands_from_sequence(start_sequence)
     -- Get project ID from projects table
     local project_id = nil
@@ -1570,6 +1645,7 @@ function M.execute(command_or_name, params)
                 local reload_sequence_id = extract_sequence_id(command)
                 local applied_mutations = false
                 local mutations = command:get_parameter("__timeline_mutations")
+                local mutation_debug_summary = nil
                 if mutations and timeline_state.apply_mutations then
                     local mutation_scope = profile_scope.begin("command_manager.apply_mutations")
                     local function apply_mutation_bucket(bucket)
@@ -1589,6 +1665,13 @@ function M.execute(command_or_name, params)
                             end
                         end
                     end
+                    local ok_summary, summary = pcall(mutation_summary_string, mutations)
+                    if ok_summary then
+                        mutation_debug_summary = summary
+                    else
+                        print(string.format("WARNING: Failed to summarize mutations for %s: %s", tostring(command.type), tostring(summary)))
+                        mutation_debug_summary = nil
+                    end
                     command:clear_parameter("__timeline_mutations")
                     mutation_scope:finish(string.format("applied=%s", tostring(applied_mutations)))
                 end
@@ -1598,21 +1681,48 @@ function M.execute(command_or_name, params)
                 end
                 if mutation_failure_info and not applied_mutations then
                     local context = mutation_failure_info.context or {}
-                    local keys = context.update_keys and table.concat(context.update_keys, ", ") or "n/a"
-                    print(string.format(
-                        "Timeline mutation failure (%s): clip=%s keys=[%s] idx=%s/%s",
-                        tostring(mutation_failure_info.kind),
-                        tostring(context.clip_id or "unknown"),
-                        keys,
-                        tostring(context.update_index or "?"),
-                        tostring(context.total_updates or "?")))
-                    if mutation_failure_info.stack then
-                        print(mutation_failure_info.stack)
+                    if mutation_failure_info.kind == "sequence_mismatch" then
+                        applied_mutations = true
+                        print(string.format(
+                            "Timeline mutation skipped for inactive sequence %s (active=%s)",
+                            tostring(context.requested_sequence or "unknown"),
+                            tostring(context.active_sequence or "unknown")))
+                    elseif mutation_failure_info.kind == "inactive_timeline_state" then
+                        applied_mutations = true
+                        print(string.format(
+                            "Timeline mutation skipped (timeline_state not initialized for sequence %s)",
+                            tostring(context.requested_sequence or "unknown")))
+                    else
+                        local keys = context.update_keys and table.concat(context.update_keys, ", ") or "n/a"
+                        print(string.format(
+                            "Timeline mutation failure (%s): clip=%s keys=[%s] idx=%s/%s",
+                            tostring(mutation_failure_info.kind),
+                            tostring(context.clip_id or "unknown"),
+                            keys,
+                            tostring(context.update_index or "?"),
+                            tostring(context.total_updates or "?")))
+                        if mutation_failure_info.stack then
+                            print(mutation_failure_info.stack)
+                        end
+                    end
+                end
+                if not applied_mutations then
+                    local allow_empty = command_flag(command, "allow_empty_mutations", "__allow_empty_mutations")
+                    if allow_empty and mutations then
+                        applied_mutations = true
                     end
                 end
 
                 if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-                    print(string.format("Timeline reload fallback for %s (no mutations applied)", tostring(reload_sequence_id)))
+                    local fallback_command_type = (command and command.type) or (command and command.command_type) or "unknown"
+                    local active_sequence = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "unknown"
+                    print(string.format(
+                        "Timeline reload fallback for %s (command=%s, active=%s, mutations=%s, failure=%s)",
+                        tostring(reload_sequence_id),
+                        tostring(fallback_command_type),
+                        tostring(active_sequence),
+                        mutation_debug_summary or "none",
+                        mutation_failure_info and mutation_failure_info.kind or "none"))
                     local reload_scope = profile_scope.begin("command_manager.reload_clips")
                     timeline_state.reload_clips(reload_sequence_id)
                     reload_scope:finish()
@@ -2874,10 +2984,11 @@ function M.undo(options)
     local skip_timeline_reload = command_flag(current_command, "skip_timeline_reload", "__skip_timeline_reload")
     local skip_selection_restore = command_flag(current_command, "skip_selection_snapshot", "__skip_selection_snapshot")
     local skip_sequence_replay = command_flag(current_command, "skip_sequence_replay", "__skip_sequence_replay")
-    if skip_sequence_replay then
+    local skip_sequence_replay_on_undo = command_flag(current_command, "skip_sequence_replay_on_undo", "__skip_sequence_replay_on_undo")
+    local skip_replay_effective = skip_sequence_replay or skip_sequence_replay_on_undo
+    if skip_replay_effective then
         skip_timeline_reload = true
     end
-
     -- Calculate target sequence (parent of current command for branching support)
     -- In a branching history, undo follows the parent link, not sequence_number - 1
     local target_sequence = current_command.parent_sequence_number or 0
@@ -2886,7 +2997,7 @@ function M.undo(options)
 
     -- Replay events up to target (or clear all if target is 0)
     local replay_success = true
-    if skip_sequence_replay then
+    if skip_replay_effective then
         replay_success = true
     else
         if target_sequence > 0 then
@@ -2990,6 +3101,20 @@ function M.redo(options)
     end
 
     local sequence_id = get_current_stack_sequence_id(true) or active_sequence_id
+    local replay_sequence_id = sequence_id
+    if replay_sequence_id and not sequence_exists(replay_sequence_id) then
+        replay_sequence_id = active_sequence_id
+    end
+    if replay_sequence_id and not sequence_exists(replay_sequence_id) then
+        if active_sequence_id ~= "default_sequence" and sequence_exists("default_sequence") then
+            replay_sequence_id = "default_sequence"
+        else
+            replay_sequence_id = nil
+        end
+    end
+    if not replay_sequence_id then
+        replay_sequence_id = sequence_id
+    end
 
     if not db then
         print("No database connection")
@@ -3009,10 +3134,16 @@ function M.redo(options)
 
     local target_sequence = next_command.sequence_number
     local command_type = next_command.command_type
+    local skip_sequence_replay = command_flag(next_command, "skip_sequence_replay", "__skip_sequence_replay")
+    local skip_sequence_replay_on_redo = command_flag(next_command, "skip_sequence_replay_on_redo", "__skip_sequence_replay_on_redo")
+    local skip_replay_effective = skip_sequence_replay or skip_sequence_replay_on_redo
     print(string.format("Redoing command: %s (seq %d)", command_type, target_sequence))
 
-    -- Replay events up to target sequence
-    local replay_success = M.replay_events(sequence_id, target_sequence)
+    -- Replay events up to target sequence unless command opts out
+    local replay_success = true
+    if not skip_replay_effective then
+        replay_success = M.replay_events(replay_sequence_id, target_sequence)
+    end
 
     if replay_success then
         -- Move current_sequence_number forward
@@ -3024,11 +3155,12 @@ function M.redo(options)
         local restored_command = M.get_last_command(active_project_id)
         local skip_timeline_reload = restored_command and command_flag(restored_command, "skip_timeline_reload", "__skip_timeline_reload") or false
         local skip_selection_restore = restored_command and command_flag(restored_command, "skip_selection_snapshot", "__skip_selection_snapshot") or false
-        local skip_sequence_replay = restored_command and command_flag(restored_command, "skip_sequence_replay", "__skip_sequence_replay") or false
-        if skip_sequence_replay then
+        local skip_sequence_replay_flag = restored_command and command_flag(restored_command, "skip_sequence_replay", "__skip_sequence_replay") or false
+        local skip_sequence_replay_on_redo_flag = restored_command and command_flag(restored_command, "skip_sequence_replay_on_redo", "__skip_sequence_replay_on_redo") or false
+        local skip_replay_effective_flag = skip_sequence_replay_flag or skip_sequence_replay_on_redo_flag
+        if skip_replay_effective_flag then
             skip_timeline_reload = true
         end
-
         -- Reload timeline state to pick up database changes
         -- This triggers listener notifications → automatic view redraws
         local timeline_state = require('ui.timeline.timeline_state')
@@ -3072,7 +3204,7 @@ function M.redo(options)
             end
         end
 
-        if skip_sequence_replay and restored_command then
+        if skip_replay_effective_flag and restored_command then
             local manual_redo = command_redoers[restored_command.type]
             if manual_redo then
                 local ok, err = pcall(manual_redo, restored_command)
@@ -3461,6 +3593,7 @@ command_undoers["ImportFCP7XML"] = function(command)
             delete_query:exec()
             delete_query:finalize()
         end
+        invalidate_sequence_stack(sequence_id)
     end
 
     print("✅ Import undone - deleted all imported entities")
