@@ -586,6 +586,29 @@ local function resolve_stack_for_command(command)
     return GLOBAL_STACK_ID, nil
 end
 
+local function select_fallback_sequence(exclude_lookup)
+    exclude_lookup = exclude_lookup or {}
+    if sequence_exists("default_sequence") and not exclude_lookup["default_sequence"] then
+        return "default_sequence"
+    end
+    if not db then
+        return nil
+    end
+    local stmt = db:prepare("SELECT id FROM sequences LIMIT 1")
+    if not stmt then
+        return nil
+    end
+    local fallback = nil
+    if stmt:exec() and stmt:next() then
+        local candidate = stmt:value(0)
+        if candidate and candidate ~= "" and not exclude_lookup[candidate] then
+            fallback = candidate
+        end
+    end
+    stmt:finalize()
+    return fallback
+end
+
 local function ensure_active_project_id()
     if not active_project_id or active_project_id == "" then
         error("CommandManager.execute: active project_id is not set")
@@ -3549,6 +3572,7 @@ command_executors["ImportFCP7XML"] = function(command)
     if parse_result.xml_content and (not xml_contents or xml_contents == "") then
         command:set_parameter("xml_contents", parse_result.xml_content)
     end
+    command:set_parameter("__skip_sequence_replay_on_undo", true)
 
     print(string.format("✅ Imported %d sequence(s), %d track(s), %d clip(s)",
         #create_result.sequence_ids,
@@ -3566,8 +3590,11 @@ command_undoers["ImportFCP7XML"] = function(command)
     local sequence_ids = command:get_parameter("created_sequence_ids") or {}
     local track_ids = command:get_parameter("created_track_ids") or {}
     local clip_ids = command:get_parameter("created_clip_ids") or {}
+    local media_ids = command:get_parameter("created_media_ids") or {}
 
     -- Delete in reverse order (clips, tracks, sequences)
+    local deleted_sequence_lookup = {}
+
     for _, clip_id in ipairs(clip_ids) do
         local delete_query = db:prepare("DELETE FROM clips WHERE id = ?")
         if delete_query then
@@ -3593,13 +3620,46 @@ command_undoers["ImportFCP7XML"] = function(command)
             delete_query:exec()
             delete_query:finalize()
         end
+        deleted_sequence_lookup[sequence_id] = true
         invalidate_sequence_stack(sequence_id)
+    end
+
+    for _, media_id in ipairs(media_ids) do
+        local delete_query = db:prepare("DELETE FROM media WHERE id = ?")
+        if delete_query then
+            delete_query:bind_value(1, media_id)
+            delete_query:exec()
+            delete_query:finalize()
+        end
+    end
+
+    local timeline_state = nil
+    local ok, loaded_state = pcall(require, 'ui.timeline.timeline_state')
+    if ok and type(loaded_state) == "table" then
+        timeline_state = loaded_state
+    end
+
+    local fallback_sequence = nil
+    local active_sequence = nil
+    if timeline_state and timeline_state.get_sequence_id then
+        active_sequence = timeline_state.get_sequence_id()
+        if active_sequence and deleted_sequence_lookup[active_sequence] then
+            fallback_sequence = select_fallback_sequence(deleted_sequence_lookup)
+        end
+    end
+
+    if fallback_sequence then
+        M.activate_timeline_stack(fallback_sequence)
+    end
+
+    if timeline_state and timeline_state.reload_clips then
+        local reload_target = fallback_sequence or active_sequence or "default_sequence"
+        timeline_state.reload_clips(reload_target)
     end
 
     print("✅ Import undone - deleted all imported entities")
     return true
 end
-
 -- ============================================================================
 -- RelinkMedia Command
 -- ============================================================================
