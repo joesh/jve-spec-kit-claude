@@ -874,7 +874,11 @@ local function restore_selection_from_serialized(clips_json, edges_json, gaps_js
         end
 
         if #restored_edges > 0 then
-            timeline_state.set_edge_selection(restored_edges)
+            if timeline_state.set_edge_selection_raw then
+                timeline_state.set_edge_selection_raw(restored_edges, {normalize = false})
+            else
+                timeline_state.set_edge_selection(restored_edges)
+            end
             return
         end
     end

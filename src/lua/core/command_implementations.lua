@@ -4837,6 +4837,26 @@ local function calculate_gap_ripple_delta_range(clip, edge_type, all_clips, sequ
 
     -- Leave at least 0ms; if duration exists, limit closure to gap length
     local duration = tonumber(clip.duration) or 0
+    if duration <= 0 then
+        -- Derive span from nearest neighbor when duration wasn't recorded
+        local left_end = 0
+        local right_start = ripple_time
+        for _, c in ipairs(all_clips) do
+            if c.track_id == clip.track_id then
+                local c_end = (c.start_time or 0) + (c.duration or 0)
+                if c_end <= ripple_time and c_end > left_end then
+                    left_end = c_end
+                end
+                if c.start_time and c.start_time >= ripple_time and c.start_time < right_start then
+                    right_start = c.start_time
+                end
+            end
+        end
+        local inferred = right_start - left_end
+        if inferred > 0 then
+            duration = inferred
+        end
+    end
     local gap_limit = -(math.max(duration, 0) - 0)  -- allow closing the gap but not crossing left neighbor
     if gap_limit > min_shift then
         min_shift = gap_limit
@@ -4858,6 +4878,35 @@ local function calculate_gap_ripple_delta_range(clip, edge_type, all_clips, sequ
     else
         min_delta = min_shift
         max_delta = max_shift
+    end
+
+    local span = math.max(duration, 0)
+    if edge_type == "out" and span > 0 and (not min_delta or min_delta > -span) then
+        min_delta = -span
+    elseif edge_type == "in" and span > 0 and (not max_delta or max_delta < span) then
+        max_delta = span
+    end
+
+    if min_delta == 0 and edge_type == "out" then
+        print(string.format("DEBUG GAP CONSTRAINT anomaly: clip=%s start=%s dur=%s ripple_time=%s min_shift=%s max_shift=%s span=%s",
+            tostring(clip.id), tostring(clip.start_time), tostring(clip.duration), tostring(ripple_time), tostring(min_shift), tostring(max_shift), tostring(duration)))
+        for _, c in ipairs(all_clips or {}) do
+            if c.track_id == clip.track_id then
+                local c_end = (c.start_time or 0) + (c.duration or 0)
+                print(string.format("  track clip %s [%s-%s]", tostring(c.id), tostring(c.start_time), tostring(c_end)))
+            end
+        end
+    end
+
+    if max_delta == 0 and edge_type == "in" then
+        print(string.format("DEBUG GAP CONSTRAINT anomaly (in): clip=%s start=%s dur=%s ripple_time=%s min_shift=%s max_shift=%s span=%s",
+            tostring(clip.id), tostring(clip.start_time), tostring(clip.duration), tostring(ripple_time), tostring(min_shift), tostring(max_shift), tostring(duration)))
+        for _, c in ipairs(all_clips or {}) do
+            if c.track_id == clip.track_id then
+                local c_end = (c.start_time or 0) + (c.duration or 0)
+                print(string.format("  track clip %s [%s-%s]", tostring(c.id), tostring(c.start_time), tostring(c_end)))
+            end
+        end
     end
 
     return min_delta, max_delta

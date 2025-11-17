@@ -1487,19 +1487,38 @@ function M.get_selected_edges()
     return state.selected_edges
 end
 
-function M.set_edge_selection(edges)
+function M.set_edge_selection_raw(edges, opts)
+    opts = opts or {}
     state.selected_edges = edges or {}
 
-    -- Clear clip selection (clips and edges are mutually exclusive)
-    state.selected_clips = {}
-    state.selected_gaps = {}
+    if opts.clear_clips ~= false then
+        state.selected_clips = {}
+    end
+    if opts.clear_gaps ~= false then
+        state.selected_gaps = {}
+    end
 
-    normalize_edge_selection()
+    if opts.normalize ~= false then
+        normalize_edge_selection()
+    end
 
-    notify_listeners()
+    if opts.notify ~= false then
+        notify_listeners()
+    end
 
-    -- Persist edge selection to database
-    M.persist_state_to_db()
+    if opts.persist ~= false then
+        M.persist_state_to_db()
+    end
+end
+
+function M.set_edge_selection(edges)
+    return M.set_edge_selection_raw(edges, {
+        normalize = true,
+        notify = true,
+        persist = true,
+        clear_clips = true,
+        clear_gaps = true
+    })
 end
 
 function M.toggle_edge_selection(clip_id, edge_type, trim_type)
