@@ -863,6 +863,9 @@ local function restore_clip_state(state)
         if not state then
             return
         end
+    if type(state.id) == "string" and state.id:find("^temp_gap_") then
+        return nil
+    end
         local Clip = require('models.clip')
         local clip = Clip.load_optional(state.id, db)
     if not clip then
