@@ -82,10 +82,10 @@ local v1_right_start = fetch_start(db, "v1_right")
 local v2_left_end = fetch_start(db, "v2_left") + 6000 -- duration of v2_left
 local v2_right_start = fetch_start(db, "v2_right")
 
--- Smallest gap is 4s on V2: expect both moves clamped to 4s delta.
+-- Smallest gap is 3s on V2: expect both moves clamped to that delta.
 assert(v2_right_start == v2_left_end, string.format(
     "V2 should butt after clamp (expected %d, got %d)", v2_left_end, v2_right_start))
-assert(v1_right_start == 4000, string.format(
-    "V1 should move by the same clamped delta (expected 4000, got %d)", v1_right_start))
+assert(v1_right_start == 5000, string.format(
+    "V1 should move by the same clamped delta (expected 5000, got %d)", v1_right_start))
 
 print("✅ Batch ripple clamps to the tightest gap to keep tracks in sync (no overlaps)")

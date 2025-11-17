@@ -4882,37 +4882,12 @@ local function calculate_gap_ripple_delta_range(clip, edge_type, all_clips, sequ
 
     local span = math.max(duration, 0)
     if edge_type == "out" and span > 0 then
-        -- Do not allow closing past the actual gap length, but also respect any stricter neighbour limit.
-        local gap_floor = -span
-
-        -- Cross-track guard: find the tightest downstream gap on any track and prevent closing past it.
-        local min_gap = span
-        for _, downstream in ipairs(all_clips or {}) do
-            if downstream.start_time and downstream.start_time >= ripple_time then
-                local left_end = 0
-                for _, candidate in ipairs(all_clips or {}) do
-                    if candidate.track_id == downstream.track_id and candidate.start_time and candidate.duration then
-                        local candidate_end = candidate.start_time + candidate.duration
-                        if candidate_end <= downstream.start_time and candidate_end > left_end then
-                            left_end = candidate_end
-                        end
-                    end
-                end
-                local gap_between = downstream.start_time - left_end
-                if gap_between < min_gap then
-                    min_gap = gap_between
-                end
-            end
-        end
-        local downstream_floor = -min_gap
-
-        min_delta = math.max(min_delta or gap_floor, gap_floor, downstream_floor)
+        -- Do not allow closing past the actual gap length. Ensure min_shift honors at least the gap_floor.
+        min_shift = math.min(min_shift, -span)
+        min_delta = min_shift
     elseif edge_type == "in" and span > 0 then
         -- Symmetric guard for gap_after trims.
-        local gap_ceiling = span
-        if not max_delta or max_delta > gap_ceiling then
-            max_delta = gap_ceiling
-        end
+        max_delta = math.max(max_delta or span, span)
     end
 
     if min_delta == 0 and edge_type == "out" then
@@ -5242,10 +5217,17 @@ command_executors["RippleEdit"] = function(command)
             return {success = false, error_message = "Gap constraint calculation failed"}
         end
         clamped_delta = math.max(min_delta, math.min(max_delta, delta_ms))
-        else
-            -- Regular clip trim: use normal constraint logic (no frame snapping)
-            -- Adjacent checks are skipped here; overlap prevention is handled below via gap checks.
-            clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, nil, nil, true)
+    else
+        -- Regular clip trim: use normal constraint logic (no frame snapping)
+        -- Adjacent checks are skipped here; overlap prevention is handled below via gap checks.
+        clamped_delta = constraints.clamp_trim_delta(clip, edge_type, delta_ms, all_clips, nil, nil, true)
+    end
+
+        -- Allow full deletion when dragging past the clip duration.
+        if edge_type == "out" and clamped_delta < -original_duration then
+            clamped_delta = -original_duration
+        elseif edge_type == "in" and clamped_delta > original_duration then
+            clamped_delta = original_duration
         end
 
         if clamped_delta ~= delta_ms and not dry_run then
