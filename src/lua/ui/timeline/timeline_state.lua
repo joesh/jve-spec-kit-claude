@@ -471,7 +471,29 @@ local function normalize_edge_selection()
         if clip then
             local new_edge_type = edge.edge_type
             local new_clip_id = clip.id
-            -- Keep gap edges as-is; even if gap is zero, maintain the original edge selection.
+            if edge.edge_type == "gap_after" then
+                local gap = compute_gap_after(clip)
+                if gap and gap <= 0 then
+                    local neighbour = find_next_clip(clip)
+                    if neighbour then
+                        new_clip_id = neighbour.id
+                        new_edge_type = "in"
+                    else
+                        new_edge_type = "in"
+                    end
+                end
+            elseif edge.edge_type == "gap_before" then
+                local gap = compute_gap_before(clip)
+                if gap and gap <= 0 then
+                    local neighbour = find_previous_clip(clip)
+                    if neighbour then
+                        new_clip_id = neighbour.id
+                        new_edge_type = "out"
+                    else
+                        new_edge_type = "out"
+                    end
+                end
+            end
 
             local key = new_clip_id .. ":" .. new_edge_type
             if not seen[key] then

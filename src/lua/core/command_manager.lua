@@ -700,9 +700,6 @@ local command_redoers = {}
 
 local function capture_selection_snapshot()
     local timeline_state = require('ui.timeline.timeline_state')
-    if timeline_state.normalize_edge_selection then
-        timeline_state.normalize_edge_selection()
-    end
     local selected_clips = timeline_state.get_selected_clips() or {}
     local clip_ids = {}
     for _, clip in ipairs(selected_clips) do
