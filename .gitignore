@@ -12,7 +12,9 @@ moc_*.cpp
 moc_*.h
 qrc_*.cpp
 ui_*.h
-Makefile*
+# CMake-generated makefiles; wrapper Makefile kept
+Makefile
+Makefile2
 *build-log*
 *.tlog
 

@@ -13,6 +13,7 @@ local M = {}
 local viewer_widget = nil
 local title_label = nil
 local content_label = nil
+local content_container = nil
 
 local DEFAULT_MESSAGE = "Double-click a clip in the Project Browser to load it here."
 
@@ -86,6 +87,12 @@ function M.create()
 
     viewer_widget = qt_constants.WIDGET.CREATE()
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
+    if qt_constants.LAYOUT.SET_SPACING then
+        pcall(qt_constants.LAYOUT.SET_SPACING, layout, 0)
+    end
+    if qt_constants.LAYOUT.SET_MARGINS then
+        pcall(qt_constants.LAYOUT.SET_MARGINS, layout, 0, 0, 0, 0)
+    end
 
     title_label = qt_constants.WIDGET.CREATE_LABEL("Source Viewer")
     qt_constants.PROPERTIES.SET_STYLE(title_label, [[
@@ -98,21 +105,42 @@ function M.create()
     ]])
     qt_constants.LAYOUT.ADD_WIDGET(layout, title_label)
 
+    content_container = qt_constants.WIDGET.CREATE()
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_container, "Expanding", "Expanding")
+    end
+    if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_STYLE then
+        qt_constants.PROPERTIES.SET_STYLE(content_container, [[
+            QWidget {
+                background: #000000;
+                border: 1px solid #1f1f1f;
+            }
+        ]])
+    end
+
+    local content_layout = qt_constants.LAYOUT.CREATE_VBOX()
+    if qt_constants.LAYOUT.SET_MARGINS then
+        pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 0, 0)
+    end
+    if qt_constants.LAYOUT.SET_SPACING then
+        pcall(qt_constants.LAYOUT.SET_SPACING, content_layout, 0)
+    end
+
     content_label = qt_constants.WIDGET.CREATE_LABEL(DEFAULT_MESSAGE)
     qt_constants.PROPERTIES.SET_STYLE(content_label, string.format([[
         QLabel {
-            background: #000000;
+            background: transparent;
             color: %s;
             padding: 16px;
             font-size: 13px;
         }
     ]], ui_constants.COLORS and (ui_constants.COLORS.TEXT_PRIMARY or "#d0d0d0") or "#d0d0d0"))
     if qt_constants.PROPERTIES.SET_ALIGNMENT then
-        qt_constants.PROPERTIES.SET_ALIGNMENT(content_label, qt_constants.PROPERTIES.ALIGN_TOP)
+        qt_constants.PROPERTIES.SET_ALIGNMENT(content_label, qt_constants.PROPERTIES.ALIGN_CENTER)
     end
     if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
-        -- Ignore the long-line size hint so the splitter width controls the panel
-        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_label, "ignored", "preferred")
+        -- Expand to fill the viewer area while keeping text centered
+        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_label, "Expanding", "Expanding")
     end
     if qt_constants.PROPERTIES.SET_MINIMUM_WIDTH then
         pcall(qt_constants.PROPERTIES.SET_MINIMUM_WIDTH, content_label, 0)
@@ -120,7 +148,16 @@ function M.create()
     if qt_constants.PROPERTIES.SET_WORD_WRAP then
         qt_constants.PROPERTIES.SET_WORD_WRAP(content_label, true)
     end
-    qt_constants.LAYOUT.ADD_WIDGET(layout, content_label)
+    qt_constants.LAYOUT.ADD_WIDGET(content_layout, content_label)
+    if qt_constants.LAYOUT.SET_STRETCH_FACTOR then
+        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, content_layout, content_label, 1)
+    end
+
+    qt_constants.LAYOUT.SET_ON_WIDGET(content_container, content_layout)
+    qt_constants.LAYOUT.ADD_WIDGET(layout, content_container)
+    if qt_constants.LAYOUT.SET_STRETCH_FACTOR then
+        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, layout, content_container, 1)
+    end
 
     qt_constants.LAYOUT.SET_ON_WIDGET(viewer_widget, layout)
 
