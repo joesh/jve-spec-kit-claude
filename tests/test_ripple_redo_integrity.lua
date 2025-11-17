@@ -150,7 +150,7 @@ local function exec(cmd)
 end
 
 local function clip_count()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline' AND track_id IS NOT NULL")
     assert(stmt:exec(), "Failed to count clips")
     assert(stmt:next(), "Count query produced no rows")
     local count = stmt:value(0)
@@ -183,7 +183,7 @@ local function snapshot_clips()
     local stmt = db:prepare([[
         SELECT id, track_id, start_time, duration, source_in, source_out
         FROM clips
-        WHERE clip_kind = 'timeline'
+        WHERE clip_kind = 'timeline' AND track_id IS NOT NULL
         ORDER BY track_id, start_time
     ]])
     assert(stmt:exec(), "Failed to fetch clips for snapshot")
@@ -271,7 +271,7 @@ local function fetch_clips_ordered()
     local stmt = db:prepare([[
         SELECT id, start_time, duration
         FROM clips
-        WHERE clip_kind = 'timeline'
+        WHERE clip_kind = 'timeline' AND track_id IS NOT NULL
         ORDER BY start_time
     ]])
     assert(stmt:exec(), "Failed to fetch clip ordering")

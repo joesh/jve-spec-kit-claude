@@ -92,8 +92,15 @@ b_start, b_dur = fetch_clip("clip_b")
 assert(math.abs(b_start - 3000) < 1, "clip_b start should restore after undo")
 assert(math.abs(b_dur - 2000) < 1, "clip_b duration should restore after undo")
 
-os.remove(TEST_DB)
-print("❌ Roll drag undo currently fails (expected until fix)")
+local function clip_count()
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+    assert(stmt:exec() and stmt:next(), "Failed to count clips")
+    local count = tonumber(stmt:value(0)) or 0
+    stmt:finalize()
+    return count
+end
 
--- NOTE: This test is expected to fail until roll undo restores original clip states without
--- persisting gap materialization.
+assert(clip_count() == 2, "Undo roll should leave the original two clips only")
+
+os.remove(TEST_DB)
+print("✅ Roll drag undo restores original clip states and clip count")
