@@ -6,6 +6,31 @@ local function set_error(set_last_error, message)
     end
 end
 
+local function ensure_mutation_bucket(command, sequence_id)
+    if not command or not sequence_id then
+        return nil
+    end
+    local mutations = command:get_parameter("__timeline_mutations")
+    if not mutations then
+        mutations = {}
+        command:set_parameter("__timeline_mutations", mutations)
+    elseif mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+        local existing = mutations
+        mutations = {[existing.sequence_id or sequence_id] = existing}
+        command:set_parameter("__timeline_mutations", mutations)
+    end
+
+    if not mutations[sequence_id] then
+        mutations[sequence_id] = {
+            sequence_id = sequence_id,
+            inserts = {},
+            updates = {},
+            deletes = {}
+        }
+    end
+    return mutations[sequence_id]
+end
+
 local function fetch_sequence_record(db, sequence_id)
     if not sequence_id or sequence_id == "" then
         return nil
@@ -545,6 +570,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
+        command:set_parameter("__skip_timeline_reload", true)
+        command:set_parameter("__allow_empty_mutations", true)
+        local bucket = ensure_mutation_bucket(command, sequence_id)
+        if bucket then
+            bucket.sequence_meta = bucket.sequence_meta or {}
+            table.insert(bucket.sequence_meta, {
+                action = "deleted",
+                sequence_id = sequence_id,
+                project_id = sequence_row.project_id,
+                name = sequence_row.name
+            })
+        end
         print(string.format("✅ Deleted sequence %s (%d track(s), %d clip(s))",
             sequence_row.name or sequence_id, #tracks, #clips))
         return true

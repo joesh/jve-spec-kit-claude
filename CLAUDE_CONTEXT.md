@@ -41,3 +41,9 @@
 ### Mutation Hydration (2025-11-12)
 - Timeline state now hydrates missing clips on-demand instead of bailing out when mutation buckets reference clip IDs that aren’t currently cached. The database layer exposes `load_clip_entry`, and `timeline_state` injects the fetched clip into its cache before applying the update so the UI no longer falls back to a full reload when editing large timelines that were loaded via replay/import.
 - Regression `tests/test_timeline_mutation_hydration.lua` exercises this path by removing a clip from `timeline_state` and verifying RippleEdit updates succeed without triggering the reload fallback. Use this test as the template when covering future mutation resiliency fixes.
+
+## Overwrite Command Mutations (2025-11-13)
+- `Overwrite` now captures occlusion metadata (trims/inserts/deletes) plus optional reused-clip snapshots before it modifies the database, and it persists those blobs into the command record (`src/lua/core/command_implementations.lua:2965-3125`).
+- Undo skips sequence replay by default (`__skip_sequence_replay_on_undo`) and instead deletes the newly inserted clip, restores reuse targets from their stored snapshots, replays occlusion actions in reverse, and immediately flushes the accumulated mutation bucket to `timeline_state` (`src/lua/core/command_implementations.lua:3127-3185`).
+- `revert_occlusion_actions` and `delete_clips_by_id` now emit insert/update/delete mutations as they manipulate the database so undo/redo receivers stay hot without falling back to `timeline_state.reload_clips` (`src/lua/core/command_implementations.lua:900-950`).
+- Regression `tests/test_overwrite_mutations.lua` stubs `timeline_state` and asserts that Overwrite emits the correct mutation buckets on execute and undo, proving we no longer rely on brute-force reloads for that command.

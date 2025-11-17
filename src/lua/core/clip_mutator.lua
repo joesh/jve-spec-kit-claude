@@ -5,6 +5,7 @@ local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
 
 local ClipMutator = {}
+local timeline_state_ok, timeline_state = pcall(require, 'ui.timeline.timeline_state')
 
 local function clone_state(row)
     return {
@@ -198,9 +199,22 @@ function ClipMutator.resolve_occlusions(db, params)
 
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
     local krono_start = krono_enabled and krono.now and krono.now() or nil
-    local track_clips, load_err = load_track_clips(db, track_id)
+    local track_clips, load_err = nil, nil
+    local window_cache = params.pending_clips and params.pending_clips.__window_cache
+    if not window_cache and timeline_state_ok and timeline_state and timeline_state.get_clips_for_track then
+        local cached = timeline_state.get_clips_for_track(track_id)
+        if cached and #cached > 0 then
+            window_cache = {[track_id] = cached}
+        end
+    end
+    if window_cache and window_cache[track_id] then
+        track_clips = window_cache[track_id]
+    end
     if not track_clips then
-        return false, load_err
+        track_clips, load_err = load_track_clips(db, track_id)
+        if not track_clips then
+            return false, load_err
+        end
     end
 
     local pending_lookup = normalize_pending_lookup(params.pending_clips, exclude_id)

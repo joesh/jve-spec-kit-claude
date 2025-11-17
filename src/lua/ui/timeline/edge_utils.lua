@@ -1,10 +1,7 @@
 local M = {}
 
--- Keep edge identifiers stable so gap edges stay distinct from clip edges.
+-- Normalize edge identifiers (currently passthrough, reserved for future mapping)
 function M.normalize_edge_type(edge_type)
-    if edge_type == nil or edge_type == "" then
-        return edge_type
-    end
     return edge_type
 end
 

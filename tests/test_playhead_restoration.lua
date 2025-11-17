@@ -47,6 +47,21 @@ function mock_timeline_state.reload_clips()
     -- Mock implementation - does nothing
 end
 
+function mock_timeline_state.apply_mutations(sequence_id, mutations)
+    if sequence_id and sequence_id ~= "" then
+        mock_timeline_state.sequence_id = sequence_id
+    end
+    return mutations ~= nil
+end
+
+function mock_timeline_state.consume_mutation_failure()
+    return nil
+end
+
+function mock_timeline_state.get_sequence_id()
+    return mock_timeline_state.sequence_id or "default_sequence"
+end
+
 local viewport_guard = 0
 
 function mock_timeline_state.capture_viewport()
@@ -228,6 +243,7 @@ print("   After command 1: " .. mock_timeline_state.get_playhead_time() .. "ms")
 
 -- Move playhead
 mock_timeline_state.set_playhead_time(10000)
+timeline_state.set_playhead_time(10000)
 print("   Moved playhead to: 10000ms")
 
 -- Execute second command
@@ -263,6 +279,7 @@ print("Test 2: Redo preserves current playhead position")
 
 -- Move playhead somewhere else
 mock_timeline_state.set_playhead_time(15000)
+timeline_state.set_playhead_time(15000)
 print("   Moved playhead to: 15000ms before redo")
 
 -- Redo command 2

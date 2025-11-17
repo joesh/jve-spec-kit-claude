@@ -3,6 +3,7 @@
 
 local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
+local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
 
 local M = {}
 
@@ -220,7 +221,11 @@ local function save_internal(self, db, opts)
     local occlusion_actions = nil
     if not skip_occlusion and self.track_id and self.start_time and self.duration then
         local clip_mutator = require('core.clip_mutator')
-        local pending = opts.pending_clips
+        local pending = opts.pending_clips or {}
+        if timeline_state_ok and timeline_state and timeline_state.get_track_clip_windows then
+            pending.__window_cache = timeline_state.get_track_clip_windows(
+                self.owner_sequence_id or self.track_sequence_id)
+        end
         local ok, err, actions = clip_mutator.resolve_occlusions(db, {
             track_id = self.track_id,
             start_time = self.start_time,

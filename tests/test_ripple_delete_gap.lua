@@ -175,6 +175,12 @@ function timeline_state.clear_gap_selection() end
 function timeline_state.set_selection() end
 function timeline_state.reload_clips() end
 function timeline_state.persist_state_to_db() end
+function timeline_state.apply_mutations(sequence_id, mutations)
+    return mutations ~= nil
+end
+function timeline_state.consume_mutation_failure()
+    return nil
+end
 function timeline_state.get_clips()
     local clips = {}
     local stmt = db:prepare("SELECT id, track_id, start_time, duration FROM clips ORDER BY track_id, start_time")

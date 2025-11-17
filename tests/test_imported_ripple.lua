@@ -26,8 +26,10 @@ local function install_timeline_stub()
     }
     local guard_depth = 0
 
+    timeline_state.sequence_id = 'default_sequence'
+
     function timeline_state.get_sequence_id()
-        return 'default_sequence'
+        return timeline_state.sequence_id
     end
 
     function timeline_state.get_playhead_time()
@@ -59,8 +61,20 @@ local function install_timeline_stub()
     end
 
     function timeline_state.normalize_edge_selection() end
-    function timeline_state.reload_clips() end
+    function timeline_state.reload_clips(sequence_id)
+        if sequence_id and sequence_id ~= "" then
+            timeline_state.sequence_id = sequence_id
+        end
+    end
     function timeline_state.persist_state_to_db() end
+
+    function timeline_state.apply_mutations()
+        return true
+    end
+
+    function timeline_state.consume_mutation_failure()
+        return nil
+    end
 
     function timeline_state.set_viewport_start_time(ms)
         timeline_state.viewport_start_time = ms

@@ -157,8 +157,21 @@ function timeline_state.get_selected_edges() return timeline_state.selected_edge
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
 function timeline_state.set_edge_selection(edges) timeline_state.selected_edges = edges or {} end
 function timeline_state.normalize_edge_selection() return false end
-function timeline_state.reload_clips() end
+function timeline_state.reload_clips(sequence_id)
+    if sequence_id and sequence_id ~= "" then
+        timeline_state.sequence_id = sequence_id
+    end
+end
 function timeline_state.persist_state_to_db() end
+function timeline_state.apply_mutations(sequence_id, mutations)
+    if sequence_id and sequence_id ~= "" then
+        timeline_state.sequence_id = sequence_id
+    end
+    return mutations ~= nil
+end
+function timeline_state.consume_mutation_failure()
+    return nil
+end
 function timeline_state.capture_viewport()
     return {
         start_time = timeline_state.viewport_start_time,

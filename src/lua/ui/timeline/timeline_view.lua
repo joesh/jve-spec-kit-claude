@@ -8,6 +8,8 @@ local focus_manager = require("ui.focus_manager")
 local frame_utils = require("core.frame_utils")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local edge_utils = require("ui.timeline.edge_utils")
+local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
+local roll_detector = require("ui.timeline.roll_detector")
 
 local function timeline_scroll_debug_now()
     return os.clock() * 1000
@@ -371,70 +373,6 @@ function M.create(widget, state_module, track_filter_fn, options)
         return nil
     end
 
-    local function find_best_roll_pair(entries, x, width)
-        if not entries or #entries < 2 then
-            return nil, nil, math.huge
-        end
-
-        local best_selection = nil
-        local best_pair = nil
-        local best_score = math.huge
-
-        for i = 1, #entries do
-            local first = entries[i]
-            local clip_a = first.clip
-            local norm_a = edge_utils.normalize_edge_type(first.edge)
-            if clip_a and norm_a and (norm_a == "in" or norm_a == "out") then
-                for j = i + 1, #entries do
-                    local second = entries[j]
-                    local clip_b = second.clip
-                    local norm_b = edge_utils.normalize_edge_type(second.edge)
-                    if clip_b and norm_b and clip_a.track_id == clip_b.track_id and clip_a.id ~= clip_b.id then
-                        local left_clip, right_clip = nil, nil
-                        local left_distance, right_distance = nil, nil
-
-                        if norm_a == "out" and norm_b == "in" then
-                            left_clip = clip_a
-                            right_clip = clip_b
-                            left_distance = first.distance
-                            right_distance = second.distance
-                        elseif norm_a == "in" and norm_b == "out" then
-                            left_clip = clip_b
-                            right_clip = clip_a
-                            left_distance = second.distance
-                            right_distance = first.distance
-                        end
-
-                        if left_clip and right_clip then
-                            if left_clip.start_time > right_clip.start_time then
-                                left_clip, right_clip = right_clip, left_clip
-                                left_distance, right_distance = right_distance, left_distance
-                            end
-
-                            if state_module.detect_roll_between_clips(left_clip, right_clip, x, width) then
-                                local score = math.max(left_distance or 0, right_distance or 0)
-                                if score < best_score then
-                                    best_score = score
-                                    best_selection = {
-                                        {clip_id = left_clip.id, edge_type = "out", trim_type = "roll"},
-                                        {clip_id = right_clip.id, edge_type = "in", trim_type = "roll"}
-                                    }
-                                    best_pair = {
-                                        left_clip = left_clip,
-                                        right_clip = right_clip,
-                                        left_edge_type = "out",
-                                        right_edge_type = "in"
-                                    }
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        return best_selection, best_pair, best_score
-    end
 
     -- Convert local track index to global track index
     local function local_to_global_track_index(local_index)
@@ -1033,6 +971,9 @@ end
                 local executor = command_manager.get_executor("RippleEdit")
                 if executor then
                     success, preview_data = executor(ripple_cmd)
+                    if success and view.drag_state then
+                        view.drag_state.preview_clamped_delta = ripple_cmd:get_parameter("clamped_delta_ms") or edge_drag_offset_ms
+                    end
                 end
             -- Multiple edges: use BatchRippleEdit
             elseif #view.drag_state.edges > 1 then
@@ -1065,11 +1006,20 @@ end
                 local executor = command_manager.get_executor("BatchRippleEdit")
                 if executor then
                     success, preview_data = executor(batch_cmd)
+                    if success and view.drag_state then
+                        view.drag_state.preview_clamped_delta = batch_cmd:get_parameter("clamped_delta_ms") or edge_drag_offset_ms
+                    end
                 end
             end
 
             -- Draw preview based on dry-run results
             if success and preview_data then
+                if not view.drag_state then
+                    view.drag_state = {}
+                end
+                view.drag_state.preview_data = preview_data
+                view.drag_state.requested_delta_ms = edge_drag_offset_ms
+
                 local all_clips = state_module.get_clips()
 
                 -- Draw affected clips (trimmed edges)
@@ -1205,29 +1155,85 @@ end
             end
         end
 
-        -- Get clips for edge bracket rendering
+        -- Get clips for edge bracket rendering (visible subset) and full set for constraints
         local all_clips = state_module.get_clips()
+        local clip_lookup = {}
+        for _, clip in ipairs(all_clips) do
+            clip_lookup[clip.id] = clip
+        end
 
         -- Capture trim constraints for edge rendering so we can show limit state
-        local database_module = require('core.database')
         local constraints_module = require('core.timeline_constraints')
-        local Clip = require('models.clip')
+        local database_module = require('core.database')
         local sequence_id = state_module.get_sequence_id()
-        local all_for_constraints = database_module.load_clips(sequence_id)
-        local db_conn = database_module.get_connection()
-
+        local all_for_constraints = database_module.load_clips(sequence_id) or {}
+        local constraint_lookup = {}
+        for _, clip in ipairs(all_for_constraints) do
+            constraint_lookup[clip.id] = clip
+        end
         local trim_constraints = {}
         local function ensure_constraint(edge_info)
             if not edge_info or not edge_info.clip_id then return end
             local key = edge_info.clip_id .. ':' .. edge_info.edge_type
             if trim_constraints[key] ~= nil then return end
-            local clip = Clip.load(edge_info.clip_id, db_conn)
+            local clip = constraint_lookup[edge_info.clip_id] or clip_lookup[edge_info.clip_id]
             if not clip then return end
+
+            local function compute_gap_duration(reference_clip, edge_type)
+                if not reference_clip then return 0 end
+                local ref_start = reference_clip.start_time or 0
+                local ref_end = ref_start + (reference_clip.duration or 0)
+                local gap_start, gap_end
+                if edge_type == 'gap_after' then
+                    gap_start = ref_end
+                    gap_end = math.huge
+                    for _, other in ipairs(all_for_constraints) do
+                        if other.track_id == reference_clip.track_id and other.id ~= reference_clip.id then
+                            if other.start_time and other.start_time >= ref_end and other.start_time < gap_end then
+                                gap_end = other.start_time
+                            end
+                        end
+                    end
+                else -- gap_before
+                    gap_end = ref_start
+                    gap_start = 0
+                    for _, other in ipairs(all_for_constraints) do
+                        if other.track_id == reference_clip.track_id and other.id ~= reference_clip.id then
+                            local other_end = (other.start_time or 0) + (other.duration or 0)
+                            if other_end <= ref_start and other_end > gap_start then
+                                gap_start = other_end
+                            end
+                        end
+                    end
+                end
+                local dur = gap_end - gap_start
+                if dur < 0 then dur = 0 end
+                return dur
+            end
+
+            -- Gap edges: clamp by gap length only (ignore clip media constraints)
+            if edge_info.edge_type == 'gap_after' or edge_info.edge_type == 'gap_before' then
+                local gap_duration = compute_gap_duration(clip, edge_info.edge_type)
+                local max_close = math.max(0, gap_duration)  -- allow full closure
+                if edge_info.edge_type == 'gap_after' then
+                    trim_constraints[key] = {
+                        min_delta = -math.huge,
+                        max_delta = max_close
+                    }
+                else -- gap_before
+                    trim_constraints[key] = {
+                        min_delta = -max_close,
+                        max_delta = math.huge
+                    }
+                end
+                return
+            end
+
             local normalized_edge = edge_info.edge_type
             if normalized_edge == 'gap_after' then
-                normalized_edge = 'in'
-            elseif normalized_edge == 'gap_before' then
                 normalized_edge = 'out'
+            elseif normalized_edge == 'gap_before' then
+                normalized_edge = 'in'
             end
             trim_constraints[key] = constraints_module.calculate_trim_range(clip, normalized_edge, all_for_constraints, false, true)
         end
@@ -1241,150 +1247,102 @@ end
             ensure_constraint(selected)
         end
 
-        for _, edge in ipairs(selected_edges) do
-            -- Find the clip for this edge
-            local edge_clip = nil
-            for _, clip in ipairs(all_clips) do
-                if clip.id == edge.clip_id then
-                    edge_clip = clip
-                    break
+        if view.drag_state and view.drag_state.preview_data and view.drag_state.preview_data.affected_clips then
+            -- Use dry-run preview data to draw edge brackets exactly where the executor says clips move.
+            for _, affected in ipairs(view.drag_state.preview_data.affected_clips) do
+                local edge_clip
+                for _, clip in ipairs(all_clips) do
+                    if clip.id == affected.clip_id then
+                        edge_clip = clip
+                        break
+                    end
+                end
+                if edge_clip and affected.edge_type then
+                    local clip_y = get_track_y_by_id(edge_clip.track_id, height)
+                    if clip_y >= 0 then
+                        local track_height = get_track_visual_height(edge_clip.track_id)
+                        local clip_start = affected.new_start_time or edge_clip.start_time
+                        local clip_duration = affected.new_duration or edge_clip.duration
+
+                        local clip_x = state_module.time_to_pixel(clip_start, width)
+                        local clip_width = math.floor((clip_duration / viewport_duration) * width) - 1
+                        local clip_height = track_height - 10
+                        local edge_x = (affected.edge_type == "in" or affected.edge_type == "gap_before") and clip_x or (clip_x + clip_width)
+                        local bracket_type = (affected.edge_type == "in" or affected.edge_type == "gap_after") and "in" or "out"
+                        local bracket_width = 8
+                        local bracket_thickness = 2
+                        local bracket_y = clip_y + 5
+                        local edge_color = state_module.colors.edge_selected_available
+
+                        if bracket_type == "in" then
+                            timeline.add_rect(view.widget, edge_x, bracket_y, bracket_thickness, clip_height, edge_color)
+                            timeline.add_rect(view.widget, edge_x, bracket_y, bracket_width, bracket_thickness, edge_color)
+                            timeline.add_rect(view.widget, edge_x, bracket_y + clip_height - bracket_thickness, bracket_width, bracket_thickness, edge_color)
+                        else
+                            timeline.add_rect(view.widget, edge_x - bracket_thickness, bracket_y, bracket_thickness, clip_height, edge_color)
+                            timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y, bracket_width, bracket_thickness, edge_color)
+                            timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y + clip_height - bracket_thickness, bracket_width, bracket_thickness, edge_color)
+                        end
+                    end
                 end
             end
+        else
+            -- When dragging, only preview the dragged edges; otherwise show selected edges
+            local edges_for_preview = selected_edges
+            if view.drag_state and view.drag_state.type == 'edges' and view.drag_state.edges then
+                edges_for_preview = view.drag_state.edges
+            end
 
-            if edge_clip then
-                local clip_y = get_track_y_by_id(edge_clip.track_id, height)
-
-                if clip_y >= 0 then  -- Clip is on a track in this view
-                    local track_height = get_track_visual_height(edge_clip.track_id)
-
-                    -- Apply drag offset to clip boundaries if this edge is being dragged
-                    local edge_key = edge.clip_id .. ":" .. edge.edge_type
-                    local is_dragging = dragging_edge_ids[edge_key]
-
-                    local clip_start = edge_clip.start_time
-                    local clip_duration = edge_clip.duration
-                    local at_limit = false
-
-                    if is_dragging then
-                        -- Adjust clip boundaries based on which edge is being dragged
-                        if edge.edge_type == "in" or edge.edge_type == "gap_before" then
-                            clip_start = clip_start + edge_drag_offset_ms
-                            clip_duration = clip_duration - edge_drag_offset_ms
-                        elseif edge.edge_type == "out" or edge.edge_type == "gap_after" then
-                            clip_duration = clip_duration + edge_drag_offset_ms
-                        end
+            -- Render edge brackets (selection + drag preview) using normalized preview edges
+            local delta_for_preview = edge_drag_offset_ms
+            if view.drag_state and view.drag_state.preview_clamped_delta ~= nil then
+                delta_for_preview = view.drag_state.preview_clamped_delta
+            end
+            local preview_edges = edge_drag_renderer.build_preview_edges(edges_for_preview, delta_for_preview, trim_constraints, state_module.colors)
+            for _, preview in ipairs(preview_edges) do
+                local edge_clip
+                for _, clip in ipairs(all_clips) do
+                    if clip.id == preview.clip_id then
+                        edge_clip = clip
+                        break
                     end
-
-                    local clip_x = state_module.time_to_pixel(clip_start, width)
-                    local clip_width = math.floor((clip_duration / viewport_duration) * width) - 1  -- Match rendering gap
-                    local clip_height = track_height - 10
-
-                    -- Determine edge position and bracket orientation
-                    local edge_x = 0
-                    local has_available_media = false
-                    local bracket_width = 8  -- Width of bracket indicator
-                    local bracket_thickness = 2
-                    local bracket_type = "in"  -- "in" for [, "out" for ]
-                    local is_gap_edge = (edge.edge_type == "gap_after" or edge.edge_type == "gap_before")
-
-                    if edge.edge_type == "in" then
-                        -- Clip's in-point: [ facing right
-                        edge_x = clip_x
-                        bracket_type = "in"
-                        local constraints = trim_constraints[edge_key]
-                        if constraints then
-                            has_available_media = constraints.min_delta < 0
-                            if constraints.min_delta >= 0 then
-                                at_limit = true
-                            end
-                        else
-                            has_available_media = edge_clip.source_in > 0
+                end
+                if edge_clip then
+                    local clip_y = get_track_y_by_id(edge_clip.track_id, height)
+                    if clip_y >= 0 then
+                        local track_height = get_track_visual_height(edge_clip.track_id)
+                        local clip_start = edge_clip.start_time
+                        local clip_duration = edge_clip.duration
+                        if preview.edge_type == "in" or preview.edge_type == "gap_before" then
+                            clip_start = clip_start + preview.delta_ms
+                            clip_duration = clip_duration - preview.delta_ms
+                        elseif preview.edge_type == "out" or preview.edge_type == "gap_after" then
+                            clip_duration = clip_duration + preview.delta_ms
                         end
-                    elseif edge.edge_type == "out" then
-                        -- Clip's out-point: ] facing left
-                        edge_x = clip_x + clip_width
-                        bracket_type = "out"
-                        local constraints = trim_constraints[edge_key]
-                        if constraints then
-                            has_available_media = constraints.max_delta > 0
-                            if constraints.max_delta <= 0 then
-                                at_limit = true
-                            end
-                        else
-                            has_available_media = true
-                        end
-                    elseif edge.edge_type == "gap_before" then
-                        -- Gap's edge before clip: ] facing right (closing towards clip)
-                        edge_x = clip_x
-                        bracket_type = "out"
-                        local constraints = trim_constraints[edge_key]
-                        if constraints then
-                            has_available_media = constraints.max_delta > 0
-                            if constraints.max_delta <= 0 then
-                                at_limit = true
-                            end
-                        else
-                            has_available_media = true  -- Gap always has "space" available
-                        end
-                    elseif edge.edge_type == "gap_after" then
-                        -- Gap's edge after clip: [ facing left (opening into gap)
-                        edge_x = clip_x + clip_width
-                        bracket_type = "in"
-                        local constraints = trim_constraints[edge_key]
-                        if constraints then
-                            has_available_media = constraints.min_delta < 0
-                            if constraints.min_delta >= 0 then
-                                at_limit = true
-                            end
-                        else
-                            has_available_media = true  -- Gap always has "space" available
-                        end
-                    end
 
-                    -- Choose color based on media availability (white if dragging for visibility)
-                    local edge_color
-                    if is_gap_edge then
-                        edge_color = is_dragging and 0xFFFFFFFF or state_module.colors.edge_selected_available
-                    else
-                        if is_dragging then
-                            edge_color = at_limit and state_module.colors.edge_selected_limit or 0xFFFFFFFF
+                        local clip_x = state_module.time_to_pixel(clip_start, width)
+                        local clip_width = math.floor((clip_duration / viewport_duration) * width) - 1
+                        local clip_height = track_height - 10
+                        local edge_x = (preview.edge_type == "in" or preview.edge_type == "gap_before") and clip_x or (clip_x + clip_width)
+                        local bracket_type = (preview.edge_type == "in" or preview.edge_type == "gap_after") and "in" or "out"
+                        local bracket_width = 8
+                        local bracket_thickness = 2
+                        local bracket_y = clip_y + 5
+                        local edge_color = preview.color
+
+                        if bracket_type == "in" then
+                            timeline.add_rect(view.widget, edge_x, bracket_y, bracket_thickness, clip_height, edge_color)
+                            timeline.add_rect(view.widget, edge_x, bracket_y, bracket_width, bracket_thickness, edge_color)
+                            timeline.add_rect(view.widget, edge_x, bracket_y + clip_height - bracket_thickness, bracket_width, bracket_thickness, edge_color)
                         else
-                            edge_color = (not has_available_media or at_limit)
-                                and state_module.colors.edge_selected_limit
-                                or state_module.colors.edge_selected_available
+                            timeline.add_rect(view.widget, edge_x - bracket_thickness, bracket_y, bracket_thickness, clip_height, edge_color)
+                            timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y, bracket_width, bracket_thickness, edge_color)
+                            timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y + clip_height - bracket_thickness, bracket_width, bracket_thickness, edge_color)
                         end
-                    end
-
-                    -- Draw bracket indicator: [ for in point, ] for out point
-                    local bracket_y = clip_y + 5
-
-                    if bracket_type == "in" then
-                        -- Draw [ bracket (opening bracket)
-                        -- Vertical line
-                        timeline.add_rect(view.widget, edge_x, bracket_y,
-                                        bracket_thickness, clip_height, edge_color)
-                        -- Top horizontal
-                        timeline.add_rect(view.widget, edge_x, bracket_y,
-                                        bracket_width, bracket_thickness, edge_color)
-                        -- Bottom horizontal
-                        timeline.add_rect(view.widget, edge_x, bracket_y + clip_height - bracket_thickness,
-                                        bracket_width, bracket_thickness, edge_color)
-                    else  -- "out"
-                        -- Draw ] bracket (closing bracket)
-                        -- Vertical line
-                        timeline.add_rect(view.widget, edge_x - bracket_thickness, bracket_y,
-                                        bracket_thickness, clip_height, edge_color)
-                        -- Top horizontal
-                        timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y,
-                                        bracket_width, bracket_thickness, edge_color)
-                        -- Bottom horizontal
-                        timeline.add_rect(view.widget, edge_x - bracket_width, bracket_y + clip_height - bracket_thickness,
-                                        bracket_width, bracket_thickness, edge_color)
                     end
                 end
             end
         end
-
         draw_mark_overlays()
 
         -- Draw playhead line (vertical line only, triangle is in ruler)
@@ -1519,7 +1477,12 @@ end
             if #clips_at_position > 0 then
                 view.pending_gap_click = nil
 
-                local best_roll_selection, best_roll_pair = find_best_roll_pair(clips_at_position, x, width)
+                local best_roll_selection, best_roll_pair = roll_detector.find_best_roll_pair(
+                    clips_at_position,
+                    x,
+                    width,
+                    state_module.detect_roll_between_clips
+                )
 
                 local target_edges = {}
                 if best_roll_selection and best_roll_pair then
@@ -1533,21 +1496,21 @@ end
                     end
                     half_roll_zone = math.min(half_roll_zone, EDGE_ZONE / 2)
 
-                    local edit_time = best_roll_pair.left_clip.start_time + best_roll_pair.left_clip.duration
+                    local edit_time = best_roll_pair.edit_time
                     local edit_x = state_module.time_to_pixel(edit_time, width)
                     if edit_x and math.abs(x - edit_x) <= half_roll_zone then
                         target_edges = best_roll_selection
                     else
                         if not edit_x or x < edit_x then
                             table.insert(target_edges, {
-                                clip_id = best_roll_pair.left_clip.id,
-                                edge_type = best_roll_pair.left_edge_type,
+                                clip_id = best_roll_pair.left_target.clip_id,
+                                edge_type = best_roll_pair.left_target.edge_type,
                                 trim_type = "ripple"
                             })
                         else
                             table.insert(target_edges, {
-                                clip_id = best_roll_pair.right_clip.id,
-                                edge_type = best_roll_pair.right_edge_type,
+                                clip_id = best_roll_pair.right_target.clip_id,
+                                edge_type = best_roll_pair.right_target.edge_type,
                                 trim_type = "ripple"
                             })
                         end
@@ -1951,7 +1914,12 @@ end
 
                 -- Determine cursor based on edge proximity
                 if #clips_at_position >= 2 then
-                    local best_selection, best_pair, best_score = find_best_roll_pair(clips_at_position, x, width)
+                    local best_selection, best_pair, best_score = roll_detector.find_best_roll_pair(
+                        clips_at_position,
+                        x,
+                        width,
+                        state_module.detect_roll_between_clips
+                    )
                     if best_selection and best_pair then
                         local roll_zone_px = ui_constants.TIMELINE.ROLL_ZONE_PX or (EDGE_ZONE * 2)
                         if roll_zone_px <= 0 then
@@ -1962,7 +1930,7 @@ end
                             half_roll_zone = 1
                         end
                         half_roll_zone = math.min(half_roll_zone, EDGE_ZONE / 2)
-                        local edit_time = best_pair.left_clip.start_time + best_pair.left_clip.duration
+                        local edit_time = best_pair.edit_time
                         local edit_x = state_module.time_to_pixel(edit_time, width)
                         if edit_x and math.abs(x - edit_x) <= half_roll_zone then
                             cursor_type = "split_h"

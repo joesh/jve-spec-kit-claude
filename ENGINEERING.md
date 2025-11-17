@@ -377,3 +377,4 @@ class FFIParameterValidator {
 - NEVER use marketing speak. ALWAYS be truthful
 - always do a push after a ci
 - don't mark tasks complete until i agree
+- When asked to fix a bug, first add a regression test that fails. Only after demonstrating the failure may you implement the fix and verify the test passes.

@@ -83,6 +83,9 @@ local imported_sequence_id = created_sequence_ids[1]
 
 timeline_state.sequence_id = imported_sequence_id
 command_manager.activate_timeline_stack(imported_sequence_id)
+timeline_state.reload_calls = 0
+timeline_state.reload_calls = 0
+timeline_state.reload_calls = 0
 
 local replay_invoked = false
 local original_replay = command_manager.replay_events

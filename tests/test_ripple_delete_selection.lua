@@ -167,6 +167,14 @@ function timeline_state.get_selected_gaps() return timeline_state.selected_gaps 
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
 function timeline_state.reload_clips() reload_state_clips() end
 function timeline_state.persist_state_to_db() end
+function timeline_state.apply_mutations(sequence_id, mutations)
+    if mutations and (mutations.updates or mutations.deletes or mutations.inserts) then
+        reload_state_clips()
+        return true
+    end
+    return false
+end
+function timeline_state.consume_mutation_failure() return nil end
 function timeline_state.get_clips()
     reload_state_clips()
     return timeline_state.clips
