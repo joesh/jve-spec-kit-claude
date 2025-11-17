@@ -192,7 +192,7 @@ local function run_test()
     local xml_path = os.tmpname() .. '.xml'
     write_bad_xml(xml_path)
 
-    local db_path = '/tmp/test_import_bad_xml.db'
+    local db_path = '/tmp/jve/test_import_bad_xml.db'
     local db = init_db(db_path)
 
     local parsed = fcp7_importer.import_xml(xml_path, 'test_project')

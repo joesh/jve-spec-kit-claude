@@ -8,7 +8,7 @@ local command_impl = require("core.command_implementations")
 local timeline_state = require("ui.timeline.timeline_state")
 local Command = require("command")
 
-local TEST_DB = "/tmp/test_delete_sequence.db"
+local TEST_DB = "/tmp/jve/test_delete_sequence.db"
 os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))
@@ -156,7 +156,7 @@ local seed_sql = string.format([[
     VALUES ('track_video_1', 'sequence_to_delete', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
-    VALUES ('media_1', 'default_project', 'Clip Media', '/tmp/clip.mov', 24000, 24.0, 1280, 720, 2, 'h264', %d, %d, '{}');
+    VALUES ('media_1', 'default_project', 'Clip Media', '/tmp/jve/clip.mov', 24000, 24.0, 1280, 720, 2, 'h264', %d, %d, '{}');
 
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
                        start_time, duration, source_in, source_out, enabled, offline, created_at, modified_at)

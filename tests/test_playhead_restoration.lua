@@ -107,7 +107,7 @@ local database = require('core.database')
 print("=== Playhead Restoration Tests ===\n")
 
 -- Setup test database
-local test_db_path = "/tmp/test_playhead_restoration.db"
+local test_db_path = "/tmp/jve/test_playhead_restoration.db"
 os.remove(test_db_path)
 
 database.init(test_db_path)

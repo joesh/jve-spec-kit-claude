@@ -7,7 +7,7 @@ local Command = require('command')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 
-local TEST_DB = "/tmp/test_timeline_mutation_hydration.db"
+local TEST_DB = "/tmp/jve/test_timeline_mutation_hydration.db"
 
 local function setup_db()
     os.remove(TEST_DB)
@@ -105,9 +105,9 @@ local function setup_db()
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
         INSERT INTO media (id, project_id, file_path, name, duration, frame_rate)
-        VALUES ('media_a', 'default_project', '/tmp/a.mov', 'Media A', 4000, 30.0);
+        VALUES ('media_a', 'default_project', '/tmp/jve/a.mov', 'Media A', 4000, 30.0);
         INSERT INTO media (id, project_id, file_path, name, duration, frame_rate)
-        VALUES ('media_b', 'default_project', '/tmp/b.mov', 'Media B', 4000, 30.0);
+        VALUES ('media_b', 'default_project', '/tmp/jve/b.mov', 'Media B', 4000, 30.0);
         INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_time, duration, source_in, source_out, media_id)
         VALUES ('clip_a', 'default_project', 'track_v1', 'default_sequence', 0, 4000, 0, 4000, 'media_a');
         INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_time, duration, source_in, source_out, media_id)

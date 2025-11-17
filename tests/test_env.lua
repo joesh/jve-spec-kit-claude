@@ -49,6 +49,16 @@ end
 ensure_json_helpers()
 ensure_timer_stub()
 
+-- Ensure temp workspace exists for all tests
+do
+    local tmp_root = "/tmp/jve"
+    local ok, err = pcall(function() return os.execute(string.format("mkdir -p %q", tmp_root)) end)
+    if not ok then
+        -- Best-effort; tests that need it will fail loudly otherwise
+        io.stderr:write("WARNING: failed to create ", tmp_root, ": ", tostring(err), "\n")
+    end
+end
+
 -- Force nil calls to raise useful errors (parity with layout.lua)
 local function enforce_nil_call_protection()
     if not debug or not debug.setmetatable then

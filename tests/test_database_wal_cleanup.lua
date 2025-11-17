@@ -68,11 +68,11 @@ package.loaded["core.sqlite3"] = {
 
 local database = require("core.database")
 
-local ok = database.set_path("/tmp/test_wal_cleanup.db")
+local ok = database.set_path("/tmp/jve/test_wal_cleanup.db")
 assert(ok, "database.set_path should succeed after cleaning WAL/SHM files")
 assert(open_calls == 2, "sqlite3.open must be retried after cleanup")
-assert(removed_paths[1] == "/tmp/test_wal_cleanup.db-wal", "first cleanup target should be WAL file")
-assert(removed_paths[2] == "/tmp/test_wal_cleanup.db-shm", "second cleanup target should be SHM file")
+assert(removed_paths[1] == "/tmp/jve/test_wal_cleanup.db-wal", "first cleanup target should be WAL file")
+assert(removed_paths[2] == "/tmp/jve/test_wal_cleanup.db-shm", "second cleanup target should be SHM file")
 
 print("✅ WAL/SHM cleanup logic exercised successfully")
 

@@ -10,7 +10,7 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 
-local TEST_DB = "/tmp/test_timeline_edit_navigation.db"
+local TEST_DB = "/tmp/jve/test_timeline_edit_navigation.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
@@ -127,13 +127,13 @@ db:exec([[
 -- V2: clip_c [1200, 2400), clip_d [5000, 6200)
 db:exec([[
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_a', 'default_project', 'clip_a.mov', '/tmp/clip_a.mov', 1500, 30.0, 0, 0, '{}');
+    VALUES ('media_clip_a', 'default_project', 'clip_a.mov', '/tmp/jve/clip_a.mov', 1500, 30.0, 0, 0, '{}');
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_b', 'default_project', 'clip_b.mov', '/tmp/clip_b.mov', 1500, 30.0, 0, 0, '{}');
+    VALUES ('media_clip_b', 'default_project', 'clip_b.mov', '/tmp/jve/clip_b.mov', 1500, 30.0, 0, 0, '{}');
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_c', 'default_project', 'clip_c.mov', '/tmp/clip_c.mov', 1200, 30.0, 0, 0, '{}');
+    VALUES ('media_clip_c', 'default_project', 'clip_c.mov', '/tmp/jve/clip_c.mov', 1200, 30.0, 0, 0, '{}');
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_d', 'default_project', 'clip_d.mov', '/tmp/clip_d.mov', 1200, 30.0, 0, 0, '{}');
+    VALUES ('media_clip_d', 'default_project', 'clip_d.mov', '/tmp/jve/clip_d.mov', 1200, 30.0, 0, 0, '{}');
 
     INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
     VALUES ('clip_a', 'track_v1', 'media_clip_a', 0, 1500, 0, 1500, 1);

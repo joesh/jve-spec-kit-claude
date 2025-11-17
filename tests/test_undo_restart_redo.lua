@@ -190,7 +190,7 @@ end
 
 print("=== Undo/Restart Redo Regression ===\n")
 
-local DB_PATH = "/tmp/test_undo_restart_redo.db"
+local DB_PATH = "/tmp/jve/test_undo_restart_redo.db"
 
 install_timeline_stub()
 local db = init_database(DB_PATH)

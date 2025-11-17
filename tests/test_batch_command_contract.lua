@@ -14,7 +14,7 @@ local database = require('core.database')
 print("=== BatchCommand Parameter Contract Tests ===\n")
 
 -- Setup test database
-local test_db_path = "/tmp/test_batch_command_contract.db"
+local test_db_path = "/tmp/jve/test_batch_command_contract.db"
 os.remove(test_db_path)  -- Clean slate
 
 database.init(test_db_path)

@@ -7,7 +7,7 @@ local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 local Command = require('command')
 
-local TEST_DB = "/tmp/test_duplicate_master_clip.db"
+local TEST_DB = "/tmp/jve/test_duplicate_master_clip.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
@@ -149,7 +149,7 @@ db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate)
-    VALUES ('media_master', 'default_project', 'Master Source', '/tmp/master.mov', 2000, 24.0);
+    VALUES ('media_master', 'default_project', 'Master Source', '/tmp/jve/master.mov', 2000, 24.0);
     INSERT INTO clips (id, project_id, clip_kind, name, media_id, start_time, duration, source_in, source_out, enabled, offline)
     VALUES ('master_clip', 'default_project', 'master', 'Master Clip', 'media_master', 0, 2000, 0, 2000, 1, 0);
     INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value)

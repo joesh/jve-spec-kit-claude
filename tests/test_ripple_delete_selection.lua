@@ -8,7 +8,7 @@ local command_impl = require('core.command_implementations')
 local Command = require('command')
 local Media = require('models.media')
 
-local TEST_DB = "/tmp/test_ripple_delete_selection.db"
+local TEST_DB = "/tmp/jve/test_ripple_delete_selection.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
@@ -226,7 +226,7 @@ local function create_clip_command(params)
     local media = Media.create({
         id = media_id,
         project_id = 'default_project',
-        file_path = '/tmp/' .. clip_id .. '.mov',
+        file_path = '/tmp/jve/' .. clip_id .. '.mov',
         file_name = clip_id .. '.mov',
         duration = clip_duration,
         frame_rate = 30

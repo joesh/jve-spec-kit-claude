@@ -121,9 +121,9 @@ local function setup_db(path)
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
         INSERT INTO media (id, project_id, file_path, name, duration, frame_rate)
-        VALUES ('media_a', 'default_project', '/tmp/media_a.mov', 'Media A', 4000, 30.0);
+        VALUES ('media_a', 'default_project', '/tmp/jve/media_a.mov', 'Media A', 4000, 30.0);
         INSERT INTO media (id, project_id, file_path, name, duration, frame_rate)
-        VALUES ('media_b', 'default_project', '/tmp/media_b.mov', 'Media B', 4000, 30.0);
+        VALUES ('media_b', 'default_project', '/tmp/jve/media_b.mov', 'Media B', 4000, 30.0);
         INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_time, duration, source_in, source_out, media_id)
         VALUES ('clip_a', 'default_project', 'track_v1', 'default_sequence', 0, 4000, 0, 4000, 'media_a');
         INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_time, duration, source_in, source_out, media_id)
@@ -134,7 +134,7 @@ local function setup_db(path)
     command_manager.init(conn, 'default_sequence', 'default_project')
 end
 
-local TEST_DB = "/tmp/test_ripple_noop.db"
+local TEST_DB = "/tmp/jve/test_ripple_noop.db"
 setup_db(TEST_DB)
 
 local ripple_cmd = Command.create("RippleEdit", "default_project")

@@ -5,7 +5,7 @@ require('test_env')
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 
-local TEST_DB = "/tmp/test_command_manager_sequence_position.db"
+local TEST_DB = "/tmp/jve/test_command_manager_sequence_position.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)

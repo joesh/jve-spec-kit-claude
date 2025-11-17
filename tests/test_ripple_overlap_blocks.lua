@@ -7,7 +7,7 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local SCHEMA_SQL = require("import_schema")
 
-local TEST_DB = "/tmp/test_ripple_overlap_blocks.db"
+local TEST_DB = "/tmp/jve/test_ripple_overlap_blocks.db"
 local function seed_db(db_path)
     os.remove(db_path)
 
@@ -111,7 +111,7 @@ local start_single = run_case(TEST_DB, false)
 assert(start_single == 2000, "single ripple should clamp to avoid overlapping left clip")
 
 -- Batch ripple (single edge in batch path) uses the same clamp rules
-local start_batch = run_case("/tmp/test_ripple_overlap_batch.db", true)
+local start_batch = run_case("/tmp/jve/test_ripple_overlap_batch.db", true)
 assert(start_batch == 2000, "batch ripple should clamp gap-before edges identically to single ripple")
 
 -- Zero-gap: clamp to no movement when clips touch
@@ -133,7 +133,7 @@ local function run_zero_gap(db_path)
     return start_time
 end
 
-local zero_gap_start = run_zero_gap("/tmp/test_ripple_overlap_zero_gap.db")
+local zero_gap_start = run_zero_gap("/tmp/jve/test_ripple_overlap_zero_gap.db")
 assert(zero_gap_start == 2000, "zero-gap ripple should clamp to no movement")
 
 print("✅ Ripple edit clamps to avoid overlapping upstream clip (single and batch)")

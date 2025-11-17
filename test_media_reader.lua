@@ -68,7 +68,7 @@ current_test = "Test 1"
 print("\n" .. current_test .. ": Generate test video file")
 
 -- Generate a simple test video: 5 seconds, 1920x1080, 30fps, with audio
-local test_video_path = "/tmp/test_video_jve.mp4"
+local test_video_path = "/tmp/jve/test_video_jve.mp4"
 local ffmpeg_cmd = string.format(
     'ffmpeg -f lavfi -i testsrc=duration=5:size=1920x1080:rate=30 ' ..
     '-f lavfi -i sine=frequency=440:duration=5 ' ..
@@ -121,7 +121,7 @@ end
 current_test = "Test 3"
 print("\n" .. current_test .. ": Error handling for nonexistent file")
 
-local metadata_bad, err_bad = media_reader.probe_file("/tmp/nonexistent_file_xyz.mp4")
+local metadata_bad, err_bad = media_reader.probe_file("/tmp/jve/nonexistent_file_xyz.mp4")
 assert_eq(metadata_bad, nil, "Returns nil for nonexistent file")
 assert_not_nil(err_bad, "Returns error message")
 print(string.format("  Error message: %s", err_bad))
@@ -142,7 +142,7 @@ assert_not_nil(err_empty, "Returns error message")
 current_test = "Test 5"
 print("\n" .. current_test .. ": Probe audio-only file")
 
-local test_audio_path = "/tmp/test_audio_jve.wav"
+local test_audio_path = "/tmp/jve/test_audio_jve.wav"
 local ffmpeg_audio_cmd = string.format(
     'ffmpeg -f lavfi -i sine=frequency=440:duration=3 ' ..
     '-c:a pcm_s16le -y "%s" 2>/dev/null',
@@ -214,7 +214,7 @@ print("\n" .. current_test .. ": Batch import multiple files")
 
 local batch_db = {saved_media = {}}
 local results = media_reader.batch_import_media(
-    {test_video_path, test_audio_path, "/tmp/nonexistent.mp4"},
+    {test_video_path, test_audio_path, "/tmp/jve/nonexistent.mp4"},
     batch_db,
     "test_project"
 )

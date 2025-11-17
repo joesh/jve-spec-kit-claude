@@ -189,7 +189,7 @@ local function ensure_media_record(db, media_id, duration)
     local media = Media.create({
         id = media_id,
         project_id = "project",
-        file_path = "/tmp/" .. media_id .. ".mov",
+        file_path = "/tmp/jve/" .. media_id .. ".mov",
         file_name = media_id .. ".mov",
         name = media_id .. ".mov",
         duration = duration,
@@ -201,7 +201,7 @@ end
 
 print("=== Clip Occlusion Tests ===\n")
 
-local db_path = "/tmp/test_clip_occlusion.db"
+local db_path = "/tmp/jve/test_clip_occlusion.db"
 local db = setup_db(db_path)
 
 ensure_media_record(db, "media_A", 4000)
@@ -413,7 +413,7 @@ print("Test 4: Ripple clamp respects media duration")
 local media_row = Media.create({
     id = "media_ripple",
     project_id = "project",
-    file_path = "/tmp/media_ripple.mov",
+    file_path = "/tmp/jve/media_ripple.mov",
     file_name = "media_ripple.mov",
     duration = 5000,
     frame_rate = 30.0
@@ -451,9 +451,9 @@ assert(ripple_after.source_out == 5000, "source_out should match media duration 
 print("✅ RippleEdit clamps extension to media duration")
 
 print("Test 5: Insert splits overlapping clip")
-local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/base.mov", file_name = "base.mov", duration = 6000, frame_rate = 30})
+local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", file_name = "base.mov", duration = 6000, frame_rate = 30})
 assert(base_media:save(db), "failed to save base media")
-local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/new.mov", file_name = "new.mov", duration = 1000, frame_rate = 30})
+local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", file_name = "new.mov", duration = 1000, frame_rate = 30})
 assert(new_media:save(db), "failed to save new media")
 
 local base_clip = Clip.create("Base Split", "media_split_base")
@@ -507,7 +507,7 @@ print("Test 6: Gap trim clamps against upstream clip")
 local gap_media_up = Media.create({
     id = "media_gap_up",
     project_id = "project",
-    file_path = "/tmp/gap_up.mov",
+    file_path = "/tmp/jve/gap_up.mov",
     name = "gap_up.mov",
     duration = 10000,
     frame_rate = 30
@@ -517,7 +517,7 @@ assert(gap_media_up:save(db), "failed saving gap upstream media")
 local gap_media_down = Media.create({
     id = "media_gap_down",
     project_id = "project",
-    file_path = "/tmp/gap_down.mov",
+    file_path = "/tmp/jve/gap_down.mov",
     name = "gap_down.mov",
     duration = 8000,
     frame_rate = 30
@@ -643,7 +643,7 @@ print("Test 10: Track1 gap ripple matches UI scenario")
 db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
           VALUES ('track_v6', 'sequence', 'V6', 'VIDEO', 6, 1)]])
 
-local gap_track_media = Media.create({id = "media_gap_track", project_id = "project", file_path = "/tmp/gap_track.mov", name = "gap_track.mov", duration = 4543567, frame_rate = 30})
+local gap_track_media = Media.create({id = "media_gap_track", project_id = "project", file_path = "/tmp/jve/gap_track.mov", name = "gap_track.mov", duration = 4543567, frame_rate = 30})
 assert(gap_track_media:save(db), "failed to save track gap media")
 
 local track_clip1 = Clip.create("Track Clip 1", "media_gap_track")
@@ -723,7 +723,7 @@ print("Test 12: Gap selection normalizes after closure")
 local selection_media_left = Media.create({
     id = "media_gap_selection_left",
     project_id = "project",
-    file_path = "/tmp/gap_selection_left.mov",
+    file_path = "/tmp/jve/gap_selection_left.mov",
     name = "gap_selection_left.mov",
     duration = 8000,
     frame_rate = 30
@@ -733,7 +733,7 @@ assert(selection_media_left:save(db), "failed saving selection upstream media")
 local selection_media_right = Media.create({
     id = "media_gap_selection_right",
     project_id = "project",
-    file_path = "/tmp/gap_selection_right.mov",
+    file_path = "/tmp/jve/gap_selection_right.mov",
     name = "gap_selection_right.mov",
     duration = 6000,
     frame_rate = 30
@@ -832,7 +832,7 @@ db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, en
 local multi_media = Media.create({
     id = "media_multi_gap",
     project_id = "project",
-    file_path = "/tmp/media_multi_gap.mov",
+    file_path = "/tmp/jve/media_multi_gap.mov",
     name = "media_multi_gap.mov",
     duration = 20000,
     frame_rate = 30
@@ -905,7 +905,7 @@ db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, en
 local clamp_media = Media.create({
     id = "media_gap_clamp",
     project_id = "project",
-    file_path = "/tmp/media_gap_clamp.mov",
+    file_path = "/tmp/jve/media_gap_clamp.mov",
     name = "media_gap_clamp.mov",
     duration = 30000,
     frame_rate = 30
@@ -959,7 +959,7 @@ print("Test 14c: Mixed clip+gap ripple clamps to available gap")
 local mixed_media = Media.create({
     id = "media_gap_mixed",
     project_id = "project",
-    file_path = "/tmp/media_gap_mixed.mov",
+    file_path = "/tmp/jve/media_gap_mixed.mov",
     name = "media_gap_mixed.mov",
     duration = 20000,
     frame_rate = 30
@@ -1006,7 +1006,7 @@ print("Test 14d: Multiple gap_before collapse clamps to available gaps")
 local multi_gap_media = Media.create({
     id = "media_gap_chain",
     project_id = "project",
-    file_path = "/tmp/media_gap_chain.mov",
+    file_path = "/tmp/jve/media_gap_chain.mov",
     name = "media_gap_chain.mov",
     duration = 30000,
     frame_rate = 30
@@ -1067,7 +1067,7 @@ db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, en
 local delete_media = Media.create({
     id = "media_ripple_delete",
     project_id = "project",
-    file_path = "/tmp/media_ripple_delete.mov",
+    file_path = "/tmp/jve/media_ripple_delete.mov",
     name = "media_ripple_delete.mov",
     duration = 10000,
     frame_rate = 30
@@ -1099,9 +1099,9 @@ assert(stmt_delete:value(0) == 0, "clip should be deleted when ripple duration f
 print("✅ Ripple trim deletes clip when duration collapses")
 
 print("Test 15: Overwrite reuses clip ID for downstream commands")
-local overwrite_media = Media.create({id = "media_overwrite_src", project_id = "project", file_path = "/tmp/overwrite_src.mov", file_name = "overwrite_src.mov", duration = 4000, frame_rate = 30})
+local overwrite_media = Media.create({id = "media_overwrite_src", project_id = "project", file_path = "/tmp/jve/overwrite_src.mov", file_name = "overwrite_src.mov", duration = 4000, frame_rate = 30})
 assert(overwrite_media:save(db), "failed to save overwrite source media")
-local overwrite_replacement = Media.create({id = "media_overwrite_new", project_id = "project", file_path = "/tmp/overwrite_new.mov", file_name = "overwrite_new.mov", duration = 1500, frame_rate = 30})
+local overwrite_replacement = Media.create({id = "media_overwrite_new", project_id = "project", file_path = "/tmp/jve/overwrite_new.mov", file_name = "overwrite_new.mov", duration = 1500, frame_rate = 30})
 assert(overwrite_replacement:save(db), "failed to save overwrite replacement media")
 
 local overwrite_clip = Clip.create("Overwrite Target", "media_overwrite_src")

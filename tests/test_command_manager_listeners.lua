@@ -99,7 +99,7 @@ local function create_schema(db)
     ]])
 end
 
-local db_path = "/tmp/test_command_manager_listeners.db"
+local db_path = "/tmp/jve/test_command_manager_listeners.db"
 os.remove(db_path)
 assert(database.init(db_path))
 local db = database.get_connection()

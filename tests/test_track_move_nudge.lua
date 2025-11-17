@@ -14,7 +14,7 @@ local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 local Command = require('command')
 
-local TEST_DB = "/tmp/test_track_move_nudge.db"
+local TEST_DB = "/tmp/jve/test_track_move_nudge.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
@@ -134,11 +134,11 @@ local nudge_amount_ms = 2000
 
 db:exec(string.format([[
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_dest', 'default_project', 'clip_dest.mov', '/tmp/clip_dest.mov', 2500, 30.0, 0, 0, '{}');
+    VALUES ('media_dest', 'default_project', 'clip_dest.mov', '/tmp/jve/clip_dest.mov', 2500, 30.0, 0, 0, '{}');
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_keep', 'default_project', 'clip_keep.mov', '/tmp/clip_keep.mov', 2000, 30.0, 0, 0, '{}');
+    VALUES ('media_keep', 'default_project', 'clip_keep.mov', '/tmp/jve/clip_keep.mov', 2000, 30.0, 0, 0, '{}');
     INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_move', 'default_project', 'clip_move.mov', '/tmp/clip_move.mov', %d, 30.0, 0, 0, '{}');
+    VALUES ('media_move', 'default_project', 'clip_move.mov', '/tmp/jve/clip_move.mov', %d, 30.0, 0, 0, '{}');
 ]], clip_move_duration))
 
 db:exec(string.format([[

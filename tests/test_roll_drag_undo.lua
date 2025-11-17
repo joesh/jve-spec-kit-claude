@@ -26,9 +26,9 @@ local function init_database(path)
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
         VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 0, 0);
         INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES ('media_a', 'default_project', 'A', '/tmp/a.mov', 10000, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        VALUES ('media_a', 'default_project', 'A', '/tmp/jve/a.mov', 10000, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
         INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES ('media_b', 'default_project', 'B', '/tmp/b.mov', 10000, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        VALUES ('media_b', 'default_project', 'B', '/tmp/jve/b.mov', 10000, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
                            start_time, duration, source_in, source_out, enabled, offline, created_at, modified_at)
         VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_a', 'default_sequence',
@@ -41,7 +41,7 @@ local function init_database(path)
     return db
 end
 
-local TEST_DB = "/tmp/test_roll_drag_undo.db"
+local TEST_DB = "/tmp/jve/test_roll_drag_undo.db"
 local db = init_database(TEST_DB)
 command_manager.init(db, "default_sequence", "default_project")
 command_manager.activate_timeline_stack("default_sequence")

@@ -250,7 +250,7 @@ local function create_media_record(media_id, duration)
     local media = Media.create({
         id = media_id,
         project_id = 'default_project',
-        file_path = '/tmp/' .. media_id .. '.mov',
+        file_path = '/tmp/jve/' .. media_id .. '.mov',
         file_name = media_id .. '.mov',
         duration = duration,
         frame_rate = 24
@@ -296,7 +296,7 @@ end
 -- Test 1: Basic copy/paste + undo
 ----------------------------------------------------------------------
 
-local TEST_DB = "/tmp/test_clipboard_timeline_basic.db"
+local TEST_DB = "/tmp/jve/test_clipboard_timeline_basic.db"
 setup_database(TEST_DB)
 
 insert_clip_via_command({
@@ -350,7 +350,7 @@ print("✅ Timeline clipboard copy/paste duplicates clips at the playhead and un
 -- Test 2: Undo/Redo regression - downstream clip must stay put
 ----------------------------------------------------------------------
 
-local REGRESSION_DB = "/tmp/test_clipboard_timeline_regression.db"
+local REGRESSION_DB = "/tmp/jve/test_clipboard_timeline_regression.db"
 setup_database(REGRESSION_DB)
 
 -- Build baseline timeline with multiple commands (mirrors real-world history)
@@ -417,7 +417,7 @@ print("✅ Redo after timeline clipboard paste preserves downstream clips on oth
 -- Test 3: Cut emits timeline mutations without forcing reload
 ----------------------------------------------------------------------
 
-local CUT_DB = "/tmp/test_clipboard_cut_mutations.db"
+local CUT_DB = "/tmp/jve/test_clipboard_cut_mutations.db"
 setup_database(CUT_DB)
 
 insert_clip_via_command({
@@ -445,7 +445,7 @@ print("✅ Cut emits delete mutations and keeps timeline cache hot")
 -- Test 4: RippleDeleteSelection emits delete/update mutations + undo inserts
 ----------------------------------------------------------------------
 
-local RIPPLE_DB = "/tmp/test_clipboard_ripple_delete.db"
+local RIPPLE_DB = "/tmp/jve/test_clipboard_ripple_delete.db"
 setup_database(RIPPLE_DB)
 
 insert_clip_via_command({

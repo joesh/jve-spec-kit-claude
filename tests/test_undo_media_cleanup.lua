@@ -15,7 +15,7 @@ local Media = require('models.media')
 print("=== Undo Media Cleanup Tests ===\n")
 
 -- Setup test database
-local test_db_path = "/tmp/test_undo_media_cleanup.db"
+local test_db_path = "/tmp/jve/test_undo_media_cleanup.db"
 os.remove(test_db_path)
 
 database.init(test_db_path)

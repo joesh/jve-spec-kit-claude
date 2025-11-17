@@ -45,7 +45,7 @@ local function row_count(db, sql, value)
     return count
 end
 
-local db_path = "/tmp/test_command_manager_replay_initial_state.db"
+local db_path = "/tmp/jve/test_command_manager_replay_initial_state.db"
 os.remove(db_path)
 assert(database.init(db_path))
 local db = database.get_connection()

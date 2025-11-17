@@ -131,11 +131,11 @@ VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
     return conn
 end
 
-local db = setup_db("/tmp/test_ripple_redo_integrity.db")
+local db = setup_db("/tmp/jve/test_ripple_redo_integrity.db")
 
 local media_cmd = Command.create("TestCreateMedia", "default_project")
 media_cmd:set_parameter("media_id", "media_src")
-media_cmd:set_parameter("file_path", "/tmp/media_src.mov")
+media_cmd:set_parameter("file_path", "/tmp/jve/media_src.mov")
 media_cmd:set_parameter("file_name", "Test Media")
 media_cmd:set_parameter("duration", 10000000)
 media_cmd:set_parameter("frame_rate", 30)
@@ -241,11 +241,11 @@ assert(ok, mismatch or "Redo clip state differs from original post-ripple state"
 print("✅ Ripple redo preserves clip deletions")
 
 -- Regression: extending a clip keeps the downstream neighbour adjacent (no gaps)
-db = setup_db("/tmp/test_ripple_gap_alignment.db")
+db = setup_db("/tmp/jve/test_ripple_gap_alignment.db")
 
 media_cmd = Command.create("TestCreateMedia", "default_project")
 media_cmd:set_parameter("media_id", "media_src")
-media_cmd:set_parameter("file_path", "/tmp/media_src.mov")
+media_cmd:set_parameter("file_path", "/tmp/jve/media_src.mov")
 media_cmd:set_parameter("file_name", "Test Media")
 media_cmd:set_parameter("duration", 10000000)
 media_cmd:set_parameter("frame_rate", 30)

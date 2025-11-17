@@ -120,7 +120,7 @@ local function reset_log()
 end
 
 stub_timeline_state()
-local db_path = "/tmp/test_branching_after_undo.db"
+local db_path = "/tmp/jve/test_branching_after_undo.db"
 init_db(db_path)
 
 register_test_command()

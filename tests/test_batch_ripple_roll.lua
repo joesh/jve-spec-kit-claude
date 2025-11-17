@@ -8,7 +8,7 @@ local command_impl = require("core.command_implementations")
 local timeline_state = require("ui.timeline.timeline_state")
 local Command = require("command")
 
-local TEST_DB = "/tmp/test_batch_ripple_roll.db"
+local TEST_DB = "/tmp/jve/test_batch_ripple_roll.db"
 os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))

@@ -137,7 +137,7 @@ local function create_clip(id, track_id, start_time, duration)
     assert(media_stmt:bind_value(1, media_id))
     assert(media_stmt:bind_value(2, "default_project"))
     assert(media_stmt:bind_value(3, id .. ".mov"))
-    assert(media_stmt:bind_value(4, "/tmp/" .. id .. ".mov"))
+    assert(media_stmt:bind_value(4, "/tmp/jve/" .. id .. ".mov"))
     assert(media_stmt:bind_value(5, duration))
     assert(media_stmt:bind_value(6, 30.0))
     assert(media_stmt:exec())
@@ -188,7 +188,7 @@ local function clip_exists_at(track_id, start_time)
     return exists
 end
 
-local TEST_DB = "/tmp/test_blade_command.db"
+local TEST_DB = "/tmp/jve/test_blade_command.db"
 local db = setup_db(TEST_DB)
 
 database.init(TEST_DB) -- ensure database module uses this db

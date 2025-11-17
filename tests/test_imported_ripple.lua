@@ -394,7 +394,7 @@ print("=== Imported Timeline Ripple Regression ===\n")
 local CLIP_CASES = {1, 5, 10}
 
 for _, clip_index in ipairs(CLIP_CASES) do
-    local db_path = string.format("/tmp/test_imported_ripple_case_%d.db", clip_index)
+    local db_path = string.format("/tmp/jve/test_imported_ripple_case_%d.db", clip_index)
     local db, sequence_id = import_fixture(db_path)
     assert_import_invariants(db, sequence_id)
 

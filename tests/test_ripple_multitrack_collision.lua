@@ -8,7 +8,7 @@ local Command = require("command")
 local SCHEMA_SQL = require("import_schema")
 
 local function setup()
-    local db_path = "/tmp/test_ripple_multitrack_collision.db"
+    local db_path = "/tmp/jve/test_ripple_multitrack_collision.db"
     os.remove(db_path)
     assert(database.init(db_path))
     local db = database.get_connection()

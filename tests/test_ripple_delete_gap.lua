@@ -9,7 +9,7 @@ local Command = require('command')
 local Clip = require('models.clip')
 local Media = require('models.media')
 
-local TEST_DB = "/tmp/test_ripple_delete_gap.db"
+local TEST_DB = "/tmp/jve/test_ripple_delete_gap.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
@@ -124,7 +124,7 @@ local function ensure_media(id, duration)
         id = id,
         project_id = 'default_project',
         name = id,
-        file_path = '/tmp/' .. id .. '.mov',
+        file_path = '/tmp/jve/' .. id .. '.mov',
         duration = duration,
         frame_rate = 30,
         width = 1920,

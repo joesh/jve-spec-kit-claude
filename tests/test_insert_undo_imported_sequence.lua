@@ -12,7 +12,7 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
 
-local TEST_DB = "/tmp/test_insert_undo_imported_sequence.db"
+local TEST_DB = "/tmp/jve/test_insert_undo_imported_sequence.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)

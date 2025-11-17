@@ -145,7 +145,7 @@ end
 
 print("=== ImportMedia Command Tests ===\n")
 
-local test_db_path = "/tmp/test_import_media_command.db"
+local test_db_path = "/tmp/jve/test_import_media_command.db"
 os.remove(test_db_path)
 
 assert(database.init(test_db_path))
@@ -212,7 +212,7 @@ end
 
 -- Execute ImportMedia
 local import_cmd = Command.create("ImportMedia", "test_project")
-import_cmd:set_parameter("file_path", "/tmp/test_source.mov")
+import_cmd:set_parameter("file_path", "/tmp/jve/test_source.mov")
 
 local result = command_manager.execute(import_cmd)
 assert(result.success, "ImportMedia command failed to execute")

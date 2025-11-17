@@ -7,7 +7,7 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local SCHEMA_SQL = require("import_schema")
 
-local TEST_DB = "/tmp/test_batch_ripple_clamped_noop.db"
+local TEST_DB = "/tmp/jve/test_batch_ripple_clamped_noop.db"
 os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))

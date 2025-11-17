@@ -56,7 +56,7 @@ local function scalar(db, sql, value)
     return result
 end
 
-local tmp_db = "/tmp/test_import_undo_removes_sequence.db"
+local tmp_db = "/tmp/jve/test_import_undo_removes_sequence.db"
 os.remove(tmp_db)
 assert(database.init(tmp_db))
 local db = database.get_connection()

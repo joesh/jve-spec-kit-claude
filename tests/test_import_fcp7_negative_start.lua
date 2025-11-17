@@ -5,7 +5,7 @@ require('test_env')
 local database = require('core.database')
 local importer = require('importers.fcp7_xml_importer')
 
-local TEST_DB = "/tmp/test_import_fcp7_negative_start.db"
+local TEST_DB = "/tmp/jve/test_import_fcp7_negative_start.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)

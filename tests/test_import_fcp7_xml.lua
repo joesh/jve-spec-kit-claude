@@ -10,7 +10,7 @@ local json = require("dkjson")
 local sqlite3 = require("core.sqlite3")
 local fcp7_importer = require("importers.fcp7_xml_importer")
 
-local TEST_DB = "/tmp/test_import_fcp7_xml.db"
+local TEST_DB = "/tmp/jve/test_import_fcp7_xml.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
@@ -377,7 +377,7 @@ assert(assigned_count == master_clip_count,
 -- Regression: importing the anamnesis fixture must assign AUDIO/VIDEO track types.
 local anamnesis_fixture = "fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
 local anamnesis_path = resolve_fixture(anamnesis_fixture)
-local scratch_db_path = "/tmp/test_import_fcp7_xml_anamnesis.db"
+local scratch_db_path = "/tmp/jve/test_import_fcp7_xml_anamnesis.db"
 os.remove(scratch_db_path)
 local scratch_db = sqlite3.open(scratch_db_path)
 assert(scratch_db, "Failed to open scratch database copy")

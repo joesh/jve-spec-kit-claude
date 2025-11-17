@@ -64,7 +64,7 @@ end
 
 print("=== Insert Command Property Propagation Tests ===")
 
-local db_path = "/tmp/test_insert_properties.db"
+local db_path = "/tmp/jve/test_insert_properties.db"
 os.remove(db_path)
 
 assert(database.init(db_path))
@@ -213,7 +213,7 @@ media_reader.import_media = function(_, _, _, existing_media_id)
 end
 
 local import_cmd = Command.create("ImportMedia", "test_project")
-import_cmd:set_parameter("file_path", "/tmp/media.mov")
+import_cmd:set_parameter("file_path", "/tmp/jve/media.mov")
 import_cmd:set_parameter("project_id", "test_project")
 
 local import_result = command_manager.execute(import_cmd)

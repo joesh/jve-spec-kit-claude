@@ -7,7 +7,7 @@ local command_manager = require("core.command_manager")
 local timeline_state = require("ui.timeline.timeline_state")
 local Command = require("command")
 
-local TEST_DB = "/tmp/test_roll_trim_behavior.db"
+local TEST_DB = "/tmp/jve/test_roll_trim_behavior.db"
 os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))

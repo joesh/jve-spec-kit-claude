@@ -10,7 +10,7 @@ local Media = require('models.media')
 local Clip = require('models.clip')
 local timeline_state = require('ui.timeline.timeline_state')
 
-local TEST_DB = "/tmp/test_ripple_delete_playhead.db"
+local TEST_DB = "/tmp/jve/test_ripple_delete_playhead.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
@@ -124,7 +124,7 @@ local function create_media(id, duration)
     local media = Media.create({
         id = id,
         project_id = 'default_project',
-        file_path = '/tmp/' .. id .. '.mov',
+        file_path = '/tmp/jve/' .. id .. '.mov',
         name = id .. '.mov',
         duration = duration,
         frame_rate = 30,

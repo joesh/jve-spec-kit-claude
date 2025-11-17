@@ -128,7 +128,7 @@ local function create_clip(params)
     local media = Media.create({
         id = params.media_id,
         project_id = 'default_project',
-        file_path = '/tmp/' .. params.media_id .. '.mov',
+        file_path = '/tmp/jve/' .. params.media_id .. '.mov',
         file_name = params.media_id .. '.mov',
         duration = params.duration,
         frame_rate = 30,
@@ -150,7 +150,7 @@ local function create_clip(params)
     return clip
 end
 
-local SINGLE_DB = "/tmp/test_option_drag_duplicate_single.db"
+local SINGLE_DB = "/tmp/jve/test_option_drag_duplicate_single.db"
 setup_database(SINGLE_DB)
 
 create_clip({clip_id = 'clip_src', media_id = 'media_src', track_id = 'video1', start_time = 0, duration = 1000})
@@ -187,7 +187,7 @@ assert(duplicate_count == 1, string.format('Expected exactly one duplicated clip
 print('✅ Option-drag duplicate preserved downstream alignment (single clip)')
 
 -- Multi-clip duplicate regression: ensure BatchCommand of Overwrite specs leaves downstream clips untouched.
-local MULTI_DB = "/tmp/test_option_drag_duplicate_multi.db"
+local MULTI_DB = "/tmp/jve/test_option_drag_duplicate_multi.db"
 setup_database(MULTI_DB)
 
 create_clip({clip_id = 'clip_src_a', media_id = 'media_src_a', track_id = 'video1', start_time = 0, duration = 1000})
