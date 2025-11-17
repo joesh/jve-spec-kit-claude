@@ -4881,10 +4881,38 @@ local function calculate_gap_ripple_delta_range(clip, edge_type, all_clips, sequ
     end
 
     local span = math.max(duration, 0)
-    if edge_type == "out" and span > 0 and (not min_delta or min_delta > -span) then
-        min_delta = -span
-    elseif edge_type == "in" and span > 0 and (not max_delta or max_delta < span) then
-        max_delta = span
+    if edge_type == "out" and span > 0 then
+        -- Do not allow closing past the actual gap length, but also respect any stricter neighbour limit.
+        local gap_floor = -span
+
+        -- Cross-track guard: find the tightest downstream gap on any track and prevent closing past it.
+        local min_gap = span
+        for _, downstream in ipairs(all_clips or {}) do
+            if downstream.start_time and downstream.start_time >= ripple_time then
+                local left_end = 0
+                for _, candidate in ipairs(all_clips or {}) do
+                    if candidate.track_id == downstream.track_id and candidate.start_time and candidate.duration then
+                        local candidate_end = candidate.start_time + candidate.duration
+                        if candidate_end <= downstream.start_time and candidate_end > left_end then
+                            left_end = candidate_end
+                        end
+                    end
+                end
+                local gap_between = downstream.start_time - left_end
+                if gap_between < min_gap then
+                    min_gap = gap_between
+                end
+            end
+        end
+        local downstream_floor = -min_gap
+
+        min_delta = math.max(min_delta or gap_floor, gap_floor, downstream_floor)
+    elseif edge_type == "in" and span > 0 then
+        -- Symmetric guard for gap_after trims.
+        local gap_ceiling = span
+        if not max_delta or max_delta > gap_ceiling then
+            max_delta = gap_ceiling
+        end
     end
 
     if min_delta == 0 and edge_type == "out" then
