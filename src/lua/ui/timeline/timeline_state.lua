@@ -66,6 +66,7 @@ local state = {
     clips = {},   -- All clips from database
     project_id = "default_project",
     sequence_frame_rate = frame_utils.default_frame_rate,
+    sequence_audio_rate = 48000,
     sequence_timecode_start = 0,
 
     -- Logical viewport (time-based, not pixel-based)
