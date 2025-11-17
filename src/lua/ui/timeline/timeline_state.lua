@@ -165,6 +165,24 @@ local function hydrate_clip_from_database(clip_id, expected_sequence_id)
     return clip
 end
 
+local function clone_clip_snapshot(clip)
+    if not clip then
+        return nil
+    end
+    return {
+        id = clip.id,
+        track_id = clip.track_id,
+        owner_sequence_id = clip.owner_sequence_id,
+        track_sequence_id = clip.track_sequence_id,
+        media_id = clip.media_id,
+        start_time = clip.start_time,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out,
+        enabled = clip.enabled
+    }
+end
+
 local function ensure_clip_indexes()
     if clip_indexes_dirty then
         rebuild_clip_indexes()
@@ -453,29 +471,7 @@ local function normalize_edge_selection()
         if clip then
             local new_edge_type = edge.edge_type
             local new_clip_id = clip.id
-            if edge.edge_type == "gap_after" then
-                local gap = compute_gap_after(clip)
-                if gap and gap <= 0 then
-                    local neighbour = find_next_clip(clip)
-                    if neighbour then
-                        new_clip_id = neighbour.id
-                        new_edge_type = "in"
-                    else
-                        new_edge_type = "in"
-                    end
-                end
-            elseif edge.edge_type == "gap_before" then
-                local gap = compute_gap_before(clip)
-                if gap and gap <= 0 then
-                    local neighbour = find_previous_clip(clip)
-                    if neighbour then
-                        new_clip_id = neighbour.id
-                        new_edge_type = "out"
-                    else
-                        new_edge_type = "out"
-                    end
-                end
-            end
+            -- Keep gap edges as-is; even if gap is zero, maintain the original edge selection.
 
             local key = new_clip_id .. ":" .. new_edge_type
             if not seen[key] then
@@ -1072,6 +1068,201 @@ function M.get_clips()
     return state.clips
 end
 
+function M.get_clips_for_track(track_id)
+    if not track_id then
+        return {}
+    end
+    ensure_clip_indexes()
+    local list = track_clip_index[track_id]
+    if not list then
+        return {}
+    end
+    local clones = {}
+    for _, clip in ipairs(list) do
+        clones[#clones + 1] = clone_clip_snapshot(clip)
+    end
+    return clones
+end
+
+function M.get_track_clip_windows(sequence_id)
+    local windows = {}
+    if not sequence_id or sequence_id ~= state.sequence_id then
+        return windows
+    end
+    ensure_clip_indexes()
+    for track, clips in pairs(track_clip_index) do
+        local clone_list = {}
+        for _, clip in ipairs(clips) do
+            clone_list[#clone_list + 1] = clone_clip_snapshot(clip)
+        end
+        windows[track] = clone_list
+    end
+    return windows
+end
+
+local function normalize_clip_id_list(clip_ids)
+    local selection = {}
+    if type(clip_ids) ~= "table" then
+        return selection
+    end
+
+    local function add_id(value)
+        if type(value) == "string" and value ~= "" then
+            selection[value] = true
+        end
+    end
+
+    if #clip_ids > 0 then
+        for _, value in ipairs(clip_ids) do
+            if type(value) == "table" then
+                add_id(value.clip_id)
+                add_id(value.id)
+            else
+                add_id(value)
+            end
+        end
+    else
+        for key, value in pairs(clip_ids) do
+            if type(key) == "string" and value then
+                add_id(key)
+            elseif type(value) == "table" then
+                add_id(value.clip_id)
+                add_id(value.id)
+            end
+        end
+    end
+
+    return selection
+end
+
+function M.describe_track_neighbors(sequence_id, clip_ids)
+    local metadata = {}
+    if not sequence_id or sequence_id ~= state.sequence_id then
+        return metadata
+    end
+    ensure_clip_indexes()
+
+    local selection = normalize_clip_id_list(clip_ids)
+    if next(selection) == nil then
+        return metadata
+    end
+
+    local clip_ids_by_track = {}
+    for clip_id in pairs(selection) do
+        local clip = lookup_clip(clip_id)
+        if clip and clip.track_id then
+            local track_info = clip_track_positions[clip.id]
+            if track_info then
+                local entry = metadata[clip.track_id]
+                if not entry then
+                    entry = {
+                        track_id = clip.track_id,
+                        sequence_id = clip.owner_sequence_id or clip.track_sequence_id or state.sequence_id,
+                        indices = {},
+                        selected = {},
+                        per_clip = {}
+                    }
+                    metadata[clip.track_id] = entry
+                end
+                table.insert(entry.indices, track_info.index)
+                table.insert(entry.selected, clone_clip_snapshot(clip))
+                clip_ids_by_track[clip.track_id] = clip_ids_by_track[clip.track_id] or {}
+                table.insert(clip_ids_by_track[clip.track_id], clip.id)
+            end
+        end
+    end
+
+    for track_id, entry in pairs(metadata) do
+        table.sort(entry.indices)
+        local list = track_clip_index[track_id] or {}
+        local first_index = entry.indices[1]
+        local last_index = entry.indices[#entry.indices]
+
+        local left_neighbor = nil
+        if first_index and first_index > 1 then
+            for idx = first_index - 1, 1, -1 do
+                local candidate = list[idx]
+                if candidate and not selection[candidate.id] then
+                    left_neighbor = candidate
+                    break
+                end
+            end
+        end
+
+        local right_neighbor = nil
+        if last_index and last_index < #list then
+            for idx = last_index + 1, #list do
+                local candidate = list[idx]
+                if candidate and not selection[candidate.id] then
+                    right_neighbor = candidate
+                    break
+                end
+            end
+        end
+
+        entry.left_neighbor = left_neighbor and clone_clip_snapshot(left_neighbor) or nil
+        entry.right_neighbor = right_neighbor and clone_clip_snapshot(right_neighbor) or nil
+
+        local window_start = first_index or 1
+        local window_end = last_index or window_start
+        if left_neighbor then
+            window_start = math.max(1, window_start - 1)
+        end
+        if right_neighbor then
+            window_end = math.min(#list, window_end + 1)
+        end
+
+        local window = {}
+        for idx = window_start, window_end do
+            local clip = list[idx]
+            if clip then
+                window[#window + 1] = clone_clip_snapshot(clip)
+            end
+        end
+        entry.window = window
+
+        local first_clip = list[first_index or window_start]
+        local last_clip = list[last_index or window_end]
+        entry.block_start = first_clip and first_clip.start_time or 0
+        if last_clip then
+            entry.block_end = (last_clip.start_time or 0) + (last_clip.duration or 0)
+        else
+            entry.block_end = entry.block_start
+        end
+
+        if clip_ids_by_track[track_id] then
+            for _, clip_id in ipairs(clip_ids_by_track[track_id]) do
+                local info = clip_track_positions[clip_id]
+                if info then
+                    local idx = info.index
+                    local left = nil
+                    for scan = idx - 1, 1, -1 do
+                        local candidate = list[scan]
+                        if candidate and not selection[candidate.id] then
+                            left = candidate
+                            break
+                        end
+                    end
+                    local right = nil
+                    for scan = idx + 1, #list do
+                        local candidate = list[scan]
+                        if candidate and not selection[candidate.id] then
+                            right = candidate
+                            break
+                        end
+                    end
+                    entry.per_clip[clip_id] = {
+                        left_neighbor = left and clone_clip_snapshot(left) or nil,
+                        right_neighbor = right and clone_clip_snapshot(right) or nil
+                    }
+                end
+            end
+        end
+    end
+
+    return metadata
+end
+
 -- Get clip by ID (always returns fresh data from current state)
 function M.get_clip_by_id(clip_id)
     for _, clip in ipairs(state.clips) do
@@ -1597,6 +1788,8 @@ local function apply_mutation_table(mutations)
     local failure_reason = nil
     local deleted_lookup = {}
 
+    local had_sequence_meta = mutations.sequence_meta ~= nil
+
     if mutations.deletes then
         for _, clip_id in ipairs(mutations.deletes) do
             if clip_id then
@@ -1627,6 +1820,10 @@ local function apply_mutation_table(mutations)
         end
     end
 
+    if not changed and had_sequence_meta then
+        changed = true
+    end
+
     return changed, failure_reason
 end
 
@@ -1640,7 +1837,18 @@ function M.apply_mutations(sequence_id, mutations)
         end
     })
     sequence_id = sequence_id or (mutations.sequence_id)
+    if not state.sequence_id or state.sequence_id == "" then
+        record_mutation_failure("inactive_timeline_state", {
+            requested_sequence = sequence_id
+        })
+        if mutation_scope then mutation_scope:finish("inactive_state") end
+        return false
+    end
     if sequence_id and state.sequence_id and sequence_id ~= state.sequence_id then
+        record_mutation_failure("sequence_mismatch", {
+            requested_sequence = sequence_id,
+            active_sequence = state.sequence_id
+        })
         if mutation_scope then mutation_scope:finish("sequence_mismatch") end
         return false
     end
