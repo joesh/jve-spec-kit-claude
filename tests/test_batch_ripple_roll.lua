@@ -29,16 +29,17 @@ local schema = [[
         name TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
+        audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_frame INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
+        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
+        mark_in_frame INTEGER,
+        mark_out_frame INTEGER,
         current_sequence_number INTEGER
     );
 
@@ -47,6 +48,8 @@ local schema = [[
         sequence_id TEXT NOT NULL,
         name TEXT NOT NULL,
         track_type TEXT NOT NULL,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         track_index INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         locked INTEGER NOT NULL DEFAULT 0,
@@ -61,7 +64,9 @@ local schema = [[
         project_id TEXT,
         name TEXT,
         file_path TEXT,
-        duration INTEGER,
+        duration_value INTEGER,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         frame_rate REAL,
         width INTEGER,
         height INTEGER,
@@ -82,10 +87,12 @@ local schema = [[
         source_sequence_id TEXT,
         parent_clip_id TEXT,
         owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
+        start_value INTEGER NOT NULL,
+        duration_value INTEGER NOT NULL,
+        source_in_value INTEGER NOT NULL DEFAULT 0,
+        source_out_value INTEGER NOT NULL,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         offline INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL DEFAULT 0,
@@ -102,7 +109,8 @@ local schema = [[
         pre_hash TEXT,
         post_hash TEXT,
         timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
+        playhead_value INTEGER DEFAULT 0,
+        playhead_rate REAL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
         selected_gap_infos TEXT DEFAULT '[]',
@@ -120,11 +128,11 @@ local seed = string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 1920, 1080);
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos, viewport_start_frame, viewport_duration_frames)
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
 
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
                        start_time, duration, source_in, source_out, enabled, offline,
@@ -142,7 +150,7 @@ assert(db:exec(seed))
 
 local function stub_timeline_state()
     timeline_state.capture_viewport = function()
-        return {start_time = 0, duration = 3000}
+        return {start_value = 0, duration_value = 3000, timebase_type = "video_frames", timebase_rate = 30}
     end
     timeline_state.push_viewport_guard = function() end
     timeline_state.pop_viewport_guard = function() end
@@ -173,7 +181,7 @@ stub_timeline_state()
 command_manager.init(db, "default_sequence", "default_project")
 
 local function fetch_clip_start(clip_id)
-    local stmt = db:prepare("SELECT start_time FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT start_value FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(clip_id))
     local value = tonumber(stmt:value(0)) or 0
