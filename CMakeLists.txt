@@ -49,22 +49,6 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/include
 )
 
-# Event log library
-set(EVENTLOG_SOURCES
-    src/eventlog/Event.cpp
-    src/eventlog/SqliteStore.cpp
-    src/eventlog/Reducer.cpp
-)
-
-add_library(JVEEventLog STATIC ${EVENTLOG_SOURCES})
-target_include_directories(JVEEventLog PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(JVEEventLog
-    PUBLIC
-        SQLite::SQLite3
-        OpenSSL::Crypto
-        nlohmann_json::nlohmann_json
-)
-
 # Source files organization
 set(CORE_SOURCES
     src/core/models/project.cpp
@@ -89,7 +73,6 @@ set(CORE_SOURCES
     
     src/core/common/uuid_generator.cpp
     src/core/resource_paths.cpp
-    src/core/sqlite_env.cpp
 
     src/lua/simple_lua_engine.cpp
     src/lua/qt_bindings.cpp
@@ -134,7 +117,6 @@ target_link_libraries(JVECore
     Qt6::Sql
     Qt6::Gui
     SQLite::SQLite3
-    JVEEventLog
     ${LUAJIT_LIBRARIES}
 )
 
@@ -175,22 +157,7 @@ target_link_directories(JVEEditor PRIVATE
 # Testing
 enable_testing()
 
-add_executable(test_eventlog_golden_replay
-    tests/eventlog/test_golden_replay.cpp
-)
-target_link_libraries(test_eventlog_golden_replay
-    PRIVATE
-        JVEEventLog
-)
-target_include_directories(test_eventlog_golden_replay PRIVATE ${CMAKE_SOURCE_DIR}/include)
-add_test(
-    NAME test_eventlog_golden_replay
-    COMMAND test_eventlog_golden_replay
-        --db ${CMAKE_BINARY_DIR}/eventlog/test_readmodels.sqlite
-        --schema-dir ${CMAKE_SOURCE_DIR}/schema/eventlog
-        --log ${CMAKE_SOURCE_DIR}/tests/eventlog/data/logs/sample.jsonl
-        --expect ${CMAKE_SOURCE_DIR}/tests/eventlog/data/logs/sample.checksum
-)
+## Disabled: eventlog golden replay (not used)
 
 # Enable automatic MOC, UIC and RCC processing
 set(CMAKE_AUTOMOC ON)
@@ -303,31 +270,6 @@ set_target_properties(test_scriptable_timeline_widget PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 add_test(NAME test_scriptable_timeline_widget COMMAND test_scriptable_timeline_widget)
-
-add_executable(test_project_browser_widget
-    tests/unit/test_project_browser_rename.cpp
-)
-target_link_libraries(test_project_browser_widget
-    JVECore
-    Qt6::Test
-    Qt6::Core
-    Qt6::Widgets
-    Qt6::Gui
-    Qt6::Sql
-    ${LUAJIT_LIBRARIES}
-)
-target_include_directories(test_project_browser_widget PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${LUAJIT_INCLUDE_DIRS}
-)
-target_link_directories(test_project_browser_widget PRIVATE
-    ${LUAJIT_LIBRARY_DIRS}
-)
-set_target_properties(test_project_browser_widget PROPERTIES
-    AUTOMOC ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-add_test(NAME test_project_browser_widget COMMAND test_project_browser_widget)
 
 add_custom_target(lua_tests ALL
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh

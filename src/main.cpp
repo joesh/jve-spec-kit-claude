@@ -13,7 +13,6 @@
 #include "lua/simple_lua_engine.h"
 #include "core/persistence/migrations.h"
 #include "core/resource_paths.h"
-#include "core/sqlite_env.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
 
@@ -89,8 +88,6 @@ int main(int argc, char *argv[])
         qunsetenv("JVE_TEST_MODE");
         qCInfo(jveMain, "Opening default project: %s", qPrintable(projectPath));
     }
-
-    JVE::EnsureSqliteLibraryEnv();
 
     // Initialize database migrations
     Migrations::initialize();

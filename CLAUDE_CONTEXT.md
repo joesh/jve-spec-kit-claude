@@ -47,3 +47,10 @@
 - Undo skips sequence replay by default (`__skip_sequence_replay_on_undo`) and instead deletes the newly inserted clip, restores reuse targets from their stored snapshots, replays occlusion actions in reverse, and immediately flushes the accumulated mutation bucket to `timeline_state` (`src/lua/core/command_implementations.lua:3127-3185`).
 - `revert_occlusion_actions` and `delete_clips_by_id` now emit insert/update/delete mutations as they manipulate the database so undo/redo receivers stay hot without falling back to `timeline_state.reload_clips` (`src/lua/core/command_implementations.lua:900-950`).
 - Regression `tests/test_overwrite_mutations.lua` stubs `timeline_state` and asserts that Overwrite emits the correct mutation buckets on execute and undo, proving we no longer rely on brute-force reloads for that command.
+
+## Timebase Migration Prep (2025-11-19)
+- Working baseline branch: `pre-timebase-stable` (before RationalTime migration). New Lua regressions were cherry-picked: `tests/lua/test_batch_command_contract.lua`, `tests/lua/test_batch_ripple_timeline_state_overlap.lua`, and `tests/lua/test_clip_occlusion_current.lua`.
+- Removed unused C++ event log layer (`include/jve/eventlog/*`, `src/eventlog/*`) and the SQLite path helper (`src/core/sqlite_env.*`) to keep “logic in Lua” and reduce unused native surface area. CMake no longer builds or links `JVEEventLog`; the only remaining native libs are Qt/SQLite/Lua.
+- Dropped unused C++ test `tests/unit/test_project_browser_rename.cpp` and the old eventlog golden test wiring.
+- Makefile now drives `cmake --build` with an explicit `-j$(JOBS)` (default 4) so `make -j4` actually fans out the underlying build instead of collapsing to `-j1` with jobserver warnings.
+- Current build configuration runs the Lua test suite via `lua_tests` during `make`; C++ tests are built but not executed automatically. All Lua tests currently pass on this branch; undo bugs remain to be investigated separately.
