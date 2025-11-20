@@ -73,24 +73,23 @@ local schema_statements = {
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
+        frame_rate REAL NOT NULL, audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_frame INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
+        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
+        mark_in_frame INTEGER,
+        mark_out_frame INTEGER,
         current_sequence_number INTEGER
     );]],
     [[CREATE TABLE tracks (
         id TEXT PRIMARY KEY,
         sequence_id TEXT,
-        name TEXT,
-        track_type TEXT,
+        name TEXT, track_type TEXT, timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL,
         track_index INTEGER,
         enabled INTEGER,
         locked INTEGER,
@@ -104,8 +103,8 @@ local schema_statements = {
         project_id TEXT,
         name TEXT,
         file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
+        duration_value INTEGER,
+        timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL, frame_rate REAL,
         width INTEGER,
         height INTEGER,
         audio_channels INTEGER,
@@ -124,10 +123,10 @@ local schema_statements = {
         source_sequence_id TEXT,
         parent_clip_id TEXT,
         owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
+        start_value INTEGER NOT NULL,
+        duration_value INTEGER NOT NULL,
+        source_in_value INTEGER NOT NULL DEFAULT 0,
+        source_out_value INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         offline INTEGER NOT NULL DEFAULT 0
     )]],
@@ -234,7 +233,7 @@ do
 end
 
 do
-    local row, stmt = fetch_one(db, "SELECT start_time, duration, source_out FROM clips LIMIT 1")
+    local row, stmt = fetch_one(db, "SELECT start_value, duration_value, source_out_value FROM clips LIMIT 1")
     assert_true("clip row", row ~= nil)
     local start_time = row:value(0)
     local duration = row:value(1)
@@ -248,7 +247,7 @@ end
 do
     local row, stmt = fetch_one(
         db,
-        [[SELECT clips.start_time, clips.duration, clips.source_in, clips.source_out
+        [[SELECT clips.start_value, clips.duration_value, clips.source_in_value, clips.source_out_value
           FROM clips
           JOIN media ON clips.media_id = media.id
           WHERE media.name = ?
