@@ -212,7 +212,7 @@ local function gather_master_initial_state(project_id)
 
     local track_query = conn:prepare([[
         SELECT id, sequence_id, name, track_type, track_index,
-               enabled, locked, muted, soloed, volume, pan
+               enabled, locked, muted, soloed, volume, pan, timebase_type, timebase_rate
         FROM tracks
         WHERE sequence_id = ?
     ]])
@@ -233,7 +233,9 @@ local function gather_master_initial_state(project_id)
                         muted = track_query:value(7) == 1 or track_query:value(7) == true,
                         soloed = track_query:value(8) == 1 or track_query:value(8) == true,
                         volume = tonumber(track_query:value(9)) or 1.0,
-                        pan = tonumber(track_query:value(10)) or 0.0
+                        pan = tonumber(track_query:value(10)) or 0.0,
+                        timebase_type = track_query:value(11),
+                        timebase_rate = track_query:value(12)
                     }
                     table.insert(master_state.tracks, track)
                 end
@@ -248,7 +250,8 @@ local function gather_master_initial_state(project_id)
     local master_clip_query = conn:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
                source_sequence_id, parent_clip_id, owner_sequence_id,
-               start_time, duration, source_in, source_out, enabled, offline
+               start_value, duration_value, source_in_value, source_out_value,
+               timebase_type, timebase_rate, enabled, offline
         FROM clips
         WHERE clip_kind = 'master' AND source_sequence_id = ?
     ]])
@@ -256,7 +259,8 @@ local function gather_master_initial_state(project_id)
     local child_clip_query = conn:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
                source_sequence_id, parent_clip_id, owner_sequence_id,
-               start_time, duration, source_in, source_out, enabled, offline
+               start_value, duration_value, source_in_value, source_out_value,
+               timebase_type, timebase_rate, enabled, offline
         FROM clips
         WHERE owner_sequence_id = ?
     ]])
@@ -280,8 +284,10 @@ local function gather_master_initial_state(project_id)
                         duration = tonumber(master_clip_query:value(10)) or 0,
                         source_in = tonumber(master_clip_query:value(11)) or 0,
                         source_out = tonumber(master_clip_query:value(12)) or 0,
-                        enabled = master_clip_query:value(13) == 1 or master_clip_query:value(13) == true,
-                        offline = master_clip_query:value(14) == 1 or master_clip_query:value(14) == true
+                        timebase_type = master_clip_query:value(13),
+                        timebase_rate = master_clip_query:value(14),
+                        enabled = master_clip_query:value(15) == 1 or master_clip_query:value(15) == true,
+                        offline = master_clip_query:value(16) == 1 or master_clip_query:value(16) == true
                     }
                     if not seen_clip_ids[clip.id] then
                         table.insert(master_state.clips, clip)
@@ -309,8 +315,10 @@ local function gather_master_initial_state(project_id)
                         duration = tonumber(child_clip_query:value(10)) or 0,
                         source_in = tonumber(child_clip_query:value(11)) or 0,
                         source_out = tonumber(child_clip_query:value(12)) or 0,
-                        enabled = child_clip_query:value(13) == 1 or child_clip_query:value(13) == true,
-                        offline = child_clip_query:value(14) == 1 or child_clip_query:value(14) == true
+                        timebase_type = child_clip_query:value(13),
+                        timebase_rate = child_clip_query:value(14),
+                        enabled = child_clip_query:value(15) == 1 or child_clip_query:value(15) == true,
+                        offline = child_clip_query:value(16) == 1 or child_clip_query:value(16) == true
                     }
                     if not seen_clip_ids[clip.id] then
                         table.insert(master_state.clips, clip)
@@ -2467,11 +2475,11 @@ function M.replay_events(sequence_id, target_sequence_number)
             if cached_initial_master.sequences and #cached_initial_master.sequences > 0 then
                 local seq_insert = db:prepare([[
                     INSERT OR REPLACE INTO sequences
-                    (id, project_id, name, kind, frame_rate, width, height,
-                     timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
-                     viewport_start_time, viewport_duration, mark_in_time, mark_out_time,
+                    (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                     timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
+                     viewport_start_frame, viewport_duration_frames, mark_in_frame, mark_out_frame,
                      current_sequence_number)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
                 if not seq_insert then
                     error("FATAL: Failed to prepare master sequence restore statement")
@@ -2482,6 +2490,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                     require_snapshot_field("master_sequence", "name", seq.name)
                     require_snapshot_field("master_sequence", "kind", seq.kind)
                     require_snapshot_field("master_sequence", "frame_rate", seq.frame_rate)
+                    require_snapshot_field("master_sequence", "audio_sample_rate", seq.audio_sample_rate)
                     require_snapshot_field("master_sequence", "width", seq.width)
                     require_snapshot_field("master_sequence", "height", seq.height)
                     require_snapshot_field("master_sequence", "timecode_start", seq.timecode_start)
@@ -2493,17 +2502,18 @@ function M.replay_events(sequence_id, target_sequence_number)
                     seq_insert:bind_value(3, seq.name)
                     seq_insert:bind_value(4, seq.kind)
                     seq_insert:bind_value(5, seq.frame_rate)
-                    seq_insert:bind_value(6, seq.width)
-                    seq_insert:bind_value(7, seq.height)
-                    seq_insert:bind_value(8, seq.timecode_start)
-                    seq_insert:bind_value(9, seq.playhead_time)
-                    seq_insert:bind_value(10, seq.selected_clip_ids)
-                    seq_insert:bind_value(11, seq.selected_edge_infos)
-                    seq_insert:bind_value(12, seq.viewport_start_time)
-                    seq_insert:bind_value(13, seq.viewport_duration)
-                    seq_insert:bind_value(14, seq.mark_in_time)
-                    seq_insert:bind_value(15, seq.mark_out_time)
-                    seq_insert:bind_value(16, seq.current_sequence_number)
+                    seq_insert:bind_value(6, seq.audio_sample_rate)
+                    seq_insert:bind_value(7, seq.width)
+                    seq_insert:bind_value(8, seq.height)
+                    seq_insert:bind_value(9, seq.timecode_start)
+                    seq_insert:bind_value(10, seq.playhead_time)
+                    seq_insert:bind_value(11, seq.selected_clip_ids)
+                    seq_insert:bind_value(12, seq.selected_edge_infos)
+                    seq_insert:bind_value(13, seq.viewport_start_time)
+                    seq_insert:bind_value(14, seq.viewport_duration)
+                    seq_insert:bind_value(15, seq.mark_in_time)
+                    seq_insert:bind_value(16, seq.mark_out_time)
+                    seq_insert:bind_value(17, seq.current_sequence_number)
                     seq_insert:exec()
                     seq_insert:reset()
                     seq_insert:clear_bindings()
@@ -2515,9 +2525,9 @@ function M.replay_events(sequence_id, target_sequence_number)
             if cached_initial_master.tracks and #cached_initial_master.tracks > 0 then
                 local track_insert = db:prepare([[
                     INSERT OR REPLACE INTO tracks
-                    (id, sequence_id, name, track_type, track_index,
+                    (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index,
                      enabled, locked, muted, soloed, volume, pan)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
                 if not track_insert then
                     error("FATAL: Failed to prepare master track restore statement")
@@ -2527,6 +2537,8 @@ function M.replay_events(sequence_id, target_sequence_number)
                     require_snapshot_field("master_track", "sequence_id", track.sequence_id)
                     require_snapshot_field("master_track", "name", track.name)
                     require_snapshot_field("master_track", "track_type", track.track_type)
+                    require_snapshot_field("master_track", "timebase_type", track.timebase_type)
+                    require_snapshot_field("master_track", "timebase_rate", track.timebase_rate)
                     require_snapshot_field("master_track", "track_index", track.track_index)
                     require_snapshot_field("master_track", "enabled", track.enabled)
                     require_snapshot_field("master_track", "locked", track.locked)
@@ -2538,13 +2550,15 @@ function M.replay_events(sequence_id, target_sequence_number)
                     track_insert:bind_value(2, track.sequence_id)
                     track_insert:bind_value(3, track.name)
                     track_insert:bind_value(4, track.track_type)
-                    track_insert:bind_value(5, track.track_index)
-                    track_insert:bind_value(6, (track.enabled == true or track.enabled == 1) and 1 or 0)
-                    track_insert:bind_value(7, (track.locked == true or track.locked == 1) and 1 or 0)
-                    track_insert:bind_value(8, (track.muted == true or track.muted == 1) and 1 or 0)
-                    track_insert:bind_value(9, (track.soloed == true or track.soloed == 1) and 1 or 0)
-                    track_insert:bind_value(10, track.volume)
-                    track_insert:bind_value(11, track.pan)
+                    track_insert:bind_value(5, track.timebase_type)
+                    track_insert:bind_value(6, track.timebase_rate)
+                    track_insert:bind_value(7, track.track_index)
+                    track_insert:bind_value(8, (track.enabled == true or track.enabled == 1) and 1 or 0)
+                    track_insert:bind_value(9, (track.locked == true or track.locked == 1) and 1 or 0)
+                    track_insert:bind_value(10, (track.muted == true or track.muted == 1) and 1 or 0)
+                    track_insert:bind_value(11, (track.soloed == true or track.soloed == 1) and 1 or 0)
+                    track_insert:bind_value(12, track.volume)
+                    track_insert:bind_value(13, track.pan)
                     track_insert:exec()
                     track_insert:reset()
                     track_insert:clear_bindings()
@@ -2558,8 +2572,8 @@ function M.replay_events(sequence_id, target_sequence_number)
                     INSERT OR REPLACE INTO clips
                     (id, project_id, clip_kind, name, track_id, media_id,
                      source_sequence_id, parent_clip_id, owner_sequence_id,
-                     start_time, duration, source_in, source_out, enabled, offline)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
 
                 if not clip_insert then
@@ -2576,6 +2590,8 @@ function M.replay_events(sequence_id, target_sequence_number)
                     require_snapshot_field(context, "duration", clip.duration)
                     require_snapshot_field(context, "source_in", clip.source_in)
                     require_snapshot_field(context, "source_out", clip.source_out)
+                    require_snapshot_field(context, "timebase_type", clip.timebase_type)
+                    require_snapshot_field(context, "timebase_rate", clip.timebase_rate)
                     require_snapshot_field(context, "enabled", clip.enabled)
                     require_snapshot_field(context, "offline", clip.offline)
                     local enabled_flag = (clip.enabled == true) or (clip.enabled == 1)
@@ -2593,8 +2609,10 @@ function M.replay_events(sequence_id, target_sequence_number)
                     clip_insert:bind_value(11, clip.duration)
                     clip_insert:bind_value(12, clip.source_in)
                     clip_insert:bind_value(13, clip.source_out)
-                    clip_insert:bind_value(14, enabled_flag and 1 or 0)
-                    clip_insert:bind_value(15, offline_flag and 1 or 0)
+                    clip_insert:bind_value(14, clip.timebase_type)
+                    clip_insert:bind_value(15, clip.timebase_rate)
+                    clip_insert:bind_value(16, enabled_flag and 1 or 0)
+                    clip_insert:bind_value(17, offline_flag and 1 or 0)
                     clip_insert:exec()
                     clip_insert:reset()
                     clip_insert:clear_bindings()
@@ -2618,25 +2636,25 @@ function M.replay_events(sequence_id, target_sequence_number)
         if using_snapshot and next(snapshot_timeline_restores) ~= nil then
             local seq_insert = db:prepare([[
                 INSERT OR REPLACE INTO sequences
-                (id, project_id, name, kind, frame_rate, width, height,
-                 timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
-                 viewport_start_time, viewport_duration, mark_in_time, mark_out_time,
+                (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                 timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
+                 viewport_start_frame, viewport_duration_frames, mark_in_frame, mark_out_frame,
                  current_sequence_number)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ]])
             local track_insert = db:prepare([[
                 INSERT OR REPLACE INTO tracks
-                (id, sequence_id, name, track_type, track_index,
+                (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index,
                  enabled, locked, muted, soloed, volume, pan)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ]])
             local clip_insert = db:prepare([[
                 INSERT OR REPLACE INTO clips
                 (id, project_id, clip_kind, name, track_id, media_id,
                  source_sequence_id, parent_clip_id, owner_sequence_id,
-                 start_time, duration, source_in, source_out,
-                 enabled, offline)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 start_value, duration_value, source_in_value, source_out_value,
+                 timebase_type, timebase_rate, enabled, offline)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ]])
 
             if not seq_insert or not track_insert or not clip_insert then
