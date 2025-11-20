@@ -34,8 +34,8 @@ function timeline_state.get_selected_clips() return {} end
 function timeline_state.get_selected_edges() return {} end
 function timeline_state.clear_edge_selection() end
 function timeline_state.clear_gap_selection() end
-function timeline_state.set_playhead_time(ms) timeline_state.playhead = ms end
-function timeline_state.get_playhead_time() return timeline_state.playhead end
+function timeline_state.set_playhead_value(ms) timeline_state.playhead = ms end
+function timeline_state.get_playhead_value() return timeline_state.playhead end
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.normalize_edge_selection() return false end
 function timeline_state.persist_state_to_db() end
@@ -101,9 +101,9 @@ overwrite_cmd:set_parameter("track_id", "track_v1")
 overwrite_cmd:set_parameter("sequence_id", "default_sequence")
 overwrite_cmd:set_parameter("media_id", "media_stub")
 overwrite_cmd:set_parameter("overwrite_time", 400)
-overwrite_cmd:set_parameter("duration", 300)
-overwrite_cmd:set_parameter("source_in", 0)
-overwrite_cmd:set_parameter("source_out", 300)
+overwrite_cmd:set_parameter("duration_value", 300)
+overwrite_cmd:set_parameter("source_in_value", 0)
+overwrite_cmd:set_parameter("source_out_value", 300)
 
 local overwrite_result = command_manager.execute(overwrite_cmd)
 assert(overwrite_result.success, overwrite_result.error_message or "Overwrite execution failed")
@@ -125,21 +125,21 @@ end
 assert(deleted_lookup[inserted_clip_id], "Undo Overwrite should delete the inserted clip without reloading the entire timeline")
 
 local stmt = db:prepare([[
-    SELECT id, start_time, duration
+    SELECT id, start_value, duration_value
     FROM clips
     WHERE clip_kind = 'timeline'
-    ORDER BY start_time
+    ORDER BY start_value
 ]])
 assert(stmt and stmt:exec(), "Failed to query clips after undo")
 local clip_count = 0
 while stmt:next() do
     clip_count = clip_count + 1
     local clip_id = stmt:value(0)
-    local start_time = tonumber(stmt:value(1)) or -1
-    local duration = tonumber(stmt:value(2)) or -1
+    local start_value = tonumber(stmt:value(1)) or -1
+    local duration_value = tonumber(stmt:value(2)) or -1
     assert(clip_id == "clip_a", "Unexpected clip id after undo: " .. tostring(clip_id))
-    assert(start_time == 0, "Original clip start_time should be restored to 0 after undo")
-    assert(duration == 1000, "Original clip duration should be restored to full length after undo")
+    assert(start_value == 0, "Original clip start_value should be restored to 0 after undo")
+    assert(duration_value == 1000, "Original clip duration_value should be restored to full length after undo")
 end
 stmt:finalize()
 assert(clip_count == 1, "Undo should leave only the original clip in the timeline")
