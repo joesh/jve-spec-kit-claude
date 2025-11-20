@@ -11,7 +11,7 @@ local timeline_state = require("ui.timeline.timeline_state")
 
 local function stub_timeline_state()
     timeline_state.capture_viewport = function()
-        return {start = 0, duration = 1000}
+        return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 24}
     end
     timeline_state.push_viewport_guard = function() end
     timeline_state.pop_viewport_guard = function() end
@@ -84,17 +84,17 @@ db:exec([[
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
+        frame_rate REAL NOT NULL, audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_frame INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
+        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
+        mark_in_frame INTEGER,
+        mark_out_frame INTEGER,
         current_sequence_number INTEGER
     );
 
@@ -102,8 +102,7 @@ db:exec([[
         id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
         name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
+        track_type TEXT NOT NULL, timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL, track_index INTEGER NOT NULL,
         enabled BOOLEAN NOT NULL DEFAULT 1,
         locked BOOLEAN NOT NULL DEFAULT 0,
         muted BOOLEAN NOT NULL DEFAULT 0,
@@ -117,7 +116,9 @@ db:exec([[
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
         file_path TEXT NOT NULL,
-        duration INTEGER NOT NULL,
+        duration_value INTEGER NOT NULL,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         frame_rate REAL NOT NULL,
         width INTEGER DEFAULT 0,
         height INTEGER DEFAULT 0,
@@ -125,7 +126,7 @@ db:exec([[
         codec TEXT DEFAULT '',
         created_at INTEGER NOT NULL,
         modified_at INTEGER NOT NULL,
-        metadata TEXT DEFAULT '{}'
+        metadata TEXT DEFAULT '{}' NOT NULL
     );
 
     CREATE TABLE clips (
@@ -138,10 +139,12 @@ db:exec([[
         source_sequence_id TEXT,
         parent_clip_id TEXT,
         owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
-        source_out INTEGER NOT NULL,
+        start_value INTEGER NOT NULL,
+        duration_value INTEGER NOT NULL,
+        source_in_value INTEGER NOT NULL DEFAULT 0,
+        source_out_value INTEGER NOT NULL,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         enabled BOOLEAN NOT NULL DEFAULT 1,
         offline BOOLEAN NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -171,7 +174,8 @@ db:exec([[
         pre_hash TEXT NOT NULL,
         post_hash TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
+        playhead_rate REAL NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
         selected_clip_ids_pre TEXT,
@@ -184,14 +188,14 @@ db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('test_project', 'Insert Test Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height,
-        timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
-        viewport_start_time, viewport_duration, current_sequence_number)
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+        timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
+        viewport_start_frame, viewport_duration_frames, current_sequence_number)
     VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
-        24.0, 1920, 1080, 0, 0, '[]', '[]', 0, 10000, NULL);
+        24.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240, NULL);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-    VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index)
+    VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 'video_frames', 24.0, 1);
 ]], now, now))
 
 stub_timeline_state()
