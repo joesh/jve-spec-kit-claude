@@ -162,9 +162,15 @@ local function gather_master_initial_state(project_id)
 
     local seq_query = conn:prepare([[
         SELECT id, project_id, name, kind, frame_rate, width, height,
-               timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
-               viewport_start_time, viewport_duration, mark_in_time, mark_out_time,
-               current_sequence_number
+               timecode_start_frame AS timecode_start,
+               playhead_frame AS playhead_time,
+               selected_clip_ids, selected_edge_infos,
+               viewport_start_frame AS viewport_start_time,
+               viewport_duration_frames AS viewport_duration,
+               mark_in_frame AS mark_in_time,
+               mark_out_frame AS mark_out_time,
+               current_sequence_number,
+               audio_sample_rate
         FROM sequences
         WHERE project_id = ? AND kind != 'timeline'
     ]])
@@ -190,8 +196,9 @@ local function gather_master_initial_state(project_id)
                     viewport_duration = tonumber(seq_query:value(12)) or 10000,
                     mark_in_time = seq_query:value(13),
                     mark_out_time = seq_query:value(14),
-                    current_sequence_number = seq_query:value(15)
-                }
+                current_sequence_number = seq_query:value(15),
+                audio_sample_rate = tonumber(seq_query:value(16))
+            }
                 table.insert(master_state.sequences, seq)
                 table.insert(sequence_ids, seq.id)
             end
@@ -1560,7 +1567,8 @@ function M.execute(command_or_name, params)
 
     -- Capture playhead and selection state BEFORE command execution (pre-state model)
     local timeline_state = require('ui.timeline.timeline_state')
-    command.playhead_time = timeline_state.get_playhead_time()
+    command.playhead_value = timeline_state.get_playhead_time()
+    command.playhead_rate = timeline_state.get_sequence_frame_rate()
     local skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
     if not skip_selection_snapshot then
         capture_pre_selection_for_command(command)
@@ -1797,7 +1805,7 @@ function M.get_last_command(project_id)
 
     -- Get command at current position
     local query = db:prepare([[
-        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time,
+        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_value, playhead_rate,
                selected_clip_ids, selected_edge_infos, selected_gap_infos,
                selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre
         FROM commands
@@ -1823,13 +1831,14 @@ function M.get_last_command(project_id)
             post_hash = query:value(6) or "",
             created_at = query:value(7) or os.time(),
             executed_at = query:value(7),
-            playhead_time = query:value(8) or 0,  -- Playhead position BEFORE this command
-            selected_clip_ids = query:value(9) or "[]",
-            selected_edge_infos = query:value(10) or "[]",
-            selected_gap_infos = query:value(11) or "[]",
-            selected_clip_ids_pre = query:value(12) or "[]",
-            selected_edge_infos_pre = query:value(13) or "[]",
-            selected_gap_infos_pre = query:value(14) or "[]",
+            playhead_value = query:value(8),
+            playhead_rate = query:value(9),
+            selected_clip_ids = query:value(10) or "[]",
+            selected_edge_infos = query:value(11) or "[]",
+            selected_gap_infos = query:value(12) or "[]",
+            selected_clip_ids_pre = query:value(13) or "[]",
+            selected_edge_infos_pre = query:value(14) or "[]",
+            selected_gap_infos_pre = query:value(15) or "[]",
         }
 
         -- Parse command_args JSON to populate parameters
@@ -1839,6 +1848,10 @@ function M.get_last_command(project_id)
             if success and params then
                 command.parameters = params
             end
+        end
+
+        if not command.playhead_value or not command.playhead_rate or command.playhead_rate <= 0 then
+            error("FATAL: command missing playhead_value/playhead_rate in get_last_command")
         end
 
         local Command = require('command')
@@ -2797,7 +2810,7 @@ function M.replay_events(sequence_id, target_sequence_number)
 
             while current_seq > start_sequence do
                 local find_query = db:prepare([[
-                    SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_time,
+                    SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_value, playhead_rate,
                            selected_clip_ids, selected_edge_infos, selected_gap_infos,
                            selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre
                     FROM commands
@@ -2822,13 +2835,14 @@ function M.replay_events(sequence_id, target_sequence_number)
                         pre_hash = find_query:value(5),
                         post_hash = find_query:value(6),
                         timestamp = find_query:value(7),
-                        playhead_time = find_query:value(8),
-                        selected_clip_ids = find_query:value(9),
-                        selected_edge_infos = find_query:value(10),
-                        selected_gap_infos = find_query:value(11),
-                        selected_clip_ids_pre = find_query:value(12),
-                        selected_edge_infos_pre = find_query:value(13),
-                        selected_gap_infos_pre = find_query:value(14)
+                        playhead_value = find_query:value(8),
+                        playhead_rate = find_query:value(9),
+                        selected_clip_ids = find_query:value(10),
+                        selected_edge_infos = find_query:value(11),
+                        selected_gap_infos = find_query:value(12),
+                        selected_clip_ids_pre = find_query:value(13),
+                        selected_edge_infos_pre = find_query:value(14),
+                        selected_gap_infos_pre = find_query:value(15)
                     })
 
                     -- Move to parent

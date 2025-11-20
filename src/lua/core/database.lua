@@ -156,7 +156,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local track_sequence_id = query:value(16)
+    local track_sequence_id = query:value(18)
     local owner_sequence_id = query:value(9) or track_sequence_id
     if not owner_sequence_id then
         error(string.format(
@@ -197,6 +197,8 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         source_out = query:value(13),
         enabled = query:value(14) == 1,
         offline = query:value(15) == 1,
+        timebase_type = query:value(16),
+        timebase_rate = query:value(17),
         media_name = media_name,
         media_path = media_path
     }
@@ -454,7 +456,7 @@ function M.load_tracks(sequence_id)
     end
 
     local query = db_connection:prepare([[
-        SELECT id, name, track_type, track_index, enabled
+        SELECT id, name, track_type, track_index, enabled, timebase_type, timebase_rate
         FROM tracks
         WHERE sequence_id = ?
         ORDER BY track_type DESC, track_index ASC
@@ -475,7 +477,9 @@ function M.load_tracks(sequence_id)
                 name = query:value(1),
                 track_type = query:value(2),  -- Keep as "VIDEO" or "AUDIO"
                 track_index = query:value(3),
-                enabled = query:value(4) == 1
+                enabled = query:value(4) == 1,
+                timebase_type = query:value(5),
+                timebase_rate = query:value(6)
             })
         end
     end
@@ -497,15 +501,16 @@ function M.load_clips(sequence_id)
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
                c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
-               c.start_time, c.duration, c.source_in, c.source_out,
-               c.enabled, c.offline, t.sequence_id,
+               c.start_value AS start_time, c.duration_value AS duration,
+               c.source_in_value AS source_in, c.source_out_value AS source_out,
+               c.enabled, c.offline, c.timebase_type, c.timebase_rate, t.sequence_id,
                m.name, m.file_path
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
         LEFT JOIN media m ON c.media_id = m.id
         WHERE t.sequence_id = ?
-        ORDER BY c.start_time ASC
+        ORDER BY c.start_value ASC
     ]])
 
     if not query then
@@ -641,7 +646,7 @@ function M.update_clip_position(clip_id, start_time, duration)
 
     local query = db_connection:prepare([[
         UPDATE clips
-        SET start_time = ?, duration = ?, modified_at = strftime('%s','now')
+        SET start_value = ?, duration_value = ?, modified_at = strftime('%s','now')
         WHERE id = ?
     ]])
 
@@ -676,7 +681,7 @@ function M.load_media()
     end
 
     local query = db_connection:prepare([[
-        SELECT id, project_id, name, file_path, duration, frame_rate,
+        SELECT id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate,
                width, height, audio_channels, codec, created_at, modified_at, metadata
         FROM media
         ORDER BY created_at DESC
@@ -689,6 +694,11 @@ function M.load_media()
     local media_items = {}
     if query:exec() then
         while query:next() do
+            local tb_type = query:value(5)
+            local tb_rate = query:value(6)
+            if not tb_type or tb_type == "" or not tb_rate or tb_rate <= 0 then
+                error("FATAL: media row missing timebase_type/timebase_rate")
+            end
             table.insert(media_items, {
                 id = query:value(0),
                 project_id = query:value(1),
@@ -696,14 +706,16 @@ function M.load_media()
                 file_name = query:value(2),  -- Alias for backward compatibility
                 file_path = query:value(3),
                 duration = query:value(4),
-                frame_rate = query:value(5),
-                width = query:value(6),
-                height = query:value(7),
-                audio_channels = query:value(8),
-                codec = query:value(9),
-                created_at = query:value(10),
-                modified_at = query:value(11),
-                metadata = query:value(12),
+                timebase_type = tb_type,
+                timebase_rate = tb_rate,
+                frame_rate = query:value(7),
+                width = query:value(8),
+                height = query:value(9),
+                audio_channels = query:value(10),
+                codec = query:value(11),
+                created_at = query:value(12),
+                modified_at = query:value(13),
+                metadata = query:value(14),
                 tags = {}  -- TODO: Load tags from media_tags table when implemented
             })
         end
@@ -727,9 +739,12 @@ function M.load_master_clips(project_id)
             c.project_id,
             c.media_id,
             c.source_sequence_id,
-            c.duration,
-            c.source_in,
-            c.source_out,
+            c.start_value,
+            c.duration_value,
+            c.source_in_value,
+            c.source_out_value,
+            c.timebase_type,
+            c.timebase_rate,
             c.enabled,
             c.offline,
             c.created_at,
@@ -737,7 +752,9 @@ function M.load_master_clips(project_id)
             m.project_id,
             m.name,
             m.file_path,
-            m.duration,
+            m.duration_value,
+            m.timebase_type,
+            m.timebase_rate,
             m.frame_rate,
             m.width,
             m.height,
@@ -749,7 +766,8 @@ function M.load_master_clips(project_id)
             s.project_id,
             s.frame_rate,
             s.width,
-            s.height
+            s.height,
+            s.audio_sample_rate
         FROM clips c
         LEFT JOIN media m ON c.media_id = m.id
         LEFT JOIN sequences s ON c.source_sequence_id = s.id
@@ -776,31 +794,45 @@ function M.load_master_clips(project_id)
             local clip_project_id = query:value(2)
             local media_id = query:value(3)
             local source_sequence_id = query:value(4)
-            local duration = query:value(5)
-            local source_in = query:value(6) or 0
-            local source_out = query:value(7) or duration
-            local enabled = query:value(8) == 1
-            local offline = query:value(9) == 1
-            local created_at = query:value(10)
-            local modified_at = query:value(11)
+            local start_value = query:value(5)
+            local duration = query:value(6)
+            local source_in = query:value(7) or 0
+            local source_out = query:value(8) or duration
+            local clip_timebase_type = query:value(9)
+            local clip_timebase_rate = query:value(10)
+            local enabled = query:value(11) == 1
+            local offline = query:value(12) == 1
+            local created_at = query:value(13)
+            local modified_at = query:value(14)
 
-            local media_project_id = query:value(12)
-            local media_name = query:value(13)
-            local media_path = query:value(14)
-            local media_duration = query:value(15)
-            local media_frame_rate = query:value(16)
-            local media_width = query:value(17)
-            local media_height = query:value(18)
-            local media_channels = query:value(19)
-            local media_codec = query:value(20)
-            local media_metadata = query:value(21)
-            local media_created_at = query:value(22)
-            local media_modified_at = query:value(23)
+            local media_project_id = query:value(15)
+            local media_name = query:value(16)
+            local media_path = query:value(17)
+            local media_duration = query:value(18)
+            local media_timebase_type = query:value(19)
+            local media_timebase_rate = query:value(20)
+            local media_frame_rate = query:value(21)
+            local media_width = query:value(22)
+            local media_height = query:value(23)
+            local media_channels = query:value(24)
+            local media_codec = query:value(25)
+            local media_metadata = query:value(26)
+            local media_created_at = query:value(27)
+            local media_modified_at = query:value(28)
 
-            local sequence_project_id = query:value(24)
-            local sequence_frame_rate = query:value(25)
-            local sequence_width = query:value(26)
-            local sequence_height = query:value(27)
+            local sequence_project_id = query:value(29)
+            local sequence_frame_rate = query:value(30)
+            local sequence_width = query:value(31)
+            local sequence_height = query:value(32)
+            local sequence_audio_rate = query:value(33)
+
+            if not clip_timebase_type or clip_timebase_type == "" or not clip_timebase_rate or clip_timebase_rate <= 0 then
+                error("FATAL: master clip missing timebase")
+            end
+
+            if media_id and (not media_timebase_type or media_timebase_type == "" or not media_timebase_rate or media_timebase_rate <= 0) then
+                error("FATAL: master clip media missing timebase")
+            end
 
             local media_info = {
                 id = media_id,
@@ -809,6 +841,8 @@ function M.load_master_clips(project_id)
                 file_name = media_name,
                 file_path = media_path,
                 duration = media_duration,
+                timebase_type = media_timebase_type,
+                timebase_rate = media_timebase_rate,
                 frame_rate = media_frame_rate,
                 width = media_width,
                 height = media_height,
@@ -825,6 +859,7 @@ function M.load_master_clips(project_id)
                 frame_rate = sequence_frame_rate,
                 width = sequence_width,
                 height = sequence_height,
+                audio_sample_rate = sequence_audio_rate
             }
 
             local clip_entry = {
@@ -833,9 +868,12 @@ function M.load_master_clips(project_id)
                 name = clip_name or (media_name or clip_id),
                 media_id = media_id,
                 source_sequence_id = source_sequence_id,
+                start_time = start_value,
                 duration = duration,
                 source_in = source_in,
                 source_out = source_out,
+                timebase_type = clip_timebase_type,
+                timebase_rate = clip_timebase_rate,
                 enabled = enabled,
                 offline = offline,
                 created_at = created_at,
@@ -869,7 +907,12 @@ function M.load_sequences(project_id)
     end
 
     local sequences = {}
-    local query = db_connection:prepare([[SELECT id, name, kind, frame_rate, width, height, playhead_time FROM sequences WHERE project_id = ? ORDER BY name]])
+    local query = db_connection:prepare([[
+        SELECT id, name, kind, frame_rate, audio_sample_rate, width, height, playhead_frame AS playhead_time
+        FROM sequences
+        WHERE project_id = ?
+        ORDER BY name
+    ]])
     if not query then
         print("WARNING: load_sequences: Failed to prepare query")
         return sequences
@@ -883,9 +926,10 @@ function M.load_sequences(project_id)
                 name = query:value(1),
                 kind = query:value(2),
                 frame_rate = query:value(3),
-                width = query:value(4),
-                height = query:value(5),
-                playhead_time = query:value(6),
+                audio_sample_rate = query:value(4),
+                width = query:value(5),
+                height = query:value(6),
+                playhead_time = query:value(7),
             })
         end
     end
@@ -919,9 +963,10 @@ function M.load_sequence_record(sequence_id)
 
     local query = db_connection:prepare([[
         SELECT id, project_id, name, kind, frame_rate, width, height,
-               timecode_start, playhead_time, viewport_start_time,
-               viewport_duration, mark_in_time, mark_out_time,
-               selected_clip_ids, selected_edge_infos
+               timecode_start_frame AS timecode_start, playhead_frame AS playhead_time,
+               viewport_start_frame AS viewport_start_time, viewport_duration_frames AS viewport_duration,
+               mark_in_frame AS mark_in_time, mark_out_frame AS mark_out_time,
+               selected_clip_ids, selected_edge_infos, audio_sample_rate
         FROM sequences
         WHERE id = ?
     ]])
@@ -950,8 +995,16 @@ function M.load_sequence_record(sequence_id)
             mark_in_time = tonumber(query:value(11)),
             mark_out_time = tonumber(query:value(12)),
             selected_clip_ids = query:value(13),
-            selected_edge_infos = query:value(14)
+            selected_edge_infos = query:value(14),
+            audio_sample_rate = tonumber(query:value(15))
         }
+
+        if not sequence.audio_sample_rate or sequence.audio_sample_rate <= 0 then
+            query:finalize()
+            error(string.format(
+                "FATAL: sequence %s missing valid audio_sample_rate", tostring(sequence_id)
+            ))
+        end
     end
 
     query:finalize()

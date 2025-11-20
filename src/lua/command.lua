@@ -43,6 +43,8 @@ function M.parse_from_query(query, project_id)
         post_hash = query:value(7) or "",
         created_at = query:value(8) or os.time(),
         executed_at = query:value(9),
+        playhead_value = query:value(10),
+        playhead_rate = query:value(11)
     }
 
     setmetatable(command, {__index = M})
@@ -77,6 +79,8 @@ function M:serialize()
         string.format('"project_id":"%s"', self.project_id),
         string.format('"sequence_number":%d', self.sequence_number),
         string.format('"status":"%s"', self.status),
+        string.format('"playhead_value":%d', self.playhead_value or -1),
+        string.format('"playhead_rate":%d', self.playhead_rate or -1),
     }
 
     return "{" .. table.concat(parts, ",") .. "}"
@@ -137,13 +141,17 @@ function M:save(db)
     local selected_edge_infos_pre_json = self.selected_edge_infos_pre or "[]"
     local selected_gap_infos_pre_json = self.selected_gap_infos_pre or "[]"
 
+    if not self.playhead_value or not self.playhead_rate or self.playhead_rate <= 0 then
+        error("FATAL: Command.save requires playhead_value and playhead_rate")
+    end
+
     local query
     if exists then
         -- UPDATE
         query = db:prepare([[
             UPDATE commands
             SET command_type = ?, sequence_number = ?, command_args = ?,
-                pre_hash = ?, post_hash = ?, timestamp = ?, playhead_time = ?,
+                pre_hash = ?, post_hash = ?, timestamp = ?, playhead_value = ?, playhead_rate = ?,
                 selected_clip_ids = ?, selected_edge_infos = ?, selected_gap_infos = ?,
                 selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?
             WHERE id = ?
@@ -163,19 +171,20 @@ function M:save(db)
         query:bind_value(4, self.pre_hash)
         query:bind_value(5, self.post_hash)
         query:bind_value(6, self.executed_at or os.time())
-        query:bind_value(7, self.playhead_time or 0)
-        query:bind_value(8, selected_clip_ids_json)
-        query:bind_value(9, selected_edge_infos_json)
-        query:bind_value(10, selected_gap_infos_json)
-        query:bind_value(11, selected_clip_ids_pre_json)
-        query:bind_value(12, selected_edge_infos_pre_json)
-        query:bind_value(13, selected_gap_infos_pre_json)
-        query:bind_value(14, self.id)
+        query:bind_value(7, self.playhead_value)
+        query:bind_value(8, self.playhead_rate)
+        query:bind_value(9, selected_clip_ids_json)
+        query:bind_value(10, selected_edge_infos_json)
+        query:bind_value(11, selected_gap_infos_json)
+        query:bind_value(12, selected_clip_ids_pre_json)
+        query:bind_value(13, selected_edge_infos_pre_json)
+        query:bind_value(14, selected_gap_infos_pre_json)
+        query:bind_value(15, self.id)
     else
         -- INSERT
         query = db:prepare([[
-            INSERT INTO commands (id, parent_id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO commands (id, parent_id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not query then
             local err = "unknown error"
@@ -195,13 +204,14 @@ function M:save(db)
         query:bind_value(7, self.pre_hash)
         query:bind_value(8, self.post_hash)
         query:bind_value(9, self.executed_at or os.time())
-        query:bind_value(10, self.playhead_time or 0)
-        query:bind_value(11, selected_clip_ids_json)
-        query:bind_value(12, selected_edge_infos_json)
-        query:bind_value(13, selected_gap_infos_json)
-        query:bind_value(14, selected_clip_ids_pre_json)
-        query:bind_value(15, selected_edge_infos_pre_json)
-        query:bind_value(16, selected_gap_infos_pre_json)
+        query:bind_value(10, self.playhead_value)
+        query:bind_value(11, self.playhead_rate)
+        query:bind_value(12, selected_clip_ids_json)
+        query:bind_value(13, selected_edge_infos_json)
+        query:bind_value(14, selected_gap_infos_json)
+        query:bind_value(15, selected_clip_ids_pre_json)
+        query:bind_value(16, selected_edge_infos_pre_json)
+        query:bind_value(17, selected_gap_infos_pre_json)
     end
 
     if not query:exec() then

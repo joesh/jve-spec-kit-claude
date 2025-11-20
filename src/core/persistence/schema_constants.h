@@ -8,8 +8,8 @@
 namespace schema {
 
 // Schema versioning
-static const int INITIAL_SCHEMA_VERSION = 2;
-static const int CURRENT_SCHEMA_VERSION = 2;
+static const int INITIAL_SCHEMA_VERSION = 1;
+static const int CURRENT_SCHEMA_VERSION = 1;
 
 // Database configuration
 static const char* const WAL_JOURNAL_MODE = "WAL";

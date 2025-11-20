@@ -45,9 +45,6 @@ private:
     static bool verifySchemaFilesExist();
     static bool validateDatabaseConnection(const QSqlDatabase& database);
     static VersionInfo determineVersionUpgrade(const QSqlDatabase& database);
-    static bool executeVersionUpgrade(QSqlDatabase& database, const VersionInfo& versions);
-    static bool applyMigrationsInSequence(QSqlDatabase& database, int fromVersion, int toVersion);
-    static bool validateFinalMigrationState(const QSqlDatabase& database);
     static bool prepareProjectFile(const QString& projectPath);
     static void cleanupMigrationConnection(QSqlDatabase& database);
 };
