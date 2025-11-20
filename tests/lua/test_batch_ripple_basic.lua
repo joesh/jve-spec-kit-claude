@@ -81,7 +81,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     local inserts = {
         "INSERT INTO projects VALUES ('default_project','Test',0,0,'{}')",
-        "INSERT INTO sequences VALUES ('default_sequence','default_project','Seq','timeline',30,1920,1080,0,0,'[]','[]',NULL)"
+        "INSERT INTO sequences VALUES ('default_sequence','default_project','Seq','timeline',24,1920,1080,0,0,'[]','[]',NULL)"
     }
 
     for _, track in ipairs(layout.tracks) do
@@ -93,7 +93,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     for _, media in ipairs(layout.media) do
         table.insert(inserts, string.format(
-            "INSERT INTO media VALUES ('%s','default_project','%s','/tmp/%s.mov',%d,30,1920,1080,2,'prores',0,0)",
+            "INSERT INTO media VALUES ('%s','default_project','%s','/tmp/%s.mov',%d,24,1920,1080,2,'prores',0,0)",
             media.id, media.name or media.id, media.id, media.duration
         ))
     end
