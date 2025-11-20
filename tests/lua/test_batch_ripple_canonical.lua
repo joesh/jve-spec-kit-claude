@@ -86,16 +86,17 @@ local function setup_database(layout)
             name TEXT NOT NULL,
             kind TEXT NOT NULL DEFAULT 'timeline',
             frame_rate REAL NOT NULL,
+            audio_sample_rate INTEGER NOT NULL,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
-            timecode_start INTEGER DEFAULT 0,
-            playhead_time INTEGER DEFAULT 0,
+            timecode_start_frame INTEGER DEFAULT 0,
+            playhead_frame INTEGER DEFAULT 0,
             selected_clip_ids TEXT DEFAULT '[]',
             selected_edge_infos TEXT DEFAULT '[]',
-            viewport_start_time INTEGER NOT NULL DEFAULT 0,
-            viewport_duration INTEGER NOT NULL DEFAULT 10000,
-            mark_in_time INTEGER,
-            mark_out_time INTEGER,
+            viewport_start_frame INTEGER NOT NULL DEFAULT 0,
+            viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
+            mark_in_frame INTEGER,
+            mark_out_frame INTEGER,
             current_sequence_number INTEGER
         )]],
         [[CREATE TABLE IF NOT EXISTS tracks (
@@ -103,6 +104,8 @@ local function setup_database(layout)
             sequence_id TEXT NOT NULL,
             name TEXT NOT NULL,
             track_type TEXT NOT NULL,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             track_index INTEGER NOT NULL,
             enabled INTEGER DEFAULT 1,
             locked INTEGER DEFAULT 0,
@@ -116,7 +119,9 @@ local function setup_database(layout)
             project_id TEXT NOT NULL,
             name TEXT NOT NULL,
             file_path TEXT NOT NULL,
-            duration INTEGER,
+            duration_value INTEGER,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             frame_rate REAL,
             width INTEGER,
             height INTEGER,
@@ -129,10 +134,12 @@ local function setup_database(layout)
             id TEXT PRIMARY KEY,
             track_id TEXT NOT NULL,
             media_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL,
-            source_out INTEGER NOT NULL,
+            start_value INTEGER NOT NULL,
+            duration_value INTEGER NOT NULL,
+            source_in_value INTEGER NOT NULL,
+            source_out_value INTEGER NOT NULL,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             enabled INTEGER DEFAULT 1
         )]],
         [[CREATE TABLE IF NOT EXISTS commands (
@@ -145,7 +152,8 @@ local function setup_database(layout)
             pre_hash TEXT,
             post_hash TEXT,
             timestamp INTEGER,
-            playhead_time INTEGER DEFAULT 0,
+            playhead_value INTEGER DEFAULT 0,
+            playhead_rate REAL DEFAULT 0,
             selected_clip_ids TEXT DEFAULT '[]',
             selected_edge_infos TEXT DEFAULT '[]',
             selected_clip_ids_pre TEXT DEFAULT '[]',
@@ -172,27 +180,27 @@ local function setup_database(layout)
 
     local inserts = {
         "INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES ('default_project', 'Test Project', 0, 0, '{}')",
-        "INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080, 0, 0, '[]', '[]')"
+        "INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 48000, 1920, 1080, 0, 0, '[]', '[]')"
     }
 
     for _, track in ipairs(tracks) do
         table.insert(inserts, string.format(
-            "INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('%s', 'default_sequence', '%s', '%s', %d, 1, 0, 0, 0, 1.0, 0.0)",
-            track.id, track.name or track.id, track.track_type, track.track_index
+            "INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('%s', 'default_sequence', '%s', '%s', '%s', %.3f, %d, 1, 0, 0, 0, 1.0, 0.0)",
+            track.id, track.name or track.id, track.track_type, track.timebase_type or "video_frames", track.timebase_rate or 30.0, track.track_index
         ))
     end
 
     for _, m in ipairs(media) do
         table.insert(inserts, string.format(
-            "INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at) VALUES ('%s', 'default_project', '%s', '/tmp/%s.mov', %d, 30.0, 1920, 1080, 2, 'prores', 0, 0)",
-            m.id, m.name or m.id, m.id, m.duration
+            "INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at) VALUES ('%s', 'default_project', '%s', '/tmp/%s.mov', %d, '%s', %.3f, 30.0, 1920, 1080, 2, 'prores', 0, 0)",
+            m.id, m.name or m.id, m.id, m.duration, m.timebase_type or \"video_frames\", m.timebase_rate or 30.0
         ))
     end
 
     for _, clip in ipairs(layout.clips) do
         table.insert(inserts, string.format(
-            "INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, 1)",
-            clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration
+            "INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, '%s', %.3f, 1)",
+            clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration, clip.timebase_type or "video_frames", clip.timebase_rate or 30.0
         ))
     end
 
