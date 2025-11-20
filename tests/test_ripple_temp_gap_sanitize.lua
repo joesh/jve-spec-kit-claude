@@ -19,28 +19,28 @@ local seed = string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height, viewport_duration)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 1920, 1080, 10000);
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, viewport_start_frame, viewport_duration_frames)
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
 
-    INSERT INTO media (id, project_id, name, duration, frame_rate, width, height)
-    VALUES ('media1', 'default_project', 'Media', 2000, 30.0, 1920, 1080);
+    INSERT INTO media (id, project_id, name, duration_value, timebase_type, timebase_rate, frame_rate, width, height)
+    VALUES ('media1', 'default_project', 'Media', 2000, 'video_frames', 30.0, 30.0, 1920, 1080);
 
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                       start_time, duration, source_in, source_out, enabled, offline,
+                       start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
                        created_at, modified_at)
     VALUES
         ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'media1', 'default_sequence',
-         0, 1000, 0, 1000, 1, 0, %d, %d),
+         0, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d),
         ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'media1', 'default_sequence',
-         2000, 1000, 0, 1000, 1, 0, %d, %d);
+         2000, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d);
 ]], now, now, now, now, now, now, now, now)
 assert(db:exec(seed))
 
 local timeline_state = require("ui.timeline.timeline_state")
-timeline_state.capture_viewport = function() return {start_time = 0, duration = 10000} end
+timeline_state.capture_viewport = function() return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 30} end
 timeline_state.push_viewport_guard = function() end
 timeline_state.pop_viewport_guard = function() end
 timeline_state.restore_viewport = function(_) end
@@ -60,7 +60,7 @@ timeline_state.apply_mutations = function(_, _) return true end
 command_manager.init(db, "default_sequence", "default_project")
 
 local function fetch_start(id)
-    local stmt = db:prepare("SELECT start_time FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT start_value FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found " .. tostring(id))
     local v = tonumber(stmt:value(0)) or 0
