@@ -94,7 +94,7 @@ local function setup_database(layout)
             selected_clip_ids TEXT DEFAULT '[]',
             selected_edge_infos TEXT DEFAULT '[]',
             viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-            viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
+            viewport_duration_value_frames INTEGER NOT NULL DEFAULT 240,
             mark_in_frame INTEGER,
             mark_out_frame INTEGER,
             current_sequence_number INTEGER
@@ -136,8 +136,8 @@ local function setup_database(layout)
             media_id TEXT,
             start_value INTEGER NOT NULL,
             duration_value INTEGER NOT NULL,
-            source_in_value INTEGER NOT NULL,
-            source_out_value INTEGER NOT NULL,
+            source_in_value_value INTEGER NOT NULL,
+            source_out_value_value INTEGER NOT NULL,
             timebase_type TEXT NOT NULL,
             timebase_rate REAL NOT NULL,
             enabled INTEGER DEFAULT 1
@@ -169,8 +169,8 @@ local function setup_database(layout)
     end
 
     local media = layout.media or {
-        {id = "media_v1", duration = 48000},
-        {id = "media_v2", duration = 48000},
+        {id = "media_v1", duration_value = 48000},
+        {id = "media_v2", duration_value = 48000},
     }
 
     local tracks = layout.tracks or {
@@ -193,14 +193,14 @@ local function setup_database(layout)
     for _, m in ipairs(media) do
         table.insert(inserts, string.format(
             "INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at) VALUES ('%s', 'default_project', '%s', '/tmp/%s.mov', %d, '%s', %.3f, 30.0, 1920, 1080, 2, 'prores', 0, 0)",
-            m.id, m.name or m.id, m.id, m.duration, m.timebase_type or \"video_frames\", m.timebase_rate or 30.0
+            m.id, m.name or m.id, m.id, m.duration_value, m.timebase_type or \"video_frames\", m.timebase_rate or 30.0
         ))
     end
 
     for _, clip in ipairs(layout.clips) do
         table.insert(inserts, string.format(
-            "INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, '%s', %.3f, 1)",
-            clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration, clip.timebase_type or "video_frames", clip.timebase_rate or 30.0
+            "INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value_value, source_out_value_value, timebase_type, timebase_rate, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, '%s', %.3f, 1)",
+            clip.id, clip.track_id, clip.media_id, clip.start_value, clip.duration_value, clip.source_in_value or 0, clip.source_out_value or (clip.source_in_value or 0) + clip.duration_value, clip.timebase_type or "video_frames", clip.timebase_rate or 30.0
         ))
     end
 
@@ -225,13 +225,13 @@ end
 
 local function fetch_clip(db, clip_id)
     local stmt = assert(db:prepare(string.format(
-        "SELECT start_time, duration, source_in, source_out FROM clips WHERE id = '%s'", clip_id)))
+        "SELECT start_value, duration_value, source_in_value, source_out_value FROM clips WHERE id = '%s'", clip_id)))
     assert(stmt:exec() and stmt:next(), "failed to fetch clip " .. clip_id)
     local clip = {
-        start_time = stmt:value(0),
-        duration = stmt:value(1),
-        source_in = stmt:value(2),
-        source_out = stmt:value(3)
+        start_value = stmt:value(0),
+        duration_value = stmt:value(1),
+        source_in_value = stmt:value(2),
+        source_out_value = stmt:value(3)
     }
     stmt:finalize()
     return clip
@@ -265,17 +265,17 @@ local function run_scenario(scenario)
 
     for clip_id, expected in pairs(scenario.expect) do
         local clip = fetch_clip(db, clip_id)
-        if expected.start_time ~= nil then
-            assert_eq(string.format("%s: start_time", scenario.name), clip.start_time, expected.start_time)
+        if expected.start_value ~= nil then
+            assert_eq(string.format("%s: start_value", scenario.name), clip.start_value, expected.start_value)
         end
-        if expected.duration ~= nil then
-            assert_eq(string.format("%s: duration", scenario.name), clip.duration, expected.duration)
+        if expected.duration_value ~= nil then
+            assert_eq(string.format("%s: duration_value", scenario.name), clip.duration_value, expected.duration_value)
         end
-        if expected.source_in ~= nil then
-            assert_eq(string.format("%s: source_in", scenario.name), clip.source_in, expected.source_in)
+        if expected.source_in_value ~= nil then
+            assert_eq(string.format("%s: source_in_value", scenario.name), clip.source_in_value, expected.source_in_value)
         end
-        if expected.source_out ~= nil then
-            assert_eq(string.format("%s: source_out", scenario.name), clip.source_out, expected.source_out)
+        if expected.source_out_value ~= nil then
+            assert_eq(string.format("%s: source_out_value", scenario.name), clip.source_out_value, expected.source_out_value)
         end
     end
 
@@ -287,9 +287,9 @@ local scenarios = {
         name = "gap_bracket_trim_left",
         layout = {
             clips = {
-                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 2000, source_in = 0, source_out = 2000},
-                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_time = 3000, duration = 2000, source_in = 2000, source_out = 4000},
-                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_time = 1000, duration = 2000, source_in = 1000, source_out = 3000}
+                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 2000, source_in_value = 0, source_out_value = 2000},
+                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_value = 3000, duration_value = 2000, source_in_value = 2000, source_out_value = 4000},
+                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_value = 1000, duration_value = 2000, source_in_value = 1000, source_out_value = 3000}
             }
         },
         edges = {
@@ -298,17 +298,17 @@ local scenarios = {
         },
         delta_ms = 1000,
         expect = {
-            clip_v1_second = {start_time = 2000, duration = 2000},
-            clip_v2_mid = {duration = 1000, source_in = 2000}
+            clip_v1_second = {start_value = 2000, duration_value = 2000},
+            clip_v2_mid = {duration_value = 1000, source_in_value = 2000}
         }
     },
     {
         name = "gap_bracket_out_trim_left",
         layout = {
             clips = {
-                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 2000, source_in = 0, source_out = 2000},
-                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_time = 3000, duration = 2000, source_in = 2000, source_out = 4000},
-                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_time = 1000, duration = 3000, source_in = 0, source_out = 3000}
+                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 2000, source_in_value = 0, source_out_value = 2000},
+                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_value = 3000, duration_value = 2000, source_in_value = 2000, source_out_value = 4000},
+                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_value = 1000, duration_value = 3000, source_in_value = 0, source_out_value = 3000}
             }
         },
         edges = {
@@ -317,16 +317,16 @@ local scenarios = {
         },
         delta_ms = -1000,
         expect = {
-            clip_v1_second = {start_time = 2000, duration = 2000},
-            clip_v2_mid = {duration = 2000, source_out = 2000}
+            clip_v1_second = {start_value = 2000, duration_value = 2000},
+            clip_v2_mid = {duration_value = 2000, source_out_value = 2000}
         }
     },
     {
         name = "single_track_out_trim_left",
         layout = {
             clips = {
-                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 1000, source_in = 0, source_out = 1000},
-                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_time = 1100, duration = 1000, source_in = 1000, source_out = 2000}
+                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 1000, source_in_value = 0, source_out_value = 1000},
+                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_value = 1100, duration_value = 1000, source_in_value = 1000, source_out_value = 2000}
             }
         },
         edges = {
@@ -334,16 +334,16 @@ local scenarios = {
         },
         delta_ms = -500,
         expect = {
-            clip_one = {start_time = 0, duration = 500, source_out = 500},
-            clip_two = {start_time = 600}
+            clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
+            clip_two = {start_value = 600}
         }
     },
     {
         name = "dual_out_trim_left",
         layout = {
             clips = {
-                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 1000, source_in = 0, source_out = 1000},
-                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_time = 1100, duration = 1000, source_in = 1000, source_out = 2000}
+                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 1000, source_in_value = 0, source_out_value = 1000},
+                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_value = 1100, duration_value = 1000, source_in_value = 1000, source_out_value = 2000}
             }
         },
         edges = {
@@ -352,8 +352,8 @@ local scenarios = {
         },
         delta_ms = -500,
         expect = {
-            clip_one = {start_time = 0, duration = 500, source_out = 500},
-            clip_two = {start_time = 600, duration = 500, source_out = 1500}
+            clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
+            clip_two = {start_value = 600, duration_value = 500, source_out_value = 1500}
         }
     }
 }
