@@ -12,8 +12,10 @@ local function make_clip(id, track_id, start_time, duration)
     return {
         id = id,
         track_id = track_id,
-        start_time = start_time,
-        duration = duration
+        start_value = start_time,
+        duration_value = duration,
+        timebase_type = "video_frames",
+        timebase_rate = 30
     }
 end
 
