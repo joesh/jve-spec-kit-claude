@@ -18,140 +18,47 @@ os.remove(TEST_DB)
 database.init(TEST_DB)
 local db = database.get_connection()
 
-db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-            CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-
-CREATE TABLE tracks (
-    id TEXT PRIMARY KEY,
-    sequence_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    track_type TEXT NOT NULL,
-    track_index INTEGER NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    locked INTEGER NOT NULL DEFAULT 0,
-    muted INTEGER NOT NULL DEFAULT 0,
-    soloed INTEGER NOT NULL DEFAULT 0,
-    volume REAL NOT NULL DEFAULT 1.0,
-    pan REAL NOT NULL DEFAULT 0.0
-);
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        duration INTEGER NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        audio_channels INTEGER NOT NULL DEFAULT 0,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT DEFAULT '{}'
-    );
-
-                    CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL DEFAULT 0,
-            source_out INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0,
-            modified_at INTEGER NOT NULL DEFAULT 0
-        );
-
-
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-]])
+db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                          timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
     VALUES
-        ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080),
-        ('imported_sequence', 'default_project', 'Imported Sequence', 30.0, 1920, 1080);
+        ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240),
+        ('imported_sequence', 'default_project', 'Imported Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index)
     VALUES
-        ('video1', 'default_sequence', 'V1', 'VIDEO', 1),
-        ('imported_v1', 'imported_sequence', 'Imported V1', 'VIDEO', 1);
+        ('video1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1),
+        ('imported_v1', 'imported_sequence', 'Imported V1', 'VIDEO', 'video_frames', 30.0, 1);
 
-    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height)
+    INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec)
     VALUES
-        ('media_existing', 'default_project', 'Existing Clip', 'synthetic://existing', 5000, 30.0, 1920, 1080),
-        ('media_insert', 'default_project', 'Insert Clip', 'synthetic://insert', 4500000, 30.0, 1920, 1080);
+        ('media_existing', 'default_project', 'Existing Clip', 'synthetic://existing', 5000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw'),
+        ('media_insert', 'default_project', 'Insert Clip', 'synthetic://insert', 4500000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw');
 
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out)
-    VALUES ('clip_existing', 'imported_v1', 'media_existing', 0, 5000, 0, 5000);
+    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate)
+    VALUES ('clip_existing', 'imported_v1', 'media_existing', 0, 5000, 0, 5000, 'video_frames', 30.0);
 ]])
 
 local timeline_state = {
-    playhead_time = 111400,
+    playhead_value = 111400,
     sequence_id = 'imported_sequence',
     project_id = 'default_project',
     selected_clips = {},
     selected_edges = {},
-    viewport_start_time = 0,
-    viewport_duration = 10000
+    viewport_start_value = 0,
+    viewport_duration_frames_value = 240,
+    sequence_frame_rate = nil
 }
 
 function timeline_state.get_project_id() return timeline_state.project_id end
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.set_sequence_id(new_id) timeline_state.sequence_id = new_id end
 function timeline_state.get_default_video_track_id() return 'imported_v1' end
-function timeline_state.get_playhead_time() return timeline_state.playhead_time end
-function timeline_state.set_playhead_time(time_ms) timeline_state.playhead_time = time_ms end
+function timeline_state.get_playhead_value() return timeline_state.playhead_value end
+function timeline_state.set_playhead_value(val) timeline_state.playhead_value = val end
 function timeline_state.get_selected_clips() return timeline_state.selected_clips end
 function timeline_state.get_selected_edges() return timeline_state.selected_edges end
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
@@ -160,12 +67,27 @@ function timeline_state.normalize_edge_selection() return false end
 function timeline_state.reload_clips(sequence_id)
     if sequence_id and sequence_id ~= "" then
         timeline_state.sequence_id = sequence_id
+        local rate_stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+        assert(rate_stmt, "timeline_state: failed to prepare frame rate lookup")
+        rate_stmt:bind_value(1, sequence_id)
+        assert(rate_stmt:exec() and rate_stmt:next(), "timeline_state: sequence missing for reload")
+        local rate = rate_stmt:value(0)
+        rate_stmt:finalize()
+        assert(rate and rate > 0, "timeline_state: invalid frame rate during reload")
+        timeline_state.sequence_frame_rate = rate
     end
 end
 function timeline_state.persist_state_to_db() end
 function timeline_state.apply_mutations(sequence_id, mutations)
     if sequence_id and sequence_id ~= "" then
         timeline_state.sequence_id = sequence_id
+        local rate_stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+        assert(rate_stmt and rate_stmt:bind_value(1, sequence_id), "timeline_state: failed to bind frame rate lookup")
+        assert(rate_stmt:exec() and rate_stmt:next(), "timeline_state: sequence missing during apply_mutations")
+        local rate = rate_stmt:value(0)
+        rate_stmt:finalize()
+        assert(rate and rate > 0, "timeline_state: invalid frame rate during apply_mutations")
+        timeline_state.sequence_frame_rate = rate
     end
     return mutations ~= nil
 end
@@ -174,14 +96,14 @@ function timeline_state.consume_mutation_failure()
 end
 function timeline_state.capture_viewport()
     return {
-        start_time = timeline_state.viewport_start_time,
-        duration = timeline_state.viewport_duration
+        start_value = timeline_state.viewport_start_value,
+        duration_value = timeline_state.viewport_duration_frames_value
     }
 end
 function timeline_state.restore_viewport(snapshot)
     if not snapshot then return end
-    if snapshot.start_time then timeline_state.viewport_start_time = snapshot.start_time end
-    if snapshot.duration then timeline_state.viewport_duration = snapshot.duration end
+    if snapshot.start_value then timeline_state.viewport_start_value = snapshot.start_value end
+    if snapshot.duration_value then timeline_state.viewport_duration_frames_value = snapshot.duration_value end
 end
 local viewport_guard = 0
 function timeline_state.push_viewport_guard()
@@ -191,6 +113,19 @@ end
 function timeline_state.pop_viewport_guard()
     if viewport_guard > 0 then viewport_guard = viewport_guard - 1 end
     return viewport_guard
+end
+function timeline_state.get_sequence_frame_rate()
+    if not timeline_state.sequence_frame_rate then
+        local stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+        assert(stmt, "timeline_state: failed to prepare frame rate lookup")
+        stmt:bind_value(1, timeline_state.sequence_id)
+        assert(stmt:exec() and stmt:next(), "timeline_state: missing sequence for frame rate")
+        local rate = stmt:value(0)
+        stmt:finalize()
+        assert(rate and rate > 0, "timeline_state: invalid frame rate")
+        timeline_state.sequence_frame_rate = rate
+    end
+    return timeline_state.sequence_frame_rate
 end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state

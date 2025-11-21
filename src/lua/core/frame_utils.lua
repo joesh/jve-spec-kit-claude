@@ -193,8 +193,8 @@ function M.validate_clip_alignment(clip, frame_rate)
 
     local errors = {}
 
-    if not M.is_frame_aligned(clip.start_time, frame_rate) then
-        table.insert(errors, string.format("start_time %dms not frame-aligned", clip.start_time))
+    if not M.is_frame_aligned(clip.start_value, frame_rate) then
+        table.insert(errors, string.format("start_value %dms not frame-aligned", clip.start_value))
     end
 
     if not M.is_frame_aligned(clip.duration, frame_rate) then

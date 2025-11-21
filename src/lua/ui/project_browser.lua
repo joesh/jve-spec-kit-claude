@@ -1734,7 +1734,7 @@ function M.insert_selected_to_timeline()
 
     local Command = require("command")
 
-    local insert_time = timeline_state_module.get_playhead_time and timeline_state_module.get_playhead_time() or 0
+    local insert_time = timeline_state_module.get_playhead_value and timeline_state_module.get_playhead_value() or 0
     local source_in = clip.source_in or 0
     local source_out = clip.source_out or clip.duration or media.duration or 0
     local duration = source_out - source_in

@@ -21,22 +21,22 @@ local function init_database(path)
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-        INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 25.0, 1920, 1080);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 0, 0);
-        INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES ('media_a', 'default_project', 'A', '/tmp/jve/a.mov', 10000, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
-        INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES ('media_b', 'default_project', 'B', '/tmp/jve/b.mov', 10000, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, kind, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Default Sequence', 25.0, 48000, 1920, 1080, 'timeline', 0, 0, 0, 250);
+        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 25.0, 1, 1, 0, 0, 0, 0, 0);
+        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES ('media_a', 'default_project', 'A', '/tmp/jve/a.mov', 10000, 'video_frames', 25.0, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES ('media_b', 'default_project', 'B', '/tmp/jve/b.mov', 10000, 'video_frames', 25.0, 25.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_time, duration, source_in, source_out, enabled, offline, created_at, modified_at)
+                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline, created_at, modified_at)
         VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_a', 'default_sequence',
-                0, 3000, 1000, 4000, 1, 0, strftime('%s','now'), strftime('%s','now'));
+                0, 3000, 1000, 4000, 'video_frames', 25.0, 1, 0, strftime('%s','now'), strftime('%s','now'));
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_time, duration, source_in, source_out, enabled, offline, created_at, modified_at)
+                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline, created_at, modified_at)
         VALUES ('clip_b', 'default_project', 'timeline', 'Clip B', 'track_v1', 'media_b', 'default_sequence',
-                3000, 2000, 500, 2500, 1, 0, strftime('%s','now'), strftime('%s','now'));
+                3000, 2000, 500, 2500, 'video_frames', 25.0, 1, 0, strftime('%s','now'), strftime('%s','now'));
     ]]))
     return db
 end
@@ -63,13 +63,13 @@ assert(result.success, result.error_message or "Roll execution failed")
 
 -- Validate post-roll state
 local function fetch_clip(id)
-    local stmt = db:prepare("SELECT start_time, duration FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT start_value, duration_value FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt and stmt:exec() and stmt:next(), "Failed to load clip " .. id)
-    local start_time = tonumber(stmt:value(0))
+    local start_value = tonumber(stmt:value(0))
     local duration = tonumber(stmt:value(1))
     stmt:finalize()
-    return start_time, duration
+    return start_value, duration
 end
 
 local a_start, a_dur = fetch_clip("clip_a")

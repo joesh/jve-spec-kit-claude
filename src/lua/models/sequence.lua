@@ -57,7 +57,7 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         frame_rate = fr,
         width = w,
         height = h,
-        timecode_start = opts.timecode_start or 0,
+        timecode_start_frame = opts.timecode_start_frame or 0,
         created_at = opts.created_at or now,
         modified_at = opts.modified_at or now
     }
@@ -77,7 +77,7 @@ function Sequence.load(id, db)
     end
 
     local stmt = conn:prepare([[
-        SELECT id, project_id, name, kind, frame_rate, width, height, timecode_start
+        SELECT id, project_id, name, kind, frame_rate, width, height, timecode_start_frame
         FROM sequences WHERE id = ?
     ]])
 
@@ -106,7 +106,7 @@ function Sequence.load(id, db)
         frame_rate = stmt:value(4),
         width = stmt:value(5),
         height = stmt:value(6),
-        timecode_start = stmt:value(7) or 0,
+        timecode_start_frame = stmt:value(7) or 0,
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -134,7 +134,7 @@ function Sequence:save(db)
 
     local stmt = conn:prepare([[
         INSERT OR REPLACE INTO sequences
-        (id, project_id, name, kind, frame_rate, width, height, timecode_start)
+        (id, project_id, name, kind, frame_rate, width, height, timecode_start_frame)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ]])
 
@@ -151,7 +151,7 @@ function Sequence:save(db)
     stmt:bind_value(5, self.frame_rate)
     stmt:bind_value(6, self.width)
     stmt:bind_value(7, self.height)
-    stmt:bind_value(8, self.timecode_start or 0)
+    stmt:bind_value(8, self.timecode_start_frame or 0)
 
     local ok = stmt:exec()
     if not ok then

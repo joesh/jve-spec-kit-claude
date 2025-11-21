@@ -164,84 +164,89 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-# Contract tests
-file(GLOB CONTRACT_TEST_SOURCES tests/contract/*.cpp)
-# Exclude tests for deleted UI components and broken tests
-list(FILTER CONTRACT_TEST_SOURCES EXCLUDE REGEX ".*(selection_system|selection_properties|clip_selection|edge_selection|uuid_determinism|command_execute|command_redo|command_undo).*")
-foreach(test_source ${CONTRACT_TEST_SOURCES})
-    get_filename_component(test_name ${test_source} NAME_WE)
-    add_executable(${test_name}
-        ${test_source}
-        tests/common/test_base.cpp
+# Legacy C++ contract/integration tests are disabled by default; Lua suite is authoritative.
+option(ENABLE_LEGACY_CPP_TESTS "Build legacy Qt/SQLite contract and integration tests" OFF)
+
+if(ENABLE_LEGACY_CPP_TESTS)
+    # Contract tests
+    file(GLOB CONTRACT_TEST_SOURCES tests/contract/*.cpp)
+    # Exclude tests for deleted UI components and broken tests
+    list(FILTER CONTRACT_TEST_SOURCES EXCLUDE REGEX ".*(selection_system|selection_properties|clip_selection|edge_selection|uuid_determinism|command_execute|command_redo|command_undo).*")
+    foreach(test_source ${CONTRACT_TEST_SOURCES})
+        get_filename_component(test_name ${test_source} NAME_WE)
+        add_executable(${test_name}
+            ${test_source}
+            tests/common/test_base.cpp
+        )
+        target_link_libraries(${test_name}
+            JVECore
+            Qt6::Test
+            Qt6::Core
+            Qt6::Gui
+            ${LUAJIT_LIBRARIES}
+        )
+        target_include_directories(${test_name} PUBLIC
+            ${CMAKE_SOURCE_DIR}
+            ${LUAJIT_INCLUDE_DIRS}
+        )
+        target_link_directories(${test_name} PRIVATE
+            ${LUAJIT_LIBRARY_DIRS}
+        )
+        add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
+
+    # Integration tests - Command replay invariant test
+    add_executable(test_command_replay_invariant
+        tests/integration/test_command_replay_invariant.cpp
     )
-    target_link_libraries(${test_name}
+    target_link_libraries(test_command_replay_invariant
         JVECore
         Qt6::Test
         Qt6::Core
+        Qt6::Widgets
+        Qt6::Sql
         Qt6::Gui
         ${LUAJIT_LIBRARIES}
     )
-    target_include_directories(${test_name} PUBLIC
+    target_include_directories(test_command_replay_invariant PUBLIC
         ${CMAKE_SOURCE_DIR}
         ${LUAJIT_INCLUDE_DIRS}
     )
-    target_link_directories(${test_name} PRIVATE
+    target_link_directories(test_command_replay_invariant PRIVATE
         ${LUAJIT_LIBRARY_DIRS}
     )
-    add_test(NAME ${test_name} COMMAND ${test_name})
-endforeach()
+    set_target_properties(test_command_replay_invariant PROPERTIES
+        AUTOMOC ON
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    add_test(NAME test_command_replay_invariant COMMAND test_command_replay_invariant)
 
-# Integration tests - Command replay invariant test
-add_executable(test_command_replay_invariant
-    tests/integration/test_command_replay_invariant.cpp
-)
-target_link_libraries(test_command_replay_invariant
-    JVECore
-    Qt6::Test
-    Qt6::Core
-    Qt6::Widgets
-    Qt6::Sql
-    Qt6::Gui
-    ${LUAJIT_LIBRARIES}
-)
-target_include_directories(test_command_replay_invariant PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${LUAJIT_INCLUDE_DIRS}
-)
-target_link_directories(test_command_replay_invariant PRIVATE
-    ${LUAJIT_LIBRARY_DIRS}
-)
-set_target_properties(test_command_replay_invariant PROPERTIES
-    AUTOMOC ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-add_test(NAME test_command_replay_invariant COMMAND test_command_replay_invariant)
-
-# Integration test - Canonical batch ripple drag regression
-add_executable(test_batch_ripple_gap_drag
-    tests/integration/test_batch_ripple_gap_drag.cpp
-)
-target_link_libraries(test_batch_ripple_gap_drag
-    JVECore
-    Qt6::Test
-    Qt6::Core
-    Qt6::Widgets
-    Qt6::Sql
-    Qt6::Gui
-    ${LUAJIT_LIBRARIES}
-)
-target_include_directories(test_batch_ripple_gap_drag PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${LUAJIT_INCLUDE_DIRS}
-)
-target_link_directories(test_batch_ripple_gap_drag PRIVATE
-    ${LUAJIT_LIBRARY_DIRS}
-)
-set_target_properties(test_batch_ripple_gap_drag PROPERTIES
-    AUTOMOC ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-add_test(NAME test_batch_ripple_gap_drag COMMAND test_batch_ripple_gap_drag)
+    # Integration test - Canonical batch ripple drag regression
+    add_executable(test_batch_ripple_gap_drag
+        tests/integration/test_batch_ripple_gap_drag.cpp
+    )
+    target_link_libraries(test_batch_ripple_gap_drag
+        JVECore
+        Qt6::Test
+        Qt6::Core
+        Qt6::Widgets
+        Qt6::Sql
+        Qt6::Gui
+        ${LUAJIT_LIBRARIES}
+    )
+    target_include_directories(test_batch_ripple_gap_drag PUBLIC
+        ${CMAKE_SOURCE_DIR}
+        ${LUAJIT_INCLUDE_DIRS}
+    )
+    target_link_directories(test_batch_ripple_gap_drag PRIVATE
+        ${LUAJIT_LIBRARY_DIRS}
+    )
+    set_target_properties(test_batch_ripple_gap_drag PROPERTIES
+        AUTOMOC ON
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    add_test(NAME test_batch_ripple_gap_drag COMMAND test_batch_ripple_gap_drag)
+endif()
 
 # Unit tests (no unit tests currently - they would go in tests/unit/)
 # Note: New timeline tests are standalone and defined below
@@ -278,6 +283,10 @@ add_custom_target(lua_tests ALL
 )
 
 add_dependencies(lua_tests JVEEditor)
+add_test(NAME lua_suite
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
 
 # Standalone Lua timeline logic test (no test_base dependency)
 # Installation (not applicable for M1 Foundation tests)

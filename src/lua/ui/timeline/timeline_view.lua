@@ -99,7 +99,7 @@ function M.create(widget, state_module, track_filter_fn, options)
             if clip_y >= 0 then
                 local track_height = get_track_visual_height(clip.track_id)
                 if y >= clip_y and y <= clip_y + track_height then
-                    local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                    local clip_x = state_module.time_to_pixel(clip.start_value, width)
                     local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
                     if clip_width < 0 then
                         clip_width = 0
@@ -343,30 +343,30 @@ function M.create(widget, state_module, track_filter_fn, options)
         end
 
         table.sort(clips_on_track, function(a, b)
-            if a.start_time == b.start_time then
+            if a.start_value == b.start_value then
                 return a.id < b.id
             end
-            return a.start_time < b.start_time
+            return a.start_value < b.start_value
         end)
 
         local previous_end = 0
         local previous_clip_id = nil
         for _, clip in ipairs(clips_on_track) do
             local gap_start = previous_end
-            local gap_end = clip.start_time
+            local gap_end = clip.start_value
             local gap_duration = gap_end - gap_start
 
             if gap_duration > 0 and time_ms >= gap_start and time_ms < gap_end then
                 return {
                     track_id = track_id,
-                    start_time = gap_start,
+                    start_value = gap_start,
                     duration = gap_duration,
                     prev_clip_id = previous_clip_id,
                     next_clip_id = clip.id,
                 }
             end
 
-            previous_end = clip.start_time + clip.duration
+            previous_end = clip.start_value + clip.duration
             previous_clip_id = clip.id
         end
 
@@ -414,10 +414,10 @@ function M.create(widget, state_module, track_filter_fn, options)
         timeline.clear_commands(view.widget)
 
         -- Get viewport state
-        local viewport_start = state_module.get_viewport_start_time()
+        local viewport_start = state_module.get_viewport_start_value()
         local viewport_duration = state_module.get_viewport_duration()
         local viewport_end = viewport_start + viewport_duration
-        local playhead_time = state_module.get_playhead_time()
+        local playhead_value = state_module.get_playhead_value()
         local mark_in = state_module.get_mark_in and state_module.get_mark_in()
         local mark_out = state_module.get_mark_out and state_module.get_mark_out()
 
@@ -640,7 +640,7 @@ end
             if y >= 0 then
                 local track_height = track_layout.height
                 local geometry_start = perf_stats and perf_now() or nil
-                local clip_start = clip.start_time + time_offset_ms
+                local clip_start = clip.start_value + time_offset_ms
                 local clip_end = clip_start + clip.duration
                 local x = state_module.time_to_pixel(clip_start, width)
                 local clip_end_px = state_module.time_to_pixel(clip_end, width)
@@ -829,8 +829,8 @@ end
                 local gap_track_y = get_track_y_by_id(gap.track_id, height)
                 if gap_track_y >= 0 then
                     local track_height = get_track_visual_height(gap.track_id)
-                    local gap_start_x = state_module.time_to_pixel(gap.start_time, width)
-                    local gap_end_x = state_module.time_to_pixel(gap.start_time + gap.duration, width)
+                    local gap_start_x = state_module.time_to_pixel(gap.start_value, width)
+                    local gap_end_x = state_module.time_to_pixel(gap.start_value + gap.duration, width)
                     local gap_width = gap_end_x - gap_start_x
                     if gap_width > 0 then
                         local gap_top = gap_track_y + 5
@@ -1030,7 +1030,7 @@ end
                             local y = get_track_y_by_id(clip.track_id, height)
                             if y >= 0 then
                                 local track_height = get_track_visual_height(clip.track_id)
-                                local x = state_module.time_to_pixel(affected_clip.new_start_time, width)
+                                local x = state_module.time_to_pixel(affected_clip.new_start_value, width)
                                 y = y + 5
                                 local clip_width = math.floor((affected_clip.new_duration / viewport_duration) * width) - 1
                                 local clip_height = track_height - 10
@@ -1055,7 +1055,7 @@ end
                             local y = get_track_y_by_id(clip.track_id, height)
                             if y >= 0 then
                                 local track_height = get_track_visual_height(clip.track_id)
-                                local x = state_module.time_to_pixel(shift_info.new_start_time, width)
+                                local x = state_module.time_to_pixel(shift_info.new_start_value, width)
                                 y = y + 5
                                 local clip_width = math.floor((clip.duration / viewport_duration) * width) - 1
                                 local clip_height = track_height - 10
@@ -1106,7 +1106,7 @@ end
                 end
 
                 -- Calculate new dimensions
-                local new_start = clip.start_time + in_edge_offset
+                local new_start = clip.start_value + in_edge_offset
                 local new_duration = clip.duration - in_edge_offset + out_edge_offset
                 local y = get_track_y_by_id(clip.track_id, height)
 
@@ -1181,7 +1181,7 @@ end
 
             local function compute_gap_duration(reference_clip, edge_type)
                 if not reference_clip then return 0 end
-                local ref_start = reference_clip.start_time or 0
+                local ref_start = reference_clip.start_value or 0
                 local ref_end = ref_start + (reference_clip.duration or 0)
                 local gap_start, gap_end
                 if edge_type == 'gap_after' then
@@ -1189,8 +1189,8 @@ end
                     gap_end = math.huge
                     for _, other in ipairs(all_for_constraints) do
                         if other.track_id == reference_clip.track_id and other.id ~= reference_clip.id then
-                            if other.start_time and other.start_time >= ref_end and other.start_time < gap_end then
-                                gap_end = other.start_time
+                            if other.start_value and other.start_value >= ref_end and other.start_value < gap_end then
+                                gap_end = other.start_value
                             end
                         end
                     end
@@ -1199,7 +1199,7 @@ end
                     gap_start = 0
                     for _, other in ipairs(all_for_constraints) do
                         if other.track_id == reference_clip.track_id and other.id ~= reference_clip.id then
-                            local other_end = (other.start_time or 0) + (other.duration or 0)
+                            local other_end = (other.start_value or 0) + (other.duration or 0)
                             if other_end <= ref_start and other_end > gap_start then
                                 gap_start = other_end
                             end
@@ -1261,7 +1261,7 @@ end
                     local clip_y = get_track_y_by_id(edge_clip.track_id, height)
                     if clip_y >= 0 then
                         local track_height = get_track_visual_height(edge_clip.track_id)
-                        local clip_start = affected.new_start_time or edge_clip.start_time
+                        local clip_start = affected.new_start_value or edge_clip.start_value
                         local clip_duration = affected.new_duration or edge_clip.duration
 
                         local clip_x = state_module.time_to_pixel(clip_start, width)
@@ -1311,7 +1311,7 @@ end
                     local clip_y = get_track_y_by_id(edge_clip.track_id, height)
                     if clip_y >= 0 then
                         local track_height = get_track_visual_height(edge_clip.track_id)
-                        local clip_start = edge_clip.start_time
+                        local clip_start = edge_clip.start_value
                         local clip_duration = edge_clip.duration
                         if preview.edge_type == "in" or preview.edge_type == "gap_before" then
                             clip_start = clip_start + preview.delta_ms
@@ -1346,8 +1346,8 @@ end
         draw_mark_overlays()
 
         -- Draw playhead line (vertical line only, triangle is in ruler)
-        if playhead_time >= viewport_start and playhead_time <= viewport_start + viewport_duration then
-            local playhead_x = state_module.time_to_pixel(playhead_time, width)
+        if playhead_value >= viewport_start and playhead_value <= viewport_start + viewport_duration then
+            local playhead_x = state_module.time_to_pixel(playhead_value, width)
             timeline.add_line(view.widget, playhead_x, 0, playhead_x, height, state_module.colors.playhead, 2)
         end
 
@@ -1408,8 +1408,8 @@ end
                 return
             end
             -- Check if clicking on playhead
-            local playhead_time = state_module.get_playhead_time()
-            local playhead_x = state_module.time_to_pixel(playhead_time, width)
+            local playhead_value = state_module.get_playhead_value()
+            local playhead_x = state_module.time_to_pixel(playhead_value, width)
             if math.abs(x - playhead_x) < 5 then
                 state_module.set_dragging_playhead(true)
                 return
@@ -1437,7 +1437,7 @@ end
 
                     -- Check if Y is within track bounds (full track, not just clip height)
                     if y >= clip_y and y <= clip_y + track_height then
-                        local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                        local clip_x = state_module.time_to_pixel(clip.start_value, width)
                         local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
                         local clip_end_x = clip_x + clip_width
 
@@ -1543,7 +1543,7 @@ end
                     type = "edges",
                     start_x = x,
                     start_y = y,
-                    start_time = state_module.pixel_to_time(x, width),
+                    start_value = state_module.pixel_to_time(x, width),
                     edges = state_module.get_selected_edges(),
                     modifiers = modifiers
                 }
@@ -1560,7 +1560,7 @@ end
                 local clip_y = get_track_y_by_id(clip.track_id, height)
                 if clip_y >= 0 then
                     local track_height = get_track_visual_height(clip.track_id)
-                    local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                    local clip_x = state_module.time_to_pixel(clip.start_value, width)
                     local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
 
                     if x >= clip_x and x <= clip_x + clip_width and
@@ -1608,7 +1608,7 @@ end
                             type = "clips",
                             start_x = x,
                             start_y = y,
-                            start_time = state_module.pixel_to_time(x, width),
+                            start_value = state_module.pixel_to_time(x, width),
                             clips = selected_clips,
                             modifiers = modifiers,
                             anchor_clip_id = clicked_clip.id
@@ -1641,7 +1641,7 @@ end
                         type = "clips",
                         start_x = x,
                         start_y = y,
-                        start_time = state_module.pixel_to_time(x, width),
+                        start_value = state_module.pixel_to_time(x, width),
                         clips = new_selection,
                         modifiers = modifiers,
                         anchor_clip_id = clicked_clip.id
@@ -1700,7 +1700,7 @@ end
                         type = view.potential_drag.type,
                         start_x = view.potential_drag.start_x,
                         start_y = view.potential_drag.start_y,
-                        start_time = view.potential_drag.start_time,
+                        start_value = view.potential_drag.start_value,
                         clips = view.potential_drag.clips,
                         edges = view.potential_drag.edges,
                         anchor_clip_id = view.potential_drag.anchor_clip_id,
@@ -1711,7 +1711,7 @@ end
                     if (not view.drag_state.anchor_clip_id) and view.drag_state.clips and #view.drag_state.clips > 0 then
                         view.drag_state.anchor_clip_id = view.drag_state.clips[1].id
                     end
-                    view.drag_state.delta_ms = math.floor(view.drag_state.current_time - view.drag_state.start_time)
+                    view.drag_state.delta_ms = math.floor(view.drag_state.current_time - view.drag_state.start_value)
 
                     -- For edge drags, augment each edge with its original_time for snapping calculations
                     if view.drag_state.type == "edges" and view.drag_state.edges then
@@ -1723,15 +1723,15 @@ end
                                     -- Calculate original time based on edge type
                                     -- No special cases - "in" is always left edge, "out" is always right edge
                                     if edge.edge_type == "in" then
-                                        edge.original_time = clip.start_time
+                                        edge.original_time = clip.start_value
                                     elseif edge.edge_type == "out" then
-                                        edge.original_time = clip.start_time + clip.duration
+                                        edge.original_time = clip.start_value + clip.duration
                                     elseif edge.edge_type == "gap_before" then
                                         -- Gap before clip shares the clip's start time
-                                        edge.original_time = clip.start_time
+                                        edge.original_time = clip.start_value
                                     elseif edge.edge_type == "gap_after" then
                                         -- Gap after clip starts where the clip ends
-                                        edge.original_time = clip.start_time + clip.duration
+                                        edge.original_time = clip.start_value + clip.duration
                                     else
                                         error("Unknown edge type: " .. tostring(edge.edge_type))
                                     end
@@ -1772,13 +1772,13 @@ end
                     if view.drag_state.type == "clips" then
                         -- For clip drags: snap CLIP EDGES, not mouse position
                         -- Calculate where clip edges will be after this drag
-                        local delta_ms = current_time - view.drag_state.start_time
+                        local delta_ms = current_time - view.drag_state.start_value
                         local best_snap = nil
                         local best_snap_distance = math.huge
 
                         for _, clip in ipairs(view.drag_state.clips) do
                             -- Check both edges of this clip
-                            local new_in_point = clip.start_time + delta_ms
+                            local new_in_point = clip.start_value + delta_ms
                             local new_out_point = new_in_point + clip.duration
 
                             -- Try snapping in-point (exclude only THIS edge from snapping to itself)
@@ -1811,7 +1811,7 @@ end
                     elseif view.drag_state.type == "edges" then
                         -- For edge drags: check if edges would snap at their new positions
                         -- Calculate where edges will be AFTER this drag, then check for snaps
-                        local delta_ms = current_time - view.drag_state.start_time
+                        local delta_ms = current_time - view.drag_state.start_value
                         local best_snap = nil
                         local best_snap_distance = math.huge
 
@@ -1848,13 +1848,13 @@ end
 
                 if modifiers and modifiers.shift then
                     view.drag_state.current_x = view.drag_state.start_x
-                    view.drag_state.current_time = view.drag_state.start_time
+                    view.drag_state.current_time = view.drag_state.start_value
                     view.drag_state.delta_ms = 0
                     view.drag_state.shift_constrained = true
                 else
                     view.drag_state.current_x = x
                     view.drag_state.current_time = current_time
-                    view.drag_state.delta_ms = math.floor(current_time - view.drag_state.start_time)
+                    view.drag_state.delta_ms = math.floor(current_time - view.drag_state.start_value)
                     view.drag_state.shift_constrained = false
                 end
 
@@ -1866,7 +1866,7 @@ end
                 render()  -- Show drag preview
             elseif state_module.is_dragging_playhead() then
                 local time = state_module.pixel_to_time(x, width)
-                state_module.set_playhead_time(time)
+                state_module.set_playhead_value(time)
             elseif view.panel_drag_move then
                 -- Forward move events to panel during drag selection
                 view.pending_gap_click = nil
@@ -1888,7 +1888,7 @@ end
                         local clip_height = track_height - 10
 
                         if y >= clip_y + 5 and y <= clip_y + 5 + clip_height then
-                            local clip_x = state_module.time_to_pixel(clip.start_time, width)
+                            local clip_x = state_module.time_to_pixel(clip.start_value, width)
                             local clip_width = math.floor((clip.duration / state_module.get_viewport_duration()) * width) - 1
 
                             local dist_from_left = math.abs(x - clip_x)
@@ -2097,7 +2097,7 @@ end
                     if alt_copy then
                         for _, clip in ipairs(current_clips) do
                             local target_track_id = clip_targets[clip.id] or clip.track_id
-                            local overwrite_time = clip.start_time + delta_ms
+                            local overwrite_time = clip.start_value + delta_ms
                             local source_in = clip.source_in or 0
                             local source_out = clip.source_out or (source_in + (clip.duration or 0))
                             local has_media = clip.media_id and clip.media_id ~= ""
@@ -2143,7 +2143,7 @@ end
                                 }
                                 if delta_ms ~= 0 then
                                     move_params.skip_occlusion = true
-                                    move_params.pending_new_start_time = move_info.clip.start_time + delta_ms
+                                    move_params.pending_new_start_value = move_info.clip.start_value + delta_ms
                                     move_params.pending_duration = move_info.clip.duration
                                 end
                                 move_params.project_id = move_info.clip.project_id or active_project_id
@@ -2190,7 +2190,7 @@ end
                         local mutation_updates = {}
                         for _, clip in ipairs(current_clips) do
                             local target_track_for_clip = clip_targets[clip.id] or clip.track_id
-                            local new_start = clip.start_time + delta_ms
+                            local new_start = clip.start_value + delta_ms
                             local track_changed = target_track_for_clip ~= clip.track_id
                             local time_changed = delta_ms ~= 0
                             if track_changed or time_changed then
@@ -2198,7 +2198,7 @@ end
                                     clip_id = clip.id,
                                     track_id = target_track_for_clip,
                                     track_sequence_id = active_sequence_id,
-                                    start_time = new_start,
+                                    start_value = new_start,
                                     duration = clip.duration,
                                     source_in = clip.source_in,
                                     source_out = clip.source_out
@@ -2404,8 +2404,8 @@ end
             if width and width > 0 then
                 local viewport_duration = state_module.get_viewport_duration()
                 local delta_time = (-horizontal / width) * viewport_duration
-                local new_start = state_module.get_viewport_start_time() + delta_time
-                state_module.set_viewport_start_time(new_start)
+                local new_start = state_module.get_viewport_start_value() + delta_time
+                state_module.set_viewport_start_value(new_start)
                 render()
             end
         end

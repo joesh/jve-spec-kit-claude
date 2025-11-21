@@ -84,7 +84,7 @@ void TestSequenceCreate::testSequenceCreateSuccess()
     QJsonObject request;
     request["name"] = "Main Timeline";
     request["frame_rate"] = 29.97;
-    request["timecode_start"] = 0;
+    request["timecode_start_frame"] = 0;
     
     // Create sequence - THIS WILL FAIL until ProjectManager is implemented
     QJsonObject response = m_projectManager->createSequence(m_validProjectId, request);
@@ -127,7 +127,7 @@ void TestSequenceCreate::testSequenceCreateValidation()
     QJsonObject invalidRequest3;
     invalidRequest3["name"] = "Invalid Timecode Sequence";
     invalidRequest3["frame_rate"] = 25;
-    invalidRequest3["timecode_start"] = -1000; // Invalid
+    invalidRequest3["timecode_start_frame"] = -1000; // Invalid
     
     QJsonObject response3 = m_projectManager->createSequence(m_validProjectId, invalidRequest3);
     QVERIFY(response3.contains("error"));
@@ -184,7 +184,7 @@ void TestSequenceCreate::testSequenceCreateTimecode()
     QJsonObject request;
     request["name"] = "Timecode Test Sequence";
     request["frame_rate"] = 25;
-    request["timecode_start"] = 3600000; // 01:00:00:00
+    request["timecode_start_frame"] = 3600000; // 01:00:00:00
     
     QJsonObject response = m_projectManager->createSequence(m_validProjectId, request);
     
@@ -202,7 +202,7 @@ void TestSequenceCreate::testSequenceCreateTimecode()
     QJsonObject defaultRequest;
     defaultRequest["name"] = "Default Timecode Sequence";
     defaultRequest["frame_rate"] = 30;
-    // timecode_start omitted - should default to 0
+    // timecode_start_frame omitted - should default to 0
     
     QJsonObject defaultResponse = m_projectManager->createSequence(m_validProjectId, defaultRequest);
     

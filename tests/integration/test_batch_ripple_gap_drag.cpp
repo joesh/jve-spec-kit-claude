@@ -280,7 +280,7 @@ void TestBatchRippleGapDrag::populateCanonicalScenario()
         if (!commandColumns.contains("parent_sequence_number")) {
             QSqlQuery alter(m_db);
             QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN parent_sequence_number INTEGER"), alter.lastError().text().toUtf8().constData());
-            QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN playhead_time INTEGER NOT NULL DEFAULT 0"), alter.lastError().text().toUtf8().constData());
+            QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN playhead_value INTEGER NOT NULL DEFAULT 0"), alter.lastError().text().toUtf8().constData());
             QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN selected_clip_ids TEXT"), alter.lastError().text().toUtf8().constData());
             QVERIFY2(alter.exec("ALTER TABLE commands ADD COLUMN selected_edge_infos TEXT"), alter.lastError().text().toUtf8().constData());
         }
@@ -375,7 +375,7 @@ void TestBatchRippleGapDrag::populateCanonicalScenario()
     // Insert V2 clip A spanning 0-5s
     {
         QSqlQuery insertClip(m_db);
-        insertClip.prepare("INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)"
+        insertClip.prepare("INSERT INTO clips (id, track_id, media_id, start_value, duration, source_in, source_out, enabled)"
                            " VALUES ('clip_v2_a', 'video2', 'media_v2_clip', 0, 5000, 0, 5000, 1)");
         QVERIFY2(insertClip.exec(), insertClip.lastError().text().toUtf8().constData());
     }
@@ -383,7 +383,7 @@ void TestBatchRippleGapDrag::populateCanonicalScenario()
     // Insert V1 clip B starting at 3s (gap before)
     {
         QSqlQuery insertClip(m_db);
-        insertClip.prepare("INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)"
+        insertClip.prepare("INSERT INTO clips (id, track_id, media_id, start_value, duration, source_in, source_out, enabled)"
                            " VALUES ('clip_v1_b', 'video1', 'media_v1_clip', 3000, 5000, 0, 5000, 1)");
         QVERIFY2(insertClip.exec(), insertClip.lastError().text().toUtf8().constData());
     }
@@ -437,8 +437,8 @@ void TestBatchRippleGapDrag::fetchTimelineMetrics()
 {
     executeLua(R"(
         local state = require('ui.timeline.timeline_state')
-        TEST_viewport_start = state.get_viewport_start_time()
-        TEST_viewport_duration = state.get_viewport_duration()
+        TEST_viewport_start = state.get_viewport_start_value()
+        TEST_viewport_duration_frames = state.get_viewport_duration_frames()
         TEST_track_height_v1 = state.get_track_height('video1')
         TEST_track_height_v2 = state.get_track_height('video2')
         local layout = state.debug_get_layout_metrics('video')
@@ -462,7 +462,7 @@ void TestBatchRippleGapDrag::fetchTimelineMetrics()
     )");
 
     m_viewportStart = getLuaNumber("TEST_viewport_start");
-    m_viewportDuration = getLuaNumber("TEST_viewport_duration");
+    m_viewportDuration = getLuaNumber("TEST_viewport_duration_frames");
     m_trackHeightV1 = getLuaNumber("TEST_track_height_v1");
     m_trackHeightV2 = getLuaNumber("TEST_track_height_v2");
 
@@ -546,7 +546,7 @@ void TestBatchRippleGapDrag::testCanonicalGapDragRight()
     waitForUi();
 
     // Move playhead away from zero so snapping doesn't pull to origin
-    executeLua("require('ui.timeline.timeline_state').set_playhead_time(5000)");
+    executeLua("require('ui.timeline.timeline_state').set_playhead_value(5000)");
     waitForUi();
 
     const auto sendMouseEvent = [&](QEvent::Type type, const QPoint& localPos, Qt::MouseButton button,
@@ -614,7 +614,7 @@ void TestBatchRippleGapDrag::testCanonicalGapDragRight()
         TEST_clip_v2_source_in = stmt:value(1)
         stmt:finalize()
 
-        local stmt_b = conn:prepare("SELECT start_time, duration FROM clips WHERE id='clip_v1_b'")
+        local stmt_b = conn:prepare("SELECT start_value, duration FROM clips WHERE id='clip_v1_b'")
         assert(stmt_b and stmt_b:exec(), "clip_v1_b query failed")
         assert(stmt_b:next(), "clip_v1_b missing after canonical drag")
         TEST_clip_v1_b_start = stmt_b:value(0)
@@ -636,13 +636,13 @@ void TestBatchRippleGapDrag::testGapDragClampsToNeighbor()
     m_videoTimeline->show();
     waitForUi();
 
-    executeLua("require('ui.timeline.timeline_state').set_playhead_time(5000)");
+    executeLua("require('ui.timeline.timeline_state').set_playhead_value(5000)");
     waitForUi();
 
     executeLua(R"LUACODE(
         local db = require('core.database')
         local conn = db.get_connection()
-        local insert = conn:prepare("INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled) VALUES ('extra_clip', 'video1', 'media_v1_clip', 0, 2000, 0, 2000, 1)")
+        local insert = conn:prepare("INSERT INTO clips (id, track_id, media_id, start_value, duration, source_in, source_out, enabled) VALUES ('extra_clip', 'video1', 'media_v1_clip', 0, 2000, 0, 2000, 1)")
         assert(insert:exec())
         insert:finalize()
     )LUACODE");
@@ -707,13 +707,13 @@ void TestBatchRippleGapDrag::testGapDragClampsToNeighbor()
         TEST_clip_v2_source_in = stmt:value(1)
         stmt:finalize()
 
-        local stmt_b = conn:prepare("SELECT start_time FROM clips WHERE id='clip_v1_b'")
+        local stmt_b = conn:prepare("SELECT start_value FROM clips WHERE id='clip_v1_b'")
         assert(stmt_b and stmt_b:exec(), "clip_v1_b query failed (clamp test)")
         assert(stmt_b:next(), "clip_v1_b missing after clamp drag")
         TEST_clip_v1_b_start = stmt_b:value(0)
         stmt_b:finalize()
 
-        local stmt_a = conn:prepare("SELECT start_time, duration FROM clips WHERE id='extra_clip'")
+        local stmt_a = conn:prepare("SELECT start_value, duration FROM clips WHERE id='extra_clip'")
         assert(stmt_a and stmt_a:exec(), "extra_clip query failed (clamp test)")
         assert(stmt_a:next(), "extra_clip missing after clamp drag")
         TEST_clip_extra_start = stmt_a:value(0)

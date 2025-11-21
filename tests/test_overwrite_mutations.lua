@@ -36,6 +36,7 @@ function timeline_state.clear_edge_selection() end
 function timeline_state.clear_gap_selection() end
 function timeline_state.set_playhead_value(ms) timeline_state.playhead = ms end
 function timeline_state.get_playhead_value() return timeline_state.playhead end
+function timeline_state.get_sequence_frame_rate() return 30.0 end
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.normalize_edge_selection() return false end
 function timeline_state.persist_state_to_db() end
@@ -63,7 +64,7 @@ local function init_database(path)
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, viewport_start_frame, viewport_duration_frames)
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
         VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
         INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled, locked, muted, soloed, volume, pan)
         VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1, 0, 0, 0, 0, 0);

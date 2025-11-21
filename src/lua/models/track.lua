@@ -66,6 +66,8 @@ local function build_track(track_type, name, sequence_id, opts)
         sequence_id = sequence_id,
         name = name,
         track_type = track_type,
+        timebase_type = opts.timebase_type,
+        timebase_rate = opts.timebase_rate,
         track_index = determine_next_index(sequence_id, track_type, opts.index, opts.db),
         enabled = opts.enabled ~= false,
         locked = opts.locked == true,
@@ -76,6 +78,35 @@ local function build_track(track_type, name, sequence_id, opts)
         created_at = os.time(),
         modified_at = os.time()
     }
+
+    if not track.timebase_type or not track.timebase_rate or track.timebase_rate <= 0 then
+        local conn = resolve_db(opts.db)
+        local seq_frame_rate = 24
+        local seq_sample_rate = 48000
+        if conn then
+            local seq_stmt = conn:prepare("SELECT frame_rate, audio_sample_rate FROM sequences WHERE id = ?")
+            if seq_stmt then
+                seq_stmt:bind_value(1, sequence_id)
+                if seq_stmt:exec() and seq_stmt:next() then
+                    seq_frame_rate = tonumber(seq_stmt:value(0)) or seq_frame_rate
+                    seq_sample_rate = tonumber(seq_stmt:value(1)) or seq_sample_rate
+                end
+                seq_stmt:finalize()
+            end
+        end
+
+        if track_type == "AUDIO" then
+            track.timebase_type = "audio_samples"
+            track.timebase_rate = seq_sample_rate
+        else
+            track.timebase_type = "video_frames"
+            track.timebase_rate = seq_frame_rate
+        end
+    end
+
+    if not track.timebase_type or not track.timebase_rate or track.timebase_rate <= 0 then
+        error("Track.create: invalid timebase_type/timebase_rate")
+    end
 
     return setmetatable(track, Track)
 end
@@ -100,7 +131,7 @@ function Track.load(id, db)
     end
 
     local stmt = conn:prepare([[
-        SELECT id, sequence_id, name, track_type, track_index,
+        SELECT id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index,
                enabled, locked, muted, soloed, volume, pan
         FROM tracks WHERE id = ?
     ]])
@@ -121,13 +152,15 @@ function Track.load(id, db)
         sequence_id = stmt:value(1),
         name = stmt:value(2),
         track_type = stmt:value(3),
-        track_index = stmt:value(4),
-        enabled = stmt:value(5) == 1,
-        locked = stmt:value(6) == 1,
-        muted = stmt:value(7) == 1,
-        soloed = stmt:value(8) == 1,
-        volume = stmt:value(9),
-        pan = stmt:value(10),
+        timebase_type = stmt:value(4),
+        timebase_rate = stmt:value(5),
+        track_index = stmt:value(6),
+        enabled = stmt:value(7) == 1,
+        locked = stmt:value(8) == 1,
+        muted = stmt:value(9) == 1,
+        soloed = stmt:value(10) == 1,
+        volume = stmt:value(11),
+        pan = stmt:value(12),
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -145,6 +178,9 @@ function Track:save(db)
         print("ERROR: Track.save: sequence_id is required")
         return false
     end
+    if not self.timebase_type or not self.timebase_rate or self.timebase_rate <= 0 then
+        error("Track.save: missing timebase_type/timebase_rate")
+    end
 
     local conn = resolve_db(db)
     if not conn then
@@ -155,8 +191,8 @@ function Track:save(db)
 
     local stmt = conn:prepare([[
         INSERT OR REPLACE INTO tracks
-        (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
 
     if not stmt then
@@ -168,13 +204,15 @@ function Track:save(db)
     stmt:bind_value(2, self.sequence_id)
     stmt:bind_value(3, self.name)
     stmt:bind_value(4, self.track_type)
-    stmt:bind_value(5, self.track_index)
-    stmt:bind_value(6, self.enabled and 1 or 0)
-    stmt:bind_value(7, self.locked and 1 or 0)
-    stmt:bind_value(8, self.muted and 1 or 0)
-    stmt:bind_value(9, self.soloed and 1 or 0)
-    stmt:bind_value(10, self.volume)
-    stmt:bind_value(11, self.pan)
+    stmt:bind_value(5, self.timebase_type)
+    stmt:bind_value(6, self.timebase_rate)
+    stmt:bind_value(7, self.track_index)
+    stmt:bind_value(8, self.enabled and 1 or 0)
+    stmt:bind_value(9, self.locked and 1 or 0)
+    stmt:bind_value(10, self.muted and 1 or 0)
+    stmt:bind_value(11, self.soloed and 1 or 0)
+    stmt:bind_value(12, self.volume)
+    stmt:bind_value(13, self.pan)
 
     local ok = stmt:exec()
     if not ok then

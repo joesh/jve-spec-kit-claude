@@ -77,8 +77,8 @@ void TestCommandUndo::testCommandUndoSuccess()
     args["sequence_id"] = m_sequenceId;
     args["track_id"] = "track1";
     args["media_id"] = "media1";
-    args["start_time"] = 0;
-    args["end_time"] = 5000;
+    args["start_value"] = 0;
+    args["end_value"] = 5000;
     createRequest["args"] = args;
     
     CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
@@ -128,8 +128,8 @@ void TestCommandUndo::testCommandUndoChain()
     args1["sequence_id"] = m_sequenceId;
     args1["track_id"] = "track1";
     args1["media_id"] = "media1";
-    args1["start_time"] = 0;
-    args1["end_time"] = 5000;
+    args1["start_value"] = 0;
+    args1["end_value"] = 5000;
     request1["args"] = args1;
     
     QJsonObject request2;
@@ -138,8 +138,8 @@ void TestCommandUndo::testCommandUndoChain()
     args2["sequence_id"] = m_sequenceId;
     args2["track_id"] = "track1";
     args2["media_id"] = "media2";
-    args2["start_time"] = 5000;
-    args2["end_time"] = 10000;
+    args2["start_value"] = 5000;
+    args2["end_value"] = 10000;
     request2["args"] = args2;
     
     m_dispatcher->executeCommand(request1);
@@ -169,8 +169,8 @@ void TestCommandUndo::testUndoInverseDeltaApplication()
     args["sequence_id"] = m_sequenceId;
     args["track_id"] = "track1";
     args["media_id"] = "media1";
-    args["start_time"] = 1000;
-    args["end_time"] = 6000;
+    args["start_value"] = 1000;
+    args["end_value"] = 6000;
     createRequest["args"] = args;
     
     QString initialHash = m_dispatcher->getStateHash();

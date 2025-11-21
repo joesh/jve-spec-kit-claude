@@ -20,9 +20,10 @@ local function stub_timeline_state()
     timeline_state.get_selected_clips = function() return {} end
     timeline_state.set_edge_selection = function(_) end
     timeline_state.get_selected_edges = function() return {} end
-    timeline_state.set_playhead_time = function(_) end
-    timeline_state.get_playhead_time = function() return 0 end
+    timeline_state.set_playhead_value = function(_) end
+    timeline_state.get_playhead_value = function() return 0 end
     timeline_state.reload_clips = function() end
+    timeline_state.get_sequence_frame_rate = function() return 24.0 end
 end
 
 local function count_properties(db, clip_id)
@@ -70,118 +71,7 @@ os.remove(db_path)
 assert(database.init(db_path))
 local db = database.get_connection()
 
-db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        modified_at INTEGER NOT NULL,
-        settings TEXT DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL, audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_frame INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
-        mark_in_frame INTEGER,
-        mark_out_frame INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL, timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL, track_index INTEGER NOT NULL,
-        enabled BOOLEAN NOT NULL DEFAULT 1,
-        locked BOOLEAN NOT NULL DEFAULT 0,
-        muted BOOLEAN NOT NULL DEFAULT 0,
-        soloed BOOLEAN NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        duration_value INTEGER NOT NULL,
-        timebase_type TEXT NOT NULL,
-        timebase_rate REAL NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER DEFAULT 0,
-        height INTEGER DEFAULT 0,
-        audio_channels INTEGER DEFAULT 0,
-        codec TEXT DEFAULT '',
-        created_at INTEGER NOT NULL,
-        modified_at INTEGER NOT NULL,
-        metadata TEXT DEFAULT '{}' NOT NULL
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_value INTEGER NOT NULL,
-        duration_value INTEGER NOT NULL,
-        source_in_value INTEGER NOT NULL DEFAULT 0,
-        source_out_value INTEGER NOT NULL,
-        timebase_type TEXT NOT NULL,
-        timebase_rate REAL NOT NULL,
-        enabled BOOLEAN NOT NULL DEFAULT 1,
-        offline BOOLEAN NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        modified_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-    );
-
-    CREATE TABLE properties (
-        id TEXT PRIMARY KEY,
-        clip_id TEXT NOT NULL,
-        property_name TEXT NOT NULL,
-        property_value TEXT NOT NULL,
-        property_type TEXT NOT NULL CHECK(property_type IN ('STRING','NUMBER','BOOLEAN','COLOR','ENUM')),
-        default_value TEXT NOT NULL,
-        FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE CASCADE,
-        UNIQUE(clip_id, property_name)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_properties_clip ON properties(clip_id);
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT NOT NULL,
-        pre_hash TEXT NOT NULL,
-        post_hash TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        playhead_value INTEGER NOT NULL DEFAULT 0,
-        playhead_rate REAL NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        selected_clip_ids_pre TEXT,
-        selected_edge_infos_pre TEXT
-    );
-]])
+db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
@@ -189,8 +79,8 @@ db:exec(string.format([[
     VALUES ('test_project', 'Insert Test Project', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-        timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
-        viewport_start_frame, viewport_duration_frames, current_sequence_number)
+        timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
+        viewport_start_value, viewport_duration_frames_value, current_sequence_number)
     VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
         24.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240, NULL);
 
@@ -213,6 +103,32 @@ media_reader.import_media = function(_, _, _, existing_media_id)
         has_audio = true,
         audio = {channels = 2, sample_rate = 48000, codec = "aac"},
     }
+    local conn = database.get_connection()
+    assert(conn, "media import stub: database not initialized")
+    local now_ts = os.time()
+    local media_stmt = conn:prepare([[
+        INSERT OR REPLACE INTO media (
+            id, project_id, name, file_path, duration_value, timebase_type, timebase_rate,
+            frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
+    ]])
+    assert(media_stmt, "media import stub: failed to prepare media insert")
+    media_stmt:bind_value(1, media_id)
+    media_stmt:bind_value(2, "test_project")
+    media_stmt:bind_value(3, "media.mov")
+    media_stmt:bind_value(4, "/tmp/jve/media.mov")
+    media_stmt:bind_value(5, metadata.duration_ms)
+    media_stmt:bind_value(6, metadata.has_video and "video_frames" or "audio_samples")
+    media_stmt:bind_value(7, metadata.video and metadata.video.frame_rate or metadata.audio.sample_rate or 1000)
+    media_stmt:bind_value(8, metadata.video and metadata.video.frame_rate or 0)
+    media_stmt:bind_value(9, metadata.video and metadata.video.width or 0)
+    media_stmt:bind_value(10, metadata.video and metadata.video.height or 0)
+    media_stmt:bind_value(11, metadata.audio and metadata.audio.channels or 0)
+    media_stmt:bind_value(12, metadata.video and metadata.video.codec or metadata.audio.codec or "")
+    media_stmt:bind_value(13, now_ts)
+    media_stmt:bind_value(14, now_ts)
+    assert(media_stmt:exec(), "media import stub: failed to insert media row")
+    media_stmt:finalize()
     return media_id, metadata
 end
 

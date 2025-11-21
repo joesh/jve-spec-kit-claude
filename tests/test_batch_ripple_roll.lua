@@ -33,13 +33,13 @@ local schema = [[
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
-        mark_in_frame INTEGER,
-        mark_out_frame INTEGER,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
         current_sequence_number INTEGER
     );
 
@@ -128,22 +128,22 @@ local seed = string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos, viewport_start_frame, viewport_duration_frames)
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos, viewport_start_value, viewport_duration_frames_value)
     VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
     VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
 
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-                       start_time, duration, source_in, source_out, enabled, offline,
+                       start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
                        created_at, modified_at)
     VALUES
         ('clip_a', 'default_project', 'timeline', 'A', 'track_v1', 'default_sequence',
-         0, 1000, 0, 1000, 1, 0, %d, %d),
+         0, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d),
         ('clip_b', 'default_project', 'timeline', 'B', 'track_v1', 'default_sequence',
-         1000, 1000, 0, 1000, 1, 0, %d, %d),
+         1000, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d),
         ('clip_c', 'default_project', 'timeline', 'C', 'track_v1', 'default_sequence',
-         2000, 1000, 0, 1000, 1, 0, %d, %d);
+         2000, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d);
 ]], now, now, now, now, now, now, now, now)
 
 assert(db:exec(seed))
@@ -160,8 +160,8 @@ local function stub_timeline_state()
     timeline_state.set_gap_selection = function(_) end
     timeline_state.get_selected_clips = function() return {} end
     timeline_state.get_selected_edges = function() return {} end
-    timeline_state.set_playhead_time = function(_) end
-    timeline_state.get_playhead_time = function() return 0 end
+    timeline_state.set_playhead_value = function(_) end
+    timeline_state.get_playhead_value = function() return 0 end
     timeline_state.get_project_id = function() return "default_project" end
     timeline_state.get_sequence_id = function() return "default_sequence" end
     timeline_state.reload_clips = function(_) end
@@ -190,7 +190,7 @@ local function fetch_clip_start(clip_id)
 end
 
 local function fetch_clip_duration(clip_id)
-    local stmt = db:prepare("SELECT duration FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT duration_value FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(clip_id))
     local value = tonumber(stmt:value(0)) or 0

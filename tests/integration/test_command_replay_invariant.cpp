@@ -68,7 +68,7 @@ private:
     };
 
     struct TimelineState {
-        int playhead_time;
+        int playhead_value;
         QStringList selected_clip_ids;
         QList<EdgeSelection> selected_edges;
         int clip_count;
@@ -168,7 +168,7 @@ void TestCommandReplayInvariant::cleanup()
     QSqlQuery query(m_db);
     query.exec("DELETE FROM clips");
     query.exec("DELETE FROM commands");
-    query.exec("UPDATE sequences SET playhead_time = 0, selected_clip_ids = NULL, selected_edge_infos = NULL");
+    query.exec("UPDATE sequences SET playhead_value = 0, selected_clip_ids = NULL, selected_edge_infos = NULL");
 
     qDebug() << "Test cleaned up";
 }
@@ -213,11 +213,11 @@ TestCommandReplayInvariant::TimelineState TestCommandReplayInvariant::queryDatab
 
     // Query sequence state
     QSqlQuery seqQuery(m_db);
-    seqQuery.prepare("SELECT playhead_time, selected_clip_ids, selected_edge_infos FROM sequences WHERE id = ?");
+    seqQuery.prepare("SELECT playhead_value, selected_clip_ids, selected_edge_infos FROM sequences WHERE id = ?");
     seqQuery.addBindValue("default_sequence");
 
     if (seqQuery.exec() && seqQuery.next()) {
-        state.playhead_time = seqQuery.value(0).toInt();
+        state.playhead_value = seqQuery.value(0).toInt();
         QString selectedJson = seqQuery.value(1).toString();
         QString edgesJson = seqQuery.value(2).toString();
 
@@ -267,11 +267,11 @@ void TestCommandReplayInvariant::assertStatesEqual(
     const TimelineState& actual,
     const QString& context)
 {
-    if (actual.playhead_time != expected.playhead_time) {
+    if (actual.playhead_value != expected.playhead_value) {
         QFAIL(qPrintable(QString("%1: playhead mismatch - expected %2, got %3")
                          .arg(context)
-                         .arg(expected.playhead_time)
-                         .arg(actual.playhead_time)));
+                         .arg(expected.playhead_value)
+                         .arg(actual.playhead_value)));
     }
     if (actual.clip_count != expected.clip_count) {
         QFAIL(qPrintable(QString("%1: clip count mismatch - expected %2, got %3")
@@ -295,7 +295,7 @@ void TestCommandReplayInvariant::testSingleInsertReplay()
 
     // Initial state: playhead=0, no clips
     TimelineState initial = captureTimelineState();
-    QCOMPARE(initial.playhead_time, 0);
+    QCOMPARE(initial.playhead_value, 0);
     QCOMPARE(initial.clip_count, 0);
 
     // Step 1: Press F9 (INSERT 3s clip at playhead)
@@ -305,11 +305,11 @@ void TestCommandReplayInvariant::testSingleInsertReplay()
     // Capture state after first INSERT
     TimelineState afterInsert1 = captureTimelineState();
     qDebug() << "After INSERT #1:"
-             << "playhead=" << afterInsert1.playhead_time
+             << "playhead=" << afterInsert1.playhead_value
              << "clips=" << afterInsert1.clip_count;
 
     QCOMPARE(afterInsert1.clip_count, 1);
-    QCOMPARE(afterInsert1.playhead_time, 3000); // Advanced 3 seconds
+    QCOMPARE(afterInsert1.playhead_value, 3000); // Advanced 3 seconds
 
     // Step 2: Undo
     qDebug() << "Step 2: Pressing Cmd+Z to UNDO";
@@ -318,7 +318,7 @@ void TestCommandReplayInvariant::testSingleInsertReplay()
     // Verify restored to initial state
     TimelineState afterUndo = captureTimelineState();
     qDebug() << "After UNDO:"
-             << "playhead=" << afterUndo.playhead_time
+             << "playhead=" << afterUndo.playhead_value
              << "clips=" << afterUndo.clip_count;
 
     assertStatesEqual(initial, afterUndo, "After undo");
@@ -330,7 +330,7 @@ void TestCommandReplayInvariant::testSingleInsertReplay()
     // Capture state after second INSERT
     TimelineState afterInsert2 = captureTimelineState();
     qDebug() << "After INSERT #2:"
-             << "playhead=" << afterInsert2.playhead_time
+             << "playhead=" << afterInsert2.playhead_value
              << "clips=" << afterInsert2.clip_count;
 
     // THE INVARIANT: Second INSERT must produce identical result to first INSERT
@@ -354,11 +354,11 @@ void TestCommandReplayInvariant::testMultipleInsertChainReplay()
 
     TimelineState afterThreeInserts = captureTimelineState();
     qDebug() << "After 3 INSERTs:"
-             << "playhead=" << afterThreeInserts.playhead_time
+             << "playhead=" << afterThreeInserts.playhead_value
              << "clips=" << afterThreeInserts.clip_count;
 
     QCOMPARE(afterThreeInserts.clip_count, 3);
-    QCOMPARE(afterThreeInserts.playhead_time, 9000); // 3 * 3s = 9s
+    QCOMPARE(afterThreeInserts.playhead_value, 9000); // 3 * 3s = 9s
 
     // Undo all three
     qDebug() << "Undoing all three commands";
@@ -377,7 +377,7 @@ void TestCommandReplayInvariant::testMultipleInsertChainReplay()
 
     TimelineState afterReplay = captureTimelineState();
     qDebug() << "After replay:"
-             << "playhead=" << afterReplay.playhead_time
+             << "playhead=" << afterReplay.playhead_value
              << "clips=" << afterReplay.clip_count;
 
     // THE INVARIANT: Replay must produce identical result
@@ -396,7 +396,7 @@ void TestCommandReplayInvariant::testOverwriteReplay()
 
     TimelineState afterSetup = captureTimelineState();
     QCOMPARE(afterSetup.clip_count, 1);
-    QCOMPARE(afterSetup.playhead_time, 3000);
+    QCOMPARE(afterSetup.playhead_value, 3000);
 
     // Move playhead to 1000ms (middle of clip)
     // TODO: Implement playhead movement command or direct Lua call
@@ -407,7 +407,7 @@ void TestCommandReplayInvariant::testOverwriteReplay()
 
     TimelineState afterUndo = captureTimelineState();
     QCOMPARE(afterUndo.clip_count, 0);
-    QCOMPARE(afterUndo.playhead_time, 0);
+    QCOMPARE(afterUndo.playhead_value, 0);
 
     // Replay F10
     sendKey(Qt::Key_F10);

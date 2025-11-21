@@ -20,23 +20,24 @@ local function seed_db(db_path)
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', %d, %d);
 
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height, viewport_duration)
-        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 1920, 1080, 10000);
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
 
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-        VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+        VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
 
-        INSERT INTO media (id, project_id, name, duration, frame_rate, width, height)
-        VALUES ('media1', 'default_project', 'Media', 5000, 30.0, 1920, 1080);
+        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec)
+        VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 5000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw');
 
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_time, duration, source_in, source_out, enabled, offline,
+                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
                            created_at, modified_at)
         VALUES
             ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'media1', 'default_sequence',
-             0, 2000, 0, 2000, 1, 0, %d, %d),
+             0, 2000, 0, 2000, 'video_frames', 30.0, 1, 0, %d, %d),
             ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'media1', 'default_sequence',
-             3000, 2000, 1000, 3000, 1, 0, %d, %d);
+             3000, 2000, 1000, 3000, 'video_frames', 30.0, 1, 0, %d, %d);
     ]], now, now, now, now, now, now, now, now)
     assert(seeded_db:exec(seed))
     command_manager.init(seeded_db, "default_sequence", "default_project")
@@ -44,7 +45,9 @@ local function seed_db(db_path)
 end
 
 local timeline_state = require("ui.timeline.timeline_state")
-timeline_state.capture_viewport = function() return {start_time = 0, duration = 10000} end
+timeline_state.capture_viewport = function()
+    return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 30.0}
+end
 timeline_state.push_viewport_guard = function() end
 timeline_state.pop_viewport_guard = function() end
 timeline_state.restore_viewport = function(_) end
@@ -53,8 +56,8 @@ timeline_state.set_edge_selection = function(_) end
 timeline_state.set_gap_selection = function(_) end
 timeline_state.get_selected_clips = function() return {} end
 timeline_state.get_selected_edges = function() return {} end
-timeline_state.set_playhead_time = function(_) end
-timeline_state.get_playhead_time = function() return 0 end
+timeline_state.set_playhead_value = function(_) end
+timeline_state.get_playhead_value = function() return 0 end
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.reload_clips = function(_) end
@@ -62,7 +65,7 @@ timeline_state.consume_mutation_failure = function() return nil end
 timeline_state.apply_mutations = function(_, _) return true end
 
 local function fetch_start(db_conn, id)
-    local stmt = db_conn:prepare("SELECT start_time FROM clips WHERE id = ?")
+    local stmt = db_conn:prepare("SELECT start_value FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found " .. tostring(id))
     local v = tonumber(stmt:value(0)) or 0
@@ -89,7 +92,7 @@ local function run_case(db_path, use_batch)
     local result = command_manager.execute(cmd)
     assert(result.success, result.error_message or "RippleEdit failed")
 
-    local start_time = fetch_start(db_conn, "clip_right")
+    local start_value = fetch_start(db_conn, "clip_right")
 
     local args_stmt
     if use_batch then
@@ -103,7 +106,7 @@ local function run_case(db_path, use_batch)
     assert(args_json:find("clamped_delta_ms"), "expected clamped_delta_ms persisted in command args")
 
     os.remove(db_path)
-    return start_time
+    return start_value
 end
 
 -- Single-edge ripple clamp
@@ -118,7 +121,7 @@ assert(start_batch == 2000, "batch ripple should clamp gap-before edges identica
 local function run_zero_gap(db_path)
     local db_conn = seed_db(db_path)
     -- Move right clip to butt against left (gap=0)
-    assert(db_conn:exec("UPDATE clips SET start_time = 2000 WHERE id = 'clip_right'"))
+    assert(db_conn:exec("UPDATE clips SET start_value = 2000 WHERE id = 'clip_right'"))
 
     local cmd = Command.create("RippleEdit", "default_project")
     cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})
@@ -128,9 +131,9 @@ local function run_zero_gap(db_path)
     local result = command_manager.execute(cmd)
     assert(result.success, result.error_message or "RippleEdit zero-gap should succeed")
 
-    local start_time = fetch_start(db_conn, "clip_right")
+    local start_value = fetch_start(db_conn, "clip_right")
     os.remove(db_path)
-    return start_time
+    return start_value
 end
 
 local zero_gap_start = run_zero_gap("/tmp/jve/test_ripple_overlap_zero_gap.db")

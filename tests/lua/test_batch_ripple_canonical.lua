@@ -90,13 +90,13 @@ local function setup_database(layout)
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
             timecode_start_frame INTEGER DEFAULT 0,
-            playhead_frame INTEGER DEFAULT 0,
+            playhead_value INTEGER DEFAULT 0,
             selected_clip_ids TEXT DEFAULT '[]',
             selected_edge_infos TEXT DEFAULT '[]',
-            viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-            viewport_duration_value_frames INTEGER NOT NULL DEFAULT 240,
-            mark_in_frame INTEGER,
-            mark_out_frame INTEGER,
+            viewport_start_value INTEGER NOT NULL DEFAULT 0,
+            viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
+            mark_in_value INTEGER,
+            mark_out_value INTEGER,
             current_sequence_number INTEGER
         )]],
         [[CREATE TABLE IF NOT EXISTS tracks (
@@ -136,8 +136,8 @@ local function setup_database(layout)
             media_id TEXT,
             start_value INTEGER NOT NULL,
             duration_value INTEGER NOT NULL,
-            source_in_value_value INTEGER NOT NULL,
-            source_out_value_value INTEGER NOT NULL,
+            source_in_value INTEGER NOT NULL,
+            source_out_value INTEGER NOT NULL,
             timebase_type TEXT NOT NULL,
             timebase_rate REAL NOT NULL,
             enabled INTEGER DEFAULT 1
@@ -180,7 +180,7 @@ local function setup_database(layout)
 
     local inserts = {
         "INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES ('default_project', 'Test Project', 0, 0, '{}')",
-        "INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 48000, 1920, 1080, 0, 0, '[]', '[]')"
+        "INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 48000, 1920, 1080, 0, 0, '[]', '[]')"
     }
 
     for _, track in ipairs(tracks) do
@@ -199,7 +199,7 @@ local function setup_database(layout)
 
     for _, clip in ipairs(layout.clips) do
         table.insert(inserts, string.format(
-            "INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value_value, source_out_value_value, timebase_type, timebase_rate, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, '%s', %.3f, 1)",
+            "INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, '%s', %.3f, 1)",
             clip.id, clip.track_id, clip.media_id, clip.start_value, clip.duration_value, clip.source_in_value or 0, clip.source_out_value or (clip.source_in_value or 0) + clip.duration_value, clip.timebase_type or "video_frames", clip.timebase_rate or 30.0
         ))
     end

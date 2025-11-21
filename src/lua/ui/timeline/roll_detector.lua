@@ -64,7 +64,7 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
                     end
 
                     if left_clip and right_clip then
-                        if left_clip.start_time > right_clip.start_time then
+                        if left_clip.start_value > right_clip.start_value then
                             left_clip, right_clip = right_clip, left_clip
                             left_distance, right_distance = right_distance, left_distance
                         end
@@ -75,7 +75,7 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
                             local right_target = {clip_id = right_clip.id, edge_type = "in"}
                             local selection = build_selection(left_target, right_target)
                             local pair_meta = {
-                                edit_time = left_clip.start_time + left_clip.duration,
+                                edit_time = left_clip.start_value + left_clip.duration_value,
                                 left_target = left_target,
                                 right_target = right_target,
                                 roll_kind = "clip_clip"
@@ -108,12 +108,12 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
             if entry.edge == "gap_after" then
                 left_target = {clip_id = clip.id, edge_type = "out"}
                 right_target = {clip_id = clip.id, edge_type = "gap_after"}
-                edit_time = clip.start_time + clip.duration
+                edit_time = clip.start_value + clip.duration_value
                 roll_kind = "clip_gap_after"
             else -- gap_before
                 left_target = {clip_id = clip.id, edge_type = "gap_before"}
                 right_target = {clip_id = clip.id, edge_type = "in"}
-                edit_time = clip.start_time
+                edit_time = clip.start_value
                 roll_kind = "gap_before_clip"
             end
 

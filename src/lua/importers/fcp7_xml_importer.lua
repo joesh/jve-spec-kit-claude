@@ -182,7 +182,7 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         track_id = track_id,
         timeline_start = nil,
         timeline_end = nil,
-        start_time = nil,
+        start_value = nil,
         duration = 0,
         source_in = 0,
         source_out = 0,
@@ -350,7 +350,7 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
 
         clip_info.timeline_start = start
         clip_info.timeline_end = finish
-        clip_info.start_time = start
+        clip_info.start_value = start
         clip_info.duration = duration
         prev_end_time = finish
     end
@@ -763,7 +763,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             id = reuse_id,
             project_id = project_id,
             clip_kind = "master",
-            start_time = 0,
+            start_value = 0,
             duration = duration,
             source_in = source_in,
             source_out = source_out,
@@ -943,7 +943,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
         clip.track_id = track_id
         clip.parent_clip_id = master_clip_id or clip.parent_clip_id
-        clip.start_time = math.floor(clip_info.start_time or 0)
+        clip.start_value = math.floor(clip_info.start_value or 0)
         clip.duration = math.max(math.floor(clip_info.duration or 0), 1)
         clip.source_in = math.floor(clip_info.source_in or 0)
         clip.source_out = math.floor(clip_info.source_out or (clip.source_in + clip.duration))

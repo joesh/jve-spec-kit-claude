@@ -10,12 +10,15 @@ local timeline_state_ok, timeline_state = pcall(require, 'ui.timeline.timeline_s
 local function clone_state(row)
     return {
         id = row.id,
+        project_id = row.project_id,
         track_id = row.track_id,
         media_id = row.media_id,
-        start_time = row.start_time,
+        start_value = row.start_value,
         duration = row.duration,
         source_in = row.source_in,
         source_out = row.source_out,
+        timebase_type = row.timebase_type,
+        timebase_rate = row.timebase_rate,
         enabled = row.enabled
     }
 end
@@ -31,13 +34,13 @@ end
 local function run_update(db, row)
     local stmt = db:prepare([[
         UPDATE clips
-        SET start_time = ?, duration = ?, source_in = ?, source_out = ?, enabled = ?
+        SET start_value = ?, duration_value = ?, source_in_value = ?, source_out_value = ?, enabled = ?
         WHERE id = ?
     ]])
     if not stmt then
         return false, "Failed to prepare UPDATE for clip " .. tostring(row.id)
     end
-    stmt:bind_value(1, row.start_time)
+    stmt:bind_value(1, row.start_value)
     stmt:bind_value(2, row.duration)
     stmt:bind_value(3, row.source_in)
     stmt:bind_value(4, row.source_out)
@@ -65,20 +68,29 @@ end
 
 local function run_insert(db, row)
     local stmt = db:prepare([[
-        INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO clips (
+            id, project_id, clip_kind, name, track_id, media_id,
+            start_value, duration_value, source_in_value, source_out_value,
+            timebase_type, timebase_rate, enabled
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     if not stmt then
         return false, "Failed to prepare INSERT for clip " .. tostring(row.id)
     end
     stmt:bind_value(1, row.id)
-    stmt:bind_value(2, row.track_id)
-    stmt:bind_value(3, row.media_id)
-    stmt:bind_value(4, row.start_time)
-    stmt:bind_value(5, row.duration)
-    stmt:bind_value(6, row.source_in or 0)
-    stmt:bind_value(7, row.source_out or (row.source_in or 0) + row.duration)
-    stmt:bind_value(8, row.enabled and 1 or 0)
+    stmt:bind_value(2, row.project_id)
+    stmt:bind_value(3, row.clip_kind or "timeline")
+    stmt:bind_value(4, row.name or "")
+    stmt:bind_value(5, row.track_id)
+    stmt:bind_value(6, row.media_id)
+    stmt:bind_value(7, row.start_value)
+    stmt:bind_value(8, row.duration)
+    stmt:bind_value(9, row.source_in or 0)
+    stmt:bind_value(10, row.source_out or (row.source_in or 0) + row.duration)
+    stmt:bind_value(11, row.timebase_type or "video_frames")
+    stmt:bind_value(12, row.timebase_rate or 24.0)
+    stmt:bind_value(13, row.enabled and 1 or 0)
     local ok = stmt:exec()
     if not ok then
         return false, stmt:last_error()
@@ -86,16 +98,18 @@ local function run_insert(db, row)
     return true
 end
 
--- Resolve occlusions for a clip about to occupy [start_time, end_time).
+-- Resolve occlusions for a clip about to occupy [start_value, end_time).
 -- Params:
---   track_id, start_time, duration
+--   track_id, start_value, duration
 --   exclude_clip_id: clip id to ignore while checking overlaps (e.g., the clip being updated)
 local function load_track_clips(db, track_id)
     local stmt = db:prepare([[
-        SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled
+        SELECT id, project_id, clip_kind, name, track_id, media_id,
+               start_value, duration_value, source_in_value, source_out_value,
+               timebase_type, timebase_rate, enabled
         FROM clips
         WHERE track_id = ?
-        ORDER BY start_time
+        ORDER BY start_value
     ]])
     if not stmt then
         return nil, "Failed to prepare track clip query"
@@ -112,13 +126,21 @@ local function load_track_clips(db, track_id)
     while stmt:next() do
         table.insert(results, {
             id = stmt:value(0),
-            track_id = stmt:value(1),
-            media_id = stmt:value(2),
-            start_time = stmt:value(3),
-            duration = stmt:value(4),
-            source_in = stmt:value(5),
-            source_out = stmt:value(6),
-            enabled = stmt:value(7) == 1 or stmt:value(7) == true
+            project_id = stmt:value(1),
+            clip_kind = stmt:value(2),
+            name = stmt:value(3),
+            track_id = stmt:value(4),
+            media_id = stmt:value(5),
+            start_value = stmt:value(6),
+            duration_value = stmt:value(7),
+            duration = stmt:value(7),
+            source_in_value = stmt:value(8),
+            source_in = stmt:value(8),
+            source_out_value = stmt:value(9),
+            source_out = stmt:value(9),
+            timebase_type = stmt:value(10),
+            timebase_rate = stmt:value(11),
+            enabled = stmt:value(12) == 1 or stmt:value(12) == true
         })
     end
     stmt:finalize()
@@ -139,7 +161,7 @@ local function normalize_pending_lookup(pending_clips, exclude_id)
             return
         end
         lookup[clip_id] = {
-            start_time = pending.start_time,
+            start_value = pending.start_value,
             duration = pending.duration,
             tolerance = pending.tolerance,
             _seen = false,
@@ -161,7 +183,7 @@ local function normalize_pending_lookup(pending_clips, exclude_id)
     return lookup
 end
 
-local function iter_overlaps(clip_list, start_time, end_time)
+local function iter_overlaps(clip_list, start_value, end_time)
     local index = 1
     local count = #clip_list
 
@@ -169,9 +191,9 @@ local function iter_overlaps(clip_list, start_time, end_time)
         while index <= count do
             local item = clip_list[index]
             index = index + 1
-            local clip_start = item.start_time or 0
+            local clip_start = item.start_value or 0
             local clip_end = clip_start + (item.duration or 0)
-            if clip_end > start_time and clip_start < end_time then
+            if clip_end > start_value and clip_start < end_time then
                 return item
             end
             if clip_start >= end_time then
@@ -188,13 +210,13 @@ function ClipMutator.resolve_occlusions(db, params)
     end
 
     local track_id = params.track_id
-    local start_time = params.start_time
+    local start_value = params.start_value
     local duration = params.duration
-    if not track_id or start_time == nil or duration == nil then
+    if not track_id or start_value == nil or duration == nil then
         return true
     end
 
-    local end_time = start_time + duration
+    local end_time = start_value + duration
     local exclude_id = params.exclude_clip_id
 
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
@@ -218,7 +240,7 @@ function ClipMutator.resolve_occlusions(db, params)
     end
 
     local pending_lookup = normalize_pending_lookup(params.pending_clips, exclude_id)
-    local overlaps = iter_overlaps(track_clips, start_time, end_time)
+    local overlaps = iter_overlaps(track_clips, start_value, end_time)
 
     local actions = {}
 
@@ -239,9 +261,9 @@ function ClipMutator.resolve_occlusions(db, params)
             goto continue_loop
         end
 
-        local clip_start = row.start_time or 0
+        local clip_start = row.start_value or 0
         local clip_end = clip_start + (row.duration or 0)
-        local overlap_start = math.max(clip_start, start_time)
+        local overlap_start = math.max(clip_start, start_value)
         local overlap_end = math.min(clip_end, end_time)
 
         if overlap_end <= overlap_start then
@@ -264,8 +286,8 @@ function ClipMutator.resolve_occlusions(db, params)
         end
 
         -- Overlap on tail (trim right side)
-        if clip_start < start_time and clip_end <= end_time then
-            local trim_amount = clip_end - start_time
+        if clip_start < start_value and clip_end <= end_time then
+            local trim_amount = clip_end - start_value
             row.duration = row.duration - trim_amount
             if row.duration < 1 then
                 table.insert(actions, {
@@ -299,9 +321,9 @@ function ClipMutator.resolve_occlusions(db, params)
         end
 
         -- Overlap on head (trim left side)
-        if clip_start >= start_time and clip_end > end_time then
+        if clip_start >= start_value and clip_end > end_time then
             local trim_amount = end_time - clip_start
-            row.start_time = end_time
+            row.start_value = end_time
             row.duration = row.duration - trim_amount
             if row.duration < 1 then
                 table.insert(actions, {
@@ -339,8 +361,8 @@ function ClipMutator.resolve_occlusions(db, params)
         end
 
         -- Straddles new clip → split existing clip
-        if clip_start < start_time and clip_end > end_time then
-            local left_duration = start_time - clip_start
+        if clip_start < start_value and clip_end > end_time then
+            local left_duration = start_value - clip_start
             local right_duration = clip_end - end_time
 
             -- Update left portion
@@ -368,12 +390,17 @@ function ClipMutator.resolve_occlusions(db, params)
                 local original_out = default_source_out(original)
                 local right_clip = {
                     id = uuid.generate(),
+                    project_id = original.project_id,
+                    clip_kind = original.clip_kind,
+                    name = original.name,
                     track_id = original.track_id,
                     media_id = original.media_id,
-                    start_time = end_time,
+                    start_value = end_time,
                     duration = right_duration,
                     source_in = base_in + (end_time - clip_start),
                     source_out = original_out,
+                    timebase_type = original.timebase_type,
+                    timebase_rate = original.timebase_rate,
                     enabled = original.enabled
                 }
                 local ok_insert, err_insert = run_insert(db, right_clip)

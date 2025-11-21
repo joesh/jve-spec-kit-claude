@@ -215,9 +215,9 @@ local function apply_ui_event(payload)
 
     if payload.type == "SetPlayhead" then
         local stmt = readmodel_db:prepare([[
-            INSERT INTO ui_state(id,active_seq,playhead_time,last_panel)
+            INSERT INTO ui_state(id,active_seq,playhead_value,last_panel)
             VALUES(1,COALESCE((SELECT active_seq FROM ui_state WHERE id=1),''),?,COALESCE((SELECT last_panel FROM ui_state WHERE id=1),'timeline'))
-            ON CONFLICT(id) DO UPDATE SET playhead_time=excluded.playhead_time
+            ON CONFLICT(id) DO UPDATE SET playhead_value=excluded.playhead_value
         ]])
         if not stmt then
             return false, "event_log: failed to prepare UI playhead upsert"
@@ -230,7 +230,7 @@ local function apply_ui_event(payload)
         end
     elseif payload.type == "SetActiveSequence" then
         local stmt = readmodel_db:prepare([[
-            INSERT INTO ui_state(id,active_seq,playhead_time,last_panel)
+            INSERT INTO ui_state(id,active_seq,playhead_value,last_panel)
             VALUES(1,?,0,'timeline')
             ON CONFLICT(id) DO UPDATE SET active_seq=excluded.active_seq
         ]])
@@ -361,7 +361,7 @@ local function build_event_envelope(command, context)
     elseif command.type == "SetPlayhead" then
         envelope.ui_payload = {
             type = "SetPlayhead",
-            time = command:get_parameter("playhead_time") or command:get_parameter("time") or 0
+            time = command:get_parameter("playhead_value") or command:get_parameter("time") or 0
         }
         envelope.scope = "ui"
     end
@@ -384,7 +384,7 @@ end
 local function attach_generic_payload(envelope, command)
     envelope.generic_payload = {
         parameters = deep_copy_parameters(command.parameters),
-        playhead_time = command.playhead_time,
+        playhead_value = command.playhead_value,
         sequence_number = command.sequence_number,
     }
 end

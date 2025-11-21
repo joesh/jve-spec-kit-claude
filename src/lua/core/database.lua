@@ -165,8 +165,8 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local media_name = query:value(17)
-    local media_path = query:value(18)
+    local media_name = query:value(19)
+    local media_path = query:value(20)
     local media_id = query:value(6)
     if media_id and media_id ~= "" then
         local has_name = media_name and media_name ~= ""
@@ -191,10 +191,10 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         parent_clip_id = query:value(8),
         owner_sequence_id = owner_sequence_id,
         track_sequence_id = track_sequence_id,
-        start_time = query:value(10),
-        duration = query:value(11),
-        source_in = query:value(12),
-        source_out = query:value(13),
+        start_value = query:value(10),
+        duration_value = query:value(11),
+        source_in_value = query:value(12),
+        source_out_value = query:value(13),
         enabled = query:value(14) == 1,
         offline = query:value(15) == 1,
         timebase_type = query:value(16),
@@ -223,6 +223,11 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         display_label = label
     end
     clip.label = display_label
+
+    -- Legacy aliases for existing consumers still using duration/source_* fields.
+    clip.duration = clip.duration_value
+    clip.source_in = clip.source_in_value
+    clip.source_out = clip.source_out_value
 
     return clip
 end
@@ -501,8 +506,8 @@ function M.load_clips(sequence_id)
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
                c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
-               c.start_value AS start_time, c.duration_value AS duration,
-               c.source_in_value AS source_in, c.source_out_value AS source_out,
+               c.start_value AS start_value, c.duration_value AS duration_value,
+               c.source_in_value AS source_in_value, c.source_out_value AS source_out_value,
                c.enabled, c.offline, c.timebase_type, c.timebase_rate, t.sequence_id,
                m.name, m.file_path
         FROM clips c
@@ -549,9 +554,9 @@ function M.load_clip_entry(clip_id)
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
                c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
-               c.start_time, c.duration, c.source_in, c.source_out,
-               c.enabled, c.offline, t.sequence_id,
-               m.name, m.file_path
+               c.start_value, c.duration_value, c.source_in_value, c.source_out_value,
+               c.enabled, c.offline, c.timebase_type, c.timebase_rate,
+               t.sequence_id, m.name, m.file_path
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
@@ -568,7 +573,7 @@ function M.load_clip_entry(clip_id)
 
     local clip = nil
     if query:exec() and query:next() then
-        clip = build_clip_from_query_row(query, query:value(16))
+        clip = build_clip_from_query_row(query, query:value(18))
     end
 
     query:finalize()
@@ -629,15 +634,15 @@ end
 -- Use command system instead: Command.create("AddClip", ...)
 
 -- Update clip position - PRESERVED (has real SQL implementation)
-function M.update_clip_position(clip_id, start_time, duration)
+function M.update_clip_position(clip_id, start_value, duration_value)
     if not clip_id then
         error("FATAL: update_clip_position() requires clip_id parameter")
     end
-    if not start_time then
-        error("FATAL: update_clip_position() requires start_time parameter")
+    if not start_value then
+        error("FATAL: update_clip_position() requires start_value parameter")
     end
-    if not duration then
-        error("FATAL: update_clip_position() requires duration parameter")
+    if not duration_value then
+        error("FATAL: update_clip_position() requires duration_value parameter")
     end
 
     if not db_connection then
@@ -654,8 +659,8 @@ function M.update_clip_position(clip_id, start_time, duration)
         error("FATAL: Failed to prepare UPDATE query for clip position")
     end
 
-    query:bind_value(1, start_time)
-    query:bind_value(2, duration)
+    query:bind_value(1, start_value)
+    query:bind_value(2, duration_value)
     query:bind_value(3, clip_id)
 
     local success = query:exec()
@@ -705,7 +710,7 @@ function M.load_media()
                 name = query:value(2),
                 file_name = query:value(2),  -- Alias for backward compatibility
                 file_path = query:value(3),
-                duration = query:value(4),
+                duration_value = query:value(4),
                 timebase_type = tb_type,
                 timebase_rate = tb_rate,
                 frame_rate = query:value(7),
@@ -795,9 +800,9 @@ function M.load_master_clips(project_id)
             local media_id = query:value(3)
             local source_sequence_id = query:value(4)
             local start_value = query:value(5)
-            local duration = query:value(6)
-            local source_in = query:value(7) or 0
-            local source_out = query:value(8) or duration
+            local duration_value = query:value(6)
+            local source_in_value = query:value(7) or 0
+            local source_out_value = query:value(8) or duration_value
             local clip_timebase_type = query:value(9)
             local clip_timebase_rate = query:value(10)
             local enabled = query:value(11) == 1
@@ -808,7 +813,7 @@ function M.load_master_clips(project_id)
             local media_project_id = query:value(15)
             local media_name = query:value(16)
             local media_path = query:value(17)
-            local media_duration = query:value(18)
+            local media_duration_value = query:value(18)
             local media_timebase_type = query:value(19)
             local media_timebase_rate = query:value(20)
             local media_frame_rate = query:value(21)
@@ -840,7 +845,7 @@ function M.load_master_clips(project_id)
                 name = media_name,
                 file_name = media_name,
                 file_path = media_path,
-                duration = media_duration,
+                duration_value = media_duration_value,
                 timebase_type = media_timebase_type,
                 timebase_rate = media_timebase_rate,
                 frame_rate = media_frame_rate,
@@ -868,10 +873,10 @@ function M.load_master_clips(project_id)
                 name = clip_name or (media_name or clip_id),
                 media_id = media_id,
                 source_sequence_id = source_sequence_id,
-                start_time = start_value,
-                duration = duration,
-                source_in = source_in,
-                source_out = source_out,
+                start_value = start_value,
+                duration_value = duration_value,
+                source_in_value = source_in_value,
+                source_out_value = source_out_value,
                 timebase_type = clip_timebase_type,
                 timebase_rate = clip_timebase_rate,
                 enabled = enabled,
@@ -908,7 +913,8 @@ function M.load_sequences(project_id)
 
     local sequences = {}
     local query = db_connection:prepare([[
-        SELECT id, name, kind, frame_rate, audio_sample_rate, width, height, playhead_frame AS playhead_time
+        SELECT id, name, kind, frame_rate, audio_sample_rate, width, height,
+               playhead_value, viewport_start_value, viewport_duration_frames_value
         FROM sequences
         WHERE project_id = ?
         ORDER BY name
@@ -929,23 +935,25 @@ function M.load_sequences(project_id)
                 audio_sample_rate = query:value(4),
                 width = query:value(5),
                 height = query:value(6),
-                playhead_time = query:value(7),
+                playhead_value = query:value(7),
+                viewport_start_value = query:value(8),
+                viewport_duration_frames_value = query:value(9),
             })
         end
     end
     query:finalize()
 
-    -- Compute duration for each sequence (max clip end)
+    -- Compute duration_value for each sequence (max clip end)
     for _, sequence in ipairs(sequences) do
         local clips = M.load_clips(sequence.id)
         local max_end = 0
         for _, clip in ipairs(clips) do
-            local clip_end = (clip.start_time or 0) + (clip.duration or 0)
+            local clip_end = (clip.start_value or 0) + (clip.duration_value or 0)
             if clip_end > max_end then
                 max_end = clip_end
             end
         end
-        sequence.duration = max_end
+        sequence.duration_value = max_end
     end
 
     return sequences
@@ -963,9 +971,9 @@ function M.load_sequence_record(sequence_id)
 
     local query = db_connection:prepare([[
         SELECT id, project_id, name, kind, frame_rate, width, height,
-               timecode_start_frame AS timecode_start, playhead_frame AS playhead_time,
-               viewport_start_frame AS viewport_start_time, viewport_duration_frames AS viewport_duration,
-               mark_in_frame AS mark_in_time, mark_out_frame AS mark_out_time,
+               timecode_start_frame, playhead_value,
+               viewport_start_value, viewport_duration_frames_value,
+               mark_in_value, mark_out_value,
                selected_clip_ids, selected_edge_infos, audio_sample_rate
         FROM sequences
         WHERE id = ?
@@ -988,12 +996,12 @@ function M.load_sequence_record(sequence_id)
             frame_rate = tonumber(query:value(4)) or 0,
             width = tonumber(query:value(5)) or 0,
             height = tonumber(query:value(6)) or 0,
-            timecode_start = tonumber(query:value(7)) or 0,
-            playhead_time = tonumber(query:value(8)) or 0,
-            viewport_start_time = tonumber(query:value(9)) or 0,
-            viewport_duration = tonumber(query:value(10)) or 0,
-            mark_in_time = tonumber(query:value(11)),
-            mark_out_time = tonumber(query:value(12)),
+            timecode_start_frame = tonumber(query:value(7)) or 0,
+            playhead_value = tonumber(query:value(8)) or 0,
+            viewport_start_value = tonumber(query:value(9)) or 0,
+            viewport_duration_frames_value = tonumber(query:value(10)) or 0,
+            mark_in_value = tonumber(query:value(11)),
+            mark_out_value = tonumber(query:value(12)),
             selected_clip_ids = query:value(13),
             selected_edge_infos = query:value(14),
             audio_sample_rate = tonumber(query:value(15))

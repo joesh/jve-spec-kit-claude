@@ -85,8 +85,8 @@ void TestCommandExecute::testCommandExecuteCreateClip()
     args["sequence_id"] = m_sequenceId;
     args["track_id"] = "track1";
     args["media_id"] = "media1";
-    args["start_time"] = 0;
-    args["end_time"] = 5000;
+    args["start_value"] = 0;
+    args["end_value"] = 5000;
     args["source_in"] = 0;
     args["source_out"] = 5000;
     request["args"] = args;
@@ -120,8 +120,8 @@ void TestCommandExecute::testCommandExecuteDeleteClip()
     createArgs["sequence_id"] = m_sequenceId;
     createArgs["track_id"] = "track1";
     createArgs["media_id"] = "media1";
-    createArgs["start_time"] = 0;
-    createArgs["end_time"] = 5000;
+    createArgs["start_value"] = 0;
+    createArgs["end_value"] = 5000;
     createRequest["args"] = createArgs;
     
     CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
@@ -158,8 +158,8 @@ void TestCommandExecute::testCommandExecuteSplitClip()
     createArgs["sequence_id"] = m_sequenceId;
     createArgs["track_id"] = "track1";
     createArgs["media_id"] = "media1";
-    createArgs["start_time"] = 0;
-    createArgs["end_time"] = 5000;
+    createArgs["start_value"] = 0;
+    createArgs["end_value"] = 5000;
     createRequest["args"] = createArgs;
     
     CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
@@ -174,7 +174,7 @@ void TestCommandExecute::testCommandExecuteSplitClip()
     
     QJsonObject args;
     args["clip_id"] = clipId;
-    args["split_time"] = 2500; // Split at 2.5 seconds
+    args["split_value"] = 2500; // Split at 2.5 seconds
     request["args"] = args;
     
     CommandResponse response = m_dispatcher->executeCommand(request);
@@ -201,8 +201,8 @@ void TestCommandExecute::testCommandExecuteRippleDelete()
     createArgs["sequence_id"] = m_sequenceId;
     createArgs["track_id"] = "track1";
     createArgs["media_id"] = "media1";
-    createArgs["start_time"] = 0;
-    createArgs["end_time"] = 5000;
+    createArgs["start_value"] = 0;
+    createArgs["end_value"] = 5000;
     createRequest["args"] = createArgs;
     
     CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
@@ -237,8 +237,8 @@ void TestCommandExecute::testCommandExecuteRippleTrim()
     createArgs["sequence_id"] = m_sequenceId;
     createArgs["track_id"] = "track1";
     createArgs["media_id"] = "media1";
-    createArgs["start_time"] = 0;
-    createArgs["end_time"] = 5000;
+    createArgs["start_value"] = 0;
+    createArgs["end_value"] = 5000;
     createRequest["args"] = createArgs;
     
     CommandResponse createResponse = m_dispatcher->executeCommand(createRequest);
@@ -275,8 +275,8 @@ void TestCommandExecute::testCommandExecuteRollEdit()
     createArgs1["sequence_id"] = m_sequenceId;
     createArgs1["track_id"] = "track1";
     createArgs1["media_id"] = "media1";
-    createArgs1["start_time"] = 0;
-    createArgs1["end_time"] = 3000;
+    createArgs1["start_value"] = 0;
+    createArgs1["end_value"] = 3000;
     createRequest1["args"] = createArgs1;
     
     CommandResponse createResponse1 = m_dispatcher->executeCommand(createRequest1);
@@ -289,8 +289,8 @@ void TestCommandExecute::testCommandExecuteRollEdit()
     createArgs2["sequence_id"] = m_sequenceId;
     createArgs2["track_id"] = "track1";
     createArgs2["media_id"] = "media1";
-    createArgs2["start_time"] = 3000;
-    createArgs2["end_time"] = 6000;
+    createArgs2["start_value"] = 3000;
+    createArgs2["end_value"] = 6000;
     createRequest2["args"] = createArgs2;
     
     CommandResponse createResponse2 = m_dispatcher->executeCommand(createRequest2);
@@ -360,8 +360,8 @@ void TestCommandExecute::testDeterministicDeltaGeneration()
     args["sequence_id"] = m_sequenceId;
     args["track_id"] = "track1";
     args["media_id"] = "media1";
-    args["start_time"] = 1000;
-    args["end_time"] = 6000;
+    args["start_value"] = 1000;
+    args["end_value"] = 6000;
     request["args"] = args;
     
     CommandResponse response1 = m_dispatcher->executeCommand(request);

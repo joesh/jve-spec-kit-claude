@@ -274,9 +274,9 @@ void TestCommandEntity::testCommandDeterminism()
     
     // Create identical command sequences
     QList<QPair<QString, QVariantMap>> commandSpecs = {
-        {"CreateClip", {{"track_id", "track-1"}, {"media_id", "media-1"}, {"start_time", 1000}, {"duration", 5000}}},
+        {"CreateClip", {{"track_id", "track-1"}, {"media_id", "media-1"}, {"start_value", 1000}, {"duration", 5000}}},
         {"SetProperty", {{"entity_id", "clip-1"}, {"entity_type", "clip"}, {"property_name", "opacity"}, {"value", 0.8}}},
-        {"CreateClip", {{"track_id", "track-2"}, {"media_id", "media-2"}, {"start_time", 5000}, {"duration", 3000}}},
+        {"CreateClip", {{"track_id", "track-2"}, {"media_id", "media-2"}, {"start_value", 5000}, {"duration", 3000}}},
         {"SetProperty", {{"entity_id", "clip-2"}, {"entity_type", "clip"}, {"property_name", "scale"}, {"value", 1.5}}}
     };
     

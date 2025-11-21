@@ -1,3 +1,5 @@
+require('test_env')
+
 local db = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
@@ -19,16 +21,17 @@ db_conn:exec([[
         name TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
+        audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
         current_sequence_number INTEGER
     );
 
@@ -56,10 +59,12 @@ db_conn:exec([[
         source_sequence_id TEXT,
         parent_clip_id TEXT,
         owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
-        source_out INTEGER NOT NULL,
+        start_value INTEGER NOT NULL,
+        duration_value INTEGER NOT NULL,
+        source_in_value INTEGER NOT NULL,
+        source_out_value INTEGER NOT NULL,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         enabled BOOLEAN DEFAULT 1,
         offline BOOLEAN DEFAULT 0
     );
@@ -69,7 +74,9 @@ db_conn:exec([[
         project_id TEXT NOT NULL,
         file_path TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
-        duration INTEGER,
+        duration_value INTEGER,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         frame_rate REAL,
         width INTEGER,
         height INTEGER
@@ -85,7 +92,8 @@ db_conn:exec([[
         pre_hash TEXT,
         post_hash TEXT,
         timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
+        playhead_value INTEGER DEFAULT 0,
+        playhead_rate REAL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
         selected_clip_ids_pre TEXT DEFAULT '[]',
@@ -95,8 +103,8 @@ db_conn:exec([[
 
 db_conn:exec([[
     INSERT OR IGNORE INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT OR IGNORE INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
+    INSERT OR IGNORE INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
 ]])
 
 command_manager.init(db_conn, 'default_sequence', 'default_project')

@@ -14,114 +14,7 @@ local media_reader = require("media.media_reader")
 local Media = require("models.media")
 
 local function create_schema(db)
-    db:exec([[
-        CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            modified_at INTEGER NOT NULL,
-            settings TEXT DEFAULT '{}'
-        );
-
-        CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-        CREATE TABLE IF NOT EXISTS tracks (
-            id TEXT PRIMARY KEY,
-            sequence_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            track_type TEXT NOT NULL,
-            track_index INTEGER NOT NULL,
-            enabled BOOLEAN NOT NULL DEFAULT 1,
-            locked BOOLEAN NOT NULL DEFAULT 0,
-            muted BOOLEAN NOT NULL DEFAULT 0,
-            soloed BOOLEAN NOT NULL DEFAULT 0,
-            volume REAL NOT NULL DEFAULT 1.0,
-            pan REAL NOT NULL DEFAULT 0.0
-        );
-
-        CREATE TABLE IF NOT EXISTS media (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            duration INTEGER NOT NULL,
-            frame_rate REAL NOT NULL,
-            width INTEGER DEFAULT 0,
-            height INTEGER DEFAULT 0,
-            audio_channels INTEGER DEFAULT 0,
-            codec TEXT DEFAULT '',
-            created_at INTEGER NOT NULL,
-            modified_at INTEGER NOT NULL,
-            metadata TEXT DEFAULT '{}'
-        );
-
-        CREATE TABLE IF NOT EXISTS clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL,
-            source_out INTEGER NOT NULL,
-            enabled BOOLEAN NOT NULL DEFAULT 1,
-            offline BOOLEAN NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-            modified_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS properties (
-            id TEXT PRIMARY KEY,
-            clip_id TEXT NOT NULL,
-            property_name TEXT NOT NULL,
-            property_value TEXT NOT NULL,
-            property_type TEXT NOT NULL CHECK(property_type IN ('STRING', 'NUMBER', 'BOOLEAN', 'COLOR', 'ENUM')),
-            default_value TEXT NOT NULL,
-            FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE CASCADE,
-            UNIQUE(clip_id, property_name)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_properties_clip ON properties(clip_id);
-
-        CREATE TABLE IF NOT EXISTS commands (
-            id TEXT PRIMARY KEY,
-            parent_id TEXT,
-            parent_sequence_number INTEGER,
-            sequence_number INTEGER UNIQUE NOT NULL,
-            command_type TEXT NOT NULL,
-            command_args TEXT NOT NULL,
-            pre_hash TEXT NOT NULL,
-            post_hash TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            playhead_time INTEGER NOT NULL DEFAULT 0,
-            selected_clip_ids TEXT,
-            selected_edge_infos TEXT,
-            selected_clip_ids_pre TEXT,
-            selected_edge_infos_pre TEXT
-        );
-    ]])
+    db:exec(require('import_schema'))
 end
 
 local function count_rows(db, table_name, where_clause, value)
@@ -156,7 +49,7 @@ create_schema(db)
 local now = os.time()
 db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at) VALUES ('test_project', 'Test Project', %d, %d);
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos, viewport_start_time, viewport_duration, current_sequence_number)
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height, timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos, viewport_start_value, viewport_duration_frames_value, current_sequence_number)
     VALUES ('default_sequence', 'test_project', 'Default Timeline', 'timeline', 30.0, 1920, 1080, 0, 0, '[]', '[]', 0, 10000, NULL);
 ]], now, now))
 
@@ -188,7 +81,7 @@ media_reader.import_media = function(file_path, db_conn, project_id, existing_me
         project_id = project_id,
         name = file_path:match("([^/\\]+)$") or file_path,
         file_path = file_path,
-        duration = metadata.duration_ms,
+        duration_value = metadata.duration_ms,
         frame_rate = metadata.video and metadata.video.frame_rate or 0,
         width = metadata.video and metadata.video.width or 0,
         height = metadata.video and metadata.video.height or 0,

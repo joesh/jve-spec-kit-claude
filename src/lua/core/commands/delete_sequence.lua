@@ -37,10 +37,10 @@ local function fetch_sequence_record(db, sequence_id)
     end
 
     local stmt = db:prepare([[
-        SELECT id, project_id, name, kind, frame_rate, width, height,
-               timecode_start, playhead_time, selected_clip_ids,
-               selected_edge_infos, viewport_start_time, viewport_duration,
-               mark_in_time, mark_out_time, current_sequence_number
+        SELECT id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+               timecode_start_frame, playhead_value, selected_clip_ids,
+               selected_edge_infos, viewport_start_value, viewport_duration_frames_value,
+               mark_in_value, mark_out_value, current_sequence_number
         FROM sequences
         WHERE id = ?
     ]])
@@ -57,17 +57,18 @@ local function fetch_sequence_record(db, sequence_id)
             name = stmt:value(2),
             kind = stmt:value(3),
             frame_rate = tonumber(stmt:value(4)) or 0,
-            width = tonumber(stmt:value(5)) or 0,
-            height = tonumber(stmt:value(6)) or 0,
-            timecode_start = tonumber(stmt:value(7)) or 0,
-            playhead_time = tonumber(stmt:value(8)) or 0,
-            selected_clip_ids = stmt:value(9),
-            selected_edge_infos = stmt:value(10),
-            viewport_start_time = tonumber(stmt:value(11)) or 0,
-            viewport_duration = tonumber(stmt:value(12)) or 10000,
-            mark_in_time = stmt:value(13) and tonumber(stmt:value(13)) or nil,
-            mark_out_time = stmt:value(14) and tonumber(stmt:value(14)) or nil,
-            current_sequence_number = stmt:value(15) and tonumber(stmt:value(15)) or nil
+            audio_sample_rate = tonumber(stmt:value(5)) or 48000,
+            width = tonumber(stmt:value(6)) or 0,
+            height = tonumber(stmt:value(7)) or 0,
+            timecode_start_frame = tonumber(stmt:value(8)) or 0,
+            playhead_value = tonumber(stmt:value(9)) or 0,
+            selected_clip_ids = stmt:value(10),
+            selected_edge_infos = stmt:value(11),
+            viewport_start_value = tonumber(stmt:value(12)) or 0,
+            viewport_duration_frames_value = tonumber(stmt:value(13)) or 10000,
+            mark_in_value = stmt:value(14) and tonumber(stmt:value(14)) or nil,
+            mark_out_value = stmt:value(15) and tonumber(stmt:value(15)) or nil,
+            current_sequence_number = stmt:value(16) and tonumber(stmt:value(16)) or nil
         }
     end
     stmt:finalize()
@@ -77,8 +78,8 @@ end
 local function fetch_sequence_tracks(db, sequence_id)
     local tracks = {}
     local stmt = db:prepare([[
-        SELECT id, sequence_id, name, track_type, track_index, enabled,
-               locked, muted, soloed, volume, pan
+        SELECT id, sequence_id, name, track_type, timebase_type, timebase_rate,
+               track_index, enabled, locked, muted, soloed, volume, pan
         FROM tracks
         WHERE sequence_id = ?
         ORDER BY track_type DESC, track_index ASC
@@ -94,13 +95,15 @@ local function fetch_sequence_tracks(db, sequence_id)
                 sequence_id = stmt:value(1),
                 name = stmt:value(2),
                 track_type = stmt:value(3),
-                track_index = tonumber(stmt:value(4)) or 0,
-                enabled = stmt:value(5) == 1 or stmt:value(5) == true,
-                locked = stmt:value(6) == 1 or stmt:value(6) == true,
-                muted = stmt:value(7) == 1 or stmt:value(7) == true,
-                soloed = stmt:value(8) == 1 or stmt:value(8) == true,
-                volume = tonumber(stmt:value(9)) or 1.0,
-                pan = tonumber(stmt:value(10)) or 0.0
+                timebase_type = stmt:value(4),
+                timebase_rate = tonumber(stmt:value(5)),
+                track_index = tonumber(stmt:value(6)) or 0,
+                enabled = stmt:value(7) == 1 or stmt:value(7) == true,
+                locked = stmt:value(8) == 1 or stmt:value(8) == true,
+                muted = stmt:value(9) == 1 or stmt:value(9) == true,
+                soloed = stmt:value(10) == 1 or stmt:value(10) == true,
+                volume = tonumber(stmt:value(11)) or 1.0,
+                pan = tonumber(stmt:value(12)) or 0.0
             })
         end
     end
@@ -142,13 +145,14 @@ local function fetch_sequence_clips(db, sequence_id)
     local clip_stmt = db:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
                source_sequence_id, parent_clip_id, owner_sequence_id,
-               start_time, duration, source_in, source_out, enabled,
+               start_value, duration_value, source_in_value, source_out_value,
+               timebase_type, timebase_rate, enabled,
                offline, created_at, modified_at
         FROM clips
         WHERE track_id IN (
             SELECT id FROM tracks WHERE sequence_id = ?
         )
-        ORDER BY track_id, start_time
+        ORDER BY track_id, start_value
     ]])
     if not clip_stmt then
         return clips, properties, clip_links
@@ -156,7 +160,7 @@ local function fetch_sequence_clips(db, sequence_id)
     clip_stmt:bind_value(1, sequence_id)
 
     local link_stmt = db:prepare([[
-        SELECT link_group_id, clip_id, role, time_offset, enabled
+        SELECT link_group_id, clip_id, role, time_offset, timebase_type, timebase_rate, enabled
         FROM clip_links
         WHERE clip_id = ?
     ]])
@@ -174,14 +178,16 @@ local function fetch_sequence_clips(db, sequence_id)
                 source_sequence_id = clip_stmt:value(6),
                 parent_clip_id = clip_stmt:value(7),
                 owner_sequence_id = clip_stmt:value(8),
-                start_time = tonumber(clip_stmt:value(9)) or 0,
-                duration = tonumber(clip_stmt:value(10)) or 0,
-                source_in = tonumber(clip_stmt:value(11)) or 0,
-                source_out = tonumber(clip_stmt:value(12)) or 0,
-                enabled = clip_stmt:value(13) == 1 or clip_stmt:value(13) == true,
-                offline = clip_stmt:value(14) == 1 or clip_stmt:value(14) == true,
-                created_at = clip_stmt:value(15) and tonumber(clip_stmt:value(15)) or nil,
-                modified_at = clip_stmt:value(16) and tonumber(clip_stmt:value(16)) or nil
+                start_value = tonumber(clip_stmt:value(9)) or 0,
+                duration_value = tonumber(clip_stmt:value(10)) or 0,
+                source_in_value = tonumber(clip_stmt:value(11)) or 0,
+                source_out_value = tonumber(clip_stmt:value(12)) or 0,
+                timebase_type = clip_stmt:value(13),
+                timebase_rate = tonumber(clip_stmt:value(14)),
+                enabled = clip_stmt:value(15) == 1 or clip_stmt:value(15) == true,
+                offline = clip_stmt:value(16) == 1 or clip_stmt:value(16) == true,
+                created_at = clip_stmt:value(17) and tonumber(clip_stmt:value(17)) or nil,
+                modified_at = clip_stmt:value(18) and tonumber(clip_stmt:value(18)) or nil
             }
             table.insert(clips, clip_entry)
             properties[clip_id] = fetch_clip_properties(db, clip_id)
@@ -195,7 +201,9 @@ local function fetch_sequence_clips(db, sequence_id)
                             clip_id = link_stmt:value(1),
                             role = link_stmt:value(2),
                             time_offset = tonumber(link_stmt:value(3)) or 0,
-                            enabled = link_stmt:value(4) == 1 or link_stmt:value(4) == true
+                            timebase_type = link_stmt:value(4),
+                            timebase_rate = tonumber(link_stmt:value(5)),
+                            enabled = link_stmt:value(6) == 1 or link_stmt:value(6) == true
                         })
                     end
                 end
@@ -301,11 +309,11 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
 
     local insert_sequence_stmt = db:prepare([[
         INSERT INTO sequences (
-            id, project_id, name, kind, frame_rate, width, height,
-            timecode_start, playhead_time, selected_clip_ids,
-            selected_edge_infos, viewport_start_time, viewport_duration,
-            mark_in_time, mark_out_time, current_sequence_number
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+            timecode_start_frame, playhead_value, selected_clip_ids,
+            selected_edge_infos, viewport_start_value, viewport_duration_frames_value,
+            mark_in_value, mark_out_value, current_sequence_number
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     if not insert_sequence_stmt then
         set_error(set_last_error, "UndoDeleteSequence: Failed to prepare sequence insert")
@@ -317,17 +325,18 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
     insert_sequence_stmt:bind_value(3, sequence_row.name)
     insert_sequence_stmt:bind_value(4, sequence_row.kind or "timeline")
     insert_sequence_stmt:bind_value(5, sequence_row.frame_rate or 30.0)
-    insert_sequence_stmt:bind_value(6, sequence_row.width or 1920)
-    insert_sequence_stmt:bind_value(7, sequence_row.height or 1080)
-    insert_sequence_stmt:bind_value(8, sequence_row.timecode_start or 0)
-    insert_sequence_stmt:bind_value(9, sequence_row.playhead_time or 0)
-    insert_sequence_stmt:bind_value(10, sequence_row.selected_clip_ids)
-    insert_sequence_stmt:bind_value(11, sequence_row.selected_edge_infos)
-    insert_sequence_stmt:bind_value(12, sequence_row.viewport_start_time or 0)
-    insert_sequence_stmt:bind_value(13, sequence_row.viewport_duration or 10000)
-    insert_sequence_stmt:bind_value(14, sequence_row.mark_in_time)
-    insert_sequence_stmt:bind_value(15, sequence_row.mark_out_time)
-    insert_sequence_stmt:bind_value(16, sequence_row.current_sequence_number)
+    insert_sequence_stmt:bind_value(6, sequence_row.audio_sample_rate or 48000)
+    insert_sequence_stmt:bind_value(7, sequence_row.width or 1920)
+    insert_sequence_stmt:bind_value(8, sequence_row.height or 1080)
+    insert_sequence_stmt:bind_value(9, sequence_row.timecode_start_frame or 0)
+    insert_sequence_stmt:bind_value(10, sequence_row.playhead_value or 0)
+    insert_sequence_stmt:bind_value(11, sequence_row.selected_clip_ids)
+    insert_sequence_stmt:bind_value(12, sequence_row.selected_edge_infos)
+    insert_sequence_stmt:bind_value(13, sequence_row.viewport_start_value or 0)
+    insert_sequence_stmt:bind_value(14, sequence_row.viewport_duration_frames_value or 10000)
+    insert_sequence_stmt:bind_value(15, sequence_row.mark_in_value)
+    insert_sequence_stmt:bind_value(16, sequence_row.mark_out_value)
+    insert_sequence_stmt:bind_value(17, sequence_row.current_sequence_number)
 
     if not insert_sequence_stmt:exec() then
         insert_sequence_stmt:finalize()
@@ -340,9 +349,9 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
     if #tracks > 0 then
         local insert_track_stmt = db:prepare([[
             INSERT INTO tracks (
-                id, sequence_id, name, track_type, track_index,
+                id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index,
                 enabled, locked, muted, soloed, volume, pan
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_track_stmt then
             set_error(set_last_error, "UndoDeleteSequence: Failed to prepare track insert")
@@ -353,13 +362,15 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
             insert_track_stmt:bind_value(2, track.sequence_id or sequence_row.id)
             insert_track_stmt:bind_value(3, track.name or "")
             insert_track_stmt:bind_value(4, track.track_type or "VIDEO")
-            insert_track_stmt:bind_value(5, track.track_index or 0)
-            insert_track_stmt:bind_value(6, track.enabled and 1 or 0)
-            insert_track_stmt:bind_value(7, track.locked and 1 or 0)
-            insert_track_stmt:bind_value(8, track.muted and 1 or 0)
-            insert_track_stmt:bind_value(9, track.soloed and 1 or 0)
-            insert_track_stmt:bind_value(10, track.volume or 1.0)
-            insert_track_stmt:bind_value(11, track.pan or 0.0)
+            insert_track_stmt:bind_value(5, track.timebase_type or "video_frames")
+            insert_track_stmt:bind_value(6, track.timebase_rate or sequence_row.frame_rate or 24)
+            insert_track_stmt:bind_value(7, track.track_index or 0)
+            insert_track_stmt:bind_value(8, track.enabled and 1 or 0)
+            insert_track_stmt:bind_value(9, track.locked and 1 or 0)
+            insert_track_stmt:bind_value(10, track.muted and 1 or 0)
+            insert_track_stmt:bind_value(11, track.soloed and 1 or 0)
+            insert_track_stmt:bind_value(12, track.volume or 1.0)
+            insert_track_stmt:bind_value(13, track.pan or 0.0)
             if not insert_track_stmt:exec() then
                 insert_track_stmt:finalize()
                 set_error(set_last_error, "UndoDeleteSequence: Failed to restore track")
@@ -377,9 +388,10 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
                 source_sequence_id, parent_clip_id, owner_sequence_id,
-                start_time, duration, source_in, source_out, enabled,
+                start_value, duration_value, source_in_value, source_out_value,
+                timebase_type, timebase_rate, enabled,
                 offline, created_at, modified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_clip_stmt then
             set_error(set_last_error, "UndoDeleteSequence: Failed to prepare clip insert")
@@ -396,14 +408,16 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
             insert_clip_stmt:bind_value(7, clip.source_sequence_id)
             insert_clip_stmt:bind_value(8, clip.parent_clip_id)
             insert_clip_stmt:bind_value(9, clip.owner_sequence_id or sequence_row.id)
-            insert_clip_stmt:bind_value(10, clip.start_time or 0)
-            insert_clip_stmt:bind_value(11, clip.duration or 0)
-            insert_clip_stmt:bind_value(12, clip.source_in or 0)
-            insert_clip_stmt:bind_value(13, clip.source_out or 0)
-            insert_clip_stmt:bind_value(14, clip.enabled and 1 or 0)
-            insert_clip_stmt:bind_value(15, clip.offline and 1 or 0)
-            insert_clip_stmt:bind_value(16, clip.created_at or os.time())
-            insert_clip_stmt:bind_value(17, clip.modified_at or os.time())
+            insert_clip_stmt:bind_value(10, clip.start_value or 0)
+            insert_clip_stmt:bind_value(11, clip.duration_value or clip.duration or 0)
+            insert_clip_stmt:bind_value(12, clip.source_in_value or clip.source_in or 0)
+            insert_clip_stmt:bind_value(13, clip.source_out_value or clip.source_out or 0)
+            insert_clip_stmt:bind_value(14, clip.timebase_type or "video_frames")
+            insert_clip_stmt:bind_value(15, clip.timebase_rate or sequence_row.frame_rate or 24)
+            insert_clip_stmt:bind_value(16, clip.enabled and 1 or 0)
+            insert_clip_stmt:bind_value(17, clip.offline and 1 or 0)
+            insert_clip_stmt:bind_value(18, clip.created_at or os.time())
+            insert_clip_stmt:bind_value(19, clip.modified_at or os.time())
             if not insert_clip_stmt:exec() then
                 insert_clip_stmt:finalize()
                 set_error(set_last_error, "UndoDeleteSequence: Failed to restore clip")
@@ -425,8 +439,8 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
     local clip_links = payload.clip_links or {}
     if #clip_links > 0 then
         local insert_link_stmt = db:prepare([[
-            INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, timebase_type, timebase_rate, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ]])
         if insert_link_stmt then
             for _, link in ipairs(clip_links) do
@@ -434,7 +448,9 @@ local function restore_sequence_from_payload(db, set_last_error, payload)
                 insert_link_stmt:bind_value(2, link.clip_id)
                 insert_link_stmt:bind_value(3, link.role)
                 insert_link_stmt:bind_value(4, link.time_offset or 0)
-                insert_link_stmt:bind_value(5, link.enabled and 1 or 0)
+                insert_link_stmt:bind_value(5, link.timebase_type or "video_frames")
+                insert_link_stmt:bind_value(6, link.timebase_rate or 24)
+                insert_link_stmt:bind_value(7, link.enabled and 1 or 0)
                 insert_link_stmt:exec()
                 insert_link_stmt:reset()
                 insert_link_stmt:clear_bindings()

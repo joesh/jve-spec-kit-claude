@@ -56,7 +56,7 @@ local function load_clip_properties(clip_id)
 end
 
 local function resolve_clip_entry(entry)
-    if type(entry) == "table" and entry.start_time and entry.track_id then
+    if type(entry) == "table" and entry.start_value and entry.track_id then
         return entry
     end
     if type(entry) == "table" and entry.id and timeline_state.get_clip_by_id then
@@ -83,12 +83,12 @@ local function copy_timeline_selection()
 
     for _, raw in ipairs(selected) do
         local clip = resolve_clip_entry(raw)
-        if clip and clip.id and clip.track_id and clip.start_time then
+        if clip and clip.id and clip.track_id and clip.start_value then
             if clip.media_id == nil and clip.parent_clip_id == nil then
                 goto continue
             end
 
-            earliest_start = math.min(earliest_start, clip.start_time)
+            earliest_start = math.min(earliest_start, clip.start_value)
             local duration = clip.duration or ((clip.source_out or 0) - (clip.source_in or 0))
 
             clip_payloads[#clip_payloads + 1] = {
@@ -99,7 +99,7 @@ local function copy_timeline_selection()
                 source_sequence_id = clip.source_sequence_id,
                 owner_sequence_id = clip.owner_sequence_id,
                 clip_kind = clip.clip_kind,
-                start_time = clip.start_time,
+                start_value = clip.start_value,
                 duration = duration,
                 source_in = clip.source_in or 0,
                 source_out = clip.source_out or ((clip.source_in or 0) + duration),
@@ -116,11 +116,11 @@ local function copy_timeline_selection()
     end
 
     if earliest_start == math.huge then
-        earliest_start = clip_payloads[1].start_time or 0
+        earliest_start = clip_payloads[1].start_value or 0
     end
 
     for _, entry in ipairs(clip_payloads) do
-        entry.offset = (entry.start_time or 0) - earliest_start
+        entry.offset = (entry.start_value or 0) - earliest_start
     end
 
     local payload = {
@@ -150,7 +150,7 @@ local function paste_timeline(payload)
 
     local project_id = (timeline_state.get_project_id and timeline_state.get_project_id())
         or payload.project_id or "default_project"
-    local playhead = (timeline_state.get_playhead_time and timeline_state.get_playhead_time()) or 0
+    local playhead = (timeline_state.get_playhead_value and timeline_state.get_playhead_value()) or 0
 
     local clips = payload.clips or {}
     if #clips == 0 then
@@ -268,7 +268,7 @@ local function copy_browser_selection()
                         source_in = clip.source_in or 0,
                         source_out = clip.source_out or clip.duration,
                         source_sequence_id = clip.source_sequence_id,
-                        start_time = clip.start_time or 0,
+                        start_value = clip.start_value or 0,
                         enabled = clip.enabled,
                         offline = clip.offline,
                         project_id = clip.project_id or entry.project_id,

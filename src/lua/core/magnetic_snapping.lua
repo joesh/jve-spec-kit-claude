@@ -29,7 +29,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
 
     -- Add playhead position as snap point
     table.insert(snap_points, {
-        time = state.get_playhead_time(),
+        time = state.get_playhead_value(),
         type = "playhead",
         description = "Playhead"
     })
@@ -41,7 +41,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
             local in_key = clip.id .. "_in"
             if not excluded_edges_lookup[in_key] then
                 table.insert(snap_points, {
-                    time = clip.start_time,
+                    time = clip.start_value,
                     type = "clip_edge",
                     edge = "in",
                     clip_id = clip.id,
@@ -53,7 +53,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
             local out_key = clip.id .. "_out"
             if not excluded_edges_lookup[out_key] then
                 table.insert(snap_points, {
-                    time = clip.start_time + clip.duration,
+                    time = clip.start_value + clip.duration,
                     type = "clip_edge",
                     edge = "out",
                     clip_id = clip.id,

@@ -37,6 +37,16 @@ bool Migrations::applyMigrations(QSqlDatabase& database, const QString& projectP
     if (!versions.upgradeNeeded) {
         return SchemaValidator::verifyConstitutionalCompliance(database);
     }
+
+    // Fresh database: apply the initial schema directly.
+    if (versions.current == 0) {
+        qCInfo(jveMigrations, "Applying initial schema (v%d)", schema::INITIAL_SCHEMA_VERSION);
+        if (!SqlExecutor::applyMigrationVersion(database, schema::INITIAL_SCHEMA_VERSION)) {
+            return false;
+        }
+        return SchemaValidator::validateSchema(database) &&
+               SchemaValidator::verifyConstitutionalCompliance(database);
+    }
     
     // No backward compatibility: schema mismatches are fatal.
     if (versions.isDowngrade) {
@@ -139,7 +149,6 @@ void Migrations::cleanupMigrationConnection(QSqlDatabase& database)
     database.close();
     QSqlDatabase::removeDatabase(connectionName);
 }
-
 
 
 

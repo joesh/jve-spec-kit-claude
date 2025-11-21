@@ -21,97 +21,20 @@ local command_impl = require("core.command_implementations")
 local Command = require("command")
 local timeline_state = require("ui.timeline.timeline_state")
 
-local SCHEMA_SQL = [[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        audio_channels INTEGER,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0
-    );
-]]
+local SCHEMA_SQL = require('import_schema')
 
 local BASE_DATA_SQL = [[
     INSERT INTO projects (id, name, created_at, modified_at, settings)
     VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'), '{}');
 
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height, selected_clip_ids, selected_edge_infos)
-    VALUES ('seq_a', 'default_project', 'Seq A', 30.0, 1920, 1080, '[]', '[]');
+    INSERT INTO sequences (id, project_id, name, frame_rate, width, height, selected_clip_ids, selected_edge_infos, audio_sample_rate, viewport_start_value, viewport_duration_frames_value, timecode_start_frame, playhead_value)
+    VALUES ('seq_a', 'default_project', 'Seq A', 30.0, 1920, 1080, '[]', '[]', 48000, 0, 10000, 0, 0);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES
-        ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 1, 1),
-        ('seq_a_v2', 'seq_a', 'V2', 'VIDEO', 2, 1),
-        ('seq_a_a1', 'seq_a', 'A1', 'AUDIO', 1, 1),
-        ('seq_a_a2', 'seq_a', 'A2', 'AUDIO', 2, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES
+        ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1),
+        ('seq_a_v2', 'seq_a', 'V2', 'VIDEO', 'video_frames', 30.0, 2, 1),
+        ('seq_a_a1', 'seq_a', 'A1', 'AUDIO', 'audio_samples', 48000, 1, 1),
+        ('seq_a_a2', 'seq_a', 'A2', 'AUDIO', 'audio_samples', 48000, 2, 1);
 ]]
 
 local function setup_database(path)

@@ -65,10 +65,10 @@ function M.create(widget, state_module)
         timeline.clear_commands(ruler.widget)
 
         -- Get viewport state
-        local viewport_start = state_module.get_viewport_start_time()
+        local viewport_start = state_module.get_viewport_start_value()
         local viewport_duration = state_module.get_viewport_duration()
         local viewport_end = viewport_start + viewport_duration
-        local playhead_time = state_module.get_playhead_time()
+        local playhead_value = state_module.get_playhead_value()
 
         -- Ruler background
         timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
@@ -222,8 +222,8 @@ function M.create(widget, state_module)
         end
 
         -- Draw playhead marker if in visible range
-        if playhead_time >= viewport_start and playhead_time <= viewport_end then
-            local playhead_x = state_module.time_to_pixel(playhead_time, width)
+        if playhead_value >= viewport_start and playhead_value <= viewport_end then
+            local playhead_x = state_module.time_to_pixel(playhead_value, width)
 
             -- Small triangle at playhead position
             local handle_size = 8
@@ -252,8 +252,8 @@ function M.create(widget, state_module)
 
         if event_type == "press" then
             -- Check if clicking on playhead
-            local playhead_time = state_module.get_playhead_time()
-            local playhead_x = state_module.time_to_pixel(playhead_time, width)
+            local playhead_value = state_module.get_playhead_value()
+            local playhead_x = state_module.time_to_pixel(playhead_value, width)
 
             if math.abs(x - playhead_x) < 10 then
                 state_module.set_dragging_playhead(true)
@@ -261,7 +261,7 @@ function M.create(widget, state_module)
                 -- Click anywhere on ruler to set playhead (snap to frame)
                 local time = state_module.pixel_to_time(x, width)
                 local snapped_time = snap_to_frame(time)
-                state_module.set_playhead_time(snapped_time)
+                state_module.set_playhead_value(snapped_time)
                 state_module.set_dragging_playhead(true)
             end
 
@@ -269,7 +269,7 @@ function M.create(widget, state_module)
             if state_module.is_dragging_playhead() then
                 local time = state_module.pixel_to_time(x, width)
                 local snapped_time = snap_to_frame(time)
-                state_module.set_playhead_time(snapped_time)
+                state_module.set_playhead_value(snapped_time)
             end
 
         elseif event_type == "release" then
@@ -290,8 +290,8 @@ function M.create(widget, state_module)
             if width and width > 0 then
                 local viewport_duration = state_module.get_viewport_duration()
                 local delta_time = (-horizontal / width) * viewport_duration
-                local new_start = state_module.get_viewport_start_time() + delta_time
-                state_module.set_viewport_start_time(new_start)
+                local new_start = state_module.get_viewport_start_value() + delta_time
+                state_module.set_viewport_start_value(new_start)
                 render()
             end
         end

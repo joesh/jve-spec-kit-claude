@@ -21,92 +21,7 @@ database.init(test_db_path)
 local db = database.get_connection()
 
 -- Create minimal schema for testing
-db:exec([[
-    CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE IF NOT EXISTS clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
-        source_out INTEGER NOT NULL,
-        enabled BOOLEAN DEFAULT 1,
-        offline BOOLEAN DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        file_path TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-]])
+db:exec(require('import_schema'))
 
 -- Insert test data
 db:exec([[
@@ -116,8 +31,8 @@ db:exec([[
     VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
 ]])
 
 command_manager.init(db, 'test_sequence')

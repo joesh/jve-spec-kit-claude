@@ -119,7 +119,7 @@ Command Command::createUndo() const
         undoCommand.setParameter("track_id", getParameter("track_id"));
         undoCommand.setParameter("media_id", getParameter("media_id"));
         undoCommand.setParameter("clip_name", getParameter("clip_name"));
-        undoCommand.setParameter("start_time", getParameter("start_time"));
+        undoCommand.setParameter("start_value", getParameter("start_value"));
         undoCommand.setParameter("duration", getParameter("duration"));
     } else if (m_type == "SetClipProperty" || m_type == "SetProperty") {
         // For property commands, swap value with previous_value

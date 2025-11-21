@@ -964,15 +964,15 @@ function M.create()
         -- Convert splitter rectangle to time range
         -- We need to map to a timeline view widget to get proper width for time conversion
         local viewport_width, _ = timeline.get_dimensions(video_widget)
-        local start_time = state.pixel_to_time(rect_x, viewport_width)
+        local start_value = state.pixel_to_time(rect_x, viewport_width)
         local end_time = state.pixel_to_time(rect_x + rect_width, viewport_width)
 
         -- Find all clips that intersect with the selection rectangle
         local selected_clips = {}
         for _, clip in ipairs(state.get_clips()) do
             -- Check time overlap
-            local clip_end_time = clip.start_time + clip.duration
-            local time_overlaps = not (clip_end_time < start_time or clip.start_time > end_time)
+            local clip_end_time = clip.start_value + clip.duration
+            local time_overlaps = not (clip_end_time < start_value or clip.start_value > end_time)
 
             if time_overlaps then
 

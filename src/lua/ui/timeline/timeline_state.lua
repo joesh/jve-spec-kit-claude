@@ -59,46 +59,81 @@ M.dimensions = {
 -- Incremented whenever clips or tracks are reloaded from database
 local state_version = 0
 
+local function fresh_state()
+    return {
+        -- Data
+        tracks = {},  -- All tracks from database
+        clips = {},   -- All clips from database
+        project_id = "default_project",
+        sequence_frame_rate = frame_utils.default_frame_rate,
+        sequence_audio_rate = 48000,
+        sequence_timecode_start_frame = 0,
+
+        -- Logical viewport (time-based, not pixel-based)
+        viewport_start_value = 0,     -- milliseconds - left edge of visible area
+        viewport_duration_frames_value = 10000,   -- milliseconds - how much time is visible
+
+        -- Playhead
+        playhead_value = 0,  -- milliseconds
+
+        -- Selection
+        selected_clips = {},  -- Array of selected clip objects
+        selected_edges = {},  -- Array of selected edge objects for trimming
+                              -- Each edge: {clip_id, edge_type ("in"/"out"), trim_type ("ripple"/"roll")}
+        selected_gaps = {},   -- Array of selected gap descriptors {track_id, start_value, duration_value}
+        mark_in_value = nil,   -- Mark In point in milliseconds (nil when unset)
+        mark_out_value = nil,  -- Mark Out point in milliseconds (nil when unset)
+
+        -- Interaction state (for cross-view operations)
+        dragging_playhead = false,
+        dragging_clip = nil,
+        drag_selecting = false,
+        drag_select_start_value = 0,  -- in milliseconds
+        drag_select_end_time = 0,
+        drag_select_start_track_index = 0,  -- global track index
+        drag_select_end_track_index = 0,
+    }
+end
+
 -- Centralized state
-local state = {
-    -- Data
-    tracks = {},  -- All tracks from database
-    clips = {},   -- All clips from database
-    project_id = "default_project",
-    sequence_frame_rate = frame_utils.default_frame_rate, sequence_audio_rate = 48000,
-    sequence_audio_rate = 48000,
-    sequence_timecode_start = 0,
-
-    -- Logical viewport (time-based, not pixel-based)
-    viewport_start_value = 0,     -- milliseconds - left edge of visible area
-    viewport_duration_value = 10000,   -- milliseconds - how much time is visible
-
-    -- Playhead
-    playhead_value = 0,  -- milliseconds
-
-    -- Selection
-    selected_clips = {},  -- Array of selected clip objects
-    selected_edges = {},  -- Array of selected edge objects for trimming
-                          -- Each edge: {clip_id, edge_type ("in"/"out"), trim_type ("ripple"/"roll")}
-    selected_gaps = {},   -- Array of selected gap descriptors {track_id, start_value, duration_value}
-    mark_in_value = nil,   -- Mark In point in milliseconds (nil when unset)
-    mark_out_value = nil,  -- Mark Out point in milliseconds (nil when unset)
-
-    -- Interaction state (for cross-view operations)
-    dragging_playhead = false,
-    dragging_clip = nil,
-    drag_selecting = false,
-    drag_select_start_value = 0,  -- in milliseconds
-    drag_select_end_time = 0,
-    drag_select_start_track_index = 0,  -- global track index
-    drag_select_end_track_index = 0,
-}
+local state = fresh_state()
 
 -- Accelerated lookup tables for clips/tracks
 local clip_lookup = {}
 local track_clip_index = {}
 local clip_track_positions = {}
 local clip_indexes_dirty = true
+
+-- Qt timer bridge (falls back to immediate execution for headless tests)
+local function create_single_shot_timer(delay_ms, callback)
+    if type(qt_create_single_shot_timer) == "function" then
+        return qt_create_single_shot_timer(delay_ms, callback)
+    end
+    -- Headless mode: execute immediately
+    callback()
+    return nil
+end
+
+-- Reset in-memory state (used by isolated tests)
+function M.reset()
+    state = fresh_state()
+    state_version = 0
+    track_layout_dirty = false
+    track_template_dirty = false
+    last_mutation_failure = nil
+    listeners = {}
+    notify_timer = nil
+    notify_profile_seq = 0
+    persist_timer = nil
+    persist_dirty = false
+    project_browser = nil
+    rubber_band = nil
+    on_selection_changed_callback = nil
+    clip_lookup = {}
+    track_clip_index = {}
+    clip_track_positions = {}
+    clip_indexes_dirty = true
+end
 
 local function invalidate_clip_indexes()
     clip_indexes_dirty = true
@@ -295,7 +330,7 @@ local function ensure_sequence_viewport_columns(db_conn)
             local column_name = pragma:value(1)
             if column_name == "viewport_start_value" then
                 has_start = true
-            elseif column_name == "viewport_duration_value" then
+            elseif column_name == "viewport_duration_frames_value" then
                 has_duration_value = true
             elseif column_name == "mark_in_value" then
                 has_mark_in = true
@@ -314,9 +349,9 @@ local function ensure_sequence_viewport_columns(db_conn)
     end
 
     if not has_duration_value then
-        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN viewport_duration_value INTEGER NOT NULL DEFAULT 10000")
+        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN viewport_duration_frames_value INTEGER NOT NULL DEFAULT 10000")
         if not ok then
-            print("WARNING: Failed to add viewport_duration_value column: " .. tostring(err or "unknown error"))
+            print("WARNING: Failed to add viewport_duration_frames_value column: " .. tostring(err or "unknown error"))
         end
     end
 
@@ -356,8 +391,8 @@ local function calculate_timeline_extent()
         max_end = state.playhead_value
     end
 
-    if state.viewport_start_value and state.viewport_duration_value then
-        local viewport_end = state.viewport_start_value + state.viewport_duration_value
+    if state.viewport_start_value and state.viewport_duration_frames_value then
+        local viewport_end = state.viewport_start_value + state.viewport_duration_frames_value
         if viewport_end > max_end then
             max_end = viewport_end
         end
@@ -395,7 +430,7 @@ local function ensure_playhead_visible()
         return false
     end
 
-    local duration_value = state.viewport_duration_value
+    local duration_value = state.viewport_duration_frames_value
     if not duration_value or duration_value <= 0 then
         return false
     end
@@ -576,7 +611,7 @@ local function notify_listeners()
     end
 
     -- Create Qt timer to batch notifications
-    notify_timer = qt_create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
+    notify_timer = create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
         notify_timer = nil
 
         local dispatch_start = krono_now_fn and krono_now_fn() or nil
@@ -650,7 +685,7 @@ function M.init(sequence_id)
             project_stmt:finalize()
         end
 
-        local query = db_conn:prepare("SELECT playhead_value, selected_clip_ids, selected_edge_infos, viewport_start_value, viewport_duration_value, frame_rate, timecode_start, mark_in_value, mark_out_value FROM sequences WHERE id = ?")
+        local query = db_conn:prepare("SELECT playhead_value, selected_clip_ids, selected_edge_infos, viewport_start_value, viewport_duration_frames_value, frame_rate, timecode_start_frame, mark_in_value, mark_out_value FROM sequences WHERE id = ?")
         if query then
             query:bind_value(1, sequence_id)
             if query:exec() and query:next() then
@@ -718,8 +753,8 @@ function M.init(sequence_id)
                 state.sequence_frame_rate = frame_utils.default_frame_rate
             end
 
-            local saved_timecode_start = tonumber(query:value(6))
-            state.sequence_timecode_start = saved_timecode_start or 0
+            local saved_timecode_start_frame = tonumber(query:value(6))
+            state.sequence_timecode_start_frame = saved_timecode_start_frame or 0
 
             local saved_mark_in = query:value(7)
             if saved_mark_in ~= nil then
@@ -736,17 +771,17 @@ function M.init(sequence_id)
             end
 
             local saved_viewport_start = query:value(3)
-            local saved_viewport_duration_value = query:value(4)
+            local saved_viewport_duration_frames_value = query:value(4)
                 local restored_viewport = false
-                if saved_viewport_duration_value and saved_viewport_duration_value > 0 then
-                    state.viewport_duration_value = math.max(1000, saved_viewport_duration_value)
+                if saved_viewport_duration_frames_value and saved_viewport_duration_frames_value > 0 then
+                    state.viewport_duration_frames_value = math.max(1000, saved_viewport_duration_frames_value)
                     restored_viewport = true
                 end
                 if saved_viewport_start and saved_viewport_start >= 0 then
                     state.viewport_start_value = saved_viewport_start
                     restored_viewport = true
                 end
-                state.viewport_start_value = clamp_viewport_start(state.viewport_start_value, state.viewport_duration_value)
+                state.viewport_start_value = clamp_viewport_start(state.viewport_start_value, state.viewport_duration_frames_value)
                 state._restored_viewport = restored_viewport
             end
             query:finalize()
@@ -785,8 +820,8 @@ function M.init(sequence_id)
 
     if not restored_viewport then
         -- Show at least 10 seconds, or enough to see all content
-        state.viewport_duration_value = math.max(10000, max_clip_end * 1.2)
-        state.viewport_start_value = clamp_viewport_start(state.viewport_start_value, state.viewport_duration_value)
+        state.viewport_duration_frames_value = math.max(10000, max_clip_end * 1.2)
+        state.viewport_start_value = clamp_viewport_start(state.viewport_start_value, state.viewport_duration_frames_value)
     end
 
     notify_listeners()
@@ -906,8 +941,8 @@ function M.get_sequence_frame_rate()
     return rate
 end
 
-function M.get_sequence_timecode_start()
-    return state.sequence_timecode_start or 0
+function M.get_sequence_timecode_start_frame()
+    return state.sequence_timecode_start_frame or 0
 end
 
 function M.has_explicit_mark_in()
@@ -925,8 +960,8 @@ end
 function M.get_timeline_extent_end()
     local content_end = compute_sequence_content_length()
     local viewport_end = 0
-    if state.viewport_start_value and state.viewport_duration_value then
-        viewport_end = state.viewport_start_value + state.viewport_duration_value
+    if state.viewport_start_value and state.viewport_duration_frames_value then
+        viewport_end = state.viewport_start_value + state.viewport_duration_frames_value
     end
     local playhead = state.playhead_value or 0
     return math.max(content_end, viewport_end, playhead)
@@ -952,8 +987,8 @@ function M.get_mark_out()
             return content_end
         end
         local viewport_end = 0
-        if state.viewport_start_value and state.viewport_duration_value then
-            viewport_end = state.viewport_start_value + state.viewport_duration_value
+        if state.viewport_start_value and state.viewport_duration_frames_value then
+            viewport_end = state.viewport_start_value + state.viewport_duration_frames_value
         end
         return viewport_end
     end
@@ -1355,18 +1390,23 @@ function M.get_viewport_start_value()
     return state.viewport_start_value
 end
 
-function M.get_viewport_duration_value()
-    return state.viewport_duration_value
+-- Legacy accessor used by multiple views (currently frame-based duration)
+function M.get_viewport_duration()
+    return state.viewport_duration_frames_value
+end
+
+function M.get_viewport_duration_frames_value()
+    return state.viewport_duration_frames_value
 end
 
 function M.get_viewport_end_time()
-    return state.viewport_start_value + state.viewport_duration_value
+    return state.viewport_start_value + state.viewport_duration_frames_value
 end
 
 function M.capture_viewport()
     return {
         start_value = state.viewport_start_value,
-        duration_value = state.viewport_duration_value,
+        duration_value = state.viewport_duration_frames_value,
     }
 end
 
@@ -1375,7 +1415,7 @@ function M.restore_viewport(snapshot)
         return
     end
 
-    local target_duration_value = math.max(1000, snapshot.duration_value or state.viewport_duration_value)
+    local target_duration_value = math.max(1000, snapshot.duration_value or state.viewport_duration_frames_value)
     local target_start = snapshot.start_value
     if target_start == nil then
         target_start = state.viewport_start_value
@@ -1384,8 +1424,8 @@ function M.restore_viewport(snapshot)
 
     local changed = false
 
-    if state.viewport_duration_value ~= target_duration_value then
-        state.viewport_duration_value = target_duration_value
+    if state.viewport_duration_frames_value ~= target_duration_value then
+        state.viewport_duration_frames_value = target_duration_value
         changed = true
     end
 
@@ -1410,7 +1450,7 @@ end
 
 -- Setters (with notification)
 function M.set_viewport_start_value(time_ms)
-    local clamped_start = clamp_viewport_start(time_ms, state.viewport_duration_value)
+    local clamped_start = clamp_viewport_start(time_ms, state.viewport_duration_frames_value)
     if state.viewport_start_value ~= clamped_start then
         state.viewport_start_value = clamped_start
         notify_listeners()
@@ -1418,17 +1458,17 @@ function M.set_viewport_start_value(time_ms)
     end
 end
 
-function M.set_viewport_duration_value(duration_value_ms)
+function M.set_viewport_duration_frames_value(duration_value_ms)
     local new_duration_value = math.max(1000, duration_value_ms)
-    if state.viewport_duration_value ~= new_duration_value then
-        local playhead = state.playhead_value or (state.viewport_start_value + state.viewport_duration_value / 2)
+    if state.viewport_duration_frames_value ~= new_duration_value then
+        local playhead = state.playhead_value or (state.viewport_start_value + state.viewport_duration_frames_value / 2)
         local desired_start = playhead - (new_duration_value / 2)
         local clamped_start = clamp_viewport_start(desired_start, new_duration_value)
 
         local changed = false
 
-        if state.viewport_duration_value ~= new_duration_value then
-            state.viewport_duration_value = new_duration_value
+        if state.viewport_duration_frames_value ~= new_duration_value then
+            state.viewport_duration_frames_value = new_duration_value
             changed = true
         end
 
@@ -1655,12 +1695,12 @@ end
 -- Coordinate conversion helpers
 -- These convert between time and pixel coordinates for a given viewport width
 function M.time_to_pixel(time_ms, viewport_width)
-    local pixels_per_ms = viewport_width / state.viewport_duration_value
+    local pixels_per_ms = viewport_width / state.viewport_duration_frames_value
     return math.floor((time_ms - state.viewport_start_value) * pixels_per_ms)
 end
 
 function M.pixel_to_time(pixel, viewport_width)
-    local pixels_per_ms = viewport_width / state.viewport_duration_value
+    local pixels_per_ms = viewport_width / state.viewport_duration_frames_value
     return math.floor(state.viewport_start_value + (pixel / pixels_per_ms))
 end
 
@@ -2174,7 +2214,7 @@ local function flush_state_to_db()
     -- Update sequences table with current state
     local query = db_conn:prepare([[
         UPDATE sequences
-        SET playhead_value = ?, selected_clip_ids = ?, selected_edge_infos = ?, viewport_start_value = ?, viewport_duration_value = ?, mark_in_value = ?, mark_out_value = ?
+        SET playhead_value = ?, selected_clip_ids = ?, selected_edge_infos = ?, viewport_start_value = ?, viewport_duration_frames_value = ?, mark_in_value = ?, mark_out_value = ?
         WHERE id = ?
     ]])
 
@@ -2183,7 +2223,7 @@ local function flush_state_to_db()
         query:bind_value(2, json_str)
         query:bind_value(3, edges_json)
         query:bind_value(4, math.floor(state.viewport_start_value or 0))
-        query:bind_value(5, math.floor(state.viewport_duration_value or 10000))
+        query:bind_value(5, math.floor(state.viewport_duration_frames_value or 10000))
         query:bind_value(6, state.mark_in_value)
         query:bind_value(7, state.mark_out_value)
         query:bind_value(8, sequence_id)
@@ -2219,7 +2259,7 @@ local function schedule_state_persist(immediate)
         return
     end
 
-    persist_timer = qt_create_single_shot_timer(PERSIST_DEBOUNCE_MS, function()
+    persist_timer = create_single_shot_timer(PERSIST_DEBOUNCE_MS, function()
         persist_timer = nil
         if not persist_dirty then
             return

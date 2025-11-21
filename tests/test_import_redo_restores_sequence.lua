@@ -20,15 +20,28 @@ local SCHEMA_SQL = require('import_schema')
 
 local function install_timeline_stub()
     local timeline_state = {
-        playhead_time = 0,
+        playhead_value = 0,
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},
-        viewport_start_time = 0,
-        viewport_duration = 10000,
-        sequence_id = 'default_sequence'
+        viewport_start_value = 0,
+        viewport_duration_frames_value = 300,
+        sequence_id = 'default_sequence',
+        sequence_frame_rate = nil,
     }
     local guard_depth = 0
+    local function refresh_sequence_frame_rate(sequence_id)
+        local db = database.get_connection()
+        assert(db, "timeline_state: database not initialized")
+        local stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+        assert(stmt, "timeline_state: failed to prepare frame rate lookup")
+        stmt:bind_value(1, sequence_id)
+        assert(stmt:exec() and stmt:next(), string.format("timeline_state: missing sequence %s", tostring(sequence_id)))
+        local rate = stmt:value(0)
+        stmt:finalize()
+        assert(rate and rate > 0, "timeline_state: invalid frame rate")
+        timeline_state.sequence_frame_rate = rate
+    end
 
     function timeline_state.get_sequence_id()
         return timeline_state.sequence_id
@@ -37,13 +50,14 @@ local function install_timeline_stub()
     function timeline_state.reload_clips(sequence_id)
         if sequence_id and sequence_id ~= "" then
             timeline_state.sequence_id = sequence_id
+            refresh_sequence_frame_rate(sequence_id)
         end
     end
 
     function timeline_state.capture_viewport()
         return {
-            start_time = timeline_state.viewport_start_time,
-            duration = timeline_state.viewport_duration
+            start_value = timeline_state.viewport_start_value,
+            duration_value = timeline_state.viewport_duration_frames_value
         }
     end
 
@@ -61,20 +75,27 @@ local function install_timeline_stub()
         if not snapshot then
             return
         end
-        if snapshot.start_time then
-            timeline_state.viewport_start_time = snapshot.start_time
+        if snapshot.start_value then
+            timeline_state.viewport_start_value = snapshot.start_value
         end
-        if snapshot.duration then
-            timeline_state.viewport_duration = snapshot.duration
+        if snapshot.duration_value then
+            timeline_state.viewport_duration_frames_value = snapshot.duration_value
         end
     end
 
-    function timeline_state.set_playhead_time(ms)
-        timeline_state.playhead_time = ms
+    function timeline_state.set_playhead_value(value)
+        timeline_state.playhead_value = value
     end
 
-    function timeline_state.get_playhead_time()
-        return timeline_state.playhead_time
+    function timeline_state.get_playhead_value()
+        return timeline_state.playhead_value
+    end
+
+    function timeline_state.get_sequence_frame_rate()
+        if not timeline_state.sequence_frame_rate then
+            refresh_sequence_frame_rate(timeline_state.sequence_id)
+        end
+        return timeline_state.sequence_frame_rate
     end
 
     function timeline_state.set_selection(clips)
@@ -119,8 +140,9 @@ local function init_database(path)
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-        INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
     ]]))
     return db
 end

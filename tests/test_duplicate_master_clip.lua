@@ -13,145 +13,19 @@ os.remove(TEST_DB)
 database.init(TEST_DB)
 local db = database.get_connection()
 
-db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        audio_channels INTEGER,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL,
-        name TEXT,
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE properties (
-        id TEXT PRIMARY KEY,
-        clip_id TEXT NOT NULL,
-        property_name TEXT NOT NULL,
-        property_value TEXT,
-        property_type TEXT NOT NULL DEFAULT 'STRING',
-        default_value TEXT
-    );
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-
-    CREATE TABLE tag_namespaces (
-        id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL
-    );
-
-    INSERT OR IGNORE INTO tag_namespaces(id, display_name)
-    VALUES('bin', 'Bins');
-
-    CREATE TABLE tags (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        path TEXT NOT NULL,
-        parent_id TEXT,
-        sort_index INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-    );
-
-    CREATE TABLE tag_assignments (
-        tag_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        entity_type TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        assigned_at INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY(tag_id, entity_type, entity_id)
-    );
-]])
+db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 24.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
-    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate)
-    VALUES ('media_master', 'default_project', 'Master Source', '/tmp/jve/master.mov', 2000, 24.0);
-    INSERT INTO clips (id, project_id, clip_kind, name, media_id, start_time, duration, source_in, source_out, enabled, offline)
-    VALUES ('master_clip', 'default_project', 'master', 'Master Clip', 'media_master', 0, 2000, 0, 2000, 1, 0);
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 24.0, 48000, 1920, 1080, 0, 0, 0, 240);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 24.0, 1, 1);
+    INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate)
+    VALUES ('media_master', 'default_project', 'Master Source', '/tmp/jve/master.mov', 2000, 'video_frames', 24.0, 24.0);
+    INSERT INTO clips (id, project_id, clip_kind, name, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline)
+    VALUES ('master_clip', 'default_project', 'master', 'Master Clip', 'media_master', 0, 2000, 0, 2000, 'video_frames', 24.0, 1, 0);
     INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value)
     VALUES ('prop1', 'master_clip', 'ColorBalance', '{"value":"warm"}', 'STRING', '{}');
 
@@ -168,10 +42,11 @@ local timeline_state_stub = {
     set_selection = function() end,
     reload_clips = function() end,
     persist_state_to_db = function() end,
-    get_playhead_time = function() return 0 end,
-    set_playhead_time = function() end,
+    get_playhead_value = function() return 0 end,
+    set_playhead_value = function() end,
+    get_sequence_frame_rate = function() return 24.0 end,
     get_clips = function() return {} end,
-    capture_viewport = function() return {start_time = 0, duration = 10000} end,
+    capture_viewport = function() return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 24.0} end,
     restore_viewport = function() end,
     push_viewport_guard = function() return 0 end,
     pop_viewport_guard = function() return 0 end
@@ -192,11 +67,11 @@ command_manager.init(db, 'default_sequence', 'default_project')
 local snapshot = {
     name = "Master Clip",
     media_id = "media_master",
-    duration = 2000,
-    source_in = 0,
-    source_out = 2000,
+    duration_value = 2000,
+    source_in_value = 0,
+    source_out_value = 2000,
     source_sequence_id = nil,
-    start_time = 0,
+    start_value = 0,
     enabled = true,
     offline = false,
     project_id = "default_project"

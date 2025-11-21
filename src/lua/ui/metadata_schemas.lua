@@ -226,18 +226,18 @@ metadata_schemas.sequence_inspector_schemas = {
             create_field("frame_rate", "Frame Rate", metadata_schemas.FIELD_TYPES.DOUBLE, 24.0),
             create_field("width", "Width", metadata_schemas.FIELD_TYPES.INTEGER, 1920),
             create_field("height", "Height", metadata_schemas.FIELD_TYPES.INTEGER, 1080),
-            create_field("timecode_start", "Start Timecode", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
-            create_field("playhead_time", "Playhead", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00")
+            create_field("timecode_start_frame", "Start Timecode", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
+            create_field("playhead_value", "Playhead", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00")
         }
     },
 
     ["Timeline Viewport"] = {
         description = "Viewport defaults and edit marks for the sequence",
         fields = {
-            create_field("viewport_start_time", "Viewport Start", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
-            create_field("viewport_duration", "Viewport Duration", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:10:00"),
-            create_field("mark_in_time", "Mark In", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
-            create_field("mark_out_time", "Mark Out", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00")
+            create_field("viewport_start_value", "Viewport Start", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
+            create_field("viewport_duration_frames_value", "Viewport Duration", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:10:00"),
+            create_field("mark_in_value", "Mark In", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
+            create_field("mark_out_value", "Mark Out", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00")
         }
     }
 }

@@ -20,7 +20,7 @@ local SELECTED_CLIP_COLOR = timeline_state.colors.clip_selected
 function TimelineRenderer.new(timeline_widget)
     local self = {
         timeline = timeline_widget,
-        playhead_time = 0,
+        playhead_value = 0,
         zoom_level = 1.0,
         tracks = {"Video 1", "Audio 1", "Audio 2"}
     }
@@ -28,8 +28,8 @@ function TimelineRenderer.new(timeline_widget)
     return self
 end
 
-function TimelineRenderer:set_playhead_time(time)
-    self.playhead_time = time
+function TimelineRenderer:set_playhead_value(time)
+    self.playhead_value = time
 end
 
 function TimelineRenderer:set_zoom_level(zoom)
@@ -52,10 +52,10 @@ function TimelineRenderer:draw_ruler(width)
     
     -- Draw time markers
     local seconds_per_marker = 1
-    local start_time = 0
+    local start_value = 0
     local end_time = (width - TRACK_HEADER_WIDTH) / (100 * self.zoom_level)
     
-    for time = start_time, end_time, seconds_per_marker do
+    for time = start_value, end_time, seconds_per_marker do
         local x = self:time_to_pixel(time)
         if x < width then
             -- Draw marker line
@@ -149,7 +149,7 @@ function TimelineRenderer:draw_clips(instances, selection)
 end
 
 function TimelineRenderer:draw_playhead(height)
-    local x = self:time_to_pixel(self.playhead_time)
+    local x = self:time_to_pixel(self.playhead_value)
     
     -- Draw playhead line
     timeline_add_line(self.timeline, x, 0, x, height, PLAYHEAD_COLOR, 2)

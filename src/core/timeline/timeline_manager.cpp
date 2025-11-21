@@ -599,12 +599,12 @@ void TimelineManager::loadClipsFromDatabase()
     // Algorithm: Query clips → Parse results → Populate list
     QSqlQuery query(*m_database);
     query.prepare(
-        "SELECT c.id, c.start_time, c.duration, c.track_id, c.media_id "
+        "SELECT c.id, c.start_value, c.duration_value, c.track_id, c.media_id "
         "FROM clips c "
         "JOIN tracks t ON c.track_id = t.id "
         "JOIN sequences s ON t.sequence_id = s.id "
         "WHERE s.id = ? "
-        "ORDER BY c.start_time"
+        "ORDER BY c.start_value"
     );
     query.addBindValue(m_sequenceId);
     
@@ -613,8 +613,8 @@ void TimelineManager::loadClipsFromDatabase()
         while (query.next()) {
             ClipInfo clip;
             clip.id = query.value("id").toString();
-            clip.start = query.value("start_time").toLongLong();
-            clip.end = clip.start + query.value("duration").toLongLong();
+            clip.start = query.value("start_value").toLongLong();
+            clip.end = clip.start + query.value("duration_value").toLongLong();
             clip.trackId = query.value("track_id").toString();
             clip.mediaId = query.value("media_id").toString();
             

@@ -15,144 +15,55 @@ os.remove(TEST_DB)
 database.init(TEST_DB)
 local db = database.get_connection()
 
+assert(db:exec(require('import_schema')))
 assert(db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        audio_channels INTEGER,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT
-    );
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]',
-        selected_gap_infos TEXT DEFAULT '[]',
-        selected_gap_infos_pre TEXT DEFAULT '[]'
-    );
-
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v2', 'default_sequence', 'Video 2', 'VIDEO', 2, 1);
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                          timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1),
+           ('track_v2', 'default_sequence', 'V2', 'VIDEO', 'video_frames', 30.0, 2, 1);
 ]]))
 
-local function ensure_media(id, duration)
-    local media = Media.create({
-        id = id,
-        project_id = 'default_project',
-        name = id,
-        file_path = '/tmp/jve/' .. id .. '.mov',
-        duration = duration,
-        frame_rate = 30,
-        width = 1920,
-        height = 1080,
-    })
-    assert(media, "failed to create media")
-    assert(media:save(db), "failed to save media")
-    return media.id
+local function ensure_media(id, duration_value)
+    local stmt = db:prepare([[
+        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES (?, 'default_project', ?, ?, ?, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw', strftime('%s','now'), strftime('%s','now'), '{}')
+    ]])
+    assert(stmt, "failed to prepare media insert")
+    assert(stmt:bind_value(1, id))
+    assert(stmt:bind_value(2, id))
+    assert(stmt:bind_value(3, "/tmp/jve/" .. id .. ".mov"))
+    assert(stmt:bind_value(4, duration_value))
+    assert(stmt:exec(), "failed to insert media")
+    stmt:finalize()
+    return id
 end
 
-local function insert_clip(id, track_id, start_time, duration)
-    local media_id = ensure_media(id .. "_media", duration)
-    local clip = Clip.create(id, media_id, {
-        id = id,
-        project_id = 'default_project',
-        track_id = track_id,
-        owner_sequence_id = 'default_sequence',
-        start_time = start_time,
-        duration = duration,
-        source_in = 0,
-        source_out = duration,
-        enabled = true,
-    })
-    assert(clip:save(db, {skip_occlusion = true}), "failed to save clip " .. id)
+local function insert_clip(id, track_id, start_value, duration_value)
+    local media_id = ensure_media(id .. "_media", duration_value)
+    local stmt = db:prepare([[
+        INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id,
+                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline, created_at, modified_at)
+        VALUES (?, 'default_project', 'timeline', ?, ?, ?, 'default_sequence', NULL, 'default_sequence',
+                ?, ?, 0, ?, 'video_frames', 30.0, 1, 0, strftime('%s','now'), strftime('%s','now'))
+    ]])
+    assert(stmt, "failed to prepare clip insert")
+    assert(stmt:bind_value(1, id))
+    assert(stmt:bind_value(2, id))
+    assert(stmt:bind_value(3, track_id))
+    assert(stmt:bind_value(4, media_id))
+    assert(stmt:bind_value(5, start_value))
+    assert(stmt:bind_value(6, duration_value))
+    assert(stmt:bind_value(7, start_value + duration_value))
+    assert(stmt:exec(), "failed to insert clip " .. id)
+    stmt:finalize()
 end
 
 local function fetch_clip_start(id)
-    local stmt = db:prepare("SELECT start_time FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT start_value FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(id))
     local value = stmt:value(0)
@@ -165,7 +76,7 @@ insert_clip("clip_b", "track_v1", 2000, 500)
 insert_clip("clip_c", "track_v2", 2000, 500)
 
 local timeline_state = {
-    playhead_time = 0,
+    playhead_value = 0,
 }
 
 function timeline_state.get_selected_clips() return {} end
@@ -178,19 +89,20 @@ function timeline_state.persist_state_to_db() end
 function timeline_state.apply_mutations(sequence_id, mutations)
     return mutations ~= nil
 end
+function timeline_state.get_sequence_frame_rate() return 30.0 end
 function timeline_state.consume_mutation_failure()
     return nil
 end
 function timeline_state.get_clips()
     local clips = {}
-    local stmt = db:prepare("SELECT id, track_id, start_time, duration FROM clips ORDER BY track_id, start_time")
+    local stmt = db:prepare("SELECT id, track_id, start_value, duration_value FROM clips ORDER BY track_id, start_value")
     if stmt:exec() then
         while stmt:next() do
             clips[#clips + 1] = {
                 id = stmt:value(0),
                 track_id = stmt:value(1),
-                start_time = stmt:value(2),
-                duration = stmt:value(3)
+                start_value = stmt:value(2),
+                duration_value = stmt:value(3)
             }
         end
     end
@@ -199,16 +111,21 @@ function timeline_state.get_clips()
 end
 function timeline_state.get_sequence_id() return "default_sequence" end
 function timeline_state.get_project_id() return "default_project" end
-function timeline_state.get_playhead_time() return timeline_state.playhead_time end
-function timeline_state.set_playhead_time(t) timeline_state.playhead_time = t end
+function timeline_state.get_playhead_value() return timeline_state.playhead_value end
+function timeline_state.set_playhead_value(t) timeline_state.playhead_value = t end
 function timeline_state.push_viewport_guard() return 1 end
 function timeline_state.pop_viewport_guard() return 0 end
-function timeline_state.capture_viewport() return {start_time = 0, duration = 10000} end
+function timeline_state.capture_viewport() return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 30.0} end
 function timeline_state.restore_viewport(_) end
-function timeline_state.get_viewport_start_time() return 0 end
-function timeline_state.get_viewport_duration() return 10000 end
-function timeline_state.set_viewport_start_time(_) end
-function timeline_state.set_viewport_duration(_) end
+function timeline_state.get_viewport_start_value() return 0 end
+function timeline_state.get_viewport_duration_frames_value() return 240 end
+function timeline_state.set_viewport_start_value(_) end
+function timeline_state.set_viewport_duration_frames_value(_) end
+-- Legacy aliases for any remaining callers
+timeline_state.get_viewport_start_value = timeline_state.get_viewport_start_value
+timeline_state.get_viewport_duration_frames_value = timeline_state.get_viewport_duration_frames_value
+timeline_state.set_viewport_start_value = timeline_state.set_viewport_start_value
+timeline_state.set_viewport_duration_frames_value = timeline_state.set_viewport_duration_frames_value
 function timeline_state.set_dragging_playhead(_) end
 function timeline_state.is_dragging_playhead() return false end
 function timeline_state.get_selected_gaps() return {} end

@@ -98,7 +98,7 @@ local function clone_clip_entry(clip)
         parent_clip_id = clip.parent_clip_id,
         owner_sequence_id = clip.owner_sequence_id,
         source_sequence_id = clip.source_sequence_id,
-        start_time = clip.start_time,
+        start_value = clip.start_value,
         duration = clip.duration,
         source_in = clip.source_in,
         source_out = clip.source_out,
@@ -162,13 +162,13 @@ local function gather_master_initial_state(project_id)
 
     local seq_query = conn:prepare([[
         SELECT id, project_id, name, kind, frame_rate, width, height,
-               timecode_start_frame AS timecode_start,
-               playhead_frame AS playhead_time,
+               timecode_start_frame,
+               playhead_value,
                selected_clip_ids, selected_edge_infos,
-               viewport_start_frame AS viewport_start_time,
-               viewport_duration_frames AS viewport_duration,
-               mark_in_frame AS mark_in_time,
-               mark_out_frame AS mark_out_time,
+               viewport_start_value,
+               viewport_duration_frames_value,
+               mark_in_value,
+               mark_out_value,
                current_sequence_number,
                audio_sample_rate
         FROM sequences
@@ -188,14 +188,14 @@ local function gather_master_initial_state(project_id)
                     frame_rate = tonumber(seq_query:value(4)) or 0,
                     width = tonumber(seq_query:value(5)) or 0,
                     height = tonumber(seq_query:value(6)) or 0,
-                    timecode_start = tonumber(seq_query:value(7)) or 0,
-                    playhead_time = tonumber(seq_query:value(8)) or 0,
+                    timecode_start_frame = tonumber(seq_query:value(7)) or 0,
+                    playhead_value = tonumber(seq_query:value(8)) or 0,
                     selected_clip_ids = seq_query:value(9),
                     selected_edge_infos = seq_query:value(10),
-                    viewport_start_time = tonumber(seq_query:value(11)) or 0,
-                    viewport_duration = tonumber(seq_query:value(12)) or 10000,
-                    mark_in_time = seq_query:value(13),
-                    mark_out_time = seq_query:value(14),
+                    viewport_start_value = tonumber(seq_query:value(11)) or 0,
+                    viewport_duration_frames_value = tonumber(seq_query:value(12)) or 10000,
+                    mark_in_value = seq_query:value(13),
+                    mark_out_value = seq_query:value(14),
                 current_sequence_number = seq_query:value(15),
                 audio_sample_rate = tonumber(seq_query:value(16))
             }
@@ -280,7 +280,7 @@ local function gather_master_initial_state(project_id)
                         source_sequence_id = master_clip_query:value(6),
                         parent_clip_id = master_clip_query:value(7),
                         owner_sequence_id = master_clip_query:value(8) or seq_id,
-                        start_time = tonumber(master_clip_query:value(9)) or 0,
+                        start_value = tonumber(master_clip_query:value(9)) or 0,
                         duration = tonumber(master_clip_query:value(10)) or 0,
                         source_in = tonumber(master_clip_query:value(11)) or 0,
                         source_out = tonumber(master_clip_query:value(12)) or 0,
@@ -311,7 +311,7 @@ local function gather_master_initial_state(project_id)
                         source_sequence_id = child_clip_query:value(6),
                         parent_clip_id = child_clip_query:value(7),
                         owner_sequence_id = child_clip_query:value(8) or seq_id,
-                        start_time = tonumber(child_clip_query:value(9)) or 0,
+                        start_value = tonumber(child_clip_query:value(9)) or 0,
                         duration = tonumber(child_clip_query:value(10)) or 0,
                         source_in = tonumber(child_clip_query:value(11)) or 0,
                         source_out = tonumber(child_clip_query:value(12)) or 0,
@@ -748,10 +748,10 @@ local function capture_selection_snapshot()
     local selected_gaps = timeline_state.get_selected_gaps and timeline_state.get_selected_gaps() or {}
     local gap_descriptors = {}
     for _, gap in ipairs(selected_gaps) do
-        if gap and gap.track_id and gap.start_time and gap.duration then
+        if gap and gap.track_id and gap.start_value and gap.duration then
             table.insert(gap_descriptors, {
                 track_id = gap.track_id,
-                start_time = gap.start_time,
+                start_value = gap.start_value,
                 duration = gap.duration
             })
         end
@@ -918,10 +918,10 @@ local function restore_selection_from_serialized(clips_json, edges_json, gaps_js
     if #gap_infos > 0 and timeline_state.set_gap_selection then
         local restored_gaps = {}
         for _, gap in ipairs(gap_infos) do
-            if type(gap) == "table" and gap.track_id and gap.start_time and gap.duration then
+            if type(gap) == "table" and gap.track_id and gap.start_value and gap.duration then
                 table.insert(restored_gaps, {
                     track_id = gap.track_id,
-                    start_time = gap.start_time,
+                    start_value = gap.start_value,
                     duration = gap.duration
                 })
             end
@@ -1265,36 +1265,37 @@ local function calculate_state_hash(project_id)
     ]], {project_id}, 3, "project")
 
     append_query([[
-        SELECT id, name, frame_rate, width, height, timecode_start
+        SELECT id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame,
+               playhead_value, viewport_start_value, viewport_duration_frames_value
         FROM sequences
         WHERE project_id = ?
         ORDER BY id
-    ]], {project_id}, 6, "sequences")
+    ]], {project_id}, 10, "sequences")
 
     append_query([[
-        SELECT t.sequence_id, t.id, t.track_type, t.track_index, t.enabled
+        SELECT t.sequence_id, t.id, t.track_type, t.timebase_type, t.timebase_rate, t.track_index, t.enabled
         FROM tracks t
         JOIN sequences s ON t.sequence_id = s.id
         WHERE s.project_id = ?
         ORDER BY t.sequence_id, t.track_index, t.id
-    ]], {project_id}, 5, "tracks")
+    ]], {project_id}, 7, "tracks")
 
     append_query([[
-        SELECT t.sequence_id, c.track_id, c.id, c.start_time, c.duration,
-               c.enabled, c.source_in, c.source_out, c.media_id
+        SELECT t.sequence_id, c.track_id, c.id, c.start_value, c.duration_value,
+               c.enabled, c.source_in_value, c.source_out_value, c.media_id, c.timebase_type, c.timebase_rate
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
         WHERE s.project_id = ?
-        ORDER BY t.sequence_id, t.track_index, c.start_time, c.id
-    ]], {project_id}, 9, "clips")
+        ORDER BY t.sequence_id, t.track_index, c.start_value, c.id
+    ]], {project_id}, 11, "clips")
 
     append_query([[
-        SELECT id, file_path, duration, frame_rate, name
+        SELECT id, file_path, duration_value, timebase_type, timebase_rate, frame_rate, name
         FROM media
         WHERE project_id = ?
         ORDER BY id
-    ]], {project_id}, 5, "media")
+    ]], {project_id}, 7, "media")
 
     local state_string = table.concat(parts)
     local hash_value = 5381
@@ -1575,7 +1576,7 @@ function M.execute(command_or_name, params)
 
     -- Capture playhead and selection state BEFORE command execution (pre-state model)
     local timeline_state = require('ui.timeline.timeline_state')
-    command.playhead_value = timeline_state.get_playhead_time()
+    command.playhead_value = timeline_state.get_playhead_value()
     command.playhead_rate = timeline_state.get_sequence_frame_rate()
     local skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
     if not skip_selection_snapshot then
@@ -2297,15 +2298,6 @@ function M.replay_events(sequence_id, target_sequence_number)
             print("Cleared all clips from database")
         end
 
-        -- Also clear all media for the project (ImportMedia commands will recreate them)
-        -- Get project_id from sequence
-       local delete_media_query = db:prepare("DELETE FROM media WHERE project_id = ?")
-        if delete_media_query then
-           delete_media_query:bind_value(1, project_id)
-           delete_media_query:exec()
-           print(string.format("Cleared all media for project '%s' from database for replay", project_id))
-        end
-
         local delete_master_clips = db:prepare([[
             DELETE FROM clips
             WHERE clip_kind = 'master'
@@ -2476,8 +2468,8 @@ function M.replay_events(sequence_id, target_sequence_number)
                 local seq_insert = db:prepare([[
                     INSERT OR REPLACE INTO sequences
                     (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                     timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
-                     viewport_start_frame, viewport_duration_frames, mark_in_frame, mark_out_frame,
+                     timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
+                     viewport_start_value, viewport_duration_frames_value, mark_in_value, mark_out_value,
                      current_sequence_number)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
@@ -2493,10 +2485,10 @@ function M.replay_events(sequence_id, target_sequence_number)
                     require_snapshot_field("master_sequence", "audio_sample_rate", seq.audio_sample_rate)
                     require_snapshot_field("master_sequence", "width", seq.width)
                     require_snapshot_field("master_sequence", "height", seq.height)
-                    require_snapshot_field("master_sequence", "timecode_start", seq.timecode_start)
-                    require_snapshot_field("master_sequence", "playhead_time", seq.playhead_time)
-                    require_snapshot_field("master_sequence", "viewport_start_time", seq.viewport_start_time)
-                    require_snapshot_field("master_sequence", "viewport_duration", seq.viewport_duration)
+                    require_snapshot_field("master_sequence", "timecode_start_frame", seq.timecode_start_frame)
+                    require_snapshot_field("master_sequence", "playhead_value", seq.playhead_value)
+                    require_snapshot_field("master_sequence", "viewport_start_value", seq.viewport_start_value)
+                    require_snapshot_field("master_sequence", "viewport_duration_frames_value", seq.viewport_duration_frames_value)
                     seq_insert:bind_value(1, seq.id)
                     seq_insert:bind_value(2, seq.project_id)
                     seq_insert:bind_value(3, seq.name)
@@ -2505,14 +2497,14 @@ function M.replay_events(sequence_id, target_sequence_number)
                     seq_insert:bind_value(6, seq.audio_sample_rate)
                     seq_insert:bind_value(7, seq.width)
                     seq_insert:bind_value(8, seq.height)
-                    seq_insert:bind_value(9, seq.timecode_start)
-                    seq_insert:bind_value(10, seq.playhead_time)
+                    seq_insert:bind_value(9, seq.timecode_start_frame)
+                    seq_insert:bind_value(10, seq.playhead_value)
                     seq_insert:bind_value(11, seq.selected_clip_ids)
                     seq_insert:bind_value(12, seq.selected_edge_infos)
-                    seq_insert:bind_value(13, seq.viewport_start_time)
-                    seq_insert:bind_value(14, seq.viewport_duration)
-                    seq_insert:bind_value(15, seq.mark_in_time)
-                    seq_insert:bind_value(16, seq.mark_out_time)
+                    seq_insert:bind_value(13, seq.viewport_start_value)
+                    seq_insert:bind_value(14, seq.viewport_duration_frames_value)
+                    seq_insert:bind_value(15, seq.mark_in_value)
+                    seq_insert:bind_value(16, seq.mark_out_value)
                     seq_insert:bind_value(17, seq.current_sequence_number)
                     seq_insert:exec()
                     seq_insert:reset()
@@ -2586,7 +2578,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                     require_snapshot_field(context, "project_id", clip.project_id)
                     require_snapshot_field(context, "clip_kind", clip.clip_kind)
                     require_snapshot_field(context, "owner_sequence_id", clip.owner_sequence_id)
-                    require_snapshot_field(context, "start_time", clip.start_time)
+                    require_snapshot_field(context, "start_value", clip.start_value)
                     require_snapshot_field(context, "duration", clip.duration)
                     require_snapshot_field(context, "source_in", clip.source_in)
                     require_snapshot_field(context, "source_out", clip.source_out)
@@ -2605,7 +2597,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                     clip_insert:bind_value(7, clip.source_sequence_id)
                     clip_insert:bind_value(8, clip.parent_clip_id)
                     clip_insert:bind_value(9, clip.owner_sequence_id)
-                    clip_insert:bind_value(10, clip.start_time)
+                    clip_insert:bind_value(10, clip.start_value)
                     clip_insert:bind_value(11, clip.duration)
                     clip_insert:bind_value(12, clip.source_in)
                     clip_insert:bind_value(13, clip.source_out)
@@ -2637,8 +2629,8 @@ function M.replay_events(sequence_id, target_sequence_number)
             local seq_insert = db:prepare([[
                 INSERT OR REPLACE INTO sequences
                 (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                 timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
-                 viewport_start_frame, viewport_duration_frames, mark_in_frame, mark_out_frame,
+                 timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
+                 viewport_start_value, viewport_duration_frames_value, mark_in_value, mark_out_value,
                  current_sequence_number)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ]])
@@ -2672,28 +2664,30 @@ function M.replay_events(sequence_id, target_sequence_number)
                     require_snapshot_field(context, "name", seq_info.name)
                     require_snapshot_field(context, "kind", seq_info.kind)
                     require_snapshot_field(context, "frame_rate", seq_info.frame_rate)
+                    require_snapshot_field(context, "audio_sample_rate", seq_info.audio_sample_rate)
                     require_snapshot_field(context, "width", seq_info.width)
                     require_snapshot_field(context, "height", seq_info.height)
-                    require_snapshot_field(context, "timecode_start", seq_info.timecode_start)
-                    require_snapshot_field(context, "playhead_time", seq_info.playhead_time)
-                    require_snapshot_field(context, "viewport_start_time", seq_info.viewport_start_time)
-                    require_snapshot_field(context, "viewport_duration", seq_info.viewport_duration)
+                    require_snapshot_field(context, "timecode_start_frame", seq_info.timecode_start_frame)
+                    require_snapshot_field(context, "playhead_value", seq_info.playhead_value)
+                    require_snapshot_field(context, "viewport_start_value", seq_info.viewport_start_value)
+                    require_snapshot_field(context, "viewport_duration_frames_value", seq_info.viewport_duration_frames_value)
                     seq_insert:bind_value(1, seq_info.id)
                     seq_insert:bind_value(2, seq_info.project_id)
                     seq_insert:bind_value(3, seq_info.name)
                     seq_insert:bind_value(4, seq_info.kind)
                     seq_insert:bind_value(5, seq_info.frame_rate or 0)
-                    seq_insert:bind_value(6, seq_info.width or 0)
-                    seq_insert:bind_value(7, seq_info.height or 0)
-                    seq_insert:bind_value(8, seq_info.timecode_start or 0)
-                    seq_insert:bind_value(9, seq_info.playhead_time or 0)
-                    seq_insert:bind_value(10, seq_info.selected_clip_ids or "[]")
-                    seq_insert:bind_value(11, seq_info.selected_edge_infos or "[]")
-                    seq_insert:bind_value(12, seq_info.viewport_start_time or 0)
-                    seq_insert:bind_value(13, seq_info.viewport_duration or 10000)
-                    seq_insert:bind_value(14, seq_info.mark_in_time)
-                    seq_insert:bind_value(15, seq_info.mark_out_time)
-                    seq_insert:bind_value(16, seq_info.current_sequence_number)
+                    seq_insert:bind_value(6, seq_info.audio_sample_rate or 48000)
+                    seq_insert:bind_value(7, seq_info.width or 0)
+                    seq_insert:bind_value(8, seq_info.height or 0)
+                    seq_insert:bind_value(9, seq_info.timecode_start_frame or 0)
+                    seq_insert:bind_value(10, seq_info.playhead_value or 0)
+                    seq_insert:bind_value(11, seq_info.selected_clip_ids or "[]")
+                    seq_insert:bind_value(12, seq_info.selected_edge_infos or "[]")
+                    seq_insert:bind_value(13, seq_info.viewport_start_value or 0)
+                    seq_insert:bind_value(14, seq_info.viewport_duration_frames_value or 10000)
+                    seq_insert:bind_value(15, seq_info.mark_in_value)
+                    seq_insert:bind_value(16, seq_info.mark_out_value)
+                    seq_insert:bind_value(17, seq_info.current_sequence_number)
                     seq_insert:exec()
                     seq_insert:reset()
                     seq_insert:clear_bindings()
@@ -2733,7 +2727,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                     require_snapshot_field(context, "project_id", clip.project_id)
                     require_snapshot_field(context, "clip_kind", clip.clip_kind)
                     require_snapshot_field(context, "owner_sequence_id", clip.owner_sequence_id)
-                    require_snapshot_field(context, "start_time", clip.start_time)
+                    require_snapshot_field(context, "start_value", clip.start_value)
                     require_snapshot_field(context, "duration", clip.duration)
                     require_snapshot_field(context, "source_in", clip.source_in)
                     require_snapshot_field(context, "source_out", clip.source_out)
@@ -2750,7 +2744,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                     clip_insert:bind_value(7, clip.source_sequence_id)
                     clip_insert:bind_value(8, clip.parent_clip_id)
                     clip_insert:bind_value(9, clip.owner_sequence_id)
-                    clip_insert:bind_value(10, clip.start_time)
+                    clip_insert:bind_value(10, clip.start_value)
                     clip_insert:bind_value(11, clip.duration)
                     clip_insert:bind_value(12, clip.source_in)
                     clip_insert:bind_value(13, clip.source_out)
@@ -2772,9 +2766,9 @@ function M.replay_events(sequence_id, target_sequence_number)
                 INSERT OR REPLACE INTO clips
                 (id, project_id, clip_kind, name, track_id, media_id,
                  source_sequence_id, parent_clip_id, owner_sequence_id,
-                 start_time, duration, source_in, source_out,
-                 enabled, offline)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 start_value, duration_value, source_in_value, source_out_value,
+                 timebase_type, timebase_rate, enabled, offline)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ]])
 
             if not clip_insert then
@@ -2787,7 +2781,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                 require_snapshot_field(context, "project_id", clip.project_id)
                 require_snapshot_field(context, "clip_kind", clip.clip_kind)
                 require_snapshot_field(context, "owner_sequence_id", clip.owner_sequence_id)
-                require_snapshot_field(context, "start_time", clip.start_time)
+                require_snapshot_field(context, "start_value", clip.start_value)
                 require_snapshot_field(context, "duration", clip.duration)
                 require_snapshot_field(context, "source_in", clip.source_in)
                 require_snapshot_field(context, "source_out", clip.source_out)
@@ -2804,12 +2798,14 @@ function M.replay_events(sequence_id, target_sequence_number)
                 clip_insert:bind_value(7, clip.source_sequence_id)
                 clip_insert:bind_value(8, clip.parent_clip_id)
                 clip_insert:bind_value(9, clip.owner_sequence_id)
-                clip_insert:bind_value(10, clip.start_time)
-                clip_insert:bind_value(11, clip.duration)
-                clip_insert:bind_value(12, clip.source_in)
-                clip_insert:bind_value(13, clip.source_out)
-                clip_insert:bind_value(14, enabled_flag and 1 or 0)
-                clip_insert:bind_value(15, offline_flag and 1 or 0)
+                clip_insert:bind_value(10, clip.start_value)
+                clip_insert:bind_value(11, clip.duration or clip.duration_value)
+                clip_insert:bind_value(12, clip.source_in or clip.source_in_value or 0)
+                clip_insert:bind_value(13, clip.source_out or clip.source_out_value or (clip.source_in or 0) + (clip.duration or 0))
+                clip_insert:bind_value(14, clip.timebase_type or "video_frames")
+                clip_insert:bind_value(15, clip.timebase_rate or 24.0)
+                clip_insert:bind_value(16, enabled_flag and 1 or 0)
+                clip_insert:bind_value(17, offline_flag and 1 or 0)
                 clip_insert:exec()
                 clip_insert:reset()
                 clip_insert:clear_bindings()
@@ -2896,7 +2892,7 @@ function M.replay_events(sequence_id, target_sequence_number)
 
             local Command = require("command")
             local commands_replayed = 0
-            local final_playhead_time = 0
+            local final_playhead_value = 0
             local final_selected_clip_ids = "[]"
             local final_selected_edge_infos = "[]"
             local final_selected_gap_infos = "[]"
@@ -2923,7 +2919,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                 end
 
                 -- Restore playhead BEFORE executing command
-                timeline_state.set_playhead_time(cmd_data.playhead_time or 0)
+                timeline_state.set_playhead_value(cmd_data.playhead_value or 0)
 
                 -- Execute the command (but don't save it again - it's already in commands table)
                 local skip_sequence_replay = command_flag(command, "skip_sequence_replay", "__skip_sequence_replay")
@@ -2946,7 +2942,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                     print("HINT: Re-run the failing command outside undo/redo to refresh its stored parameters")
                     return false
                 end
-                final_playhead_time = cmd_data.playhead_time or 0
+                final_playhead_value = cmd_data.playhead_value or 0
                 final_selected_clip_ids = cmd_data.selected_clip_ids or "[]"
                 final_selected_edge_infos = cmd_data.selected_edge_infos or "[]"
                 final_selected_gap_infos = cmd_data.selected_gap_infos or "[]"
@@ -2961,8 +2957,8 @@ function M.replay_events(sequence_id, target_sequence_number)
             if db_module and sequence_id then
                 sequence_record = db_module.load_sequence_record(sequence_id)
             end
-            if sequence_record and sequence_record.playhead_time then
-                restored_playhead = sequence_record.playhead_time
+            if sequence_record and sequence_record.playhead_value then
+                restored_playhead = sequence_record.playhead_value
             end
 
             if timeline_state.reload_clips then
@@ -2975,8 +2971,8 @@ function M.replay_events(sequence_id, target_sequence_number)
 
             if sequence_record then
                 timeline_state.restore_viewport({
-                    start_time = sequence_record.viewport_start_time,
-                    duration = sequence_record.viewport_duration
+                    start_value = sequence_record.viewport_start_value,
+                    duration = sequence_record.viewport_duration_frames_value
                 })
                 selected_clip_ids = sequence_record.selected_clip_ids
                 selected_edge_infos = sequence_record.selected_edge_infos
@@ -2985,7 +2981,7 @@ function M.replay_events(sequence_id, target_sequence_number)
 
             restore_selection_from_serialized(selected_clip_ids, selected_edge_infos, selected_gap_infos)
 
-            timeline_state.set_playhead_time(restored_playhead)
+            timeline_state.set_playhead_value(restored_playhead)
             print(string.format("No commands to replay - restored playhead to %s", format_timecode_for_log(restored_playhead)))
         end
 
@@ -3072,8 +3068,8 @@ function M.undo(options)
             end
         end
         -- Restore playhead to position BEFORE the undone command (i.e., AFTER the last valid command)
-        -- This is stored in current_command.playhead_time
-        local restored_playhead = current_command.playhead_time or 0
+        -- This is stored in current_command.playhead_value
+        local restored_playhead = current_command.playhead_value or 0
 
         local pending_reload_sequence = nil
         if target_sequence == 0 then
@@ -3092,9 +3088,9 @@ function M.undo(options)
 
         if pending_reload_sequence and timeline_state.reload_clips then
             timeline_state.reload_clips(pending_reload_sequence)
-            timeline_state.set_playhead_time(restored_playhead)
+            timeline_state.set_playhead_value(restored_playhead)
         elseif not skip_timeline_reload then
-            timeline_state.set_playhead_time(restored_playhead)
+            timeline_state.set_playhead_value(restored_playhead)
         end
         print(string.format("Restored playhead to %s", format_timecode_for_log(restored_playhead)))
 
@@ -3987,7 +3983,7 @@ command_executors.ImportResolveProject = function(cmd, params)
                         local clip = Clip.create({
                             track_id = track_id,
                             media_id = media_id,
-                            start_time = clip_data.start_time,
+                            start_value = clip_data.start_value,
                             duration = clip_data.duration,
                             source_in = clip_data.source_in,
                             source_out = clip_data.source_out
@@ -4198,7 +4194,7 @@ command_executors.ImportResolveDatabase = function(cmd, params)
                         local clip = Clip.create({
                             track_id = track_id,
                             media_id = media_id,
-                            start_time = clip_data.start_time,
+                            start_value = clip_data.start_value,
                             duration = clip_data.duration,
                             source_in = clip_data.source_in,
                             source_out = clip_data.source_out

@@ -14,115 +14,27 @@ os.remove(TEST_DB)
 database.init(TEST_DB)
 local db = database.get_connection()
 
-db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-            CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-                    CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL DEFAULT 0,
-            source_out INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0,
-            modified_at INTEGER NOT NULL DEFAULT 0
-        );
-
-
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        audio_channels INTEGER,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT
-    );
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-]])
+db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 2, 1);
 ]])
 
 local function clips_snapshot()
     local clips = {}
-    local stmt = db:prepare("SELECT id, track_id, start_time, duration FROM clips ORDER BY track_id, start_time")
+    local stmt = db:prepare("SELECT id, track_id, start_value, duration_value FROM clips ORDER BY track_id, start_value")
     assert(stmt:exec())
     while stmt:next() do
         clips[#clips + 1] = {
             id = stmt:value(0),
             track_id = stmt:value(1),
-            start_time = stmt:value(2),
+            start_value = stmt:value(2),
             duration = stmt:value(3)
         }
     end
@@ -137,8 +49,9 @@ local function clip_exists(id)
 end
 
 local timeline_state = {
-    playhead_time = 0,
-    selected_clips = {}
+    playhead_value = 0,
+    selected_clips = {},
+    sequence_frame_rate = 30.0
 }
 
 local function load_clips_into_state()
@@ -154,21 +67,22 @@ function timeline_state.clear_edge_selection() timeline_state.selected_clips = {
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
 function timeline_state.reload_clips() load_clips_into_state() end
 function timeline_state.persist_state_to_db() end
-function timeline_state.get_playhead_time() return timeline_state.playhead_time end
-function timeline_state.set_playhead_time(time_ms) timeline_state.playhead_time = time_ms end
+function timeline_state.get_playhead_value() return timeline_state.playhead_value end
+function timeline_state.set_playhead_value(time_ms) timeline_state.playhead_value = time_ms end
 function timeline_state.get_clips()
     load_clips_into_state()
     return timeline_state.clips
 end
+function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
 
 local viewport_guard = 0
-timeline_state.viewport_start_time = timeline_state.viewport_start_time or 0
-timeline_state.viewport_duration = timeline_state.viewport_duration or 10000
+timeline_state.viewport_start_value = timeline_state.viewport_start_value or 0
+timeline_state.viewport_duration_frames_value = timeline_state.viewport_duration_frames_value or 10000
 
 function timeline_state.capture_viewport()
     return {
-        start_time = timeline_state.viewport_start_time,
-        duration = timeline_state.viewport_duration,
+        start_value = timeline_state.viewport_start_value,
+        duration = timeline_state.viewport_duration_frames_value,
     }
 end
 
@@ -178,11 +92,11 @@ function timeline_state.restore_viewport(snapshot)
     end
 
     if snapshot.duration then
-        timeline_state.viewport_duration = snapshot.duration
+        timeline_state.viewport_duration_frames_value = snapshot.duration
     end
 
-    if snapshot.start_time then
-        timeline_state.viewport_start_time = snapshot.start_time
+    if snapshot.start_value then
+        timeline_state.viewport_start_value = snapshot.start_value
     end
 end
 
@@ -209,7 +123,7 @@ command_manager.init(db, 'default_sequence', 'default_project')
 -- Helper command to create clips via command system so undo/redo replay works
 local function create_clip_command(params)
     local clip_id = params.clip_id
-    local clip_start = params.start_time
+    local clip_start = params.start_value
     local clip_duration = params.duration
     local track_id = params.track_id
 
@@ -229,7 +143,7 @@ local function create_clip_command(params)
     local clip = Clip.create('Test Clip', media_id)
     clip.id = clip_id
     clip.track_id = track_id
-    clip.start_time = clip_start
+    clip.start_value = clip_start
     clip.duration = clip_duration
     clip.source_in = 0
     clip.source_out = clip_duration
@@ -241,7 +155,7 @@ end
 command_manager.register_executor("TestCreateClip", function(cmd)
     return create_clip_command({
         clip_id = cmd:get_parameter("clip_id"),
-        start_time = cmd:get_parameter("start_time"),
+        start_value = cmd:get_parameter("start_value"),
         duration = cmd:get_parameter("duration"),
         track_id = cmd:get_parameter("track_id"),
         media_id = cmd:get_parameter("media_id")
@@ -260,7 +174,7 @@ for _, spec in ipairs(clip_specs) do
     local cmd = Command.create("TestCreateClip", "default_project")
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", spec.track)
-    cmd:set_parameter("start_time", spec.start)
+    cmd:set_parameter("start_value", spec.start)
     cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
@@ -289,7 +203,7 @@ assert(clip_exists("clip_c"), "clip_c should be restored after undo")
 
 -- Test 2: Cut with no selection is a no-op
 timeline_state.set_selection({})
-timeline_state.playhead_time = 1300
+timeline_state.playhead_value = 1300
 local before = clips_snapshot()
 result = command_manager.execute("Cut")
 assert(result.success, "Cut with no selection should still succeed")

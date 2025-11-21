@@ -30,11 +30,11 @@ local SCHEMA_SQL = [[
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
         current_sequence_number INTEGER
     );
 

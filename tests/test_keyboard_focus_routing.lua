@@ -35,11 +35,11 @@ function timeline_state.get_sequence_frame_rate()
     return 24
 end
 
-function timeline_state.get_playhead_time()
+function timeline_state.get_playhead_value()
     return timeline_state.playhead or 0
 end
 
-function timeline_state.set_playhead_time(value)
+function timeline_state.set_playhead_value(value)
     timeline_state.playhead = value
     table.insert(timeline_moves, value)
 end
@@ -112,10 +112,10 @@ end
 function timeline_state.set_mark_range()
 end
 
-function timeline_state.set_viewport_duration()
+function timeline_state.set_viewport_duration_frames_value()
 end
 
-function timeline_state.set_viewport_start_time()
+function timeline_state.set_viewport_start_value()
 end
 
 local command_manager_stub = {

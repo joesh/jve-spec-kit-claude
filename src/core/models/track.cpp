@@ -277,9 +277,9 @@ qint64 Track::duration(const QSqlDatabase& database) const
         return m_cachedDuration;
     }
     
-    // Query database → Find max (start_time + duration) for this track
+    // Query database → Find max (start_value + duration_value) for this track
     QSqlQuery query(database);
-    query.prepare("SELECT MAX(start_time + duration) FROM clips WHERE track_id = ?");
+    query.prepare("SELECT MAX(start_value + duration_value) FROM clips WHERE track_id = ?");
     query.addBindValue(m_id);
     
     if (!query.exec()) {
@@ -319,8 +319,8 @@ bool Track::hasOverlappingClips(const Clip& clip, const QSqlDatabase& database) 
         WHERE track_id = ? 
         AND id != ?
         AND NOT (
-            ? >= (start_time + duration) OR
-            (? + ?) <= start_time
+            ? >= (start_value + duration_value) OR
+            (? + ?) <= start_value
         )
     )");
     query.addBindValue(m_id);
@@ -359,9 +359,9 @@ QList<Clip> Track::getClipsAtTime(qint64 time, const QSqlDatabase& database) con
     query.prepare(R"(
         SELECT id FROM clips 
         WHERE track_id = ? 
-        AND start_time <= ? 
-        AND (start_time + duration) > ?
-        ORDER BY start_time ASC
+        AND start_value <= ? 
+        AND (start_value + duration_value) > ?
+        ORDER BY start_value ASC
     )");
     query.addBindValue(m_id);
     query.addBindValue(time);

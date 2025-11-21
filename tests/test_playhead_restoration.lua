@@ -9,20 +9,20 @@ require('test_env')
 
 -- Mock timeline_state module for testing
 local mock_timeline_state = {
-    playhead_time = 0,
+    playhead_value = 0,
     clips = {},
     selected_clips = {},
     selected_edges = {},
-    viewport_start_time = 0,
-    viewport_duration = 10000
+    viewport_start_value = 0,
+    viewport_duration_frames_value = 300
 }
 
-function mock_timeline_state.get_playhead_time()
-    return mock_timeline_state.playhead_time
+function mock_timeline_state.get_playhead_value()
+    return mock_timeline_state.playhead_value
 end
 
-function mock_timeline_state.set_playhead_time(time)
-    mock_timeline_state.playhead_time = time
+function mock_timeline_state.set_playhead_value(time)
+    mock_timeline_state.playhead_value = time
 end
 
 function mock_timeline_state.get_selected_clips()
@@ -61,13 +61,16 @@ end
 function mock_timeline_state.get_sequence_id()
     return mock_timeline_state.sequence_id or "default_sequence"
 end
+function mock_timeline_state.get_sequence_frame_rate()
+    return 30.0
+end
 
 local viewport_guard = 0
 
 function mock_timeline_state.capture_viewport()
     return {
-        start_time = mock_timeline_state.viewport_start_time,
-        duration = mock_timeline_state.viewport_duration,
+        start_value = mock_timeline_state.viewport_start_value,
+        duration_value = mock_timeline_state.viewport_duration_frames_value,
     }
 end
 
@@ -76,12 +79,12 @@ function mock_timeline_state.restore_viewport(snapshot)
         return
     end
 
-    if snapshot.duration then
-        mock_timeline_state.viewport_duration = snapshot.duration
+    if snapshot.duration_value then
+        mock_timeline_state.viewport_duration_frames_value = snapshot.duration_value
     end
 
-    if snapshot.start_time then
-        mock_timeline_state.viewport_start_time = snapshot.start_time
+    if snapshot.start_value then
+        mock_timeline_state.viewport_start_value = snapshot.start_value
     end
 end
 
@@ -114,96 +117,24 @@ database.init(test_db_path)
 local db = database.get_connection()
 
 -- Create schema
-db:exec([[
-    CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE IF NOT EXISTS clips (
-        id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
-        media_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
-        source_out INTEGER NOT NULL,
-        enabled BOOLEAN DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        file_path TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-]])
+db:exec(require('import_schema'))
 
 -- Insert test data
 db:exec([[
-    INSERT INTO projects (id, name) VALUES ('test_project', 'Test Project');
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
+    INSERT INTO projects (id, name, created_at, modified_at) VALUES
+        ('test_project', 'Test Project', strftime('%s','now'), strftime('%s','now')),
+        ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                           timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    VALUES
+        ('test_sequence', 'test_project', 'Test Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300),
+        ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
+
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    VALUES
+        ('track_v1', 'test_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1),
+        ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
 ]])
 
 do
@@ -219,7 +150,7 @@ command_manager.init(db, 'test_sequence', 'test_project')
 print("Test 1: Undo restores playhead to pre-command position")
 
 -- Set initial playhead position
-mock_timeline_state.set_playhead_time(5000)
+mock_timeline_state.set_playhead_value(5000)
 print("   Initial playhead: 5000ms")
 
 -- Execute a command (CreateSequence doesn't move playhead)
@@ -236,14 +167,14 @@ if not result1.success then
     os.exit(1)
 end
 -- Simulate user moving playhead after command 1 by persisting new position
-mock_timeline_state.set_playhead_time(5000)
+mock_timeline_state.set_playhead_value(5000)
 local timeline_state = require('ui.timeline.timeline_state')
-timeline_state.set_playhead_time(5000)
-print("   After command 1: " .. mock_timeline_state.get_playhead_time() .. "ms")
+timeline_state.set_playhead_value(5000)
+print("   After command 1: " .. mock_timeline_state.get_playhead_value() .. "ms")
 
 -- Move playhead
-mock_timeline_state.set_playhead_time(10000)
-timeline_state.set_playhead_time(10000)
+mock_timeline_state.set_playhead_value(10000)
+timeline_state.set_playhead_value(10000)
 print("   Moved playhead to: 10000ms")
 
 -- Execute second command
@@ -259,12 +190,12 @@ if not result2.success then
     print("❌ FAIL: Command 2 execution failed")
     os.exit(1)
 end
-print("   After command 2: " .. mock_timeline_state.get_playhead_time() .. "ms")
-timeline_state.set_playhead_time(10000)
+print("   After command 2: " .. mock_timeline_state.get_playhead_value() .. "ms")
+timeline_state.set_playhead_value(10000)
 
 -- Undo should restore playhead to 10000ms (position BEFORE cmd2)
 command_manager.undo()
-local playhead_after_undo = mock_timeline_state.get_playhead_time()
+local playhead_after_undo = mock_timeline_state.get_playhead_value()
 print("   After undo: " .. playhead_after_undo .. "ms")
 
 if playhead_after_undo == 10000 then
@@ -278,13 +209,13 @@ end
 print("Test 2: Redo preserves current playhead position")
 
 -- Move playhead somewhere else
-mock_timeline_state.set_playhead_time(15000)
-timeline_state.set_playhead_time(15000)
+mock_timeline_state.set_playhead_value(15000)
+timeline_state.set_playhead_value(15000)
 print("   Moved playhead to: 15000ms before redo")
 
 -- Redo command 2
 command_manager.redo()
-local playhead_after_redo = mock_timeline_state.get_playhead_time()
+local playhead_after_redo = mock_timeline_state.get_playhead_value()
 print("   After redo: " .. playhead_after_redo .. "ms")
 
 -- Redo should NOT change playhead (it's user state, not command output)
@@ -298,7 +229,7 @@ end
 -- We're currently at position after cmd2, playhead at 15000ms
 -- Undo to position after cmd1 (should restore to 10000ms)
 command_manager.undo()
-local playhead_after_second_undo = mock_timeline_state.get_playhead_time()
+local playhead_after_second_undo = mock_timeline_state.get_playhead_value()
 print("   After second undo: " .. playhead_after_second_undo .. "ms")
 
 if playhead_after_second_undo == 10000 then
@@ -310,7 +241,7 @@ end
 
 -- Undo again to drop command 1 (should restore to original 5000ms)
 command_manager.undo()
-local playhead_after_third_undo = mock_timeline_state.get_playhead_time()
+local playhead_after_third_undo = mock_timeline_state.get_playhead_value()
 print("   After third undo: " .. playhead_after_third_undo .. "ms")
 
 if playhead_after_third_undo == 5000 then

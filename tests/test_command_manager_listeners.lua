@@ -9,94 +9,8 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 
 local function create_schema(db)
-    db:exec([[ 
-        CREATE TABLE projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            modified_at INTEGER NOT NULL,
-            settings TEXT DEFAULT '{}'
-        );
-
-        CREATE TABLE sequences (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'timeline',
-            frame_rate REAL NOT NULL,
-            width INTEGER NOT NULL,
-            height INTEGER NOT NULL,
-            timecode_start INTEGER NOT NULL DEFAULT 0,
-            playhead_time INTEGER NOT NULL DEFAULT 0,
-            selected_clip_ids TEXT,
-            selected_edge_infos TEXT,
-            viewport_start_time INTEGER NOT NULL DEFAULT 0,
-            viewport_duration INTEGER NOT NULL DEFAULT 10000,
-            mark_in_time INTEGER,
-            mark_out_time INTEGER,
-            current_sequence_number INTEGER
-        );
-
-        CREATE TABLE tracks (
-            id TEXT PRIMARY KEY,
-            sequence_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            track_type TEXT NOT NULL,
-            track_index INTEGER NOT NULL,
-            enabled BOOLEAN NOT NULL DEFAULT 1,
-            locked BOOLEAN NOT NULL DEFAULT 0,
-            muted BOOLEAN NOT NULL DEFAULT 0,
-            soloed BOOLEAN NOT NULL DEFAULT 0,
-            volume REAL NOT NULL DEFAULT 1.0,
-            pan REAL NOT NULL DEFAULT 0.0
-        );
-
-        CREATE TABLE media (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT,
-            file_path TEXT,
-            duration INTEGER DEFAULT 0,
-            frame_rate REAL DEFAULT 0
-        );
-
-        CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL,
-            source_out INTEGER NOT NULL,
-            enabled BOOLEAN NOT NULL DEFAULT 1,
-            offline BOOLEAN NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-            modified_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-        );
-
-        CREATE TABLE commands (
-            id TEXT PRIMARY KEY,
-            parent_id TEXT,
-            parent_sequence_number INTEGER,
-            sequence_number INTEGER UNIQUE NOT NULL,
-            command_type TEXT NOT NULL,
-            command_args TEXT NOT NULL,
-            pre_hash TEXT NOT NULL,
-            post_hash TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            playhead_time INTEGER NOT NULL DEFAULT 0,
-            selected_clip_ids TEXT,
-            selected_edge_infos TEXT,
-            selected_clip_ids_pre TEXT,
-            selected_edge_infos_pre TEXT
-        );
-    ]])
+    local SCHEMA_SQL = require("import_schema")
+    assert(db:exec(SCHEMA_SQL))
 end
 
 local db_path = "/tmp/jve/test_command_manager_listeners.db"
@@ -110,11 +24,11 @@ db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('test_project', 'Listener Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height,
-        timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
-        viewport_start_time, viewport_duration, current_sequence_number)
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+        timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
+        viewport_start_value, viewport_duration_frames_value, current_sequence_number)
     VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
-        24.0, 1920, 1080, 0, 0, '[]', '[]', 0, 10000, NULL);
+        24.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240, NULL);
 ]], now, now))
 
 command_manager.init(db, "timeline_seq", "test_project")

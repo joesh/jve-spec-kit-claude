@@ -38,9 +38,9 @@ end
 
 local function fetch_sequence_record(db, sequence_id)
     local query = db:prepare([[
-        SELECT id, project_id, name, kind, frame_rate, width, height,
-               timecode_start, playhead_time, selected_clip_ids, selected_edge_infos,
-               viewport_start_time, viewport_duration, mark_in_time, mark_out_time,
+        SELECT id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+               timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
+               viewport_start_value, viewport_duration_frames_value, mark_in_value, mark_out_value,
                current_sequence_number
         FROM sequences
         WHERE id = ?
@@ -60,17 +60,18 @@ local function fetch_sequence_record(db, sequence_id)
             name = query:value(2),
             kind = query:value(3),
             frame_rate = query:value(4),
-            width = query:value(5),
-            height = query:value(6),
-            timecode_start = query:value(7),
-            playhead_time = query:value(8),
-            selected_clip_ids = query:value(9),
-            selected_edge_infos = query:value(10),
-            viewport_start_time = query:value(11),
-            viewport_duration = query:value(12),
-            mark_in_time = query:value(13),
-            mark_out_time = query:value(14),
-            current_sequence_number = query:value(15)
+            audio_sample_rate = query:value(5),
+            width = query:value(6),
+            height = query:value(7),
+            timecode_start_frame = query:value(8),
+            playhead_value = query:value(9),
+            selected_clip_ids = query:value(10),
+            selected_edge_infos = query:value(11),
+            viewport_start_value = query:value(12),
+            viewport_duration_frames_value = query:value(13),
+            mark_in_value = query:value(14),
+            mark_out_value = query:value(15),
+            current_sequence_number = query:value(16)
         }
     end
 
@@ -85,7 +86,7 @@ end
 
 local function fetch_tracks(db, sequence_id)
     local query = db:prepare([[
-        SELECT id, sequence_id, name, track_type, track_index,
+        SELECT id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index,
                enabled, locked, muted, soloed, volume, pan
         FROM tracks
         WHERE sequence_id = ?
@@ -106,13 +107,15 @@ local function fetch_tracks(db, sequence_id)
                 sequence_id = query:value(1),
                 name = query:value(2),
                 track_type = query:value(3),
-                track_index = query:value(4),
-                enabled = query:value(5),
-                locked = query:value(6),
-                muted = query:value(7),
-                soloed = query:value(8),
-                volume = query:value(9),
-                pan = query:value(10)
+                timebase_type = query:value(4),
+                timebase_rate = query:value(5),
+                track_index = query:value(6),
+                enabled = query:value(7),
+                locked = query:value(8),
+                muted = query:value(9),
+                soloed = query:value(10),
+                volume = query:value(11),
+                pan = query:value(12)
             }
         end
     end
@@ -143,10 +146,12 @@ local function build_snapshot_payload(db, sequence_id, clips)
         require_field("build_snapshot_payload", "clip", "clip_kind", clip.clip_kind)
         require_field("build_snapshot_payload", "clip", "project_id", clip.project_id)
         require_field("build_snapshot_payload", "clip", "owner_sequence_id", clip.owner_sequence_id)
-        require_field("build_snapshot_payload", "clip", "start_time", clip.start_time)
-        require_field("build_snapshot_payload", "clip", "duration", clip.duration)
-        require_field("build_snapshot_payload", "clip", "source_in", clip.source_in)
-        require_field("build_snapshot_payload", "clip", "source_out", clip.source_out)
+        require_field("build_snapshot_payload", "clip", "start_value", clip.start_value)
+        require_field("build_snapshot_payload", "clip", "duration_value", clip.duration_value or clip.duration)
+        require_field("build_snapshot_payload", "clip", "source_in_value", clip.source_in_value or clip.source_in)
+        require_field("build_snapshot_payload", "clip", "source_out_value", clip.source_out_value or clip.source_out)
+        require_field("build_snapshot_payload", "clip", "timebase_type", clip.timebase_type)
+        require_field("build_snapshot_payload", "clip", "timebase_rate", clip.timebase_rate)
         require_field("build_snapshot_payload", "clip", "enabled", clip.enabled)
         require_field("build_snapshot_payload", "clip", "offline", clip.offline)
 
@@ -160,10 +165,12 @@ local function build_snapshot_payload(db, sequence_id, clips)
             parent_clip_id = clip.parent_clip_id,
             source_sequence_id = clip.source_sequence_id,
             media_id = clip.media_id,
-            start_time = clip.start_time,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out,
+            start_value = clip.start_value,
+            duration_value = clip.duration_value or clip.duration,
+            source_in_value = clip.source_in_value or clip.source_in,
+            source_out_value = clip.source_out_value or clip.source_out,
+            timebase_type = clip.timebase_type,
+            timebase_rate = clip.timebase_rate,
             enabled = clip.enabled and 1 or 0,
             offline = clip.offline and 1 or 0
         })
@@ -176,14 +183,17 @@ local function build_snapshot_payload(db, sequence_id, clips)
                 require_field("build_snapshot_payload", "media", "project_id", media.project_id)
                 require_field("build_snapshot_payload", "media", "name", media.name)
                 require_field("build_snapshot_payload", "media", "file_path", media.file_path)
-                require_field("build_snapshot_payload", "media", "duration", media.duration)
-                require_field("build_snapshot_payload", "media", "frame_rate", media.frame_rate)
+                require_field("build_snapshot_payload", "media", "duration_value", media.duration_value)
+                require_field("build_snapshot_payload", "media", "timebase_type", media.timebase_type)
+                require_field("build_snapshot_payload", "media", "timebase_rate", media.timebase_rate)
                 media_data_lookup[clip.media_id] = {
                     id = media.id,
                     project_id = media.project_id,
                     name = media.name,
                     file_path = media.file_path,
-                    duration = media.duration,
+                    duration_value = media.duration_value,
+                    timebase_type = media.timebase_type,
+                    timebase_rate = media.timebase_rate,
                     frame_rate = media.frame_rate,
                     width = media.width,
                     height = media.height,
@@ -244,12 +254,13 @@ local function deserialize_snapshot_payload(json_str)
         require_field("deserialize_snapshot_payload", "sequence", "name", payload.sequence.name)
         require_field("deserialize_snapshot_payload", "sequence", "kind", payload.sequence.kind)
         require_field("deserialize_snapshot_payload", "sequence", "frame_rate", payload.sequence.frame_rate)
+        require_field("deserialize_snapshot_payload", "sequence", "audio_sample_rate", payload.sequence.audio_sample_rate)
         require_field("deserialize_snapshot_payload", "sequence", "width", payload.sequence.width)
         require_field("deserialize_snapshot_payload", "sequence", "height", payload.sequence.height)
-        require_field("deserialize_snapshot_payload", "sequence", "timecode_start", payload.sequence.timecode_start)
-        require_field("deserialize_snapshot_payload", "sequence", "playhead_time", payload.sequence.playhead_time)
-        require_field("deserialize_snapshot_payload", "sequence", "viewport_start_time", payload.sequence.viewport_start_time)
-        require_field("deserialize_snapshot_payload", "sequence", "viewport_duration", payload.sequence.viewport_duration)
+        require_field("deserialize_snapshot_payload", "sequence", "timecode_start_frame", payload.sequence.timecode_start_frame)
+        require_field("deserialize_snapshot_payload", "sequence", "playhead_value", payload.sequence.playhead_value)
+        require_field("deserialize_snapshot_payload", "sequence", "viewport_start_value", payload.sequence.viewport_start_value)
+        require_field("deserialize_snapshot_payload", "sequence", "viewport_duration_frames_value", payload.sequence.viewport_duration_frames_value)
     end
 
     local tracks = {}
@@ -260,11 +271,15 @@ local function deserialize_snapshot_payload(json_str)
             require_field("deserialize_snapshot_payload", "track", "name", track.name)
             require_field("deserialize_snapshot_payload", "track", "track_type", track.track_type)
             require_field("deserialize_snapshot_payload", "track", "track_index", track.track_index)
+            require_field("deserialize_snapshot_payload", "track", "timebase_type", track.timebase_type)
+            require_field("deserialize_snapshot_payload", "track", "timebase_rate", track.timebase_rate)
             tracks[#tracks + 1] = {
                 id = track.id,
                 sequence_id = track.sequence_id,
                 name = track.name,
                 track_type = track.track_type,
+                timebase_type = track.timebase_type,
+                timebase_rate = track.timebase_rate,
                 track_index = track.track_index,
                 enabled = track.enabled,
                 locked = track.locked,
@@ -283,10 +298,12 @@ local function deserialize_snapshot_payload(json_str)
             require_field("deserialize_snapshot_payload", "clip", "clip_kind", data.clip_kind)
             require_field("deserialize_snapshot_payload", "clip", "project_id", data.project_id)
             require_field("deserialize_snapshot_payload", "clip", "owner_sequence_id", data.owner_sequence_id)
-            require_field("deserialize_snapshot_payload", "clip", "start_time", data.start_time)
-            require_field("deserialize_snapshot_payload", "clip", "duration", data.duration)
-            require_field("deserialize_snapshot_payload", "clip", "source_in", data.source_in)
-            require_field("deserialize_snapshot_payload", "clip", "source_out", data.source_out)
+            require_field("deserialize_snapshot_payload", "clip", "start_value", data.start_value)
+            require_field("deserialize_snapshot_payload", "clip", "duration_value", data.duration_value or data.duration)
+            require_field("deserialize_snapshot_payload", "clip", "source_in_value", data.source_in_value or data.source_in)
+            require_field("deserialize_snapshot_payload", "clip", "source_out_value", data.source_out_value or data.source_out)
+            require_field("deserialize_snapshot_payload", "clip", "timebase_type", data.timebase_type)
+            require_field("deserialize_snapshot_payload", "clip", "timebase_rate", data.timebase_rate)
             require_field("deserialize_snapshot_payload", "clip", "enabled", data.enabled)
             require_field("deserialize_snapshot_payload", "clip", "offline", data.offline)
 
@@ -300,10 +317,12 @@ local function deserialize_snapshot_payload(json_str)
                 source_sequence_id = data.source_sequence_id,
                 track_id = data.track_id,
                 media_id = data.media_id,
-                start_time = data.start_time,
-                duration = data.duration,
-                source_in = data.source_in,
-                source_out = data.source_out,
+                start_value = data.start_value,
+                duration_value = data.duration_value or data.duration,
+                source_in_value = data.source_in_value or data.source_in,
+                source_out_value = data.source_out_value or data.source_out,
+                timebase_type = data.timebase_type,
+                timebase_rate = data.timebase_rate,
                 enabled = data.enabled == 1,
                 offline = data.offline == 1
             }
@@ -317,14 +336,17 @@ local function deserialize_snapshot_payload(json_str)
             require_field("deserialize_snapshot_payload", "media", "project_id", media_data.project_id)
             require_field("deserialize_snapshot_payload", "media", "name", media_data.name)
             require_field("deserialize_snapshot_payload", "media", "file_path", media_data.file_path)
-            require_field("deserialize_snapshot_payload", "media", "duration", media_data.duration)
-            require_field("deserialize_snapshot_payload", "media", "frame_rate", media_data.frame_rate)
+            require_field("deserialize_snapshot_payload", "media", "duration_value", media_data.duration_value or media_data.duration)
+            require_field("deserialize_snapshot_payload", "media", "timebase_type", media_data.timebase_type)
+            require_field("deserialize_snapshot_payload", "media", "timebase_rate", media_data.timebase_rate)
             media[#media + 1] = {
                 id = media_data.id,
                 project_id = media_data.project_id,
                 name = media_data.name,
                 file_path = media_data.file_path,
-                duration = media_data.duration,
+                duration_value = media_data.duration_value or media_data.duration,
+                timebase_type = media_data.timebase_type,
+                timebase_rate = media_data.timebase_rate,
                 frame_rate = media_data.frame_rate,
                 width = media_data.width,
                 height = media_data.height,

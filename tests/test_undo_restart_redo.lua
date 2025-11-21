@@ -16,12 +16,12 @@ local Command = require('command')
 
 local function install_timeline_stub()
     local timeline_state = {
-        playhead_time = 0,
+        playhead_value = 0,
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},
-        viewport_start_time = 0,
-        viewport_duration = 10000
+        viewport_start_value = 0,
+        viewport_duration_frames_value = 300
     }
     local guard_depth = 0
 
@@ -29,12 +29,20 @@ local function install_timeline_stub()
         return 'default_sequence'
     end
 
-    function timeline_state.get_playhead_time()
-        return timeline_state.playhead_time
+    function timeline_state.get_playhead_value()
+        return timeline_state.playhead_value
     end
 
-    function timeline_state.set_playhead_time(ms)
-        timeline_state.playhead_time = ms
+    function timeline_state.set_playhead_value(ms)
+        timeline_state.playhead_value = ms
+    end
+
+    function timeline_state.get_sequence_frame_rate()
+        return 30.0
+    end
+
+    function timeline_state.get_sequence_audio_sample_rate()
+        return 48000
     end
 
     function timeline_state.get_selected_clips()
@@ -61,18 +69,18 @@ local function install_timeline_stub()
     function timeline_state.reload_clips() end
     function timeline_state.persist_state_to_db() end
 
-    function timeline_state.set_viewport_start_time(ms)
-        timeline_state.viewport_start_time = ms
+    function timeline_state.set_viewport_start_value(ms)
+        timeline_state.viewport_start_value = ms
     end
 
-    function timeline_state.set_viewport_duration(ms)
-        timeline_state.viewport_duration = ms
+    function timeline_state.set_viewport_duration_frames_value(ms)
+        timeline_state.viewport_duration_frames_value = ms
     end
 
     function timeline_state.capture_viewport()
         return {
-            start_time = timeline_state.viewport_start_time,
-            duration = timeline_state.viewport_duration,
+            start_value = timeline_state.viewport_start_value,
+            duration_value = timeline_state.viewport_duration_frames_value,
         }
     end
 
@@ -80,11 +88,11 @@ local function install_timeline_stub()
         if not snapshot then
             return
         end
-        if snapshot.start_time then
-            timeline_state.viewport_start_time = snapshot.start_time
+        if snapshot.start_value then
+            timeline_state.viewport_start_value = snapshot.start_value
         end
-        if snapshot.duration then
-            timeline_state.viewport_duration = snapshot.duration
+        if snapshot.duration_value then
+            timeline_state.viewport_duration_frames_value = snapshot.duration_value
         end
     end
 
@@ -108,71 +116,12 @@ local function init_database(path)
     assert(database.init(path))
     local db = database.get_connection()
 
-    db:exec([[
-        CREATE TABLE projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            settings TEXT NOT NULL DEFAULT '{}'
-        );
-
-        CREATE TABLE sequences (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'timeline',
-            frame_rate REAL NOT NULL,
-            width INTEGER NOT NULL,
-            height INTEGER NOT NULL,
-            timecode_start INTEGER NOT NULL DEFAULT 0,
-            playhead_time INTEGER NOT NULL DEFAULT 0,
-            selected_clip_ids TEXT,
-            selected_edge_infos TEXT,
-            selected_gap_infos TEXT,
-            viewport_start_time INTEGER NOT NULL DEFAULT 0,
-            viewport_duration INTEGER NOT NULL DEFAULT 10000,
-            mark_in_time INTEGER,
-            mark_out_time INTEGER,
-            current_sequence_number INTEGER
-        );
-
-        CREATE TABLE tracks (
-            id TEXT PRIMARY KEY,
-            sequence_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            track_type TEXT NOT NULL,
-            track_index INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            locked INTEGER NOT NULL DEFAULT 0,
-            muted INTEGER NOT NULL DEFAULT 0,
-            soloed INTEGER NOT NULL DEFAULT 0,
-            volume REAL NOT NULL DEFAULT 1.0,
-            pan REAL NOT NULL DEFAULT 0.0
-        );
-
-        CREATE TABLE commands (
-            id TEXT PRIMARY KEY,
-            parent_id TEXT,
-            parent_sequence_number INTEGER,
-            sequence_number INTEGER UNIQUE NOT NULL,
-            command_type TEXT NOT NULL,
-            command_args TEXT,
-            pre_hash TEXT,
-            post_hash TEXT,
-            timestamp INTEGER,
-            playhead_time INTEGER DEFAULT 0,
-            selected_clip_ids TEXT DEFAULT '[]',
-            selected_edge_infos TEXT DEFAULT '[]',
-            selected_gap_infos TEXT DEFAULT '[]',
-            selected_clip_ids_pre TEXT DEFAULT '[]',
-            selected_edge_infos_pre TEXT DEFAULT '[]',
-            selected_gap_infos_pre TEXT DEFAULT '[]'
-        );
-    ]])
+    db:exec(require('import_schema'))
 
     db:exec([[
         INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-        INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
     ]])
 
     return db

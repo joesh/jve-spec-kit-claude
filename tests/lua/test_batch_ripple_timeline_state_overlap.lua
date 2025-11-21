@@ -22,16 +22,16 @@ end
 local function assert_no_overlap(label, clips)
     table.sort(clips, function(a, b)
         if a.track_id == b.track_id then
-            return a.start_time < b.start_time
+            return a.start_value < b.start_value
         end
         return a.track_id < b.track_id
     end)
     local last_end = {}
     for _, c in ipairs(clips) do
-        local e = (c.start_time or 0) + (c.duration or 0)
+        local e = (c.start_value or 0) + (c.duration or 0)
         local prev = last_end[c.track_id]
-        if prev and (c.start_time < prev) then
-            io.stderr:write(string.format("%s: overlap on %s between clips near %d\n", label, c.track_id, c.start_time))
+        if prev and (c.start_value < prev) then
+            io.stderr:write(string.format("%s: overlap on %s between clips near %d\n", label, c.track_id, c.start_value))
             os.exit(1)
         end
         last_end[c.track_id] = e
@@ -64,9 +64,9 @@ local function seed_db(layout)
 
     for _, clip in ipairs(layout.clips) do
         assert_true("clip", db:exec(string.format([[INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-          start_time, duration, source_in, source_out, enabled)
+          start_value, duration, source_in, source_out, enabled)
           VALUES ('%s','default_project','timeline','', '%s','%s','default_sequence',%d,%d,%d,%d,1);]],
-          clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration)))
+          clip.id, clip.track_id, clip.media_id, clip.start_value, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration)))
     end
 
     return db
@@ -88,8 +88,8 @@ do
         tracks = {{id="v1", index=1}},
         media = {{id="m", duration=10000}},
         clips = {
-            {id="clip_one", track_id="v1", media_id="m", start_time=0, duration=2000, source_out=2000},
-            {id="clip_two", track_id="v1", media_id="m", start_time=1500, duration=1000, source_in=2000, source_out=3000}
+            {id="clip_one", track_id="v1", media_id="m", start_value=0, duration=2000, source_out=2000},
+            {id="clip_two", track_id="v1", media_id="m", start_value=1500, duration=1000, source_in=2000, source_out=3000}
         }
     }
     local db = seed_db(layout)
@@ -106,7 +106,7 @@ do
     local one = Clip.load("clip_one", db)
     local two = Clip.load("clip_two", db)
     assert_true("clip_one duration", one.duration == 1500)
-    assert_true("clip_two start", two.start_time == 1500)
+    assert_true("clip_two start", two.start_value == 1500)
     assert_no_overlap("single_track_timeline_state", {one, two})
 end
 
@@ -116,10 +116,10 @@ do
         tracks = {{id="v1", index=1}, {id="a1", index=1, track_type="AUDIO", timebase_type="audio_samples", timebase_rate=48000}},
         media = {{id="av", duration=10000, frame_rate=30.0}},
         clips = {
-            {id="clip_v1", track_id="v1", media_id="av", start_time=0, duration=2500, source_out=2500},
-            {id="clip_v2", track_id="v1", media_id="av", start_time=2200, duration=1000, source_in=3000, source_out=4000},
-            {id="clip_a1", track_id="a1", media_id="av", start_time=0, duration=2500, source_out=2500},
-            {id="clip_a2", track_id="a1", media_id="av", start_time=2200, duration=1000, source_in=3000, source_out=4000}
+            {id="clip_v1", track_id="v1", media_id="av", start_value=0, duration=2500, source_out=2500},
+            {id="clip_v2", track_id="v1", media_id="av", start_value=2200, duration=1000, source_in=3000, source_out=4000},
+            {id="clip_a1", track_id="a1", media_id="av", start_value=0, duration=2500, source_out=2500},
+            {id="clip_a2", track_id="a1", media_id="av", start_value=2200, duration=1000, source_in=3000, source_out=4000}
         }
     }
     local db = seed_db(layout)
@@ -142,8 +142,8 @@ do
     local a2 = Clip.load("clip_a2", db)
     assert_true("v1 duration", v1.duration == 1700)
     assert_true("a1 duration", a1.duration == 1700)
-    assert_true("v2 start", v2.start_time == 1700)
-    assert_true("a2 start", a2.start_time == 1700)
+    assert_true("v2 start", v2.start_value == 1700)
+    assert_true("a2 start", a2.start_value == 1700)
     assert_no_overlap("linked_av_v", {v1, v2})
     assert_no_overlap("linked_av_a", {a1, a2})
 end
@@ -154,10 +154,10 @@ do
         tracks = {{id="track1", index=1}, {id="track2", index=2}},
         media = {{id="m1", duration=10000}},
         clips = {
-            {id="gap_clip", track_id="track1", media_id="m1", start_time=2000, duration=4000, source_in=0, source_out=4000},
-            {id="t1_clip_b", track_id="track1", media_id="m1", start_time=6250, duration=2000, source_in=4000, source_out=6000},
-            {id="t2_clip_a", track_id="track2", media_id="m1", start_time=0, duration=2000, source_out=2000},
-            {id="t2_clip_b", track_id="track2", media_id="m1", start_time=2500, duration=4500, source_in=2000, source_out=6500}
+            {id="gap_clip", track_id="track1", media_id="m1", start_value=2000, duration=4000, source_in=0, source_out=4000},
+            {id="t1_clip_b", track_id="track1", media_id="m1", start_value=6250, duration=2000, source_in=4000, source_out=6000},
+            {id="t2_clip_a", track_id="track2", media_id="m1", start_value=0, duration=2000, source_out=2000},
+            {id="t2_clip_b", track_id="track2", media_id="m1", start_value=2500, duration=4500, source_in=2000, source_out=6500}
         }
     }
     local db = seed_db(layout)
@@ -174,9 +174,9 @@ do
     local gap_clip = Clip.load("gap_clip", db)
     local t1b = Clip.load("t1_clip_b", db)
     local t2b = Clip.load("t2_clip_b", db)
-    assert_true("gap_clip moved left with clamp", gap_clip.start_time == 1500)
-    assert_true("next V1 clip shifted consistently", t1b.start_time == 5750)
-    assert_true("t2 clip respects guard", t2b.start_time == 2000)
+    assert_true("gap_clip moved left with clamp", gap_clip.start_value == 1500)
+    assert_true("next V1 clip shifted consistently", t1b.start_value == 5750)
+    assert_true("t2 clip respects guard", t2b.start_value == 2000)
     assert_no_overlap("gap_before_overlap_tracks", {gap_clip, t2b})
 end
 
@@ -186,10 +186,10 @@ do
         tracks = {{id="track1", index=1}, {id="track2", index=2}},
         media = {{id="m1", duration=10000}},
         clips = {
-            {id="gap_clip", track_id="track1", media_id="m1", start_time=2000, duration=4000, source_in=0, source_out=4000},
-            {id="t1_clip_b", track_id="track1", media_id="m1", start_time=6250, duration=2000, source_in=4000, source_out=6000},
-            {id="t2_clip_a", track_id="track2", media_id="m1", start_time=0, duration=2000, source_out=2000},
-            {id="t2_clip_b", track_id="track2", media_id="m1", start_time=2500, duration=4500, source_in=2000, source_out=6500}
+            {id="gap_clip", track_id="track1", media_id="m1", start_value=2000, duration=4000, source_in=0, source_out=4000},
+            {id="t1_clip_b", track_id="track1", media_id="m1", start_value=6250, duration=2000, source_in=4000, source_out=6000},
+            {id="t2_clip_a", track_id="track2", media_id="m1", start_value=0, duration=2000, source_out=2000},
+            {id="t2_clip_b", track_id="track2", media_id="m1", start_value=2500, duration=4500, source_in=2000, source_out=6500}
         }
     }
     local db = seed_db(layout)
@@ -206,9 +206,9 @@ do
     local gap_clip = Clip.load("gap_clip", db)
     local t1b = Clip.load("t1_clip_b", db)
     local t2b = Clip.load("t2_clip_b", db)
-    assert_true("ripple gap clip clamped", gap_clip.start_time == 1500)
-    assert_true("ripple next V1 clip shifted consistently", t1b.start_time == 5750)
-    assert_true("ripple t2 clip respects guard", t2b.start_time == 2000)
+    assert_true("ripple gap clip clamped", gap_clip.start_value == 1500)
+    assert_true("ripple next V1 clip shifted consistently", t1b.start_value == 5750)
+    assert_true("ripple t2 clip respects guard", t2b.start_value == 2000)
     assert_no_overlap("ripple_gap_before_overlap_tracks", {gap_clip, t2b})
 end
 

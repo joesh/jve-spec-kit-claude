@@ -21,6 +21,8 @@ io.stdout:setvbuf("no")
 io.stderr:setvbuf("no")
 
 print("🎬 Creating layout...")
+local layout_path = debug.getinfo(1, "S").source:sub(2)
+local layout_dir = layout_path:match("(.*/)")
 
 -- Initialize database connection
 print("💾 Initializing database...")
@@ -72,23 +74,17 @@ else
 
     if not has_schema then
         print("💾 Creating database schema...")
-        local schema_file = io.open("src/core/persistence/schema.sql", "r")
+        local schema_path = layout_dir .. "../../core/persistence/schema.sql"
+        local schema_file, ferr = io.open(schema_path, "r")
         if not schema_file then
-            error("FATAL: Failed to open schema.sql")
+            error("FATAL: Failed to open schema.sql at " .. schema_path .. ": " .. tostring(ferr))
         end
         local schema_sql = schema_file:read("*all")
         schema_file:close()
 
-        for statement in schema_sql:gmatch("CREATE TABLE.-%;") do
-            local stmt, stmt_err = db_conn:prepare(statement)
-            if not stmt then
-                error("FATAL: Failed to prepare CREATE TABLE: " .. tostring(stmt_err))
-            end
-            local ok_exec = stmt:exec()
-            stmt:finalize()
-            if not ok_exec then
-                error("FATAL: Failed to execute schema statement")
-            end
+        local ok, exec_err = db_conn:exec(schema_sql)
+        if not ok then
+            error("FATAL: Failed to apply schema: " .. tostring(exec_err))
         end
         print("✅ Database schema created")
     end
@@ -120,43 +116,90 @@ else
             print("✅ Inserted default project")
         end
 
+        local sequence_id = nil
         if table_count("SELECT COUNT(*) FROM sequences") == 0 then
             local insert_sequence = db_conn:prepare([[
-                INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos)
-                VALUES ('default_sequence', 'default_project', 'Sequence 1', 30.0, 1920, 1080, 0, 0, '[]', '[]')
+                INSERT INTO sequences (
+                    id, project_id, name, kind, frame_rate, audio_sample_rate,
+                    width, height, timecode_start_frame, playhead_value,
+                    selected_clip_ids, selected_edge_infos, selected_gap_infos,
+                    viewport_start_value, viewport_duration_frames_value
+                ) VALUES (
+                    'default_sequence', 'default_project', 'Sequence 1', 'timeline', 24.0, 48000,
+                    1920, 1080, 0, 0,
+                    '[]', '[]', '[]',
+                    0, 240
+                )
             ]])
             if not insert_sequence then
                 error("FATAL: Failed to prepare default sequence insert")
             end
-            insert_sequence:exec()
+            local ok_seq = insert_sequence:exec()
             insert_sequence:finalize()
-
-            local function insert_track(id, name, track_type, track_index)
-                local stmt = db_conn:prepare([[
-                    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-                    VALUES (?, 'default_sequence', ?, ?, ?, 1)
-                ]])
-                if not stmt then
-                    error("FATAL: Failed to prepare default track insert")
-                end
-                stmt:bind_value(1, id)
-                stmt:bind_value(2, name)
-                stmt:bind_value(3, track_type)
-                stmt:bind_value(4, track_index)
-                stmt:exec()
-                stmt:finalize()
+            assert(ok_seq ~= false, "FATAL: Failed to insert default sequence")
+            sequence_id = "default_sequence"
+        else
+            local seq_stmt = db_conn:prepare("SELECT id, frame_rate, audio_sample_rate FROM sequences LIMIT 1")
+            if not seq_stmt then
+                error("FATAL: Failed to query existing sequence")
             end
+            local ok = seq_stmt:exec() and seq_stmt:next()
+            if ok then
+                sequence_id = seq_stmt:value(0)
+            end
+            seq_stmt:finalize()
+            assert(sequence_id, "FATAL: Existing sequence missing id")
+        end
 
-            insert_track("video1", "V1", "VIDEO", 1)
-            insert_track("video2", "V2", "VIDEO", 2)
-            insert_track("video3", "V3", "VIDEO", 3)
-            insert_track("audio1", "A1", "AUDIO", 1)
-            insert_track("audio2", "A2", "AUDIO", 2)
-            insert_track("audio3", "A3", "AUDIO", 3)
+        -- Ensure tracks exist for the active sequence
+        local function insert_track(seq_id, id, name, track_type, track_index, timebase_type, timebase_rate)
+            local stmt = db_conn:prepare([[
+                INSERT INTO tracks (
+                    id, sequence_id, name, track_type, timebase_type, timebase_rate,
+                    track_index, enabled, locked, muted, soloed, volume, pan
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, 1.0, 0.0)
+            ]])
+            if not stmt then
+                error("FATAL: Failed to prepare default track insert")
+            end
+            stmt:bind_value(1, id)
+            stmt:bind_value(2, seq_id)
+            stmt:bind_value(3, name)
+            stmt:bind_value(4, track_type)
+            stmt:bind_value(5, timebase_type)
+            stmt:bind_value(6, timebase_rate)
+            stmt:bind_value(7, track_index)
+            local ok = stmt:exec()
+            stmt:finalize()
+            assert(ok ~= false, string.format("FATAL: Failed to insert track %s", tostring(id)))
+        end
+
+        -- Only seed tracks if none exist for the active sequence
+        local track_count_sql = string.format("SELECT COUNT(*) FROM tracks WHERE sequence_id = '%s'", sequence_id)
+        if table_count(track_count_sql) == 0 then
+            local video_rate = 24.0
+            local audio_rate = 48000.0
+            insert_track(sequence_id, "video1", "V1", "VIDEO", 1, "video_frames", video_rate)
+            insert_track(sequence_id, "video2", "V2", "VIDEO", 2, "video_frames", video_rate)
+            insert_track(sequence_id, "video3", "V3", "VIDEO", 3, "video_frames", video_rate)
+            insert_track(sequence_id, "audio1", "A1", "AUDIO", 1, "audio_samples", audio_rate)
+            insert_track(sequence_id, "audio2", "A2", "AUDIO", 2, "audio_samples", audio_rate)
+            insert_track(sequence_id, "audio3", "A3", "AUDIO", 3, "audio_samples", audio_rate)
 
             local insert_media = db_conn:prepare([[
-                INSERT INTO media (id, file_path, file_name, duration, frame_rate, metadata)
-                VALUES ('media1', '/path/to/test.mp4', 'test.mp4', 10000, 30.0, '{}')
+                INSERT INTO media (
+                    id, project_id, name, file_path,
+                    duration_value, timebase_type, timebase_rate,
+                    frame_rate, width, height, audio_channels, codec,
+                    created_at, modified_at, metadata
+                )
+                VALUES (
+                    'media1', 'default_project', 'test.mp4', '/path/to/test.mp4',
+                    2400, 'video_frames', 24.0,
+                    24.0, 1920, 1080, 2, 'h264',
+                    strftime('%s','now'), strftime('%s','now'), '{}'
+                )
             ]])
             if insert_media then
                 insert_media:exec()
@@ -223,7 +266,8 @@ local menu_system = require("core.menu_system")
 menu_system.init(main_window, command_manager, project_browser_mod)
 
 -- Load menus from XML
-local menu_success, menu_error = menu_system.load_from_file("menus.xml")
+local menu_path = layout_dir .. "../../../menus.xml"
+local menu_success, menu_error = menu_system.load_from_file(menu_path)
 if menu_success then
     print("✅ Menu system loaded successfully")
 else

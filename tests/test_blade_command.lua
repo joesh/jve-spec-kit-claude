@@ -13,109 +13,21 @@ local function setup_db(path)
     database.init(path)
     local db = database.get_connection()
 
-    db:exec([[
-        CREATE TABLE projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            settings TEXT NOT NULL DEFAULT '{}'
-        );
+    db:exec(require('import_schema'))
 
-                CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-
-        CREATE TABLE tracks (
-            id TEXT PRIMARY KEY,
-            sequence_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            track_type TEXT NOT NULL,
-            track_index INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
-        );
-
-                CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL DEFAULT 0,
-            source_out INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0,
-            modified_at INTEGER NOT NULL DEFAULT 0
-        );
-
-
-        CREATE TABLE media (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            duration INTEGER NOT NULL,
-            frame_rate REAL NOT NULL,
-            width INTEGER DEFAULT 0,
-            height INTEGER DEFAULT 0,
-            audio_channels INTEGER DEFAULT 0,
-            codec TEXT DEFAULT '',
-            created_at INTEGER DEFAULT 0,
-            modified_at INTEGER DEFAULT 0,
-            metadata TEXT DEFAULT '{}'
-        );
-
-        CREATE TABLE commands (
-            id TEXT PRIMARY KEY,
-            parent_id TEXT,
-            parent_sequence_number INTEGER,
-            sequence_number INTEGER UNIQUE NOT NULL,
-            command_type TEXT NOT NULL,
-            command_args TEXT,
-            pre_hash TEXT,
-            post_hash TEXT,
-            timestamp INTEGER,
-            playhead_time INTEGER DEFAULT 0,
-            selected_clip_ids TEXT DEFAULT '[]',
-            selected_edge_infos TEXT DEFAULT '[]',
-            selected_clip_ids_pre TEXT DEFAULT '[]',
-            selected_edge_infos_pre TEXT DEFAULT '[]'
-        );
-    ]])
-
-    db:exec([[
-        INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-        INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-        VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
-    ]])
+    local now = os.time()
+    db:exec(string.format([[
+        INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', %d, %d);
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
+        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 2, 1);
+    ]], now, now))
 
     return db
 end
 
-local function create_clip(id, track_id, start_time, duration)
+local function create_clip(id, track_id, start_value, duration_value)
     local conn = database.get_connection()
     local media_id = id .. "_media"
 
@@ -125,47 +37,52 @@ local function create_clip(id, track_id, start_time, duration)
             project_id,
             name,
             file_path,
-            duration,
+            duration_value,
+            timebase_type,
+            timebase_rate,
             frame_rate,
+            width,
+            height,
+            audio_channels,
+            codec,
             created_at,
             modified_at,
             metadata
         )
-        VALUES (?, ?, ?, ?, ?, ?, 0, 0, '{}')
+        VALUES (?, ?, ?, ?, ?, 'video_frames', 30.0, 30.0, 1920, 1080, 0, '', 0, 0, '{}')
     ]])
     assert(media_stmt, "failed to prepare media insert")
     assert(media_stmt:bind_value(1, media_id))
     assert(media_stmt:bind_value(2, "default_project"))
     assert(media_stmt:bind_value(3, id .. ".mov"))
     assert(media_stmt:bind_value(4, "/tmp/jve/" .. id .. ".mov"))
-    assert(media_stmt:bind_value(5, duration))
-    assert(media_stmt:bind_value(6, 30.0))
+    assert(media_stmt:bind_value(5, duration_value))
     assert(media_stmt:exec())
     media_stmt:finalize()
 
     local clip_stmt = conn:prepare([[
-        INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-        VALUES (?, ?, ?, ?, ?, 0, ?, 1)
+        INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled)
+        VALUES (?, ?, ?, ?, ?, 0, ?, 'video_frames', 30.0, 1)
     ]])
     assert(clip_stmt, "failed to prepare clip insert")
     assert(clip_stmt:bind_value(1, id))
     assert(clip_stmt:bind_value(2, track_id))
     assert(clip_stmt:bind_value(3, media_id))
-    assert(clip_stmt:bind_value(4, start_time))
-    assert(clip_stmt:bind_value(5, duration))
-    assert(clip_stmt:bind_value(6, duration))
+    assert(clip_stmt:bind_value(4, start_value))
+    assert(clip_stmt:bind_value(5, duration_value))
+    assert(clip_stmt:bind_value(6, duration_value))
     assert(clip_stmt:exec())
     clip_stmt:finalize()
 end
 
 local function fetch_clip(id)
-    local stmt = database.get_connection():prepare([[SELECT start_time, duration FROM clips WHERE id = ?]])
+    local stmt = database.get_connection():prepare([[SELECT start_value, duration_value FROM clips WHERE id = ?]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(id))
-    local start_time = stmt:value(0)
-    local duration = stmt:value(1)
+    local start_value = stmt:value(0)
+    local duration_value = stmt:value(1)
     stmt:finalize()
-    return start_time, duration
+    return start_value, duration_value
 end
 
 local function clip_count()
@@ -176,13 +93,13 @@ local function clip_count()
     return count
 end
 
-local function clip_exists_at(track_id, start_time)
+local function clip_exists_at(track_id, start_value)
     local stmt = database.get_connection():prepare([[
-        SELECT 1 FROM clips WHERE track_id = ? AND start_time = ? LIMIT 1
+        SELECT 1 FROM clips WHERE track_id = ? AND start_value = ? LIMIT 1
     ]])
     assert(stmt, "failed to prepare clip lookup")
     assert(stmt:bind_value(1, track_id))
-    assert(stmt:bind_value(2, start_time))
+    assert(stmt:bind_value(2, start_value))
     local exists = stmt:exec() and stmt:next()
     stmt:finalize()
     return exists
@@ -208,7 +125,7 @@ local function reset_clips()
     timeline_state.reload_clips()
 end
 
-local function execute_batch_split(split_time, clip_ids)
+local function execute_batch_split(split_value, clip_ids)
     local json = dkjson
     local specs = {}
     for _, clip in ipairs(clip_ids) do
@@ -216,7 +133,7 @@ local function execute_batch_split(split_time, clip_ids)
             command_type = "SplitClip",
             parameters = {
                 clip_id = clip.id or clip,
-                split_time = split_time
+                split_value = split_value
             }
         })
     end
@@ -232,7 +149,7 @@ print("=== Blade Command Tests ===\n")
 -- Scenario 1: No selection - split all clips under playhead
 reset_clips()
 timeline_state.set_selection({})
-timeline_state.set_playhead_time(1000)
+timeline_state.set_playhead_value(1000)
 local targets = timeline_state.get_clips_at_time(1000)
 assert(#targets == 2, "Expected two clips under playhead")
 local before_count = clip_count()
@@ -247,7 +164,7 @@ assert(clip_exists_at('track_v2', 1000), "Second segment of clip_c should exist"
 -- Scenario 2: Selection limits split targets
 reset_clips()
 timeline_state.set_selection({{id = 'clip_a'}})
-timeline_state.set_playhead_time(1000)
+timeline_state.set_playhead_value(1000)
 local selected_targets = timeline_state.get_clips_at_time(1000, {'clip_a'})
 assert(#selected_targets == 1, "Only selected clip should be targeted")
 before_count = clip_count()

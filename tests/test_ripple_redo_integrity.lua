@@ -6,111 +6,28 @@ require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
+local command_impl = require('core.command_implementations')
 local Command = require('command')
 local timeline_state = require('ui.timeline.timeline_state')
 local Media = require('models.media')
 
 local function setup_db(path)
     os.remove(path)
-    database.init(path)
+    assert(database.init(path))
     local conn = database.get_connection()
 
-    conn:exec([[
-CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}');
-        CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
+    conn:exec(require('import_schema'))
 
-CREATE TABLE tracks (
-    id TEXT PRIMARY KEY,
-    sequence_id TEXT NOT NULL,
-    name TEXT,
-    track_type TEXT NOT NULL,
-    track_index INTEGER NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    locked INTEGER NOT NULL DEFAULT 0,
-    muted INTEGER NOT NULL DEFAULT 0,
-    soloed INTEGER NOT NULL DEFAULT 0,
-    volume REAL NOT NULL DEFAULT 1.0,
-    pan REAL NOT NULL DEFAULT 0.0
-);
-                CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL DEFAULT 0,
-            source_out INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0,
-            modified_at INTEGER NOT NULL DEFAULT 0
-        );
-
-
-CREATE TABLE media (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    file_path TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
-    duration INTEGER,
-    frame_rate REAL,
-    width INTEGER,
-    height INTEGER,
-    audio_channels INTEGER DEFAULT 0,
-    codec TEXT DEFAULT '',
-    created_at INTEGER DEFAULT 0,
-    modified_at INTEGER DEFAULT 0,
-    metadata TEXT DEFAULT '{}'
-);
-CREATE TABLE commands (
-    id TEXT PRIMARY KEY,
-    parent_id TEXT,
-    parent_sequence_number INTEGER,
-    sequence_number INTEGER UNIQUE NOT NULL,
-    command_type TEXT NOT NULL,
-    command_args TEXT,
-    pre_hash TEXT,
-    post_hash TEXT,
-    timestamp INTEGER,
-    playhead_time INTEGER DEFAULT 0,
-    selected_clip_ids TEXT DEFAULT '[]',
-    selected_edge_infos TEXT DEFAULT '[]',
-    selected_clip_ids_pre TEXT DEFAULT '[]',
-    selected_edge_infos_pre TEXT DEFAULT '[]'
-);
-    ]])
-
-    conn:exec([[
+    assert(conn:exec([[
 INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
-    ]])
+INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 10000);
+INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    ]]))
 
+    local executors, undoers = {}, {}
+    command_impl.register_commands(executors, undoers, conn)
     command_manager.init(conn, 'default_sequence', 'default_project')
     timeline_state.init('default_sequence')
 
@@ -119,10 +36,16 @@ VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
             id = cmd:get_parameter("media_id"),
             project_id = cmd:get_parameter("project_id") or 'default_project',
             file_path = cmd:get_parameter("file_path"),
-            file_name = cmd:get_parameter("file_name"),
             name = cmd:get_parameter("file_name"),
-            duration = cmd:get_parameter("duration"),
-            frame_rate = cmd:get_parameter("frame_rate") or 30
+            duration_value = cmd:get_parameter("duration_value") or cmd:get_parameter("duration"),
+            timebase_type = "video_frames",
+            timebase_rate = 30.0,
+            frame_rate = cmd:get_parameter("frame_rate") or 30.0,
+            width = 1920,
+            height = 1080,
+            audio_channels = 2,
+            audio_sample_rate = 48000,
+            metadata = "{}"
         })
         assert(media, "failed to create media " .. tostring(cmd:get_parameter("media_id")))
         return media:save(conn)
@@ -150,7 +73,7 @@ local function exec(cmd)
 end
 
 local function clip_count()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline' AND track_id IS NOT NULL")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
     assert(stmt:exec(), "Failed to count clips")
     assert(stmt:next(), "Count query produced no rows")
     local count = stmt:value(0)
@@ -181,10 +104,10 @@ exec(ripple_cmd)
 
 local function snapshot_clips()
     local stmt = db:prepare([[
-        SELECT id, track_id, start_time, duration, source_in, source_out
+        SELECT id, track_id, start_value, duration_value, source_in_value, source_out_value
         FROM clips
-        WHERE clip_kind = 'timeline' AND track_id IS NOT NULL
-        ORDER BY track_id, start_time
+        WHERE clip_kind = 'timeline'
+        ORDER BY track_id, start_value
     ]])
     assert(stmt:exec(), "Failed to fetch clips for snapshot")
 
@@ -193,10 +116,10 @@ local function snapshot_clips()
         clips[#clips + 1] = {
             id = stmt:value(0),
             track_id = stmt:value(1),
-            start_time = stmt:value(2),
-            duration = stmt:value(3),
-            source_in = stmt:value(4),
-            source_out = stmt:value(5),
+            start_value = stmt:value(2),
+            duration_value = stmt:value(3),
+            source_in_value = stmt:value(4),
+            source_out_value = stmt:value(5),
         }
     end
     stmt:finalize()
@@ -210,7 +133,7 @@ local function states_match(expected, actual)
     for idx = 1, #expected do
         local want = expected[idx]
         local got = actual[idx]
-        for _, field in ipairs({"id", "track_id", "start_time", "duration", "source_in", "source_out"}) do
+        for _, field in ipairs({"id", "track_id", "start_value", "duration_value", "source_in_value", "source_out_value"}) do
             if want[field] ~= got[field] then
                 return false, string.format(
                     "clip mismatch at index %d field %s (expected=%s, actual=%s)",
@@ -252,11 +175,11 @@ media_cmd:set_parameter("frame_rate", 30)
 media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
-local function insert_clip(start_time, duration, source_in)
+local function insert_clip(start_value, duration, source_in)
     local cmd = Command.create("Insert", "default_project")
     cmd:set_parameter("media_id", "media_src")
     cmd:set_parameter("track_id", "track_default_v1")
-    cmd:set_parameter("insert_time", start_time)
+    cmd:set_parameter("insert_time", start_value)
     cmd:set_parameter("duration", duration)
     cmd:set_parameter("source_in", source_in or 0)
     cmd:set_parameter("source_out", (source_in or 0) + duration)
@@ -269,18 +192,18 @@ insert_clip(1713800, 2332838, 1713800)
 
 local function fetch_clips_ordered()
     local stmt = db:prepare([[
-        SELECT id, start_time, duration
+        SELECT id, start_value, duration_value
         FROM clips
-        WHERE clip_kind = 'timeline' AND track_id IS NOT NULL
-        ORDER BY start_time
+        WHERE clip_kind = 'timeline'
+        ORDER BY start_value
     ]])
     assert(stmt:exec(), "Failed to fetch clip ordering")
     local clips = {}
     while stmt:next() do
         clips[#clips + 1] = {
             id = stmt:value(0),
-            start_time = stmt:value(1),
-            duration = stmt:value(2)
+            start_value = stmt:value(1),
+            duration_value = stmt:value(2)
         }
     end
     stmt:finalize()
@@ -305,18 +228,18 @@ assert(#post_clips == 2, string.format("expected two clips after ripple, got %d"
 
 local first_after = post_clips[1]
 local second_after = post_clips[2]
-local actual_extension = first_after.duration - first_initial.duration
+local actual_extension = first_after.duration_value - first_initial.duration_value
 
 assert(actual_extension > 0, "expected first clip duration to increase")
 
-local expected_second_start = second_initial.start_time + actual_extension
-assert(second_after.start_time == expected_second_start,
+local expected_second_start = second_initial.start_value + actual_extension
+assert(second_after.start_value == expected_second_start,
     string.format("downstream clip should shift by actual extension (expected %d, got %d)",
-        expected_second_start, second_after.start_time))
+        expected_second_start, second_after.start_value))
 
-local first_end = first_after.start_time + first_after.duration
-assert(first_end == second_after.start_time,
+local first_end = first_after.start_value + first_after.duration_value
+assert(first_end == second_after.start_value,
     string.format("clips should remain touching after ripple (expected contact %d, found %d)",
-        first_end, second_after.start_time))
+        first_end, second_after.start_value))
 
 print("✅ Ripple extension maintains adjacency")

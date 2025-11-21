@@ -161,10 +161,10 @@ function ErrorBuilder:withQtWidget(widget)
 end
 
 -- Add timing context for performance analysis
--- start_time: number - when operation started (from os.time() or os.clock())
-function ErrorBuilder:withTiming(start_time)
-    if start_time then
-        local duration = os.time() - start_time
+-- start_value: number - when operation started (from os.time() or os.clock())
+function ErrorBuilder:withTiming(start_value)
+    if start_value then
+        local duration = os.time() - start_value
         self:addContext("operation_duration_seconds", duration)
     end
     return self

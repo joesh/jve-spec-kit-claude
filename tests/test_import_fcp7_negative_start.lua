@@ -12,82 +12,7 @@ database.init(TEST_DB)
 local db = database.get_connection()
 
 -- Create the minimal schema required by the importer.
-db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_path TEXT UNIQUE NOT NULL,
-        duration INTEGER NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        audio_channels INTEGER NOT NULL DEFAULT 0,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT DEFAULT '{}'
-    );
-]])
+db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name)
@@ -143,11 +68,11 @@ local clip_count = clip_count_stmt:value(0)
 clip_count_stmt:finalize()
 assert(clip_count > 0, "expected importer to create timeline clips")
 
-local negative_start_stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE start_time < 0")
+local negative_start_stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE start_value < 0")
 assert(negative_start_stmt:exec() and negative_start_stmt:next())
 local negative_count = negative_start_stmt:value(0)
 negative_start_stmt:finalize()
 
-assert(negative_count == 0, string.format("found %d clips with negative start_time", negative_count))
+assert(negative_count == 0, string.format("found %d clips with negative start_value", negative_count))
 
 print("✅ FCP7 importer handled negative start/end sentinels without producing negative clip positions")

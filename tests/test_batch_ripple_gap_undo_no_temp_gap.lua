@@ -18,33 +18,34 @@ local function setup_db(path)
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', %d, %d);
 
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height, viewport_duration)
-        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 1920, 1080, 20000);
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 600);
 
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1),
-               ('track_v2', 'default_sequence', 'V2', 'VIDEO', 2, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1),
+               ('track_v2', 'default_sequence', 'V2', 'VIDEO', 'video_frames', 30.0, 2, 1);
 
-        INSERT INTO media (id, project_id, name, duration, frame_rate, width, height)
-        VALUES ('media1', 'default_project', 'Media', 120000, 30.0, 1920, 1080);
+        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec)
+        VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 120000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw');
 
         -- Track V1: left/right with gap
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_time, duration, source_in, source_out, enabled, offline,
+                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
                            created_at, modified_at)
         VALUES ('v1_left', 'default_project', 'timeline', 'V1 Left', 'track_v1', 'media1', 'default_sequence',
-                0, 2000, 0, 2000, 1, 0, %d, %d),
+                0, 2000, 0, 2000, 'video_frames', 30.0, 1, 0, %d, %d),
                ('v1_right', 'default_project', 'timeline', 'V1 Right', 'track_v1', 'media1', 'default_sequence',
-                5000, 2000, 2000, 4000, 1, 0, %d, %d);
+                5000, 2000, 2000, 4000, 'video_frames', 30.0, 1, 0, %d, %d);
 
         -- Track V2: left/right with a different gap
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_time, duration, source_in, source_out, enabled, offline,
+                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
                            created_at, modified_at)
         VALUES ('v2_left', 'default_project', 'timeline', 'V2 Left', 'track_v2', 'media1', 'default_sequence',
-                0, 3000, 0, 3000, 1, 0, %d, %d),
+                0, 3000, 0, 3000, 'video_frames', 30.0, 1, 0, %d, %d),
                ('v2_right', 'default_project', 'timeline', 'V2 Right', 'track_v2', 'media1', 'default_sequence',
-                8000, 2000, 3000, 5000, 1, 0, %d, %d);
+                8000, 2000, 3000, 5000, 'video_frames', 30.0, 1, 0, %d, %d);
     ]], now, now, now, now, now, now, now, now, now, now)))
 
     command_manager.init(db, "default_sequence", "default_project")

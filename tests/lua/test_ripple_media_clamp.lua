@@ -167,8 +167,8 @@ mock_db:store_clip({
     media_id = 'media_short',
     start_value = 1000,
     duration_value = 9500,
-    source_in_value_value = 0,
-    source_out_value_value = 9500,
+    source_in_value = 0,
+    source_out_value = 9500,
     timebase_type = 'video_frames',
     timebase_rate = 30
 })
@@ -178,7 +178,7 @@ mock_db:store_clip({
     media_id = 'media_short',
     start_value = 12000,
     duration_value = 2000,
-    source_in_value_value = 0,
+    source_in_value = 0,
     source_out_value = 2000,
     timebase_type = 'video_frames',
     timebase_rate = 30
@@ -193,7 +193,7 @@ cmd:set_parameter('sequence_id', 'test_sequence')
 
 assert_eq('execute media clamp out', executor(cmd), true)
 assert_eq('media clamp out duration_value', mock_db.clips['clip_out'].duration_value, 10000)
-assert_eq('media clamp out source_out_value', mock_db.clips['clip_out'].source_out_value_value, 10000)
+assert_eq('media clamp out source_out_value', mock_db.clips['clip_out'].source_out_value, 10000)
 assert_eq('media clamp out downstream shift', mock_db.clips['clip_downstream'].start_value, 12500)
 
 -- Test 2: In-point extend clamps to media start.
@@ -205,8 +205,8 @@ mock_db:store_clip({
     media_id = 'media_short',
     start_value = 1000,
     duration_value = 3000,
-    source_in_value_value = 500,
-    source_out_value_value = 3500,
+    source_in_value = 500,
+    source_out_value = 3500,
     timebase_type = 'video_frames',
     timebase_rate = 30
 })
@@ -216,8 +216,8 @@ mock_db:store_clip({
     media_id = 'media_short',
     start_value = 4500,
     duration_value = 2000,
-    source_in_value_value = 0,
-    source_out_value_value = 2000,
+    source_in_value = 0,
+    source_out_value = 2000,
     timebase_type = 'video_frames',
     timebase_rate = 30
 })

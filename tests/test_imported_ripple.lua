@@ -17,27 +17,49 @@ local Command = require('command')
 
 local function install_timeline_stub()
     local timeline_state = {
-        playhead_time = 0,
+        playhead_value = 0,
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},
-        viewport_start_time = 0,
-        viewport_duration = 10000
+        viewport_start_value = 0,
+        viewport_duration_frames_value = 10000,
+        sequence_frame_rate = nil,
     }
     local guard_depth = 0
 
     timeline_state.sequence_id = 'default_sequence'
 
+    local function refresh_sequence_frame_rate(sequence_id)
+        local db = database.get_connection()
+        assert(db, "timeline_state: database not initialized")
+        local stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+        assert(stmt, "timeline_state: failed to prepare frame rate lookup")
+        stmt:bind_value(1, sequence_id)
+        assert(stmt:exec() and stmt:next(),
+            string.format("timeline_state: missing sequence %s", tostring(sequence_id)))
+        local rate = stmt:value(0)
+        stmt:finalize()
+        assert(rate and rate > 0, "timeline_state: invalid frame rate")
+        timeline_state.sequence_frame_rate = rate
+    end
+
     function timeline_state.get_sequence_id()
         return timeline_state.sequence_id
     end
 
-    function timeline_state.get_playhead_time()
-        return timeline_state.playhead_time
+    function timeline_state.get_playhead_value()
+        return timeline_state.playhead_value
     end
 
-    function timeline_state.set_playhead_time(ms)
-        timeline_state.playhead_time = ms
+    function timeline_state.get_sequence_frame_rate()
+        if not timeline_state.sequence_frame_rate then
+            refresh_sequence_frame_rate(timeline_state.sequence_id)
+        end
+        return timeline_state.sequence_frame_rate
+    end
+
+    function timeline_state.set_playhead_value(ms)
+        timeline_state.playhead_value = ms
     end
 
     function timeline_state.get_selected_clips()
@@ -62,8 +84,9 @@ local function install_timeline_stub()
 
     function timeline_state.normalize_edge_selection() end
     function timeline_state.reload_clips(sequence_id)
-        if sequence_id and sequence_id ~= "" then
+        if sequence_id and sequence_id ~= '' then
             timeline_state.sequence_id = sequence_id
+            refresh_sequence_frame_rate(sequence_id)
         end
     end
     function timeline_state.persist_state_to_db() end
@@ -76,18 +99,18 @@ local function install_timeline_stub()
         return nil
     end
 
-    function timeline_state.set_viewport_start_time(ms)
-        timeline_state.viewport_start_time = ms
+    function timeline_state.set_viewport_start_value(ms)
+        timeline_state.viewport_start_value = ms
     end
 
-    function timeline_state.set_viewport_duration(ms)
-        timeline_state.viewport_duration = ms
+    function timeline_state.set_viewport_duration_frames_value(ms)
+        timeline_state.viewport_duration_frames_value = ms
     end
 
     function timeline_state.capture_viewport()
         return {
-            start_time = timeline_state.viewport_start_time,
-            duration = timeline_state.viewport_duration,
+            start_value = timeline_state.viewport_start_value,
+            duration_value = timeline_state.viewport_duration_frames_value,
         }
     end
 
@@ -95,11 +118,11 @@ local function install_timeline_stub()
         if not snapshot then
             return
         end
-        if snapshot.start_time then
-            timeline_state.viewport_start_time = snapshot.start_time
+        if snapshot.start_value then
+            timeline_state.viewport_start_value = snapshot.start_value
         end
-        if snapshot.duration then
-            timeline_state.viewport_duration = snapshot.duration
+        if snapshot.duration or snapshot.duration_value then
+            timeline_state.viewport_duration_frames_value = snapshot.duration_value or snapshot.duration
         end
     end
 
@@ -120,142 +143,19 @@ end
 
 install_timeline_stub()
 
-local SCHEMA_SQL = [[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        selected_gap_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_path TEXT UNIQUE NOT NULL,
-        duration INTEGER NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        audio_channels INTEGER NOT NULL DEFAULT 0,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT DEFAULT '{}'
-    );
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_gap_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]',
-        selected_gap_infos_pre TEXT DEFAULT '[]'
-    );
-
-    CREATE TABLE tag_namespaces (
-        id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL
-    );
-
-    INSERT OR IGNORE INTO tag_namespaces(id, display_name)
-    VALUES('bin', 'Bins');
-
-    CREATE TABLE tags (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        path TEXT NOT NULL,
-        parent_id TEXT,
-        sort_index INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-    );
-
-    CREATE TABLE tag_assignments (
-        tag_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        entity_type TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        assigned_at INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY(tag_id, entity_type, entity_id)
-    );
-]]
-
+local SCHEMA_SQL = require('import_schema')
 local function init_database(db_path)
     os.remove(db_path)
     assert(database.init(db_path))
     local db = database.get_connection()
     assert(db:exec(SCHEMA_SQL))
     assert(db:exec([[
-        INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-        INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
+        INSERT INTO projects (id, name, created_at, modified_at)
+        VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline',
+                30.0, 48000, 1920, 1080, 0, 0, 0, 10000);
     ]]))
     return db
 end
@@ -320,10 +220,10 @@ local function assert_import_invariants(db, sequence_id)
 
     for _, track_id in ipairs(track_ids) do
         local clip_stmt = db:prepare([[
-            SELECT id, start_time, duration, owner_sequence_id
+            SELECT id, start_value, duration_value, owner_sequence_id
             FROM clips
             WHERE track_id = ?
-            ORDER BY start_time ASC
+            ORDER BY start_value ASC
         ]])
         clip_stmt:bind_value(1, track_id)
         assert(clip_stmt:exec(), "Failed to query clips for track " .. tostring(track_id))
@@ -331,7 +231,7 @@ local function assert_import_invariants(db, sequence_id)
         local previous_end = nil
         while clip_stmt:next() do
             local clip_id = clip_stmt:value(0)
-            local start_time = clip_stmt:value(1)
+            local start_value = clip_stmt:value(1)
             local duration = clip_stmt:value(2)
             local owner_sequence_id = clip_stmt:value(3)
 
@@ -340,11 +240,11 @@ local function assert_import_invariants(db, sequence_id)
                     clip_id, tostring(owner_sequence_id), tostring(sequence_id)))
 
             if previous_end then
-                assert(start_time >= previous_end,
+                assert(start_value >= previous_end,
                     string.format("Track %s overlaps: clip %s starts at %d before previous end %d",
-                        track_id, clip_id, start_time, previous_end))
+                        track_id, clip_id, start_value, previous_end))
             end
-            previous_end = start_time + duration
+            previous_end = start_value + duration
         end
         clip_stmt:finalize()
     end
@@ -352,11 +252,11 @@ end
 
 local function fetch_video_clips(db, sequence_id)
     local stmt = db:prepare([[
-        SELECT c.id, c.track_id, c.start_time, c.duration
+        SELECT c.id, c.track_id, c.start_value, c.duration_value
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
-        ORDER BY c.start_time ASC
+        ORDER BY c.start_value ASC
     ]])
     stmt:bind_value(1, sequence_id)
     assert(stmt:exec(), "Failed to load video clips")
@@ -366,7 +266,7 @@ local function fetch_video_clips(db, sequence_id)
         clips[#clips + 1] = {
             id = stmt:value(0),
             track_id = stmt:value(1),
-            start_time = stmt:value(2),
+            start_value = stmt:value(2),
             duration = stmt:value(3)
         }
     end
@@ -375,13 +275,13 @@ local function fetch_video_clips(db, sequence_id)
 end
 
 local function fetch_clip_state(db, clip_id)
-    local stmt = db:prepare("SELECT start_time, duration FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT start_value, duration_value FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec(), "Failed to query clip state for " .. tostring(clip_id))
     local state = nil
     if stmt:next() then
         state = {
-            start_time = stmt:value(0),
+            start_value = stmt:value(0),
             duration = stmt:value(1)
         }
     end
@@ -416,7 +316,7 @@ for _, clip_index in ipairs(CLIP_CASES) do
     local expected_target_duration = target_duration + delta
     assert(expected_target_duration > 0, "Ripple delta would delete target clip")
 
-    local expected_downstream_start = downstream.start_time + delta
+    local expected_downstream_start = downstream.start_value + delta
 
     local ripple_cmd = Command.create("RippleEdit", "default_project")
     ripple_cmd:set_parameter("edge_info", {
@@ -439,9 +339,9 @@ for _, clip_index in ipairs(CLIP_CASES) do
         string.format("Clip %s duration mismatch after ripple: expected %d, got %d",
             target.id, expected_target_duration, target_after.duration))
 
-    assert(downstream_after.start_time == expected_downstream_start,
+    assert(downstream_after.start_value == expected_downstream_start,
         string.format("Clip %s start mismatch after ripple: expected %d, got %d",
-            downstream.id, expected_downstream_start, downstream_after.start_time))
+            downstream.id, expected_downstream_start, downstream_after.start_value))
 
     print(string.format("✅ RippleEdit shifted downstream clip for case index %d (delta %dms)", clip_index, delta))
 end

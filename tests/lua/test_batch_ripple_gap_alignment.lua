@@ -29,14 +29,14 @@ local function create_schema(db)
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 10000,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
         current_sequence_number INTEGER
     );
 
@@ -52,7 +52,7 @@ local function create_schema(db)
             source_sequence_id TEXT,
             parent_clip_id TEXT,
             owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
+            start_value INTEGER NOT NULL,
             duration INTEGER NOT NULL,
             source_in INTEGER NOT NULL DEFAULT 0,
             source_out INTEGER NOT NULL,
@@ -63,7 +63,25 @@ local function create_schema(db)
         );
 
 
-        CREATE TABLE commands (id TEXT PRIMARY KEY, parent_id TEXT, parent_sequence_number INTEGER, sequence_number INTEGER, command_type TEXT, command_args TEXT, pre_hash TEXT, post_hash TEXT, timestamp INTEGER, playhead_time INTEGER, selected_clip_ids TEXT, selected_edge_infos TEXT, selected_clip_ids_pre TEXT, selected_edge_infos_pre TEXT);
+        CREATE TABLE commands (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT,
+        parent_sequence_number INTEGER,
+        sequence_number INTEGER UNIQUE NOT NULL,
+        command_type TEXT NOT NULL,
+        command_args TEXT,
+        pre_hash TEXT,
+        post_hash TEXT,
+        timestamp INTEGER,
+        playhead_value INTEGER DEFAULT 0,
+        playhead_rate REAL DEFAULT 0,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
+        selected_gap_infos TEXT DEFAULT '[]',
+        selected_clip_ids_pre TEXT DEFAULT '[]',
+        selected_edge_infos_pre TEXT DEFAULT '[]',
+        selected_gap_infos_pre TEXT DEFAULT '[]'
+    );
     ]]
 
     for stmt in schema:gmatch("[^;]+;") do
@@ -95,8 +113,8 @@ local function seed_project(db, layout)
 
     for _, clip in ipairs(layout.clips) do
         table.insert(statements, string.format(
-            "INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id, start_time, duration, source_in, source_out, enabled, offline) VALUES ('%s','default_project','timeline','', '%s','%s',NULL,NULL,'default_sequence',%d,%d,%d,%d,1,0)",
-            clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration,
+            "INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id, start_value, duration, source_in, source_out, enabled, offline) VALUES ('%s','default_project','timeline','', '%s','%s',NULL,NULL,'default_sequence',%d,%d,%d,%d,1,0)",
+            clip.id, clip.track_id, clip.media_id, clip.start_value, clip.duration,
             clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration
         ))
     end
@@ -133,11 +151,11 @@ local function run_scenario(name, layout, edges, delta_ms, expectations)
 
     local fetch = function(clip_id)
         local stmt = assert(db:prepare(string.format(
-            "SELECT start_time, duration, source_in, source_out FROM clips WHERE id='%s'", clip_id)))
+            "SELECT start_value, duration, source_in, source_out FROM clips WHERE id='%s'", clip_id)))
         assert(stmt:exec())
         assert(stmt:next(), "missing clip " .. clip_id)
         local clip = {
-            start_time = stmt:value(0),
+            start_value = stmt:value(0),
             duration = stmt:value(1),
             source_in = stmt:value(2),
             source_out = stmt:value(3)
@@ -148,8 +166,8 @@ local function run_scenario(name, layout, edges, delta_ms, expectations)
 
     for clip_id, expect in pairs(expectations) do
         local clip = fetch(clip_id)
-        if expect.start_time ~= nil then
-            assert_eq(name .. " start " .. clip_id, clip.start_time, expect.start_time)
+        if expect.start_value ~= nil then
+            assert_eq(name .. " start " .. clip_id, clip.start_value, expect.start_value)
         end
         if expect.duration ~= nil then
             assert_eq(name .. " duration " .. clip_id, clip.duration, expect.duration)
@@ -181,9 +199,9 @@ run_scenario(
         tracks = tracks,
         media = media,
         clips = {
-            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_time = 0, duration = 3000, source_out = 3000},
-            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_time = 5000, duration = 4000, source_out = 7000},
-            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_time = 2000, duration = 3000, source_out = 3000}
+            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_value = 0, duration = 3000, source_out = 3000},
+            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_value = 5000, duration = 4000, source_out = 7000},
+            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_value = 2000, duration = 3000, source_out = 3000}
         }
     },
     {
@@ -192,7 +210,7 @@ run_scenario(
     },
     -600,
     {
-        clip_v1_b = {start_time = 4400},
+        clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
     }
 )
@@ -203,9 +221,9 @@ run_scenario(
         tracks = tracks,
         media = media,
         clips = {
-            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_time = 0, duration = 3000, source_out = 3000},
-            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_time = 5000, duration = 4000, source_out = 7000},
-            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_time = 2000, duration = 3000, source_out = 3000}
+            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_value = 0, duration = 3000, source_out = 3000},
+            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_value = 5000, duration = 4000, source_out = 7000},
+            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_value = 2000, duration = 3000, source_out = 3000}
         }
     },
     {
@@ -214,7 +232,7 @@ run_scenario(
     },
     -600,
     {
-        clip_v1_b = {start_time = 4400},
+        clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
     }
 )
@@ -225,9 +243,9 @@ run_scenario(
         tracks = tracks,
         media = media,
         clips = {
-            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_time = 0, duration = 3000, source_out = 3000},
-            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_time = 5000, duration = 4000, source_out = 7000},
-            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_time = 2000, duration = 3000, source_out = 3000}
+            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_value = 0, duration = 3000, source_out = 3000},
+            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_value = 5000, duration = 4000, source_out = 7000},
+            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_value = 2000, duration = 3000, source_out = 3000}
         }
     },
     {
@@ -236,7 +254,7 @@ run_scenario(
     },
     -600,
     {
-        clip_v1_b = {start_time = 4400},
+        clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
     }
 )
@@ -247,9 +265,9 @@ run_scenario(
         tracks = tracks,
         media = media,
         clips = {
-            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_time = 0, duration = 3000, source_out = 3000},
-            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_time = 5000, duration = 4000, source_out = 7000},
-            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_time = 2000, duration = 3000, source_out = 3000}
+            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_value = 0, duration = 3000, source_out = 3000},
+            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_value = 5000, duration = 4000, source_out = 7000},
+            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_value = 2000, duration = 3000, source_out = 3000}
         }
     },
     {
@@ -258,7 +276,7 @@ run_scenario(
     },
     -600,
     {
-        clip_v1_b = {start_time = 4400},
+        clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
     }
 )
@@ -269,8 +287,8 @@ run_scenario(
         tracks = {{id = "track_v1", index = 1}},
         media = {{id = "media1", duration = 100000}},
         clips = {
-            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_time = 0, duration = 3000, source_out = 3000},
-            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_time = 5000, duration = 4000, source_out = 7000}
+            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_value = 0, duration = 3000, source_out = 3000},
+            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_value = 5000, duration = 4000, source_out = 7000}
         }
     },
     {
@@ -278,7 +296,7 @@ run_scenario(
     },
     -400,
     {
-        clip_v1_b = {start_time = 4600}
+        clip_v1_b = {start_value = 4600}
     }
 )
 
@@ -288,9 +306,9 @@ run_scenario(
         tracks = tracks,
         media = media,
         clips = {
-            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_time = 0, duration = 3000, source_out = 3000},
-            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_time = 4500, duration = 4000, source_out = 6500},
-            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_time = 7000, duration = 2000, source_out = 2000}
+            {id = "clip_v1_a", track_id = "track_v1", media_id = "media1", start_value = 0, duration = 3000, source_out = 3000},
+            {id = "clip_v1_b", track_id = "track_v1", media_id = "media1", start_value = 4500, duration = 4000, source_out = 6500},
+            {id = "clip_v2_a", track_id = "track_v2", media_id = "media2", start_value = 7000, duration = 2000, source_out = 2000}
         }
     },
     {
@@ -299,7 +317,7 @@ run_scenario(
     },
     -500,
     {
-        clip_v1_b = {start_time = 4000},
+        clip_v1_b = {start_value = 4000},
         clip_v2_a = {duration = 1500, source_out = 1500}
     }
 )

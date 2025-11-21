@@ -88,13 +88,17 @@ CREATE TABLE IF NOT EXISTS sequences (
     width INTEGER NOT NULL CHECK(width > 0),
     height INTEGER NOT NULL CHECK(height > 0),
     timecode_start_frame INTEGER NOT NULL DEFAULT 0 CHECK(timecode_start_frame >= 0),
-    playhead_frame INTEGER NOT NULL DEFAULT 0 CHECK(playhead_frame >= 0),
+    playhead_value INTEGER NOT NULL DEFAULT 0 CHECK(playhead_value >= 0),
     selected_clip_ids TEXT,                                                -- JSON array of selected clip IDs
     selected_edge_infos TEXT,                                              -- JSON array of selected edge descriptors
-    viewport_start_frame INTEGER NOT NULL DEFAULT 0 CHECK(viewport_start_frame >= 0),
-    viewport_duration_frames INTEGER NOT NULL DEFAULT 240 CHECK(viewport_duration_frames >= 1),
-    mark_in_frame INTEGER CHECK(mark_in_frame IS NULL OR mark_in_frame >= 0),
-    mark_out_frame INTEGER CHECK(mark_out_frame IS NULL OR mark_out_frame >= 0),
+    selected_gap_infos TEXT,                                               -- JSON array of selected gaps
+    selected_clip_ids_pre TEXT,                                            -- Pre-state selection (undo/redo)
+    selected_edge_infos_pre TEXT,
+    selected_gap_infos_pre TEXT,
+    viewport_start_value INTEGER NOT NULL DEFAULT 0 CHECK(viewport_start_value >= 0),
+    viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240 CHECK(viewport_duration_frames_value >= 1),
+    mark_in_value INTEGER CHECK(mark_in_value IS NULL OR mark_in_value >= 0),
+    mark_out_value INTEGER CHECK(mark_out_value IS NULL OR mark_out_value >= 0),
     current_sequence_number INTEGER,                                       -- Current position in undo tree (NULL = at HEAD)
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -277,8 +281,8 @@ BEGIN
             WHERE track_id = NEW.track_id 
             AND id != NEW.id
             AND NOT (
-                NEW.start_time >= (start_time + duration) OR
-                (NEW.start_time + NEW.duration) <= start_time
+                NEW.start_value >= (start_value + duration_value) OR
+                (NEW.start_value + NEW.duration_value) <= start_value
             )
         )
         THEN RAISE(ABORT, 'CLIP_OVERLAP_FORBIDDEN: Clips cannot overlap on the same track')
@@ -312,16 +316,16 @@ SELECT
     t.track_type,
     t.track_index,
     c.id as clip_id,
-    c.start_time,
-    c.duration,
-    c.start_time + c.duration as end_time,
+    c.start_value,
+    c.duration_value,
+    c.start_value + c.duration_value as end_value,
     -- Check for gaps and overlaps
-    LAG(c.start_time + c.duration) OVER (
-        PARTITION BY t.id ORDER BY c.start_time
-    ) as prev_end_time
+    LAG(c.start_value + c.duration_value) OVER (
+        PARTITION BY t.id ORDER BY c.start_value
+    ) as prev_end_value
 FROM tracks t
 JOIN clips c ON t.id = c.track_id
-ORDER BY t.sequence_id, t.track_type, t.track_index, c.start_time;
+ORDER BY t.sequence_id, t.track_type, t.track_index, c.start_value;
 
 -- View: Command replay validation
 CREATE VIEW IF NOT EXISTS command_replay_status AS

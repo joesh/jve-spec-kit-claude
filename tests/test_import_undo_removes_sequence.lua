@@ -16,7 +16,7 @@ local function stub_timeline_state()
     local current_sequence_id = "default_sequence"
 
     timeline_state.capture_viewport = function()
-        return {start_time = 0, duration = 10000}
+        return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 30.0}
     end
     timeline_state.push_viewport_guard = function() end
     timeline_state.pop_viewport_guard = function() end
@@ -26,8 +26,8 @@ local function stub_timeline_state()
     timeline_state.set_gap_selection = function(_) end
     timeline_state.get_selected_clips = function() return {} end
     timeline_state.get_selected_edges = function() return {} end
-    timeline_state.set_playhead_time = function(_) end
-    timeline_state.get_playhead_time = function() return 0 end
+    timeline_state.set_playhead_value = function(_) end
+    timeline_state.get_playhead_value = function() return 0 end
     timeline_state.get_project_id = function() return "default_project" end
     timeline_state.get_sequence_id = function() return current_sequence_id end
     timeline_state.reload_clips = function(sequence_id)
@@ -61,137 +61,16 @@ os.remove(tmp_db)
 assert(database.init(tmp_db))
 local db = database.get_connection()
 
-exec(db, [[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        modified_at INTEGER NOT NULL,
-        settings TEXT DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        audio_channels INTEGER,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-
-    CREATE TABLE tag_namespaces (
-        id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL
-    );
-
-    INSERT OR IGNORE INTO tag_namespaces(id, display_name)
-    VALUES('bin', 'Bins');
-
-    CREATE TABLE tags (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        path TEXT NOT NULL,
-        parent_id TEXT,
-        sort_index INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-    );
-
-    CREATE TABLE tag_assignments (
-        tag_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        entity_type TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        assigned_at INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY(tag_id, entity_type, entity_id)
-    );
-]])
+local SCHEMA_SQL = require("import_schema")
+exec(db, SCHEMA_SQL)
 
 local now = os.time()
 exec(db, string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Sequence 1', 'timeline', 30.0, 1920, 1080);
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    VALUES ('default_sequence', 'default_project', 'Sequence 1', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
 ]], now, now))
 
 stub_timeline_state()

@@ -502,14 +502,14 @@ local function create_action_callback(command_name, params)
             end
 
             local timeline_state = timeline_panel.get_state()
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_value()
             local selected_clips = timeline_state.get_selected_clips()
 
             local target_clips
             if selected_clips and #selected_clips > 0 then
-                target_clips = timeline_state.get_clips_at_time(playhead_time, selected_clips)
+                target_clips = timeline_state.get_clips_at_time(playhead_value, selected_clips)
             else
-                target_clips = timeline_state.get_clips_at_time(playhead_time)
+                target_clips = timeline_state.get_clips_at_time(playhead_value)
             end
 
             if #target_clips == 0 then
@@ -526,16 +526,16 @@ local function create_action_callback(command_name, params)
             local specs = {}
 
             for _, clip in ipairs(target_clips) do
-                local start_time = clip.start_time
-                local end_time = clip.start_time + clip.duration
-                if playhead_time <= start_time or playhead_time >= end_time then
+                local start_value = clip.start_value
+                local end_time = clip.start_value + clip.duration
+                if playhead_value <= start_value or playhead_value >= end_time then
                     -- Skip invalid targets to avoid SplitClip errors
                 else
                     table.insert(specs, {
                         command_type = "SplitClip",
                         parameters = {
                             clip_id = clip.id,
-                            split_time = playhead_time
+                            split_time = playhead_value
                         }
                     })
                 end
@@ -594,7 +594,7 @@ local function create_action_callback(command_name, params)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local timeline_state = timeline_panel.get_state()
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_value()
 
             local Command = require("command")
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -610,7 +610,7 @@ local function create_action_callback(command_name, params)
             cmd:set_parameter("media_id", media_id)
             cmd:set_parameter("sequence_id", sequence_id)
             cmd:set_parameter("track_id", track_id)
-            cmd:set_parameter("insert_time", playhead_time)
+            cmd:set_parameter("insert_time", playhead_value)
             cmd:set_parameter("duration", clip_duration)
             cmd:set_parameter("source_in", 0)
             cmd:set_parameter("source_out", clip_duration)
@@ -621,7 +621,7 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_clip.name or media_id, playhead_time))
+                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_clip.name or media_id, playhead_value))
             else
                 print(string.format("❌ INSERT failed: %s", result and result.error_message or "unknown error"))
             end
@@ -656,7 +656,7 @@ local function create_action_callback(command_name, params)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local timeline_state = timeline_panel.get_state()
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_value()
 
             local Command = require("command")
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -672,7 +672,7 @@ local function create_action_callback(command_name, params)
             cmd:set_parameter("media_id", media_id)
             cmd:set_parameter("sequence_id", sequence_id)
             cmd:set_parameter("track_id", track_id)
-            cmd:set_parameter("overwrite_time", playhead_time)
+            cmd:set_parameter("overwrite_time", playhead_value)
             cmd:set_parameter("duration", clip_duration)
             cmd:set_parameter("source_in", 0)
             cmd:set_parameter("source_out", clip_duration)
@@ -683,7 +683,7 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_clip.name or media_id, playhead_time))
+                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_clip.name or media_id, playhead_value))
             else
                 print(string.format("❌ OVERWRITE failed: %s", result and result.error_message or "unknown error"))
             end

@@ -19,7 +19,7 @@ local seed = string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, viewport_start_frame, viewport_duration_frames)
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
     VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
@@ -49,8 +49,8 @@ timeline_state.set_edge_selection = function(_) end
 timeline_state.set_gap_selection = function(_) end
 timeline_state.get_selected_clips = function() return {} end
 timeline_state.get_selected_edges = function() return {} end
-timeline_state.set_playhead_time = function(_) end
-timeline_state.get_playhead_time = function() return 0 end
+timeline_state.set_playhead_value = function(_) end
+timeline_state.get_playhead_value = function() return 0 end
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.reload_clips = function(_) end

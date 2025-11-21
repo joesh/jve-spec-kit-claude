@@ -16,107 +16,14 @@ os.remove(TEST_DB)
 database.init(TEST_DB)
 local db = database.get_connection()
 
-db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-                    CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL, audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start_frame_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_frame INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_value_frames INTEGER NOT NULL DEFAULT 240,
-        mark_in_frame INTEGER,
-        mark_out_frame INTEGER,
-        current_sequence_number INTEGER
-    );
-
-
-
-CREATE TABLE tracks (
-    id TEXT PRIMARY KEY,
-    sequence_id TEXT NOT NULL,
-    name TEXT NOT NULL, track_type TEXT NOT NULL, timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL, frame_rate REAL NOT NULL, track_index INTEGER NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    locked INTEGER NOT NULL DEFAULT 0,
-    muted INTEGER NOT NULL DEFAULT 0,
-    soloed INTEGER NOT NULL DEFAULT 0,
-    volume REAL NOT NULL DEFAULT 1.0,
-    pan REAL NOT NULL DEFAULT 0.0
-);
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_path TEXT NOT NULL, source_in_value_value INTEGER NOT NULL,s*source_out_value_value INTEGER NOT NULL,s*timebase_type TEXT NOT NULL,s*timebase_rate REAL NOT NULL,s*enabled INTEGER NOT NULL DEFAULT 1,
-        frame_rate REAL NOT NULL,
-        width INTEGER DEFAULT 0,
-        height INTEGER DEFAULT 0,
-        audio_channels INTEGER DEFAULT 0,
-        codec TEXT DEFAULT '',
-        created_at INTEGER DEFAULT 0,
-        modified_at INTEGER DEFAULT 0,
-        metadata TEXT DEFAULT '{}'
-    );
-
-                    CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_value INTEGER NOT NULL,
-            duration_value INTEGER NOT NULL,
-            source_in_value INTEGER NOT NULL DEFAULT 0,
-            source_out_value INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0,
-            modified_at INTEGER NOT NULL DEFAULT 0
-        );
-
-
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_value INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-]])
+db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
     INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
     VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 2, 1);
 ]])
 
 -- Timeline layout (in ms):
@@ -151,7 +58,7 @@ local timeline_state = {
         {id = 'clip_d', start_value = 5000, duration_value = 1200},
     },
     viewport_start_value = 0,
-    viewport_duration_value = 10000
+    viewport_duration_frames_value = 10000
 }
 
 function timeline_state.get_selected_clips() return {} end
@@ -170,7 +77,7 @@ local viewport_guard = 0
 function timeline_state.capture_viewport()
     return {
         start_value = timeline_state.viewport_start_value,
-        duration_value = timeline_state.viewport_duration_value,
+        duration_value = timeline_state.viewport_duration_frames_value,
     }
 end
 
@@ -180,7 +87,7 @@ function timeline_state.restore_viewport(snapshot)
     end
 
     if snapshot.duration_value then
-        timeline_state.viewport_duration_value = snapshot.duration_value
+        timeline_state.viewport_duration_frames_value = snapshot.duration_value
     end
 
     if snapshot.start_value then

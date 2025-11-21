@@ -77,13 +77,13 @@ local schema_statements = {
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
-        mark_in_frame INTEGER,
-        mark_out_frame INTEGER,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
         current_sequence_number INTEGER
     );]],
     [[CREATE TABLE tracks (
@@ -235,12 +235,12 @@ end
 do
     local row, stmt = fetch_one(db, "SELECT start_value, duration_value, source_out_value FROM clips LIMIT 1")
     assert_true("clip row", row ~= nil)
-    local start_time = row:value(0)
+    local start_value = row:value(0)
     local duration = row:value(1)
     local source_out = row:value(2)
-    assert_eq("clip start at zero", start_time, 0)
+    assert_eq("clip start at zero", start_value, 0)
     assert_true("clip duration positive", duration > 0)
-    assert_true("clip source_out > start", source_out > start_time)
+    assert_true("clip source_out > start", source_out > start_value)
     stmt:finalize()
 end
 

@@ -20,107 +20,14 @@ os.remove(TEST_DB)
 database.init(TEST_DB)
 local db = database.get_connection()
 
-db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-            CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL, audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_frame INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_frame INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames INTEGER NOT NULL DEFAULT 240,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
-        current_sequence_number INTEGER
-    );
-
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL, track_type TEXT NOT NULL, timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL, track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        duration_value INTEGER NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER DEFAULT 0,
-        height INTEGER DEFAULT 0,
-        audio_channels INTEGER DEFAULT 0,
-        codec TEXT DEFAULT '',
-        created_at INTEGER DEFAULT 0,
-        modified_at INTEGER DEFAULT 0,
-        metadata TEXT DEFAULT '{}' NOT NULL
-    );
-
-                    CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_value INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in_value INTEGER NOT NULL DEFAULT 0,
-            source_out_value INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0,
-            modified_at INTEGER NOT NULL DEFAULT 0
-        );
-
-
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-]])
+db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_frame, viewport_start_frame, viewport_duration_frames)
+    INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
     VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
     INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 2, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 2, 1);
 ]])
 
 -- Existing clips:
@@ -131,21 +38,21 @@ local clip_move_duration = 1500
 local nudge_amount_ms = 2000
 
 db:exec(string.format([[
-    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_dest', 'default_project', 'clip_dest.mov', '/tmp/jve/clip_dest.mov', 2500, 30.0, 0, 0, '{}');
-    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_keep', 'default_project', 'clip_keep.mov', '/tmp/jve/clip_keep.mov', 2000, 30.0, 0, 0, '{}');
-    INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_move', 'default_project', 'clip_move.mov', '/tmp/jve/clip_move.mov', %d, 30.0, 0, 0, '{}');
+    INSERT INTO media (id, project_id, name, file_path, duration_value, frame_rate, created_at, modified_at, metadata, timebase_type, timebase_rate)
+    VALUES ('media_dest', 'default_project', 'clip_dest.mov', '/tmp/jve/clip_dest.mov', 2500, 30.0, 0, 0, '{}', 'video_frames', 30.0);
+    INSERT INTO media (id, project_id, name, file_path, duration_value, frame_rate, created_at, modified_at, metadata, timebase_type, timebase_rate)
+    VALUES ('media_keep', 'default_project', 'clip_keep.mov', '/tmp/jve/clip_keep.mov', 2000, 30.0, 0, 0, '{}', 'video_frames', 30.0);
+    INSERT INTO media (id, project_id, name, file_path, duration_value, frame_rate, created_at, modified_at, metadata, timebase_type, timebase_rate)
+    VALUES ('media_move', 'default_project', 'clip_move.mov', '/tmp/jve/clip_move.mov', %d, 30.0, 0, 0, '{}', 'video_frames', 30.0);
 ]], clip_move_duration))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out)
-    VALUES ('clip_dest', 'track_v2', 'media_dest', 500, 2500, 0, 2500);
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out)
-    VALUES ('clip_keep', 'track_v1', 'media_keep', 0, 2000, 0, 2000);
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out)
-    VALUES ('clip_move', 'track_v1', 'media_move', %d, %d, 0, %d);
+    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate)
+    VALUES ('clip_dest', 'track_v2', 'media_dest', 500, 2500, 0, 2500, 'video_frames', 30.0);
+    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate)
+    VALUES ('clip_keep', 'track_v1', 'media_keep', 0, 2000, 0, 2000, 'video_frames', 30.0);
+    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate)
+    VALUES ('clip_move', 'track_v1', 'media_move', %d, %d, 0, %d, 'video_frames', 30.0);
 ]], clip_move_start, clip_move_duration, clip_move_duration))
 
 -- Minimal stub for timeline state used by command_manager internals.
@@ -157,13 +64,15 @@ local timeline_state = {
     set_selection = function() end,
     reload_clips = function() end,
     persist_state_to_db = function() end,
-    get_playhead_time = function() return 0 end,
-    set_playhead_time = function() end,
-    viewport_start_time = 0,
-    viewport_duration = 10000,
+    get_playhead_value = function() return 0 end,
+    set_playhead_value = function() end,
+    get_sequence_frame_rate = function() return 30.0 end,
+    get_sequence_audio_sample_rate = function() return 48000 end,
+    viewport_start_value = 0,
+    viewport_duration_frames_value = 240,
     get_clips = function()
         local clips = {}
-        local stmt = db:prepare("SELECT id FROM clips ORDER BY start_time")
+        local stmt = db:prepare("SELECT id FROM clips ORDER BY start_value")
         if stmt and stmt:exec() then
             while stmt:next() do
                 clips[#clips + 1] = { id = stmt:value(0) }
@@ -177,8 +86,8 @@ local viewport_guard = 0
 
 function timeline_state.capture_viewport()
     return {
-        start_time = timeline_state.viewport_start_time,
-        duration = timeline_state.viewport_duration,
+        start_value = timeline_state.viewport_start_value,
+        duration_value = timeline_state.viewport_duration_frames_value,
     }
 end
 
@@ -187,12 +96,12 @@ function timeline_state.restore_viewport(snapshot)
         return
     end
 
-    if snapshot.duration then
-        timeline_state.viewport_duration = snapshot.duration
+    if snapshot.duration_value then
+        timeline_state.viewport_duration_frames_value = snapshot.duration_value
     end
 
-    if snapshot.start_time then
-        timeline_state.viewport_start_time = snapshot.start_time
+    if snapshot.start_value then
+        timeline_state.viewport_start_value = snapshot.start_value
     end
 end
 
@@ -219,7 +128,7 @@ command_manager.init(db, 'default_sequence', 'default_project')
 print("=== MoveClipToTrack + Nudge Regression ===\n")
 
 local function fetch_clip(id)
-    local stmt = db:prepare("SELECT start_time, duration FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT start_value, duration_value FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. id)
     return stmt:value(0), stmt:value(1)
@@ -234,7 +143,7 @@ local commands_json = dkjson.encode({
             clip_id = "clip_move",
             target_track_id = "track_v2",
             skip_occlusion = true,
-            pending_new_start_time = clip_move_start + nudge_amount_ms,
+            pending_new_start_value = clip_move_start + nudge_amount_ms,
             pending_duration = clip_move_duration
         }
     },

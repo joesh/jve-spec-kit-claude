@@ -33,16 +33,17 @@ local function bootstrap_schema(conn)
         name TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'timeline',
         frame_rate REAL NOT NULL,
+        audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
         current_sequence_number INTEGER
     );
 
@@ -52,6 +53,8 @@ local function bootstrap_schema(conn)
         sequence_id TEXT NOT NULL,
         name TEXT NOT NULL,
         track_type TEXT NOT NULL,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         track_index INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         locked INTEGER NOT NULL DEFAULT 0,
@@ -71,10 +74,12 @@ local function bootstrap_schema(conn)
             source_sequence_id TEXT,
             parent_clip_id TEXT,
             owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL DEFAULT 0,
-            source_out INTEGER NOT NULL,
+            start_value INTEGER NOT NULL,
+            duration_value INTEGER NOT NULL,
+            source_in_value INTEGER NOT NULL DEFAULT 0,
+            source_out_value INTEGER NOT NULL,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             offline INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL DEFAULT 0,
@@ -88,7 +93,9 @@ local function bootstrap_schema(conn)
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
         file_path TEXT UNIQUE NOT NULL,
-        duration INTEGER NOT NULL,
+        duration_value INTEGER NOT NULL,
+        timebase_type TEXT NOT NULL,
+        timebase_rate REAL NOT NULL,
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
@@ -109,11 +116,14 @@ local function bootstrap_schema(conn)
         pre_hash TEXT,
         post_hash TEXT,
         timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
+        playhead_value INTEGER DEFAULT 0,
+        playhead_rate REAL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
+        selected_gap_infos TEXT DEFAULT '[]',
         selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
+        selected_edge_infos_pre TEXT DEFAULT '[]',
+        selected_gap_infos_pre TEXT DEFAULT '[]'
     );
 
     CREATE TABLE tag_namespaces (
@@ -147,9 +157,9 @@ local function bootstrap_schema(conn)
     );
 ]]), "Failed to create schema tables")
     assert(conn:exec([[
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
+    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
 ]]), "Failed to seed default project/sequence")
 end
 
@@ -157,12 +167,13 @@ bootstrap_schema(db)
 
 -- Minimal timeline_state stub to satisfy command replay requirements.
 local timeline_state = {
-    playhead_time = 0,
+    playhead_value = 0,
     selected_clips = {},
     selected_edges = {},
-    viewport_start_time = 0,
-    viewport_duration = 10000,
+    viewport_start_value = 0,
+    viewport_duration_frames_value = 300,
     sequence_id = "default_sequence",
+    sequence_frame_rate = 24.0,
     last_mutations = nil,
     last_mutations_attempt = nil
 }
@@ -170,8 +181,9 @@ local timeline_state = {
 local viewport_guard = 0
 
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
-function timeline_state.get_playhead_time() return timeline_state.playhead_time end
-function timeline_state.set_playhead_time(time_ms) timeline_state.playhead_time = time_ms end
+function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
+function timeline_state.get_playhead_value() return timeline_state.playhead_value end
+function timeline_state.set_playhead_value(time_ms) timeline_state.playhead_value = time_ms end
 function timeline_state.get_selected_clips() return timeline_state.selected_clips end
 function timeline_state.get_selected_edges() return timeline_state.selected_edges end
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
@@ -202,18 +214,18 @@ function timeline_state.apply_mutations(sequence_id, mutations)
     end
     return changed
 end
-function timeline_state.set_viewport_start_time(ms) timeline_state.viewport_start_time = ms end
-function timeline_state.set_viewport_duration(ms) timeline_state.viewport_duration = ms end
+function timeline_state.set_viewport_start_value(ms) timeline_state.viewport_start_value = ms end
+function timeline_state.set_viewport_duration_frames_value(ms) timeline_state.viewport_duration_frames_value = ms end
 function timeline_state.capture_viewport()
     return {
-        start_time = timeline_state.viewport_start_time,
-        duration = timeline_state.viewport_duration,
+        start_value = timeline_state.viewport_start_value,
+        duration_value = timeline_state.viewport_duration_frames_value,
     }
 end
 function timeline_state.restore_viewport(snapshot)
     if not snapshot then return end
-    if snapshot.duration then timeline_state.viewport_duration = snapshot.duration end
-    if snapshot.start_time then timeline_state.viewport_start_time = snapshot.start_time end
+    if snapshot.duration_value then timeline_state.viewport_duration_frames_value = snapshot.duration_value end
+    if snapshot.start_value then timeline_state.viewport_start_value = snapshot.start_value end
 end
 function timeline_state.push_viewport_guard()
     viewport_guard = viewport_guard + 1
@@ -664,7 +676,7 @@ local split_spec = json.encode({
         command_type = "SplitClip",
         parameters = {
             clip_id = inserted_clip_id,
-            split_time = 800500
+            split_value = 800500
         }
     }
 })

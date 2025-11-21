@@ -38,7 +38,8 @@ local function load_internal(clip_id, db, raise_errors)
     local query = db:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
                source_sequence_id, parent_clip_id, owner_sequence_id,
-               start_time, duration, source_in, source_out, enabled, offline
+               start_value, duration_value, source_in_value, source_out_value,
+               timebase_type, timebase_rate, enabled, offline
         FROM clips
         WHERE id = ?
     ]])
@@ -75,15 +76,21 @@ local function load_internal(clip_id, db, raise_errors)
         source_sequence_id = query:value(6),
         parent_clip_id = query:value(7),
         owner_sequence_id = query:value(8),
-        start_time = query:value(9),
-        duration = query:value(10),
-        source_in = query:value(11),
-        source_out = query:value(12),
-        enabled = query:value(13) == 1 or query:value(13) == true,
-        offline = query:value(14) == 1 or query:value(14) == true,
+        start_value = query:value(9),
+        duration_value = query:value(10),
+        source_in_value = query:value(11),
+        source_out_value = query:value(12),
+        timebase_type = query:value(13),
+        timebase_rate = query:value(14),
+        enabled = query:value(15) == 1 or query:value(15) == true,
+        offline = query:value(16) == 1 or query:value(16) == true,
     }
 
     clip.name = derive_display_name(clip.id, clip.name)
+
+    clip.duration = clip.duration_value
+    clip.source_in = clip.source_in_value
+    clip.source_out = clip.source_out_value
 
     setmetatable(clip, {__index = M})
     return clip
@@ -102,13 +109,19 @@ function M.create(name, media_id, opts)
         source_sequence_id = opts.source_sequence_id,
         parent_clip_id = opts.parent_clip_id,
         owner_sequence_id = opts.owner_sequence_id,
-        start_time = opts.start_time or 0,
-        duration = opts.duration or 1000,  -- Default 1 second
-        source_in = opts.source_in or 0,
-        source_out = opts.source_out or (opts.source_in or 0) + (opts.duration or 1000),
+        start_value = opts.start_value or opts.start_value or 0,
+        duration_value = opts.duration_value or opts.duration or 1000,  -- Default 1 second
+        source_in_value = opts.source_in_value or opts.source_in or 0,
+        source_out_value = opts.source_out_value or opts.source_out or (opts.source_in_value or opts.source_in or 0) + (opts.duration_value or opts.duration or 1000),
+        timebase_type = opts.timebase_type or "video_frames",
+        timebase_rate = opts.timebase_rate or 30.0,
         enabled = opts.enabled ~= false,
         offline = opts.offline or false,
     }
+
+    clip.duration = clip.duration_value
+    clip.source_in = clip.source_in_value
+    clip.source_out = clip.source_out_value
 
     clip.name = derive_display_name(clip.id, clip.name)
 
@@ -177,30 +190,51 @@ local function save_internal(self, db, opts)
         return false
     end
 
-    -- Normalise numeric fields
-    if self.start_time then
-        self.start_time = math.floor(self.start_time + 0.5)
-    end
+    -- Keep legacy aliases in sync before normalising numeric fields
     if self.duration then
-        self.duration = math.floor(self.duration + 0.5)
+        self.duration_value = self.duration
+    elseif self.duration_value then
+        self.duration = self.duration_value
     end
     if self.source_in then
-        self.source_in = math.floor(self.source_in + 0.5)
+        self.source_in_value = self.source_in
+    elseif self.source_in_value then
+        self.source_in = self.source_in_value
     end
     if self.source_out then
-        self.source_out = math.floor(self.source_out + 0.5)
+        self.source_out_value = self.source_out
+    elseif self.source_out_value then
+        self.source_out = self.source_out_value
     end
-    if self.duration == nil or self.duration < 1 then
+
+    -- Normalise numeric fields
+    if self.start_value then
+        self.start_value = math.floor(self.start_value + 0.5)
+    end
+    if self.duration_value then
+        self.duration_value = math.floor(self.duration_value + 0.5)
+    end
+    if self.source_in_value then
+        self.source_in_value = math.floor(self.source_in_value + 0.5)
+    end
+    if self.source_out_value then
+        self.source_out_value = math.floor(self.source_out_value + 0.5)
+    end
+    if self.duration_value == nil or self.duration_value < 1 then
         print(string.format("WARNING: Clip.save: duration %s invalid, clamping to 1 for clip %s",
-            tostring(self.duration), tostring(self.id)))
-        self.duration = 1
+            tostring(self.duration_value), tostring(self.id)))
+        self.duration_value = 1
     end
-    if self.source_out and self.source_in and self.source_out <= self.source_in then
-        self.source_out = self.source_in + self.duration
+    if self.source_out_value and self.source_in_value and self.source_out_value <= self.source_in_value then
+        self.source_out_value = self.source_in_value + self.duration_value
     end
-    if not self.start_time then
-        self.start_time = 0
+    if not self.start_value then
+        self.start_value = 0
     end
+    -- Maintain legacy aliases for code still referencing duration/source_*.
+    self.duration = self.duration_value
+    self.source_in = self.source_in_value
+    self.source_out = self.source_out_value
 
     ensure_project_context(self, db)
     self.clip_kind = self.clip_kind or DEFAULT_CLIP_KIND
@@ -219,7 +253,7 @@ local function save_internal(self, db, opts)
 
     local skip_occlusion = opts.skip_occlusion == true
     local occlusion_actions = nil
-    if not skip_occlusion and self.track_id and self.start_time and self.duration then
+    if not skip_occlusion and self.track_id and self.start_value and self.duration_value then
         local clip_mutator = require('core.clip_mutator')
         local pending = opts.pending_clips or {}
         if timeline_state_ok and timeline_state and timeline_state.get_track_clip_windows then
@@ -228,8 +262,8 @@ local function save_internal(self, db, opts)
         end
         local ok, err, actions = clip_mutator.resolve_occlusions(db, {
             track_id = self.track_id,
-            start_time = self.start_time,
-            duration = self.duration,
+            start_value = self.start_value,
+            duration = self.duration_value,
             exclude_clip_id = exists and self.id or nil,
             pending_clips = pending
         })
@@ -247,8 +281,8 @@ local function save_internal(self, db, opts)
             UPDATE clips
             SET project_id = ?, clip_kind = ?, name = ?, track_id = ?, media_id = ?,
                 source_sequence_id = ?, parent_clip_id = ?, owner_sequence_id = ?,
-                start_time = ?, duration = ?, source_in = ?, source_out = ?,
-                enabled = ?, offline = ?, modified_at = strftime('%s','now')
+                start_value = ?, duration_value = ?, source_in_value = ?, source_out_value = ?,
+                timebase_type = ?, timebase_rate = ?, enabled = ?, offline = ?, modified_at = strftime('%s','now')
             WHERE id = ?
         ]])
     else
@@ -256,9 +290,9 @@ local function save_internal(self, db, opts)
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
                 source_sequence_id, parent_clip_id, owner_sequence_id,
-                start_time, duration, source_in, source_out, enabled, offline
+                start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
     end
 
@@ -276,13 +310,15 @@ local function save_internal(self, db, opts)
         query:bind_value(6, self.source_sequence_id)
         query:bind_value(7, self.parent_clip_id)
         query:bind_value(8, self.owner_sequence_id)
-        query:bind_value(9, self.start_time)
-        query:bind_value(10, self.duration)
-        query:bind_value(11, self.source_in)
-        query:bind_value(12, self.source_out)
-        query:bind_value(13, self.enabled and 1 or 0)
-        query:bind_value(14, self.offline and 1 or 0)
-        query:bind_value(15, self.id)
+        query:bind_value(9, self.start_value)
+        query:bind_value(10, self.duration_value)
+        query:bind_value(11, self.source_in_value)
+        query:bind_value(12, self.source_out_value)
+        query:bind_value(13, self.timebase_type or "video_frames")
+        query:bind_value(14, self.timebase_rate or 30.0)
+        query:bind_value(15, self.enabled and 1 or 0)
+        query:bind_value(16, self.offline and 1 or 0)
+        query:bind_value(17, self.id)
     else
         query:bind_value(1, self.id)
         query:bind_value(2, self.project_id)
@@ -293,12 +329,14 @@ local function save_internal(self, db, opts)
         query:bind_value(7, self.source_sequence_id)
         query:bind_value(8, self.parent_clip_id)
         query:bind_value(9, self.owner_sequence_id)
-        query:bind_value(10, self.start_time)
-        query:bind_value(11, self.duration)
-        query:bind_value(12, self.source_in)
-        query:bind_value(13, self.source_out)
-        query:bind_value(14, self.enabled and 1 or 0)
-        query:bind_value(15, self.offline and 1 or 0)
+        query:bind_value(10, self.start_value)
+        query:bind_value(11, self.duration_value)
+        query:bind_value(12, self.source_in_value)
+        query:bind_value(13, self.source_out_value)
+        query:bind_value(14, self.timebase_type or "video_frames")
+        query:bind_value(15, self.timebase_rate or 30.0)
+        query:bind_value(16, self.enabled and 1 or 0)
+        query:bind_value(17, self.offline and 1 or 0)
     end
 
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil
@@ -313,6 +351,11 @@ local function save_internal(self, db, opts)
             tostring(self.id:sub(1,8)), total_ms,
             krono_exists - krono_start, krono_exec - krono_exists))
     end
+
+    -- Keep caller-facing aliases in sync after persistence
+    self.duration = self.duration_value
+    self.source_in = self.source_in_value
+    self.source_out = self.source_out_value
 
     return true, occlusion_actions
 end

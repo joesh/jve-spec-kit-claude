@@ -43,7 +43,7 @@ Clip Clip::load(const QString& id, const QSqlDatabase& database)
     // Algorithm: Query database → Parse results → Construct object
     QSqlQuery query(database);
     query.prepare(R"(
-        SELECT id, track_id, media_id, start_time, duration, source_in, source_out, enabled
+        SELECT id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, enabled
         FROM clips WHERE id = ?
     )");
     query.addBindValue(id);
@@ -62,11 +62,11 @@ Clip Clip::load(const QString& id, const QSqlDatabase& database)
     clip.m_id = query.value("id").toString();
     clip.m_trackId = query.value("track_id").toString();
     clip.m_mediaId = query.value("media_id").toString();
-    clip.m_timelineStart = query.value("start_time").toLongLong();
-    qint64 duration = query.value("duration").toLongLong();
-    clip.m_timelineEnd = clip.m_timelineStart + duration;
-    clip.m_sourceStart = query.value("source_in").toLongLong();
-    clip.m_sourceEnd = query.value("source_out").toLongLong();
+    clip.m_timelineStart = query.value("start_value").toLongLong();
+    qint64 duration_value = query.value("duration_value").toLongLong();
+    clip.m_timelineEnd = clip.m_timelineStart + duration_value;
+    clip.m_sourceStart = query.value("source_in_value").toLongLong();
+    clip.m_sourceEnd = query.value("source_out_value").toLongLong();
     
     // Set defaults for fields not in schema
     clip.m_name = QString("Clip %1").arg(clip.m_id.left(8));
@@ -98,13 +98,13 @@ bool Clip::save(const QSqlDatabase& database)
         return false;
     }
     
-    // For schema compliance, ensure minimum duration
-    qint64 duration = m_timelineEnd - m_timelineStart;
-    if (duration <= 0) {
-        duration = 1; // Minimum duration for schema compliance
+    // For schema compliance, ensure minimum duration_value
+    qint64 duration_value = m_timelineEnd - m_timelineStart;
+    if (duration_value <= 0) {
+        duration_value = 1; // Minimum duration_value for schema compliance
     }
     
-    // Ensure source_out > source_in for schema compliance
+    // Ensure source_out_value > source_in_value for schema compliance
     qint64 sourceIn = m_sourceStart;
     qint64 sourceOut = m_sourceEnd;
     if (sourceOut <= sourceIn) {
@@ -116,7 +116,7 @@ bool Clip::save(const QSqlDatabase& database)
     QSqlQuery query(database);
     query.prepare(R"(
         INSERT OR REPLACE INTO clips 
-        (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
+        (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, enabled)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     )");
     
@@ -124,7 +124,7 @@ bool Clip::save(const QSqlDatabase& database)
     query.addBindValue(m_trackId.isEmpty() ? QVariant() : m_trackId); // NULL if no track
     query.addBindValue(m_mediaId);
     query.addBindValue(m_timelineStart);
-    query.addBindValue(duration);
+    query.addBindValue(duration_value);
     query.addBindValue(sourceIn);
     query.addBindValue(sourceOut);
     query.addBindValue(true); // enabled default

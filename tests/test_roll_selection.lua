@@ -8,12 +8,12 @@ package.path = package.path
 
 local roll_detector = require('ui.timeline.roll_detector')
 
-local function make_clip(id, track_id, start_time, duration)
+local function make_clip(id, track_id, start_value, duration_value)
     return {
         id = id,
         track_id = track_id,
-        start_value = start_time,
-        duration_value = duration,
+        start_value = start_value,
+        duration_value = duration_value,
         timebase_type = "video_frames",
         timebase_rate = 30
     }

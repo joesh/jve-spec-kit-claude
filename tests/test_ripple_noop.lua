@@ -14,15 +14,17 @@ local timeline_state = {
 
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.get_project_id() return "default_project" end
-function timeline_state.get_playhead_time() return 0 end
-function timeline_state.set_playhead_time(_) end
+function timeline_state.get_playhead_value() return 0 end
+function timeline_state.set_playhead_value(_) end
 function timeline_state.set_selection(_) end
 function timeline_state.get_selected_clips() return {} end
 function timeline_state.get_selected_edges() return {} end
 function timeline_state.clear_edge_selection() end
 function timeline_state.clear_gap_selection() end
 function timeline_state.persist_state_to_db() end
-function timeline_state.capture_viewport() return {start_time = 0, duration = 10000} end
+function timeline_state.capture_viewport() return {start_value = 0, duration_value = 400, timebase_type = "video_frames", timebase_rate = 30.0} end
+function timeline_state.get_sequence_frame_rate() return 30.0 end
+function timeline_state.get_sequence_audio_sample_rate() return 48000 end
 function timeline_state.restore_viewport(_) end
 function timeline_state.push_viewport_guard() return 0 end
 function timeline_state.pop_viewport_guard() return 0 end
@@ -44,90 +46,22 @@ local function setup_db(path)
     os.remove(path)
     assert(database.init(path))
     local conn = database.get_connection()
-    assert(conn:exec([[
-        CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, settings TEXT DEFAULT '{}');
-        CREATE TABLE sequences (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'timeline',
-            frame_rate REAL NOT NULL,
-            width INTEGER NOT NULL,
-            height INTEGER NOT NULL,
-            timecode_start INTEGER NOT NULL DEFAULT 0,
-            playhead_time INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE tracks (
-            id TEXT PRIMARY KEY,
-            sequence_id TEXT NOT NULL,
-            name TEXT,
-            track_type TEXT NOT NULL,
-            track_index INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL DEFAULT 0,
-            source_out INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE media (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            file_path TEXT,
-            name TEXT,
-            duration INTEGER,
-            frame_rate REAL,
-            width INTEGER,
-            height INTEGER,
-            audio_channels INTEGER DEFAULT 0,
-            codec TEXT DEFAULT '',
-            created_at INTEGER DEFAULT 0,
-            modified_at INTEGER DEFAULT 0,
-            metadata TEXT DEFAULT '{}'
-        );
-        CREATE TABLE commands (
-            id TEXT PRIMARY KEY,
-            parent_id TEXT,
-            parent_sequence_number INTEGER,
-            sequence_number INTEGER UNIQUE NOT NULL,
-            command_type TEXT NOT NULL,
-            command_args TEXT,
-            pre_hash TEXT,
-            post_hash TEXT,
-            timestamp INTEGER,
-            playhead_time INTEGER DEFAULT 0,
-            selected_clip_ids TEXT DEFAULT '[]',
-            selected_edge_infos TEXT DEFAULT '[]',
-            selected_clip_ids_pre TEXT DEFAULT '[]',
-            selected_edge_infos_pre TEXT DEFAULT '[]'
-        );
-    ]]))
+    local SCHEMA_SQL = require("import_schema")
+    assert(conn:exec(SCHEMA_SQL))
     assert(conn:exec([[
         INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-        INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-        VALUES ('default_sequence', 'default_project', 'Timeline', 30.0, 1920, 1080);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);
-        INSERT INTO media (id, project_id, file_path, name, duration, frame_rate)
-        VALUES ('media_a', 'default_project', '/tmp/jve/media_a.mov', 'Media A', 4000, 30.0);
-        INSERT INTO media (id, project_id, file_path, name, duration, frame_rate)
-        VALUES ('media_b', 'default_project', '/tmp/jve/media_b.mov', 'Media B', 4000, 30.0);
-        INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_time, duration, source_in, source_out, media_id)
-        VALUES ('clip_a', 'default_project', 'track_v1', 'default_sequence', 0, 4000, 0, 4000, 'media_a');
-        INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_time, duration, source_in, source_out, media_id)
-        VALUES ('clip_b', 'default_project', 'track_v1', 'default_sequence', 4000, 4000, 0, 4000, 'media_b');
+        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 400);
+        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+        INSERT INTO media (id, project_id, file_path, name, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES ('media_a', 'default_project', '/tmp/jve/media_a.mov', 'Media A', 4000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        INSERT INTO media (id, project_id, file_path, name, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES ('media_b', 'default_project', '/tmp/jve/media_b.mov', 'Media B', 4000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, media_id, clip_kind, enabled, offline)
+        VALUES ('clip_a', 'default_project', 'track_v1', 'default_sequence', 0, 4000, 0, 4000, 'video_frames', 30.0, 'media_a', 'timeline', 1, 0);
+        INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, media_id, clip_kind, enabled, offline)
+        VALUES ('clip_b', 'default_project', 'track_v1', 'default_sequence', 4000, 4000, 0, 4000, 'video_frames', 30.0, 'media_b', 'timeline', 1, 0);
     ]]))
 
     command_impl.register_commands({}, {}, conn)

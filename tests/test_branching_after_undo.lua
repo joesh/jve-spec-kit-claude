@@ -9,7 +9,7 @@ local Command = require('command')
 
 local function stub_timeline_state()
     timeline_state.capture_viewport = function()
-        return {start_time = 0, duration = 10000}
+        return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 30.0}
     end
     timeline_state.push_viewport_guard = function() end
     timeline_state.pop_viewport_guard = function() end
@@ -19,8 +19,8 @@ local function stub_timeline_state()
     timeline_state.set_gap_selection = function(_) end
     timeline_state.get_selected_clips = function() return {} end
     timeline_state.get_selected_edges = function() return {} end
-    timeline_state.set_playhead_time = function(_) end
-    timeline_state.get_playhead_time = function() return 0 end
+    timeline_state.set_playhead_value = function(_) end
+    timeline_state.get_playhead_value = function() return 0 end
     timeline_state.get_project_id = function() return 'default_project' end
     timeline_state.get_sequence_id = function() return 'default_sequence' end
     timeline_state.reload_clips = function() end
@@ -47,16 +47,17 @@ local function init_db(path)
             name TEXT NOT NULL,
             kind TEXT NOT NULL DEFAULT 'timeline',
             frame_rate REAL NOT NULL,
+            audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
-            timecode_start INTEGER NOT NULL DEFAULT 0,
-            playhead_time INTEGER NOT NULL DEFAULT 0,
+            timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+            playhead_value INTEGER NOT NULL DEFAULT 0,
             selected_clip_ids TEXT,
             selected_edge_infos TEXT,
-            viewport_start_time INTEGER NOT NULL DEFAULT 0,
-            viewport_duration INTEGER NOT NULL DEFAULT 10000,
-            mark_in_time INTEGER,
-            mark_out_time INTEGER,
+            viewport_start_value INTEGER NOT NULL DEFAULT 0,
+            viewport_duration_frames_value INTEGER NOT NULL DEFAULT 300,
+            mark_in_value INTEGER,
+            mark_out_value INTEGER,
             current_sequence_number INTEGER
         );
 
@@ -65,27 +66,30 @@ local function init_db(path)
             sequence_id TEXT NOT NULL,
             name TEXT NOT NULL,
             track_type TEXT NOT NULL,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             track_index INTEGER NOT NULL
         );
 
         CREATE TABLE commands (
-            id TEXT PRIMARY KEY,
-            parent_id TEXT,
-            parent_sequence_number INTEGER,
-            sequence_number INTEGER UNIQUE NOT NULL,
-            command_type TEXT NOT NULL,
-            command_args TEXT,
-            pre_hash TEXT,
-            post_hash TEXT,
-            timestamp INTEGER,
-            playhead_time INTEGER DEFAULT 0,
-            selected_clip_ids TEXT DEFAULT '[]',
-            selected_edge_infos TEXT DEFAULT '[]',
-            selected_gap_infos TEXT DEFAULT '[]',
-            selected_clip_ids_pre TEXT DEFAULT '[]',
-            selected_edge_infos_pre TEXT DEFAULT '[]',
-            selected_gap_infos_pre TEXT DEFAULT '[]'
-        );
+        id TEXT PRIMARY KEY,
+        parent_id TEXT,
+        parent_sequence_number INTEGER,
+        sequence_number INTEGER UNIQUE NOT NULL,
+        command_type TEXT NOT NULL,
+        command_args TEXT,
+        pre_hash TEXT,
+        post_hash TEXT,
+        timestamp INTEGER,
+        playhead_value INTEGER DEFAULT 0,
+        playhead_rate REAL DEFAULT 0,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
+        selected_gap_infos TEXT DEFAULT '[]',
+        selected_clip_ids_pre TEXT DEFAULT '[]',
+        selected_edge_infos_pre TEXT DEFAULT '[]',
+        selected_gap_infos_pre TEXT DEFAULT '[]'
+    );
     ]]
 
     local ok, err = db:exec(schema)
@@ -93,11 +97,12 @@ local function init_db(path)
 
     ok, err = db:exec([[INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');]])
     assert(ok, err)
-    ok, err = db:exec([[INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-                        VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);]])
+    ok, err = db:exec([[INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
+                                               timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+                        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);]])
     assert(ok, err)
-    ok, err = db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-                        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1);]])
+    ok, err = db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index)
+                        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1);]])
     assert(ok, err)
 
     return db

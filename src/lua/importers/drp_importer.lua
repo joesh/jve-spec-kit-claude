@@ -280,7 +280,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
 
             local clip = {
                 name = get_text(find_element(clip_elem, "Name")),
-                start_time = frames_to_ms(start_frames, frame_rate),
+                start_value = frames_to_ms(start_frames, frame_rate),
                 duration = frames_to_ms(duration_frames, frame_rate),
                 source_in = frames_to_ms(media_start_frames, frame_rate),
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
@@ -402,7 +402,7 @@ local function parse_sequence(seq_elem, frame_rate)
             if path and path ~= "" then
                 local clip = {
                     name = path:match("([^/\\]+)$") or path,
-                    start_time = 0,
+                    start_value = 0,
                     duration = 1000,
                     source_in = 0,
                     source_out = 1000,
@@ -461,15 +461,15 @@ local function parse_clip_item(clip_elem, frame_rate)
         return nil  -- Invalid clip
     end
 
-    local start_time = parse_resolve_timecode(get_text(start_elem), frame_rate)
+    local start_value = parse_resolve_timecode(get_text(start_elem), frame_rate)
     local end_time = parse_resolve_timecode(get_text(end_elem), frame_rate)
     local source_in = in_elem and parse_resolve_timecode(get_text(in_elem), frame_rate) or 0
     local source_out = out_elem and parse_resolve_timecode(get_text(out_elem), frame_rate) or 0
 
     local clip = {
         name = name_elem and get_text(name_elem) or "Untitled Clip",
-        start_time = start_time,
-        duration = end_time - start_time,
+        start_value = start_value,
+        duration = end_time - start_value,
         source_in = source_in,
         source_out = source_out
     }

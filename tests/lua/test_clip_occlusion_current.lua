@@ -26,14 +26,14 @@ local function assert_eq(label, actual, expected)
 end
 
 local function assert_no_overlaps(clips)
-    table.sort(clips, function(a, b) return a.start_time < b.start_time end)
+    table.sort(clips, function(a, b) return a.start_value < b.start_value end)
     local prev_end = nil
     for _, c in ipairs(clips) do
-        if prev_end and c.start_time < prev_end then
-            io.stderr:write(string.format("overlap: %s starts %d before prev_end %d\n", c.id, c.start_time, prev_end))
+        if prev_end and c.start_value < prev_end then
+            io.stderr:write(string.format("overlap: %s starts %d before prev_end %d\n", c.id, c.start_value, prev_end))
             os.exit(1)
         end
-        prev_end = c.start_time + c.duration
+        prev_end = c.start_value + c.duration
     end
 end
 
@@ -55,14 +55,14 @@ local function seed_project(layout)
       audio_rate REAL NOT NULL DEFAULT 48000,
       width INTEGER NOT NULL,
       height INTEGER NOT NULL,
-      timecode_start INTEGER NOT NULL DEFAULT 0,
-      playhead_time INTEGER NOT NULL DEFAULT 0,
+      timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+      playhead_value INTEGER NOT NULL DEFAULT 0,
       selected_clip_ids TEXT DEFAULT '[]',
       selected_edge_infos TEXT DEFAULT '[]',
-      viewport_start_time INTEGER NOT NULL DEFAULT 0,
-      viewport_duration INTEGER NOT NULL DEFAULT 10000,
-      mark_in_time INTEGER,
-      mark_out_time INTEGER,
+      viewport_start_value INTEGER NOT NULL DEFAULT 0,
+      viewport_duration_frames_value INTEGER NOT NULL DEFAULT 10000,
+      mark_in_value INTEGER,
+      mark_out_value INTEGER,
       current_sequence_number INTEGER
     );
     CREATE TABLE tracks (
@@ -106,7 +106,7 @@ local function seed_project(layout)
       source_sequence_id TEXT,
       parent_clip_id TEXT,
       owner_sequence_id TEXT,
-      start_time INTEGER NOT NULL,
+      start_value INTEGER NOT NULL,
       duration INTEGER NOT NULL,
       source_in INTEGER NOT NULL DEFAULT 0,
       source_out INTEGER NOT NULL,
@@ -115,7 +115,25 @@ local function seed_project(layout)
       created_at INTEGER NOT NULL DEFAULT 0,
       modified_at INTEGER NOT NULL DEFAULT 0
     );
-    CREATE TABLE commands (id TEXT PRIMARY KEY, parent_id TEXT, parent_sequence_number INTEGER, sequence_number INTEGER, command_type TEXT, command_args TEXT, pre_hash TEXT, post_hash TEXT, timestamp INTEGER, playhead_time INTEGER, selected_clip_ids TEXT, selected_edge_infos TEXT, selected_clip_ids_pre TEXT, selected_edge_infos_pre TEXT);
+    CREATE TABLE commands (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT,
+        parent_sequence_number INTEGER,
+        sequence_number INTEGER UNIQUE NOT NULL,
+        command_type TEXT NOT NULL,
+        command_args TEXT,
+        pre_hash TEXT,
+        post_hash TEXT,
+        timestamp INTEGER,
+        playhead_value INTEGER DEFAULT 0,
+        playhead_rate REAL DEFAULT 0,
+        selected_clip_ids TEXT DEFAULT '[]',
+        selected_edge_infos TEXT DEFAULT '[]',
+        selected_gap_infos TEXT DEFAULT '[]',
+        selected_clip_ids_pre TEXT DEFAULT '[]',
+        selected_edge_infos_pre TEXT DEFAULT '[]',
+        selected_gap_infos_pre TEXT DEFAULT '[]'
+    );
     ]]
 
     for stmt in schema:gmatch("[^;]+;") do
@@ -142,8 +160,8 @@ local function seed_project(layout)
 
     for _, clip in ipairs(layout.clips) do
         db:exec(string.format(
-            "INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, start_time, duration, source_in, source_out, enabled) VALUES ('%s','project','timeline','', '%s','%s','sequence',%d,%d,%d,%d,1)",
-            clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration))
+            "INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, start_value, duration, source_in, source_out, enabled) VALUES ('%s','project','timeline','', '%s','%s','sequence',%d,%d,%d,%d,1)",
+            clip.id, clip.track_id, clip.media_id, clip.start_value, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration))
     end
 
     command_manager.init(db)
@@ -151,14 +169,14 @@ local function seed_project(layout)
 end
 
 local function load_track_clips(db, track_id)
-    local stmt = db:prepare("SELECT id, start_time, duration FROM clips WHERE track_id = ? ORDER BY start_time")
+    local stmt = db:prepare("SELECT id, start_value, duration FROM clips WHERE track_id = ? ORDER BY start_value")
     stmt:bind_value(1, track_id)
     assert_true("query", stmt:exec())
     local clips = {}
     while stmt:next() do
         clips[#clips + 1] = {
             id = stmt:value(0),
-            start_time = stmt:value(1),
+            start_value = stmt:value(1),
             duration = stmt:value(2)
         }
     end
@@ -172,14 +190,14 @@ do
         tracks = {{id="v1", index=1}},
         media = {{id="m", duration=10000}},
         clips = {
-            {id="a", track_id="v1", media_id="m", start_time=0, duration=5000, source_out=5000},
-            {id="b", track_id="v1", media_id="m", start_time=5000, duration=5000, source_out=10000}
+            {id="a", track_id="v1", media_id="m", start_value=0, duration=5000, source_out=5000},
+            {id="b", track_id="v1", media_id="m", start_value=5000, duration=5000, source_out=10000}
         }
     })
 
     local cmd = Command.create("InsertClipToTimeline", "project")
     cmd:set_parameter("track_id", "v1")
-    cmd:set_parameter("start_time", 2500)
+    cmd:set_parameter("start_value", 2500)
     cmd:set_parameter("clip_id", "c")
     cmd:set_parameter("media_id", "m")
     cmd:set_parameter("duration", 2000)
@@ -196,16 +214,16 @@ do
         tracks = {{id="v1", index=1},{id="v2", index=2}},
         media = {{id="m", duration=20000}},
         clips = {
-            {id="mov", track_id="v1", media_id="m", start_time=2000, duration=4000, source_out=4000},
-            {id="dst1", track_id="v2", media_id="m", start_time=0, duration=5000, source_out=5000},
-            {id="dst2", track_id="v2", media_id="m", start_time=10000, duration=5000, source_out=10000}
+            {id="mov", track_id="v1", media_id="m", start_value=2000, duration=4000, source_out=4000},
+            {id="dst1", track_id="v2", media_id="m", start_value=0, duration=5000, source_out=5000},
+            {id="dst2", track_id="v2", media_id="m", start_value=10000, duration=5000, source_out=10000}
         }
     })
 
     local cmd = Command.create("MoveClipToTrack", "project")
     cmd:set_parameter("clip_id", "mov")
     cmd:set_parameter("target_track_id", "v2")
-    cmd:set_parameter("target_start_time", 3000)
+    cmd:set_parameter("target_start_value", 3000)
     cmd:set_parameter("sequence_id", "sequence")
     assert_true("MoveClipToTrack executes", command_manager.execute(cmd).success)
 
@@ -219,10 +237,10 @@ do
         tracks = {{id="v1", index=1},{id="v2", index=2}},
         media = {{id="m", duration=60000}},
         clips = {
-            {id="v1_left", track_id="v1", media_id="m", start_time=0, duration=5000, source_out=5000},
-            {id="v1_right", track_id="v1", media_id="m", start_time=8000, duration=4000, source_out=9000},
-            {id="v2_left", track_id="v2", media_id="m", start_time=0, duration=5000, source_out=5000},
-            {id="v2_right", track_id="v2", media_id="m", start_time=12000, duration=6000, source_out=6000}
+            {id="v1_left", track_id="v1", media_id="m", start_value=0, duration=5000, source_out=5000},
+            {id="v1_right", track_id="v1", media_id="m", start_value=8000, duration=4000, source_out=9000},
+            {id="v2_left", track_id="v2", media_id="m", start_value=0, duration=5000, source_out=5000},
+            {id="v2_right", track_id="v2", media_id="m", start_value=12000, duration=6000, source_out=6000}
         }
     })
 

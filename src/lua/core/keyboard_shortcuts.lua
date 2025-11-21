@@ -86,25 +86,25 @@ end
 
 local function snapshot_viewport(state)
     if not state then
-        return {start_time = 0, duration = 10000}
+        return {start_value = 0, duration = 10000}
     end
 
     if state.capture_viewport then
         local ok, viewport = pcall(state.capture_viewport)
         if ok and type(viewport) == "table" then
             return {
-                start_time = viewport.start_time,
+                start_value = viewport.start_value,
                 duration = viewport.duration,
             }
         end
     end
 
-    local start_time = 0
+    local start_value = 0
     local duration = frame_utils.default_frame_rate * 1000  -- fallback of ~1s
-    if state.get_viewport_start_time then
-        local ok, value = pcall(state.get_viewport_start_time)
+    if state.get_viewport_start_value then
+        local ok, value = pcall(state.get_viewport_start_value)
         if ok then
-            start_time = value or start_time
+            start_value = value or start_value
         end
     end
     if state.get_viewport_duration then
@@ -113,7 +113,7 @@ local function snapshot_viewport(state)
             duration = value or duration
         end
     end
-    return {start_time = start_time, duration = duration}
+    return {start_value = start_value, duration = duration}
 end
 
 function keyboard_shortcuts.toggle_zoom_fit(target_state)
@@ -143,10 +143,10 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
             pcall(state.restore_viewport, prev)
         end
 
-        if state.get_playhead_time and state.set_viewport_start_time then
-            local playhead = state.get_playhead_time()
+        if state.get_playhead_value and state.set_viewport_start_value then
+            local playhead = state.get_playhead_value()
             if playhead then
-                state.set_viewport_start_time(playhead - (restore_duration / 2))
+                state.set_viewport_start_value(playhead - (restore_duration / 2))
             end
         end
 
@@ -163,39 +163,64 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
         end
     end
 
+    local min_start = math.huge
     local max_end_time = 0
     for _, clip in ipairs(clips) do
-        local start_time = tonumber(clip.start_time) or 0
-        local duration = tonumber(clip.duration) or 0
-        local clip_end = start_time + duration
+        local start_value = tonumber(clip.start_value) or tonumber(clip.start) or 0
+        local duration = tonumber(clip.duration_value) or tonumber(clip.duration) or 0
+        local clip_end = start_value + duration
+        if start_value < min_start then
+            min_start = start_value
+        end
         if clip_end > max_end_time then
             max_end_time = clip_end
         end
     end
 
-    if max_end_time <= 0 then
+    if max_end_time <= 0 or min_start == math.huge then
         zoom_fit_toggle_state = nil
         print("⚠️  No clips to scale to")
         return false
     end
 
-    local viewport_duration = math.floor(max_end_time * 1.1)
-
-    if state.set_viewport_start_time then
-        state.set_viewport_start_time(0)
-    end
-    if state.set_viewport_duration then
-        state.set_viewport_duration(viewport_duration)
-    end
-
     zoom_fit_toggle_state = {
-        previous_view = {
-            start_time = snapshot.start_time,
-            duration = snapshot.duration,
-        }
+        previous_view = snapshot,
     }
-    print(string.format("🔍 Zoomed to fit: %.2fs visible", viewport_duration / 1000))
+
+    local start_value = math.max(0, min_start)
+    local duration = math.max(1000, max_end_time - start_value)
+
+    if state.set_viewport_duration_frames_value then
+        state.set_viewport_duration_frames_value(duration)
+    elseif state.set_viewport_duration then
+        state.set_viewport_duration(duration)
+    end
+    if state.set_viewport_start_value then
+        state.set_viewport_start_value(start_value)
+    end
+
+    print(string.format("🔍 Zoomed to fit: %.2f visible (start=%d, end=%d)", duration / 1000.0, start_value, max_end_time))
     return true
+end
+
+-- Minimal command dispatcher for tests and menu actions
+function keyboard_shortcuts.handle_command(command_name)
+    if command_name == "TimelineZoomFit" then
+        return keyboard_shortcuts.toggle_zoom_fit(timeline_state)
+    elseif command_name == "TimelineZoomIn" then
+        if timeline_state and timeline_state.get_viewport_duration and timeline_state.set_viewport_duration then
+            local dur = timeline_state.get_viewport_duration()
+            timeline_state.set_viewport_duration(math.max(1000, dur * 0.8))
+            return true
+        end
+    elseif command_name == "TimelineZoomOut" then
+        if timeline_state and timeline_state.get_viewport_duration and timeline_state.set_viewport_duration then
+            local dur = timeline_state.get_viewport_duration()
+            timeline_state.set_viewport_duration(dur * 1.25)
+            return true
+        end
+    end
+    return false
 end
 
 local function ensure_browser_shortcuts_registered()
@@ -424,7 +449,7 @@ function keyboard_shortcuts.perform_delete_action(opts)
         local gap = selected_gaps[1]
         local params = {
             track_id = gap.track_id,
-            gap_start = gap.start_time,
+            gap_start = gap.start_value,
             gap_duration = gap.duration,
         }
         if timeline_state.get_sequence_id then
@@ -607,7 +632,7 @@ function keyboard_shortcuts.handle_key(event)
     if (key == KEY.Left or key == KEY.Right) and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
             local frame_rate = get_active_frame_rate()
-            local current_time = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+            local current_time = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
             local current_frame = frame_utils.time_to_frame(current_time, frame_rate)
             local step_frames = modifier_shift and math.max(1, math.floor(frame_rate + 0.5)) or 1
             if key == KEY.Left then
@@ -616,7 +641,7 @@ function keyboard_shortcuts.handle_key(event)
                 current_frame = current_frame + step_frames
             end
             local new_time = frame_utils.frame_to_time(current_frame, frame_rate)
-            timeline_state.set_playhead_time(new_time)
+            timeline_state.set_playhead_value(new_time)
             return true
         end
     end
@@ -627,10 +652,10 @@ function keyboard_shortcuts.handle_key(event)
             if modifier_shift then
                 local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
                 if mark_in then
-                    timeline_state.set_playhead_time(mark_in)
+                    timeline_state.set_playhead_value(mark_in)
                 end
             else
-                local playhead = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+                local playhead = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
                 timeline_state.set_mark_in(playhead)
             end
             return true
@@ -642,10 +667,10 @@ function keyboard_shortcuts.handle_key(event)
             if modifier_shift then
                 local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
                 if mark_out then
-                    timeline_state.set_playhead_time(mark_out)
+                    timeline_state.set_playhead_value(mark_out)
                 end
             else
-                local playhead = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+                local playhead = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
                 timeline_state.set_mark_out(playhead)
             end
             return true
@@ -657,13 +682,13 @@ function keyboard_shortcuts.handle_key(event)
             timeline_state.clear_marks()
             return true
         elseif not modifier_meta and not modifier_alt then
-            local playhead = timeline_state.get_playhead_time and timeline_state.get_playhead_time() or 0
+            local playhead = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
             local clips = timeline_state.get_clips and timeline_state.get_clips() or {}
             local best_clip = nil
             local best_priority = nil
 
             for _, clip in ipairs(clips) do
-                local clip_start = clip.start_time or 0
+                local clip_start = clip.start_value or 0
                 local clip_end = clip_start + (clip.duration or 0)
                 if playhead >= clip_start and playhead <= clip_end then
                     local track = timeline_state.get_track_by_id and timeline_state.get_track_by_id(clip.track_id)
@@ -680,7 +705,7 @@ function keyboard_shortcuts.handle_key(event)
             end
 
             if best_clip then
-                local clip_start = best_clip.start_time or 0
+                local clip_start = best_clip.start_value or 0
                 local clip_out = clip_start + (best_clip.duration or 0)
                 timeline_state.set_mark_in(clip_start)
                 timeline_state.set_mark_out(clip_out)
@@ -862,13 +887,13 @@ function keyboard_shortcuts.handle_key(event)
     if key == KEY.B and modifier_meta then
         if timeline_state and command_manager and panel_active_timeline then
             local selected_clips = timeline_state.get_selected_clips()
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_value()
 
             local target_clips
             if selected_clips and #selected_clips > 0 then
-                target_clips = timeline_state.get_clips_at_time(playhead_time, selected_clips)
+                target_clips = timeline_state.get_clips_at_time(playhead_value, selected_clips)
             else
-                target_clips = timeline_state.get_clips_at_time(playhead_time)
+                target_clips = timeline_state.get_clips_at_time(playhead_value)
             end
 
             if #target_clips == 0 then
@@ -885,14 +910,14 @@ function keyboard_shortcuts.handle_key(event)
             local specs = {}
 
             for _, clip in ipairs(target_clips) do
-                local start_time = clip.start_time
-                local end_time = clip.start_time + clip.duration
-                if playhead_time > start_time and playhead_time < end_time then
+                local start_value = clip.start_value
+                local end_time = clip.start_value + clip.duration
+                if playhead_value > start_value and playhead_value < end_time then
                     table.insert(specs, {
                         command_type = "SplitClip",
                         parameters = {
                             clip_id = clip.id,
-                            split_time = playhead_time
+                            split_time = playhead_value
                         }
                     })
                 end
@@ -913,7 +938,7 @@ function keyboard_shortcuts.handle_key(event)
 
             local result = command_manager.execute(batch_cmd)
             if result.success then
-                print(string.format("Blade: Split %d clip(s) at %dms", #specs, playhead_time))
+                print(string.format("Blade: Split %d clip(s) at %dms", #specs, playhead_value))
             else
                 print(string.format("Blade: Failed to split clips: %s", result.error_message or "unknown error"))
             end
@@ -976,7 +1001,7 @@ function keyboard_shortcuts.handle_key(event)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local Command = require("command")
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_value()
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
             local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
@@ -990,7 +1015,7 @@ function keyboard_shortcuts.handle_key(event)
             insert_cmd:set_parameter("media_id", media_id)
             insert_cmd:set_parameter("sequence_id", sequence_id)
             insert_cmd:set_parameter("track_id", track_id)
-            insert_cmd:set_parameter("insert_time", playhead_time)
+            insert_cmd:set_parameter("insert_time", playhead_value)
             insert_cmd:set_parameter("duration", clip_duration)
             insert_cmd:set_parameter("source_in", 0)
             insert_cmd:set_parameter("source_out", clip_duration)
@@ -998,7 +1023,7 @@ function keyboard_shortcuts.handle_key(event)
             insert_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
             local result = command_manager.execute(insert_cmd)
             if result.success then
-                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_clip.name or media_id, playhead_time))
+                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_clip.name or media_id, playhead_value))
             else
                 print("❌ INSERT failed: " .. (result.error_message or "unknown error"))
             end
@@ -1025,7 +1050,7 @@ function keyboard_shortcuts.handle_key(event)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local Command = require("command")
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_value()
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
             local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
@@ -1039,7 +1064,7 @@ function keyboard_shortcuts.handle_key(event)
             overwrite_cmd:set_parameter("media_id", media_id)
             overwrite_cmd:set_parameter("sequence_id", sequence_id)
             overwrite_cmd:set_parameter("track_id", track_id)
-            overwrite_cmd:set_parameter("overwrite_time", playhead_time)
+            overwrite_cmd:set_parameter("overwrite_time", playhead_value)
             overwrite_cmd:set_parameter("duration", clip_duration)
             overwrite_cmd:set_parameter("source_in", 0)
             overwrite_cmd:set_parameter("source_out", clip_duration)
@@ -1047,7 +1072,7 @@ function keyboard_shortcuts.handle_key(event)
             overwrite_cmd:set_parameter("advance_playhead", true)  -- Command will move playhead
             local result = command_manager.execute(overwrite_cmd)
             if result.success then
-                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_clip.name or media_id, playhead_time))
+                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_clip.name or media_id, playhead_value))
             else
                 print("❌ OVERWRITE failed: " .. (result.error_message or "unknown error"))
             end

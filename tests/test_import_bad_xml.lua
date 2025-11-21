@@ -52,13 +52,7 @@ local function init_db(path)
     assert(database.set_path(path))
     local db = database.get_connection()
 
-    db:exec([[CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}',
-        created_at INTEGER DEFAULT 0,
-        modified_at INTEGER DEFAULT 0
-    );]])
+    db:exec(require('import_schema'))
 
     db:exec([[        CREATE TABLE IF NOT EXISTS sequences (
         id TEXT PRIMARY KEY,
@@ -68,14 +62,14 @@ local function init_db(path)
         frame_rate REAL NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
-        viewport_start_time INTEGER NOT NULL DEFAULT 0,
-        viewport_duration INTEGER NOT NULL DEFAULT 10000,
-        mark_in_time INTEGER,
-        mark_out_time INTEGER,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 10000,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
         current_sequence_number INTEGER
     );
 ]])
@@ -120,7 +114,7 @@ local function init_db(path)
             source_sequence_id TEXT,
             parent_clip_id TEXT,
             owner_sequence_id TEXT,
-            start_time INTEGER NOT NULL,
+            start_value INTEGER NOT NULL,
             duration INTEGER NOT NULL,
             source_in INTEGER NOT NULL DEFAULT 0,
             source_out INTEGER NOT NULL,
@@ -142,11 +136,14 @@ local function init_db(path)
         pre_hash TEXT,
         post_hash TEXT,
         timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
+        playhead_value INTEGER DEFAULT 0,
+        playhead_rate REAL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
+        selected_gap_infos TEXT DEFAULT '[]',
         selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
+        selected_edge_infos_pre TEXT DEFAULT '[]',
+        selected_gap_infos_pre TEXT DEFAULT '[]'
     );]])
 
     db:exec([[
