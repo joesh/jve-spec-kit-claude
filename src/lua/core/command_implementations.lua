@@ -2533,19 +2533,20 @@ command_executors["SplitClip"] = function(command)
     -- Create second clip (right side of split)
     -- IMPORTANT: Reuse second_clip_id if this is a replay (deterministic replay for event sourcing)
     local existing_second_clip_id = command:get_parameter("second_clip_id")
-    local second_clip = Clip.create(original_clip.name .. " (2)", original_clip.media_id, {
+    local new_clip = Clip.create(original_clip.name, original_clip.media_id, {
         project_id = original_clip.project_id,
         track_id = original_clip.track_id,
-        owner_sequence_id = original_clip.owner_sequence_id,
         parent_clip_id = original_clip.parent_clip_id,
+        owner_sequence_id = original_clip.owner_sequence_id,
         source_sequence_id = original_clip.source_sequence_id,
-        start_value = split_value,
-        duration = second_duration,
-        source_in = source_split_point,
-        source_out = original_clip.source_out,
+        start_value = split_time,
+        duration_value = new_duration,
+        source_in_value = new_source_in,
+        source_out_value = original_clip.source_out_value,
+        timebase_type = original_clip.timebase_type,
+        timebase_rate = original_clip.timebase_rate,
         enabled = original_clip.enabled,
-        offline = original_clip.offline,
-        clip_kind = original_clip.clip_kind,
+        offline = original_clip.offline
     })
     if existing_second_clip_id then
         second_clip.id = existing_second_clip_id  -- Reuse ID from original execution
