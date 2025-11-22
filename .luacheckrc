@@ -1,0 +1,85 @@
+std = "max"
+
+-- Broader checks; keep line-length relaxed for now.
+max_line_length = false
+unused_args = false
+unused = true      -- include unused diagnostics
+redefined = true   -- include redefined/shadow diagnostics
+
+-- Ignore whitespace-only/trailing whitespace
+ignore = {
+    "611", "612", "613", "614",
+}
+
+globals = {
+    -- Exposed by Qt/Lua bridge
+    "qt_constants",
+    "qt_set_focus",
+    "qt_set_widget_click_handler",
+    "qt_set_button_click_handler",
+    "qt_set_context_menu_handler",
+    "qt_set_line_edit_text_changed_handler",
+    "qt_set_line_edit_editing_finished_handler",
+    "qt_set_slider_value_changed_handler",
+    "qt_set_checkbox_state_changed_handler",
+    "qt_set_combobox_index_changed_handler",
+    "qt_set_tree_widget_selection_changed_handler",
+    "qt_set_table_widget_selection_changed_handler",
+    "qt_set_header_view_section_resized_handler",
+    "qt_set_widget_hover_handler",
+    "qt_set_widget_focus_change_handler",
+    "qt_set_range_slider_values_changed_handler",
+    "qt_is_key_pressed",
+    "qt_json_encode",
+    "qt_json_decode",
+    "qt_set_widget_attribute",
+    "qt_update_widget",
+    "qt_set_widget_stylesheet",
+    "qt_set_object_name",
+    "qt_set_focus_handler",
+    "qt_set_focus_policy",
+    "qt_set_splitter_moved_handler",
+    "qt_hide_splitter_handle",
+    "qt_set_scroll_area_anchor_bottom",
+    "qt_get_splitter_handle",
+    "qt_set_scroll_position",
+    "qt_set_scroll_area_scroll_handler",
+    "qt_set_widget_cursor",
+    "qt_create_single_shot_timer",
+    "qt_set_global_key_handler",
+    "qt_set_layout_stretch_factor",
+    "timeline",
+
+    -- Runtime globals
+    "jit",
+}
+
+exclude_files = {
+    "build/**",
+    "CMakeFiles/**",
+    "src/lua/ui/keyboard_dialog_premiere.lua",
+    "src/lua/ui/**/*.json",
+    "src/lua/ui/.DS_Store",
+}
+
+include_files = {
+    "src/lua/ui/**",
+}
+
+files = {
+    ["src/lua/core/command_implementations.lua"] = {
+        ignore = { "211", "311", "241", "421", "431", "511" },
+    },
+    ["src/lua/core/command_manager.lua"] = {
+        ignore = { "211", "311", "431" },
+    },
+    ["src/lua/ui/timeline/timeline_view.lua"] = {
+        ignore = { "211", "212", "213", "231", "241", "311", "321", "331", "421", "431" },
+    },
+    ["src/lua/ui/timeline/timeline_panel.lua"] = {
+        ignore = { "211", "212", "213", "231", "241", "311", "321", "331", "421", "431" },
+    },
+    ["src/lua/ui/project_browser.lua"] = {
+        ignore = { "211", "212", "213", "231", "241", "311", "321", "331", "421", "431" },
+    },
+}
