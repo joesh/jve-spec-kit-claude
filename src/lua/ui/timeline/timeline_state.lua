@@ -401,12 +401,11 @@ local function calculate_timeline_extent()
     return math.max(60000, max_end + 10000)
 end
 
-local function sanitize_mark_time(time_ms)
-    if type(time_ms) ~= "number" then
+local function sanitize_mark_time(time_value)
+    if type(time_value) ~= "number" then
         return nil
     end
-    local frame_rate = state.sequence_frame_rate or frame_utils.default_frame_rate
-    local snapped = frame_utils.snap_to_frame(time_ms, frame_rate)
+    local snapped = math.floor(time_value + 0.5)
     if snapped < 0 then
         snapped = 0
     end

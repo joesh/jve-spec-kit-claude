@@ -631,17 +631,14 @@ function keyboard_shortcuts.handle_key(event)
 
     if (key == KEY.Left or key == KEY.Right) and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
-            local frame_rate = get_active_frame_rate()
-            local current_time = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
-            local current_frame = frame_utils.time_to_frame(current_time, frame_rate)
+            local current_frame = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
             local step_frames = modifier_shift and math.max(1, math.floor(frame_rate + 0.5)) or 1
             if key == KEY.Left then
                 current_frame = math.max(0, current_frame - step_frames)
             else
                 current_frame = current_frame + step_frames
             end
-            local new_time = frame_utils.frame_to_time(current_frame, frame_rate)
-            timeline_state.set_playhead_value(new_time)
+            timeline_state.set_playhead_value(current_frame)
             return true
         end
     end
@@ -689,7 +686,11 @@ function keyboard_shortcuts.handle_key(event)
 
             for _, clip in ipairs(clips) do
                 local clip_start = clip.start_value or 0
-                local clip_end = clip_start + (clip.duration or 0)
+                local clip_duration = clip.duration_value or clip.duration
+                if not clip_duration or clip_duration <= 0 then
+                    error(string.format("Mark range shortcut: clip %s missing duration_value", tostring(clip.id)))
+                end
+                local clip_end = clip_start + clip_duration
                 if playhead >= clip_start and playhead <= clip_end then
                     local track = timeline_state.get_track_by_id and timeline_state.get_track_by_id(clip.track_id)
                     if track then
@@ -706,7 +707,9 @@ function keyboard_shortcuts.handle_key(event)
 
             if best_clip then
                 local clip_start = best_clip.start_value or 0
-                local clip_out = clip_start + (best_clip.duration or 0)
+                local clip_duration = best_clip.duration_value or best_clip.duration
+                assert(clip_duration and clip_duration > 0, "Mark range shortcut missing clip duration_value")
+                local clip_out = clip_start + clip_duration
                 timeline_state.set_mark_in(clip_start)
                 timeline_state.set_mark_out(clip_out)
             end
@@ -910,8 +913,10 @@ function keyboard_shortcuts.handle_key(event)
             local specs = {}
 
             for _, clip in ipairs(target_clips) do
-                local start_value = clip.start_value
-                local end_time = clip.start_value + clip.duration
+                local start_value = clip.start_value or 0
+                local duration = clip.duration_value or clip.duration
+                assert(duration and duration > 0, string.format("Blade shortcut: clip %s missing duration_value", tostring(clip.id)))
+                local end_time = start_value + duration
                 if playhead_value > start_value and playhead_value < end_time then
                     table.insert(specs, {
                         command_type = "SplitClip",
