@@ -58,18 +58,10 @@ set(CORE_SOURCES
     src/core/models/media.cpp
     src/core/models/property.cpp
     
-    src/core/commands/command.cpp
-    src/core/commands/command_manager.cpp
-    
-    src/core/api/project_manager.cpp
-    src/core/api/selection_manager.cpp
-    
     src/core/persistence/migrations.cpp
     src/core/persistence/project_persistence.cpp
     src/core/persistence/schema_validator.cpp
     src/core/persistence/sql_executor.cpp
-    
-    src/core/timeline/timeline_manager.cpp
     
     src/core/common/uuid_generator.cpp
     src/core/resource_paths.cpp
