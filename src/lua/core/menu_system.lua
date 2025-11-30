@@ -621,7 +621,7 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_clip.name or media_id, playhead_value))
+                print(string.format("✅ INSERT: Added %s at %s, rippled subsequent clips", selected_clip.name or media_id, tostring(playhead_value)))
             else
                 print(string.format("❌ INSERT failed: %s", result and result.error_message or "unknown error"))
             end
@@ -683,7 +683,7 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_clip.name or media_id, playhead_value))
+                print(string.format("✅ OVERWRITE: Added %s at %s, trimmed overlapping clips", selected_clip.name or media_id, tostring(playhead_value)))
             else
                 print(string.format("❌ OVERWRITE failed: %s", result and result.error_message or "unknown error"))
             end
