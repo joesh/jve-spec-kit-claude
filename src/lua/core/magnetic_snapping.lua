@@ -1,6 +1,9 @@
 -- Magnetic snapping: Find snap points for clip edges and playhead
 -- Provides snap detection logic for drag operations in the timeline
 
+local time_utils = require("core.time_utils")
+local Rational = require("core.rational")
+
 local M = {}
 
 -- Snap tolerance in milliseconds (typical NLE default: ~6-10 pixels at default zoom)
@@ -28,8 +31,13 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
     end
 
     -- Add playhead position as snap point
+    local playhead_time = state.get_playhead_value()
+    
+    if getmetatable(playhead_time) ~= Rational.metatable then
+        error("magnetic_snapping: Playhead value must be a Rational object", 2)
+    end
     table.insert(snap_points, {
-        time = state.get_playhead_value(),
+        time = playhead_time,
         type = "playhead",
         description = "Playhead"
     })
@@ -40,8 +48,12 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
             -- In-point (left edge)
             local in_key = clip.id .. "_in"
             if not excluded_edges_lookup[in_key] then
+                if getmetatable(clip.timeline_start_frame) ~= Rational.metatable then
+                    error("magnetic_snapping: Clip timeline_start_frame must be a Rational object", 2)
+                end
+
                 table.insert(snap_points, {
-                    time = clip.start_value,
+                    time = clip.timeline_start_frame,
                     type = "clip_edge",
                     edge = "in",
                     clip_id = clip.id,
@@ -52,8 +64,13 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
             -- Out-point (right edge)
             local out_key = clip.id .. "_out"
             if not excluded_edges_lookup[out_key] then
+                if getmetatable(clip.timeline_start_frame) ~= Rational.metatable or getmetatable(clip.duration_frames) ~= Rational.metatable then
+                    error("magnetic_snapping: Clip time values must be Rational objects", 2)
+                end
+                local clip_out_time = clip.timeline_start_frame + clip.duration_frames
+
                 table.insert(snap_points, {
-                    time = clip.start_value + clip.duration,
+                    time = clip_out_time,
                     type = "clip_edge",
                     edge = "out",
                     clip_id = clip.id,
@@ -69,22 +86,39 @@ end
 -- Find the closest snap point to a given time within tolerance
 -- Returns {time, type, description} or nil if no snap point within tolerance
 function M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, tolerance_ms)
-    tolerance_ms = tolerance_ms or DEFAULT_SNAP_TOLERANCE_MS
+    local sequence_fps_num = state.get_sequence_fps_numerator()
+    local sequence_fps_den = state.get_sequence_fps_denominator()
+
+    -- Convert tolerance_ms to a Rational object at the sequence's rate
+    local tolerance_rational = time_utils.from_milliseconds(tolerance_ms or DEFAULT_SNAP_TOLERANCE_MS, sequence_fps_num, sequence_fps_den)
 
     local snap_points = M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
 
     local closest_snap = nil
-    local closest_distance = math.huge
+    local closest_distance_rational = nil -- Initialize to nil instead of math.huge Rational
 
     for _, snap_point in ipairs(snap_points) do
-        local distance = math.abs(snap_point.time - target_time)
-        if distance <= tolerance_ms and distance < closest_distance then
-            closest_snap = snap_point
-            closest_distance = distance
+        -- Ensure snap_point.time is also a Rational object
+        if getmetatable(snap_point.time) ~= Rational.metatable then
+            error("magnetic_snapping: Snap point time must be a Rational object", 2)
+        end
+        
+        -- Calculate absolute difference using Rational arithmetic
+        local difference = time_utils.sub(snap_point.time, target_time)
+        -- Rational.new expects integer frames. math.abs on frames is fine.
+        local distance_rational = Rational.new(math.abs(difference.frames), difference.fps_numerator, difference.fps_denominator)
+
+        if closest_distance_rational == nil or distance_rational < closest_distance_rational then
+            -- Also ensure distance is within tolerance after finding the closest
+            if distance_rational <= tolerance_rational then
+                closest_snap = snap_point
+                closest_distance_rational = distance_rational
+            end
         end
     end
 
-    return closest_snap, closest_distance
+
+    return closest_snap, closest_distance_rational
 end
 
 -- Apply snapping to a time value if enabled
@@ -94,26 +128,40 @@ function M.apply_snap(state, target_time, is_snapping_enabled, excluded_clip_ids
         return target_time, {snapped = false, snap_point = nil}
     end
 
-    local snap_point, distance = M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, tolerance_ms)
+    local snap_point, distance_rational = M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, tolerance_ms)
 
     if snap_point then
-        print(string.format("SNAP: target=%dms → snapped to %dms (%s) [distance=%dms, tolerance=%dms]",
-            target_time, snap_point.time, snap_point.description, distance, tolerance_ms))
-        return snap_point.time, {snapped = true, snap_point = snap_point, distance = distance}
+
+        -- Convert Rational times to milliseconds for printing
+        local target_ms = time_utils.to_milliseconds(target_time)
+        local snap_ms = time_utils.to_milliseconds(snap_point.time)
+        local distance_ms = time_utils.to_milliseconds(distance_rational)
+        local tolerance_ms_print = tolerance_ms or DEFAULT_SNAP_TOLERANCE_MS
+
+        print(string.format("SNAP: target=%.2fms → snapped to %.2fms (%s) [distance=%.2fms, tolerance=%.2fms]",
+            target_ms, snap_ms, snap_point.description, distance_ms, tolerance_ms_print))
+        return snap_point.time, {snapped = true, snap_point = snap_point, distance = distance_rational}
     else
         -- Debug: Show why no snap occurred
-        -- print(string.format("NO SNAP: target=%dms [tolerance=%dms, no points within range]", target_time, tolerance_ms))
+        -- local target_ms = time_utils.to_milliseconds(target_time)
+        -- local tolerance_ms_print = tolerance_ms or DEFAULT_SNAP_TOLERANCE_MS
+        -- print(string.format("NO SNAP: target=%.2fms [tolerance=%.2fms, no points within range]", target_time, tolerance_ms_print))
         return target_time, {snapped = false, snap_point = nil}
     end
 end
 
 -- Calculate snap tolerance based on zoom level
 -- More zoomed in = larger pixel tolerance = smaller time tolerance
-function M.calculate_tolerance(viewport_duration_ms, viewport_width_px)
+function M.calculate_tolerance(state, viewport_duration_rational, viewport_width_px)
     local SNAP_TOLERANCE_PX = 12  -- Pixels within which to snap
+    
+    local viewport_duration_ms = time_utils.to_milliseconds(viewport_duration_rational)
     local ms_per_pixel = viewport_duration_ms / viewport_width_px
-    local tolerance = SNAP_TOLERANCE_PX * ms_per_pixel
-    return tolerance  -- No caps - pure pixel-based tolerance
+    local tolerance_ms = SNAP_TOLERANCE_PX * ms_per_pixel
+    
+    local sequence_fps_num = state.get_sequence_fps_numerator()
+    local sequence_fps_den = state.get_sequence_fps_denominator()
+    return time_utils.from_milliseconds(tolerance_ms, sequence_fps_num, sequence_fps_den)
 end
 
 return M

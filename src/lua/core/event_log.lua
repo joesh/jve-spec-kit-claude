@@ -11,15 +11,29 @@ local function compute_repo_root()
     if not info or not info.source or info.source == "" then
         error("event_log: unable to resolve module path")
     end
-    if info.source:sub(1, 1) ~= "@" then
-        error("event_log: source path unavailable for event_log module")
+
+    local source_path
+    if info.source:sub(1, 1) == "@" then
+        source_path = info.source:sub(2)
+    else
+        source_path = info.source
     end
-    local full_path = info.source:sub(2)
-    local root = full_path:match("^(.*)/src/lua/core/event_log%.lua$")
-    if not root then
-        error("event_log: failed to derive repository root from path: " .. full_path)
+
+    -- Attempt to find the repository root by looking for the "src/lua/core" pattern.
+    -- This makes it more robust to how the script is invoked (e.g., from project root, or directly)
+    local root_match = source_path:match("^(.*)/src/lua/core/event_log%.lua$")
+    if root_match then
+        return root_match
     end
-    return root
+
+    -- If the full path doesn't match, assume we are already in the root or a subdirectory
+    -- and event_log.lua is in 'src/lua/core' relative to the current working directory.
+    -- This is a common pattern for running tests from the project root.
+    if source_path:match("^src/lua/core/event_log%.lua$") then
+        return "." -- Current working directory is the repo root
+    end
+
+    error("event_log: failed to derive repository root from path: " .. source_path)
 end
 
 local repo_root = compute_repo_root()

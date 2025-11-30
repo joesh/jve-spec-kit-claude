@@ -1,4 +1,4 @@
-#include "scriptable_timeline.h"
+#include "timeline_renderer.h"
 #include "lua/qt_bindings.h"
 #include <QPaintEvent>
 #include <QResizeEvent>
@@ -7,7 +7,7 @@
 
 namespace JVE {
 
-ScriptableTimeline::ScriptableTimeline(const std::string& widget_id, QWidget* parent)
+TimelineRenderer::TimelineRenderer(const std::string& widget_id, QWidget* parent)
     : QWidget(parent), widget_id_(widget_id)
 {
     // No hardcoded minimum size - let layout system and content determine size
@@ -16,19 +16,19 @@ ScriptableTimeline::ScriptableTimeline(const std::string& widget_id, QWidget* pa
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
-QSize ScriptableTimeline::sizeHint() const
+QSize TimelineRenderer::sizeHint() const
 {
     // Return QWIDGETSIZE_MAX for width so layout gives us maximum space
     // Height: 150px default (3 tracks @ 50px each)
     return QSize(QWIDGETSIZE_MAX, 150);
 }
 
-void ScriptableTimeline::clearCommands()
+void TimelineRenderer::clearCommands()
 {
     drawing_commands_.clear();
 }
 
-void ScriptableTimeline::addRect(int x, int y, int width, int height, const QString& color)
+void TimelineRenderer::addRect(int x, int y, int width, int height, const QString& color)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::RECT;
@@ -40,7 +40,7 @@ void ScriptableTimeline::addRect(int x, int y, int width, int height, const QStr
     drawing_commands_.push_back(cmd);
 }
 
-void ScriptableTimeline::addText(int x, int y, const QString& text, const QString& color)
+void TimelineRenderer::addText(int x, int y, const QString& text, const QString& color)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::TEXT;
@@ -51,7 +51,7 @@ void ScriptableTimeline::addText(int x, int y, const QString& text, const QStrin
     drawing_commands_.push_back(cmd);
 }
 
-void ScriptableTimeline::addLine(int x1, int y1, int x2, int y2, const QString& color, int width)
+void TimelineRenderer::addLine(int x1, int y1, int x2, int y2, const QString& color, int width)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::LINE;
@@ -64,7 +64,7 @@ void ScriptableTimeline::addLine(int x1, int y1, int x2, int y2, const QString& 
     drawing_commands_.push_back(cmd);
 }
 
-void ScriptableTimeline::renderTestTimeline()
+void TimelineRenderer::renderTestTimeline()
 {
     clearCommands();
     
@@ -103,7 +103,7 @@ void ScriptableTimeline::renderTestTimeline()
     update(); // Trigger repaint
 }
 
-void ScriptableTimeline::paintEvent(QPaintEvent* /* event */)
+void TimelineRenderer::paintEvent(QPaintEvent* /* event */)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
@@ -115,7 +115,7 @@ void ScriptableTimeline::paintEvent(QPaintEvent* /* event */)
     executeDrawingCommands(painter);
 }
 
-void ScriptableTimeline::executeDrawingCommands(QPainter& painter)
+void TimelineRenderer::executeDrawingCommands(QPainter& painter)
 {
     for (const auto& cmd : drawing_commands_) {
         painter.setPen(QPen(cmd.color, cmd.line_width));
@@ -139,33 +139,33 @@ void ScriptableTimeline::executeDrawingCommands(QPainter& painter)
     }
 }
 
-void ScriptableTimeline::setPlayheadPosition(qint64 timeMs)
+void TimelineRenderer::setPlayheadPosition(qint64 timeMs)
 {
     playhead_position_ = timeMs;
     update(); // Redraw to show new playhead position
 }
 
-qint64 ScriptableTimeline::getPlayheadPosition() const
+qint64 TimelineRenderer::getPlayheadPosition() const
 {
     return playhead_position_;
 }
 
-void ScriptableTimeline::setMouseEventHandler(const std::string& handler_name)
+void TimelineRenderer::setMouseEventHandler(const std::string& handler_name)
 {
     mouse_event_handler_ = handler_name;
 }
 
-void ScriptableTimeline::setKeyEventHandler(const std::string& handler_name)
+void TimelineRenderer::setKeyEventHandler(const std::string& handler_name)
 {
     key_event_handler_ = handler_name;
 }
 
-void ScriptableTimeline::setResizeEventHandler(const std::string& handler_name)
+void TimelineRenderer::setResizeEventHandler(const std::string& handler_name)
 {
     resize_event_handler_ = handler_name;
 }
 
-void ScriptableTimeline::mousePressEvent(QMouseEvent* event)
+void TimelineRenderer::mousePressEvent(QMouseEvent* event)
 {
     if (!mouse_event_handler_.empty() && lua_state_) {
         lua_getglobal(lua_state_, mouse_event_handler_.c_str());
@@ -215,7 +215,7 @@ void ScriptableTimeline::mousePressEvent(QMouseEvent* event)
     QWidget::mousePressEvent(event);
 }
 
-void ScriptableTimeline::mouseReleaseEvent(QMouseEvent* event)
+void TimelineRenderer::mouseReleaseEvent(QMouseEvent* event)
 {
     if (!mouse_event_handler_.empty() && lua_state_) {
         lua_getglobal(lua_state_, mouse_event_handler_.c_str());
@@ -262,7 +262,7 @@ void ScriptableTimeline::mouseReleaseEvent(QMouseEvent* event)
     QWidget::mouseReleaseEvent(event);
 }
 
-void ScriptableTimeline::mouseMoveEvent(QMouseEvent* event)
+void TimelineRenderer::mouseMoveEvent(QMouseEvent* event)
 {
     if (!mouse_event_handler_.empty() && lua_state_) {
         lua_getglobal(lua_state_, mouse_event_handler_.c_str());
@@ -309,7 +309,7 @@ void ScriptableTimeline::mouseMoveEvent(QMouseEvent* event)
     QWidget::mouseMoveEvent(event);
 }
 
-void ScriptableTimeline::wheelEvent(QWheelEvent* event)
+void TimelineRenderer::wheelEvent(QWheelEvent* event)
 {
     if (!mouse_event_handler_.empty() && lua_state_) {
         lua_getglobal(lua_state_, mouse_event_handler_.c_str());
@@ -365,7 +365,7 @@ void ScriptableTimeline::wheelEvent(QWheelEvent* event)
     QWidget::wheelEvent(event);
 }
 
-void ScriptableTimeline::keyPressEvent(QKeyEvent* event)
+void TimelineRenderer::keyPressEvent(QKeyEvent* event)
 {
     if (!key_event_handler_.empty() && lua_state_) {
         lua_getglobal(lua_state_, key_event_handler_.c_str());
@@ -395,7 +395,7 @@ void ScriptableTimeline::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 
-void ScriptableTimeline::resizeEvent(QResizeEvent* event)
+void TimelineRenderer::resizeEvent(QResizeEvent* event)
 {
     if (!resize_event_handler_.empty() && lua_state_) {
         lua_getglobal(lua_state_, resize_event_handler_.c_str());
@@ -472,7 +472,7 @@ void registerTimelineBindings(lua_State* L)
 
 int lua_timeline_clear_commands(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     if (timeline) {
         timeline->clearCommands();
         lua_pushboolean(L, 1);
@@ -484,7 +484,7 @@ int lua_timeline_clear_commands(lua_State* L)
 
 int lua_timeline_add_rect(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     int x = lua_tointeger(L, 2);
     int y = lua_tointeger(L, 3);
     int width = lua_tointeger(L, 4);
@@ -502,7 +502,7 @@ int lua_timeline_add_rect(lua_State* L)
 
 int lua_timeline_add_text(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     int x = lua_tointeger(L, 2);
     int y = lua_tointeger(L, 3);
     const char* text = lua_tostring(L, 4);
@@ -519,7 +519,7 @@ int lua_timeline_add_text(lua_State* L)
 
 int lua_timeline_add_line(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     int x1 = lua_tointeger(L, 2);
     int y1 = lua_tointeger(L, 3);
     int x2 = lua_tointeger(L, 4);
@@ -538,7 +538,7 @@ int lua_timeline_add_line(lua_State* L)
 
 int lua_timeline_get_dimensions(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     if (timeline) {
         lua_pushinteger(L, timeline->getWidth());
         lua_pushinteger(L, timeline->getHeight());
@@ -552,7 +552,7 @@ int lua_timeline_get_dimensions(lua_State* L)
 
 int lua_timeline_set_playhead(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     qint64 timeMs = lua_tointeger(L, 2);
 
     if (timeline) {
@@ -566,7 +566,7 @@ int lua_timeline_set_playhead(lua_State* L)
 
 int lua_timeline_get_playhead(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     if (timeline) {
         lua_pushinteger(L, timeline->getPlayheadPosition());
     } else {
@@ -577,7 +577,7 @@ int lua_timeline_get_playhead(lua_State* L)
 
 int lua_timeline_update(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     if (timeline) {
         timeline->requestUpdate();
         lua_pushboolean(L, 1);
@@ -589,7 +589,7 @@ int lua_timeline_update(lua_State* L)
 
 int lua_timeline_set_mouse_event_handler(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     const char* handler = lua_tostring(L, 2);
 
     if (timeline && handler) {
@@ -603,7 +603,7 @@ int lua_timeline_set_mouse_event_handler(lua_State* L)
 
 int lua_timeline_set_key_event_handler(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     const char* handler = lua_tostring(L, 2);
 
     if (timeline && handler) {
@@ -617,7 +617,7 @@ int lua_timeline_set_key_event_handler(lua_State* L)
 
 int lua_timeline_set_resize_event_handler(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
     const char* handler = lua_tostring(L, 2);
 
     if (timeline && handler) {
@@ -631,7 +631,7 @@ int lua_timeline_set_resize_event_handler(lua_State* L)
 
 int lua_timeline_set_lua_state(lua_State* L)
 {
-    JVE::ScriptableTimeline* timeline = (JVE::ScriptableTimeline*)lua_to_widget(L, 1);
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
 
     if (timeline) {
         timeline->setLuaState(L);
@@ -641,3 +641,4 @@ int lua_timeline_set_lua_state(lua_State* L)
     }
     return 1;
 }
+

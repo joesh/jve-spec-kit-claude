@@ -12,10 +12,11 @@ local M = {}
 -- Database connection (set externally)
 local db = nil
 
+local profile_scope = require("core.profile_scope")
+local event_log = require("core.event_log")
 local command_scope = require("core.command_scope")
 local frame_utils = require("core.frame_utils")
-local event_log = require("core.event_log")
-local profile_scope = require("core.profile_scope")
+local json = require("dkjson")
 
 -- State tracking
 local last_sequence_number = 0
@@ -160,7 +161,7 @@ local function gather_master_initial_state(project_id)
         return master_state
     end
 
-    local seq_query = conn:prepare([[
+    local seq_query = conn:prepare([[ 
         SELECT id, project_id, name, kind, frame_rate, width, height,
                timecode_start_frame,
                playhead_value,
@@ -210,7 +211,7 @@ local function gather_master_initial_state(project_id)
         return master_state
     end
 
-    local track_query = conn:prepare([[
+    local track_query = conn:prepare([[ 
         SELECT id, sequence_id, name, track_type, track_index,
                enabled, locked, muted, soloed, volume, pan, timebase_type, timebase_rate
         FROM tracks
@@ -247,20 +248,20 @@ local function gather_master_initial_state(project_id)
     end
 
     local seen_clip_ids = {}
-    local master_clip_query = conn:prepare([[
+    local master_clip_query = conn:prepare([[ 
         SELECT id, project_id, clip_kind, name, track_id, media_id,
                source_sequence_id, parent_clip_id, owner_sequence_id,
-               start_value, duration_value, source_in_value, source_out_value,
-               timebase_type, timebase_rate, enabled, offline
+               timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+               fps_numerator, fps_denominator, enabled, offline
         FROM clips
         WHERE clip_kind = 'master' AND source_sequence_id = ?
     ]])
 
-    local child_clip_query = conn:prepare([[
+    local child_clip_query = conn:prepare([[ 
         SELECT id, project_id, clip_kind, name, track_id, media_id,
                source_sequence_id, parent_clip_id, owner_sequence_id,
-               start_value, duration_value, source_in_value, source_out_value,
-               timebase_type, timebase_rate, enabled, offline
+               timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+               fps_numerator, fps_denominator, enabled, offline
         FROM clips
         WHERE owner_sequence_id = ?
     ]])
@@ -280,12 +281,12 @@ local function gather_master_initial_state(project_id)
                         source_sequence_id = master_clip_query:value(6),
                         parent_clip_id = master_clip_query:value(7),
                         owner_sequence_id = master_clip_query:value(8) or seq_id,
-                        start_value = tonumber(master_clip_query:value(9)) or 0,
-                        duration = tonumber(master_clip_query:value(10)) or 0,
-                        source_in = tonumber(master_clip_query:value(11)) or 0,
-                        source_out = tonumber(master_clip_query:value(12)) or 0,
-                        timebase_type = master_clip_query:value(13),
-                        timebase_rate = master_clip_query:value(14),
+                        timeline_start_frame = tonumber(master_clip_query:value(9)) or 0,
+                        duration_frames = tonumber(master_clip_query:value(10)) or 0,
+                        source_in_frame = tonumber(master_clip_query:value(11)) or 0,
+                        source_out_frame = tonumber(master_clip_query:value(12)) or 0,
+                        fps_numerator = master_clip_query:value(13),
+                        fps_denominator = master_clip_query:value(14),
                         enabled = master_clip_query:value(15) == 1 or master_clip_query:value(15) == true,
                         offline = master_clip_query:value(16) == 1 or master_clip_query:value(16) == true
                     }
@@ -311,12 +312,12 @@ local function gather_master_initial_state(project_id)
                         source_sequence_id = child_clip_query:value(6),
                         parent_clip_id = child_clip_query:value(7),
                         owner_sequence_id = child_clip_query:value(8) or seq_id,
-                        start_value = tonumber(child_clip_query:value(9)) or 0,
-                        duration = tonumber(child_clip_query:value(10)) or 0,
-                        source_in = tonumber(child_clip_query:value(11)) or 0,
-                        source_out = tonumber(child_clip_query:value(12)) or 0,
-                        timebase_type = child_clip_query:value(13),
-                        timebase_rate = child_clip_query:value(14),
+                        timeline_start_frame = tonumber(child_clip_query:value(9)) or 0,
+                        duration_frames = tonumber(child_clip_query:value(10)) or 0,
+                        source_in_frame = tonumber(child_clip_query:value(11)) or 0,
+                        source_out_frame = tonumber(child_clip_query:value(12)) or 0,
+                        fps_numerator = child_clip_query:value(13),
+                        fps_denominator = child_clip_query:value(14),
                         enabled = child_clip_query:value(15) == 1 or child_clip_query:value(15) == true,
                         offline = child_clip_query:value(16) == 1 or child_clip_query:value(16) == true
                     }
@@ -454,7 +455,7 @@ local function find_latest_child_command(parent_sequence)
         return nil
     end
 
-    local query = db:prepare([[
+    local query = db:prepare([[ 
         SELECT sequence_number, command_type, command_args
         FROM commands
         WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
@@ -713,6 +714,23 @@ local command_executors = {}
 local command_undoers = {}
 local command_redoers = {}
 
+-- Auto-loading logic for commands
+local function load_command_module(command_type)
+    -- Convert CamelCase to snake_case for file path
+    local filename = command_type:gsub("%u", function(c) return "_" .. c:lower() end):sub(2)
+    local module_path = "core.commands." .. filename
+    
+    local status, mod = pcall(require, module_path)
+    if status and type(mod) == "table" and mod.register then
+        local registered = mod.register(command_executors, command_undoers, db, M.set_last_error)
+        if registered and registered.executor then
+            M.register_executor(command_type, registered.executor, registered.undoer)
+            return true
+        end
+    end
+    return false
+end
+
 local function capture_selection_snapshot()
     local timeline_state = require('ui.timeline.timeline_state')
     local selected_clips = timeline_state.get_selected_clips() or {}
@@ -969,7 +987,7 @@ local function fetch_first_timeline_sequence(project_id)
     if not db or not project_id or project_id == "" then
         return nil
     end
-    local query = db:prepare([[
+    local query = db:prepare([[ 
         SELECT id FROM sequences
         WHERE project_id = ? AND kind = 'timeline'
         ORDER BY name LIMIT 1
@@ -994,6 +1012,34 @@ function M.set_last_error(message)
     end
 end
 
+function M.shutdown()
+    db = nil
+    last_sequence_number = 0
+    current_sequence_number = nil
+    active_sequence_id = "default_sequence"
+    active_project_id = "default_project"
+    current_state_hash = ""
+    state_hash_cache = {}
+    last_error_message = ""
+    undo_stack_states = {
+        [GLOBAL_STACK_ID] = {
+            current_sequence_number = nil,
+            current_branch_path = {},
+            sequence_id = nil,
+            position_initialized = false,
+        }
+    }
+    active_stack_id = GLOBAL_STACK_ID
+    command_executors = {}
+    command_undoers = {}
+    sequence_initial_state = {
+        clips = {},
+        media = {},
+        master = {},
+        timeline = {}
+    }
+end
+
 -- Initialize CommandManager with database connection
 function M.init(database, sequence_id, project_id)
     db = database
@@ -1016,39 +1062,19 @@ function M.init(database, sequence_id, project_id)
 
     -- Query last sequence number from database
     local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
-    if query and query:exec() and query:next() then
-        last_sequence_number = query:value(0) or 0
+    if query then
+        if query:exec() and query:next() then
+            last_sequence_number = query:value(0) or 0
+        end
+        query:finalize()
     end
 
     local global_state = ensure_stack_state(GLOBAL_STACK_ID)
     global_state.sequence_id = active_sequence_id
     set_active_stack(GLOBAL_STACK_ID, {sequence_id = active_sequence_id})
 
-    -- Register all command executors and undoers
-    local command_implementations = require("core.command_implementations")
-    command_implementations.register_commands(command_executors, command_undoers, command_redoers, db, M.set_last_error)
-
-    local exported = command_implementations.exported_commands or {}
-    for command_type, export in pairs(exported) do
-        local executor, undoer
-        if type(export) == "table" and export.register then
-            local ok, result = pcall(export.register, command_executors, command_undoers, db, M.set_last_error)
-            if ok and result then
-                executor = result.executor
-                undoer = result.undoer
-                exported[command_type] = result
-            elseif not ok then
-                print(string.format("WARNING: Failed to register %s executor: %s", tostring(command_type), tostring(result)))
-            end
-        elseif type(export) == "table" then
-            executor = export.executor
-            undoer = export.undoer
-        end
-
-        if executor then
-            M.register_executor(command_type, executor, undoer)
-        end
-    end
+    -- Commands are now auto-loaded via load_command_module when executed.
+    -- Legacy explicit registration loop removed.
 
     print(string.format("CommandManager initialized, last sequence: %d, current position: %s",
         last_sequence_number, tostring(current_sequence_number)))
@@ -1068,7 +1094,7 @@ local function repair_broken_parent_chains()
     end
 
     -- Find all commands with NULL parent except sequence 1
-    local find_query = db:prepare([[
+    local find_query = db:prepare([[ 
         SELECT sequence_number
         FROM commands
         WHERE parent_sequence_number IS NULL
@@ -1077,6 +1103,7 @@ local function repair_broken_parent_chains()
     ]])
 
     if not find_query or not find_query:exec() then
+        if find_query then find_query:finalize() end
         return
     end
 
@@ -1084,6 +1111,7 @@ local function repair_broken_parent_chains()
     while find_query:next() do
         table.insert(broken_commands, find_query:value(0))
     end
+    find_query:finalize()
 
     if #broken_commands == 0 then
         return  -- No repairs needed
@@ -1101,7 +1129,7 @@ local function repair_broken_parent_chains()
             verify_query:bind_value(1, expected_parent)
             if verify_query:exec() and verify_query:next() then
                 -- Parent exists, repair the link
-                local update_query = db:prepare([[
+                local update_query = db:prepare([[ 
                     UPDATE commands
                     SET parent_sequence_number = ?
                     WHERE sequence_number = ?
@@ -1115,10 +1143,12 @@ local function repair_broken_parent_chains()
                     else
                         print(string.format("  ❌ Failed to repair command %d", seq_num))
                     end
+                    update_query:finalize()
                 end
             else
                 print(string.format("  ⚠️  Command %d has no predecessor - cannot repair", seq_num))
             end
+            verify_query:finalize()
         end
     end
 
@@ -1144,7 +1174,7 @@ local function save_undo_position()
         return false
     end
 
-    local update = db:prepare([[
+    local update = db:prepare([[ 
         UPDATE sequences
         SET current_sequence_number = ?
         WHERE id = ?
@@ -1162,6 +1192,7 @@ local function save_undo_position()
     update:bind_value(1, stored_position)
     update:bind_value(2, sequence_id)
     local success = update:exec()
+    update:finalize()
 
     if not success then
         print("WARNING: Failed to save undo position to database")
@@ -1176,7 +1207,7 @@ local function load_sequence_undo_position(sequence_id)
         return nil, false
     end
 
-    local query = db:prepare([[
+    local query = db:prepare([[ 
         SELECT current_sequence_number
         FROM sequences
         WHERE id = ?
@@ -1265,37 +1296,37 @@ local function calculate_state_hash(project_id)
     ]], {project_id}, 3, "project")
 
     append_query([[
-        SELECT id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame,
-               playhead_value, viewport_start_value, viewport_duration_frames_value
+        SELECT id, name, fps_numerator, fps_denominator, audio_rate, width, height,
+               playhead_frame, view_start_frame, view_duration_frames
         FROM sequences
         WHERE project_id = ?
         ORDER BY id
     ]], {project_id}, 10, "sequences")
 
     append_query([[
-        SELECT t.sequence_id, t.id, t.track_type, t.timebase_type, t.timebase_rate, t.track_index, t.enabled
+        SELECT t.sequence_id, t.id, t.track_type, t.track_index, t.enabled
         FROM tracks t
         JOIN sequences s ON t.sequence_id = s.id
         WHERE s.project_id = ?
         ORDER BY t.sequence_id, t.track_index, t.id
-    ]], {project_id}, 7, "tracks")
+    ]], {project_id}, 5, "tracks")
 
     append_query([[
-        SELECT t.sequence_id, c.track_id, c.id, c.start_value, c.duration_value,
-               c.enabled, c.source_in_value, c.source_out_value, c.media_id, c.timebase_type, c.timebase_rate
+        SELECT t.sequence_id, c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
+               c.enabled, c.source_in_frame, c.source_out_frame, c.media_id, c.fps_numerator, c.fps_denominator
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
         WHERE s.project_id = ?
-        ORDER BY t.sequence_id, t.track_index, c.start_value, c.id
+        ORDER BY t.sequence_id, t.track_index, c.timeline_start_frame, c.id
     ]], {project_id}, 11, "clips")
 
     append_query([[
-        SELECT id, file_path, duration_value, timebase_type, timebase_rate, frame_rate, name
+        SELECT id, file_path, duration_frames, fps_numerator, fps_denominator, name
         FROM media
         WHERE project_id = ?
         ORDER BY id
-    ]], {project_id}, 7, "media")
+    ]], {project_id}, 6, "media")
 
     local state_string = table.concat(parts)
     local hash_value = 5381
@@ -1380,6 +1411,7 @@ local function load_commands_from_sequence(start_sequence)
             end
         end
     end
+    query:finalize()
 
     return commands
 end
@@ -1387,12 +1419,18 @@ end
 -- Execute command implementation (routes to specific handlers)
 local function execute_command_implementation(command)
     local scope = profile_scope.begin("command_manager.exec_impl", {
-        details_fn = function()
+        details_fn = function() 
             return string.format("command=%s status=%s", command and command.type or "unknown", tostring(last_error_message == "" and "ok" or "error"))
         end
     })
 
     local executor = command_executors[command.type]
+    
+    if not executor then
+        -- Attempt auto-load
+        load_command_module(command.type)
+        executor = command_executors[command.type]
+    end
 
     if executor then
         local success, result = pcall(executor, command)
@@ -1464,7 +1502,7 @@ function M.execute(command_or_name, params)
     end
 
     local exec_scope = profile_scope.begin("command_manager.execute", {
-        details_fn = function()
+        details_fn = function() 
             return string.format("command=%s", command and command.type or tostring(command_or_name))
         end
     })
@@ -1518,10 +1556,12 @@ function M.execute(command_or_name, params)
     -- If anything fails, everything rolls back automatically
     local begin_tx = db:prepare("BEGIN TRANSACTION")
     if not (begin_tx and begin_tx:exec()) then
+        if begin_tx then begin_tx:finalize() end
         result.error_message = "Failed to begin transaction"
         exec_scope:finish("begin_tx_failed")
         return result
     end
+    begin_tx:finalize()
 
     -- Calculate pre-execution state hash
     local pre_hash = calculate_state_hash(command.project_id)
@@ -1544,7 +1584,10 @@ function M.execute(command_or_name, params)
                 tostring(current_sequence_number), last_sequence_number))
             print("ERROR: This indicates a bug in undo position tracking!")
             local rollback_tx = db:prepare("ROLLBACK")
-            if rollback_tx then rollback_tx:exec() end
+            if rollback_tx then 
+                rollback_tx:exec()
+                rollback_tx:finalize()
+            end
             last_sequence_number = last_sequence_number - 1
             result.error_message = "FATAL: Cannot execute command with NULL parent (would break undo tree)"
             exec_scope:finish("null_parent")
@@ -1558,16 +1601,21 @@ function M.execute(command_or_name, params)
         if verify_parent then
             verify_parent:bind_value(1, command.parent_sequence_number)
             if not (verify_parent:exec() and verify_parent:next()) then
+                verify_parent:finalize()
                 print(string.format("ERROR: Command %d references non-existent parent %d!",
                     sequence_number, command.parent_sequence_number))
                 print("ERROR: Parent command was deleted or never existed - broken referential integrity")
                 local rollback_tx = db:prepare("ROLLBACK")
-                if rollback_tx then rollback_tx:exec() end
+                if rollback_tx then 
+                    rollback_tx:exec()
+                    rollback_tx:finalize()
+                end
                 last_sequence_number = last_sequence_number - 1
                 result.error_message = "FATAL: Cannot execute command with non-existent parent (would break undo tree)"
                 exec_scope:finish("missing_parent")
                 return result
             end
+            verify_parent:finalize()
         end
     end
 
@@ -1602,7 +1650,10 @@ function M.execute(command_or_name, params)
         local suppress_noop = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
         if suppress_noop and post_hash == pre_hash then
             local rollback_tx = db:prepare("ROLLBACK")
-            if rollback_tx then rollback_tx:exec() end
+            if rollback_tx then 
+                rollback_tx:exec()
+                rollback_tx:finalize()
+            end
             last_sequence_number = last_sequence_number - 1
             current_state_hash = pre_hash
             result.success = true
@@ -1629,7 +1680,10 @@ function M.execute(command_or_name, params)
             if not record_ok then
                 print("ERROR: Failed to append event log entry: " .. tostring(record_err))
                 local rollback_tx = db:prepare("ROLLBACK")
-                if rollback_tx then rollback_tx:exec() end
+                if rollback_tx then 
+                    rollback_tx:exec()
+                    rollback_tx:finalize()
+                end
                 last_sequence_number = last_sequence_number - 1
                 result.success = false
                 result.error_message = "Failed to append event log entry"
@@ -1661,7 +1715,7 @@ function M.execute(command_or_name, params)
 
             if #snapshot_targets > 0 and (force_snapshot or snapshot_mgr.should_snapshot(sequence_number)) then
                 local snapshot_scope = profile_scope.begin("command_manager.snapshot", {
-                    details_fn = function()
+                    details_fn = function() 
                         return string.format("targets=%d", #snapshot_targets)
                     end
                 })
@@ -1676,7 +1730,10 @@ function M.execute(command_or_name, params)
             -- COMMIT TRANSACTION: Everything succeeded
             local commit_scope = profile_scope.begin("command_manager.commit_tx")
             local commit_tx = db:prepare("COMMIT")
-            if commit_tx then commit_tx:exec() end
+            if commit_tx then 
+                commit_tx:exec()
+                commit_tx:finalize()
+            end
             commit_scope:finish()
 
             -- Reload timeline state to pick up database changes
@@ -1783,7 +1840,10 @@ function M.execute(command_or_name, params)
             result.error_message = "Failed to save command to database"
             -- ROLLBACK: Command execution succeeded but save failed
             local rollback_tx = db:prepare("ROLLBACK")
-            if rollback_tx then rollback_tx:exec() end
+            if rollback_tx then 
+                rollback_tx:exec()
+                rollback_tx:finalize()
+            end
             last_sequence_number = last_sequence_number - 1  -- Revert sequence number
         end
     else
@@ -1792,7 +1852,10 @@ function M.execute(command_or_name, params)
         last_error_message = ""
         -- ROLLBACK: Command execution failed
         local rollback_tx = db:prepare("ROLLBACK")
-        if rollback_tx then rollback_tx:exec() end
+        if rollback_tx then 
+            rollback_tx:exec()
+            rollback_tx:finalize()
+        end
         last_sequence_number = last_sequence_number - 1  -- Revert sequence number
     end
 
@@ -1853,20 +1916,23 @@ function M.get_last_command(project_id)
         -- Parse command_args JSON to populate parameters
         local command_args_json = query:value(2)
         if command_args_json and command_args_json ~= "" and command_args_json ~= "{}" then
-            local success, params = pcall(qt_json_decode, command_args_json)
+            local success, params = pcall(json.decode, command_args_json)
             if success and params then
                 command.parameters = params
             end
         end
 
         if not command.playhead_value or not command.playhead_rate or command.playhead_rate <= 0 then
+            query:finalize()
             error("FATAL: command missing playhead_value/playhead_rate in get_last_command")
         end
 
         local Command = require('command')
         setmetatable(command, {__index = Command})
+        query:finalize()
         return command
     end
+    query:finalize()
 
     return nil
 end
@@ -2168,6 +2234,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                 if project_query:exec() and project_query:next() then
                     project_id = project_query:value(0)
                 end
+                project_query:finalize()
             end
         end
 
@@ -2231,7 +2298,7 @@ function M.replay_events(sequence_id, target_sequence_number)
         elseif start_sequence > 0 then
             initial_clips = db_module.load_clips(sequence_id) or {}
             if #initial_clips > 0 then
-                print(string.format("Using current database state with %d clips as baseline", #initial_clips))
+                print(string.format("Starting from current database state with %d clips as baseline", #initial_clips))
             else
                 print("Starting from empty initial state (no snapshot)")
             end
@@ -2295,6 +2362,7 @@ function M.replay_events(sequence_id, target_sequence_number)
         if delete_clips_query then
             delete_clips_query:bind_value(1, sequence_id)
             delete_clips_query:exec()
+            delete_clips_query:finalize()
             print("Cleared all clips from database")
         end
 
@@ -2308,6 +2376,7 @@ function M.replay_events(sequence_id, target_sequence_number)
         if delete_master_clips then
             delete_master_clips:bind_value(1, project_id)
             delete_master_clips:exec()
+            delete_master_clips:finalize()
             print("Cleared master clips and their children for replay")
         end
 
@@ -2320,6 +2389,7 @@ function M.replay_events(sequence_id, target_sequence_number)
         if delete_master_tracks then
             delete_master_tracks:bind_value(1, project_id)
             delete_master_tracks:exec()
+            delete_master_tracks:finalize()
             print("Cleared master tracks for replay")
         end
 
@@ -2330,6 +2400,7 @@ function M.replay_events(sequence_id, target_sequence_number)
         if delete_master_sequences then
             delete_master_sequences:bind_value(1, project_id)
             delete_master_sequences:exec()
+            delete_master_sequences:finalize()
             print("Cleared master sequences for replay")
         end
 
@@ -2342,9 +2413,9 @@ function M.replay_events(sequence_id, target_sequence_number)
         end
 
         if using_snapshot then
-            for seq_id, restore in pairs(snapshot_timeline_restores) do
-                if restore.sequence then
-                    local kind = restore.sequence.kind or "timeline"
+            for seq_id, snap in pairs(snapshot_timeline_restores) do
+                if snap.sequence then
+                    local kind = snap.sequence.kind or "timeline"
                     if kind == "timeline" then
                         retain_timelines[seq_id] = true
                     end
@@ -2564,7 +2635,8 @@ function M.replay_events(sequence_id, target_sequence_number)
                     INSERT OR REPLACE INTO clips
                     (id, project_id, clip_kind, name, track_id, media_id,
                      source_sequence_id, parent_clip_id, owner_sequence_id,
-                     start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline)
+                     start_value, duration_value, source_in_value, source_out_value,
+                     timebase_type, timebase_rate, enabled, offline)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ]])
 
@@ -2861,6 +2933,8 @@ function M.replay_events(sequence_id, target_sequence_number)
 
                     -- Move to parent
                     local parent = find_query:value(4)
+                    find_query:finalize()
+
                     -- Check for NULL parent (only error if not the first command)
                     if not parent then
                         local replaying_from_root = start_sequence == 0
@@ -2883,6 +2957,7 @@ function M.replay_events(sequence_id, target_sequence_number)
                         current_seq = parent
                     end
                 else
+                    find_query:finalize()
                     print(string.format("WARNING: Could not find command with sequence %d", current_seq))
                     break
                 end
@@ -3689,20 +3764,20 @@ command_undoers["ImportFCP7XML"] = function(command)
     print("✅ Import undone - deleted all imported entities")
     return true
 end
--- ============================================================================
+-- ============================================================================ 
 -- RelinkMedia Command
--- ============================================================================
+-- ============================================================================ 
 -- Updates media file_path to point to a new location
 -- Used by media relinking system when files have been moved/renamed
---
+-- 
 -- Parameters:
 --   - media_id: ID of media record to relink
 --   - new_file_path: New absolute path to media file
---
+-- 
 -- Stored state (for undo):
 --   - old_file_path: Previous file path before relinking
 
-command_executors.RelinkMedia = function(cmd, params)
+command_executors.RelinkMedia = function(cmd, params) 
     local media_id = params.media_id
     local new_file_path = params.new_file_path
 
@@ -3766,14 +3841,14 @@ command_undoers.RelinkMedia = function(cmd)
     return true
 end
 
--- ============================================================================
+-- ============================================================================ 
 -- BatchRelinkMedia Command
--- ============================================================================
+-- ============================================================================ 
 -- Relinks multiple media files in a single undo-able operation
---
+-- 
 -- Parameters:
 --   - relink_map: table mapping media_id → new_file_path
---
+-- 
 -- Stored state (for undo):
 --   - old_paths: table mapping media_id → old_file_path
 
@@ -3856,9 +3931,9 @@ function M.get_executor(command_type)
     return command_executors[command_type]
 end
 
--- ============================================================================
+-- ============================================================================ 
 -- ImportResolveProject Command
--- ============================================================================
+-- ============================================================================ 
 -- Imports DaVinci Resolve .drp project file into JVE
 -- Creates: project record, media items, timelines, tracks, clips
 -- Full undo support: deletes all created entities
@@ -4076,9 +4151,9 @@ command_undoers.ImportResolveProject = function(cmd)
     return true
 end
 
--- ============================================================================
+-- ============================================================================ 
 -- ImportResolveDatabase Command
--- ============================================================================
+-- ============================================================================ 
 -- Imports DaVinci Resolve project from SQLite disk database
 -- Creates: project record, media items, timelines, tracks, clips
 -- Full undo support: deletes all created entities

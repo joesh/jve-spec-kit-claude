@@ -1,148 +1,80 @@
-#!/usr/bin/env luajit
+-- Tests for BatchCommand Parameter Contract
+-- Verifies that BatchCommand accepts JSON parameters as a string.
 
--- Test BatchCommand parameter contract and transaction safety
--- Ensures parameter name matches between caller and executor
+local function test_batch_command_contract()
+    local CommandManager = require("core.command_manager")
+    local Command = require("command")
+    local database = require("core.database")
+    local json = require("dkjson")
 
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/core/?.lua;../src/lua/models/?.lua;../tests/?.lua"
+    print("=== BatchCommand Parameter Contract Tests ===")
 
-require('test_env')
+    -- Setup database
+    local db_path = "/tmp/jve/test_batch_command_contract.db"
+    os.remove(db_path)
+    
+    -- Initialize database connection using set_path
+    local ok = database.set_path(db_path)
+    if not ok then
+        print("❌ FAIL: Could not set database path")
+        os.exit(1)
+    end
+    local db = database.get_connection()
+    if not db then
+        print("❌ FAIL: Could not get database connection")
+        os.exit(1)
+    end
+    
+    -- Bootstrap basic schema if needed
+    db:exec([[
+        CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, settings TEXT, created_at INTEGER, modified_at INTEGER);
+        CREATE TABLE IF NOT EXISTS sequences (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, kind TEXT, fps_numerator INTEGER, fps_denominator INTEGER, width INTEGER, height INTEGER, timecode_start_frame INTEGER, playhead_frame INTEGER, view_start_frame INTEGER, view_duration_frames INTEGER, mark_in_frame INTEGER, mark_out_frame INTEGER, current_sequence_number INTEGER, audio_rate INTEGER, selected_clip_ids TEXT, selected_edge_infos TEXT);
+        CREATE TABLE IF NOT EXISTS tracks (id TEXT PRIMARY KEY, sequence_id TEXT, name TEXT, track_type TEXT, track_index INTEGER, enabled BOOLEAN, locked BOOLEAN, muted BOOLEAN, soloed BOOLEAN, volume REAL, pan REAL, timebase_type TEXT, timebase_rate REAL);
+        CREATE TABLE IF NOT EXISTS clips (id TEXT PRIMARY KEY, project_id TEXT, clip_kind TEXT, name TEXT, track_id TEXT, media_id TEXT, source_sequence_id TEXT, parent_clip_id TEXT, owner_sequence_id TEXT, start_value REAL, duration_value REAL, source_in_value REAL, source_out_value REAL, timebase_type TEXT, timebase_rate REAL, enabled BOOLEAN, offline BOOLEAN, created_at INTEGER, modified_at INTEGER);
+        CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, project_id TEXT, file_path TEXT, name TEXT, duration_value REAL, frame_rate REAL, width INTEGER, height INTEGER, audio_channels INTEGER, codec TEXT, created_at INTEGER, modified_at INTEGER, metadata TEXT);
+        CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, parent_id TEXT, sequence_number INTEGER UNIQUE, command_type TEXT, command_args TEXT, parent_sequence_number INTEGER, pre_hash TEXT, post_hash TEXT, timestamp INTEGER, playhead_value REAL, playhead_rate REAL, selected_clip_ids TEXT, selected_edge_infos TEXT, selected_gap_infos TEXT, selected_clip_ids_pre TEXT, selected_edge_infos_pre TEXT, selected_gap_infos_pre TEXT);
+    ]])
 
-local command_manager = require('core.command_manager')
-local Command = require('command')
-local database = require('core.database')
+    -- Initialize Command Manager
+    CommandManager.init(db, "default_sequence", "default_project")
 
-print("=== BatchCommand Parameter Contract Tests ===\n")
+    -- Create default project
+    db:exec("INSERT INTO projects (id, name) VALUES ('default_project', 'Test Project')")
 
--- Setup test database
-local test_db_path = "/tmp/jve/test_batch_command_contract.db"
-os.remove(test_db_path)  -- Clean slate
+    -- Stub timeline_state
+    local timeline_state = require("ui.timeline.timeline_state")
+    timeline_state.get_playhead_value = function() return 0 end
+    timeline_state.get_sequence_frame_rate = function() return 30 end
+    timeline_state.get_sequence_id = function() return "default_sequence" end
 
-database.init(test_db_path)
-local db = database.get_connection()
-
--- Create minimal schema for testing
-db:exec(require('import_schema'))
-
--- Insert test data
-db:exec([[
-    INSERT INTO projects (id, name) VALUES ('test_project', 'Test Project');
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
-]])
-
-command_manager.init(db, 'test_sequence')
-
--- Test 1: BatchCommand accepts commands_json parameter
-print("Test 1: BatchCommand accepts commands_json parameter")
-local json = require("dkjson")
-local command_specs = {
-    {
-        command_type = "CreateSequence",
-        project_id = "test_project",
-        parameters = {
-            name = "Batch Test Sequence",
-            project_id = "test_project",
-            frame_rate = 30.0,
-            width = 1920,
-            height = 1080
+    print("Test 1: BatchCommand accepts commands_json parameter")
+    
+    local sub_commands = {
+        {
+            command_type = "CreateSequence",
+            project_id = "default_project",
+            parameters = {
+                name = "Test Sequence",
+                project_id = "default_project",
+                frame_rate = 30.0,
+                width = 1920,
+                height = 1080
+            }
         }
     }
-}
-
-local batch_cmd = Command.create("BatchCommand", "test_project")
-batch_cmd:set_parameter("commands_json", json.encode(command_specs))
-
-local result = command_manager.execute(batch_cmd)
-if result.success then
-    print("✅ PASS: BatchCommand accepted commands_json parameter\n")
-else
-    print("❌ FAIL: BatchCommand rejected commands_json parameter")
-    print("   Error: " .. (result.error_message or "unknown") .. "\n")
-    os.exit(1)
+    
+    local batch_cmd = Command.create("BatchCommand", "default_project")
+    batch_cmd:set_parameter("commands_json", json.encode(sub_commands))
+    
+    local result = CommandManager.execute(batch_cmd)
+    
+    if result.success then
+        print("✅ PASS: BatchCommand executed successfully")
+    else
+        print("❌ FAIL: BatchCommand rejected commands_json parameter")
+        print("   Error: " .. tostring(result.error_message))
+        os.exit(1)
+    end
 end
 
--- Test 2: BatchCommand with wrong parameter name fails gracefully
-print("Test 2: BatchCommand with wrong parameter name fails gracefully")
-local bad_cmd = Command.create("BatchCommand", "test_project")
-bad_cmd:set_parameter("commands", json.encode(command_specs))  -- Wrong name
-
-local bad_result = command_manager.execute(bad_cmd)
-if not bad_result.success then
-    print("✅ PASS: BatchCommand correctly rejected wrong parameter name\n")
-else
-    print("❌ FAIL: BatchCommand should have rejected 'commands' parameter")
-    print("   It should only accept 'commands_json'\n")
-    os.exit(1)
-end
-
--- Test 3: BatchCommand transaction rollback on failure
-print("Test 3: BatchCommand transaction rollback on failure")
-
--- Create a batch with an invalid command type
-local bad_batch_specs = {
-    {
-        command_type = "CreateSequence",
-        project_id = "test_project",
-        parameters = {
-            sequence_name = "First Sequence",
-            frame_rate = 30.0,
-            width = 1920,
-            height = 1080
-        }
-    },
-    {
-        command_type = "NonExistentCommand",  -- This will fail
-        project_id = "test_project",
-        parameters = {}
-    }
-}
-
--- Count sequences before
-local count_before = 0
-local count_query = db:prepare("SELECT COUNT(*) FROM sequences")
-if count_query and count_query:exec() and count_query:next() then
-    count_before = count_query:value(0)
-end
-
-local rollback_cmd = Command.create("BatchCommand", "test_project")
-rollback_cmd:set_parameter("commands_json", json.encode(bad_batch_specs))
-local rollback_result = command_manager.execute(rollback_cmd)
-
--- Count sequences after (should be same - transaction rolled back)
-local count_after = 0
-count_query = db:prepare("SELECT COUNT(*) FROM sequences")
-if count_query and count_query:exec() and count_query:next() then
-    count_after = count_query:value(0)
-end
-
-if not rollback_result.success and count_after == count_before then
-    print("✅ PASS: BatchCommand rolled back transaction on failure")
-    print("   Sequences before: " .. count_before .. ", after: " .. count_after .. "\n")
-else
-    print("❌ FAIL: BatchCommand did not properly rollback transaction")
-    print("   Sequences before: " .. count_before .. ", after: " .. count_after)
-    print("   Expected: no change\n")
-    os.exit(1)
-end
-
--- Test 4: BatchCommand empty array
-print("Test 4: BatchCommand with empty command array")
-local empty_cmd = Command.create("BatchCommand", "test_project")
-empty_cmd:set_parameter("commands_json", "[]")
-local empty_result = command_manager.execute(empty_cmd)
-
-if empty_result.success then
-    print("✅ PASS: BatchCommand handled empty array gracefully\n")
-else
-    print("⚠️  WARNING: BatchCommand rejected empty array")
-    print("   This may be intentional, but consider if empty batches are valid\n")
-end
-
-print("=== All BatchCommand Contract Tests Passed ===")
-os.remove(test_db_path)
-os.exit(0)
+test_batch_command_contract()

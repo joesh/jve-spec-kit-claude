@@ -16,7 +16,7 @@
 #include <limits>
 
 #include "../../src/lua/simple_lua_engine.h"
-#include "../../src/ui/timeline/scriptable_timeline.h"
+#include "../../src/ui/timeline/timeline_renderer.h"
 #include "../../src/core/persistence/migrations.h"
 #include "../../src/core/resource_paths.h"
 
@@ -50,7 +50,7 @@ private:
     QJsonObject getLuaJsonObject(const char* globalName);
     void populateCanonicalScenario();
     void reloadTimelineState();
-    JVE::ScriptableTimeline* locateVideoTimeline();
+    JVE::TimelineRenderer* locateVideoTimeline();
     void fetchTimelineMetrics();
     QPoint pointForEdge(const QString& clipId, bool insideClip) const;
     int timeToPixel(int timeMs) const;
@@ -63,7 +63,7 @@ private:
 
     SimpleLuaEngine* m_luaEngine = nullptr;
     QWidget* m_mainWindow = nullptr;
-    JVE::ScriptableTimeline* m_videoTimeline = nullptr;
+    JVE::TimelineRenderer* m_videoTimeline = nullptr;
 
     double m_viewportStart = 0.0;
     double m_viewportDuration = 10000.0;
@@ -410,17 +410,17 @@ void TestBatchRippleGapDrag::reloadTimelineState()
     waitForUi();
 }
 
-JVE::ScriptableTimeline* TestBatchRippleGapDrag::locateVideoTimeline()
+JVE::TimelineRenderer* TestBatchRippleGapDrag::locateVideoTimeline()
 {
-    const auto timelines = m_mainWindow->findChildren<JVE::ScriptableTimeline*>();
+    const auto timelines = m_mainWindow->findChildren<JVE::TimelineRenderer*>();
     if (timelines.isEmpty()) {
         return nullptr;
     }
 
-    JVE::ScriptableTimeline* best = nullptr;
+    JVE::TimelineRenderer* best = nullptr;
     int bestScore = std::numeric_limits<int>::min();
 
-    for (JVE::ScriptableTimeline* timeline : timelines) {
+    for (JVE::TimelineRenderer* timeline : timelines) {
         const QSize size = timeline->size();
         const QPoint globalPos = timeline->mapToGlobal(QPoint(0, 0));
         const int score = size.height() * 10 - globalPos.y();

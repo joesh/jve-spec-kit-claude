@@ -1,6 +1,6 @@
 #include "simple_lua_engine.h"
 #include "qt_bindings.h"
-#include "ui/timeline/scriptable_timeline.h"
+#include "ui/timeline/timeline_renderer.h"
 #include "core/resource_paths.h"
 #include <QDebug>
 #include <QDir>

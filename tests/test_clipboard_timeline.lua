@@ -8,56 +8,53 @@ local event_log_stub = {
 }
 package.loaded["core.event_log"] = event_log_stub
 
-local database = require('core.database')
-local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
-local Command = require('command')
+local database = require("core.database")
+local command_manager = require("core.command_manager")
+-- core.command_implementations is deleted
+-- require("core.command_implementations")
+
+local Command = require("command")
+local timeline_state = require("ui.timeline.timeline_state")
 local clipboard = require('core.clipboard')
 local json = require('dkjson')
 
 local SCHEMA_SQL = require("import_schema")
 
-local BASE_DATA_SQL = [[
-    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 24.0, 48000, 1920, 1080, 0, 0, 0, 240);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 24.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('video2', 'default_sequence', 'V2', 'VIDEO', 'video_frames', 24.0, 2, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('video3', 'default_sequence', 'V3', 'VIDEO', 'video_frames', 24.0, 3, 1);
-]]
+local now = os.time()
+local BASE_DATA_SQL = string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_a1', 'default_sequence', 'Audio 1', 'AUDIO', 1, 1);
+]], now, now, now, now)
 
 local db = nil
 
 local function reload_clips_into_state(state)
+    if not state or not state.clips then return end
     state.clips = {}
-    state.clip_lookup = {}
     local stmt = db:prepare([[
-        SELECT id, track_id, start_value, duration_value, source_in_value, source_out_value, media_id, parent_clip_id
+        SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame 
         FROM clips
-        ORDER BY start_value
     ]])
-    assert(stmt:exec())
-    while stmt:next() do
-        local entry = {
+    if not stmt then return end -- Should handle error
+    while stmt:exec() and stmt:next() do
+        local clip = {
             id = stmt:value(0),
             track_id = stmt:value(1),
-            start_value = stmt:value(2),
-            duration_value = stmt:value(3),
-            duration = stmt:value(3),
-            source_in_value = stmt:value(4),
-            source_in = stmt:value(4),
-            source_out_value = stmt:value(5),
-            source_out = stmt:value(5),
-            media_id = stmt:value(6),
-            parent_clip_id = stmt:value(7),
-            clip_kind = "timeline"
+            start_value = stmt:value(2) * 1000.0 / 30.0, -- Approx MS for legacy test logic
+            duration_value = stmt:value(3) * 1000.0 / 30.0,
+            source_in_value = stmt:value(4) * 1000.0 / 30.0,
+            source_out_value = stmt:value(5) * 1000.0 / 30.0,
+            enabled = true
         }
-        state.clips[#state.clips + 1] = entry
-        state.clip_lookup[entry.id] = entry
+        table.insert(state.clips, clip)
+        if state.clip_lookup then
+            state.clip_lookup[clip.id] = clip
+        end
     end
+    stmt:finalize()
 end
 
 local timeline_state = {
@@ -125,11 +122,9 @@ local function setup_database(path)
     assert(database.init(path))
     db = database.get_connection()
     assert(db:exec(SCHEMA_SQL))
-    assert(db:exec(BASE_DATA_SQL))
-
     local executors = {}
     local undoers = {}
-    command_impl.register_commands(executors, undoers, db)
+    -- command_impl.register_commands(executors, undoers, db) -- Removed
     command_manager.init(db, 'default_sequence', 'default_project')
 
     timeline_state.playhead_value = 0
@@ -145,7 +140,7 @@ local function reopen_database(path)
 
     local executors = {}
     local undoers = {}
-    command_impl.register_commands(executors, undoers, db)
+    -- command_impl.register_commands(executors, undoers, db)
     command_manager.init(db, 'default_sequence', 'default_project')
 
     timeline_state.playhead_value = 0
@@ -184,10 +179,10 @@ local function insert_clip_via_command(params)
 end
 
 local function get_clip_start_value(clip_id)
-    local stmt = db:prepare("SELECT start_value FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(clip_id))
-    local start_value = stmt:value(0)
+    local start_value = stmt:value(0) * 1000.0 / 30.0
     stmt:finalize()
     return start_value
 end

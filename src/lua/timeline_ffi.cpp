@@ -1,5 +1,5 @@
 #include "timeline_ffi.h"
-#include "../ui/timeline/scriptable_timeline.h"
+#include "../ui/timeline/timeline_renderer.h"
 #include <QDebug>
 
 namespace JVE {
@@ -15,19 +15,19 @@ void TimelineFFI::register_functions(lua_State* L) {
     qDebug() << "TimelineFFI: Registered 5 timeline drawing functions with Lua";
 }
 
-ScriptableTimeline* TimelineFFI::get_timeline_widget(lua_State* L, int index) {
-    // Get userdata and cast to ScriptableTimeline*
+TimelineRenderer* TimelineFFI::get_timeline_widget(lua_State* L, int index) {
+    // Get userdata and cast to TimelineRenderer*
     // Lua validation should ensure this is valid before calling
     void** userdata = static_cast<void**>(lua_touserdata(L, index));
     if (!userdata || !*userdata) {
         return nullptr;
     }
     
-    return static_cast<ScriptableTimeline*>(*userdata);
+    return static_cast<TimelineRenderer*>(*userdata);
 }
 
 int TimelineFFI::timeline_clear_commands(lua_State* L) {
-    ScriptableTimeline* timeline = get_timeline_widget(L, 1);
+    TimelineRenderer* timeline = get_timeline_widget(L, 1);
     
     if (timeline) {
         timeline->clearCommands();
@@ -40,7 +40,7 @@ int TimelineFFI::timeline_clear_commands(lua_State* L) {
 }
 
 int TimelineFFI::timeline_add_rect(lua_State* L) {
-    ScriptableTimeline* timeline = get_timeline_widget(L, 1);
+    TimelineRenderer* timeline = get_timeline_widget(L, 1);
     int x = lua_tointeger(L, 2);
     int y = lua_tointeger(L, 3);
     int width = lua_tointeger(L, 4);
@@ -57,7 +57,7 @@ int TimelineFFI::timeline_add_rect(lua_State* L) {
 }
 
 int TimelineFFI::timeline_add_text(lua_State* L) {
-    ScriptableTimeline* timeline = get_timeline_widget(L, 1);
+    TimelineRenderer* timeline = get_timeline_widget(L, 1);
     int x = lua_tointeger(L, 2);
     int y = lua_tointeger(L, 3);
     const char* text = lua_tostring(L, 4);
@@ -73,7 +73,7 @@ int TimelineFFI::timeline_add_text(lua_State* L) {
 }
 
 int TimelineFFI::timeline_add_line(lua_State* L) {
-    ScriptableTimeline* timeline = get_timeline_widget(L, 1);
+    TimelineRenderer* timeline = get_timeline_widget(L, 1);
     int x1 = lua_tointeger(L, 2);
     int y1 = lua_tointeger(L, 3);
     int x2 = lua_tointeger(L, 4);
@@ -92,11 +92,11 @@ int TimelineFFI::timeline_add_line(lua_State* L) {
 }
 
 int TimelineFFI::timeline_update(lua_State* L) {
-    ScriptableTimeline* timeline = get_timeline_widget(L, 1);
+    TimelineRenderer* timeline = get_timeline_widget(L, 1);
     
     if (timeline) {
         // Trigger a repaint to execute the drawing commands
-        timeline->update();
+        timeline->update(); // QWidget update method
         lua_pushboolean(L, true);
     } else {
         lua_pushboolean(L, false);

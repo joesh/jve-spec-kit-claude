@@ -1,6 +1,50 @@
 local edge_utils = require('ui.timeline.edge_utils')
+local Rational = require('core.rational')
 
 local Renderer = {}
+
+local function to_rational_if_needed(val, ref_rational)
+    if type(val) == "number" then
+        -- Preserve infinity
+        if val == math.huge or val == -math.huge then return val end
+        if ref_rational and getmetatable(ref_rational) == Rational.metatable then
+            return Rational.new(val, ref_rational.fps_numerator, ref_rational.fps_denominator)
+        end
+    end
+    return val
+end
+
+-- Helper for min/max with mixed Rational/Number (Infinity)
+local function min_val(a, b)
+    if a == -math.huge or b == -math.huge then return -math.huge end
+    if a == math.huge then return b end
+    if b == math.huge then return a end
+    if getmetatable(a) == Rational.metatable and getmetatable(b) == Rational.metatable then
+        return (a < b) and a or b
+    elseif getmetatable(a) == Rational.metatable and type(b) == "number" then
+        return (a < Rational.new(b, a.fps_numerator, a.fps_denominator)) and a or b
+    elseif type(a) == "number" and getmetatable(b) == Rational.metatable then
+        return (Rational.new(a, b.fps_numerator, b.fps_denominator) < b) and a or b
+    else
+        return math.min(a, b)
+    end
+end
+
+local function max_val(a, b)
+    if a == math.huge or b == math.huge then return math.huge end
+    if a == -math.huge then return b end
+    if b == -math.huge then return a end
+    if getmetatable(a) == Rational.metatable and getmetatable(b) == Rational.metatable then
+        return Rational.max(a, b)
+    else
+        -- Fallback/mixed
+        return (a < b) and b or a
+    end
+end
+
+local function is_rational(v)
+    return getmetatable(v) == Rational.metatable
+end
 
 -- Normalize constraints lookup for a given edge.
 local function constraint_for_edge(trim_constraints, edge)
@@ -12,57 +56,73 @@ local function constraint_for_edge(trim_constraints, edge)
 end
 
 -- Compute a shared clamped delta across all edges by intersecting their constraints.
-local function compute_shared_delta(drag_edges, drag_delta_ms, trim_constraints)
+local function compute_shared_delta(drag_edges, drag_delta, trim_constraints)
     local global_min = -math.huge
     local global_max = math.huge
 
     for _, edge in ipairs(drag_edges or {}) do
         local constraints = constraint_for_edge(trim_constraints, edge)
         if constraints then
-            if constraints.min_delta and constraints.min_delta > global_min then
-                global_min = constraints.min_delta
+            if constraints.min_delta then
+                global_min = max_val(global_min, constraints.min_delta)
             end
-            if constraints.max_delta and constraints.max_delta < global_max then
-                global_max = constraints.max_delta
+            if constraints.max_delta then
+                global_max = min_val(global_max, constraints.max_delta)
             end
         end
     end
 
     if global_min > global_max then
         -- No valid range; block movement.
+        -- Return 0 matching the type of drag_delta if possible
+        if is_rational(drag_delta) then
+            return Rational.new(0, drag_delta.fps_numerator, drag_delta.fps_denominator), global_min, global_max
+        end
         return 0, global_min, global_max
     end
 
-    local clamped = math.max(global_min, math.min(global_max, drag_delta_ms))
+    local clamped = max_val(global_min, min_val(global_max, drag_delta))
     return clamped, global_min, global_max
 end
 
--- Clamp the requested delta_ms using the calculated trim constraints.
-local function clamp_edge_delta(edge, delta_ms, trim_constraints)
+-- Clamp the requested delta using the calculated trim constraints.
+local function clamp_edge_delta(edge, delta, trim_constraints)
     local constraints = constraint_for_edge(trim_constraints, edge)
     if not constraints then
-        return delta_ms, false
+        return delta, false
     end
     local min_delta = constraints.min_delta or -math.huge
     local max_delta = constraints.max_delta or math.huge
-    local clamped = math.max(min_delta, math.min(max_delta, delta_ms))
-    local at_limit = (clamped ~= delta_ms)
+    
+    local clamped = max_val(min_delta, min_val(max_delta, delta))
+    local at_limit = (clamped ~= delta)
     return clamped, at_limit
 end
 
 -- Prepare preview metadata for a single edge: clamped delta, at-limit flag, color.
-local function build_preview_edge(edge, shared_delta_ms, requested_delta_ms, trim_constraints, colors)
+local function build_preview_edge(edge, shared_delta, requested_delta, trim_constraints, colors)
     local normalized_edge = edge_utils.normalize_edge_type(edge.edge_type)
     local constraints = constraint_for_edge(trim_constraints, edge)
-    local clamped_delta, at_limit = clamp_edge_delta(edge, shared_delta_ms, trim_constraints)
-    if constraints and requested_delta_ms and requested_delta_ms ~= shared_delta_ms then
-        local eps = 0.0001
+    local clamped_delta, at_limit = clamp_edge_delta(edge, shared_delta, trim_constraints)
+    
+    if constraints and requested_delta and requested_delta ~= shared_delta then
+        -- Check closeness to limit
         local min_d = constraints.min_delta or -math.huge
         local max_d = constraints.max_delta or math.huge
-        if shared_delta_ms <= min_d + eps or shared_delta_ms >= max_d - eps then
+        
+        if shared_delta == min_d or shared_delta == max_d then
             at_limit = true
         end
+        
+        -- Rational close check? Assume strict equality for Rational, or epsilon for float
+        if not is_rational(shared_delta) then
+             local eps = 0.0001
+             if shared_delta <= min_d + eps or shared_delta >= max_d - eps then
+                at_limit = true
+             end
+        end
     end
+    
     local color = colors.edge_selected_available
     if at_limit then
         color = colors.edge_selected_limit
@@ -71,23 +131,23 @@ local function build_preview_edge(edge, shared_delta_ms, requested_delta_ms, tri
         clip_id = edge.clip_id,
         edge_type = normalized_edge,
         target_track_id = edge.track_id,
-        delta_ms = clamped_delta,
+        delta = clamped_delta,
         at_limit = at_limit,
         color = color
     }
 end
 
 -- Public API: normalize a list of drag edges into preview-ready edges
-function Renderer.build_preview_edges(drag_edges, drag_delta_ms, trim_constraints, colors)
+function Renderer.build_preview_edges(drag_edges, drag_delta, trim_constraints, colors)
     local previews = {}
     if not drag_edges or #drag_edges == 0 then
         return previews
     end
 
-    local shared_delta = compute_shared_delta(drag_edges, drag_delta_ms, trim_constraints)
+    local shared_delta = compute_shared_delta(drag_edges, drag_delta, trim_constraints)
 
     for _, edge in ipairs(drag_edges) do
-        local preview = build_preview_edge(edge, shared_delta, drag_delta_ms, trim_constraints, colors)
+        local preview = build_preview_edge(edge, shared_delta, drag_delta, trim_constraints, colors)
         table.insert(previews, preview)
     end
     return previews

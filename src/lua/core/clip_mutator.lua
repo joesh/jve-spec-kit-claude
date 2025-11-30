@@ -7,7 +7,7 @@ local krono_ok, krono = pcall(require, "core.krono")
 local ClipMutator = {}
 local timeline_state_ok, timeline_state = pcall(require, 'ui.timeline.timeline_state')
 
-local function clone_state(row)
+    local function clone_state(row)
     return {
         id = row.id,
         project_id = row.project_id,
@@ -17,8 +17,8 @@ local function clone_state(row)
         duration = row.duration,
         source_in = row.source_in,
         source_out = row.source_out,
-        timebase_type = row.timebase_type,
-        timebase_rate = row.timebase_rate,
+        fps_numerator = row.fps_numerator,
+        fps_denominator = row.fps_denominator,
         enabled = row.enabled
     }
 end
@@ -34,7 +34,7 @@ end
 local function run_update(db, row)
     local stmt = db:prepare([[
         UPDATE clips
-        SET start_value = ?, duration_value = ?, source_in_value = ?, source_out_value = ?, enabled = ?
+        SET timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
         WHERE id = ?
     ]])
     if not stmt then
@@ -70,8 +70,8 @@ local function run_insert(db, row)
     local stmt = db:prepare([[
         INSERT INTO clips (
             id, project_id, clip_kind, name, track_id, media_id,
-            start_value, duration_value, source_in_value, source_out_value,
-            timebase_type, timebase_rate, enabled
+            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+            fps_numerator, fps_denominator, enabled
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
@@ -88,8 +88,8 @@ local function run_insert(db, row)
     stmt:bind_value(8, row.duration)
     stmt:bind_value(9, row.source_in or 0)
     stmt:bind_value(10, row.source_out or (row.source_in or 0) + row.duration)
-    stmt:bind_value(11, row.timebase_type or "video_frames")
-    stmt:bind_value(12, row.timebase_rate or 24.0)
+    stmt:bind_value(11, row.fps_numerator or 30)
+    stmt:bind_value(12, row.fps_denominator or 1)
     stmt:bind_value(13, row.enabled and 1 or 0)
     local ok = stmt:exec()
     if not ok then
@@ -105,11 +105,11 @@ end
 local function load_track_clips(db, track_id)
     local stmt = db:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
-               start_value, duration_value, source_in_value, source_out_value,
-               timebase_type, timebase_rate, enabled
+               timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+               fps_numerator, fps_denominator, enabled
         FROM clips
         WHERE track_id = ?
-        ORDER BY start_value
+        ORDER BY timeline_start_frame
     ]])
     if not stmt then
         return nil, "Failed to prepare track clip query"
@@ -132,14 +132,11 @@ local function load_track_clips(db, track_id)
             track_id = stmt:value(4),
             media_id = stmt:value(5),
             start_value = stmt:value(6),
-            duration_value = stmt:value(7),
             duration = stmt:value(7),
-            source_in_value = stmt:value(8),
             source_in = stmt:value(8),
-            source_out_value = stmt:value(9),
             source_out = stmt:value(9),
-            timebase_type = stmt:value(10),
-            timebase_rate = stmt:value(11),
+            fps_numerator = stmt:value(10),
+            fps_denominator = stmt:value(11),
             enabled = stmt:value(12) == 1 or stmt:value(12) == true
         })
     end

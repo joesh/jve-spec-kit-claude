@@ -3,7 +3,7 @@
 ## **🔧 DEVELOPMENT RULES**
 
 ### **0. Todo Management & Session Continuity**
-- **ALWAYS use TodoWrite tool** for real-time task tracking
+- **ALWAYS write to TODO.md for real-time task tracking
 - **UPDATE immediately** when starting/completing/discovering tasks
 - **CHECK todo list FIRST** before asking what's next
 - **ONE task in_progress** at a time

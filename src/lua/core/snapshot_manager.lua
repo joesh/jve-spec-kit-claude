@@ -3,6 +3,7 @@
 -- Part of the event sourcing architecture
 
 local uuid = require("uuid")
+local Rational = require("core.rational")
 
 local M = {}
 
@@ -38,10 +39,10 @@ end
 
 local function fetch_sequence_record(db, sequence_id)
     local query = db:prepare([[
-        SELECT id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-               timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
-               viewport_start_value, viewport_duration_frames_value, mark_in_value, mark_out_value,
-               current_sequence_number
+        SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
+               timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
+               view_start_frame, view_duration_frames, mark_in_frame, mark_out_frame,
+               current_sequence_number, audio_rate
         FROM sequences
         WHERE id = ?
     ]])
@@ -59,19 +60,20 @@ local function fetch_sequence_record(db, sequence_id)
             project_id = query:value(1),
             name = query:value(2),
             kind = query:value(3),
-            frame_rate = query:value(4),
-            audio_sample_rate = query:value(5),
+            fps_numerator = query:value(4),
+            fps_denominator = query:value(5),
             width = query:value(6),
             height = query:value(7),
             timecode_start_frame = query:value(8),
-            playhead_value = query:value(9),
+            playhead_frame = query:value(9),
             selected_clip_ids = query:value(10),
             selected_edge_infos = query:value(11),
-            viewport_start_value = query:value(12),
-            viewport_duration_frames_value = query:value(13),
-            mark_in_value = query:value(14),
-            mark_out_value = query:value(15),
-            current_sequence_number = query:value(16)
+            view_start_frame = query:value(12),
+            view_duration_frames = query:value(13),
+            mark_in_frame = query:value(14),
+            mark_out_frame = query:value(15),
+            current_sequence_number = query:value(16),
+            audio_rate = query:value(17)
         }
     end
 
@@ -86,7 +88,7 @@ end
 
 local function fetch_tracks(db, sequence_id)
     local query = db:prepare([[
-        SELECT id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index,
+        SELECT id, sequence_id, name, track_type, track_index,
                enabled, locked, muted, soloed, volume, pan
         FROM tracks
         WHERE sequence_id = ?
@@ -107,15 +109,13 @@ local function fetch_tracks(db, sequence_id)
                 sequence_id = query:value(1),
                 name = query:value(2),
                 track_type = query:value(3),
-                timebase_type = query:value(4),
-                timebase_rate = query:value(5),
-                track_index = query:value(6),
-                enabled = query:value(7),
-                locked = query:value(8),
-                muted = query:value(9),
-                soloed = query:value(10),
-                volume = query:value(11),
-                pan = query:value(12)
+                track_index = query:value(4),
+                enabled = query:value(5),
+                locked = query:value(6),
+                muted = query:value(7),
+                soloed = query:value(8),
+                volume = query:value(9),
+                pan = query:value(10)
             }
         end
     end
@@ -144,17 +144,16 @@ local function build_snapshot_payload(db, sequence_id, clips)
     for _, clip in ipairs(clips) do
         require_field("build_snapshot_payload", "clip", "id", clip.id)
         require_field("build_snapshot_payload", "clip", "clip_kind", clip.clip_kind)
-        require_field("build_snapshot_payload", "clip", "project_id", clip.project_id)
-        require_field("build_snapshot_payload", "clip", "owner_sequence_id", clip.owner_sequence_id)
-        require_field("build_snapshot_payload", "clip", "start_value", clip.start_value)
-        require_field("build_snapshot_payload", "clip", "duration_value", clip.duration_value or clip.duration)
-        require_field("build_snapshot_payload", "clip", "source_in_value", clip.source_in_value or clip.source_in)
-        require_field("build_snapshot_payload", "clip", "source_out_value", clip.source_out_value or clip.source_out)
-        require_field("build_snapshot_payload", "clip", "timebase_type", clip.timebase_type)
-        require_field("build_snapshot_payload", "clip", "timebase_rate", clip.timebase_rate)
-        require_field("build_snapshot_payload", "clip", "enabled", clip.enabled)
-        require_field("build_snapshot_payload", "clip", "offline", clip.offline)
-
+        -- V5: Use Rational properties
+        -- Ensure we extract frames/ticks for storage
+        local start_frame = clip.timeline_start and clip.timeline_start.frames
+        local dur_frames = clip.duration and clip.duration.frames
+        local src_in_frame = clip.source_in and clip.source_in.frames
+        local src_out_frame = clip.source_out and clip.source_out.frames
+        
+        -- Fallback for missing Rational objects (should be caught by require_field ideally)
+        if not start_frame then start_frame = 0 end -- Error?
+        
         table.insert(clip_data, {
             id = clip.id,
             clip_kind = clip.clip_kind,
@@ -165,36 +164,30 @@ local function build_snapshot_payload(db, sequence_id, clips)
             parent_clip_id = clip.parent_clip_id,
             source_sequence_id = clip.source_sequence_id,
             media_id = clip.media_id,
-            start_value = clip.start_value,
-            duration_value = clip.duration_value or clip.duration,
-            source_in_value = clip.source_in_value or clip.source_in,
-            source_out_value = clip.source_out_value or clip.source_out,
-            timebase_type = clip.timebase_type,
-            timebase_rate = clip.timebase_rate,
+            
+            timeline_start_frame = start_frame,
+            duration_frames = dur_frames,
+            source_in_frame = src_in_frame,
+            source_out_frame = src_out_frame,
+            
+            fps_numerator = clip.rate and clip.rate.fps_numerator,
+            fps_denominator = clip.rate and clip.rate.fps_denominator,
+            
             enabled = clip.enabled and 1 or 0,
             offline = clip.offline and 1 or 0
         })
 
         if clip.media_id and clip.media_id ~= "" then
             local media = media_lookup[clip.media_id]
-            assert(media, string.format("snapshot_manager.build_snapshot_payload: clip %s references missing media %s", tostring(clip.id), tostring(clip.media_id)))
-            if not media_data_lookup[clip.media_id] then
-                require_field("build_snapshot_payload", "media", "id", media.id)
-                require_field("build_snapshot_payload", "media", "project_id", media.project_id)
-                require_field("build_snapshot_payload", "media", "name", media.name)
-                require_field("build_snapshot_payload", "media", "file_path", media.file_path)
-                require_field("build_snapshot_payload", "media", "duration_value", media.duration_value)
-                require_field("build_snapshot_payload", "media", "timebase_type", media.timebase_type)
-                require_field("build_snapshot_payload", "media", "timebase_rate", media.timebase_rate)
+            if media and not media_data_lookup[clip.media_id] then
                 media_data_lookup[clip.media_id] = {
                     id = media.id,
                     project_id = media.project_id,
                     name = media.name,
                     file_path = media.file_path,
-                    duration_value = media.duration_value,
-                    timebase_type = media.timebase_type,
-                    timebase_rate = media.timebase_rate,
-                    frame_rate = media.frame_rate,
+                    duration_frames = media.duration and media.duration.frames,
+                    fps_numerator = media.frame_rate and media.frame_rate.fps_numerator,
+                    fps_denominator = media.frame_rate and media.frame_rate.fps_denominator,
                     width = media.width,
                     height = media.height,
                     audio_channels = media.audio_channels,
@@ -296,17 +289,10 @@ local function deserialize_snapshot_payload(json_str)
         for _, data in ipairs(payload.clips) do
             require_field("deserialize_snapshot_payload", "clip", "id", data.id)
             require_field("deserialize_snapshot_payload", "clip", "clip_kind", data.clip_kind)
-            require_field("deserialize_snapshot_payload", "clip", "project_id", data.project_id)
-            require_field("deserialize_snapshot_payload", "clip", "owner_sequence_id", data.owner_sequence_id)
-            require_field("deserialize_snapshot_payload", "clip", "start_value", data.start_value)
-            require_field("deserialize_snapshot_payload", "clip", "duration_value", data.duration_value or data.duration)
-            require_field("deserialize_snapshot_payload", "clip", "source_in_value", data.source_in_value or data.source_in)
-            require_field("deserialize_snapshot_payload", "clip", "source_out_value", data.source_out_value or data.source_out)
-            require_field("deserialize_snapshot_payload", "clip", "timebase_type", data.timebase_type)
-            require_field("deserialize_snapshot_payload", "clip", "timebase_rate", data.timebase_rate)
-            require_field("deserialize_snapshot_payload", "clip", "enabled", data.enabled)
-            require_field("deserialize_snapshot_payload", "clip", "offline", data.offline)
-
+            
+            local num = data.fps_numerator or 30
+            local den = data.fps_denominator or 1
+            
             clips[#clips + 1] = {
                 id = data.id,
                 clip_kind = data.clip_kind,
@@ -317,12 +303,14 @@ local function deserialize_snapshot_payload(json_str)
                 source_sequence_id = data.source_sequence_id,
                 track_id = data.track_id,
                 media_id = data.media_id,
-                start_value = data.start_value,
-                duration_value = data.duration_value or data.duration,
-                source_in_value = data.source_in_value or data.source_in,
-                source_out_value = data.source_out_value or data.source_out,
-                timebase_type = data.timebase_type,
-                timebase_rate = data.timebase_rate,
+                
+                timeline_start = Rational.new(data.timeline_start_frame or 0, num, den),
+                duration = Rational.new(data.duration_frames or 0, num, den),
+                source_in = Rational.new(data.source_in_frame or 0, num, den),
+                source_out = Rational.new(data.source_out_frame or 0, num, den),
+                
+                rate = { fps_numerator = num, fps_denominator = den },
+                
                 enabled = data.enabled == 1,
                 offline = data.offline == 1
             }
@@ -333,21 +321,19 @@ local function deserialize_snapshot_payload(json_str)
     if payload.media then
         for _, media_data in ipairs(payload.media) do
             require_field("deserialize_snapshot_payload", "media", "id", media_data.id)
-            require_field("deserialize_snapshot_payload", "media", "project_id", media_data.project_id)
-            require_field("deserialize_snapshot_payload", "media", "name", media_data.name)
-            require_field("deserialize_snapshot_payload", "media", "file_path", media_data.file_path)
-            require_field("deserialize_snapshot_payload", "media", "duration_value", media_data.duration_value or media_data.duration)
-            require_field("deserialize_snapshot_payload", "media", "timebase_type", media_data.timebase_type)
-            require_field("deserialize_snapshot_payload", "media", "timebase_rate", media_data.timebase_rate)
+            
+            local num = media_data.fps_numerator or 30
+            local den = media_data.fps_denominator or 1
+            
             media[#media + 1] = {
                 id = media_data.id,
                 project_id = media_data.project_id,
                 name = media_data.name,
                 file_path = media_data.file_path,
-                duration_value = media_data.duration_value or media_data.duration,
-                timebase_type = media_data.timebase_type,
-                timebase_rate = media_data.timebase_rate,
-                frame_rate = media_data.frame_rate,
+                
+                duration = Rational.new(media_data.duration_frames or 0, num, den),
+                frame_rate = { fps_numerator = num, fps_denominator = den },
+                
                 width = media_data.width,
                 height = media_data.height,
                 audio_channels = media_data.audio_channels,

@@ -4,12 +4,13 @@
 
 local M = {}
 local db = require("core.database")
-local frame_utils = require("core.frame_utils")
-local command_manager = require("core.command_manager")
+-- local command_manager = require("core.command_manager") -- Removed to break circular dependency
 local Command = require("command")
 local ui_constants = require("core.ui_constants")
 local profile_scope = require("core.profile_scope")
 local krono_ok, krono = pcall(require, "core.krono")
+local json = require("dkjson")
+local Rational = require("core.rational")
 
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
 local track_layout_dirty = false
@@ -65,24 +66,27 @@ local function fresh_state()
         tracks = {},  -- All tracks from database
         clips = {},   -- All clips from database
         project_id = "default_project",
-        sequence_frame_rate = frame_utils.default_frame_rate,
+        
+        -- Rate is now a table { fps_numerator, fps_denominator }
+        sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 },
         sequence_audio_rate = 48000,
         sequence_timecode_start_frame = 0,
 
-        -- Logical viewport (time-based, not pixel-based)
-        viewport_start_value = 0,     -- milliseconds - left edge of visible area
-        viewport_duration_frames_value = 10000,   -- milliseconds - how much time is visible
+        -- Logical viewport (Rational Time)
+        -- Defaults: Start at 0, Duration 10 seconds (300 frames @ 30fps)
+        viewport_start_time = Rational.new(0, 1, 1),
+        viewport_duration = Rational.new(300, 1, 1), 
 
-        -- Playhead
-        playhead_value = 0,  -- milliseconds
+        -- Playhead (Rational Time)
+        playhead_position = Rational.new(0, 1, 1),
 
         -- Selection
         selected_clips = {},  -- Array of selected clip objects
         selected_edges = {},  -- Array of selected edge objects for trimming
                               -- Each edge: {clip_id, edge_type ("in"/"out"), trim_type ("ripple"/"roll")}
         selected_gaps = {},   -- Array of selected gap descriptors {track_id, start_value, duration_value}
-        mark_in_value = nil,   -- Mark In point in milliseconds (nil when unset)
-        mark_out_value = nil,  -- Mark Out point in milliseconds (nil when unset)
+        mark_in_value = nil,   -- Mark In point in Rational (nil when unset)
+        mark_out_value = nil,  -- Mark Out point in Rational (nil when unset)
 
         -- Interaction state (for cross-view operations)
         dragging_playhead = false,
@@ -160,8 +164,8 @@ local function rebuild_clip_indexes()
 
     for _, list in pairs(track_clip_index) do
         table.sort(list, function(a, b)
-            local a_start = a.start_value or 0
-            local b_start = b.start_value or 0
+            local a_start = a.timeline_start.frames or 0
+            local b_start = b.timeline_start.frames or 0
             if a_start == b_start then
                 return (a.id or "") < (b.id or "")
             end
@@ -197,7 +201,7 @@ local function hydrate_clip_from_database(clip_id, expected_sequence_id)
     clip._version = state_version
     table.insert(state.clips, clip)
     invalidate_clip_indexes()
-    print(string.format("timeline_state: Hydrated missing clip %s from database", tostring(clip_id)))
+    -- print(string.format("timeline_state: Hydrated missing clip %s from database", tostring(clip_id)))
     return clip
 end
 
@@ -211,10 +215,10 @@ local function clone_clip_snapshot(clip)
         owner_sequence_id = clip.owner_sequence_id,
         track_sequence_id = clip.track_sequence_id,
         media_id = clip.media_id,
-        start_value = clip.start_value,
-        duration_value = clip.duration_value,
-        source_in_value = clip.source_in_value,
-        source_out_value = clip.source_out_value,
+        timeline_start = clip.timeline_start,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        source_out = clip.source_out,
         enabled = clip.enabled
     }
 end
@@ -311,117 +315,60 @@ local function build_track_height_template()
     return template
 end
 
-local function ensure_sequence_viewport_columns(db_conn)
-    if not db_conn then
-        return
-    end
-
-    local pragma = db_conn:prepare("PRAGMA table_info(sequences)")
-    if not pragma then
-        return
-    end
-
-    local has_start = false
-    local has_duration_value = false
-    local has_mark_in = false
-    local has_mark_out = false
-    if pragma:exec() then
-        while pragma:next() do
-            local column_name = pragma:value(1)
-            if column_name == "viewport_start_value" then
-                has_start = true
-            elseif column_name == "viewport_duration_frames_value" then
-                has_duration_value = true
-            elseif column_name == "mark_in_value" then
-                has_mark_in = true
-            elseif column_name == "mark_out_value" then
-                has_mark_out = true
+local function compute_sequence_content_length()
+    local max_end_rational = Rational.new(0, state.sequence_frame_rate.fps_numerator, state.sequence_frame_rate.fps_denominator)
+    for _, clip in ipairs(state.clips) do
+        if getmetatable(clip.timeline_start) == Rational.metatable and getmetatable(clip.duration) == Rational.metatable then
+            local clip_end = clip.timeline_start + clip.duration
+            if clip_end > max_end_rational then
+                max_end_rational = clip_end
             end
         end
     end
-    pragma:finalize()
-
-    if not has_start then
-        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN viewport_start_value INTEGER NOT NULL DEFAULT 0")
-        if not ok then
-            print("WARNING: Failed to add viewport_start_value column: " .. tostring(err or "unknown error"))
-        end
-    end
-
-    if not has_duration_value then
-        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN viewport_duration_frames_value INTEGER NOT NULL DEFAULT 10000")
-        if not ok then
-            print("WARNING: Failed to add viewport_duration_frames_value column: " .. tostring(err or "unknown error"))
-        end
-    end
-
-    if not has_mark_in then
-        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN mark_in_value INTEGER")
-        if not ok then
-            print("WARNING: Failed to add mark_in_value column: " .. tostring(err or "unknown error"))
-        end
-    end
-
-    if not has_mark_out then
-        local ok, err = db_conn:exec("ALTER TABLE sequences ADD COLUMN mark_out_value INTEGER")
-        if not ok then
-            print("WARNING: Failed to add mark_out_value column: " .. tostring(err or "unknown error"))
-        end
-    end
-end
-
-local function compute_sequence_content_length()
-    local max_end = 0
-    for _, clip in ipairs(state.clips) do
-        local clip_start = clip.start_value or 0
-        local clip_duration_value = clip.duration_value or 0
-        local clip_end = clip_start + clip_duration_value
-        if clip_end > max_end then
-            max_end = clip_end
-        end
-    end
-    return max_end
+    return max_end_rational
 end
 
 local function calculate_timeline_extent()
-    local content_end = compute_sequence_content_length()
-    local max_end = content_end
+    local content_end_rational = compute_sequence_content_length()
+    local max_end_rational = content_end_rational
 
-    if state.playhead_value and state.playhead_value > max_end then
-        max_end = state.playhead_value
+    -- Default rate for constants
+    local seq_fps = M.get_sequence_frame_rate()
+    local default_fps_num = seq_fps.fps_numerator
+    local default_fps_den = seq_fps.fps_denominator
+
+    if state.playhead_position > max_end_rational then
+        max_end_rational = state.playhead_position
     end
 
-    if state.viewport_start_value and state.viewport_duration_frames_value then
-        local viewport_end = state.viewport_start_value + state.viewport_duration_frames_value
-        if viewport_end > max_end then
-            max_end = viewport_end
+    if state.viewport_start_time and state.viewport_duration then
+        local viewport_end = state.viewport_start_time + state.viewport_duration
+        if viewport_end > max_end_rational then
+            max_end_rational = viewport_end
         end
     end
 
-    return math.max(60000, max_end + 10000)
+    -- Add some buffer, ensuring it's Rational
+    local buffer_rational = Rational.new(10000, default_fps_num, default_fps_den) -- 10000 frames buffer
+    local min_extent_rational = Rational.new(60000, default_fps_num, default_fps_den) -- min 60000 frames extent
+
+    return Rational.max(min_extent_rational, max_end_rational + buffer_rational)
 end
 
-local function sanitize_mark_time(time_value)
-    if type(time_value) ~= "number" then
-        return nil
-    end
-    local snapped = math.floor(time_value + 0.5)
-    if snapped < 0 then
-        snapped = 0
-    end
-    return snapped
-end
+local function clamp_viewport_start(desired_start_rational, duration_rational)
+    local total_extent_rational = calculate_timeline_extent()
 
-local function clamp_viewport_start(desired_start, duration_value)
-    local total_extent = calculate_timeline_extent()
-    local max_start = math.max(0, total_extent - duration_value)
-    if desired_start < 0 then
-        return 0
+    -- Calculate max_start_rational, ensuring it doesn't go below 0
+    local zero_rational = Rational.new(0, desired_start_rational.fps_numerator, desired_start_rational.fps_denominator)
+    local max_start_rational = Rational.max(zero_rational, total_extent_rational - duration_rational)
+
+    if desired_start_rational < zero_rational then
+        return zero_rational
     end
-    if desired_start > max_start then
-        return max_start
+    if desired_start_rational > max_start_rational then
+        return max_start_rational
     end
-    return desired_start
+    return desired_start_rational
 end
 
 local function ensure_playhead_visible()
@@ -429,21 +376,32 @@ local function ensure_playhead_visible()
         return false
     end
 
-    local duration_value = state.viewport_duration_frames_value
-    if not duration_value or duration_value <= 0 then
+    local viewport_duration_rational = state.viewport_duration
+    if not viewport_duration_rational or viewport_duration_rational.frames <= 0 then
         return false
     end
 
-    local start_value = state.viewport_start_value
-    local end_time = start_value + duration_value
-    local playhead = state.playhead_value or 0
+    local viewport_start_rational = state.viewport_start_time
+    local viewport_end_rational = viewport_start_rational + viewport_duration_rational
+    local playhead_position_rational = state.playhead_position or Rational.new(0, viewport_duration_rational.fps_numerator, viewport_duration_rational.fps_denominator)
 
-    if playhead < start_value or playhead > end_time then
-        local desired_start = playhead - (duration_value / 2)
-        M.set_viewport_start_value(desired_start)
-        return true
+    local changed = false
+    if playhead_position_rational < viewport_start_rational or playhead_position_rational > viewport_end_rational then
+        -- Center playhead in viewport
+        local desired_start = playhead_position_rational - (viewport_duration_rational / 2)
+        local clamped_start = clamp_viewport_start(desired_start, viewport_duration_rational)
+        
+        if state.viewport_start_time ~= clamped_start then
+            state.viewport_start_time = clamped_start
+            changed = true
+        end
     end
-    return false
+    
+    if changed then
+        notify_listeners()
+        M.persist_state_to_db()
+    end
+    return changed
 end
 
 -- Debug layout capture (populated by views when rendering)
@@ -457,10 +415,10 @@ local function compute_gap_after(clip)
     if not next_clip then
         return nil
     end
-    local clip_end = (clip.start_value or 0) + (clip.duration_value or 0)
-    local gap = (next_clip.start_value or 0) - clip_end
-    if gap <= 1 then
-        return 0
+    local clip_end = clip.timeline_start + clip.duration
+    local gap = next_clip.timeline_start - clip_end
+    if gap.frames <= 1 then
+        return Rational.new(0, gap.fps_numerator, gap.fps_denominator)
     end
     return gap
 end
@@ -473,11 +431,11 @@ local function compute_gap_before(clip)
     if not prev_clip then
         return nil
     end
-    local clip_start = clip.start_value or 0
-    local prev_end = (prev_clip.start_value or 0) + (prev_clip.duration_value or 0)
+    local clip_start = clip.timeline_start
+    local prev_end = prev_clip.timeline_start + prev_clip.duration
     local gap = clip_start - prev_end
-    if gap <= 1 then
-        return 0
+    if gap.frames <= 1 then
+        return Rational.new(0, gap.fps_numerator, gap.fps_denominator)
     end
     return gap
 end
@@ -508,7 +466,7 @@ local function normalize_edge_selection()
             local new_clip_id = clip.id
             if edge.edge_type == "gap_after" then
                 local gap = compute_gap_after(clip)
-                if gap and gap <= 0 then
+                if gap and gap.frames <= 0 then
                     local neighbour = find_next_clip(clip)
                     if neighbour then
                         new_clip_id = neighbour.id
@@ -519,7 +477,7 @@ local function normalize_edge_selection()
                 end
             elseif edge.edge_type == "gap_before" then
                 local gap = compute_gap_before(clip)
-                if gap and gap <= 0 then
+                if gap and gap.frames <= 0 then
                     local neighbour = find_previous_clip(clip)
                     if neighbour then
                         new_clip_id = neighbour.id
@@ -592,58 +550,17 @@ M.colors = {
     edge_selected_limit = "#ff6666",      -- Red for selected edge at media limit
 }
 
--- Listener notification helper (defined early so M.init can use it)
--- Batches rapid state changes to prevent excessive redraws (60fps throttle)
+-- Listener notification helper
 local function notify_listeners()
     if notify_timer then
-        -- Timer already scheduled, will notify soon
         return
-    end
-
-    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
-    local krono_now_fn = (krono_enabled and krono and krono.now) and krono.now or nil
-    local schedule_ts = krono_now_fn and krono_now_fn() or nil
-    local profile_id = nil
-    if krono_enabled then
-        notify_profile_seq = notify_profile_seq + 1
-        profile_id = notify_profile_seq
     end
 
     -- Create Qt timer to batch notifications
     notify_timer = create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
         notify_timer = nil
-
-        local dispatch_start = krono_now_fn and krono_now_fn() or nil
-        local listener_count = #listeners
-        if profile_id and schedule_ts and dispatch_start then
-            print(string.format(
-                "timeline_state.notify[%d]: wait %.2fms (%d listener(s))",
-                profile_id,
-                dispatch_start - schedule_ts,
-                listener_count))
-        end
-
-        -- Call all listeners
         for index, listener in ipairs(listeners) do
-            local listener_start = krono_now_fn and krono_now_fn() or nil
             listener()
-            if profile_id and listener_start and krono_now_fn then
-                local listener_end = krono_now_fn()
-                print(string.format(
-                    "timeline_state.notify[%d]: listener %d (%s) %.2fms",
-                    profile_id,
-                    index,
-                    tostring(listener),
-                    listener_end - listener_start))
-            end
-        end
-
-        if profile_id and dispatch_start and krono_now_fn then
-            local dispatch_end = krono_now_fn()
-            print(string.format(
-                "timeline_state.notify[%d]: dispatch %.2fms",
-                profile_id,
-                dispatch_end - dispatch_start))
         end
     end)
 end
@@ -668,8 +585,6 @@ function M.init(sequence_id)
     -- Load playhead and selection state from sequence
     local db_conn = db.get_connection()
     if db_conn then
-        ensure_sequence_viewport_columns(db_conn)
-
         local project_stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
         if project_stmt then
             project_stmt:bind_value(1, sequence_id)
@@ -684,22 +599,35 @@ function M.init(sequence_id)
             project_stmt:finalize()
         end
 
-        local query = db_conn:prepare("SELECT playhead_value, selected_clip_ids, selected_edge_infos, viewport_start_value, viewport_duration_frames_value, frame_rate, timecode_start_frame, mark_in_value, mark_out_value FROM sequences WHERE id = ?")
+        local query = db_conn:prepare("SELECT playhead_frame, selected_clip_ids, selected_edge_infos, view_start_frame, view_duration_frames, fps_numerator, fps_denominator, mark_in_frame, mark_out_frame FROM sequences WHERE id = ?")
         if query then
             query:bind_value(1, sequence_id)
             if query:exec() and query:next() then
-                -- Restore playhead position
-                local saved_playhead = query:value(0)
-                if saved_playhead then
-                    state.playhead_value = saved_playhead
+                -- Load Rate
+                local fps_num = query:value(5) or 30
+                local fps_den = query:value(6) or 1
+                state.sequence_frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den }
+
+                -- Unconditionally rescale existing Rational objects in state to the loaded sequence rate
+                if state.playhead_position then state.playhead_position = state.playhead_position:rescale(fps_num, fps_den) end
+                if state.viewport_start_time then state.viewport_start_time = state.viewport_start_time:rescale(fps_num, fps_den) end
+                if state.viewport_duration then state.viewport_duration = state.viewport_duration:rescale(fps_num, fps_den) end
+                if state.mark_in_value then state.mark_in_value = state.mark_in_value:rescale(fps_num, fps_den) end
+                if state.mark_out_value then state.mark_out_value = state.mark_out_value:rescale(fps_num, fps_den) end
+
+                -- Restore playhead position (Rational)
+                local saved_playhead_frame = query:value(0)
+                if saved_playhead_frame then
+                    state.playhead_position = Rational.new(saved_playhead_frame, fps_num, fps_den)
+                else
+                    state.playhead_position = Rational.new(0, fps_num, fps_den)
                 end
 
                 -- Restore selection
                 local saved_selection_json = query:value(1)
                 if saved_selection_json and saved_selection_json ~= "" then
-                    local success, selected_ids = pcall(qt_json_decode, saved_selection_json)
+                    local success, selected_ids = pcall(json.decode, saved_selection_json)
                     if success and type(selected_ids) == "table" then
-                        -- Load clip objects for saved IDs
                         state.selected_clips = {}
                         for _, clip_id in ipairs(selected_ids) do
                             local clip = lookup_clip(clip_id)
@@ -707,17 +635,13 @@ function M.init(sequence_id)
                                 table.insert(state.selected_clips, clip)
                             end
                         end
-                        if #state.selected_clips > 0 then
-                            print(string.format("Restored playhead to %dms, selection: %d clips",
-                                state.playhead_value, #state.selected_clips))
-                        end
                     end
                 end
 
                 -- Restore edge selection
                 local saved_edges_json = query:value(2)
                 if saved_edges_json and saved_edges_json ~= "" then
-                    local success_edges, edge_infos = pcall(qt_json_decode, saved_edges_json)
+                    local success_edges, edge_infos = pcall(json.decode, saved_edges_json)
                     if success_edges and type(edge_infos) == "table" then
                         state.selected_edges = {}
                         for _, edge_info in ipairs(edge_infos) do
@@ -731,57 +655,43 @@ function M.init(sequence_id)
                                 end
                             end
                         end
-
                         if #state.selected_edges > 0 then
-                            -- Edge selection is exclusive with clip selection
                             state.selected_clips = {}
-                            print(string.format(
-                                "Restored playhead to %dms, edge selection: %d edges",
-                                state.playhead_value,
-                                #state.selected_edges
-                            ))
                         end
+                    end
                 end
-            end
 
-            -- Restore sequence-level timing metadata
-            local saved_frame_rate = tonumber(query:value(5))
-            if saved_frame_rate and saved_frame_rate > 0 then
-                state.sequence_frame_rate = saved_frame_rate
-            else
-                state.sequence_frame_rate = frame_utils.default_frame_rate
-            end
-
-            local saved_timecode_start_frame = tonumber(query:value(6))
-            state.sequence_timecode_start_frame = saved_timecode_start_frame or 0
-
-            local saved_mark_in = query:value(7)
-            if saved_mark_in ~= nil then
-                state.mark_in_value = tonumber(saved_mark_in)
-            else
-                state.mark_in_value = nil
-            end
-
-            local saved_mark_out = query:value(8)
-            if saved_mark_out ~= nil then
-                state.mark_out_value = tonumber(saved_mark_out)
-            else
-                state.mark_out_value = nil
-            end
-
-            local saved_viewport_start = query:value(3)
-            local saved_viewport_duration_frames_value = query:value(4)
-                local restored_viewport = false
-                if saved_viewport_duration_frames_value and saved_viewport_duration_frames_value > 0 then
-                    state.viewport_duration_frames_value = math.max(1000, saved_viewport_duration_frames_value)
-                    restored_viewport = true
+                -- Marks (Rational)
+                local saved_mark_in = query:value(7)
+                if saved_mark_in ~= nil then
+                    state.mark_in_value = Rational.new(saved_mark_in, fps_num, fps_den)
+                else
+                    state.mark_in_value = nil
                 end
-                if saved_viewport_start and saved_viewport_start >= 0 then
-                    state.viewport_start_value = saved_viewport_start
-                    restored_viewport = true
+
+                local saved_mark_out = query:value(8)
+                if saved_mark_out ~= nil then
+                    state.mark_out_value = Rational.new(saved_mark_out, fps_num, fps_den)
+                else
+                    state.mark_out_value = nil
                 end
-                state.viewport_start_value = clamp_viewport_start(state.viewport_start_value, state.viewport_duration_frames_value)
-                state._restored_viewport = restored_viewport
+
+                -- Viewport (Rational)
+                local saved_view_start = query:value(3)
+                local saved_view_dur = query:value(4)
+                
+                if saved_view_start then
+                    state.viewport_start_time = Rational.new(saved_view_start, fps_num, fps_den)
+                else
+                    state.viewport_start_time = Rational.new(0, fps_num, fps_den)
+                end
+                
+                if saved_view_dur and saved_view_dur > 0 then
+                    state.viewport_duration = Rational.new(saved_view_dur, fps_num, fps_den)
+                else
+                    -- Default 10 seconds duration
+                    state.viewport_duration = Rational.new(300, fps_num, fps_den) 
+                end
             end
             query:finalize()
         end
@@ -805,12 +715,18 @@ function M.init(sequence_id)
     print(string.format("Timeline state initialized: %d tracks, %d clips",
         #state.tracks, #state.clips))
 
-    -- Calculate initial viewport duration_value based on content
-    local max_clip_end = 0
+    -- Calculate initial viewport duration based on content
+    local max_clip_end_rat = Rational.new(0, 30, 1)
+    if state.sequence_frame_rate then
+        max_clip_end_rat = Rational.new(0, state.sequence_frame_rate.fps_numerator, state.sequence_frame_rate.fps_denominator)
+    end
+
     for _, clip in ipairs(state.clips) do
-        local clip_end = clip.start_value + clip.duration_value
-        if clip_end > max_clip_end then
-            max_clip_end = clip_end
+        if clip.timeline_start and clip.duration then
+            local clip_end = clip.timeline_start + clip.duration
+            if clip_end > max_clip_end_rat then
+                max_clip_end_rat = clip_end
+            end
         end
     end
 
@@ -819,8 +735,17 @@ function M.init(sequence_id)
 
     if not restored_viewport then
         -- Show at least 10 seconds, or enough to see all content
-        state.viewport_duration_frames_value = math.max(10000, max_clip_end * 1.2)
-        state.viewport_start_value = clamp_viewport_start(state.viewport_start_value, state.viewport_duration_frames_value)
+        local min_dur = Rational.new(300, max_clip_end_rat.fps_numerator, max_clip_end_rat.fps_denominator) -- 10s approx
+        
+        -- 1.2x content
+        -- Approximate by adding 20% frames
+        local content_plus_buffer = max_clip_end_rat + Rational.new(math.floor(max_clip_end_rat.frames * 0.2), max_clip_end_rat.fps_numerator, max_clip_end_rat.fps_denominator)
+        
+        if content_plus_buffer > min_dur then
+            state.viewport_duration = content_plus_buffer
+        else
+            state.viewport_duration = min_dur
+        end
     end
 
     notify_listeners()
@@ -829,10 +754,6 @@ end
 
 -- Reload clips from database (for after commands that modify database)
 function M.reload_clips(target_sequence_id, opts)
-    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
-    local krono_now_fn = (krono_enabled and krono and krono.now) and krono.now or nil
-    local start_ts = krono_now_fn and krono_now_fn() or nil
-
     local active_sequence = state.sequence_id
     if not active_sequence or active_sequence == "" then
         local fallback = target_sequence_id or "default_sequence"
@@ -851,7 +772,6 @@ function M.reload_clips(target_sequence_id, opts)
     state.clips = db.load_clips(sequence_id)
     invalidate_clip_indexes()
     ensure_clip_indexes()
-    local load_done = krono_now_fn and krono_now_fn() or nil
 
     if state.selected_clips and #state.selected_clips > 0 then
         local refreshed = {}
@@ -866,8 +786,7 @@ function M.reload_clips(target_sequence_id, opts)
             on_selection_changed_callback(state.selected_clips)
         end
     end
-    local selected_after = state.selected_clips and #state.selected_clips or 0
-
+    
     -- Increment version and stamp all clips
     state_version = state_version + 1
     for _, clip in ipairs(state.clips) do
@@ -875,31 +794,9 @@ function M.reload_clips(target_sequence_id, opts)
     end
 
     local selection_adjusted = normalize_edge_selection()
-    local refresh_done = krono_now_fn and krono_now_fn() or nil
-    print(string.format("Reloaded %d clips from database (version %d)", #state.clips, state_version))
+    -- print(string.format("Reloaded %d clips from database (version %d)", #state.clips, state_version))
     if selection_adjusted then
         M.persist_state_to_db()
-    end
-    local finalize_ts = krono_now_fn and krono_now_fn() or nil
-    if krono_enabled and start_ts and finalize_ts then
-        local load_ms = load_done and (load_done - start_ts) or 0
-        local refresh_ms = 0
-        if refresh_done and load_done then
-            refresh_ms = refresh_done - load_done
-        end
-        local finalize_ms = finalize_ts - (refresh_done or load_done or start_ts)
-        print(string.format(
-            "timeline_state.reload_clips[%s]: total=%.2fms load=%.2fms refresh=%.2fms finalize=%.2fms clips=%d selection %d→%d edges=%d (adjusted=%s)",
-            sequence_id,
-            finalize_ts - start_ts,
-            load_ms,
-            refresh_ms,
-            finalize_ms,
-            #state.clips,
-            selected_before,
-            selected_after,
-            state.selected_edges and #state.selected_edges or 0,
-            tostring(selection_adjusted)))
     end
     notify_listeners()
     return true
@@ -933,15 +830,26 @@ function M.get_sequence_id()
 end
 
 function M.get_sequence_frame_rate()
-    local rate = state.sequence_frame_rate or frame_utils.default_frame_rate
-    if type(rate) ~= "number" or rate <= 0 then
-        return frame_utils.default_frame_rate
+    if not state.sequence_frame_rate or type(state.sequence_frame_rate) ~= "table" or 
+       state.sequence_frame_rate.fps_numerator == nil or state.sequence_frame_rate.fps_numerator <= 0 then
+        -- Return a default rate if not properly set, ensuring it's always valid
+        state.sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 }
     end
-    return rate
+    return state.sequence_frame_rate
+end
+
+function M.get_sequence_fps_numerator()
+    local seq_fps = M.get_sequence_frame_rate()
+    return seq_fps.fps_numerator
+end
+
+function M.get_sequence_fps_denominator()
+    local seq_fps = M.get_sequence_frame_rate()
+    return seq_fps.fps_denominator
 end
 
 function M.get_sequence_timecode_start_frame()
-    return state.sequence_timecode_start_frame or 0
+    return 0
 end
 
 function M.has_explicit_mark_in()
@@ -957,13 +865,7 @@ function M.get_timeline_content_length()
 end
 
 function M.get_timeline_extent_end()
-    local content_end = compute_sequence_content_length()
-    local viewport_end = 0
-    if state.viewport_start_value and state.viewport_duration_frames_value then
-        viewport_end = state.viewport_start_value + state.viewport_duration_frames_value
-    end
-    local playhead = state.playhead_value or 0
-    return math.max(content_end, viewport_end, playhead)
+    return calculate_timeline_extent()
 end
 
 function M.get_mark_in()
@@ -971,7 +873,7 @@ function M.get_mark_in()
         return state.mark_in_value
     end
     if state.mark_out_value ~= nil then
-        return 0
+        return Rational.new(0, state.sequence_frame_rate.fps_numerator, state.sequence_frame_rate.fps_denominator)
     end
     return nil
 end
@@ -983,19 +885,16 @@ function M.get_mark_out()
     if state.mark_in_value ~= nil then
         local content_end = compute_sequence_content_length()
         if content_end > 0 then
-            return content_end
+            return Rational.new(content_end, state.sequence_frame_rate.fps_numerator, state.sequence_frame_rate.fps_denominator)
         end
-        local viewport_end = 0
-        if state.viewport_start_value and state.viewport_duration_frames_value then
-            viewport_end = state.viewport_start_value + state.viewport_duration_frames_value
-        end
+        local viewport_end = (state.viewport_start_time + state.viewport_duration)
         return viewport_end
     end
     return nil
 end
 
-function M.set_mark_in(time_ms)
-    if time_ms == nil then
+function M.set_mark_in(time_obj)
+    if time_obj == nil then
         if state.mark_in_value ~= nil then
             state.mark_in_value = nil
             notify_listeners()
@@ -1004,9 +903,9 @@ function M.set_mark_in(time_ms)
         return
     end
 
-    local sanitized = sanitize_mark_time(time_ms)
-    if not sanitized then
-        return
+    local sanitized = time_obj
+    if type(sanitized) == "number" then
+        sanitized = Rational.new(sanitized, state.sequence_frame_rate.fps_numerator, state.sequence_frame_rate.fps_denominator)
     end
 
     if state.mark_in_value == sanitized then
@@ -1023,8 +922,8 @@ function M.set_mark_in(time_ms)
     M.persist_state_to_db()
 end
 
-function M.set_mark_out(time_ms)
-    if time_ms == nil then
+function M.set_mark_out(time_obj)
+    if time_obj == nil then
         if state.mark_out_value ~= nil then
             state.mark_out_value = nil
             notify_listeners()
@@ -1033,9 +932,9 @@ function M.set_mark_out(time_ms)
         return
     end
 
-    local sanitized = sanitize_mark_time(time_ms)
-    if not sanitized then
-        return
+    local sanitized = time_obj
+    if type(sanitized) == "number" then
+        sanitized = Rational.new(sanitized, state.sequence_frame_rate.fps_numerator, state.sequence_frame_rate.fps_denominator)
     end
 
     if state.mark_in_value and sanitized < state.mark_in_value then
@@ -1087,16 +986,6 @@ function M.get_audio_tracks()
     return audio_tracks
 end
 
-local function normalize_track_type(track_type)
-    if not track_type then
-        return nil
-    end
-    if type(track_type) ~= "string" then
-        return nil
-    end
-    return track_type:upper()
-end
-
 function M.get_primary_track_id(track_type)
     local desired_type = normalize_track_type(track_type)
     if not desired_type then
@@ -1118,6 +1007,29 @@ end
 
 function M.get_default_audio_track_id()
     return M.get_primary_track_id("AUDIO")
+end
+
+function M.get_track_height(track_id)
+    for _, track in ipairs(state.tracks) do
+        if track.id == track_id then
+            return track.height or M.dimensions.default_track_height
+        end
+    end
+    return M.dimensions.default_track_height
+end
+
+function M.set_track_height(track_id, height)
+    for _, track in ipairs(state.tracks) do
+        if track.id == track_id then
+            if track.height ~= height then
+                track.height = height
+                track_layout_dirty = true
+                notify_listeners()
+                M.persist_state_to_db()
+            end
+            return
+        end
+    end
 end
 
 -- Get all clips (WARNING: returned objects become stale after next reload_clips())
@@ -1155,41 +1067,6 @@ function M.get_track_clip_windows(sequence_id)
         windows[track] = clone_list
     end
     return windows
-end
-
-local function normalize_clip_id_list(clip_ids)
-    local selection = {}
-    if type(clip_ids) ~= "table" then
-        return selection
-    end
-
-    local function add_id(value)
-        if type(value) == "string" and value ~= "" then
-            selection[value] = true
-        end
-    end
-
-    if #clip_ids > 0 then
-        for _, value in ipairs(clip_ids) do
-            if type(value) == "table" then
-                add_id(value.clip_id)
-                add_id(value.id)
-            else
-                add_id(value)
-            end
-        end
-    else
-        for key, value in pairs(clip_ids) do
-            if type(key) == "string" and value then
-                add_id(key)
-            elseif type(value) == "table" then
-                add_id(value.clip_id)
-                add_id(value.id)
-            end
-        end
-    end
-
-    return selection
 end
 
 function M.describe_track_neighbors(sequence_id, clip_ids)
@@ -1280,9 +1157,9 @@ function M.describe_track_neighbors(sequence_id, clip_ids)
 
         local first_clip = list[first_index or window_start]
         local last_clip = list[last_index or window_end]
-        entry.block_start = first_clip and first_clip.start_value or 0
+        entry.block_start = first_clip and first_clip.timeline_start or Rational.new(0, 1, 1)
         if last_clip then
-            entry.block_end = (last_clip.start_value or 0) + (last_clip.duration_value or 0)
+            entry.block_end = (last_clip.timeline_start or Rational.new(0, 1, 1)) + (last_clip.duration or Rational.new(0, 1, 1))
         else
             entry.block_end = entry.block_start
         end
@@ -1320,7 +1197,6 @@ function M.describe_track_neighbors(sequence_id, clip_ids)
     return metadata
 end
 
--- Get clip by ID (always returns fresh data from current state)
 function M.get_clip_by_id(clip_id)
     for _, clip in ipairs(state.clips) do
         if clip.id == clip_id then
@@ -1330,12 +1206,8 @@ function M.get_clip_by_id(clip_id)
     return nil
 end
 
--- Return clips intersecting the provided playhead time.
--- Optional allowed_clips parameter filters the results to specific clip IDs.
-function M.get_clips_at_time(time_ms, allowed_clips)
-    if type(time_ms) ~= "number" then
-        error("timeline_state.get_clips_at_time requires numeric time_ms")
-    end
+function M.get_clips_at_time(time_obj, allowed_clips)
+    local time_frames = time_obj.frames
 
     local filter = nil
     if allowed_clips and #allowed_clips > 0 then
@@ -1353,9 +1225,9 @@ function M.get_clips_at_time(time_ms, allowed_clips)
 
     local results = {}
     for _, clip in ipairs(state.clips) do
-        local clip_start = clip.start_value
-        local clip_end = clip.start_value + clip.duration_value
-        if time_ms > clip_start and time_ms < clip_end then
+        local clip_start = clip.timeline_start.frames
+        local clip_end = clip.timeline_start.frames + clip.duration.frames
+        if time_frames > clip_start and time_frames < clip_end then
             if not filter or filter[clip.id] then
                 table.insert(results, clip)
             end
@@ -1364,8 +1236,6 @@ function M.get_clips_at_time(time_ms, allowed_clips)
     return results
 end
 
--- Validate that a clip object is still fresh (not stale)
--- Returns: success (bool), error_message (string or nil)
 function M.validate_clip_fresh(clip)
     if not clip then
         return false, "Clip is nil"
@@ -1380,32 +1250,30 @@ function M.validate_clip_fresh(clip)
     return true
 end
 
--- Get current state version (for debugging)
 function M.get_state_version()
     return state_version
 end
 
-function M.get_viewport_start_value()
-    return state.viewport_start_value
+function M.get_viewport_start_time()
+    return state.viewport_start_time
 end
 
--- Legacy accessor used by multiple views (currently frame-based duration)
 function M.get_viewport_duration()
-    return state.viewport_duration_frames_value
+    return state.viewport_duration
 end
 
-function M.get_viewport_duration_frames_value()
-    return state.viewport_duration_frames_value
+function M.get_viewport_duration_frames()
+    return state.viewport_duration.frames
 end
 
 function M.get_viewport_end_time()
-    return state.viewport_start_value + state.viewport_duration_frames_value
+    return state.viewport_start_time + state.viewport_duration
 end
 
 function M.capture_viewport()
     return {
-        start_value = state.viewport_start_value,
-        duration_value = state.viewport_duration_frames_value,
+        start_time = state.viewport_start_time,
+        duration = state.viewport_duration,
     }
 end
 
@@ -1414,22 +1282,23 @@ function M.restore_viewport(snapshot)
         return
     end
 
-    local target_duration_value = math.max(1000, snapshot.duration_value or state.viewport_duration_frames_value)
-    local target_start = snapshot.start_value
+    local target_duration = snapshot.duration or state.viewport_duration
+    local target_start = snapshot.start_time
     if target_start == nil then
-        target_start = state.viewport_start_value
+        target_start = state.viewport_start_time
     end
-    target_start = clamp_viewport_start(target_start, target_duration_value)
+    
+    local clamped_start_rational = clamp_viewport_start(target_start, target_duration)
 
     local changed = false
 
-    if state.viewport_duration_frames_value ~= target_duration_value then
-        state.viewport_duration_frames_value = target_duration_value
+    if state.viewport_duration ~= target_duration then
+        state.viewport_duration = target_duration
         changed = true
     end
 
-    if state.viewport_start_value ~= target_start then
-        state.viewport_start_value = target_start
+    if state.viewport_start_time ~= clamped_start_rational then
+        state.viewport_start_time = clamped_start_rational
         changed = true
     end
 
@@ -1439,40 +1308,45 @@ function M.restore_viewport(snapshot)
     end
 end
 
-function M.get_playhead_value()
-    return state.playhead_value
+function M.get_playhead_position()
+    return state.playhead_position
 end
 
 function M.get_selected_clips()
     return state.selected_clips
 end
 
--- Setters (with notification)
-function M.set_viewport_start_value(time_ms)
-    local clamped_start = clamp_viewport_start(time_ms, state.viewport_duration_frames_value)
-    if state.viewport_start_value ~= clamped_start then
-        state.viewport_start_value = clamped_start
+function M.set_viewport_start_time(time_obj)
+    local clamped_start_rational = clamp_viewport_start(time_obj, state.viewport_duration)
+    if state.viewport_start_time ~= clamped_start_rational then
+        state.viewport_start_time = clamped_start_rational
         notify_listeners()
         M.persist_state_to_db()
     end
 end
 
-function M.set_viewport_duration_frames_value(duration_value_ms)
-    local new_duration_value = math.max(1000, duration_value_ms)
-    if state.viewport_duration_frames_value ~= new_duration_value then
-        local playhead = state.playhead_value or (state.viewport_start_value + state.viewport_duration_frames_value / 2)
-        local desired_start = playhead - (new_duration_value / 2)
-        local clamped_start = clamp_viewport_start(desired_start, new_duration_value)
+function M.set_viewport_duration(duration_obj)
+    local new_duration_rational = duration_obj
+    if type(new_duration_rational) == "number" then
+        local seq_fps = M.get_sequence_frame_rate()
+        new_duration_rational = Rational.new(new_duration_rational, seq_fps.fps_numerator, seq_fps.fps_denominator)
+    end
+
+    if state.viewport_duration ~= new_duration_rational then
+        local playhead = state.playhead_position
+        local half_duration = new_duration_rational / 2
+        local desired_start = playhead - half_duration
+        local clamped_start_rational = clamp_viewport_start(desired_start, new_duration_rational)
 
         local changed = false
 
-        if state.viewport_duration_frames_value ~= new_duration_value then
-            state.viewport_duration_frames_value = new_duration_value
+        if state.viewport_duration ~= new_duration_rational then
+            state.viewport_duration = new_duration_rational
             changed = true
         end
 
-        if state.viewport_start_value ~= clamped_start then
-            state.viewport_start_value = clamped_start
+        if state.viewport_start_time ~= clamped_start_rational then
+            state.viewport_start_time = clamped_start_rational
             changed = true
         end
 
@@ -1483,10 +1357,14 @@ function M.set_viewport_duration_frames_value(duration_value_ms)
     end
 end
 
-function M.set_playhead_value(time_ms)
-    local normalized_time = math.max(0, time_ms)
-    local changed = state.playhead_value ~= normalized_time
-    state.playhead_value = normalized_time
+function M.set_playhead_position(time_obj)
+    local normalized_time = time_obj
+    if type(normalized_time) == "number" then
+        local seq_fps = M.get_sequence_frame_rate()
+        normalized_time = Rational.new(normalized_time, seq_fps.fps_numerator, seq_fps.fps_denominator)
+    end
+    local changed = state.playhead_position ~= normalized_time
+    state.playhead_position = normalized_time
 
     local viewport_adjusted = ensure_playhead_visible()
 
@@ -1522,7 +1400,6 @@ function M.set_selection(clips)
     end
 end
 
--- Edge selection functions (for trimming)
 function M.get_selected_edges()
     return state.selected_edges
 end
@@ -1611,10 +1488,25 @@ function M.get_selected_gaps()
 end
 
 local function gaps_equal(a, b)
-    return a and b
-        and a.track_id == b.track_id
-        and math.abs((a.start_value or 0) - (b.start_value or 0)) < 1
-        and math.abs((a.duration_value or 0) - (b.duration_value or 0)) < 1
+    if not a or not b or a.track_id ~= b.track_id then
+        return false
+    end
+    
+    -- Assume Rational objects
+    if getmetatable(a.start_value) == Rational.metatable and getmetatable(b.start_value) == Rational.metatable then
+        if a.start_value ~= b.start_value then return false end
+    else
+        -- Fallback (should not happen if fully migrated)
+        if (a.start_value or 0) ~= (b.start_value or 0) then return false end
+    end
+
+    if getmetatable(a.duration) == Rational.metatable and getmetatable(b.duration) == Rational.metatable then
+        if a.duration ~= b.duration then return false end
+    else
+        if (a.duration or a.duration_value or 0) ~= (b.duration or b.duration_value or 0) then return false end
+    end
+    
+    return true
 end
 
 function M.set_gap_selection(gaps)
@@ -1662,18 +1554,13 @@ function M.pop_viewport_guard()
     return viewport_guard_count
 end
 
--- Selection callback (for inspector integration)
 function M.set_on_selection_changed(callback)
     on_selection_changed_callback = callback
-
-    -- Immediately notify the new callback of current selection state
-    -- This ensures listeners that register after init() still get the current state
     if callback and #state.selected_clips > 0 then
         callback(state.selected_clips)
     end
 end
 
--- Project browser reference
 function M.set_project_browser(browser)
     project_browser = browser
 end
@@ -1682,7 +1569,6 @@ function M.get_project_browser()
     return project_browser
 end
 
--- Rubber band reference (for drag selection UI)
 function M.set_rubber_band(band)
     rubber_band = band
 end
@@ -1691,24 +1577,34 @@ function M.get_rubber_band()
     return rubber_band
 end
 
--- Coordinate conversion helpers
--- These convert between time and pixel coordinates for a given viewport width
-function M.time_to_pixel(time_ms, viewport_width)
-    local pixels_per_ms = viewport_width / state.viewport_duration_frames_value
-    return math.floor((time_ms - state.viewport_start_value) * pixels_per_ms)
+function M.time_to_pixel(time_obj, viewport_width)
+    local time_ms
+    if type(time_obj) == "table" and time_obj.to_seconds then
+        time_ms = time_obj:to_seconds() * 1000.0
+    else
+        time_ms = tonumber(time_obj) or 0
+    end
+
+    local start_ms = state.viewport_start_time:to_seconds() * 1000.0
+    local duration_ms = state.viewport_duration:to_seconds() * 1000.0
+    
+    local pixels_per_ms = viewport_width / duration_ms
+    return math.floor((time_ms - start_ms) * pixels_per_ms)
 end
 
 function M.pixel_to_time(pixel, viewport_width)
-    local pixels_per_ms = viewport_width / state.viewport_duration_frames_value
-    return math.floor(state.viewport_start_value + (pixel / pixels_per_ms))
+    local start_ms = state.viewport_start_time:to_seconds() * 1000.0
+    local duration_ms = state.viewport_duration:to_seconds() * 1000.0
+    
+    local pixels_per_ms = viewport_width / duration_ms
+    local time_ms = start_ms + (pixel / pixels_per_ms)
+    
+    local rate = state.sequence_frame_rate
+    return Rational.from_seconds(time_ms / 1000.0, rate.fps_numerator, rate.fps_denominator)
 end
 
--- Debug helpers for tests to query the most recent layout geometry
 function M.debug_begin_layout_capture(view_id, viewport_width, viewport_height)
-    if not view_id then
-        return
-    end
-
+    if not view_id then return end
     debug_layouts[view_id] = {
         widget_width = viewport_width,
         widget_height = viewport_height,
@@ -1719,82 +1615,52 @@ end
 
 function M.debug_record_track_layout(view_id, track_id, y, height)
     local layout = debug_layouts[view_id]
-    if not layout then
-        return
-    end
-
-    layout.tracks[track_id] = {
-        y = y,
-        height = height
-    }
+    if not layout then return end
+    layout.tracks[track_id] = { y = y, height = height }
 end
 
 function M.debug_record_clip_layout(view_id, clip_id, track_id, x, y, width, height)
     local layout = debug_layouts[view_id]
-    if not layout then
-        return
-    end
-
-    layout.clips[clip_id] = {
-        track_id = track_id,
-        x = x,
-        y = y,
-        width = width,
-        height = height
-    }
+    if not layout then return end
+    layout.clips[clip_id] = { track_id = track_id, x = x, y = y, width = width, height = height }
 end
 
 function M.debug_get_clip_layout(view_id, clip_id)
     local layout = debug_layouts[view_id]
-    if layout then
-        return layout.clips[clip_id]
-    end
-    return nil
+    return layout and layout.clips[clip_id] or nil
 end
 
 function M.debug_get_track_layout(view_id, track_id)
     local layout = debug_layouts[view_id]
-    if layout then
-        return layout.tracks[track_id]
-    end
-    return nil
+    return layout and layout.tracks[track_id] or nil
 end
 
 function M.debug_get_layout_metrics(view_id)
     return debug_layouts[view_id]
 end
 
--- Edge detection helper for trimming
--- Returns: edge_type ("in"/"out"), trim_type ("ripple"/"roll"), or nil if not near edge
 function M.detect_edge_at_position(clip, click_x, viewport_width)
     local EDGE_ZONE_PX = ui_constants.TIMELINE.EDGE_ZONE_PX
+    local clip_start_x = M.time_to_pixel(clip.timeline_start, viewport_width)
+    local clip_end_x = M.time_to_pixel(clip.timeline_start + clip.duration, viewport_width)
 
-    local clip_start_x = M.time_to_pixel(clip.start_value, viewport_width)
-    local clip_end_x = M.time_to_pixel(clip.start_value + clip.duration_value, viewport_width)
-
-    -- Check left edge (in point)
     if math.abs(click_x - clip_start_x) <= EDGE_ZONE_PX then
         return "in", "ripple"
     end
-
-    -- Check right edge (out point)
     if math.abs(click_x - clip_end_x) <= EDGE_ZONE_PX then
         return "out", "ripple"
     end
-
     return nil, nil
 end
 
--- Check if click is between two adjacent clips (for roll edit)
 function M.detect_roll_between_clips(clip1, clip2, click_x, viewport_width)
     if not clip1 or not clip2 then return false end
 
     local ROLL_ZONE_PX = ui_constants.TIMELINE.ROLL_ZONE_PX
     local EDGE_ZONE_PX = ui_constants.TIMELINE.EDGE_ZONE_PX or 0
-    local gap_start_x = M.time_to_pixel(clip1.start_value + clip1.duration_value, viewport_width)
-    local gap_end_x = M.time_to_pixel(clip2.start_value, viewport_width)
+    local gap_start_x = M.time_to_pixel(clip1.timeline_start + clip1.duration, viewport_width)
+    local gap_end_x = M.time_to_pixel(clip2.timeline_start, viewport_width)
 
-    -- If clips are adjacent or close enough, check if click is near the edit point
     if gap_end_x - gap_start_x < ROLL_ZONE_PX then
         local edit_point_x = (gap_start_x + gap_end_x) / 2
         local half_roll_zone = ROLL_ZONE_PX / 2
@@ -1808,12 +1674,8 @@ function M.detect_roll_between_clips(clip1, clip2, click_x, viewport_width)
             return true
         end
     end
-
     return false
 end
-
--- Clip management - BLOCKED to enforce event sourcing discipline
--- All timeline modifications MUST go through command system for proper undo/redo
 
 function M.add_clip(clip)
     error("timeline_state.add_clip() is blocked - use command system instead:\n" ..
@@ -1827,7 +1689,6 @@ function M.remove_clip(clip_id)
           "This ensures proper undo/redo and prevents phantom state changes.")
 end
 
--- Internal helpers for command executors (bypass event sourcing check)
 function M._internal_add_clip_from_command(clip)
     table.insert(state.clips, clip)
     invalidate_clip_indexes()
@@ -1839,15 +1700,12 @@ function M._internal_remove_clip_from_command(clip_id)
         if clip.id == clip_id then
             table.remove(state.clips, i)
             invalidate_clip_indexes()
-
-            -- Remove from selection if selected
             for j, selected in ipairs(state.selected_clips) do
                 if selected.id == clip_id then
                     table.remove(state.selected_clips, j)
                     break
                 end
             end
-
             notify_listeners()
             return
         end
@@ -1861,14 +1719,10 @@ function M.consume_mutation_failure()
 end
 
 local function apply_mutation_table(mutations)
-    if not mutations then
-        return false
-    end
-
+    if not mutations then return false end
     local changed = false
     local failure_reason = nil
     local deleted_lookup = {}
-
     local had_sequence_meta = mutations.sequence_meta ~= nil
 
     if mutations.deletes then
@@ -1909,27 +1763,20 @@ local function apply_mutation_table(mutations)
 end
 
 function M.apply_mutations(sequence_id, mutations)
-    if not mutations then
-        return false
-    end
+    if not mutations then return false end
     local mutation_scope = profile_scope.begin("timeline_state.apply_mutations", {
-        details_fn = function()
+        details_fn = function() 
             return string.format("sequence=%s", tostring(sequence_id or state.sequence_id))
         end
     })
     sequence_id = sequence_id or (mutations.sequence_id)
     if not state.sequence_id or state.sequence_id == "" then
-        record_mutation_failure("inactive_timeline_state", {
-            requested_sequence = sequence_id
-        })
+        record_mutation_failure("inactive_timeline_state", { requested_sequence = sequence_id })
         if mutation_scope then mutation_scope:finish("inactive_state") end
         return false
     end
     if sequence_id and state.sequence_id and sequence_id ~= state.sequence_id then
-        record_mutation_failure("sequence_mismatch", {
-            requested_sequence = sequence_id,
-            active_sequence = state.sequence_id
-        })
+        record_mutation_failure("sequence_mismatch", { requested_sequence = sequence_id, active_sequence = state.sequence_id })
         if mutation_scope then mutation_scope:finish("sequence_mismatch") end
         return false
     end
@@ -1948,12 +1795,8 @@ function M.apply_mutations(sequence_id, mutations)
 end
 
 function M._internal_apply_clip_updates(updates, deleted_lookup)
-    if not updates or #updates == 0 then
-        return true, false
-    end
-
+    if not updates or #updates == 0 then return true, false end
     ensure_clip_indexes()
-
     local changed = false
     local needs_resort = false
     for index, update in ipairs(updates) do
@@ -1972,16 +1815,9 @@ function M._internal_apply_clip_updates(updates, deleted_lookup)
                     goto continue_update_loop
                 end
                 local update_keys = {}
-                for key in pairs(update) do
-                    table.insert(update_keys, tostring(key))
-                end
+                for key in pairs(update) do table.insert(update_keys, tostring(key)) end
                 table.sort(update_keys)
-                record_mutation_failure("missing_clip", {
-                    clip_id = clip_id,
-                    update_keys = update_keys,
-                    update_index = index,
-                    total_updates = #updates
-                })
+                record_mutation_failure("missing_clip", { clip_id = clip_id, update_keys = update_keys, update_index = index, total_updates = #updates })
                 return false
             end
 
@@ -1991,28 +1827,24 @@ function M._internal_apply_clip_updates(updates, deleted_lookup)
                 needs_resort = true
                 changed = true
             end
-
-            if update.start_value and update.start_value ~= clip.start_value then
-                clip.start_value = update.start_value
+            local seq_fps = M.get_sequence_frame_rate()
+            if update.start_value and update.start_value ~= clip.timeline_start.frames then
+                clip.timeline_start = Rational.new(update.start_value, seq_fps.fps_numerator, seq_fps.fps_denominator)
                 needs_resort = true
                 changed = true
             end
-
-            if update.duration_value and update.duration_value ~= clip.duration_value then
-                clip.duration_value = update.duration_value
+            if update.duration_value and update.duration_value ~= clip.duration.frames then
+                clip.duration = Rational.new(update.duration_value, seq_fps.fps_numerator, seq_fps.fps_denominator)
                 changed = true
             end
-
-            if update.source_in_value and update.source_in_value ~= clip.source_in_value then
-                clip.source_in_value = update.source_in_value
+            if update.source_in_value and update.source_in_value ~= clip.source_in.frames then
+                clip.source_in = Rational.new(update.source_in_value, seq_fps.fps_numerator, seq_fps.fps_denominator)
                 changed = true
             end
-
-            if update.source_out_value and update.source_out_value ~= clip.source_out_value then
-                clip.source_out_value = update.source_out_value
+            if update.source_out_value and update.source_out_value ~= clip.source_out.frames then
+                clip.source_out = Rational.new(update.source_out_value, seq_fps.fps_numerator, seq_fps.fps_denominator)
                 changed = true
             end
-
             if update.enabled ~= nil and update.enabled ~= clip.enabled then
                 clip.enabled = update.enabled and true or false
                 changed = true
@@ -2021,159 +1853,48 @@ function M._internal_apply_clip_updates(updates, deleted_lookup)
         ::continue_update_loop::
     end
 
-    if not changed then
-        return true, false
-    end
-
+    if not changed then return true, false end
     state_version = state_version + 1
-
     if needs_resort then
         local track_order = {}
-        for idx, track in ipairs(state.tracks) do
-            track_order[track.id] = idx
-        end
-
+        for idx, track in ipairs(state.tracks) do track_order[track.id] = idx end
         table.sort(state.clips, function(a, b)
             local ta = track_order[a.track_id] or math.huge
             local tb = track_order[b.track_id] or math.huge
             if ta == tb then
-                local sa = a.start_value or 0
-                local sb = b.start_value or 0
-                if sa == sb then
-                    return (a.id or "") < (b.id or "")
-                end
+                local sa = a.timeline_start.frames or 0
+                local sb = b.timeline_start.frames or 0
+                if sa == sb then return (a.id or "") < (b.id or "") end
                 return sa < sb
             end
             return ta < tb
         end)
     end
-
     if state.selected_clips and #state.selected_clips > 0 then
         local refreshed = {}
         for _, selected in ipairs(state.selected_clips) do
             local clip = lookup_clip(selected.id)
-            if clip then
-                table.insert(refreshed, clip)
-            end
+            if clip then table.insert(refreshed, clip) end
         end
         state.selected_clips = refreshed
     end
-
     invalidate_clip_indexes()
-    if needs_resort then
-        ensure_clip_indexes()
-    end
-
+    if needs_resort then ensure_clip_indexes() end
     notify_listeners()
     return true, true
 end
 
 function M.update_clip(clip_id, updates)
-    -- DISABLED: Direct clip modifications bypass the command system and break undo/redo
-    -- All clip modifications must go through the command_manager to be logged in the event log
     error("Direct clip modification is not allowed. Use command_manager to execute a command instead.")
 end
 
--- Find track by ID
-function M.get_track_by_id(track_id)
-    for _, track in ipairs(state.tracks) do
-        if track.id == track_id then
-            return track
-        end
-    end
-    return nil
+function M.get_playhead_value()
+    return state.playhead_position
 end
 
--- Get global track index (for selection operations)
-function M.get_track_index(track_id)
-    for i, track in ipairs(state.tracks) do
-        if track.id == track_id then
-            return i - 1  -- 0-based index
-        end
-    end
-    return -1
-end
-
--- Get track height by track ID
-function M.get_track_height(track_id)
-    for _, track in ipairs(state.tracks) do
-        if track.id == track_id then
-            return track.height or M.dimensions.default_track_height
-        end
-    end
-    return M.dimensions.default_track_height
-end
-
--- Set track height by track ID
-function M.set_track_height(track_id, height)
-    for _, track in ipairs(state.tracks) do
-        if track.id == track_id then
-            local new_height = clamp_track_height(height or track.height or M.dimensions.default_track_height) or M.dimensions.default_track_height
-            if track.height ~= new_height then
-                track.height = new_height
-                track_layout_dirty = true
-                track_template_dirty = true
-                notify_listeners()
-                M.persist_state_to_db()
-            end
-            return true
-        end
-    end
-    return false
-end
-
--- Interaction state management
-function M.is_dragging_playhead()
-    return state.dragging_playhead
-end
-
-function M.set_dragging_playhead(dragging)
-    local normalized = dragging and true or false
-    if state.dragging_playhead == normalized then
-        return
-    end
-
-    state.dragging_playhead = normalized
-
-    if not normalized and persist_dirty then
-        schedule_state_persist(true)
-    end
-end
-
-function M.get_dragging_clip()
-    return state.dragging_clip
-end
-
-function M.set_dragging_clip(clip)
-    state.dragging_clip = clip
-end
-
-function M.is_drag_selecting()
-    return state.drag_selecting
-end
-
-function M.set_drag_selecting(selecting)
-    state.drag_selecting = selecting
-end
-
-function M.get_drag_selection_bounds()
-    return {
-        start_value = state.drag_select_start_value,
-        end_time = state.drag_select_end_time,
-        start_track = state.drag_select_start_track_index,
-        end_track = state.drag_select_end_track_index,
-    }
-end
-
-function M.set_drag_selection_bounds(start_value, end_time, start_track, end_track)
-    state.drag_select_start_value = start_value
-    state.drag_select_end_time = end_time
-    state.drag_select_start_track_index = start_track
-    state.drag_select_end_track_index = end_track
-    notify_listeners()
-end
-
---- Persist playhead and selection state to sequences table (for session restoration)
+---
+-- Persist playhead and selection state to sequences table (for session restoration)
+---
 local function flush_state_to_db()
     local db_conn = db.get_connection()
     if not db_conn then
@@ -2188,7 +1909,7 @@ local function flush_state_to_db()
         table.insert(selected_ids, clip.id)
     end
 
-    local success, json_str = pcall(qt_json_encode, selected_ids)
+    local success, json_str = pcall(json.encode, selected_ids)
     if not success then
         json_str = "[]"
     end
@@ -2205,26 +1926,26 @@ local function flush_state_to_db()
         end
     end
 
-    local success_edges, edges_json = pcall(qt_json_encode, edge_descriptors)
+    local success_edges, edges_json = pcall(json.encode, edge_descriptors)
     if not success_edges then
         edges_json = "[]"
     end
 
     -- Update sequences table with current state
-    local query = db_conn:prepare([[
+    local query = db_conn:prepare([[ 
         UPDATE sequences
-        SET playhead_value = ?, selected_clip_ids = ?, selected_edge_infos = ?, viewport_start_value = ?, viewport_duration_frames_value = ?, mark_in_value = ?, mark_out_value = ?
+        SET playhead_frame = ?, selected_clip_ids = ?, selected_edge_infos = ?, view_start_frame = ?, view_duration_frames = ?, mark_in_frame = ?, mark_out_frame = ?
         WHERE id = ?
     ]])
 
     if query then
-        query:bind_value(1, state.playhead_value)
+        query:bind_value(1, state.playhead_position.frames)
         query:bind_value(2, json_str)
         query:bind_value(3, edges_json)
-        query:bind_value(4, math.floor(state.viewport_start_value or 0))
-        query:bind_value(5, math.floor(state.viewport_duration_frames_value or 10000))
-        query:bind_value(6, state.mark_in_value)
-        query:bind_value(7, state.mark_out_value)
+        query:bind_value(4, state.viewport_start_time.frames)
+        query:bind_value(5, state.viewport_duration.frames)
+        query:bind_value(6, state.mark_in_value and state.mark_in_value.frames or nil)
+        query:bind_value(7, state.mark_out_value and state.mark_out_value.frames or nil)
         query:bind_value(8, sequence_id)
         query:exec()
     end
@@ -2269,6 +1990,7 @@ local function schedule_state_persist(immediate)
 end
 
 function M.persist_state_to_db(force)
+    local command_manager = require("core.command_manager") -- Added dynamically
     if force == true then
         schedule_state_persist(true)
     else

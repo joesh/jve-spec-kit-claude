@@ -971,8 +971,8 @@ function M.create()
         local selected_clips = {}
         for _, clip in ipairs(state.get_clips()) do
             -- Check time overlap
-            local clip_end_time = clip.start_value + clip.duration
-            local time_overlaps = not (clip_end_time < start_value or clip.start_value > end_time)
+            local clip_end_time = clip.timeline_start + clip.duration
+            local time_overlaps = not (clip_end_time < start_value or clip.timeline_start > end_time)
 
             if time_overlaps then
 

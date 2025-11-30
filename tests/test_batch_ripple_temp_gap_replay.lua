@@ -20,22 +20,23 @@ local seed = string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                          timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+                          playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
 
+    -- 1000ms @ 30fps = 30 frames. 3000ms = 90 frames.
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-                       start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
+                       timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline,
                        created_at, modified_at)
     VALUES
         ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'default_sequence',
-         0, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d),
+         0, 30, 0, 30, 30, 1, 1, 0, %d, %d),
         ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'default_sequence',
-         3000, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d);
-]], now, now, now, now, now, now, now, now)
+         90, 30, 0, 30, 30, 1, 1, 0, %d, %d);
+]], now, now, now, now, now, now, now, now, now, now)
 assert(db:exec(seed))
 
 -- Minimal timeline_state stubs so command_manager can run
@@ -53,6 +54,7 @@ timeline_state.get_selected_clips = function() return {} end
 timeline_state.get_selected_edges = function() return {} end
 timeline_state.set_playhead_value = function(_) end
 timeline_state.get_playhead_value = function() return 0 end
+timeline_state.get_sequence_frame_rate = function() return {fps_numerator=30, fps_denominator=1} end
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.reload_clips = function(_) end
@@ -62,12 +64,13 @@ timeline_state.apply_mutations = function(_, _) return true end
 command_manager.init(db, "default_sequence", "default_project")
 
 local function fetch_clip_start(clip_id)
-    local stmt = db:prepare("SELECT start_value FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(clip_id))
     local value = tonumber(stmt:value(0)) or 0
     stmt:finalize()
-    return value
+    -- Convert frames back to approx MS
+    return math.floor(value / 30.0 * 1000.0 + 0.5)
 end
 
 -- Build a BatchRippleEdit that includes a gap edge whose clip_id was accidentally

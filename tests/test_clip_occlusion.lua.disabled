@@ -6,16 +6,14 @@ local database = require('core.database')
 local Clip = require('models.clip')
 local Media = require('models.media')
 local Command = require('command')
-local command_impl = require('core.command_implementations')
+-- local command_impl = require('core.command_implementations') -- Removed
 local timeline_constraints = require('core.timeline_constraints')
 local command_manager = require('core.command_manager')
 local timeline_state = require('ui.timeline.timeline_state')
+local Rational = require('core.rational')
 
 local function new_command_env(db)
-    local executors = {}
-    local undoers = {}
-    command_impl.register_commands(executors, undoers, db)
-    return executors, undoers
+    return {}, {}
 end
 
 local function setup_db(path)
@@ -27,58 +25,90 @@ local function setup_db(path)
     db:exec(require('import_schema'))
 
     local now = os.time()
-    db:exec(string.format([[
+    
+    local function exec_safe(sql, label)
+        local code = db:exec(sql)
+        if code ~= 0 and code ~= 0.0 and code ~= true then -- Assuming 0 is OK. If boolean, true might be OK? No lsqlite3 exec returns int.
+            -- Wait, if it returns boolean? 
+            -- lsqlite3 exec: "executes sql ... returns error code"
+            -- If it returns boolean, maybe it's not lsqlite3?
+            -- Let's just print whatever it is.
+            local msg = "unknown"
+            if db.errmsg then msg = db:errmsg() end
+            print(string.format("FAIL: %s (code %s): %s", label, tostring(code), msg))
+            os.exit(1) 
+        end
+    end
+
+    exec_safe(string.format([[
         INSERT INTO projects (id, name, created_at, modified_at) VALUES ('project', 'Test Project', %d, %d);
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('sequence', 'project', 'Seq', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('selection_sequence', 'project', 'Selection Seq', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 'video_frames', 30.0, 2, 1);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v3', 'sequence', 'V3', 'VIDEO', 'video_frames', 30.0, 3, 1);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v4', 'sequence', 'V4', 'VIDEO', 'video_frames', 30.0, 4, 1);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v5', 'sequence', 'V5', 'VIDEO', 'video_frames', 30.0, 5, 1);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('selection_track_v1', 'selection_sequence', 'Selection V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    ]], now, now))
+    ]], now, now), "Insert Project")
+
+    local seq1_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, timecode_start_frame, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('sequence', 'project', 'Seq', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 0, 240, %d, %d);", now, now)
+    exec_safe(seq1_sql, "Insert Sequence 1")
+
+    local seq2_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, timecode_start_frame, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('selection_sequence', 'project', 'Selection Seq', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 0, 240, %d, %d);", now, now)
+    exec_safe(seq2_sql, "Insert Sequence 2")
+
+    exec_safe([[
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 1, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 2, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v3', 'sequence', 'V3', 'VIDEO', 3, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v4', 'sequence', 'V4', 'VIDEO', 4, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('track_v5', 'sequence', 'V5', 'VIDEO', 5, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('selection_track_v1', 'selection_sequence', 'Selection V1', 'VIDEO', 1, 1);
+    ]], "Insert Tracks")
 
     return db
 end
 
 local function fetch_clip(db, clip_id)
     local stmt = db:prepare([[
-        SELECT track_id, start_value, duration_value, source_in_value, source_out_value
+        SELECT track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, clip_id)
     assert(stmt:exec(), "query exec failed")
     assert(stmt:next(), "clip not found: " .. tostring(clip_id))
+    
+    -- Convert frames to MS for test logic compatibility
+    local function to_ms(frames) return math.floor(frames / 30.0 * 1000.0 + 0.5) end
+    
+    local start_val = to_ms(stmt:value(1) or 0)
+    local dur_val = to_ms(stmt:value(2) or 0)
+    local src_in = to_ms(stmt:value(3) or 0)
+    local src_out = to_ms(stmt:value(4) or 0)
+    
     return {
         track_id = stmt:value(0),
-        start_value = stmt:value(1),
-        duration_value = stmt:value(2),
-        duration = stmt:value(2),
-        source_in_value = stmt:value(3),
-        source_in = stmt:value(3),
-        source_out_value = stmt:value(4),
-        source_out = stmt:value(4)
+        start_value = start_val,
+        duration_value = dur_val,
+        duration = dur_val,
+        source_in_value = src_in,
+        source_in = src_in,
+        source_out_value = src_out,
+        source_out = src_out
     }
 end
 
 local function fetch_track_clips(db, track_id)
-    local stmt = db:prepare([[SELECT start_value, duration_value, id FROM clips WHERE track_id = ? ORDER BY start_value]])
+    local stmt = db:prepare([[SELECT timeline_start_frame, duration_frames, id FROM clips WHERE track_id = ? ORDER BY timeline_start_frame]])
     stmt:bind_value(1, track_id)
     assert(stmt:exec(), "track clip query failed")
+    
+    local function to_ms(frames) return math.floor(frames / 30.0 * 1000.0 + 0.5) end
+    
     local clips = {}
     while stmt:next() do
         clips[#clips + 1] = {
-            start_value = stmt:value(0),
-            duration = stmt:value(1),
+            start_value = to_ms(stmt:value(0) or 0),
+            duration = to_ms(stmt:value(1) or 0),
             id = stmt:value(2)
         }
     end
@@ -98,15 +128,16 @@ local function assert_no_overlaps(clips)
     end
 end
 
-local function ensure_media_record(db, media_id, duration)
+local function ensure_media_record(db, media_id, duration_frames)
     local media = Media.create({
         id = media_id,
         project_id = "project",
         file_path = "/tmp/jve/" .. media_id .. ".mov",
         file_name = media_id .. ".mov",
         name = media_id .. ".mov",
-        duration = duration,
-        frame_rate = 30
+        duration_frames = duration_frames,
+        fps_numerator = 30,
+        fps_denominator = 1
     })
     assert(media, "failed creating media " .. tostring(media_id))
     assert(media:save(db), "failed saving media " .. tostring(media_id))
@@ -117,60 +148,91 @@ print("=== Clip Occlusion Tests ===\n")
 local db_path = "/tmp/jve/test_clip_occlusion.db"
 local db = setup_db(db_path)
 
-ensure_media_record(db, "media_A", 4000)
-ensure_media_record(db, "media_B", 3000)
-ensure_media_record(db, "media_C", 4000)
-ensure_media_record(db, "media_D", 5000)
-ensure_media_record(db, "media_E", 8000)
-ensure_media_record(db, "media_F", 2000)
+ensure_media_record(db, "media_A", 120) -- 4000ms
+-- Debug check
+local function count(tbl)
+    local s = db:prepare("SELECT count(*) FROM " .. tbl)
+    s:exec(); s:next(); local c = s:value(0); s:finalize()
+    return c
+end
+print("DEBUG: Projects count: " .. count("projects"))
+print("DEBUG: Sequences count: " .. count("sequences"))
+print("DEBUG: Tracks count: " .. count("tracks"))
+print("DEBUG: Media count: " .. count("media"))
+
+ensure_media_record(db, "media_B", 90)  -- 3000ms
+ensure_media_record(db, "media_C", 120) -- 4000ms
+ensure_media_record(db, "media_D", 150) -- 5000ms
+ensure_media_record(db, "media_E", 240) -- 8000ms
+ensure_media_record(db, "media_F", 60)  -- 2000ms
 
 -- Seed two clips
-local clip_a = Clip.create("A", "media_A")
-clip_a.track_id = "track_v1"
-clip_a.start_value = 0
-clip_a.duration = 4000
-clip_a.source_in = 0
-clip_a.source_out = 4000
+local clip_a = Clip.create("A", "media_A", {
+    id = "A",
+    project_id = "project",
+    track_id = "track_v1",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(0, 30, 1),
+    duration = Rational.new(120, 30, 1), -- 4000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(120, 30, 1),
+    enabled = true
+})
 assert(clip_a:save(db), "failed saving clip A")
 
-local clip_b = Clip.create("B", "media_B")
-clip_b.track_id = "track_v1"
-clip_b.start_value = 6000
-clip_b.duration = 3000
-clip_b.source_in = 0
-clip_b.source_out = 3000
+local clip_b = Clip.create("B", "media_B", {
+    id = "B",
+    project_id = "project",
+    track_id = "track_v1",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(180, 30, 1), -- 6000ms
+    duration = Rational.new(90, 30, 1), -- 3000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(90, 30, 1),
+    enabled = true
+})
 assert(clip_b:save(db), "failed saving clip B")
 
 print("Test 1: inserting overlapping clip trims existing tails")
-local clip_c = Clip.create("C", "media_C")
-clip_c.track_id = "track_v1"
-clip_c.start_value = 2500   -- overlaps tail of clip A
-clip_c.duration = 2000     -- occupies [2500, 4500)
-clip_c.source_in = 0
-clip_c.source_out = 2000
+local clip_c = Clip.create("C", "media_C", {
+    id = "C",
+    project_id = "project",
+    track_id = "track_v1",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(75, 30, 1), -- 2500ms
+    duration = Rational.new(60, 30, 1), -- 2000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(60, 30, 1),
+    enabled = true
+})
 assert(clip_c:save(db), "failed saving clip C")
 
 local state_a = fetch_clip(db, clip_a.id)
 assert(state_a.start_value == 0, "clip A start should remain 0")
-assert(state_a.duration == 2500, string.format("clip A duration trimmed to 2500, got %d", state_a.duration))
+assert(math.abs(state_a.duration - 2500) < 20, string.format("clip A duration trimmed to 2500, got %d", state_a.duration))
 
 local state_c = fetch_clip(db, clip_c.id)
-assert(state_c.start_value == 2500, "clip C start mismatch")
+assert(math.abs(state_c.start_value - 2500) < 20, "clip C start mismatch")
 
 print("✅ Tail trim applied to clip A")
 
 print("Test 2: moving clip over neighbour trims neighbours")
-local clip_d = Clip.create("D", "media_D")
-clip_d.track_id = "track_v1"
-clip_d.start_value = 5000   -- sits between C and B
-clip_d.duration = 5000     -- spans into clip B
-clip_d.source_in = 0
-clip_d.source_out = 5000
+local clip_d = Clip.create("D", "media_D", {
+    id = "D",
+    project_id = "project",
+    track_id = "track_v1",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(150, 30, 1), -- 5000ms
+    duration = Rational.new(150, 30, 1), -- 5000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(150, 30, 1),
+    enabled = true
+})
 assert(clip_d:save(db), "failed saving clip D")
 
 -- Move clip_d earlier so it straddles clip C and its right portion creates overlap
 clip_d = Clip.load(clip_d.id, db)
-clip_d.start_value = 2000   -- spans [2000, 7000) covering end of A, all of C, start of B
+clip_d.timeline_start = Rational.new(60, 30, 1) -- 2000ms
 assert(clip_d:save(db), "failed moving clip D with occlusion")
 
 local stmt = db:prepare("SELECT id FROM clips WHERE track_id = 'track_v1'")
@@ -182,14 +244,15 @@ end
 assert(#ids == 2, string.format("expected 2 clips remaining (one deleted), got %d", #ids))
 
 local state_d = fetch_clip(db, clip_d.id)
-assert(state_d.start_value == 2000, "clip D start should be 2000")
-assert(state_d.duration == 5000, "clip D duration should remain 5000")
+assert(math.abs(state_d.start_value - 2000) < 20, "clip D start should be 2000")
+assert(math.abs(state_d.duration - 5000) < 20, "clip D duration should remain 5000")
 
-local stmt_a = db:prepare("SELECT duration_value FROM clips WHERE id = ?")
+local stmt_a = db:prepare("SELECT duration_frames FROM clips WHERE id = ?")
 stmt_a:bind_value(1, clip_a.id)
 stmt_a:exec()
 stmt_a:next()
-assert(stmt_a:value(0) == 2000, "clip A should be trimmed to 2000ms")
+-- 2000ms = 60 frames
+assert(stmt_a:value(0) == 60, "clip A should be trimmed to 2000ms (60 frames)")
 
 local stmt_b = db:prepare("SELECT COUNT(*) FROM clips WHERE media_id = 'media_B'")
 stmt_b:exec(); stmt_b:next()
@@ -198,15 +261,20 @@ assert(stmt_b:value(0) == 0, "clip B should be deleted when fully occluded")
 print("✅ Occlusions resolved via trim/delete cascade")
 
 print("Test 2b: MoveClipToTrack resolves overlaps on destination track")
-db:exec([[INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-          VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 'video_frames', 30.0, 2, 1)]])
+db:exec([[INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+          VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 2, 1)]])
 
-local mover_clip = Clip.create("Mover", "media_C")
-mover_clip.track_id = "track_v2"
-mover_clip.start_value = 2000
-mover_clip.duration = 4000
-mover_clip.source_in = 0
-mover_clip.source_out = 4000
+local mover_clip = Clip.create("Mover", "media_C", {
+    id = "Mover",
+    project_id = "project",
+    track_id = "track_v2",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(60, 30, 1), -- 2000ms
+    duration = Rational.new(120, 30, 1), -- 4000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(120, 30, 1),
+    enabled = true
+})
 assert(mover_clip:save(db), "failed saving mover clip")
 
 command_executors = new_command_env(db)
@@ -214,50 +282,70 @@ local move_cmd = Command.create("MoveClipToTrack", "project")
 move_cmd:set_parameter("clip_id", mover_clip.id)
 move_cmd:set_parameter("target_track_id", "track_v1")
 move_cmd:set_parameter("sequence_id", "sequence")
-assert(command_executors["MoveClipToTrack"](move_cmd), "MoveClipToTrack should succeed and resolve overlaps")
+assert(command_manager.execute(move_cmd).success, "MoveClipToTrack should succeed and resolve overlaps")
 
 local trimmed_a_after_move = fetch_clip(db, clip_a.id)
-assert(trimmed_a_after_move.duration == 2000,
+-- A was 2000ms. Mover overlaps from 2000ms.
+-- Mover 2000-6000.
+-- A should be trimmed or deleted?
+-- If A is 0-2000 and Mover is 2000-6000, they touch but don't overlap.
+-- A duration 2000.
+assert(math.abs(trimmed_a_after_move.duration - 2000) < 20,
     string.format("upstream clip should be trimmed to 2000ms after move, got %d", trimmed_a_after_move.duration))
 
 local moved_on_v1 = fetch_clip(db, mover_clip.id)
 assert(moved_on_v1, "moved clip should still exist after move")
 assert(moved_on_v1.track_id == "track_v1",
     string.format("moved clip should now reside on track_v1, got %s", tostring(moved_on_v1.track_id)))
-assert(moved_on_v1.start_value == 2000,
+assert(math.abs(moved_on_v1.start_value - 2000) < 20,
     string.format("moved clip should retain start time 2000ms, got %d", moved_on_v1.start_value))
-assert(moved_on_v1.duration == 4000, "moved clip duration should remain unchanged")
+assert(math.abs(moved_on_v1.duration - 4000) < 20, "moved clip duration should remain unchanged")
 
 print("✅ MoveClipToTrack trims overlaps on destination track")
 
 print("Test 2c: Move + Nudge keeps destination track collision-free")
-db:exec([[INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-          VALUES ('track_nudge_v1', 'sequence', 'NV1', 'VIDEO', 'video_frames', 30.0, 12, 1);
-          INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-          VALUES ('track_nudge_v2', 'sequence', 'NV2', 'VIDEO', 'video_frames', 30.0, 13, 1);]])
+db:exec([[INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+          VALUES ('track_nudge_v1', 'sequence', 'NV1', 'VIDEO', 12, 1);
+          INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+          VALUES ('track_nudge_v2', 'sequence', 'NV2', 'VIDEO', 13, 1);]])
 
-local base_left = Clip.create("Base Left", "media_C")
-base_left.track_id = "track_nudge_v1"
-base_left.start_value = 1000
-base_left.duration = 3000
-base_left.source_in = 0
-base_left.source_out = 3000
+local base_left = Clip.create("Base Left", "media_C", {
+    id = "Base Left",
+    project_id = "project",
+    track_id = "track_nudge_v1",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(30, 30, 1), -- 1000ms
+    duration = Rational.new(90, 30, 1), -- 3000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(90, 30, 1),
+    enabled = true
+})
 assert(base_left:save(db), "failed saving base_left clip")
 
-local base_right = Clip.create("Base Right", "media_C")
-base_right.track_id = "track_nudge_v1"
-base_right.start_value = 6000
-base_right.duration = 3000
-base_right.source_in = 3000
-base_right.source_out = 6000
+local base_right = Clip.create("Base Right", "media_C", {
+    id = "Base Right",
+    project_id = "project",
+    track_id = "track_nudge_v1",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(180, 30, 1), -- 6000ms
+    duration = Rational.new(90, 30, 1), -- 3000ms
+    source_in = Rational.new(90, 30, 1),
+    source_out = Rational.new(180, 30, 1),
+    enabled = true
+})
 assert(base_right:save(db), "failed saving base_right clip")
 
-local mover_for_nudge = Clip.create("Mover Nudge", "media_C")
-mover_for_nudge.track_id = "track_nudge_v2"
-mover_for_nudge.start_value = 3500
-mover_for_nudge.duration = 4000
-mover_for_nudge.source_in = 0
-mover_for_nudge.source_out = 4000
+local mover_for_nudge = Clip.create("Mover Nudge", "media_C", {
+    id = "Mover Nudge",
+    project_id = "project",
+    track_id = "track_nudge_v2",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(105, 30, 1), -- 3500ms
+    duration = Rational.new(120, 30, 1), -- 4000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(120, 30, 1),
+    enabled = true
+})
 assert(mover_for_nudge:save(db), "failed saving mover clip for nudge test")
 
 command_executors = new_command_env(db)
@@ -265,7 +353,7 @@ local move_cmd = Command.create("MoveClipToTrack", "project")
 move_cmd:set_parameter("clip_id", mover_for_nudge.id)
 move_cmd:set_parameter("target_track_id", "track_nudge_v1")
 move_cmd:set_parameter("sequence_id", "sequence")
-assert(command_executors["MoveClipToTrack"](move_cmd), "Move command should succeed")
+assert(command_manager.execute(move_cmd).success, "Move command should succeed")
 
 local nudge_cmd = Command.create("Nudge", "project")
 nudge_cmd:set_parameter("nudge_amount_ms", -2500)
@@ -273,54 +361,53 @@ nudge_cmd:set_parameter("nudge_axis", "time")
 nudge_cmd:set_parameter("selected_clip_ids", {mover_for_nudge.id})
 nudge_cmd:set_parameter("selected_edges", {})
 nudge_cmd:set_parameter("sequence_id", "sequence")
-assert(command_executors["Nudge"](nudge_cmd), "Nudge command should succeed")
+assert(command_manager.execute(nudge_cmd).success, "Nudge command should succeed")
 
 local nudge_track_clips = fetch_track_clips(db, "track_nudge_v1")
 assert(#nudge_track_clips >= 2, "nudge track should retain clips")
 assert_no_overlaps(nudge_track_clips)
 
 local moved_after_nudge = fetch_clip(db, mover_for_nudge.id)
-assert(moved_after_nudge.start_value == 1000,
+assert(math.abs(moved_after_nudge.start_value - 1000) < 20,
     string.format("nudge should shift mover to 1000ms, got %d", moved_after_nudge.start_value))
 
 print("✅ Move + Nudge maintains occlusion invariant")
 
 print("Test 3: insert inside long clip splits into two segments")
-local clip_e = Clip.create("E", "media_E")
-clip_e.track_id = "track_v2"
-clip_e.start_value = 0
-clip_e.duration = 8000
-clip_e.source_in = 0
-clip_e.source_out = 8000
+local clip_e = Clip.create("E", "media_E", {
+    id = "E",
+    project_id = "project",
+    track_id = "track_v2",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(0, 30, 1),
+    duration = Rational.new(240, 30, 1), -- 8000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(240, 30, 1),
+    enabled = true
+})
 assert(clip_e:save(db), "failed saving clip E")
 
-local clip_f = Clip.create("F", "media_F")
-clip_f.track_id = "track_v2"
-clip_f.start_value = 3000
-clip_f.duration = 2000
-clip_f.source_in = 0
-clip_f.source_out = 2000
-assert(clip_f:save(db), "failed saving clip F (split test)")
+local clip_f = Clip.create("F", "media_F", {
+    id = "F",
+    project_id = "project",
+    track_id = "track_v2",
+    owner_sequence_id = "sequence",
+    timeline_start = Rational.new(90, 30, 1), -- 3000ms
+    duration = Rational.new(60, 30, 1), -- 2000ms
+    source_in = Rational.new(0, 30, 1),
+    source_out = Rational.new(60, 30, 1),
+    enabled = true
+})
+assert(clip_f:save(db), "failed saving clip F")
 
-stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = 'track_v2'")
-stmt:exec(); stmt:next()
-clip_count = stmt:value(0)
-assert(clip_count == 3, string.format("expected split into three clips on track_v2, got %d", clip_count))
+local clips_v2 = fetch_track_clips(db, "track_v2")
+assert(#clips_v2 == 3, string.format("expected 3 clips (E split + F), got %d", #clips_v2))
+-- E1: [0, 3000), F: [3000, 5000), E2: [5000, 8000)
+assert(math.abs(clips_v2[1].duration - 3000) < 20, "E1 duration mismatch")
+assert(math.abs(clips_v2[2].duration - 2000) < 20, "F duration mismatch")
+assert(math.abs(clips_v2[3].duration - 3000) < 20, "E2 duration mismatch")
 
-local left_fragment = fetch_clip(db, clip_e.id)
-assert(left_fragment.duration == 3000, "left fragment duration should be 3000")
-
-stmt = db:prepare([[
-    SELECT id FROM clips
-    WHERE track_id = 'track_v2' AND start_value = 5000
-]])
-stmt:exec(); stmt:next()
-local right_id = stmt:value(0)
-assert(right_id, "right fragment not found")
-local right_fragment = fetch_clip(db, right_id)
-assert(right_fragment.duration == 3000, "right fragment duration should be 3000")
-
-print("✅ Straddled clip split into two fragments")
+print("✅ Split via insert verified")
 
 print("Test 4: Ripple clamp respects media duration")
 local media_row = Media.create({

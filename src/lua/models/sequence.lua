@@ -3,9 +3,13 @@
 
 local database = require("core.database")
 local uuid = require("uuid")
+local Rational = require("core.rational")
 
 local Sequence = {}
 Sequence.__index = Sequence
+
+local MIGRATION_FPS_NUM = 30
+local MIGRATION_FPS_DEN = 1
 
 local function resolve_db(db)
     if db then
@@ -18,18 +22,15 @@ local function resolve_db(db)
     return conn
 end
 
-local function clamp_resolution(value, fallback)
-    if type(value) ~= "number" or value <= 0 then
-        return fallback
+local function validate_frame_rate(val)
+    if type(val) == "number" and val > 0 then
+        return { fps_numerator = math.floor(val), fps_denominator = 1 } -- Simple integer rate
     end
-    return math.floor(value)
-end
-
-local function validate_frame_rate(value)
-    if type(value) ~= "number" or value <= 0 then
-        return nil
+    if type(val) == "table" and val.fps_numerator and val.fps_denominator then
+        return val
     end
-    return value
+    -- Default 30 fps
+    return { fps_numerator = 30, fps_denominator = 1 }
 end
 
 function Sequence.create(name, project_id, frame_rate, width, height, opts)
@@ -42,9 +43,13 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         return nil
     end
 
-    local fr = validate_frame_rate(frame_rate) or 30.0
-    local w = clamp_resolution(width, 1920)
-    local h = clamp_resolution(height, 1080)
+    local fr = validate_frame_rate(frame_rate)
+    
+    -- Clamp resolution (legacy logic preserved)
+    local w = 1920
+    local h = 1080
+    if type(width) == "number" and width > 0 then w = math.floor(width) end
+    if type(height) == "number" and height > 0 then h = math.floor(height) end
 
     opts = opts or {}
     local now = os.time()
@@ -57,7 +62,18 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         frame_rate = fr,
         width = w,
         height = h,
-        timecode_start_frame = opts.timecode_start_frame or 0,
+        
+        -- New Rational Properties
+        -- Removed timecode_start as it's not in schema
+        playhead_position = Rational.new(0, fr.fps_numerator, fr.fps_denominator),
+        viewport_start_time = Rational.new(0, fr.fps_numerator, fr.fps_denominator),
+        
+        -- Default viewport duration: 10 seconds
+        viewport_duration = Rational.from_seconds(10.0, fr.fps_numerator, fr.fps_denominator),
+        
+        mark_in = nil,
+        mark_out = nil,
+
         created_at = opts.created_at or now,
         modified_at = opts.modified_at or now
     }
@@ -76,41 +92,67 @@ function Sequence.load(id, db)
         return nil
     end
 
-    local stmt = conn:prepare([[
-        SELECT id, project_id, name, kind, frame_rate, width, height, timecode_start_frame
-        FROM sequences WHERE id = ?
-    ]])
-
-    if not stmt then
-        print("WARNING: Sequence.load: failed to prepare query")
-        return nil
-    end
-
-    stmt:bind_value(1, id)
-    if not stmt:exec() then
-        print(string.format("WARNING: Sequence.load: query failed for %s", id))
-        stmt:finalize()
-        return nil
-    end
-
-    if not stmt:next() then
-        stmt:finalize()
-        return nil
-    end
-
-    local sequence = {
-        id = stmt:value(0),
-        project_id = stmt:value(1),
-        name = stmt:value(2),
-        kind = stmt:value(3),
-        frame_rate = stmt:value(4),
-        width = stmt:value(5),
-        height = stmt:value(6),
-        timecode_start_frame = stmt:value(7) or 0,
-        created_at = os.time(),
-        modified_at = os.time()
-    }
-
+            local stmt = conn:prepare([[
+                SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height, 
+                       playhead_frame, view_start_frame, 
+                       view_duration_frames, mark_in_frame, mark_out_frame, audio_rate
+                FROM sequences WHERE id = ?
+            ]])
+    
+            if not stmt then
+                print(string.format("WARNING: Sequence.load: failed to prepare query: %s", conn:last_error()))
+                return nil
+            end
+    
+            stmt:bind_value(1, id)
+            if not stmt:exec() then
+                print(string.format("WARNING: Sequence.load: query failed for %s", id))
+                stmt:finalize()
+                return nil
+            end
+    
+            if not stmt:next() then
+                stmt:finalize()
+                return nil
+            end
+    
+            local fps_num = stmt:value(4)
+            local fps_den = stmt:value(5)
+            local audio_rate = stmt:value(13)
+            
+            local fr = { fps_numerator = fps_num, fps_denominator = fps_den }
+    
+            local sequence = {
+                id = stmt:value(0),
+                project_id = stmt:value(1),
+                name = stmt:value(2),
+                kind = stmt:value(3),
+                frame_rate = fr,
+                audio_sample_rate = audio_rate,
+                width = stmt:value(6),
+                height = stmt:value(7),
+                
+                -- New Rational Properties (loaded from frames)
+                playhead_position = Rational.new(stmt:value(8) or 0, fps_num, fps_den),
+                viewport_start_time = Rational.new(stmt:value(9) or 0, fps_num, fps_den),
+                
+                -- Viewport Duration
+                viewport_duration = Rational.new(stmt:value(10) or 240, fps_num, fps_den),
+                
+                created_at = os.time(),
+                modified_at = os.time()
+            }
+            
+            -- Optional Marks
+            local raw_mark_in = stmt:value(11)
+            if raw_mark_in then
+                sequence.mark_in = Rational.new(raw_mark_in, fps_num, fps_den)
+            end
+            
+            local raw_mark_out = stmt:value(12)
+            if raw_mark_out then
+                sequence.mark_out = Rational.new(raw_mark_out, fps_num, fps_den)
+            end
     stmt:finalize()
     return setmetatable(sequence, Sequence)
 end
@@ -132,10 +174,28 @@ function Sequence:save(db)
 
     self.modified_at = os.time()
 
+    -- V5: Rational Storage
+    -- We store the Rate (fps_num/den) and the Frames/Ticks directly.
+    
+    local db_fps_num = self.frame_rate.fps_numerator
+    local db_fps_den = self.frame_rate.fps_denominator
+    
+    -- Removed db_timecode_start as it's not in schema
+    local db_playhead = self.playhead_position.frames
+    local db_view_start = self.viewport_start_time.frames
+    local db_view_dur = self.viewport_duration.frames
+    
+    local db_mark_in = self.mark_in and self.mark_in.frames or nil
+    local db_mark_out = self.mark_out and self.mark_out.frames or nil
+    
+    local db_audio_rate = self.audio_sample_rate or 48000
+
     local stmt = conn:prepare([[
         INSERT OR REPLACE INTO sequences
-        (id, project_id, name, kind, frame_rate, width, height, timecode_start_frame)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, project_id, name, kind, fps_numerator, fps_denominator, width, height, 
+         playhead_frame, view_start_frame, view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
+         created_at, modified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
 
     if not stmt then
@@ -148,14 +208,41 @@ function Sequence:save(db)
     stmt:bind_value(2, self.project_id)
     stmt:bind_value(3, self.name)
     stmt:bind_value(4, self.kind or "timeline")
-    stmt:bind_value(5, self.frame_rate)
-    stmt:bind_value(6, self.width)
-    stmt:bind_value(7, self.height)
-    stmt:bind_value(8, self.timecode_start_frame or 0)
+    stmt:bind_value(5, db_fps_num)
+    stmt:bind_value(6, db_fps_den)
+    stmt:bind_value(7, self.width)
+    stmt:bind_value(8, self.height)
+    stmt:bind_value(9, db_playhead)
+    stmt:bind_value(10, db_view_start)
+    stmt:bind_value(11, db_view_dur)
+    
+    if db_mark_in then 
+        stmt:bind_value(12, db_mark_in) 
+    else 
+        if stmt.bind_null then
+            stmt:bind_null(12) 
+        else
+            stmt:bind_value(12, nil)
+        end
+    end
+    
+    if db_mark_out then 
+        stmt:bind_value(13, db_mark_out) 
+    else 
+        if stmt.bind_null then
+            stmt:bind_null(13)
+        else
+            stmt:bind_value(13, nil)
+        end
+    end
+    
+    stmt:bind_value(14, db_audio_rate)
+    stmt:bind_value(15, self.created_at)
+    stmt:bind_value(16, self.modified_at)
 
     local ok = stmt:exec()
     if not ok then
-        print(string.format("WARNING: Sequence.save: failed for %s", self.id))
+        print(string.format("WARNING: Sequence.save: failed for %s with error: %s", self.id, stmt:last_error()))
     end
 
     stmt:finalize()

@@ -79,7 +79,7 @@ set(CORE_SOURCES
 )
 
 set(UI_SOURCES
-    src/ui/timeline/scriptable_timeline.cpp
+    src/ui/timeline/timeline_renderer.cpp
     # Removed C++ UI implementations that violate architecture (should be Lua):
     # src/ui/keyboard_customization_dialog.cpp  (MOVED TO LUA - src/lua/ui/)
     # src/ui/selection/selection_manager.cpp
@@ -252,10 +252,10 @@ endif()
 # Note: New timeline tests are standalone and defined below
 
 # Standalone timeline widget test (no test_base dependency)
-add_executable(test_scriptable_timeline_widget
-    tests/unit/test_scriptable_timeline_widget.cpp
+add_executable(test_timeline_renderer_widget
+    tests/unit/test_timeline_renderer_widget.cpp
 )
-target_link_libraries(test_scriptable_timeline_widget
+target_link_libraries(test_timeline_renderer_widget
     JVECore
     Qt6::Test
     Qt6::Core
@@ -263,18 +263,18 @@ target_link_libraries(test_scriptable_timeline_widget
     Qt6::Gui
     ${LUAJIT_LIBRARIES}
 )
-target_include_directories(test_scriptable_timeline_widget PUBLIC
+target_include_directories(test_timeline_renderer_widget PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${LUAJIT_INCLUDE_DIRS}
 )
-target_link_directories(test_scriptable_timeline_widget PRIVATE
+target_link_directories(test_timeline_renderer_widget PRIVATE
     ${LUAJIT_LIBRARY_DIRS}
 )
-set_target_properties(test_scriptable_timeline_widget PROPERTIES
+set_target_properties(test_timeline_renderer_widget PROPERTIES
     AUTOMOC ON
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
-add_test(NAME test_scriptable_timeline_widget COMMAND test_scriptable_timeline_widget)
+add_test(NAME test_timeline_renderer_widget COMMAND test_timeline_renderer_widget)
 
 add_custom_target(lua_tests ALL
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh

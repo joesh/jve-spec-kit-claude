@@ -17,7 +17,7 @@ extern "C" {
 namespace JVE {
 
 /**
- * Scriptable Timeline Widget - Minimal C++ rendering surface for command-based timeline
+ * Timeline Renderer - Minimal C++ rendering surface for command-based timeline
  * 
  * This widget implements the principle: "only performance-heavy stuff in C++, everything else in scripts"
  * 
@@ -30,13 +30,13 @@ namespace JVE {
  * - All user interaction handling
  * - All business logic and state management
  */
-class ScriptableTimeline : public QWidget
+class TimelineRenderer : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit ScriptableTimeline(const std::string& widget_id, QWidget* parent = nullptr);
-    ~ScriptableTimeline() = default;
+    explicit TimelineRenderer(const std::string& widget_id, QWidget* parent = nullptr);
+    ~TimelineRenderer() = default;
 
     // Set Lua state for callbacks
     void setLuaState(lua_State* L) { lua_state_ = L; }
@@ -118,7 +118,7 @@ private:
 
 } // namespace JVE
 
-// Lua bindings for ScriptableTimeline
+// Lua bindings for TimelineRenderer
 extern "C" {
     void registerTimelineBindings(lua_State* L);
 

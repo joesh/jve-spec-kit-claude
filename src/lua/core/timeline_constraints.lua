@@ -6,33 +6,36 @@ local M = {}
 local Media = require('models.media')
 local database_module = require('core.database')
 
-local function clip_duration(clip)
-    if not clip then
-        return nil
+local function to_ms(val)
+    if type(val) == "number" then return val end
+    if type(val) == "table" and val.to_seconds then
+        return val:to_seconds() * 1000.0
     end
-    return tonumber(clip.duration_value) or tonumber(clip.duration)
+    return nil
+end
+
+local function clip_duration(clip)
+    if not clip then return nil end
+    return to_ms(clip.duration) or tonumber(clip.duration_value)
 end
 
 local function clip_source_in(clip)
-    if not clip then
-        return nil
-    end
-    return tonumber(clip.source_in_value) or tonumber(clip.source_in) or 0
+    if not clip then return nil end
+    return to_ms(clip.source_in) or tonumber(clip.source_in_value) or 0
 end
 
 local function clip_source_out(clip)
-    if not clip then
-        return nil
-    end
-    local explicit = tonumber(clip.source_out_value) or tonumber(clip.source_out)
-    if explicit then
-        return explicit
-    end
+    if not clip then return nil end
+    local explicit = to_ms(clip.source_out) or tonumber(clip.source_out_value)
+    if explicit then return explicit end
     local dur = clip_duration(clip)
-    if not dur then
-        return nil
-    end
+    if not dur then return nil end
     return clip_source_in(clip) + dur
+end
+
+local function clip_start(clip)
+    if not clip then return nil end
+    return to_ms(clip.timeline_start) or to_ms(clip.start_value) or 0
 end
 
 -- Calculate the valid range for moving a clip
@@ -53,6 +56,7 @@ function M.calculate_move_range(clip_id, track_id, all_clips)
     if not clip_duration_value then
         return nil, "Clip missing duration_value"
     end
+    local c_start = clip_start(clip)
 
     -- Find adjacent clips on the target track
     local left_boundary = 0  -- Earliest allowed start time
@@ -66,10 +70,11 @@ function M.calculate_move_range(clip_id, track_id, all_clips)
             if not other_duration then
                 error("calculate_move_range: other clip missing duration_value")
             end
-            local other_end = other.start_value + other_duration
+            local o_start = clip_start(other)
+            local other_end = o_start + other_duration
 
             -- Clip to our left
-            if other_end <= clip.start_value then
+            if other_end <= c_start then
                 if other_end > left_boundary then
                     left_boundary = other_end
                     blocking_left = other
@@ -77,9 +82,9 @@ function M.calculate_move_range(clip_id, track_id, all_clips)
             end
 
             -- Clip to our right
-            if other.start_value >= clip.start_value + clip_duration_value then
-                if other.start_value < right_boundary then
-                    right_boundary = other.start_value
+            if o_start >= c_start + clip_duration_value then
+                if o_start < right_boundary then
+                    right_boundary = o_start
                     blocking_right = other
                 end
             end
@@ -113,6 +118,7 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
     local duration = clip_duration(clip)
     local source_in = clip_source_in(clip)
     local source_out = clip_source_out(clip)
+    local start_val = clip_start(clip)
 
     if not is_gap_clip and not duration then
         error("calculate_trim_range: clip missing duration_value")
@@ -182,7 +188,7 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
                 media_missing = true
             end
 
-            local media_duration = media_record and media_record.duration or nil
+            local media_duration = clip_duration(media_record)
             local current_source_out = source_out or (source_in + (duration or 0))
 
             if media_duration then
@@ -224,6 +230,7 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
             -- For ripple edits: check all tracks. For regular trims: only same track
             local should_check = (check_all_tracks or other.track_id == clip.track_id)
             if other.id ~= clip.id and should_check then
+                local o_start = clip_start(other)
                 if edge_type == "in" then
                     if enforce_adjacent_left then
                         -- Trimming in-point: check for clip to the left
@@ -231,10 +238,10 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
                         if not other_duration then
                             error("calculate_trim_range: adjacent clip missing duration_value")
                         end
-                        local other_end = other.start_value + other_duration
-                        if other_end <= clip.start_value then
+                        local other_end = o_start + other_duration
+                        if other_end <= start_val then
                             -- Clip is to our left
-                            local max_drag_left = clip.start_value - other_end
+                            local max_drag_left = start_val - other_end
                             if -max_drag_left > min_delta then
                                 min_delta = -max_drag_left
                                 limit_left = other
@@ -244,10 +251,10 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
                 elseif edge_type == "out" then
                     if enforce_adjacent_right then
                         -- Trimming out-point: check for clip to the right
-                        local clip_end = clip.start_value + duration
-                        if other.start_value >= clip_end then
+                        local clip_end = start_val + duration
+                        if o_start >= clip_end then
                             -- Clip is to our right
-                            local max_drag_right = other.start_value - clip_end
+                            local max_drag_right = o_start - clip_end
                             if max_drag_right < max_delta then
                                 max_delta = max_drag_right
                                 limit_right = other
@@ -261,7 +268,7 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
 
     -- CONSTRAINT 4: Timeline start (can't move clip start before t=0)
     if edge_type == "in" then
-        local max_drag_left = clip.start_value  -- Can't go before 0
+        local max_drag_left = start_val  -- Can't go before 0
         if -max_drag_left > min_delta then
             min_delta = -max_drag_left
             limit_left = "timeline_start"

@@ -61,13 +61,13 @@ static id qt_nsstring_from_utf8(const char* utf8)
 #endif
 
 // Include existing UI components
-#include "ui/timeline/scriptable_timeline.h"  // Performance-critical timeline rendering
+#include "ui/timeline/timeline_renderer.h"  // Performance-critical timeline rendering
 
 // Widget userdata metatable name
 static const char* WIDGET_METATABLE = "JVE.Widget";
 
 // Forward declarations
-int lua_create_scriptable_timeline(lua_State* L);
+int lua_create_timeline_renderer(lua_State* L);
 int lua_set_line_edit_text_changed_handler(lua_State* L);
 int lua_set_line_edit_editing_finished_handler(lua_State* L);
 int lua_update_widget(lua_State* L);
@@ -1002,7 +1002,7 @@ void registerQtBindings(lua_State* L)
     lua_setfield(L, -2, "CREATE_SLIDER");
     lua_pushcfunction(L, lua_create_tree_widget);
     lua_setfield(L, -2, "CREATE_TREE");
-    lua_pushcfunction(L, lua_create_scriptable_timeline);
+    lua_pushcfunction(L, lua_create_timeline_renderer);
     lua_setfield(L, -2, "CREATE_TIMELINE");
     lua_pushcfunction(L, lua_create_inspector_panel);
     lua_setfield(L, -2, "CREATE_INSPECTOR");
@@ -1461,10 +1461,10 @@ int lua_create_tree_widget(lua_State* L)
     return 1;
 }
 
-int lua_create_scriptable_timeline(lua_State* L)
+int lua_create_timeline_renderer(lua_State* L)
 {
     // // qDebug() << "Creating scriptable timeline from Lua";
-    JVE::ScriptableTimeline* timeline = new JVE::ScriptableTimeline("timeline_widget");
+    JVE::TimelineRenderer* timeline = new JVE::TimelineRenderer("timeline_widget");
 
     // Set size policy to expand and fill available space
     timeline->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);

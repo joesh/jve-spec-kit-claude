@@ -2,7 +2,7 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QKeyEvent>
-#include "src/ui/timeline/scriptable_timeline.h"
+#include "src/ui/timeline/timeline_renderer.h"
 
 extern "C" {
 #include <lua.h>
@@ -10,13 +10,13 @@ extern "C" {
 #include <lauxlib.h>
 }
 
-class TestScriptableTimelineWidget : public QObject
+class TestTimelineRendererWidget : public QObject
 {
     Q_OBJECT
 
 private:
     lua_State* L = nullptr;
-    JVE::ScriptableTimeline* timeline = nullptr;
+    JVE::TimelineRenderer* timeline = nullptr;
 
     // Event handler tracking
     struct EventData {
@@ -104,7 +104,7 @@ private slots:
         lua_setglobal(L, "mock_key_handler");
 
         // Create timeline widget
-        timeline = new JVE::ScriptableTimeline("test_timeline");
+        timeline = new JVE::TimelineRenderer("test_timeline");
         timeline->setLuaState(L);
     }
 
@@ -322,8 +322,8 @@ private slots:
 };
 
 // Static member initialization
-TestScriptableTimelineWidget::EventData TestScriptableTimelineWidget::lastMouseEvent;
-TestScriptableTimelineWidget::EventData TestScriptableTimelineWidget::lastKeyEvent;
+TestTimelineRendererWidget::EventData TestTimelineRendererWidget::lastMouseEvent;
+TestTimelineRendererWidget::EventData TestTimelineRendererWidget::lastKeyEvent;
 
-QTEST_MAIN(TestScriptableTimelineWidget)
+QTEST_MAIN(TestTimelineRendererWidget)
 #include "test_scriptable_timeline_widget.moc"

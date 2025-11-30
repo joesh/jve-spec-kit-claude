@@ -19,25 +19,27 @@ local seed = string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                          timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+                          playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
 
-    INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec)
-    VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 1000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw');
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+    VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 1000, 30, 1, 1920, 1080, 0, 'raw', %d, %d);
 
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id,
-                       start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
+    -- Track V1: left/right with gap
+    -- 2000ms @ 30fps = 60 frames. 5000ms = 150 frames.
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
+                       timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline,
                        created_at, modified_at)
     VALUES
-        ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'media1', 'default_sequence', NULL, 'default_sequence',
-         0, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d),
-        ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'media1', 'default_sequence', NULL, 'default_sequence',
-         1000, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, %d, %d);
-]], now, now, now, now, now, now, now, now)
+        ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'media1', 'default_sequence',
+         0, 30, 0, 30, 30, 1, 1, 0, %d, %d),
+        ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'media1', 'default_sequence',
+         30, 30, 0, 30, 30, 1, 1, 0, %d, %d);
+]], now, now, now, now, now, now, now, now, now, now)
 assert(db:exec(seed))
 
 -- Minimal timeline_state stubs
@@ -64,21 +66,22 @@ timeline_state.apply_mutations = function(_, _) return true end
 command_manager.init(db, "default_sequence", "default_project")
 
 local function fetch_clip_start(clip_id)
-    local stmt = db:prepare("SELECT start_value FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(clip_id))
     local value = tonumber(stmt:value(0)) or 0
     stmt:finalize()
-    return value
+    -- Convert ticks back to approx MS for assertion consistency
+    return math.floor(value / 30.0 * 1000.0 + 0.5)
 end
 
 local function fetch_clip_duration(clip_id)
-    local stmt = db:prepare("SELECT duration_value FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(clip_id))
     local value = tonumber(stmt:value(0)) or 0
     stmt:finalize()
-    return value
+    return math.floor(value / 30.0 * 1000.0 + 0.5)
 end
 
 -- Adjacent clips: out edge of left cannot move right (constraint max 0), in edge of right cannot move left.

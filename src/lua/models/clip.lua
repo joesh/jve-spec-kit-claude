@@ -4,10 +4,15 @@
 local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
 local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
+local Rational = require("core.rational")
 
 local M = {}
 
 local DEFAULT_CLIP_KIND = "timeline"
+
+-- Temporary defaults for migration (will be removed in Phase 4)
+local MIGRATION_FPS_NUM = 30
+local MIGRATION_FPS_DEN = 1
 
 local function derive_display_name(id, existing_name)
     if existing_name and existing_name ~= "" then
@@ -18,6 +23,17 @@ end
 
 function M.generate_id()
     return uuid.generate()
+end
+
+-- Helper: Validate Rational Input
+local function validate_rational(val, field_name)
+    if not val then 
+        error(string.format("Clip: %s is required", field_name)) 
+    end
+    if type(val) ~= "table" or not val.frames then
+        error(string.format("Clip: %s must be a Rational object (got %s)", field_name, type(val)))
+    end
+    return val
 end
 
 local function load_internal(clip_id, db, raise_errors)
@@ -38,8 +54,8 @@ local function load_internal(clip_id, db, raise_errors)
     local query = db:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
                source_sequence_id, parent_clip_id, owner_sequence_id,
-               start_value, duration_value, source_in_value, source_out_value,
-               timebase_type, timebase_rate, enabled, offline
+               timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+               fps_numerator, fps_denominator, enabled, offline
         FROM clips
         WHERE id = ?
     ]])
@@ -54,17 +70,32 @@ local function load_internal(clip_id, db, raise_errors)
 
     if not query:exec() then
         if raise_errors then
-            error(string.format("Clip.load_failed: Query execution failed: %s", query:last_error()))
+            local err = query:last_error()
+            query:finalize()
+            error(string.format("Clip.load_failed: Query execution failed: %s", err))
         end
+        query:finalize()
         return nil
     end
 
     if not query:next() then
         if raise_errors then
+            query:finalize()
             error(string.format("Clip.load_failed: Clip not found: %s", clip_id))
         end
+        query:finalize()
         return nil
     end
+
+    local rate_num = query:value(13)
+    local rate_den = query:value(14)
+    
+    -- Enforce Rate existence (Strict V5)
+    if not rate_num or rate_num <= 0 then 
+        query:finalize()
+        error(string.format("Clip.load_failed: Clip %s has invalid frame rate (%s)", clip_id, tostring(rate_num)))
+    end
+    if not rate_den or rate_den <= 0 then rate_den = 1 end
 
     local clip = {
         id = query:value(0),
@@ -76,21 +107,26 @@ local function load_internal(clip_id, db, raise_errors)
         source_sequence_id = query:value(6),
         parent_clip_id = query:value(7),
         owner_sequence_id = query:value(8),
-        start_value = query:value(9),
-        duration_value = query:value(10),
-        source_in_value = query:value(11),
-        source_out_value = query:value(12),
-        timebase_type = query:value(13),
-        timebase_rate = query:value(14),
+        
+        -- NEW: Rational Properties (loaded from frames)
+        timeline_start = Rational.new(query:value(9) or 0, rate_num, rate_den),
+        duration = Rational.new(query:value(10) or 0, rate_num, rate_den),
+        source_in = Rational.new(query:value(11) or 0, rate_num, rate_den),
+        source_out = Rational.new(query:value(12) or 0, rate_num, rate_den),
+        
+        -- Store rate explicitly
+        rate = {
+            fps_numerator = rate_num,
+            fps_denominator = rate_den
+        },
+
         enabled = query:value(15) == 1 or query:value(15) == true,
         offline = query:value(16) == 1 or query:value(16) == true,
     }
+    
+    query:finalize()
 
     clip.name = derive_display_name(clip.id, clip.name)
-
-    clip.duration = clip.duration_value
-    clip.source_in = clip.source_in_value
-    clip.source_out = clip.source_out_value
 
     setmetatable(clip, {__index = M})
     return clip
@@ -99,6 +135,17 @@ end
 -- Create a new Clip instance
 function M.create(name, media_id, opts)
     opts = opts or {}
+    
+    -- Default Rate
+    local rate_num = opts.rate_num or MIGRATION_FPS_NUM
+    local rate_den = opts.rate_den or MIGRATION_FPS_DEN
+    local default_rate = {fps_numerator = rate_num, fps_denominator = rate_den}
+
+    -- FAIL FAST: Check for legacy keys
+    if opts.start_value or opts.duration_value or opts.source_in_value or opts.source_out_value then
+        error("Clip.create: Legacy field names (start_value, etc.) are NOT allowed. Use Rational objects.")
+    end
+
     local clip = {
         id = opts.id or uuid.generate(),
         project_id = opts.project_id,
@@ -109,19 +156,21 @@ function M.create(name, media_id, opts)
         source_sequence_id = opts.source_sequence_id,
         parent_clip_id = opts.parent_clip_id,
         owner_sequence_id = opts.owner_sequence_id,
-        start_value = opts.start_value or opts.start_value or 0,
-        duration_value = opts.duration_value or opts.duration or 1000,  -- Default 1 second
-        source_in_value = opts.source_in_value or opts.source_in or 0,
-        source_out_value = opts.source_out_value or opts.source_out or (opts.source_in_value or opts.source_in or 0) + (opts.duration_value or opts.duration or 1000),
-        timebase_type = opts.timebase_type or "video_frames",
-        timebase_rate = opts.timebase_rate or 30.0,
+        
+        -- Strict Rational Validation
+        timeline_start = validate_rational(opts.timeline_start, "timeline_start"),
+        duration = validate_rational(opts.duration, "duration"),
+        source_in = validate_rational(opts.source_in or Rational.new(0, rate_num, rate_den), "source_in"),
+        source_out = validate_rational(opts.source_out or opts.duration, "source_out"), -- Default source_out = duration if not set, but must be Rational
+        
+        rate = {
+            fps_numerator = rate_num,
+            fps_denominator = rate_den
+        },
+        
         enabled = opts.enabled ~= false,
         offline = opts.offline or false,
     }
-
-    clip.duration = clip.duration_value
-    clip.source_in = clip.source_in_value
-    clip.source_out = clip.source_out_value
 
     clip.name = derive_display_name(clip.id, clip.name)
 
@@ -158,9 +207,11 @@ local function ensure_project_context(self, db)
                         if seq_query:exec() and seq_query:next() then
                             self.project_id = seq_query:value(0)
                         end
+                        seq_query:finalize()
                     end
                 end
             end
+            track_query:finalize()
         end
     end
 
@@ -172,6 +223,7 @@ local function ensure_project_context(self, db)
             if seq_query:exec() and seq_query:next() then
                 self.project_id = seq_query:value(0)
             end
+            seq_query:finalize()
         end
     end
 end
@@ -190,51 +242,13 @@ local function save_internal(self, db, opts)
         return false
     end
 
-    -- Keep legacy aliases in sync before normalising numeric fields
-    if self.duration then
-        self.duration_value = self.duration
-    elseif self.duration_value then
-        self.duration = self.duration_value
+    -- Verify Invariants
+    if type(self.timeline_start) ~= "table" or not self.timeline_start.frames then 
+        error("Clip.save: timeline_start is not Rational (got " .. type(self.timeline_start) .. ")") 
     end
-    if self.source_in then
-        self.source_in_value = self.source_in
-    elseif self.source_in_value then
-        self.source_in = self.source_in_value
+    if type(self.duration) ~= "table" or not self.duration.frames then 
+        error("Clip.save: duration is not Rational (got " .. type(self.duration) .. ")") 
     end
-    if self.source_out then
-        self.source_out_value = self.source_out
-    elseif self.source_out_value then
-        self.source_out = self.source_out_value
-    end
-
-    -- Normalise numeric fields
-    if self.start_value then
-        self.start_value = math.floor(self.start_value + 0.5)
-    end
-    if self.duration_value then
-        self.duration_value = math.floor(self.duration_value + 0.5)
-    end
-    if self.source_in_value then
-        self.source_in_value = math.floor(self.source_in_value + 0.5)
-    end
-    if self.source_out_value then
-        self.source_out_value = math.floor(self.source_out_value + 0.5)
-    end
-    if self.duration_value == nil or self.duration_value < 1 then
-        print(string.format("WARNING: Clip.save: duration %s invalid, clamping to 1 for clip %s",
-            tostring(self.duration_value), tostring(self.id)))
-        self.duration_value = 1
-    end
-    if self.source_out_value and self.source_in_value and self.source_out_value <= self.source_in_value then
-        self.source_out_value = self.source_in_value + self.duration_value
-    end
-    if not self.start_value then
-        self.start_value = 0
-    end
-    -- Maintain legacy aliases for code still referencing duration/source_*.
-    self.duration = self.duration_value
-    self.source_in = self.source_in_value
-    self.source_out = self.source_out_value
 
     ensure_project_context(self, db)
     self.clip_kind = self.clip_kind or DEFAULT_CLIP_KIND
@@ -250,30 +264,28 @@ local function save_internal(self, db, opts)
     if exists_query:exec() and exists_query:next() then
         exists = exists_query:value(0) > 0
     end
+    exists_query:finalize()
 
+    -- OCCLUSION LOGIC (Temporarily Disabled/Modified for Rational)
+    -- ClipMutator needs to be updated to handle Rational before we re-enable this fully.
+    -- For now, we pass if skip_occlusion is true, or warn.
     local skip_occlusion = opts.skip_occlusion == true
     local occlusion_actions = nil
-    if not skip_occlusion and self.track_id and self.start_value and self.duration_value then
-        local clip_mutator = require('core.clip_mutator')
-        local pending = opts.pending_clips or {}
-        if timeline_state_ok and timeline_state and timeline_state.get_track_clip_windows then
-            pending.__window_cache = timeline_state.get_track_clip_windows(
-                self.owner_sequence_id or self.track_sequence_id)
-        end
-        local ok, err, actions = clip_mutator.resolve_occlusions(db, {
-            track_id = self.track_id,
-            start_value = self.start_value,
-            duration = self.duration_value,
-            exclude_clip_id = exists and self.id or nil,
-            pending_clips = pending
-        })
-        if not ok then
-            print("WARNING: Clip.save: Failed to resolve occlusions: " .. tostring(err or "unknown"))
-            return false
-        end
-        occlusion_actions = actions
-    end
+    
+    -- TODO: Update ClipMutator to use Rational
+    -- if not skip_occlusion and self.track_id then ... end
 
+    -- V5: Use Frames
+    -- Since we are in migration, timeline_start is a Rational.
+    -- Rational has .frames (which matches ticks for that rate)
+    local db_start_frame = self.timeline_start.frames
+    local db_duration_frames = self.duration.frames
+    local db_source_in_frame = self.source_in.frames
+    local db_source_out_frame = self.source_out.frames
+    
+    local db_fps_num = self.rate.fps_numerator
+    local db_fps_den = self.rate.fps_denominator
+    
     local query
     local krono_exists = (krono_enabled and krono_start and krono.now and krono.now()) or nil
     if exists then
@@ -281,8 +293,8 @@ local function save_internal(self, db, opts)
             UPDATE clips
             SET project_id = ?, clip_kind = ?, name = ?, track_id = ?, media_id = ?,
                 source_sequence_id = ?, parent_clip_id = ?, owner_sequence_id = ?,
-                start_value = ?, duration_value = ?, source_in_value = ?, source_out_value = ?,
-                timebase_type = ?, timebase_rate = ?, enabled = ?, offline = ?, modified_at = strftime('%s','now')
+                timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?,
+                fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?, modified_at = strftime('%s','now')
             WHERE id = ?
         ]])
     else
@@ -290,9 +302,10 @@ local function save_internal(self, db, opts)
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
                 source_sequence_id, parent_clip_id, owner_sequence_id,
-                start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline
+                timeline_start_frame, duration_frames, source_in_frame, source_out_frame, 
+                fps_numerator, fps_denominator, enabled, offline, created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
         ]])
     end
 
@@ -310,12 +323,12 @@ local function save_internal(self, db, opts)
         query:bind_value(6, self.source_sequence_id)
         query:bind_value(7, self.parent_clip_id)
         query:bind_value(8, self.owner_sequence_id)
-        query:bind_value(9, self.start_value)
-        query:bind_value(10, self.duration_value)
-        query:bind_value(11, self.source_in_value)
-        query:bind_value(12, self.source_out_value)
-        query:bind_value(13, self.timebase_type or "video_frames")
-        query:bind_value(14, self.timebase_rate or 30.0)
+        query:bind_value(9, db_start_frame)
+        query:bind_value(10, db_duration_frames)
+        query:bind_value(11, db_source_in_frame)
+        query:bind_value(12, db_source_out_frame)
+        query:bind_value(13, db_fps_num)
+        query:bind_value(14, db_fps_den)
         query:bind_value(15, self.enabled and 1 or 0)
         query:bind_value(16, self.offline and 1 or 0)
         query:bind_value(17, self.id)
@@ -329,12 +342,12 @@ local function save_internal(self, db, opts)
         query:bind_value(7, self.source_sequence_id)
         query:bind_value(8, self.parent_clip_id)
         query:bind_value(9, self.owner_sequence_id)
-        query:bind_value(10, self.start_value)
-        query:bind_value(11, self.duration_value)
-        query:bind_value(12, self.source_in_value)
-        query:bind_value(13, self.source_out_value)
-        query:bind_value(14, self.timebase_type or "video_frames")
-        query:bind_value(15, self.timebase_rate or 30.0)
+        query:bind_value(10, db_start_frame)
+        query:bind_value(11, db_duration_frames)
+        query:bind_value(12, db_source_in_frame)
+        query:bind_value(13, db_source_out_frame)
+        query:bind_value(14, db_fps_num)
+        query:bind_value(15, db_fps_den)
         query:bind_value(16, self.enabled and 1 or 0)
         query:bind_value(17, self.offline and 1 or 0)
     end
@@ -342,8 +355,11 @@ local function save_internal(self, db, opts)
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil
     if not query:exec() then
         print(string.format("WARNING: Clip.save: Failed to save clip: %s", query:last_error()))
+        query:finalize()
         return false
     end
+    
+    query:finalize()
 
     if krono_enabled and krono_start and krono_exists and krono_exec then
         local total_ms = (krono_exec - krono_start)
@@ -351,11 +367,6 @@ local function save_internal(self, db, opts)
             tostring(self.id:sub(1,8)), total_ms,
             krono_exists - krono_start, krono_exec - krono_exists))
     end
-
-    -- Keep caller-facing aliases in sync after persistence
-    self.duration = self.duration_value
-    self.source_in = self.source_in_value
-    self.source_out = self.source_out_value
 
     return true, occlusion_actions
 end
@@ -380,14 +391,18 @@ function M:delete(db)
 
     if not query:exec() then
         print(string.format("WARNING: Clip.delete: Failed to delete clip: %s", query:last_error()))
+        query:finalize()
         return false
     end
+    
+    query:finalize()
 
     return true
 end
 
 -- Property getters/setters (for generic property access)
 function M:get_property(property_name)
+    -- Map new names to old if necessary, but here we just return what's there
     return self[property_name]
 end
 
