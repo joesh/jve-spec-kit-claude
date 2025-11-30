@@ -120,15 +120,15 @@ else
         if table_count("SELECT COUNT(*) FROM sequences") == 0 then
             local insert_sequence = db_conn:prepare([[
                 INSERT INTO sequences (
-                    id, project_id, name, kind, frame_rate, audio_sample_rate,
-                    width, height, timecode_start_frame, playhead_value,
+                    id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+                    width, height, playhead_frame,
                     selected_clip_ids, selected_edge_infos, selected_gap_infos,
-                    viewport_start_value, viewport_duration_frames_value
+                    view_start_frame, view_duration_frames, created_at, modified_at
                 ) VALUES (
-                    'default_sequence', 'default_project', 'Sequence 1', 'timeline', 24.0, 48000,
-                    1920, 1080, 0, 0,
+                    'default_sequence', 'default_project', 'Sequence 1', 'timeline', 24, 1, 48000,
+                    1920, 1080, 0,
                     '[]', '[]', '[]',
-                    0, 240
+                    0, 240, strftime('%s', 'now'), strftime('%s', 'now')
                 )
             ]])
             if not insert_sequence then
@@ -139,7 +139,7 @@ else
             assert(ok_seq ~= false, "FATAL: Failed to insert default sequence")
             sequence_id = "default_sequence"
         else
-            local seq_stmt = db_conn:prepare("SELECT id, frame_rate, audio_sample_rate FROM sequences LIMIT 1")
+            local seq_stmt = db_conn:prepare("SELECT id, fps_numerator, fps_denominator, audio_rate FROM sequences LIMIT 1")
             if not seq_stmt then
                 error("FATAL: Failed to query existing sequence")
             end
@@ -152,13 +152,13 @@ else
         end
 
         -- Ensure tracks exist for the active sequence
-        local function insert_track(seq_id, id, name, track_type, track_index, timebase_type, timebase_rate)
+        local function insert_track(seq_id, id, name, track_type, track_index)
             local stmt = db_conn:prepare([[
                 INSERT INTO tracks (
-                    id, sequence_id, name, track_type, timebase_type, timebase_rate,
+                    id, sequence_id, name, track_type,
                     track_index, enabled, locked, muted, soloed, volume, pan
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, 1.0, 0.0)
+                VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, 1.0, 0.0)
             ]])
             if not stmt then
                 error("FATAL: Failed to prepare default track insert")
@@ -167,9 +167,7 @@ else
             stmt:bind_value(2, seq_id)
             stmt:bind_value(3, name)
             stmt:bind_value(4, track_type)
-            stmt:bind_value(5, timebase_type)
-            stmt:bind_value(6, timebase_rate)
-            stmt:bind_value(7, track_index)
+            stmt:bind_value(5, track_index)
             local ok = stmt:exec()
             stmt:finalize()
             assert(ok ~= false, string.format("FATAL: Failed to insert track %s", tostring(id)))
@@ -178,26 +176,24 @@ else
         -- Only seed tracks if none exist for the active sequence
         local track_count_sql = string.format("SELECT COUNT(*) FROM tracks WHERE sequence_id = '%s'", sequence_id)
         if table_count(track_count_sql) == 0 then
-            local video_rate = 24.0
-            local audio_rate = 48000.0
-            insert_track(sequence_id, "video1", "V1", "VIDEO", 1, "video_frames", video_rate)
-            insert_track(sequence_id, "video2", "V2", "VIDEO", 2, "video_frames", video_rate)
-            insert_track(sequence_id, "video3", "V3", "VIDEO", 3, "video_frames", video_rate)
-            insert_track(sequence_id, "audio1", "A1", "AUDIO", 1, "audio_samples", audio_rate)
-            insert_track(sequence_id, "audio2", "A2", "AUDIO", 2, "audio_samples", audio_rate)
-            insert_track(sequence_id, "audio3", "A3", "AUDIO", 3, "audio_samples", audio_rate)
+            insert_track(sequence_id, "video1", "V1", "VIDEO", 1)
+            insert_track(sequence_id, "video2", "V2", "VIDEO", 2)
+            insert_track(sequence_id, "video3", "V3", "VIDEO", 3)
+            insert_track(sequence_id, "audio1", "A1", "AUDIO", 1)
+            insert_track(sequence_id, "audio2", "A2", "AUDIO", 2)
+            insert_track(sequence_id, "audio3", "A3", "AUDIO", 3)
 
             local insert_media = db_conn:prepare([[
                 INSERT INTO media (
                     id, project_id, name, file_path,
-                    duration_value, timebase_type, timebase_rate,
-                    frame_rate, width, height, audio_channels, codec,
+                    duration_frames, fps_numerator, fps_denominator,
+                    width, height, audio_channels, codec,
                     created_at, modified_at, metadata
                 )
                 VALUES (
                     'media1', 'default_project', 'test.mp4', '/path/to/test.mp4',
-                    2400, 'video_frames', 24.0,
-                    24.0, 1920, 1080, 2, 'h264',
+                    2400, 24, 1,
+                    1920, 1080, 2, 'h264',
                     strftime('%s','now'), strftime('%s','now'), '{}'
                 )
             ]])
