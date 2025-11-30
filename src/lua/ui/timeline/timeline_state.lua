@@ -50,11 +50,15 @@ M.remove_listener = data.remove_listener
 
 -- Viewport & Playhead
 M.get_viewport_start_time = viewport.get_viewport_start_time
+M.get_viewport_start_value = viewport.get_viewport_start_time -- Legacy Alias
 M.set_viewport_start_time = viewport.set_viewport_start_time
+M.set_viewport_start_value = viewport.set_viewport_start_time -- Legacy Alias
 M.get_viewport_duration = viewport.get_viewport_duration
 M.set_viewport_duration = viewport.set_viewport_duration
 M.get_playhead_position = viewport.get_playhead_position
+M.get_playhead_value = viewport.get_playhead_position -- Legacy Alias
 M.set_playhead_position = viewport.set_playhead_position
+M.set_playhead_value = viewport.set_playhead_position -- Legacy Alias
 M.time_to_pixel = viewport.time_to_pixel
 M.pixel_to_time = viewport.pixel_to_time
 M.capture_viewport = function()

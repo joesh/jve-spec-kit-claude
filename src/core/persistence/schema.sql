@@ -82,6 +82,11 @@ CREATE TABLE IF NOT EXISTS sequences (
     mark_in_frame INTEGER,
     mark_out_frame INTEGER,
     
+    -- Selection State (JSON)
+    selected_clip_ids TEXT DEFAULT '[]',
+    selected_edge_infos TEXT DEFAULT '[]',
+    selected_gap_infos TEXT DEFAULT '[]',
+    
     -- Undo/Redo State
     current_sequence_number INTEGER DEFAULT 0,
     

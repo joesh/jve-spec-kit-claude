@@ -176,8 +176,11 @@ function M.init(sequence_id)
         if query then
             query:bind_value(1, sequence_id)
             if query:exec() and query:next() then
-                local fps_num = query:value(5) or 30
-                local fps_den = query:value(6) or 1
+                local fps_num = query:value(5)
+                local fps_den = query:value(6)
+                
+                fps_num = fps_num or 30
+                fps_den = fps_den or 1
                 data.state.sequence_frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den }
 
                 -- Rescale existing rationals if rate changed (though we just reloaded state so they are fresh/default)

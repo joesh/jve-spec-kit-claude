@@ -41,3 +41,4 @@
 - [x] Refactored Importers (`fcp7_xml_importer.lua`, `drp_importer.lua`) to use `Rational`.
 - [x] Refactored Monolithic `timeline_state.lua` into `ui/timeline/state/*`.
 - [x] Refactored Monolithic `timeline_view.lua` into `ui/timeline/view/*`.
+- [x] Created Full-Stack Integration Test `tests/integration/test_full_timebase_pipeline.lua`.
