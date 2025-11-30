@@ -20,6 +20,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local fps_num = sequence.frame_rate.fps_numerator
         local fps_den = sequence.frame_rate.fps_denominator
 
+        -- Helper to safely extract frame count from Rational or Number
+        local function extract_frames(param)
+            if type(param) == "table" and param.frames then
+                return param.frames
+            elseif type(param) == "number" then
+                return param
+            end
+            return nil
+        end
+
         -- Get Rational inputs if available
         local p_start = command:get_parameter("start_value") or command:get_parameter("timeline_start")
         local p_dur = command:get_parameter("duration")
@@ -27,10 +37,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local p_sout = command:get_parameter("source_out")
 
         -- Get raw frame values from command parameters, defaulting to 0 for start/in
-        local raw_timeline_start_frame = (p_start and p_start.frames) or command:get_parameter("timeline_start_frame") or 0
-        local raw_duration_frames = (p_dur and p_dur.frames) or command:get_parameter("duration_frames")
-        local raw_source_in_frame = (p_sin and p_sin.frames) or command:get_parameter("source_in_frame") or 0
-        local raw_source_out_frame = (p_sout and p_sout.frames) or command:get_parameter("source_out_frame")
+        local raw_timeline_start_frame = extract_frames(p_start) or command:get_parameter("timeline_start_frame") or 0
+        local raw_duration_frames = extract_frames(p_dur) or command:get_parameter("duration_frames")
+        local raw_source_in_frame = extract_frames(p_sin) or command:get_parameter("source_in_frame") or 0
+        local raw_source_out_frame = extract_frames(p_sout) or command:get_parameter("source_out_frame")
         local master_clip_id = command:get_parameter("master_clip_id")
         local project_id_param = command:get_parameter("project_id")
 

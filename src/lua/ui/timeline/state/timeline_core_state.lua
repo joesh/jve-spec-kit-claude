@@ -58,6 +58,17 @@ local function build_track_height_template()
     return template
 end
 
+-- Column Constants
+local SEQ_COL_PLAYHEAD = 0
+local SEQ_COL_SEL_CLIPS = 1
+local SEQ_COL_SEL_EDGES = 2
+local SEQ_COL_VIEW_START = 3
+local SEQ_COL_VIEW_DUR = 4
+local SEQ_COL_FPS_NUM = 5
+local SEQ_COL_FPS_DEN = 6
+local SEQ_COL_MARK_IN = 7
+local SEQ_COL_MARK_OUT = 8
+
 local function flush_state_to_db()
     local db_conn = db.get_connection()
     if not db_conn then return end
@@ -147,6 +158,19 @@ function M.persist_state_to_db(force)
     end
 end
 
+local function compute_content_end()
+    local max_end = Rational.new(0, data.state.sequence_frame_rate.fps_numerator, data.state.sequence_frame_rate.fps_denominator)
+    for _, clip in ipairs(data.state.clips) do
+        if clip.timeline_start and clip.duration then
+            local end_time = clip.timeline_start + clip.duration
+            if end_time > max_end then
+                max_end = end_time
+            end
+        end
+    end
+    return max_end
+end
+
 function M.init(sequence_id)
     -- Persist pending state before switching
     if persist_dirty then M.persist_state_to_db(true) end
@@ -176,11 +200,13 @@ function M.init(sequence_id)
         if query then
             query:bind_value(1, sequence_id)
             if query:exec() and query:next() then
-                local fps_num = query:value(5)
-                local fps_den = query:value(6)
+                local fps_num = query:value(SEQ_COL_FPS_NUM)
+                local fps_den = query:value(SEQ_COL_FPS_DEN)
                 
-                fps_num = fps_num or 30
-                fps_den = fps_den or 1
+                if not fps_num or not fps_den then
+                    error(string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(sequence_id)))
+                end
+                
                 data.state.sequence_frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den }
 
                 -- Rescale existing rationals if rate changed (though we just reloaded state so they are fresh/default)
@@ -188,11 +214,11 @@ function M.init(sequence_id)
                 -- `fresh_state` in data.lua sets defaults.
 
                 -- Restore Playhead
-                local saved_playhead = query:value(0)
+                local saved_playhead = query:value(SEQ_COL_PLAYHEAD)
                 data.state.playhead_position = Rational.new(saved_playhead or 0, fps_num, fps_den)
 
                 -- Restore Selection
-                local saved_sel = query:value(1)
+                local saved_sel = query:value(SEQ_COL_SEL_CLIPS)
                 if saved_sel and saved_sel ~= "" then
                     local ok, ids = pcall(json.decode, saved_sel)
                     if ok and type(ids) == "table" then
@@ -205,7 +231,7 @@ function M.init(sequence_id)
                 end
 
                 -- Restore Edges
-                local saved_edges = query:value(2)
+                local saved_edges = query:value(SEQ_COL_SEL_EDGES)
                 if saved_edges and saved_edges ~= "" then
                     local ok, edges = pcall(json.decode, saved_edges)
                     if ok and type(edges) == "table" then
@@ -226,14 +252,14 @@ function M.init(sequence_id)
                 end
 
                 -- Marks
-                local mi = query:value(7)
+                local mi = query:value(SEQ_COL_MARK_IN)
                 data.state.mark_in_value = mi and Rational.new(mi, fps_num, fps_den) or nil
-                local mo = query:value(8)
+                local mo = query:value(SEQ_COL_MARK_OUT)
                 data.state.mark_out_value = mo and Rational.new(mo, fps_num, fps_den) or nil
 
                 -- Viewport
-                local vs = query:value(3)
-                local vd = query:value(4)
+                local vs = query:value(SEQ_COL_VIEW_START)
+                local vd = query:value(SEQ_COL_VIEW_DUR)
                 data.state.viewport_start_time = Rational.new(vs or 0, fps_num, fps_den)
                 if vd and vd > 0 then
                     data.state.viewport_duration = Rational.new(vd, fps_num, fps_den)
@@ -265,22 +291,13 @@ function M.init(sequence_id)
     end
 
     -- Viewport Initialization Logic (if not restored or invalid)
-    -- ... (Logic from original: calculate content length, etc)
-    -- Simplified:
-    local max_content = compute_content_end() -- Need helper
-    -- We can rely on viewport_state clamping later or just accept DB values.
-    -- Original did strict calc.
+    -- Ensure viewport covers content if unset
+    -- (Simplified from original, assuming default duration is reasonable start)
+    -- But we can use compute_content_end here if needed.
+    -- Current logic sets default if DB value missing.
 
     data.notify_listeners()
     return true
-end
-
-function compute_content_end()
-    -- Helper duplicated from viewport_state because of circular dependency risk if we require viewport_state?
-    -- viewport_state requires data. This is fine.
-    -- But viewport_state helpers are local.
-    -- We can just use what we loaded.
-    return Rational.new(0, 30, 1)
 end
 
 function M.reload_clips(target_sequence_id, opts)
