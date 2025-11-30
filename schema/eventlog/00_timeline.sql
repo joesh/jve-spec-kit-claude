@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS tl_clips (
   seq_id TEXT,
   clip_id TEXT PRIMARY KEY,
   media_id TEXT,
-  track INTEGER,
+  track TEXT,
   t_in INTEGER,
   t_out INTEGER,
   src_in INTEGER,
