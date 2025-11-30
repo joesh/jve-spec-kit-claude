@@ -193,6 +193,35 @@ CREATE TABLE IF NOT EXISTS commands (
 );
 
 -- ============================================================================
+-- TAGS & BINS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS tag_namespaces (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    namespace_id TEXT NOT NULL REFERENCES tag_namespaces(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    parent_id TEXT REFERENCES tags(id) ON DELETE CASCADE,
+    sort_index INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS tag_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    namespace_id TEXT NOT NULL REFERENCES tag_namespaces(id) ON DELETE CASCADE,
+    entity_type TEXT NOT NULL, -- 'master_clip', 'media'
+    entity_id TEXT NOT NULL,
+    UNIQUE(tag_id, entity_type, entity_id)
+);
+
+-- ============================================================================
 -- TRIGGERS
 -- ============================================================================
 

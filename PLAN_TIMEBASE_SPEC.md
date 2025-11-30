@@ -51,6 +51,17 @@ Each clip is self-describing. It stores its position and length in its *own* tim
 | `fps_numerator` | INTEGER | NOT NULL, > 0 | Definition of "1 Frame" (e.g. 24 or 48000). |
 | `fps_denominator` | INTEGER | NOT NULL, > 0 | Definition of "1 Frame" (e.g. 1 or 1). |
 
+### 2.4 Tables: `tags` & `tag_assignments` (Bins)
+Restored support for project organization (Bins).
+
+| Table | Column | Type | Constraints |
+| :--- | :--- | :--- | :--- |
+| `tag_namespaces` | `id` | TEXT | PRIMARY KEY |
+| `tags` | `id` | TEXT | PRIMARY KEY |
+| | `namespace_id` | TEXT | FK -> `tag_namespaces` |
+| | `parent_id` | TEXT | FK -> `tags` (Hierarchy) |
+| `tag_assignments`| `entity_id` | TEXT | Target (e.g. Media/Clip ID) |
+
 ---
 
 ## 3. The Lua Object Model (`RationalTime`)
