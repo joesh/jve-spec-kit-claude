@@ -95,6 +95,36 @@ function Rational:rescale(target_fps_num, target_fps_den)
     return Rational.new(new_frames, target_fps_num, target_fps_den)
 end
 
+function Rational:rescale_floor(target_fps_num, target_fps_den)
+    target_fps_den = target_fps_den or 1
+    validate_inputs(0, target_fps_num, target_fps_den)
+
+    if self.fps_numerator == target_fps_num and self.fps_denominator == target_fps_den then
+        return Rational.new(self.frames, self.fps_numerator, self.fps_denominator)
+    end
+
+    local num = self.frames * target_fps_num * self.fps_denominator
+    local den = target_fps_den * self.fps_numerator
+    
+    local new_frames = math.floor(num / den)
+    return Rational.new(new_frames, target_fps_num, target_fps_den)
+end
+
+function Rational:rescale_ceil(target_fps_num, target_fps_den)
+    target_fps_den = target_fps_den or 1
+    validate_inputs(0, target_fps_num, target_fps_den)
+
+    if self.fps_numerator == target_fps_num and self.fps_denominator == target_fps_den then
+        return Rational.new(self.frames, self.fps_numerator, self.fps_denominator)
+    end
+
+    local num = self.frames * target_fps_num * self.fps_denominator
+    local den = target_fps_den * self.fps_numerator
+    
+    local new_frames = math.ceil(num / den)
+    return Rational.new(new_frames, target_fps_num, target_fps_den)
+end
+
 --- Add two Rational times.
 -- If rates differ, rhs is rescaled to lhs rate.
 -- @param other Rational

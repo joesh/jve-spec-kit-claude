@@ -240,8 +240,10 @@ END;
 
 -- Overlap Prevention (Video Only)
 -- Audio allows overlapping layers (mix), Video usually does not (overwrite/composite).
--- For V5, we enforce NO OVERLAP on Video Tracks at the DB level.
-CREATE TRIGGER IF NOT EXISTS trg_prevent_video_overlap_insert
+-- For V5, we enforce NO OVERLAP on Video Tracks at the DB level using timebase-aware comparison.
+
+DROP TRIGGER IF EXISTS trg_prevent_video_overlap_insert;
+CREATE TRIGGER trg_prevent_video_overlap_insert
 BEFORE INSERT ON clips
 WHEN EXISTS (
     SELECT 1 FROM tracks WHERE id = NEW.track_id AND track_type = 'VIDEO'
@@ -253,14 +255,21 @@ BEGIN
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
           AND (
-            (NEW.timeline_start_frame < c.timeline_start_frame + c.duration_frames) AND
-            (NEW.timeline_start_frame + NEW.duration_frames > c.timeline_start_frame)
+            (
+              (CAST(NEW.timeline_start_frame AS REAL) * NEW.fps_denominator / NEW.fps_numerator) <
+              (CAST(c.timeline_start_frame AS REAL) * c.fps_denominator / c.fps_numerator + CAST(c.duration_frames AS REAL) * c.fps_denominator / c.fps_numerator) - 0.000001
+            ) AND
+            (
+              (CAST(NEW.timeline_start_frame AS REAL) * NEW.fps_denominator / NEW.fps_numerator + CAST(NEW.duration_frames AS REAL) * NEW.fps_denominator / NEW.fps_numerator) >
+              (CAST(c.timeline_start_frame AS REAL) * c.fps_denominator / c.fps_numerator) + 0.000001
+            )
           )
     ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     END;
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_prevent_video_overlap_update
+DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;
+CREATE TRIGGER trg_prevent_video_overlap_update
 BEFORE UPDATE ON clips
 WHEN EXISTS (
     SELECT 1 FROM tracks WHERE id = NEW.track_id AND track_type = 'VIDEO'
@@ -272,8 +281,14 @@ BEGIN
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
           AND (
-            (NEW.timeline_start_frame < c.timeline_start_frame + c.duration_frames) AND
-            (NEW.timeline_start_frame + NEW.duration_frames > c.timeline_start_frame)
+            (
+              (CAST(NEW.timeline_start_frame AS REAL) * NEW.fps_denominator / NEW.fps_numerator) <
+              (CAST(c.timeline_start_frame AS REAL) * c.fps_denominator / c.fps_numerator + CAST(c.duration_frames AS REAL) * c.fps_denominator / c.fps_numerator) - 0.000001
+            ) AND
+            (
+              (CAST(NEW.timeline_start_frame AS REAL) * NEW.fps_denominator / NEW.fps_numerator + CAST(NEW.duration_frames AS REAL) * NEW.fps_denominator / NEW.fps_numerator) >
+              (CAST(c.timeline_start_frame AS REAL) * c.fps_denominator / c.fps_numerator) + 0.000001
+            )
           )
     ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     END;

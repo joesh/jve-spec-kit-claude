@@ -1,9 +1,3 @@
--- clip_mutator.lua
--- Centralised helpers for enforcing clip occlusion policies on save.
-
-local uuid = require("uuid")
-local krono_ok, krono = pcall(require, "core.krono")
-
 local ClipMutator = {}
 local timeline_state_ok, timeline_state = pcall(require, 'ui.timeline.timeline_state')
 local Rational = require("core.rational")
@@ -312,9 +306,13 @@ function ClipMutator.resolve_occlusions(db, params)
         end
 
         -- Overlap on tail (trim right side)
+        -- Result must end BEFORE or AT start_value
         if clip_start < start_value and clip_end <= end_time then
-            local trim_amount = clip_end - start_value
-            row.duration = row.duration - trim_amount
+            -- Round down new end to integer frame in clip's rate
+            local target_end = start_value:rescale_floor(row.fps_numerator, row.fps_denominator)
+            local new_duration = target_end - clip_start
+            
+            row.duration = new_duration
             
             local dur_frames = get_frames(row.duration)
             if dur_frames < 1 then
@@ -330,7 +328,10 @@ function ClipMutator.resolve_occlusions(db, params)
             end
 
             if row.source_out then
-                row.source_out = row.source_out - trim_amount
+                -- source_in + new_duration
+                -- Wait, if source_out exists, we must update it to reflect trimmed tail
+                -- Usually source_out = source_in + duration
+                row.source_out = (row.source_in or 0) + new_duration
             else
                 local base_in = row.source_in or 0
                 row.source_out = base_in + row.duration
@@ -349,10 +350,18 @@ function ClipMutator.resolve_occlusions(db, params)
         end
 
         -- Overlap on head (trim left side)
+        -- Result must start AFTER or AT end_time
         if clip_start >= start_value and clip_end > end_time then
-            local trim_amount = end_time - clip_start
-            row.start_value = end_time
-            row.duration = row.duration - trim_amount
+            -- Round up new start to integer frame in clip's rate
+            local target_start = end_time:rescale_ceil(row.fps_numerator, row.fps_denominator)
+            
+            local original_end = clip_start + row.duration
+            local new_duration = original_end - target_start
+            
+            local trim_amount = target_start - clip_start
+            
+            row.start_value = target_start
+            row.duration = new_duration
             
             local dur_frames = get_frames(row.duration)
             if dur_frames < 1 then
@@ -370,13 +379,11 @@ function ClipMutator.resolve_occlusions(db, params)
             if row.source_in then
                 row.source_in = row.source_in + trim_amount
             else
-                row.source_in = 0
+                row.source_in = trim_amount
             end
-            if row.source_out then
-                row.source_out = row.source_in + row.duration
-            else
-                row.source_out = row.source_in + row.duration
-            end
+            
+            -- Recalculate source_out to be consistent
+            row.source_out = row.source_in + row.duration
 
             local ok, err = run_update(db, row)
             if not ok then
@@ -392,17 +399,18 @@ function ClipMutator.resolve_occlusions(db, params)
 
         -- Straddles new clip → split existing clip
         if clip_start < start_value and clip_end > end_time then
-            local left_duration = start_value - clip_start
-            local right_duration = clip_end - end_time
+            -- Left Part: End at start_value (floor)
+            local target_left_end = start_value:rescale_floor(row.fps_numerator, row.fps_denominator)
+            local left_duration = target_left_end - clip_start
+            
+            -- Right Part: Start at end_time (ceil)
+            local target_right_start = end_time:rescale_ceil(row.fps_numerator, row.fps_denominator)
+            local right_duration = clip_end - target_right_start
 
             -- Update left portion
             row.duration = left_duration
-            if row.source_out then
-                row.source_out = original.source_out - right_duration
-            else
-                local base_in = row.source_in or 0
-                row.source_out = base_in + left_duration
-            end
+            -- Update source_out
+            row.source_out = (row.source_in or 0) + left_duration
 
             local ok, err = run_update(db, row)
             if not ok then
@@ -418,6 +426,7 @@ function ClipMutator.resolve_occlusions(db, params)
             local right_dur_frames = get_frames(right_duration)
             if right_dur_frames > 0 then
                 local base_in = original.source_in or 0
+                local shift_amount = target_right_start - clip_start
                 local original_out = default_source_out(original)
                 local right_clip = {
                     id = uuid.generate(),
@@ -426,9 +435,9 @@ function ClipMutator.resolve_occlusions(db, params)
                     name = original.name,
                     track_id = original.track_id,
                     media_id = original.media_id,
-                    start_value = end_time,
+                    start_value = target_right_start,
                     duration = right_duration,
-                    source_in = base_in + (end_time - clip_start),
+                    source_in = base_in + shift_amount,
                     source_out = original_out,
                     fps_numerator = original.fps_numerator,
                     fps_denominator = original.fps_denominator,
