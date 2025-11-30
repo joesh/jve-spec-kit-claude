@@ -51,15 +51,7 @@ include_directories(
 
 # Source files organization
 set(CORE_SOURCES
-    src/core/models/project.cpp
-    src/core/models/sequence.cpp
-    src/core/models/track.cpp
-    src/core/models/clip.cpp
-    src/core/models/media.cpp
-    src/core/models/property.cpp
-    
     src/core/persistence/migrations.cpp
-    src/core/persistence/project_persistence.cpp
     src/core/persistence/schema_validator.cpp
     src/core/persistence/sql_executor.cpp
     
