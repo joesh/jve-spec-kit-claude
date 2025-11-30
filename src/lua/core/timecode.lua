@@ -61,4 +61,58 @@ function M.parse_timecode(timecode, frame_rate)
     return Rational.new(total_frames, rate.fps_numerator, rate.fps_denominator)
 end
 
+-- Calculate appropriate ruler interval
+-- Returns: interval_ms, format_hint, interval_value (in hint units)
+function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, pixels_per_ms)
+    local target_ms = target_pixels / pixels_per_ms
+    local rate = frame_utils.normalize_rate(frame_rate)
+    local fps = rate.fps_numerator / rate.fps_denominator
+    local frame_ms = 1000.0 / fps
+
+    -- Define tiers
+    -- 1. Frame level
+    if target_ms < frame_ms * 5 then
+        return frame_ms, "frames", 1
+    elseif target_ms < frame_ms * 10 then
+        return frame_ms * 5, "frames", 5
+    elseif target_ms < 1000 then
+        -- Sub-second (frames)
+        local frames = math.ceil(target_ms / frame_ms)
+        return frames * frame_ms, "frames", frames
+    elseif target_ms < 5000 then
+        return 1000, "seconds", 1
+    elseif target_ms < 10000 then
+        return 5000, "seconds", 5
+    elseif target_ms < 30000 then
+        return 10000, "seconds", 10
+    elseif target_ms < 60000 then
+        return 30000, "seconds", 30
+    else
+        return 60000, "minutes", 1
+    end
+end
+
+-- Format ruler label
+function M.format_ruler_label(time_ms, frame_rate, hint)
+    if hint == "frames" or not hint then
+        -- Full Timecode
+        local r = Rational.from_seconds(time_ms / 1000.0) -- Approx
+        -- Better: use frame_utils
+        return frame_utils.format_timecode(time_ms, frame_rate)
+    elseif hint == "seconds" then
+        -- MM:SS
+        local seconds = math.floor(time_ms / 1000.0)
+        local minutes = math.floor(seconds / 60)
+        local secs = seconds % 60
+        return string.format("%02d:%02d", minutes, secs)
+    elseif hint == "minutes" then
+        -- HH:MM
+        local minutes = math.floor(time_ms / 60000.0)
+        local hours = math.floor(minutes / 60)
+        local mins = minutes % 60
+        return string.format("%02d:%02d", hours, mins)
+    end
+    return ""
+end
+
 return M

@@ -960,17 +960,20 @@ function M.load_sequences(project_id)
     end
     query:finalize()
 
-    -- Compute duration_value for each sequence (max clip end)
+    -- Compute duration for each sequence (max clip end)
     for _, sequence in ipairs(sequences) do
         local clips = M.load_clips(sequence.id)
-        local max_end = 0
+        -- Initialize max_end as Rational 0
+        local max_end = Rational.new(0, sequence.frame_rate.fps_numerator, sequence.frame_rate.fps_denominator)
         for _, clip in ipairs(clips) do
-            local clip_end = (clip.start_value or 0) + (clip.duration_value or 0)
-            if clip_end > max_end then
-                max_end = clip_end
+            if clip.timeline_start and clip.duration then
+                local clip_end = clip.timeline_start + clip.duration
+                if clip_end > max_end then
+                    max_end = clip_end
+                end
             end
         end
-        sequence.duration_value = max_end
+        sequence.duration = max_end
     end
 
     return sequences
@@ -988,7 +991,7 @@ function M.load_sequence_record(sequence_id)
 
     local query = db_connection:prepare([[
         SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
-               timecode_start_frame, playhead_frame,
+               playhead_frame,
                view_start_frame, view_duration_frames,
                mark_in_frame, mark_out_frame,
                selected_clip_ids, selected_edge_infos, audio_rate
@@ -1016,15 +1019,14 @@ function M.load_sequence_record(sequence_id)
             frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den },
             width = tonumber(query:value(6)) or 0,
             height = tonumber(query:value(7)) or 0,
-            timecode_start_frame = tonumber(query:value(8)) or 0,
-            playhead_value = tonumber(query:value(9)) or 0,
-            viewport_start_value = tonumber(query:value(10)) or 0,
-            viewport_duration_frames_value = tonumber(query:value(11)) or 0,
-            mark_in_value = tonumber(query:value(12)),
-            mark_out_value = tonumber(query:value(13)),
-            selected_clip_ids = query:value(14),
-            selected_edge_infos = query:value(15),
-            audio_sample_rate = tonumber(query:value(16))
+            playhead_value = tonumber(query:value(8)) or 0,
+            viewport_start_value = tonumber(query:value(9)) or 0,
+            viewport_duration_frames_value = tonumber(query:value(10)) or 0,
+            mark_in_value = tonumber(query:value(11)),
+            mark_out_value = tonumber(query:value(12)),
+            selected_clip_ids = query:value(13),
+            selected_edge_infos = query:value(14),
+            audio_sample_rate = tonumber(query:value(15))
         }
 
         if not sequence.audio_sample_rate or sequence.audio_sample_rate <= 0 then

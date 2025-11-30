@@ -3,6 +3,7 @@ local Sequence = require("models.sequence")
 local Track = require("models.track")
 local Clip = require("models.clip")
 local MediaReader = require("media.media_reader")
+local Rational = require("core.rational")
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["ImportMedia"] = function(command)
@@ -40,24 +41,35 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return name
         end
 
-        local duration_ms = 1000
+        local fps_num = 30
+        local fps_den = 1
+        if metadata and metadata.video and metadata.video.frame_rate then
+             local rate = metadata.video.frame_rate
+             if type(rate) == "number" and rate > 0 then
+                 fps_num = math.floor(rate + 0.5)
+             elseif type(rate) == "table" and rate.fps_numerator then
+                 fps_num = rate.fps_numerator
+                 fps_den = rate.fps_denominator
+             end
+        end
+
+        local duration_rat
         if metadata and metadata.duration_ms and metadata.duration_ms > 0 then
-            duration_ms = math.floor(metadata.duration_ms + 0.5)
+            duration_rat = Rational.from_seconds(metadata.duration_ms / 1000.0, fps_num, fps_den)
+        else
+            duration_rat = Rational.new(fps_num, fps_num, fps_den) -- 1 second default
         end
-        if duration_ms <= 0 then
-            duration_ms = 1000
-        end
+        local zero_rat = Rational.new(0, fps_num, fps_den)
 
         local base_name = extract_filename(file_path)
         local master_sequence_id = command:get_parameter("master_sequence_id")
         local sequence = Sequence.create(base_name .. " (Source)", project_id,
-            metadata and metadata.video and metadata.video.frame_rate or 30.0,
+            {fps_numerator=fps_num, fps_denominator=fps_den},
             metadata and metadata.video and metadata.video.width or 1920,
             metadata and metadata.video and metadata.video.height or 1080,
             {
                 id = master_sequence_id,
-                kind = "master",
-                timecode_start_frame = 0
+                kind = "master"
             })
         if not sequence then
             print("ERROR: ImportMedia: Failed to create master sequence object")
@@ -117,12 +129,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             project_id = project_id,
             clip_kind = "master",
             source_sequence_id = sequence.id,
-            start_value = 0,
-            duration = duration_ms,
-            source_in = 0,
-            source_out = duration_ms,
+            timeline_start = zero_rat,
+            duration = duration_rat,
+            source_in = zero_rat,
+            source_out = duration_rat,
             enabled = true,
-            offline = false
+            offline = false,
+            rate_num = fps_num,
+            rate_den = fps_den
         })
         local ok_master, occlusion_actions = master_clip:save(db, {skip_occlusion = true})
         if not ok_master then
@@ -142,12 +156,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 track_id = video_track.id,
                 parent_clip_id = master_clip.id,
                 owner_sequence_id = sequence.id,
-                start_value = 0,
-                duration = duration_ms,
-                source_in = 0,
-                source_out = duration_ms,
+                timeline_start = zero_rat,
+                duration = duration_rat,
+                source_in = zero_rat,
+                source_out = duration_rat,
                 enabled = true,
-                offline = false
+                offline = false,
+                rate_num = fps_num,
+                rate_den = fps_den
             })
             if not video_clip:save(db, {skip_occlusion = true}) then
                 print("ERROR: ImportMedia: Failed to create master video clip")
@@ -170,12 +186,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 track_id = track_id,
                 parent_clip_id = master_clip.id,
                 owner_sequence_id = sequence.id,
-                start_value = 0,
-                duration = duration_ms,
-                source_in = 0,
-                source_out = duration_ms,
+                timeline_start = zero_rat,
+                duration = duration_rat,
+                source_in = zero_rat,
+                source_out = duration_rat,
                 enabled = true,
-                offline = false
+                offline = false,
+                rate_num = fps_num,
+                rate_den = fps_den
             })
             if not audio_clip:save(db, {skip_occlusion = true}) then
                 print("ERROR: ImportMedia: Failed to create master audio clip")

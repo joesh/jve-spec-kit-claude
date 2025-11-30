@@ -70,8 +70,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local width = command:get_parameter("width")
         local height = command:get_parameter("height")
 
-        if not name or name == "" or not project_id or project_id == "" or not frame_rate or frame_rate <= 0 then
+        if not name or name == "" or not project_id or project_id == "" or not frame_rate then
             print("WARNING: CreateSequence: Missing required parameters")
+            return false
+        end
+        
+        if type(frame_rate) == "number" and frame_rate <= 0 then
+            print("WARNING: CreateSequence: Invalid frame rate")
             return false
         end
 

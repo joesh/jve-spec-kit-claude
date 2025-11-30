@@ -128,27 +128,29 @@ local M = {
   _sections_visible_state = nil, -- Tracks last visibility applied to schema sections
 }
 
-local function format_timecode(time_ms, override_rate)
-  if not time_ms then
+local function format_timecode(time_input, override_rate)
+  if not time_input then
     return "00:00:00:00"
   end
 
   local frame_rate = override_rate
-  if type(frame_rate) ~= "number" or frame_rate <= 0 then
+  local rate_valid = false
+  if type(frame_rate) == "number" and frame_rate > 0 then
+      rate_valid = true
+  elseif type(frame_rate) == "table" and frame_rate.fps_numerator then
+      rate_valid = true
+  end
+
+  if not rate_valid then
     if timeline_state and timeline_state.get_sequence_frame_rate then
       frame_rate = timeline_state.get_sequence_frame_rate()
     end
   end
   frame_rate = frame_rate or frame_utils.default_frame_rate
 
-  local ok, formatted = pcall(frame_utils.format_timecode, time_ms, frame_rate)
+  local ok, formatted = pcall(frame_utils.format_timecode, time_input, frame_rate)
   if ok and formatted then
     return formatted
-  end
-
-  local fallback_ok, fallback_formatted = pcall(frame_utils.format_timecode, time_ms or 0, frame_utils.default_frame_rate)
-  if fallback_ok and fallback_formatted then
-    return fallback_formatted
   end
 
   return "00:00:00:00"
@@ -157,8 +159,10 @@ end
 local function current_frame_rate()
   if timeline_state and timeline_state.get_sequence_frame_rate then
     local ok, rate = pcall(timeline_state.get_sequence_frame_rate)
-    if ok and type(rate) == "number" and rate > 0 then
-      return rate
+    if ok then
+        if type(rate) == "table" or (type(rate) == "number" and rate > 0) then
+            return rate
+        end
     end
   end
   return frame_utils.default_frame_rate
@@ -490,7 +494,7 @@ local function create_inspector_field(section, field, field_widgets)
     local text_value = ""
     if value ~= nil then
       if self.field_type == FIELD_TYPES.TIMECODE then
-        if type(value) == "number" then
+        if type(value) == "number" or (type(value) == "table" and value.frames) then
           text_value = format_timecode(value, current_frame_rate())
         else
           text_value = tostring(value)

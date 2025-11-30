@@ -17,6 +17,16 @@ local content_container = nil
 
 local DEFAULT_MESSAGE = "Double-click a clip in the Project Browser to load it here."
 
+local function get_fps_float(rate)
+    if type(rate) == "table" and rate.fps_numerator then
+        if rate.fps_denominator == 0 then return 0 end
+        return rate.fps_numerator / rate.fps_denominator
+    elseif type(rate) == "number" then
+        return rate
+    end
+    return 0
+end
+
 local function ensure_created()
     if not viewer_widget then
         error("viewer_panel: create() must be called before using viewer functions")
@@ -31,17 +41,25 @@ local function format_resolution(media)
 end
 
 local function format_duration(media)
-    if not media.duration or media.duration <= 0 then
+    if not media.duration then
         return nil
     end
+    -- Handle Rational comparison for duration > 0
+    local is_positive = false
+    if type(media.duration) == "table" and media.duration.frames then
+        is_positive = media.duration.frames > 0
+    elseif type(media.duration) == "number" then
+        is_positive = media.duration > 0
+    end
+    
+    if not is_positive then
+        return nil
+    end
+
     local frame_rate = media.frame_rate or frame_utils.default_frame_rate
     local ok, result = pcall(frame_utils.format_timecode, media.duration, frame_rate)
     if ok and result then
         return result
-    end
-    local fallback_ok, fallback = pcall(frame_utils.format_timecode, media.duration or 0, frame_utils.default_frame_rate)
-    if fallback_ok and fallback then
-        return fallback
     end
     return "00:00:00:00"
 end
@@ -209,8 +227,9 @@ function M.show_source_clip(media)
         table.insert(lines, "Resolution: " .. resolution)
     end
 
-    if media.frame_rate and media.frame_rate > 0 then
-        table.insert(lines, string.format("Frame Rate: %.2f fps", media.frame_rate))
+    local fps_val = get_fps_float(media.frame_rate)
+    if fps_val > 0 then
+        table.insert(lines, string.format("Frame Rate: %.2f fps", fps_val))
     end
 
     if media.codec and media.codec ~= "" then
@@ -270,8 +289,9 @@ function M.show_timeline(sequence)
     local lines = {}
     table.insert(lines, string.format("Timeline: %s", sequence.name or sequence.id or "Untitled"))
 
-    if sequence.frame_rate and sequence.frame_rate > 0 then
-        table.insert(lines, string.format("Frame Rate: %.2f fps", sequence.frame_rate))
+    local fps_val = get_fps_float(sequence.frame_rate)
+    if fps_val > 0 then
+        table.insert(lines, string.format("Frame Rate: %.2f fps", fps_val))
     end
 
     if sequence.width and sequence.height and sequence.width > 0 and sequence.height > 0 then

@@ -52,6 +52,15 @@ function M.create(widget, state_module)
         return frame_utils.default_frame_rate
     end
 
+    local function to_ms(val)
+        if type(val) == "table" and val.to_seconds then
+            return val:to_seconds() * 1000.0
+        elseif type(val) == "number" then
+            return val
+        end
+        return 0
+    end
+
     -- Render the ruler
     local function render()
         if not ruler.widget then
@@ -64,18 +73,18 @@ function M.create(widget, state_module)
         -- Clear previous drawing commands
         timeline.clear_commands(ruler.widget)
 
-        -- Get viewport state
-        local viewport_start = state_module.get_viewport_start_time()
-        local viewport_duration = state_module.get_viewport_duration()
+        -- Get viewport state (Convert to MS for rendering logic)
+        local viewport_start = to_ms(state_module.get_viewport_start_time())
+        local viewport_duration = to_ms(state_module.get_viewport_duration())
         local viewport_end = viewport_start + viewport_duration
-        local playhead_value = state_module.get_playhead_position()
+        local playhead_value = to_ms(state_module.get_playhead_position())
 
         -- Ruler background
         timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
         timeline.add_rect(ruler.widget, 0, M.RULER_HEIGHT - BASELINE_HEIGHT, width, BASELINE_HEIGHT, BASELINE_COLOR)
 
-        local mark_in = state_module.get_mark_in and state_module.get_mark_in()
-        local mark_out = state_module.get_mark_out and state_module.get_mark_out()
+        local mark_in = to_ms(state_module.get_mark_in and state_module.get_mark_in())
+        local mark_out = to_ms(state_module.get_mark_out and state_module.get_mark_out())
         local explicit_mark_in = state_module.has_explicit_mark_in and state_module.has_explicit_mark_in()
         local explicit_mark_out = state_module.has_explicit_mark_out and state_module.has_explicit_mark_out()
 
@@ -244,32 +253,27 @@ function M.create(widget, state_module)
         local width, height = timeline.get_dimensions(ruler.widget)
         local frame_rate = get_frame_rate()
 
-        -- Helper to snap time to nearest frame boundary
-        local function snap_to_frame(time_ms)
-            local frames = timecode.ms_to_frames(time_ms, frame_rate)
-            return timecode.frames_to_ms(frames, frame_rate)
-        end
-
         if event_type == "press" then
             -- Check if clicking on playhead
-            local playhead_value = state_module.get_playhead_position()
-            local playhead_x = state_module.time_to_pixel(playhead_value, width)
+            local playhead_rat = state_module.get_playhead_position()
+            local playhead_ms = to_ms(playhead_rat)
+            local playhead_x = state_module.time_to_pixel(playhead_ms, width)
 
             if math.abs(x - playhead_x) < 10 then
                 state_module.set_dragging_playhead(true)
             else
                 -- Click anywhere on ruler to set playhead (snap to frame)
-                local time = state_module.pixel_to_time(x, width)
-                local snapped_time = snap_to_frame(time)
-                state_module.set_playhead_value(snapped_time)
+                local time_rat = state_module.pixel_to_time(x, width)
+                local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
+                state_module.set_playhead_value(snapped_rat)
                 state_module.set_dragging_playhead(true)
             end
 
         elseif event_type == "move" then
             if state_module.is_dragging_playhead() then
-                local time = state_module.pixel_to_time(x, width)
-                local snapped_time = snap_to_frame(time)
-                state_module.set_playhead_value(snapped_time)
+                local time_rat = state_module.pixel_to_time(x, width)
+                local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
+                state_module.set_playhead_value(snapped_rat)
             end
 
         elseif event_type == "release" then

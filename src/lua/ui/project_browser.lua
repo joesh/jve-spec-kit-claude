@@ -491,27 +491,31 @@ local function store_tree_item(tree, tree_id, info)
     M.item_lookup[tostring(tree_id)] = info
 end
 
-local function format_duration(duration_ms, frame_rate)
-    if not duration_ms or duration_ms == 0 then
+local function format_duration(duration_input, frame_rate)
+    if not duration_input then
         return "--:--"
     end
 
     local rate = frame_rate or frame_utils.default_frame_rate
-    local ok, formatted = pcall(frame_utils.format_timecode, duration_ms, rate)
+    local ok, formatted = pcall(frame_utils.format_timecode, duration_input, rate)
     if ok and formatted then
         return formatted
     end
 
-    local total_seconds = math.floor(duration_ms / 1000)
-    local hours = math.floor(total_seconds / 3600)
-    local minutes = math.floor((total_seconds % 3600) / 60)
-    local seconds = total_seconds % 60
+    if type(duration_input) == "number" then
+        local total_seconds = math.floor(duration_input / 1000)
+        local hours = math.floor(total_seconds / 3600)
+        local minutes = math.floor((total_seconds % 3600) / 60)
+        local seconds = total_seconds % 60
 
-    if hours > 0 then
-        return string.format("%d:%02d:%02d", hours, minutes, seconds)
-    else
-        return string.format("%d:%02d", minutes, seconds)
+        if hours > 0 then
+            return string.format("%d:%02d:%02d", hours, minutes, seconds)
+        else
+            return string.format("%d:%02d", minutes, seconds)
+        end
     end
+    
+    return "--:--"
 end
 
 local function format_date(timestamp)
@@ -519,6 +523,16 @@ local function format_date(timestamp)
         return ""
     end
     return os.date("%b %d %Y", timestamp)
+end
+
+local function get_fps_float(rate)
+    if type(rate) == "table" and rate.fps_numerator then
+        if rate.fps_denominator == 0 then return 0 end
+        return rate.fps_numerator / rate.fps_denominator
+    elseif type(rate) == "number" then
+        return rate
+    end
+    return 0
 end
 
 local function resolve_tree_item(entry)
@@ -703,8 +717,10 @@ local function populate_tree()
         local resolution_str = (sequence.width and sequence.height and sequence.width > 0)
             and string.format("%dx%d", sequence.width, sequence.height)
             or ""
-        local fps_str = (sequence.frame_rate and sequence.frame_rate > 0)
-            and string.format("%.2f", sequence.frame_rate)
+        
+        local fps_val = get_fps_float(sequence.frame_rate)
+        local fps_str = (fps_val > 0)
+            and string.format("%.2f", fps_val)
             or ""
 
         local tree_id = qt_constants.CONTROL.ADD_TREE_ITEM(M.tree, {
@@ -766,13 +782,16 @@ local function populate_tree()
         local duration_str = format_duration(duration_ms, clip.frame_rate or (media and media.frame_rate))
         local display_width = clip.width or media.width
         local display_height = clip.height or media.height
-        local display_fps = clip.frame_rate or media.frame_rate
+        local display_fps = clip.frame_rate or (media and media.frame_rate)
         local resolution_str = (display_width and display_height and display_width > 0)
             and string.format("%dx%d", display_width, display_height)
             or ""
-        local fps_str = (display_fps and display_fps > 0)
-            and string.format("%.2f", display_fps)
+        
+        local fps_val = get_fps_float(display_fps)
+        local fps_str = (fps_val > 0)
+            and string.format("%.2f", fps_val)
             or ""
+        
         local codec_str = clip.codec or media.codec or ""
         local date_str = format_date(clip.modified_at or clip.created_at or media.modified_at or media.created_at)
 
