@@ -45,7 +45,9 @@ function M.create(widget, state_module)
     local function get_frame_rate()
         if state_module and state_module.get_sequence_frame_rate then
             local rate = state_module.get_sequence_frame_rate()
-            if type(rate) == "number" and rate > 0 then
+            if type(rate) == "table" and rate.fps_numerator then
+                return rate
+            elseif type(rate) == "number" and rate > 0 then
                 return rate
             end
         end
