@@ -85,10 +85,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         
         if edge_type == "in" then
             -- Ripple in: shorten duration, advance source_in
-            -- We DO NOT move timeline_start. We effectively shorten from the "right" in timeline space
-            -- by moving the In point "right" in Source space, but keeping Start fixed.
-            -- This means the End point moves Left.
-            
             local new_dur = clip.duration - delta_rat
             if new_dur.frames < 1 then return nil, false, true end -- Too short
             
@@ -112,49 +108,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return clip.timeline_start, true, false
     end
 
-    local function calculate_gap_ripple_delta_range(clip, edge_type, all_clips, sequence_id)
-        if not clip or not edge_type then return nil, nil end
-        all_clips = all_clips or {}
-
-        local ripple_time
-        if edge_type == "in" then
-            ripple_time = clip.timeline_start
-        else
-            ripple_time = clip.timeline_start + clip.duration
-        end
-
-        local stationary_clips = {}
-        for _, c in ipairs(all_clips) do
-            if c.timeline_start < ripple_time then
-                stationary_clips[#stationary_clips + 1] = c
-            end
-        end
-
-        local max_shift = Rational.new(999999999, 30, 1) -- Large number
-        local min_shift = Rational.new(-999999999, 30, 1)
-
-        for _, shifting_clip in ipairs(all_clips) do
-            if shifting_clip.timeline_start >= ripple_time then
-                for _, stationary in ipairs(stationary_clips) do
-                    if shifting_clip.track_id == stationary.track_id then
-                        local gap_between = shifting_clip.timeline_start - (stationary.timeline_start + stationary.duration)
-                        -- Logic to constrain shift based on gap_between
-                        -- Simplification: For now we assume gaps can close completely but not overlap
-                        if gap_between.frames >= 0 then
-                             -- We can shift left (negative delta) by at most gap_between
-                             local potential_min = Rational.new(-gap_between.frames, gap_between.fps_numerator, gap_between.fps_denominator)
-                             if potential_min > min_shift then min_shift = potential_min end
-                        end
-                    end
-                end
-            end
-        end
-        
-        return min_shift, max_shift
-    end
-
-    -- ... compute_gap_bounds refactoring omitted for brevity, assuming similar Rational logic ...
-
     local function collect_downstream_clips(all_clips, excluded_ids, ripple_time)
         local clips = {}
         for _, other in ipairs(all_clips) do
@@ -174,10 +127,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local raw_edge_info = command:get_parameter("edge_info")
-        -- ... (edge info parsing) ...
-        
         local delta_frames = command:get_parameter("delta_frames")
-        -- Fallback for legacy calls (if any)
         local delta_ms = command:get_parameter("delta_ms") 
         
         if not raw_edge_info or (not delta_frames and not delta_ms) then
@@ -185,23 +135,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
              return {success = false, error_message = "RippleEdit missing parameters"}
         end
         
-        -- Resolve Sequence Rate
         local sequence_id = command_helper.resolve_sequence_for_track(nil, raw_edge_info.track_id)
         if not sequence_id or sequence_id == "" then sequence_id = "default_sequence" end
         
-        -- Load all clips for collision/ripple calculation
         local all_clips = database.load_clips(sequence_id)
         
-        -- Initialize state tracking variables (must be before helper functions)
         local occlusion_actions = {}
         local post_states = {}
         local deleted_clip_ids = {}
         
-        -- We need the sequence FPS to construct the Rational delta if only frames provided
-        -- Load sequence to get rate
         local seq_fps_num = 30
         local seq_fps_den = 1
-        -- Query DB for sequence rate
         local seq_stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
         if seq_stmt then
             seq_stmt:bind_value(1, sequence_id)
@@ -216,11 +160,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if delta_frames then
             delta_rat = Rational.new(delta_frames, seq_fps_num, seq_fps_den)
         else
-            -- Legacy MS conversion
             delta_rat = Rational.from_seconds(delta_ms / 1000.0, seq_fps_num, seq_fps_den)
         end
 
-        -- ... (Clip Loading) ...
         local clip = Clip.load(raw_edge_info.clip_id, db)
         if not clip then
              print("ERROR: RippleEdit: Clip not found")
@@ -231,25 +173,48 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local original_duration_rat = clip.duration
         local original_end_rat = original_start_rat + original_duration_rat
 
-        -- Calculate clamped delta (simplified for V5 - strict Rational checking)
         local clamped_delta = delta_rat
+        local is_gap_clip = false -- Simplified
         
-        local is_gap_clip = false -- Logic for gap clips simplified out for now
-        
-        if is_gap_clip then
-            local min_delta, max_delta = calculate_gap_ripple_delta_range(clip, raw_edge_info.edge_type, all_clips, sequence_id)
-            if not min_delta or not max_delta then
-                print("ERROR: RippleEdit: Failed to calculate gap constraints")
-                return {success = false, error_message = "Gap constraint calculation failed"}
-            end
-            
-            -- Clamp Rational delta
-            if clamped_delta < min_delta then clamped_delta = min_delta end
-            if clamped_delta > max_delta then clamped_delta = max_delta end
-        else
-            -- For clips, apply_edge_ripple handles basic duration/media checks.
-            -- We could add adjacent clip checking here if needed, but ripple logic usually pushes neighbors.
-            -- If we need strict limits (e.g. max duration), apply_edge_ripple returns failure.
+        -- MEDIA BOUNDARY CLAMPING
+        if not is_gap_clip and clip.media_id then
+             local media_stmt = db:prepare("SELECT duration_frames, fps_numerator, fps_denominator FROM media WHERE id = ?")
+             if media_stmt then
+                 media_stmt:bind_value(1, clip.media_id)
+                 if media_stmt:exec() and media_stmt:next() then
+                     local m_dur = media_stmt:value(0)
+                     local m_num = media_stmt:value(1)
+                     local m_den = media_stmt:value(2)
+                     if m_dur and m_num and m_den then
+                         -- Media duration in its own timebase
+                         local media_duration = Rational.new(m_dur, m_num, m_den)
+                         
+                         -- Current source out
+                         local current_out = clip.source_out
+                         
+                         if raw_edge_info.edge_type == "out" then
+                             -- Extending tail: New Out = Current Out + Delta
+                             -- Limit: New Out <= Media Duration
+                             -- Current Out + Delta <= Media Duration
+                             -- Delta <= Media Duration - Current Out
+                             local max_delta = media_duration - current_out
+                             if clamped_delta > max_delta then
+                                 clamped_delta = max_delta
+                             end
+                         elseif raw_edge_info.edge_type == "in" then
+                             -- Extending head (moving In left): New In = Current In + Delta (Delta is negative)
+                             -- Limit: New In >= 0
+                             -- Current In + Delta >= 0
+                             -- Delta >= -Current In
+                             local min_delta = -clip.source_in
+                             if clamped_delta < min_delta then
+                                 clamped_delta = min_delta
+                             end
+                         end
+                     end
+                 end
+                 media_stmt:finalize()
+             end
         end
 
         delta_rat = clamped_delta
@@ -264,11 +229,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
              return {success = false, error_message = "Ripple operation failed"}
         end
         
-        -- Calculate shift amount for downstream clips
-        -- shift = new_end - original_end
-        -- This works for both IN and OUT ripples:
-        -- IN (trim):  new_dur = old_dur - delta. shift = -delta.
-        -- OUT (trim): new_dur = old_dur + delta. shift = +delta.
         local new_end_rat = clip.timeline_start + clip.duration
         local shift_rat = new_end_rat - original_end_rat
 
@@ -282,24 +242,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local excluded_ids = {[clip.id] = true}
-        -- Collect clips starting at or after the original end point
         local clips_to_shift = collect_downstream_clips(all_clips, excluded_ids, original_end_rat)
-
-        -- Build pending moves if needed (omitted for Rational pending moves for now)
-        -- local pending_moves = build_pending_moves(shift_rat) 
 
         if dry_run then
             return true, {
+                clamped_delta_ms = delta_rat.frames * 1000 / (seq_fps_num/seq_fps_den), -- approx for UI
                 affected_clip = {
                     clip_id = clip.id,
                     new_start_value = clip.timeline_start,
                     new_duration = clip.duration
                 },
-                shifted_clips = {} -- Omitted for brevity in Rational port
+                shifted_clips = {}
             }
         end
 
-        -- Define operations
         local function save_trimmed_clip()
             if not is_gap_clip then
                 if deleted_clip then
@@ -310,7 +266,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     command_helper.add_delete_mutation(command, sequence_id, clip.id)
                 else
                     local save_opts = nil
-                    -- if pending_moves...
                     local ok, actions = clip:save(db, save_opts)
                     if not ok then
                         print(string.format("ERROR: RippleEdit: Failed to save clip %s", raw_edge_info.clip_id:sub(1,8)))
@@ -332,7 +287,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local shift_clip = Clip.load(downstream_clip.id, db)
                 if shift_clip then
                     shift_clip.timeline_start = shift_clip.timeline_start + shift_rat
-                    local save_opts = nil -- {pending_clips = pending_moves}
+                    local save_opts = nil 
                     local ok, actions = shift_clip:save(db, save_opts)
                     if ok then
                         append_actions(occlusion_actions, actions)
@@ -350,14 +305,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        -- Execution Order based on shift direction
         local success_op = true
         if shift_rat > Rational.new(0, 1, 1) then
-            -- Expanding: Shift first, then expand
             if not shift_downstream() then return {success = false} end
             if not save_trimmed_clip() then return {success = false} end
         else
-            -- Shrinking: Shrink first, then shift
             if not save_trimmed_clip() then return {success = false} end
             if not shift_downstream() then return {success = false} end
         end
@@ -365,8 +317,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if occlusion_actions and #occlusion_actions > 0 then
             record_occlusion_actions(command, sequence_id, occlusion_actions)
         end
-
-        -- ... (parameters) ...
         
         command:set_parameter("ripple_shift_amount_rat", shift_rat)
         command:set_parameter("ripple_post_states", post_states)
@@ -380,7 +330,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["RippleEdit"] = function(command)
-        -- ... (undo logic) ...
         print("Undoing RippleEdit command")
         local sequence_id = command:get_parameter("sequence_id") or command_helper.resolve_sequence_for_track(nil, command:get_parameter("edge_info").track_id)
         
@@ -392,23 +341,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
              shift_rat = Rational.new(shift_rat.frames, shift_rat.fps_numerator, shift_rat.fps_denominator)
         end
         
-        -- Undo Order also matters!
-        -- If we expanded (shift > 0): we are shrinking back. Shrink target first (restore), then shift back.
-        -- If we shrank (shift < 0): we are expanding back. Shift back (out) first? No, shift back makes room.
-        -- Wait.
-        -- Expand case: Target grew, Others moved Right.
-        -- Undo: Others move Left, Target shrinks.
-        -- Must shrink Target FIRST to avoid overlap when Others move Left.
-        
-        -- Shrink case: Target shrank, Others moved Left.
-        -- Undo: Others move Right, Target grows.
-        -- Must move Others Right FIRST to make room for Target to grow.
-        
         local function restore_target()
             if original_clip_state then
                 local restored = command_helper.restore_clip_state(original_clip_state)
                 if restored then
-                    -- Force save to overwrite current state
                     local ok, err = restored:save(db, {skip_occlusion = true}) 
                     if not ok then
                          print("ERROR: UndoRippleEdit: restore_target failed: " .. (err or "unknown"))
@@ -425,7 +361,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local function reverse_shift()
             if post_states then
                 for _, state in ipairs(post_states) do
-                    -- Skip the target clip (handled by restore_target)
                     if not original_clip_state or state.id ~= original_clip_state.id then
                         local clip = Clip.load_optional(state.id, db)
                         if clip then
@@ -443,11 +378,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         
         if shift_rat > Rational.new(0, 1, 1) then
-            -- Was Expanding. Undo: Shrink target, then move others left.
             restore_target()
             reverse_shift()
         else
-            -- Was Shrinking. Undo: Move others right, then grow target.
             reverse_shift()
             restore_target()
         end

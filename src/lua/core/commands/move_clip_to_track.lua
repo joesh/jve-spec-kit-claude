@@ -3,8 +3,28 @@ local Clip = require('models.clip')
 local frame_utils = require('core.frame_utils') -- Still used for legacy/migration. Keep for now.
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
+local clip_mutator = require("core.clip_mutator")
 
 function M.register(command_executors, command_undoers, db, set_last_error)
+    local function record_occlusion_actions(command, sequence_id, actions)
+        if not actions or #actions == 0 then return end
+        for _, action in ipairs(actions) do
+            if action.type == "delete" and action.clip and action.clip.id then
+                command_helper.add_delete_mutation(command, sequence_id, action.clip.id)
+            elseif action.type == "trim" and action.after then
+                local update = command_helper.clip_update_payload(action.after, sequence_id)
+                if update then
+                    command_helper.add_update_mutation(command, update.track_sequence_id or sequence_id, update)
+                end
+            elseif action.type == "insert" and action.clip then
+                local insert_payload = command_helper.clip_insert_payload(action.clip, sequence_id)
+                if insert_payload then
+                    command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
+                end
+            end
+        end
+    end
+
     command_executors["MoveClipToTrack"] = function(command)
         local dry_run = command:get_parameter("dry_run")
         if not dry_run then
@@ -86,6 +106,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("original_timeline_start_rat", clip.timeline_start)
             clip.timeline_start = pending_new_start_rat
         end
+
+        -- Resolve Occlusions on Target Track
+        -- Must happen before saving the moved clip to clear space
+        local target_start = clip.timeline_start
+        local target_duration = pending_duration_rat or clip.duration
+        
+        local ok_occ, err_occ, actions = clip_mutator.resolve_occlusions(db, {
+            track_id = target_track_id,
+            timeline_start = target_start,
+            duration = target_duration,
+            exclude_clip_id = clip.id -- Don't trim self if we are just moving on same track (though track_id changed here)
+        })
+        
+        if not ok_occ then
+            print(string.format("ERROR: MoveClipToTrack: Failed to resolve occlusions: %s", tostring(err_occ)))
+            return false
+        end
+        
+        record_occlusion_actions(command, mutation_sequence, actions)
 
         clip.track_id = target_track_id
 

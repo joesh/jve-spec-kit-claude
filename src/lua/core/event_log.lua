@@ -138,6 +138,13 @@ local function write_event_line(event_record)
     return true
 end
 
+local function to_frames(val)
+    if type(val) == "table" and val.frames then
+        return val.frames
+    end
+    return val
+end
+
 local function apply_timeline_event(payload)
     if not payload then
         return true
@@ -155,10 +162,10 @@ local function apply_timeline_event(payload)
         stmt:bind_value(2, payload.clip_id)
         stmt:bind_value(3, payload.media_id)
         stmt:bind_value(4, payload.track)
-        stmt:bind_value(5, payload.t_in)
-        stmt:bind_value(6, payload.t_out)
-        stmt:bind_value(7, payload.src_in)
-        stmt:bind_value(8, payload.src_out)
+        stmt:bind_value(5, to_frames(payload.t_in))
+        stmt:bind_value(6, to_frames(payload.t_out))
+        stmt:bind_value(7, to_frames(payload.src_in))
+        stmt:bind_value(8, to_frames(payload.src_out))
         stmt:bind_value(9, payload.enable and 1 or 0)
         local ok = stmt:exec()
         stmt:finalize()
@@ -176,7 +183,7 @@ local function apply_timeline_event(payload)
         end
         stmt:bind_value(1, payload.seq_id)
         stmt:bind_value(2, payload.marker_id)
-        stmt:bind_value(3, payload.time)
+        stmt:bind_value(3, to_frames(payload.time))
         stmt:bind_value(4, payload.color or "yellow")
         stmt:bind_value(5, payload.name or "")
         local ok = stmt:exec()
@@ -236,7 +243,7 @@ local function apply_ui_event(payload)
         if not stmt then
             return false, "event_log: failed to prepare UI playhead upsert"
         end
-        stmt:bind_value(1, payload.time or 0)
+        stmt:bind_value(1, to_frames(payload.time) or 0)
         local ok = stmt:exec()
         stmt:finalize()
         if not ok then
@@ -296,7 +303,32 @@ local function normalize_clip_payload(command, context)
     local duration = command:get_parameter("duration")
     local insert_time = command:get_parameter("insert_time")
     local src_in = command:get_parameter("source_in") or 0
-    local src_out = command:get_parameter("source_out") or (src_in + (duration or 0))
+    
+    -- Calculate derived values using Rational arithmetic if present
+    local src_out = command:get_parameter("source_out")
+    if not src_out then
+        if type(src_in) == "table" and src_in.frames and type(duration) == "table" and duration.frames then
+             -- Assume Rational
+             -- We cannot perform arithmetic here without loading Rational module or assuming metatable.
+             -- command parameters SHOULD have metatable if set properly.
+             -- But let's try to be safe. If metatables are missing, we can't add.
+             -- However, normalize_clip_payload is called during record_command, where Rationals are live.
+             src_out = src_in + duration
+        else
+             src_out = src_in + (duration or 0)
+        end
+    end
+    
+    local t_out
+    if insert_time and duration then
+        if type(insert_time) == "table" and insert_time.frames and type(duration) == "table" and duration.frames then
+            t_out = insert_time + duration
+        else
+            t_out = insert_time + duration
+        end
+    else
+        t_out = insert_time
+    end
 
     return {
         type = "InsertClip",
@@ -305,7 +337,7 @@ local function normalize_clip_payload(command, context)
         media_id = command:get_parameter("media_id"),
         track = command:get_parameter("track_id"),
         t_in = insert_time,
-        t_out = insert_time and duration and (insert_time + duration) or insert_time,
+        t_out = t_out,
         src_in = src_in,
         src_out = src_out,
         enable = true,

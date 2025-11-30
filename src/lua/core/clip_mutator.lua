@@ -6,6 +6,7 @@ local krono_ok, krono = pcall(require, "core.krono")
 
 local ClipMutator = {}
 local timeline_state_ok, timeline_state = pcall(require, 'ui.timeline.timeline_state')
+local Rational = require("core.rational")
 
     local function clone_state(row)
     return {
@@ -23,8 +24,34 @@ local timeline_state_ok, timeline_state = pcall(require, 'ui.timeline.timeline_s
     }
 end
 
+-- Helper to get frame count
+local function get_frames(val)
+    if type(val) == "table" and val.frames then return val.frames end
+    return val
+end
+
+-- Helper for mixed min/max
+local function val_max(a, b)
+    if getmetatable(a) == Rational.metatable or getmetatable(b) == Rational.metatable then
+        return Rational.max(a, b)
+    end
+    return math.max(a, b)
+end
+
+local function val_min(a, b)
+    -- Rational doesn't have min? It implements __lt.
+    if getmetatable(a) == Rational.metatable or getmetatable(b) == Rational.metatable then
+        return (a < b) and a or b
+    end
+    return math.min(a, b)
+end
+
 local function default_source_out(row)
     local source_in = row.source_in or 0
+    if getmetatable(source_in) ~= Rational.metatable then
+        -- Should ideally be Rational
+    end
+    
     if row.source_out then
         return row.source_out
     end
@@ -40,10 +67,10 @@ local function run_update(db, row)
     if not stmt then
         return false, "Failed to prepare UPDATE for clip " .. tostring(row.id)
     end
-    stmt:bind_value(1, row.start_value)
-    stmt:bind_value(2, row.duration)
-    stmt:bind_value(3, row.source_in)
-    stmt:bind_value(4, row.source_out)
+    stmt:bind_value(1, get_frames(row.start_value))
+    stmt:bind_value(2, get_frames(row.duration))
+    stmt:bind_value(3, get_frames(row.source_in))
+    stmt:bind_value(4, get_frames(row.source_out))
     stmt:bind_value(5, row.enabled and 1 or 0)
     stmt:bind_value(6, row.id)
     local ok = stmt:exec()
@@ -84,10 +111,10 @@ local function run_insert(db, row)
     stmt:bind_value(4, row.name or "")
     stmt:bind_value(5, row.track_id)
     stmt:bind_value(6, row.media_id)
-    stmt:bind_value(7, row.start_value)
-    stmt:bind_value(8, row.duration)
-    stmt:bind_value(9, row.source_in or 0)
-    stmt:bind_value(10, row.source_out or (row.source_in or 0) + row.duration)
+    stmt:bind_value(7, get_frames(row.start_value))
+    stmt:bind_value(8, get_frames(row.duration))
+    stmt:bind_value(9, get_frames(row.source_in or 0))
+    stmt:bind_value(10, get_frames(row.source_out or (row.source_in or 0) + row.duration))
     stmt:bind_value(11, row.fps_numerator or 30)
     stmt:bind_value(12, row.fps_denominator or 1)
     stmt:bind_value(13, row.enabled and 1 or 0)
@@ -124,6 +151,8 @@ local function load_track_clips(db, track_id)
     end
 
     while stmt:next() do
+        local num = stmt:value(10)
+        local den = stmt:value(11)
         table.insert(results, {
             id = stmt:value(0),
             project_id = stmt:value(1),
@@ -131,12 +160,12 @@ local function load_track_clips(db, track_id)
             name = stmt:value(3),
             track_id = stmt:value(4),
             media_id = stmt:value(5),
-            start_value = stmt:value(6),
-            duration = stmt:value(7),
-            source_in = stmt:value(8),
-            source_out = stmt:value(9),
-            fps_numerator = stmt:value(10),
-            fps_denominator = stmt:value(11),
+            start_value = Rational.new(stmt:value(6), num, den),
+            duration = Rational.new(stmt:value(7), num, den),
+            source_in = Rational.new(stmt:value(8), num, den),
+            source_out = Rational.new(stmt:value(9), num, den),
+            fps_numerator = num,
+            fps_denominator = den,
             enabled = stmt:value(12) == 1 or stmt:value(12) == true
         })
     end
@@ -158,7 +187,7 @@ local function normalize_pending_lookup(pending_clips, exclude_id)
             return
         end
         lookup[clip_id] = {
-            start_value = pending.start_value,
+            start_value = pending.timeline_start or pending.start_value, -- Accept both
             duration = pending.duration,
             tolerance = pending.tolerance,
             _seen = false,
@@ -207,7 +236,7 @@ function ClipMutator.resolve_occlusions(db, params)
     end
 
     local track_id = params.track_id
-    local start_value = params.start_value
+    local start_value = params.timeline_start or params.start_value -- Accept both
     local duration = params.duration
     if not track_id or start_value == nil or duration == nil then
         return true
@@ -260,8 +289,8 @@ function ClipMutator.resolve_occlusions(db, params)
 
         local clip_start = row.start_value or 0
         local clip_end = clip_start + (row.duration or 0)
-        local overlap_start = math.max(clip_start, start_value)
-        local overlap_end = math.min(clip_end, end_time)
+        local overlap_start = val_max(clip_start, start_value)
+        local overlap_end = val_min(clip_end, end_time)
 
         if overlap_end <= overlap_start then
             goto continue_loop
@@ -286,7 +315,9 @@ function ClipMutator.resolve_occlusions(db, params)
         if clip_start < start_value and clip_end <= end_time then
             local trim_amount = clip_end - start_value
             row.duration = row.duration - trim_amount
-            if row.duration < 1 then
+            
+            local dur_frames = get_frames(row.duration)
+            if dur_frames < 1 then
                 table.insert(actions, {
                     type = "delete",
                     clip = original
@@ -322,7 +353,9 @@ function ClipMutator.resolve_occlusions(db, params)
             local trim_amount = end_time - clip_start
             row.start_value = end_time
             row.duration = row.duration - trim_amount
-            if row.duration < 1 then
+            
+            local dur_frames = get_frames(row.duration)
+            if dur_frames < 1 then
                 table.insert(actions, {
                     type = "delete",
                     clip = original
@@ -382,7 +415,8 @@ function ClipMutator.resolve_occlusions(db, params)
             })
 
             -- Create right portion
-            if right_duration > 0 then
+            local right_dur_frames = get_frames(right_duration)
+            if right_dur_frames > 0 then
                 local base_in = original.source_in or 0
                 local original_out = default_source_out(original)
                 local right_clip = {
@@ -396,8 +430,8 @@ function ClipMutator.resolve_occlusions(db, params)
                     duration = right_duration,
                     source_in = base_in + (end_time - clip_start),
                     source_out = original_out,
-                    timebase_type = original.timebase_type,
-                    timebase_rate = original.timebase_rate,
+                    fps_numerator = original.fps_numerator,
+                    fps_denominator = original.fps_denominator,
                     enabled = original.enabled
                 }
                 local ok_insert, err_insert = run_insert(db, right_clip)

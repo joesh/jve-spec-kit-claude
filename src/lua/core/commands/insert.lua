@@ -1,7 +1,8 @@
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
-local Rational = require("core.rational") -- Add Rational requirement
+local Rational = require("core.rational")
+local uuid = require("uuid")
 local timeline_state
 do
     local status, mod = pcall(require, 'ui.timeline.timeline_state')
@@ -90,7 +91,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local overlap_query = db:prepare([[
-            SELECT id, timeline_start_frame, duration_frames, fps_numerator, fps_denominator
+            SELECT id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator
             FROM clips
             WHERE track_id = ?
             ORDER BY timeline_start_frame ASC
@@ -104,8 +105,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         overlap_query:bind_value(1, track_id)
 
         local clips_to_ripple = {}
+        local clips_to_split = {}
         local pending_moves = {}
-        -- pending_tolerance also needs to be Rational (e.g. 1 frame)
+        
         local pending_tolerance = Rational.new(1, seq_fps_num, seq_fps_den)
         
         if overlap_query:exec() then
@@ -113,25 +115,47 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local clip_id = overlap_query:value(0)
                 local clip_start_frame = overlap_query:value(1)
                 local clip_duration_frame = overlap_query:value(2)
-                local clip_fps_num = overlap_query:value(3)
-                local clip_fps_den = overlap_query:value(4)
-                
+                local clip_source_in_frame = overlap_query:value(3)
+                local clip_source_out_frame = overlap_query:value(4)
+                local clip_fps_num = overlap_query:value(5)
+                local clip_fps_den = overlap_query:value(6)
+
                 local current_clip_start_rat = Rational.new(clip_start_frame, clip_fps_num, clip_fps_den)
                 local current_clip_duration_rat = Rational.new(clip_duration_frame, clip_fps_num, clip_fps_den)
+                local current_clip_end_rat = current_clip_start_rat + current_clip_duration_rat
 
                 if current_clip_start_rat >= insert_time_rat then
+                    -- Clip starts after or at insert point, needs to be rippled
                     local new_start = current_clip_start_rat + duration_rat
                     table.insert(clips_to_ripple, {
                         id = clip_id,
                         old_start = current_clip_start_rat,
                         new_start = new_start,
-                        duration = current_clip_duration_rat
+                        duration = current_clip_duration_rat,
+                        source_in = Rational.new(clip_source_in_frame, clip_fps_num, clip_fps_den),
+                        source_out = Rational.new(clip_source_out_frame, clip_fps_num, clip_fps_den)
                     })
                     pending_moves[clip_id] = {
                         timeline_start = new_start,
                         duration = current_clip_duration_rat,
                         tolerance = pending_tolerance
                     }
+                elseif current_clip_start_rat < insert_time_rat and current_clip_end_rat > insert_time_rat then
+                    -- Clip straddles insert point, needs to be split
+                    local left_part_duration = insert_time_rat - current_clip_start_rat
+                    local right_part_duration = current_clip_end_rat - insert_time_rat
+                    
+                    table.insert(clips_to_split, {
+                        original_id = clip_id,
+                        original_start = current_clip_start_rat,
+                        original_duration = current_clip_duration_rat,
+                        original_source_in = Rational.new(clip_source_in_frame, clip_fps_num, clip_fps_den),
+                        original_source_out = Rational.new(clip_source_out_frame, clip_fps_num, clip_fps_den),
+                        left_part_duration = left_part_duration,
+                        right_part_duration = right_part_duration,
+                        clip_fps_num = clip_fps_num,
+                        clip_fps_den = clip_fps_den
+                    })
                 end
             end
         end
@@ -161,6 +185,59 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             }
         end
 
+        -- Handle Splits first
+        local executed_splits = {}
+        for _, split_info in ipairs(clips_to_split) do
+            local original_clip = Clip.load_optional(split_info.original_id, db)
+            if not original_clip then goto continue_split end
+
+            -- Trim original clip to be the "left part"
+            original_clip.duration = split_info.left_part_duration
+            original_clip.source_out = original_clip.source_in + split_info.left_part_duration
+            assert(original_clip:save(db, {skip_occlusion = true}), "Failed to trim left part of split clip")
+            command_helper.add_update_mutation(command, sequence_id, command_helper.clip_update_payload(original_clip, sequence_id))
+
+            -- Create new clip for the "right part"
+            local right_part_id = uuid.generate()
+            local right_part_clip = Clip.create(original_clip.name .. " (2)", original_clip.media_id, {
+                id = right_part_id,
+                project_id = original_clip.project_id,
+                track_id = original_clip.track_id,
+                owner_sequence_id = original_clip.owner_sequence_id,
+                parent_clip_id = original_clip.parent_clip_id,
+                source_sequence_id = original_clip.source_sequence_id,
+                timeline_start = insert_time_rat + duration_rat, -- Starts after the new inserted clip
+                duration = split_info.right_part_duration,
+                source_in = original_clip.source_in + split_info.left_part_duration,
+                source_out = original_clip.source_out,
+                enabled = original_clip.enabled,
+                offline = original_clip.offline,
+                rate_num = split_info.clip_fps_num,
+                rate_den = split_info.clip_fps_den,
+            })
+            assert(right_part_clip:save(db, {skip_occlusion = true}), "Failed to save right part of split clip")
+            command_helper.add_insert_mutation(command, sequence_id, command_helper.clip_insert_payload(right_part_clip, sequence_id))
+            
+            -- This new right part needs to be rippled too!
+            table.insert(clips_to_ripple, {
+                id = right_part_id,
+                old_start = right_part_clip.timeline_start,
+                new_start = right_part_clip.timeline_start + duration_rat,
+                duration = right_part_clip.duration,
+                source_in = right_part_clip.source_in,
+                source_out = right_part_clip.source_out
+            })
+
+            table.insert(executed_splits, {
+                original_id = original_clip.id,
+                right_id = right_part_id,
+                original_duration = split_info.original_duration,
+                original_source_out = split_info.original_source_out
+            })
+            ::continue_split::
+        end
+
+        -- Execute Ripples
         for _, clip_info in ipairs(clips_to_ripple) do
             local clip = Clip.load_optional(clip_info.id, db)
             if not clip then
@@ -171,11 +248,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             clip.timeline_start = clip_info.new_start
 
-            local save_opts = nil
-            if next(pending_moves) ~= nil then
-                save_opts = {pending_clips = pending_moves}
-            end
-
+            local save_opts = {skip_occlusion = true}
             local saved, occlusion_actions = clip:save(db, save_opts)
             if not saved then
                 print(string.format("WARNING: Insert: Failed to ripple clip %s", clip_info.id))
@@ -192,6 +265,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         command:set_parameter("rippled_clips", clips_to_ripple)
+        command:set_parameter("split_clips", executed_splits) -- Store split info
 
         local existing_clip_id = command:get_parameter("clip_id")
         local clip_name = (master_clip and master_clip.name) or "Inserted Clip"
@@ -224,7 +298,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("project_id", master_clip.project_id)
         end
 
-        local saved, clip_occlusion_actions = clip:save(db)
+        local saved, clip_occlusion_actions = clip:save(db, {skip_occlusion = true}) -- Inserted clip is new, safe to skip occlusion
         if saved then
             if #copied_properties > 0 then
                 command_helper.delete_properties_for_clip(clip.id)
@@ -234,7 +308,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             local advance_playhead = command:get_parameter("advance_playhead")
             if advance_playhead and timeline_state then
-                timeline_state.set_playhead_value(insert_time_rat + duration_rat)
+                timeline_state.set_playhead_position(insert_time_rat + duration_rat)
             end
 
             local insert_payload = command_helper.clip_insert_payload(clip, sequence_id)
@@ -256,19 +330,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local clip_id = command:get_parameter("clip_id")
         local rippled_clips = command:get_parameter("rippled_clips")
+        local split_clips_info = command:get_parameter("split_clips") -- Added for undo
         local sequence_id = command:get_parameter("sequence_id")
-        local duration_rat = command:get_parameter("duration") -- This will be duration_raw, not duration_rat.
-        
-        -- Hydrate duration_rat if needed
-        -- This should be duration_rat from the command, not duration_raw.
-        -- But I didn't set "duration_rat" in the command parameters.
-        -- I need to save it to command parameters in the executor.
-        
-        -- For now, assume duration_rat exists or is derivable.
-        local current_duration_rat = Rational.new(1, 1, 1) -- Placeholder. Should be duration_rat from command.
         
         -- Hydrate duration_rat from command parameter directly
-        duration_rat = command:get_parameter("duration_rat")
+        local duration_rat = command:get_parameter("duration")
         if type(duration_rat) == "table" and duration_rat.frames and (not getmetatable(duration_rat) or not getmetatable(duration_rat).__lt) then
             duration_rat = Rational.new(duration_rat.frames, duration_rat.fps_numerator, duration_rat.fps_denominator)
         end
@@ -281,6 +347,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Delete the inserted clip
         command_helper.delete_clips_by_id(command, sequence_id, {clip_id})
         
+        -- Undo Splits
+        if split_clips_info then
+            for _, split_info in ipairs(split_clips_info) do
+                -- Delete right part
+                command_helper.delete_clips_by_id(command, sequence_id, {split_info.right_id})
+                
+                -- Restore original clip (left part) duration and source out
+                local original_clip = Clip.load_optional(split_info.original_id, db)
+                if original_clip then
+                    original_clip.duration = split_info.original_duration
+                    original_clip.source_out = split_info.original_source_out
+                    if not original_clip:save(db, {skip_occlusion = true}) then
+                        print(string.format("WARNING: UndoInsert: Failed to restore original clip %s duration", split_info.original_id))
+                    else
+                        command_helper.add_update_mutation(command, sequence_id, command_helper.clip_update_payload(original_clip, sequence_id))
+                    end
+                end
+            end
+        end
+
         -- Ripple clips back
         if rippled_clips then
             for _, clip_info in ipairs(rippled_clips) do
@@ -298,10 +384,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     if not clip:save(db, {skip_occlusion = true}) then
                         print(string.format("WARNING: UndoInsert: Failed to un-ripple clip %s", clip_info.id))
                     else
-                        local update_payload = command_helper.clip_update_payload(clip, sequence_id)
-                        if update_payload then
-                            command_helper.add_update_mutation(command, update_payload.track_sequence_id, update_payload)
-                        end
+                        command_helper.add_update_mutation(command, sequence_id, command_helper.clip_update_payload(clip, sequence_id))
                     end
                 end
             end
