@@ -19,42 +19,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local media_id = command:get_parameter("media_id")
         local track_id = command:get_parameter("track_id")
         
-        local insert_time_raw = command:get_parameter("insert_time")
-        local duration_raw = command:get_parameter("duration_value") or command:get_parameter("duration")
-        local source_in_raw = command:get_parameter("source_in_value") or command:get_parameter("source_in")
-        local source_out_raw = command:get_parameter("source_out_value") or command:get_parameter("source_out")
-        local master_clip_id = command:get_parameter("master_clip_id")
-        local project_id_param = command:get_parameter("project_id")
-
-        local master_clip = nil
-        if master_clip_id and master_clip_id ~= "" then
-            master_clip = Clip.load_optional(master_clip_id, db)
-            if not master_clip then
-                print(string.format("WARNING: Insert: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
-                master_clip_id = nil
-            end
-        end
-
-        local copied_properties = {}
-        if master_clip then
-            if (not media_id or media_id == "") and master_clip.media_id then
-                media_id = master_clip.media_id
-            end
-            if duration_raw == nil or (type(duration_raw) == "table" and duration_raw.frames <= 0) or (type(duration_raw) == "number" and duration_raw <= 0) then
-                duration_raw = master_clip.duration or (master_clip.source_out - master_clip.source_in)
-            end
-            if source_out_raw == nil or (type(source_out_raw) == "table" and source_out_raw <= source_in_raw) or (type(source_out_raw) == "number" and source_out_raw <= source_in_raw) then
-                source_in_raw = master_clip.source_in or source_in_raw
-                source_out_raw = master_clip.source_out or (source_in_raw + duration_raw)
-            end
-            copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
-        end
-
-        if not media_id or media_id == "" or not track_id or track_id == "" then
-            print("WARNING: Insert: Missing media_id or track_id")
-            return false
-        end
-
+        -- Early resolution of sequence FPS for hydration
         local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id) or "default_sequence"
         if sequence_id and sequence_id ~= "" then
             command:set_parameter("sequence_id", sequence_id)
@@ -72,18 +37,73 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             seq_stmt:finalize()
         end
 
-        local function to_rational_with_seq_fps(val)
-            if type(val) == "table" and val.frames then return val end
-            if type(val) == "number" then
+        local function hydrate(val)
+            if type(val) == "table" and val.frames then
+                return Rational.new(val.frames, val.fps_numerator or seq_fps_num, val.fps_denominator or seq_fps_den)
+            elseif type(val) == "number" then
                 return Rational.new(val, seq_fps_num, seq_fps_den)
             end
-            return Rational.new(0, seq_fps_num, seq_fps_den) -- Default to zero Rational
+            return nil
         end
+
+        local insert_time_raw = command:get_parameter("insert_time")
+        local duration_raw = command:get_parameter("duration_value") or command:get_parameter("duration")
+        local source_in_raw = command:get_parameter("source_in_value") or command:get_parameter("source_in")
+        local source_out_raw = command:get_parameter("source_out_value") or command:get_parameter("source_out")
         
-        local insert_time_rat = to_rational_with_seq_fps(insert_time_raw)
-        local duration_rat = to_rational_with_seq_fps(duration_raw)
-        local source_in_rat = to_rational_with_seq_fps(source_in_raw)
-        local source_out_rat = to_rational_with_seq_fps(source_out_raw)
+        local master_clip_id = command:get_parameter("master_clip_id")
+        local project_id_param = command:get_parameter("project_id")
+
+        local master_clip = nil
+        if master_clip_id and master_clip_id ~= "" then
+            master_clip = Clip.load_optional(master_clip_id, db)
+            if not master_clip then
+                print(string.format("WARNING: Insert: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
+                master_clip_id = nil
+            end
+        end
+
+        local copied_properties = {}
+        if master_clip then
+            if (not media_id or media_id == "") and master_clip.media_id then
+                media_id = master_clip.media_id
+            end
+            
+            -- Hydrate/Default duration
+            local duration_rat = hydrate(duration_raw)
+            if not duration_rat or duration_rat.frames <= 0 then
+                if master_clip.duration then
+                    duration_raw = master_clip.duration
+                else
+                    local start = master_clip.source_in or Rational.new(0, seq_fps_num, seq_fps_den)
+                    local end_t = master_clip.source_out or start
+                    duration_raw = end_t - start
+                end
+            end
+            
+            -- Hydrate/Default source range
+            local source_in_rat = hydrate(source_in_raw)
+            local source_out_rat = hydrate(source_out_raw)
+            
+            if not source_out_rat or (source_in_rat and source_out_rat <= source_in_rat) then
+                source_in_raw = master_clip.source_in or (source_in_raw or 0)
+                -- Re-hydrate duration to be sure
+                local dur = hydrate(duration_raw)
+                source_out_raw = master_clip.source_out or (hydrate(source_in_raw) + dur)
+            end
+            copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
+        end
+
+        if not media_id or media_id == "" or not track_id or track_id == "" then
+            print("WARNING: Insert: Missing media_id or track_id")
+            return false
+        end
+
+        -- Final Hydration
+        local insert_time_rat = hydrate(insert_time_raw) or Rational.new(0, seq_fps_num, seq_fps_den)
+        local duration_rat = hydrate(duration_raw)
+        local source_in_rat = hydrate(source_in_raw) or Rational.new(0, seq_fps_num, seq_fps_den)
+        local source_out_rat = hydrate(source_out_raw)
 
         if not insert_time_rat or not duration_rat or duration_rat.frames <= 0 or not source_out_rat then
             print("WARNING: Insert: Missing or invalid insert_time, duration, or source_out")
@@ -336,7 +356,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Hydrate duration_rat from command parameter directly
         local duration_rat = command:get_parameter("duration")
         if type(duration_rat) == "table" and duration_rat.frames and (not getmetatable(duration_rat) or not getmetatable(duration_rat).__lt) then
-            duration_rat = Rational.new(duration_rat.frames, duration_rat.fps_numerator, duration_rat.fps_denominator)
+            local seq_fps_num = 30 -- Fallback if not found (should be in command context really)
+            local seq_fps_den = 1
+            -- We really should save sequence rate in command if needed, but Rationals carry it.
+            -- The issue is deserialization strips methods.
+            -- We can infer from duration_rat.fps_numerator.
+            if duration_rat.fps_numerator then
+                seq_fps_num = duration_rat.fps_numerator
+                seq_fps_den = duration_rat.fps_denominator
+            end
+            duration_rat = Rational.new(duration_rat.frames, seq_fps_num, seq_fps_den)
         end
 
         if not clip_id then
@@ -356,8 +385,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 -- Restore original clip (left part) duration and source out
                 local original_clip = Clip.load_optional(split_info.original_id, db)
                 if original_clip then
-                    original_clip.duration = split_info.original_duration
-                    original_clip.source_out = split_info.original_source_out
+                    -- Hydrate original_duration
+                    local od = split_info.original_duration
+                    if type(od) == "table" and od.frames and not getmetatable(od) then
+                        od = Rational.new(od.frames, od.fps_numerator, od.fps_denominator)
+                    end
+                    local oso = split_info.original_source_out
+                    if type(oso) == "table" and oso.frames and not getmetatable(oso) then
+                        oso = Rational.new(oso.frames, oso.fps_numerator, oso.fps_denominator)
+                    end
+                    
+                    original_clip.duration = od
+                    original_clip.source_out = oso
                     if not original_clip:save(db, {skip_occlusion = true}) then
                         print(string.format("WARNING: UndoInsert: Failed to restore original clip %s duration", split_info.original_id))
                     else
