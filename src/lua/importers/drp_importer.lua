@@ -17,6 +17,7 @@
 local M = {}
 
 local xml2 = require("xml2")
+local Rational = require("core.rational")
 
 --- Unzip .drp file to temporary directory
 -- @param drp_path string: Path to .drp file
@@ -137,8 +138,11 @@ end
 -- @param frame_rate number: Timeline frame rate
 -- @return number: Milliseconds
 local function parse_resolve_timecode(timecode_str, frame_rate)
+    local fps_num = math.floor(frame_rate * 1000)
+    local fps_den = 1000
+
     if not timecode_str or timecode_str == "" then
-        return 0
+        return Rational.new(0, fps_num, fps_den)
     end
 
     -- Handle rational notation (frames/divisor)
@@ -146,24 +150,29 @@ local function parse_resolve_timecode(timecode_str, frame_rate)
     if numerator and denominator then
         local frames = tonumber(numerator)
         local divisor = tonumber(denominator)
-        return math.floor((frames / divisor) * (1000.0 / frame_rate))
+        -- Resolve's rational format means: frames @ divisor FPS.
+        -- We need to convert this to our internal fps_num/fps_den
+        local temp_rational = Rational.new(frames, divisor, 1)
+        return temp_rational:rescale(fps_num, fps_den)
     end
 
     -- Handle absolute frame count
     local frames = tonumber(timecode_str)
     if frames then
-        return math.floor(frames * (1000.0 / frame_rate))
+        return Rational.new(frames, fps_num, fps_den)
     end
 
-    return 0
+    return Rational.new(0, fps_num, fps_den)
 end
 
-local function frames_to_ms(frames, frame_rate)
+local function frames_to_rational(frames, frame_rate)
     local fr = frame_rate or 30.0
     if fr <= 0 then
         fr = 30.0
     end
-    return math.floor((frames / fr) * 1000)
+    local fps_num = math.floor(fr * 1000)
+    local fps_den = 1000
+    return Rational.new(frames, fps_num, fps_den)
 end
 
 --- Parse project.xml to extract project metadata
@@ -280,9 +289,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
 
             local clip = {
                 name = get_text(find_element(clip_elem, "Name")),
-                start_value = frames_to_ms(start_frames, frame_rate),
-                duration = frames_to_ms(duration_frames, frame_rate),
-                source_in = frames_to_ms(media_start_frames, frame_rate),
+                start_value = frames_to_rational(start_frames, frame_rate),
+                duration = frames_to_rational(duration_frames, frame_rate),
+                source_in = frames_to_rational(media_start_frames, frame_rate),
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
                 file_path = file_path,
                 media_key = file_path,
@@ -290,8 +299,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
                 frame_rate = frame_rate
             }
 
-            if clip.duration <= 0 then
-                clip.duration = 1
+            if clip.duration.frames <= 0 then
+                -- Ensure duration is at least 1 frame
+                clip.duration = Rational.new(1, clip.duration.fps_numerator, clip.duration.fps_denominator)
             end
 
             clip.source_out = clip.source_in + clip.duration
@@ -415,6 +425,11 @@ local function parse_sequence(seq_elem, frame_rate)
         end
 
         if #fallback_clips > 0 then
+            local fps_num = math.floor(frame_rate * 1000)
+            local fps_den = 1000
+            local zero_rational = Rational.new(0, fps_num, fps_den)
+            local default_duration_rational = Rational.new(1000, fps_num, fps_den)
+
             timeline.tracks = {
                 {
                     type = "VIDEO",
@@ -427,11 +442,17 @@ local function parse_sequence(seq_elem, frame_rate)
             }
             timeline.media_files = timeline.media_files or {}
             for _, clip in ipairs(fallback_clips) do
+                -- Ensure Rational types are correctly initialized in fallback clips
+                clip.start_value = clip.start_value or zero_rational
+                clip.duration = clip.duration or default_duration_rational
+                clip.source_in = clip.source_in or zero_rational
+                clip.source_out = clip.source_out or default_duration_rational
+
                 if clip.media_key and not timeline.media_files[clip.media_key] then
                     timeline.media_files[clip.media_key] = {
                         name = clip.name,
                         path = clip.media_key,
-                        duration = clip.duration,
+                        duration = clip.duration, -- Use Rational duration
                         frame_rate = frame_rate,
                         width = 1920,
                         height = 1080,
@@ -463,8 +484,12 @@ local function parse_clip_item(clip_elem, frame_rate)
 
     local start_value = parse_resolve_timecode(get_text(start_elem), frame_rate)
     local end_time = parse_resolve_timecode(get_text(end_elem), frame_rate)
-    local source_in = in_elem and parse_resolve_timecode(get_text(in_elem), frame_rate) or 0
-    local source_out = out_elem and parse_resolve_timecode(get_text(out_elem), frame_rate) or 0
+    
+    local fps_num = math.floor(frame_rate * 1000)
+    local fps_den = 1000
+
+    local source_in = in_elem and parse_resolve_timecode(get_text(in_elem), frame_rate) or Rational.new(0, fps_num, fps_den)
+    local source_out = out_elem and parse_resolve_timecode(get_text(out_elem), frame_rate) or Rational.new(0, fps_num, fps_den)
 
     local clip = {
         name = name_elem and get_text(name_elem) or "Untitled Clip",

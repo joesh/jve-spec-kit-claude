@@ -4,28 +4,37 @@
 
 local M = {}
 local uuid = require("uuid")
+local Rational = require("core.rational")
 
 -- Parse FCP7 time value (rational number like "900/30")
 -- Returns milliseconds
 local function parse_time(time_str, frame_rate)
+    local seq_fps_num = math.floor(frame_rate * 1000)
+    local seq_fps_den = 1000
+
     if not time_str or time_str == "" then
-        return 0
+        return Rational.new(0, seq_fps_num, seq_fps_den)
     end
 
     -- Handle rational format "numerator/denominator"
     local numerator, denominator = time_str:match("(%d+)/(%d+)")
     if numerator and denominator then
-        local frames = tonumber(numerator) / tonumber(denominator)
-        return math.floor((frames / frame_rate) * 1000)
+        local frames_num = tonumber(numerator)
+        local frames_den = tonumber(denominator)
+        
+        -- FCP7 XML "frames/timebase" means 'frames_num' frames at 'frames_den' FPS.
+        -- We need to rescale this to the sequence's effective frame_rate (seq_fps_num/seq_fps_den)
+        local temp_rational = Rational.new(frames_num, frames_den, 1)
+        return temp_rational:rescale(seq_fps_num, seq_fps_den)
     end
 
-    -- Handle plain integer frames
+    -- Handle plain integer frames (FCP7 time is often just a frame count at the sequence's frame_rate)
     local frames = tonumber(time_str)
     if frames then
-        return math.floor((frames / frame_rate) * 1000)
+        return Rational.new(frames, seq_fps_num, seq_fps_den)
     end
 
-    return 0
+    return Rational.new(0, seq_fps_num, seq_fps_den)
 end
 
 local function collect_children(node)
@@ -261,13 +270,13 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         end
     end
 
-    if clip_info.duration <= 0 and clip_info.source_out > clip_info.source_in then
+    if clip_info.duration and clip_info.duration.frames <= 0 and clip_info.source_out and clip_info.source_out.frames > clip_info.source_in.frames then
         clip_info.duration = clip_info.source_out - clip_info.source_in
     end
-    if clip_info.duration <= 0 and clip_info.raw_duration and clip_info.raw_duration > 0 then
+    if clip_info.duration and clip_info.duration.frames <= 0 and clip_info.raw_duration and clip_info.raw_duration.frames > 0 then
         clip_info.duration = clip_info.raw_duration
     end
-    if clip_info.duration <= 0 and clip_info.timeline_start and clip_info.timeline_end and clip_info.timeline_end > clip_info.timeline_start then
+    if clip_info.duration and clip_info.duration.frames <= 0 and clip_info.timeline_start and clip_info.timeline_end and clip_info.timeline_end > clip_info.timeline_start then
         clip_info.duration = clip_info.timeline_end - clip_info.timeline_start
     end
 
@@ -290,33 +299,29 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
 
     local function finalize_clip_timing(clip_info)
         local start = clip_info.timeline_start
-        if start and start < 0 then
+        local fps_num = math.floor(clip_info.frame_rate * 1000)
+        local fps_den = 1000
+        local zero_rational = Rational.new(0, fps_num, fps_den)
+
+        if start and start < zero_rational then
             start = nil
         end
 
         local finish = clip_info.timeline_end
-        if finish and finish < 0 then
+        if finish and finish < zero_rational then
             finish = nil
         end
 
         local duration = clip_info.duration
-        if duration and duration <= 0 then
+        if duration and duration.frames <= 0 then
             duration = nil
         end
 
-        if not duration and clip_info.source_out > clip_info.source_in then
+        if not duration and clip_info.source_out and clip_info.source_in and clip_info.source_out > clip_info.source_in then
             duration = clip_info.source_out - clip_info.source_in
-            if duration <= 0 then
+            if duration and duration.frames <= 0 then
                 duration = nil
             end
-        end
-
-        if not start and finish and duration then
-            start = finish - duration
-        end
-
-        if not finish and start and duration then
-            finish = start + duration
         end
 
         if not start and prev_end_time then
@@ -330,7 +335,7 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
             duration = finish - start
         end
 
-        if not start or not duration or duration <= 0 then
+        if not start or not duration or duration.frames <= 0 then
             error(string.format(
                 "FCP7 XML importer: unable to determine timing for clip '%s'",
                 clip_info.name or clip_info.original_id or "<unnamed clip>"
@@ -749,13 +754,18 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             name = "Imported Master Clip"
         end
 
-        local duration = math.floor(clip_info.media and clip_info.media.duration or clip_info.duration or 1000)
-        if duration <= 0 then
-            duration = 1000
+        local fps_num = math.floor(clip_info.frame_rate * 1000)
+        local fps_den = 1000
+        local zero_rational = Rational.new(0, fps_num, fps_den)
+        local default_duration_rational = Rational.new(1000, fps_num, fps_den)
+
+        local duration = (clip_info.media and clip_info.media.duration) or clip_info.duration or default_duration_rational
+        if duration.frames <= 0 then
+            duration = default_duration_rational
         end
-        local source_in = math.floor(clip_info.source_in or 0)
-        local source_out = math.floor(clip_info.source_out or (source_in + duration))
-        if source_out <= source_in then
+        local source_in = clip_info.source_in or zero_rational
+        local source_out = clip_info.source_out or (source_in + duration)
+        if source_out < source_in then -- Rational comparison
             source_out = source_in + duration
         end
 
@@ -763,7 +773,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             id = reuse_id,
             project_id = project_id,
             clip_kind = "master",
-            start_value = 0,
+            start_value = zero_rational, -- Master clips always start at 0 timeline position
             duration = duration,
             source_in = source_in,
             source_out = source_out,
@@ -859,12 +869,16 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             parsed_result.media_files[key] = media_info
         end
 
+        local fps_num = math.floor(frame_rate * 1000)
+        local fps_den = 1000
+        local one_rational = Rational.new(1, fps_num, fps_den)
+
         local duration = media_info.duration
-        if (not duration or duration <= 0) and clip_info.duration and clip_info.duration > 0 then
+        if (not duration or duration.frames <= 0) and clip_info.duration and clip_info.duration.frames > 0 then
             duration = clip_info.duration
         end
-        if not duration or duration <= 0 then
-            duration = 1
+        if not duration or duration.frames <= 0 then
+            duration = one_rational
         end
 
         local file_path = media_info.path
@@ -873,22 +887,12 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             print(string.format("WARNING: create_entities: missing file path for media %s; using placeholder %s", tostring(key), file_path))
         end
 
-        local frame_rate = media_info.frame_rate or clip_info.frame_rate or 30.0
-
-        local reuse_id = nil
-        if key then
-            reuse_id = resolve_reuse_id('media', key)
-            if not reuse_id then
-                reuse_id = find_existing_media_id(file_path)
-            end
-        end
-
         local media = Media.create({
             id = reuse_id,
             project_id = project_id,
             file_path = file_path,
             name = media_info.name or tostring(key or file_path),
-            duration = math.floor(duration),
+            duration = duration,
             frame_rate = frame_rate,
             width = media_info.width,
             height = media_info.height,
@@ -941,15 +945,26 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             clip.id = reuse_id
         end
 
+        local fps_num = math.floor(clip_info.frame_rate * 1000)
+        local fps_den = 1000
+        local zero_rational = Rational.new(0, fps_num, fps_den)
+        local one_rational = Rational.new(1, fps_num, fps_den)
+        
+        local start_value = clip_info.start_value or zero_rational
+        local duration = clip_info.duration or one_rational
+        duration = Rational.max(duration, one_rational) -- Ensure duration is at least 1 Rational frame
+        local source_in = clip_info.source_in or zero_rational
+        local source_out = clip_info.source_out or (source_in + duration)
+        if source_out < source_in then
+            source_out = source_in + duration
+        end
+
         clip.track_id = track_id
         clip.parent_clip_id = master_clip_id or clip.parent_clip_id
-        clip.start_value = math.floor(clip_info.start_value or 0)
-        clip.duration = math.max(math.floor(clip_info.duration or 0), 1)
-        clip.source_in = math.floor(clip_info.source_in or 0)
-        clip.source_out = math.floor(clip_info.source_out or (clip.source_in + clip.duration))
-        if clip.source_out <= clip.source_in then
-            clip.source_out = clip.source_in + clip.duration
-        end
+        clip.start_value = start_value
+        clip.duration = duration
+        clip.source_in = source_in
+        clip.source_out = source_out
         clip.enabled = clip_info.enabled ~= false
 
         if not clip:save(conn) then
