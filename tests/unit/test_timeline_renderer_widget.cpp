@@ -326,4 +326,4 @@ TestTimelineRendererWidget::EventData TestTimelineRendererWidget::lastMouseEvent
 TestTimelineRendererWidget::EventData TestTimelineRendererWidget::lastKeyEvent;
 
 QTEST_MAIN(TestTimelineRendererWidget)
-#include "test_scriptable_timeline_widget.moc"
+#include "test_timeline_renderer_widget.moc"
