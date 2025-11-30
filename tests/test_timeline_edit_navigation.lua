@@ -68,8 +68,8 @@ function timeline_state.clear_edge_selection() end
 function timeline_state.set_selection(_) end
 function timeline_state.reload_clips() end
 function timeline_state.persist_state_to_db() end
-function timeline_state.get_playhead_value() return timeline_state.playhead_value end
-function timeline_state.set_playhead_value(time_ms) timeline_state.playhead_value = time_ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
 function timeline_state.get_clips() return timeline_state.clips end
 
 local viewport_guard = 0
@@ -119,20 +119,20 @@ print("=== Timeline Edit Navigation Tests ===\n")
 
 local result = command_manager.execute("GoToPrevEdit")
 assert(result.success == true, "GoToPrevEdit should succeed")
-assert(timeline_state.playhead_value == 2400,
-    string.format("GoToPrevEdit expected 2400, got %d", timeline_state.playhead_value))
+assert(timeline_state.playhead_position == 2400,
+    string.format("GoToPrevEdit expected 2400, got %d", timeline_state.playhead_position))
 
-timeline_state.playhead_value = 3200
+timeline_state.playhead_position = 3200
 
 result = command_manager.execute("GoToNextEdit")
 assert(result.success == true, "GoToNextEdit should succeed")
-assert(timeline_state.playhead_value == 4500,
-    string.format("GoToNextEdit expected 4500, got %d", timeline_state.playhead_value))
+assert(timeline_state.playhead_position == 4500,
+    string.format("GoToNextEdit expected 4500, got %d", timeline_state.playhead_position))
 
-timeline_state.playhead_value = 6200
+timeline_state.playhead_position = 6200
 result = command_manager.execute("GoToNextEdit")
 assert(result.success == true, "GoToNextEdit should succeed even at timeline end")
-assert(timeline_state.playhead_value == 6200,
-    string.format("GoToNextEdit at end should stay at 6200, got %d", timeline_state.playhead_value))
+assert(timeline_state.playhead_position == 6200,
+    string.format("GoToNextEdit at end should stay at 6200, got %d", timeline_state.playhead_position))
 
 print("✅ GoToPrevEdit/GoToNextEdit navigation commands adjust playhead correctly")

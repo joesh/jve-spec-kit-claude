@@ -17,12 +17,12 @@ local mock_timeline_state = {
     viewport_duration_frames_value = 300
 }
 
-function mock_timeline_state.get_playhead_value()
-    return mock_timeline_state.playhead_value
+function mock_timeline_state.get_playhead_position()
+    return mock_timeline_state.playhead_position
 end
 
-function mock_timeline_state.set_playhead_value(time)
-    mock_timeline_state.playhead_value = time
+function mock_timeline_state.set_playhead_position(time)
+    mock_timeline_state.playhead_position = time
 end
 
 function mock_timeline_state.get_selected_clips()
@@ -150,7 +150,7 @@ command_manager.init(db, 'test_sequence', 'test_project')
 print("Test 1: Undo restores playhead to pre-command position")
 
 -- Set initial playhead position
-mock_timeline_state.set_playhead_value(5000)
+mock_timeline_state.set_playhead_position(5000)
 print("   Initial playhead: 5000ms")
 
 -- Execute a command (CreateSequence doesn't move playhead)
@@ -167,14 +167,14 @@ if not result1.success then
     os.exit(1)
 end
 -- Simulate user moving playhead after command 1 by persisting new position
-mock_timeline_state.set_playhead_value(5000)
+mock_timeline_state.set_playhead_position(5000)
 local timeline_state = require('ui.timeline.timeline_state')
-timeline_state.set_playhead_value(5000)
-print("   After command 1: " .. mock_timeline_state.get_playhead_value() .. "ms")
+timeline_state.set_playhead_position(5000)
+print("   After command 1: " .. mock_timeline_state.get_playhead_position() .. "ms")
 
 -- Move playhead
-mock_timeline_state.set_playhead_value(10000)
-timeline_state.set_playhead_value(10000)
+mock_timeline_state.set_playhead_position(10000)
+timeline_state.set_playhead_position(10000)
 print("   Moved playhead to: 10000ms")
 
 -- Execute second command
@@ -190,12 +190,12 @@ if not result2.success then
     print("❌ FAIL: Command 2 execution failed")
     os.exit(1)
 end
-print("   After command 2: " .. mock_timeline_state.get_playhead_value() .. "ms")
-timeline_state.set_playhead_value(10000)
+print("   After command 2: " .. mock_timeline_state.get_playhead_position() .. "ms")
+timeline_state.set_playhead_position(10000)
 
 -- Undo should restore playhead to 10000ms (position BEFORE cmd2)
 command_manager.undo()
-local playhead_after_undo = mock_timeline_state.get_playhead_value()
+local playhead_after_undo = mock_timeline_state.get_playhead_position()
 print("   After undo: " .. playhead_after_undo .. "ms")
 
 if playhead_after_undo == 10000 then
@@ -209,13 +209,13 @@ end
 print("Test 2: Redo preserves current playhead position")
 
 -- Move playhead somewhere else
-mock_timeline_state.set_playhead_value(15000)
-timeline_state.set_playhead_value(15000)
+mock_timeline_state.set_playhead_position(15000)
+timeline_state.set_playhead_position(15000)
 print("   Moved playhead to: 15000ms before redo")
 
 -- Redo command 2
 command_manager.redo()
-local playhead_after_redo = mock_timeline_state.get_playhead_value()
+local playhead_after_redo = mock_timeline_state.get_playhead_position()
 print("   After redo: " .. playhead_after_redo .. "ms")
 
 -- Redo should NOT change playhead (it's user state, not command output)
@@ -229,7 +229,7 @@ end
 -- We're currently at position after cmd2, playhead at 15000ms
 -- Undo to position after cmd1 (should restore to 10000ms)
 command_manager.undo()
-local playhead_after_second_undo = mock_timeline_state.get_playhead_value()
+local playhead_after_second_undo = mock_timeline_state.get_playhead_position()
 print("   After second undo: " .. playhead_after_second_undo .. "ms")
 
 if playhead_after_second_undo == 10000 then
@@ -241,7 +241,7 @@ end
 
 -- Undo again to drop command 1 (should restore to original 5000ms)
 command_manager.undo()
-local playhead_after_third_undo = mock_timeline_state.get_playhead_value()
+local playhead_after_third_undo = mock_timeline_state.get_playhead_position()
 print("   After third undo: " .. playhead_after_third_undo .. "ms")
 
 if playhead_after_third_undo == 5000 then

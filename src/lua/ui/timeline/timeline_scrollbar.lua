@@ -58,7 +58,7 @@ function M.create(widget, state_module)
         timeline.add_rect(scrollbar.widget, 0, 0, width, M.SCROLLBAR_HEIGHT, "#1a1a1a")
 
         -- Get viewport and total duration
-        local viewport_start = state_module.get_viewport_start_value()
+        local viewport_start = state_module.get_viewport_start_time()
         local viewport_duration = state_module.get_viewport_duration()
         local total_duration = get_total_duration()
 
@@ -85,7 +85,7 @@ function M.create(widget, state_module)
         local width, height = timeline.get_dimensions(scrollbar.widget)
         local total_duration = get_total_duration()
 
-        local viewport_start = state_module.get_viewport_start_value()
+        local viewport_start = state_module.get_viewport_start_time()
         local viewport_duration = state_module.get_viewport_duration()
 
         local thumb_x = math.floor((viewport_start / total_duration) * width)
@@ -119,7 +119,7 @@ function M.create(widget, state_module)
                 -- Center viewport on click position
                 new_start = new_start - (viewport_duration / 2)
                 new_start = math.max(0, math.min(total_duration - viewport_duration, new_start))
-                state_module.set_viewport_start_value(new_start)
+                state_module.set_viewport_start_time(new_start)
             end
 
         elseif event_type == "move" then
@@ -131,7 +131,7 @@ function M.create(widget, state_module)
 
                 -- Clamp to valid range
                 new_start = math.max(0, math.min(total_duration - viewport_duration, new_start))
-                state_module.set_viewport_start_value(new_start)
+                state_module.set_viewport_start_time(new_start)
 
             elseif scrollbar.dragging_left_edge then
                 -- Dragging left edge = zoom + scroll
@@ -144,7 +144,7 @@ function M.create(widget, state_module)
                 -- Ensure minimum duration of 1 second
                 if new_duration >= 1000 then
                     new_start = math.max(0, new_start)
-                    state_module.set_viewport_start_value(new_start)
+                    state_module.set_viewport_start_time(new_start)
                     state_module.set_viewport_duration(new_duration)
                 end
 

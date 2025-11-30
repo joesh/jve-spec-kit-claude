@@ -35,11 +35,11 @@ function timeline_state.get_sequence_frame_rate()
     return 24
 end
 
-function timeline_state.get_playhead_value()
+function timeline_state.get_playhead_position()
     return timeline_state.playhead or 0
 end
 
-function timeline_state.set_playhead_value(value)
+function timeline_state.set_playhead_position(value)
     timeline_state.playhead = value
     table.insert(timeline_moves, value)
 end

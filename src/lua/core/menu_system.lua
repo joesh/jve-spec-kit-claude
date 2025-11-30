@@ -502,7 +502,7 @@ local function create_action_callback(command_name, params)
             end
 
             local timeline_state = timeline_panel.get_state()
-            local playhead_value = timeline_state.get_playhead_value()
+            local playhead_value = timeline_state.get_playhead_position()
             local selected_clips = timeline_state.get_selected_clips()
 
             local target_clips
@@ -594,7 +594,7 @@ local function create_action_callback(command_name, params)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local timeline_state = timeline_panel.get_state()
-            local playhead_value = timeline_state.get_playhead_value()
+            local playhead_value = timeline_state.get_playhead_position()
 
             local Command = require("command")
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -656,7 +656,7 @@ local function create_action_callback(command_name, params)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local timeline_state = timeline_panel.get_state()
-            local playhead_value = timeline_state.get_playhead_value()
+            local playhead_value = timeline_state.get_playhead_position()
 
             local Command = require("command")
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"

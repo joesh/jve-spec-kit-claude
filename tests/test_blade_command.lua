@@ -120,7 +120,7 @@ db = database.get_connection()
 command_manager.init(db, 'default_sequence', 'default_project')
 
 -- Stub timeline state
-timeline_state.get_playhead_value = function() return 0 end
+timeline_state.get_playhead_position = function() return 0 end
 timeline_state.get_sequence_frame_rate = function() return {fps_numerator=30, fps_denominator=1} end
 timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.get_project_id = function() return "default_project" end
@@ -167,7 +167,7 @@ print("=== Blade Command Tests ===\n")
 -- Scenario 1: No selection - split all clips under playhead
 reset_clips()
 timeline_state.set_selection({})
-timeline_state.set_playhead_value(1000) -- 1000ms = 30 frames
+timeline_state.set_playhead_position(1000) -- 1000ms = 30 frames
 
 -- Stub get_clips_at_time to return mock clips with ID and MS start/dur for test logic (before DB reload?)
 -- Wait, execute_batch_split takes clip_ids.
@@ -217,7 +217,7 @@ assert(clip_exists_at('track_v2', 1000), "Second segment of clip_c should exist"
 -- Scenario 2: Selection limits split targets
 reset_clips()
 timeline_state.set_selection({{id = 'clip_a'}})
-timeline_state.set_playhead_value(1000)
+timeline_state.set_playhead_position(1000)
 local selected_targets = timeline_state.get_clips_at_time(1000, {'clip_a'})
 assert(#selected_targets == 1, "Only selected clip should be targeted")
 before_count = clip_count()

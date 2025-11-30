@@ -86,8 +86,8 @@ function timeline_state.get_clips()
 end
 function timeline_state.get_sequence_id() return "default_sequence" end
 function timeline_state.get_sequence_frame_rate() return 30.0 end
-function timeline_state.get_playhead_value() return timeline_state.playhead_value end
-function timeline_state.set_playhead_value(time_ms) timeline_state.playhead_value = time_ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
 function timeline_state.push_viewport_guard() return 1 end
 function timeline_state.pop_viewport_guard() return 0 end
 function timeline_state.capture_viewport()
@@ -114,7 +114,7 @@ local function reset_timeline_state()
     timeline_state.selected_clips = {}
     timeline_state.selected_edges = {}
     timeline_state.selected_gaps = {}
-    timeline_state.playhead_value = 0
+    timeline_state.playhead_position = 0
 end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
@@ -192,7 +192,7 @@ end
 
 -- Test: Ripple delete removes clip and shifts downstream clips
 local original_playhead = 43210
-timeline_state.playhead_value = original_playhead
+timeline_state.playhead_position = original_playhead
 execute_ripple_delete({"clip_b"})
 
 local after_delete = clips_snapshot()
@@ -208,8 +208,8 @@ assert(clip_c.start_value == 1000, string.format("Clip C start_value expected 10
 -- Undo restores original state
 local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed for RippleDeleteSelection")
-assert(timeline_state.playhead_value == original_playhead,
-    string.format("Undo should restore playhead to %d, got %d", original_playhead, timeline_state.playhead_value))
+assert(timeline_state.playhead_position == original_playhead,
+    string.format("Undo should restore playhead to %d, got %d", original_playhead, timeline_state.playhead_position))
 
 local after_undo = clips_snapshot()
 assert(#after_undo == 3, "Expected 3 clips after undo")
@@ -240,7 +240,7 @@ db:exec("DELETE FROM media;")
 timeline_state.selected_clips = {}
 timeline_state.selected_edges = {}
 timeline_state.selected_gaps = {}
-timeline_state.playhead_value = 0
+timeline_state.playhead_position = 0
 
 local regression_specs = {
     {id = "clip_1", start = 0, duration = 500},   -- selected
@@ -309,7 +309,7 @@ reload_state_clips()
 local selection_before = {{id = "mt_v1_target"}}
 timeline_state.selected_clips = selection_before
 local selection_playhead = 24680
-timeline_state.playhead_value = selection_playhead
+timeline_state.playhead_position = selection_playhead
 
 execute_ripple_delete({"mt_v1_target"})
 
@@ -324,9 +324,9 @@ assert(undo_multi.success, undo_multi.error_message or "Undo failed for multi-tr
 assert(timeline_state.selected_clips and timeline_state.selected_clips[1]
     and timeline_state.selected_clips[1].id == "mt_v1_target",
     "Undo should restore original selection for ripple delete")
-assert(timeline_state.playhead_value == selection_playhead,
+assert(timeline_state.playhead_position == selection_playhead,
     string.format("Undo should restore playhead to %d, got %d",
-        selection_playhead, timeline_state.playhead_value))
+        selection_playhead, timeline_state.playhead_position))
 
 local restored_v2 = find_clip("mt_v2_post")
 assert(restored_v2.start_value == 2000,

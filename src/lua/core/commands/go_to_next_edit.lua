@@ -37,7 +37,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local points = collect_edit_points()
-        local playhead = timeline_state.get_playhead_value() or 0
+        local playhead = timeline_state.get_playhead_position() or 0
 
         local target = playhead
         for _, point in ipairs(points) do

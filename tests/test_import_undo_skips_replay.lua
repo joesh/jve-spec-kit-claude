@@ -44,8 +44,8 @@ function timeline_state.get_selected_clips() return {} end
 function timeline_state.get_selected_edges() return {} end
 function timeline_state.clear_edge_selection() end
 function timeline_state.clear_gap_selection() end
-function timeline_state.set_playhead_value(ms) timeline_state.playhead = ms end
-function timeline_state.get_playhead_value() return timeline_state.playhead end
+function timeline_state.set_playhead_position(ms) timeline_state.playhead = ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead end
 function timeline_state.get_project_id() return "default_project" end
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.reload_clips(sequence_id)

@@ -29,12 +29,12 @@ local mock_timeline_state = {
     viewport_duration_frames_value = 300
 }
 
-function mock_timeline_state.get_playhead_value()
-    return mock_timeline_state.playhead_value
+function mock_timeline_state.get_playhead_position()
+    return mock_timeline_state.playhead_position
 end
 
-function mock_timeline_state.set_playhead_value(time)
-    mock_timeline_state.playhead_value = time
+function mock_timeline_state.set_playhead_position(time)
+    mock_timeline_state.playhead_position = time
 end
 
 function mock_timeline_state.get_selected_clips()

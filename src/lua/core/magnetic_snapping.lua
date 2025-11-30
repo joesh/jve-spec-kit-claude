@@ -31,7 +31,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
     end
 
     -- Add playhead position as snap point
-    local playhead_time = state.get_playhead_value()
+    local playhead_time = state.get_playhead_position()
     
     if getmetatable(playhead_time) ~= Rational.metatable then
         error("magnetic_snapping: Playhead value must be a Rational object", 2)

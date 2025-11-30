@@ -101,8 +101,8 @@ local function snapshot_viewport(state)
 
     local start_value = 0
     local duration = frame_utils.default_frame_rate * 1000  -- fallback of ~1s
-    if state.get_viewport_start_value then
-        local ok, value = pcall(state.get_viewport_start_value)
+    if state.get_viewport_start_time then
+        local ok, value = pcall(state.get_viewport_start_time)
         if ok then
             start_value = value or start_value
         end
@@ -143,10 +143,10 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
             pcall(state.restore_viewport, prev)
         end
 
-        if state.get_playhead_value and state.set_viewport_start_value then
-            local playhead = state.get_playhead_value()
+        if state.get_playhead_position and state.set_viewport_start_time then
+            local playhead = state.get_playhead_position()
             if playhead then
-                state.set_viewport_start_value(playhead - (restore_duration / 2))
+                state.set_viewport_start_time(playhead - (restore_duration / 2))
             end
         end
 
@@ -195,8 +195,8 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
     elseif state.set_viewport_duration then
         state.set_viewport_duration(duration)
     end
-    if state.set_viewport_start_value then
-        state.set_viewport_start_value(start_value)
+    if state.set_viewport_start_time then
+        state.set_viewport_start_time(start_value)
     end
 
     print(string.format("🔍 Zoomed to fit: %.2f visible (start=%d, end=%d)", duration / 1000.0, start_value, max_end_time))
@@ -632,10 +632,10 @@ function keyboard_shortcuts.handle_key(event)
     if (key == KEY.Left or key == KEY.Right) and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
 <<<<<<< HEAD
-            local current_frame = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
+            local current_frame = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
 =======
             local frame_rate = get_active_frame_rate()
-            local current_time = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
+            local current_time = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
             local current_frame = frame_utils.time_to_frame(current_time, frame_rate)
 >>>>>>> eecc945 (Checkpoint: timebase migration progress and zoom-fit regression)
             local step_frames = modifier_shift and math.max(1, math.floor(frame_rate + 0.5)) or 1
@@ -663,7 +663,7 @@ function keyboard_shortcuts.handle_key(event)
                     timeline_state.set_playhead_value(mark_in)
                 end
             else
-                local playhead = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
+                local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
                 timeline_state.set_mark_in(playhead)
             end
             return true
@@ -678,7 +678,7 @@ function keyboard_shortcuts.handle_key(event)
                     timeline_state.set_playhead_value(mark_out)
                 end
             else
-                local playhead = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
+                local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
                 timeline_state.set_mark_out(playhead)
             end
             return true
@@ -690,7 +690,7 @@ function keyboard_shortcuts.handle_key(event)
             timeline_state.clear_marks()
             return true
         elseif not modifier_meta and not modifier_alt then
-            local playhead = timeline_state.get_playhead_value and timeline_state.get_playhead_value() or 0
+            local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
             local clips = timeline_state.get_clips and timeline_state.get_clips() or {}
             local best_clip = nil
             local best_priority = nil
@@ -909,7 +909,7 @@ function keyboard_shortcuts.handle_key(event)
     if key == KEY.B and modifier_meta then
         if timeline_state and command_manager and panel_active_timeline then
             local selected_clips = timeline_state.get_selected_clips()
-            local playhead_value = timeline_state.get_playhead_value()
+            local playhead_value = timeline_state.get_playhead_position()
 
             local target_clips
             if selected_clips and #selected_clips > 0 then
@@ -1030,7 +1030,7 @@ function keyboard_shortcuts.handle_key(event)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local Command = require("command")
-            local playhead_value = timeline_state.get_playhead_value()
+            local playhead_value = timeline_state.get_playhead_position()
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
             local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
@@ -1079,7 +1079,7 @@ function keyboard_shortcuts.handle_key(event)
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
             local Command = require("command")
-            local playhead_value = timeline_state.get_playhead_value()
+            local playhead_value = timeline_state.get_playhead_position()
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
             local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil

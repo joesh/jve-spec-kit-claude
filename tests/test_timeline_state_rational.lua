@@ -40,93 +40,97 @@ end
 
 -- Mock a minimal statement object for the playhead/selection query
 
-local mock_stmt = {}
+local mock_stmt_sequence = {
 
-mock_stmt.bind_value = function(idx, val) end
+    _results = {
 
-mock_stmt.exec = function() return true end
+        [0] = 48,   -- playhead_frame
 
-mock_stmt.next = function(self)
+        [1] = "[]", -- selected_clip_ids
 
-    if not self._next_called then
+        [2] = "[]", -- selected_edge_infos
 
-        self._next_called = true
+        [3] = 0,    -- view_start_frame
 
-        return true
+        [4] = 300,  -- view_duration_frames
 
-    end
+        [5] = 24,   -- fps_numerator
 
-    return false
+        [6] = 1,    -- fps_denominator
 
-end
+        [7] = nil,  -- mark_in_frame
 
-mock_stmt.value = function(idx)
+        [8] = nil,  -- mark_out_frame
 
-    -- Simulate data from the sequence query in timeline_state.init()
+    },
 
-    if idx == 0 then return 48 end -- playhead_frame
+    _next_called = false,
 
-    if idx == 1 then return "[]" end -- selected_clip_ids
+    bind_value = function(idx, val) end,
 
-    if idx == 2 then return "[]" end -- selected_edge_infos
+    exec = function() return true end,
 
-    if idx == 3 then return 0 end -- view_start_frame
+    next = function(self)
 
-    if idx == 4 then return 300 end -- view_duration_frames (10s at 30fps)
+        if not self._next_called then
 
-    if idx == 5 then return 24 end -- fps_numerator
+            self._next_called = true
 
-    if idx == 6 then return 1 end -- fps_denominator
+            return true
 
-    if idx == 7 then return nil end -- mark_in_frame
+        end
 
-    if idx == 8 then return nil end -- mark_out_frame
+        return false
 
-    return nil
+    end,
 
-end
+    value = function(self, idx) return self._results[idx] end,
 
-mock_stmt.finalize = function(self) self._next_called = nil end
+    finalize = function(self) self._next_called = false end,
 
-mock_stmt.last_error = function() return "mock error" end
+}
 
 
 
 -- Mock for project_id query
 
-local project_stmt_mock = {}
+local project_stmt_mock = {
 
-project_stmt_mock.bind_value = function(...) end
+    _next_called = false,
 
-project_stmt_mock.exec = function() return true end
+    bind_value = function(...) end,
 
-project_stmt_mock.next = function(self) -- Pass self explicitly
+    exec = function() return true end,
 
-    if not self._next_called then
+    next = function(self)
 
-        self._next_called = true
+        if not self._next_called then
 
-        return true
+            self._next_called = true
 
-    end
+            return true
 
-    return false
+        end
 
-end
+        return false
 
-project_stmt_mock.value = function(idx) return "default_project" end
+    end,
 
-project_stmt_mock.finalize = function(self) self._next_called = nil end
+    value = function(idx) return "default_project" end,
+
+    finalize = function(self) self._next_called = false end,
+
+}
 
 
 
 local mock_conn = {
 
-        prepare = function(self, sql)
+    prepare = function(self, sql)
 
-            if sql:find("SELECT playhead_frame") then
+        if sql:find("SELECT playhead_frame") then
 
-            return mock_stmt
+            return mock_stmt_sequence
 
         elseif sql:find("SELECT project_id") then
 
@@ -136,21 +140,38 @@ local mock_conn = {
 
         return nil -- Fallback for unmocked queries
 
-    end,    exec = function(sql) return true end,
+    end,
+
+    exec = function(sql) return true end,
+
     last_error = function() return "mock error" end,
+
 }
+
+
 
 db.get_connection = function() return mock_conn end
 
+
+
 -- Restore original db functions after tests (good practice)
+
 local function cleanup_db_mocks()
+
     db.load_tracks = original_load_tracks
+
     db.load_clips = original_load_clips
+
     db.get_connection = original_get_connection
+
 end
 
+
+
 -- Reset to an empty in-memory state
+
 timeline_state.reset()
+
 timeline_state.init() -- Initialize the state, loading default sequence data
 
 -- Playhead rational conversion round-trip (frames@24fps)

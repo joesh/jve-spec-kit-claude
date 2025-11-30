@@ -51,7 +51,7 @@ local function setup_db(path)
 
     -- Stub timeline_state for Command.save validation
     local timeline_state = require("ui.timeline.timeline_state")
-    timeline_state.get_playhead_value = function() return 0 end
+    timeline_state.get_playhead_position = function() return 0 end
     timeline_state.get_sequence_frame_rate = function() return 30 end
     timeline_state.get_sequence_id = function() return "default_sequence" end
 

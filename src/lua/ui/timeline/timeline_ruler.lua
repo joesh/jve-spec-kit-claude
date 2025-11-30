@@ -65,10 +65,10 @@ function M.create(widget, state_module)
         timeline.clear_commands(ruler.widget)
 
         -- Get viewport state
-        local viewport_start = state_module.get_viewport_start_value()
+        local viewport_start = state_module.get_viewport_start_time()
         local viewport_duration = state_module.get_viewport_duration()
         local viewport_end = viewport_start + viewport_duration
-        local playhead_value = state_module.get_playhead_value()
+        local playhead_value = state_module.get_playhead_position()
 
         -- Ruler background
         timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
@@ -252,7 +252,7 @@ function M.create(widget, state_module)
 
         if event_type == "press" then
             -- Check if clicking on playhead
-            local playhead_value = state_module.get_playhead_value()
+            local playhead_value = state_module.get_playhead_position()
             local playhead_x = state_module.time_to_pixel(playhead_value, width)
 
             if math.abs(x - playhead_x) < 10 then
@@ -290,8 +290,8 @@ function M.create(widget, state_module)
             if width and width > 0 then
                 local viewport_duration = state_module.get_viewport_duration()
                 local delta_time = (-horizontal / width) * viewport_duration
-                local new_start = state_module.get_viewport_start_value() + delta_time
-                state_module.set_viewport_start_value(new_start)
+                local new_start = state_module.get_viewport_start_time() + delta_time
+                state_module.set_viewport_start_time(new_start)
                 render()
             end
         end

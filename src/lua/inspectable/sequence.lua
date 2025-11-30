@@ -65,7 +65,7 @@ function SequenceInspectable:set(field, value)
         elseif field == "playhead_value" then
             timeline_state.set_playhead_value(value or 0)
         elseif field == "viewport_start_value" then
-            timeline_state.set_viewport_start_value(value or 0)
+            timeline_state.set_viewport_start_time(value or 0)
         elseif field == "viewport_duration" then
             timeline_state.set_viewport_duration(value or 0)
         end

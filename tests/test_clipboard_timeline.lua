@@ -75,8 +75,8 @@ function timeline_state.get_clip_by_id(id) return timeline_state.clip_lookup[id]
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.get_project_id() return timeline_state.project_id end
 function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
-function timeline_state.get_playhead_value() return timeline_state.playhead_value end
-function timeline_state.set_playhead_value(ms) timeline_state.playhead_value = ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(ms) timeline_state.playhead_position = ms end
 function timeline_state.reload_clips()
     reload_clips_into_state(timeline_state)
 end
@@ -127,7 +127,7 @@ local function setup_database(path)
     -- command_impl.register_commands(executors, undoers, db) -- Removed
     command_manager.init(db, 'default_sequence', 'default_project')
 
-    timeline_state.playhead_value = 0
+    timeline_state.playhead_position = 0
     timeline_state.selected_clips = {}
     timeline_state.clip_lookup = {}
     reload_clips_into_state(timeline_state)
@@ -143,7 +143,7 @@ local function reopen_database(path)
     -- command_impl.register_commands(executors, undoers, db)
     command_manager.init(db, 'default_sequence', 'default_project')
 
-    timeline_state.playhead_value = 0
+    timeline_state.playhead_position = 0
     timeline_state.selected_clips = {}
     timeline_state.clip_lookup = {}
     reload_clips_into_state(timeline_state)
@@ -221,7 +221,7 @@ assert(ok, err or "copy failed")
 local payload = clipboard.get()
 assert(payload and payload.kind == "timeline_clips", "clipboard should contain timeline payload")
 
-timeline_state.set_playhead_value(4000)
+timeline_state.set_playhead_position(4000)
 timeline_state.set_selection({})
 
 local paste_ok, paste_err = clipboard_actions.paste()
@@ -292,7 +292,7 @@ focus_manager.set_focused_panel("timeline")
 local copy_ok, copy_err = clipboard_actions.copy()
 assert(copy_ok, copy_err or "copy failed")
 
-timeline_state.set_playhead_value(16000000)
+timeline_state.set_playhead_position(16000000)
 timeline_state.set_selection({})
 local paste_result, paste_error = clipboard_actions.paste()
 assert(paste_result, paste_error or "paste failed")

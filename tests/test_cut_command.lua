@@ -67,8 +67,8 @@ function timeline_state.clear_edge_selection() timeline_state.selected_clips = {
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
 function timeline_state.reload_clips() load_clips_into_state() end
 function timeline_state.persist_state_to_db() end
-function timeline_state.get_playhead_value() return timeline_state.playhead_value end
-function timeline_state.set_playhead_value(time_ms) timeline_state.playhead_value = time_ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
 function timeline_state.get_clips()
     load_clips_into_state()
     return timeline_state.clips
@@ -203,7 +203,7 @@ assert(clip_exists("clip_c"), "clip_c should be restored after undo")
 
 -- Test 2: Cut with no selection is a no-op
 timeline_state.set_selection({})
-timeline_state.playhead_value = 1300
+timeline_state.playhead_position = 1300
 local before = clips_snapshot()
 result = command_manager.execute("Cut")
 assert(result.success, "Cut with no selection should still succeed")

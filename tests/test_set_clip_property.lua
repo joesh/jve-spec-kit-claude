@@ -20,8 +20,8 @@ local function stub_timeline_state()
     timeline_state.get_selected_clips = function() return {} end
     timeline_state.set_edge_selection = function(_) end
     timeline_state.get_selected_edges = function() return {} end
-    timeline_state.set_playhead_value = function(_) end
-    timeline_state.get_playhead_value = function() return 0 end
+    timeline_state.set_playhead_position = function(_) end
+    timeline_state.get_playhead_position = function() return 0 end
     timeline_state.reload_clips = function() end
     timeline_state.get_sequence_frame_rate = function() return 24.0 end
     timeline_state.get_sequence_audio_sample_rate = function() return 48000 end

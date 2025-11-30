@@ -1624,7 +1624,7 @@ function M.execute(command_or_name, params)
 
     -- Capture playhead and selection state BEFORE command execution (pre-state model)
     local timeline_state = require('ui.timeline.timeline_state')
-    command.playhead_value = timeline_state.get_playhead_value()
+    command.playhead_value = timeline_state.get_playhead_position()
     command.playhead_rate = timeline_state.get_sequence_frame_rate()
     local skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
     if not skip_selection_snapshot then

@@ -150,7 +150,7 @@ local function paste_timeline(payload)
 
     local project_id = (timeline_state.get_project_id and timeline_state.get_project_id())
         or payload.project_id or "default_project"
-    local playhead = (timeline_state.get_playhead_value and timeline_state.get_playhead_value()) or 0
+    local playhead = (timeline_state.get_playhead_position and timeline_state.get_playhead_position()) or 0
 
     local clips = payload.clips or {}
     if #clips == 0 then

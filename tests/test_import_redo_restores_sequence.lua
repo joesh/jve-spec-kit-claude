@@ -83,12 +83,12 @@ local function install_timeline_stub()
         end
     end
 
-    function timeline_state.set_playhead_value(value)
-        timeline_state.playhead_value = value
+    function timeline_state.set_playhead_position(value)
+        timeline_state.playhead_position = value
     end
 
-    function timeline_state.get_playhead_value()
-        return timeline_state.playhead_value
+    function timeline_state.get_playhead_position()
+        return timeline_state.playhead_position
     end
 
     function timeline_state.get_sequence_frame_rate()

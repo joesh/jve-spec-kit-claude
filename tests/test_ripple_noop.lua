@@ -14,8 +14,8 @@ local timeline_state = {
 
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.get_project_id() return "default_project" end
-function timeline_state.get_playhead_value() return 0 end
-function timeline_state.set_playhead_value(_) end
+function timeline_state.get_playhead_position() return 0 end
+function timeline_state.set_playhead_position(_) end
 function timeline_state.set_selection(_) end
 function timeline_state.get_selected_clips() return {} end
 function timeline_state.get_selected_edges() return {} end

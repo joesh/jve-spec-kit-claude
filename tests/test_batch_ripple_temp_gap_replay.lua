@@ -52,8 +52,8 @@ timeline_state.set_edge_selection = function(_) end
 timeline_state.set_gap_selection = function(_) end
 timeline_state.get_selected_clips = function() return {} end
 timeline_state.get_selected_edges = function() return {} end
-timeline_state.set_playhead_value = function(_) end
-timeline_state.get_playhead_value = function() return 0 end
+timeline_state.set_playhead_position = function(_) end
+timeline_state.get_playhead_position = function() return 0 end
 timeline_state.get_sequence_frame_rate = function() return {fps_numerator=30, fps_denominator=1} end
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.get_sequence_id = function() return "default_sequence" end

@@ -182,8 +182,8 @@ local viewport_guard = 0
 
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
-function timeline_state.get_playhead_value() return timeline_state.playhead_value end
-function timeline_state.set_playhead_value(time_ms) timeline_state.playhead_value = time_ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
 function timeline_state.get_selected_clips() return timeline_state.selected_clips end
 function timeline_state.get_selected_edges() return timeline_state.selected_edges end
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end

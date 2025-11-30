@@ -29,7 +29,7 @@ end
 
 local function current_view()
     return {
-        start_value = timeline_state.get_viewport_start_value(),
+        start_value = timeline_state.get_viewport_start_time(),
         duration = timeline_state.get_viewport_duration()
     }
 end

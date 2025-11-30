@@ -53,8 +53,8 @@ function timeline_state.clear_edge_selection() end
 function timeline_state.set_selection(_) end
 function timeline_state.reload_clips() end
 function timeline_state.persist_state_to_db() end
-function timeline_state.get_playhead_value() return timeline_state.playhead_value end
-function timeline_state.set_playhead_value(time_ms) timeline_state.playhead_value = time_ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
 function timeline_state.get_clips() return timeline_state.clips end
 
 local viewport_guard = 0
@@ -104,13 +104,13 @@ print("=== Timeline Navigation Command Tests ===\n")
 
 local result = command_manager.execute("GoToStart")
 assert(result.success == true, "GoToStart should succeed")
-assert(timeline_state.playhead_value == 0, "GoToStart must set playhead to 0")
+assert(timeline_state.playhead_position == 0, "GoToStart must set playhead to 0")
 
-timeline_state.playhead_value = 321 -- ensure we move again
+timeline_state.playhead_position = 321 -- ensure we move again
 
 result = command_manager.execute("GoToEnd")
 assert(result.success == true, "GoToEnd should succeed")
-assert(timeline_state.playhead_value == 3500,
-    string.format("GoToEnd must set playhead to timeline end (expected 3500, got %d)", timeline_state.playhead_value))
+assert(timeline_state.playhead_position == 3500,
+    string.format("GoToEnd must set playhead to timeline end (expected 3500, got %d)", timeline_state.playhead_position))
 
 print("✅ GoToStart/GoToEnd navigation commands adjust playhead correctly")

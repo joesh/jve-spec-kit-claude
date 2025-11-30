@@ -111,21 +111,16 @@ function timeline_state.get_clips()
 end
 function timeline_state.get_sequence_id() return "default_sequence" end
 function timeline_state.get_project_id() return "default_project" end
-function timeline_state.get_playhead_value() return timeline_state.playhead_value end
-function timeline_state.set_playhead_value(t) timeline_state.playhead_value = t end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(t) timeline_state.playhead_position = t end
 function timeline_state.push_viewport_guard() return 1 end
 function timeline_state.pop_viewport_guard() return 0 end
 function timeline_state.capture_viewport() return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 30.0} end
 function timeline_state.restore_viewport(_) end
-function timeline_state.get_viewport_start_value() return 0 end
+function timeline_state.get_viewport_start_time() return 0 end
 function timeline_state.get_viewport_duration_frames_value() return 240 end
-function timeline_state.set_viewport_start_value(_) end
+function timeline_state.set_viewport_start_time(_) end
 function timeline_state.set_viewport_duration_frames_value(_) end
--- Legacy aliases for any remaining callers
-timeline_state.get_viewport_start_value = timeline_state.get_viewport_start_value
-timeline_state.get_viewport_duration_frames_value = timeline_state.get_viewport_duration_frames_value
-timeline_state.set_viewport_start_value = timeline_state.set_viewport_start_value
-timeline_state.set_viewport_duration_frames_value = timeline_state.set_viewport_duration_frames_value
 function timeline_state.set_dragging_playhead(_) end
 function timeline_state.is_dragging_playhead() return false end
 function timeline_state.get_selected_gaps() return {} end

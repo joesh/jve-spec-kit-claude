@@ -151,7 +151,7 @@ assert(db:exec(seed))
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.reload_clips = function() end
-timeline_state.set_playhead_value = function(_) end
+timeline_state.set_playhead_position = function(_) end
 timeline_state.capture_viewport = function() return {start_value = 0, duration_value = 3000, timebase_type = "video_frames", timebase_rate = 30.0} end
 timeline_state.push_viewport_guard = function() end
 timeline_state.pop_viewport_guard = function() end

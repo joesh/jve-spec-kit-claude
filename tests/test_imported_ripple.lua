@@ -47,8 +47,8 @@ local function install_timeline_stub()
         return timeline_state.sequence_id
     end
 
-    function timeline_state.get_playhead_value()
-        return timeline_state.playhead_value
+    function timeline_state.get_playhead_position()
+        return timeline_state.playhead_position
     end
 
     function timeline_state.get_sequence_frame_rate()
@@ -58,8 +58,8 @@ local function install_timeline_stub()
         return timeline_state.sequence_frame_rate
     end
 
-    function timeline_state.set_playhead_value(ms)
-        timeline_state.playhead_value = ms
+    function timeline_state.set_playhead_position(ms)
+        timeline_state.playhead_position = ms
     end
 
     function timeline_state.get_selected_clips()
@@ -99,8 +99,8 @@ local function install_timeline_stub()
         return nil
     end
 
-    function timeline_state.set_viewport_start_value(ms)
-        timeline_state.viewport_start_value = ms
+    function timeline_state.set_viewport_start_time(ms)
+        timeline_state.viewport_start_time = ms
     end
 
     function timeline_state.set_viewport_duration_frames_value(ms)
@@ -109,7 +109,7 @@ local function install_timeline_stub()
 
     function timeline_state.capture_viewport()
         return {
-            start_value = timeline_state.viewport_start_value,
+            start_time = timeline_state.viewport_start_time,
             duration_value = timeline_state.viewport_duration_frames_value,
         }
     end
@@ -118,8 +118,8 @@ local function install_timeline_stub()
         if not snapshot then
             return
         end
-        if snapshot.start_value then
-            timeline_state.viewport_start_value = snapshot.start_value
+        if snapshot.start_time then
+            timeline_state.viewport_start_time = snapshot.start_time
         end
         if snapshot.duration or snapshot.duration_value then
             timeline_state.viewport_duration_frames_value = snapshot.duration_value or snapshot.duration

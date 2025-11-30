@@ -84,7 +84,7 @@ command_impl.register_commands(executors, undoers, db)
 command_manager.init(db, 'default_sequence', 'default_project')
 
 local original_playhead = 8888
-timeline_state.set_playhead_value(original_playhead)
+timeline_state.set_playhead_position(original_playhead)
 
 local cmd = Command.create("RippleDeleteSelection", "default_project")
 cmd:set_parameter("sequence_id", "default_sequence")
@@ -95,7 +95,7 @@ assert(exec_result.success, exec_result.error_message or "RippleDeleteSelection 
 local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed for ripple delete")
 
-local restored = timeline_state.get_playhead_value()
+local restored = timeline_state.get_playhead_position()
 assert(restored == original_playhead,
     string.format("Undo should restore playhead to %d, got %d", original_playhead, restored))
 
