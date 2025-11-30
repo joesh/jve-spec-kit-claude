@@ -311,9 +311,6 @@ if mount_result and mount_result.success then
     -- Wire up timeline to inspector
     timeline_panel_mod.set_inspector(view)
 
-    -- Wire up timeline to project browser for media insertion
-    timeline_panel_mod.set_project_browser(project_browser_mod)
-
     -- Wire up project browser to timeline for insert button
     project_browser_mod.set_timeline_panel(timeline_panel_mod)
     project_browser_mod.set_viewer_panel(viewer_panel_mod)

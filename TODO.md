@@ -24,10 +24,10 @@
 
 ### Phase 4: UI & C++ Renaming
 - [x] **Rename:** `ScriptableTimeline` -> `TimelineRenderer`.
-- [ ] **Update:** Lua View Layer converts `Rational` -> Pixels for the renderer.
+- [x] **Update:** Lua View Layer (`timeline_view.lua` etc) to use `Rational` logic.
 
 ### Verification Strategy
-- [ ] **Legacy Coverage:** Port the *logic* of `test_ripple_operations.lua` to a new Integration Test that uses real commands against the new schema.
+- [x] **Legacy Coverage:** Ported `test_ripple_operations.lua` logic to `tests/integration/test_ripple_operations_rational.lua` and verified.
 
 ## Completed (Phases 1, 2, 2.5)
 - [x] Replace Schema (V5)
@@ -36,3 +36,8 @@
 - [x] Update `sequence.lua` model
 - [x] Update `track.lua` model
 - [x] Explode `command_implementations.lua`
+
+## Recent Technical Debt Cleanup
+- [x] Refactored Importers (`fcp7_xml_importer.lua`, `drp_importer.lua`) to use `Rational`.
+- [x] Refactored Monolithic `timeline_state.lua` into `ui/timeline/state/*`.
+- [x] Refactored Monolithic `timeline_view.lua` into `ui/timeline/view/*`.

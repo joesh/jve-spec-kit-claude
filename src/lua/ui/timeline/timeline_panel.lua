@@ -148,12 +148,6 @@ function M.set_inspector(_)
     -- Inspector updates are routed through selection_hub in layout wiring.
 end
 
-function M.set_project_browser(browser)
-    if state then
-        state.set_project_browser(browser)
-    end
-end
-
 function M.get_state()
     return timeline_state  -- Return the module, not the local state variable
 end
@@ -895,7 +889,6 @@ function M.create()
     -- Create rubber band for drag selection (parented to splitter so it can span both views)
     -- Note: rubber band starts hidden (QRubberBand::hide() called in C++)
     local rubber_band = qt_constants.WIDGET.CREATE_RUBBER_BAND(vertical_splitter)
-    state.set_rubber_band(rubber_band)  -- Store in state for access from timeline views
 
     -- Panel drag coordination callbacks
     -- Called by view during drag to update rubber band geometry
