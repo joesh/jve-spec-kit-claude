@@ -14,17 +14,38 @@ local function load_main_schema(db_conn)
         error("FATAL: No database connection provided to load main schema")
     end
 
-    local schema_path = "./src/core/persistence/schema.sql"
-    local file = io.open(schema_path, "r")
+    local schema_path = "src/core/persistence/schema.sql"
+
+    -- Attempt to resolve schema_path relative to the project root
+    -- This relies on `core.database` being loaded, and `package.path` pointing to `src/lua`
+    local project_root = nil
+    local core_db_path = package.searchpath("core.database", package.path)
+    if core_db_path then
+        -- core_db_path might be .../src/lua/core/database.lua
+        -- project_root would be .../
+        local root = core_db_path:match("(.*)/src/lua/core/database%.lua")
+        if root then
+            project_root = root .. "/"
+        end
+    end
+
+    if not project_root then
+        -- Fallback: Assume current working directory is project root
+        project_root = "./"
+    end
+    
+    local absolute_schema_path = project_root .. schema_path
+
+    local file = io.open(absolute_schema_path, "r")
     if not file then
-        error(string.format("FATAL: Missing main schema file '%s'", schema_path))
+        error(string.format("FATAL: Missing main schema file '%s'", absolute_schema_path))
     end
     local sql = file:read("*a")
     file:close()
 
     local ok, err = db_conn:exec(sql)
     if not ok then
-        error(string.format("FATAL: Failed to apply main schema %s: %s", schema_path, tostring(err)))
+        error(string.format("FATAL: Failed to apply main schema %s: %s", absolute_schema_path, tostring(err)))
     end
 end
 

@@ -24,6 +24,8 @@ os.execute("mkdir -p /tmp/jve")
 database.init(db_path)
 local db = database.get_connection()
 db:exec(require('import_schema'))
+db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_insert;")
+db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 
 -- Insert Project/Sequence
 local now = os.time()
@@ -40,6 +42,22 @@ db:exec([[
 ]])
 
 command_manager.init(db, 'sequence', 'project')
+
+-- Register Overwrite Command
+local registry = require('core.command_registry')
+local overwrite_cmd = require('core.commands.overwrite')
+-- Pass dummy tables, then register with manager
+local ret = overwrite_cmd.register({}, {}, db, command_manager.set_last_error)
+command_manager.register_executor("Overwrite", ret.executor, ret.undoer)
+command_manager.register_executor("UndoOverwrite", ret.executor, ret.undoer) -- UndoOverwrite usually maps to same logic if handled internally or separate?
+-- Overwrite.lua defines command_executors["UndoOverwrite"] = command_undoers["Overwrite"]
+-- So ret.undoer is the undo function.
+-- But command_manager.execute_undo calls the UNDOER associated with the command type "Overwrite".
+-- So register_executor("Overwrite", exec, undo) is enough.
+-- BUT if explicit "UndoOverwrite" command is used...
+-- The command_manager uses: `undoer = registry.get_undoer(cmd.type)`.
+-- So valid.
+
 
 -- Create Media
 local media = Media.create({
@@ -62,6 +80,8 @@ local clip_existing = Clip.create("Existing", "media_1", {
     duration = Rational.new(100, 24, 1),
     source_in = Rational.new(0, 24, 1),
     source_out = Rational.new(100, 24, 1),
+    rate_num = 24,
+    rate_den = 1,
     enabled = true
 })
 clip_existing:save(db)

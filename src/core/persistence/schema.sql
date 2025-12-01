@@ -264,7 +264,7 @@ BEGIN
               (CAST(c.timeline_start_frame AS REAL) * c.fps_denominator / c.fps_numerator) + 0.000001
             )
           )
-    ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
+    ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: NewStart=' || NEW.timeline_start_frame)
     END;
 END;
 

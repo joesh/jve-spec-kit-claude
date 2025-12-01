@@ -125,6 +125,36 @@ function Rational:rescale_ceil(target_fps_num, target_fps_den)
     return Rational.new(new_frames, target_fps_num, target_fps_den)
 end
 
+--- Hydrate a value into a Rational object.
+-- Handles numbers (using default rate), plain tables (deserialized), and existing Rationals.
+-- @param val number|table|nil
+-- @param fps_num integer (Optional) Default FPS numerator for number conversion
+-- @param fps_den integer (Optional) Default FPS denominator
+-- @return Rational|nil
+function Rational.hydrate(val, fps_num, fps_den)
+    if not val then return nil end
+    
+    -- If it's already a Rational (has methods), return it
+    if getmetatable(val) == Rational_mt then
+        return val
+    end
+
+    -- If it's a plain table with frames (deserialized JSON)
+    if type(val) == "table" and val.frames then
+        return Rational.new(val.frames, val.fps_numerator or fps_num or 30, val.fps_denominator or fps_den or 1)
+    end
+
+    -- If it's a number, treat as integer frames (legacy compat) or seconds? 
+    -- V5 convention: Number inputs in commands/models are usually Frames unless specified otherwise.
+    -- But in UI layer (legacy), numbers often meant Milliseconds.
+    -- Context matters. BUT safe hydration usually assumes Frames for consistency with DB.
+    if type(val) == "number" then
+        return Rational.new(val, fps_num or 30, fps_den or 1)
+    end
+
+    return nil
+end
+
 --- Add two Rational times.
 -- If rates differ, rhs is rescaled to lhs rate.
 -- @param other Rational

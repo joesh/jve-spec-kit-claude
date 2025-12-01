@@ -163,6 +163,18 @@ function Database:exec(sql)
     return true
 end
 
+function Database:begin_transaction()
+    return self:exec("BEGIN TRANSACTION;")
+end
+
+function Database:commit_transaction()
+    return self:exec("COMMIT;")
+end
+
+function Database:rollback_transaction()
+    return self:exec("ROLLBACK;")
+end
+
 -- Statement methods (declaration is at top of file)
 
 function Statement:bind_value(index, value)

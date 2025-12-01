@@ -512,4 +512,193 @@ function M.delete_clips_by_id(command, sequence_id, clip_ids)
     end
 end
 
+-- Applies a list of mutations (from clip_mutator) to the database.
+-- Caller must handle transaction.
+function M.apply_mutations(db, mutations)
+    if not db then
+        return false, "No database connection provided for apply_mutations"
+    end
+    if not mutations or #mutations == 0 then
+        return true
+    end
+
+    for _, mut in ipairs(mutations) do
+        -- print(string.format("DEBUG: Mutation %s id=%s start=%s dur=%s", mut.type, tostring(mut.clip_id), tostring(mut.timeline_start_frame), tostring(mut.duration_frames)))
+        if mut.type == "update" then
+            local stmt = db:prepare([[
+                UPDATE clips
+                SET timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
+                WHERE id = ?
+            ]])
+            if not stmt then
+                return false, "Failed to prepare UPDATE statement for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+            end
+            stmt:bind_value(1, mut.timeline_start_frame)
+            stmt:bind_value(2, mut.duration_frames)
+            stmt:bind_value(3, mut.source_in_frame)
+            stmt:bind_value(4, mut.source_out_frame)
+            stmt:bind_value(5, mut.enabled)
+            stmt:bind_value(6, mut.clip_id)
+            local ok = stmt:exec()
+            stmt:finalize()
+            if not ok then
+                return false, "Failed to execute UPDATE for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+            end
+            if db:changes() == 0 then
+                return false, "UPDATE affected 0 rows for clip " .. tostring(mut.clip_id)
+            end
+        elseif mut.type == "delete" then
+            local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+            if not stmt then
+                return false, "Failed to prepare DELETE statement for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+            end
+            stmt:bind_value(1, mut.clip_id)
+            local ok = stmt:exec()
+            stmt:finalize()
+            if not ok then
+                return false, "Failed to execute DELETE for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+            end
+        elseif mut.type == "insert" then
+            local stmt = db:prepare([[
+                INSERT INTO clips (
+                    id, project_id, clip_kind, name, track_id, media_id,
+                    timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                    fps_numerator, fps_denominator, enabled,
+                    created_at, modified_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]])
+            if not stmt then
+                return false, "Failed to prepare INSERT statement for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+            end
+            stmt:bind_value(1, mut.clip_id)
+            stmt:bind_value(2, mut.project_id)
+            stmt:bind_value(3, mut.clip_kind)
+            stmt:bind_value(4, mut.name)
+            stmt:bind_value(5, mut.track_id)
+            stmt:bind_value(6, mut.media_id)
+            stmt:bind_value(7, mut.timeline_start_frame)
+            stmt:bind_value(8, mut.duration_frames)
+            stmt:bind_value(9, mut.source_in_frame)
+            stmt:bind_value(10, mut.source_out_frame)
+            stmt:bind_value(11, mut.fps_numerator)
+            stmt:bind_value(12, mut.fps_denominator)
+            stmt:bind_value(13, mut.enabled)
+            stmt:bind_value(14, mut.created_at or os.time())
+            stmt:bind_value(15, mut.modified_at or os.time())
+            local ok = stmt:exec()
+            stmt:finalize()
+            if not ok then
+                return false, "Failed to execute INSERT for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+            end
+        else
+            return false, "Unknown mutation type: " .. tostring(mut.type)
+        end
+    end
+
+    return true
+end
+
+function M.revert_mutations(db, mutations, command, sequence_id)
+    if not db then return false, "No database connection" end
+    if not mutations or #mutations == 0 then return true end
+
+    -- Revert in reverse order
+    for i = #mutations, 1, -1 do
+        local mut = mutations[i]
+        if mut.type == "insert" then
+            -- Undo Insert = Delete
+            local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+            if not stmt then return false, "Failed to prepare undo insert" end
+            stmt:bind_value(1, mut.clip_id)
+            local ok = stmt:exec()
+            stmt:finalize()
+            if not ok then return false, "Failed to execute undo insert" end
+            
+            if command then
+                M.add_delete_mutation(command, sequence_id, mut.clip_id)
+            end
+            
+        elseif mut.type == "delete" then
+            -- Undo Delete = Insert (restore previous)
+            local prev = mut.previous
+            if not prev then return false, "Cannot undo delete: missing previous state" end
+            
+            local stmt = db:prepare([[
+                INSERT INTO clips (
+                    id, project_id, clip_kind, name, track_id, media_id,
+                    timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                    fps_numerator, fps_denominator, enabled,
+                    created_at, modified_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]])
+            if not stmt then return false, "Failed to prepare undo delete" end
+            
+            -- Helper to extract frame count
+            local function val_frames(v)
+                if type(v) == "table" and v.frames then return v.frames end
+                return v or 0
+            end
+
+            stmt:bind_value(1, prev.id)
+            stmt:bind_value(2, prev.project_id)
+            stmt:bind_value(3, prev.clip_kind)
+            stmt:bind_value(4, prev.name)
+            stmt:bind_value(5, prev.track_id)
+            stmt:bind_value(6, prev.media_id)
+            stmt:bind_value(7, val_frames(prev.timeline_start or prev.start_value))
+            stmt:bind_value(8, val_frames(prev.duration))
+            stmt:bind_value(9, val_frames(prev.source_in))
+            stmt:bind_value(10, val_frames(prev.source_out))
+            stmt:bind_value(11, prev.fps_numerator or prev.rate and prev.rate.fps_numerator or 30)
+            stmt:bind_value(12, prev.fps_denominator or prev.rate and prev.rate.fps_denominator or 1)
+            stmt:bind_value(13, prev.enabled and 1 or 0)
+            stmt:bind_value(14, prev.created_at or os.time())
+            stmt:bind_value(15, prev.modified_at or os.time())
+            
+            local ok = stmt:exec()
+            stmt:finalize()
+            if not ok then return false, "Failed to execute undo delete: " .. (db:last_error() or "") end
+            
+            if command then
+                 M.add_insert_mutation(command, sequence_id, {id = prev.id})
+            end
+
+        elseif mut.type == "update" then
+            -- Undo Update = Update to previous
+            local prev = mut.previous
+            if not prev then return false, "Cannot undo update: missing previous state" end
+
+            local stmt = db:prepare([[
+                UPDATE clips
+                SET timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
+                WHERE id = ?
+            ]])
+            if not stmt then return false, "Failed to prepare undo update" end
+
+            local function val_frames(v)
+                if type(v) == "table" and v.frames then return v.frames end
+                return v or 0
+            end
+
+            stmt:bind_value(1, val_frames(prev.timeline_start or prev.start_value))
+            stmt:bind_value(2, val_frames(prev.duration))
+            stmt:bind_value(3, val_frames(prev.source_in))
+            stmt:bind_value(4, val_frames(prev.source_out))
+            stmt:bind_value(5, prev.enabled and 1 or 0)
+            stmt:bind_value(6, prev.id)
+            
+            local ok = stmt:exec()
+            stmt:finalize()
+            if not ok then return false, "Failed to execute undo update" end
+            
+            if command then
+                M.add_update_mutation(command, sequence_id, {clip_id = prev.id})
+            end
+        end
+    end
+    return true
+end
+
 return M

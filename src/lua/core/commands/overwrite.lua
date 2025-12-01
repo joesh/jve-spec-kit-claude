@@ -3,6 +3,7 @@ local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
 local clip_mutator = require("core.clip_mutator")
+local uuid = require("uuid")
 local timeline_state
 do
     local status, mod = pcall(require, 'ui.timeline.timeline_state')
@@ -10,73 +11,6 @@ do
 end
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local function append_actions(target, actions)
-        if not actions or target == nil then
-            return
-        end
-        for _, action in ipairs(actions) do
-            target[#target + 1] = action
-        end
-    end
-
-    local function record_occlusion_actions(command, sequence_id, actions)
-        if not actions or #actions == 0 then
-            return
-        end
-        for _, action in ipairs(actions) do
-            if action.type == "delete" and action.clip and action.clip.id then
-                command_helper.add_delete_mutation(command, sequence_id, action.clip.id)
-            elseif action.type == "trim" and action.after then
-                local update = command_helper.clip_update_payload(action.after, sequence_id)
-                if update then
-                    command_helper.add_update_mutation(command, update.track_sequence_id or sequence_id, update)
-                end
-            elseif action.type == "insert" and action.clip then
-                local insert_payload = command_helper.clip_insert_payload(action.clip, sequence_id)
-                if insert_payload then
-                    command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
-                end
-            end
-        end
-    end
-
-    local function revert_occlusion_actions(actions, command, sequence_id)
-        if not actions or #actions == 0 then
-            return
-        end
-        -- Revert in reverse order
-        for i = #actions, 1, -1 do
-            local action = actions[i]
-            if action.type == 'trim' then
-                local restored = command_helper.restore_clip_state(action.before)
-                if restored and command then
-                    restored:save(db, {skip_occlusion = true})
-                    local payload = command_helper.clip_update_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
-                    if payload then
-                        command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                    end
-                end
-            elseif action.type == 'delete' then
-                local restored = command_helper.restore_clip_state(action.clip or action.before)
-                if restored and command then
-                    restored:save(db, {skip_occlusion = true})
-                    local payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
-                    if payload then
-                        command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                    end
-                end
-            elseif action.type == 'insert' then
-                local state = action.clip
-                if state then
-                    local clip = Clip.load_optional(state.id, db)
-                    if clip and clip:delete(db) and command then
-                        command_helper.add_delete_mutation(command, sequence_id or state.owner_sequence_id or state.track_sequence_id, state.id)
-                    end
-                end
-            end
-        end
-    end
-
     command_executors["Overwrite"] = function(command)
         local dry_run = command:get_parameter("dry_run")
         if not dry_run then
@@ -120,19 +54,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             seq_stmt:finalize()
         end
 
-        local function hydrate(val)
-            if type(val) == "table" and val.frames then
-                return Rational.new(val.frames, val.fps_numerator or seq_fps_num, val.fps_denominator or seq_fps_den)
-            elseif type(val) == "number" then
-                return Rational.new(val, seq_fps_num, seq_fps_den)
-            end
-            return nil
-        end
-        
-        local overwrite_time_rat = hydrate(overwrite_time_raw)
-        local duration_rat = hydrate(duration_raw)
-        local source_in_rat = hydrate(source_in_raw)
-        local source_out_rat = hydrate(source_out_raw)
+        local overwrite_time_rat = Rational.hydrate(overwrite_time_raw, seq_fps_num, seq_fps_den)
+        local duration_rat = Rational.hydrate(duration_raw, seq_fps_num, seq_fps_den)
+        local source_in_rat = Rational.hydrate(source_in_raw, seq_fps_num, seq_fps_den)
+        local source_out_rat = Rational.hydrate(source_out_raw, seq_fps_num, seq_fps_den)
 
         if master_clip and (not media_id or media_id == "") then
             media_id = master_clip.media_id
@@ -160,13 +85,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
+        -- Re-hydrate final values just in case they were nil
+        overwrite_time_rat = Rational.hydrate(overwrite_time_rat, seq_fps_num, seq_fps_den)
+        duration_rat = Rational.hydrate(duration_rat, seq_fps_num, seq_fps_den)
+        source_in_rat = Rational.hydrate(source_in_rat, seq_fps_num, seq_fps_den)
+        source_out_rat = Rational.hydrate(source_out_rat, seq_fps_num, seq_fps_den)
+
         if not overwrite_time_rat or not duration_rat or duration_rat.frames <= 0 or not source_out_rat then
             print("WARNING: Overwrite: Missing or invalid overwrite_time, duration, or source range")
             return false
         end
 
         -- Resolve Occlusions (Trim/Delete existing clips)
-        local ok_occ, err_occ, actions = clip_mutator.resolve_occlusions(db, {
+        local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_occlusions(db, {
             track_id = track_id,
             timeline_start = overwrite_time_rat,
             duration = duration_rat,
@@ -177,15 +108,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             print(string.format("ERROR: Overwrite: Failed to resolve occlusions: %s", tostring(err_occ)))
             return false
         end
-        
-        if actions and #actions > 0 then
-            record_occlusion_actions(command, sequence_id, actions)
-            command:set_parameter("occlusion_actions", actions)
-        end
-
-        -- Reuse existing clip ID if we completely overwrote exactly one clip?
-        -- The legacy logic tried to be smart. V5 simplifies: insert new clip.
-        -- clip_mutator deleted what was under.
         
         local existing_clip_id = command:get_parameter("clip_id")
         local clip_opts = {
@@ -205,9 +127,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             rate_den = seq_fps_den,
         }
         local clip_name = command:get_parameter("clip_name") or (master_clip and master_clip.name) or "Overwrite Clip"
-        local clip = Clip.create(clip_name, media_id, clip_opts)
+        local clip_to_insert = Clip.create(clip_name, media_id, clip_opts)
 
-        command:set_parameter("clip_id", clip.id)
+        command:set_parameter("clip_id", clip_to_insert.id)
         if master_clip_id and master_clip_id ~= "" then
             command:set_parameter("master_clip_id", master_clip_id)
         end
@@ -217,56 +139,67 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("project_id", master_clip.project_id)
         end
 
-        -- Save with skip_occlusion=true because we already resolved it
-        local saved, save_actions = clip:save(db, {skip_occlusion = true})
-        if saved then
-            if #copied_properties > 0 then
-                command_helper.delete_properties_for_clip(clip.id)
-                if not command_helper.insert_properties_for_clip(clip.id, copied_properties) then
-                    print(string.format("WARNING: Overwrite: Failed to copy properties from master clip %s", tostring(master_clip_id)))
-                end
-            end
-            
-            local advance_playhead = command:get_parameter("advance_playhead")
-            if advance_playhead and timeline_state then
-                timeline_state.set_playhead_position(overwrite_time_rat + duration_rat)
-            end
+        -- Add the new clip to the planned mutations
+        table.insert(planned_mutations, clip_mutator.plan_insert(clip_to_insert))
 
-            local insert_payload = command_helper.clip_insert_payload(clip, sequence_id)
-            if insert_payload then
-                command_helper.add_insert_mutation(command, insert_payload.track_sequence_id, insert_payload)
-            end
-
-            command:set_parameter("__skip_sequence_replay_on_undo", true)
-
-            print(string.format("✅ Overwrote at %s", tostring(overwrite_time_rat)))
-            return true
-        else
-            print("WARNING: Overwrite: Failed to save clip")
-            return false
+        -- Apply all planned mutations within the transaction
+        local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
+        if not ok_apply then
+            return false, "Failed to apply clip_mutator actions: " .. tostring(apply_err)
         end
+        
+        -- Record mutations for undo AFTER successful commit
+        command:set_parameter("executed_mutations", planned_mutations)
+        
+        if #copied_properties > 0 then
+            command_helper.delete_properties_for_clip(clip_to_insert.id)
+            if not command_helper.insert_properties_for_clip(clip_to_insert.id, copied_properties) then
+                print(string.format("WARNING: Overwrite: Failed to copy properties from master clip %s", tostring(master_clip_id)))
+            end
+        end
+        
+        local advance_playhead = command:get_parameter("advance_playhead")
+        if advance_playhead and timeline_state then
+            timeline_state.set_playhead_position(overwrite_time_rat + duration_rat)
+        end
+
+        print(string.format("✅ Overwrote at %s (id: %s)",
+            tostring(overwrite_time_rat), tostring(clip_to_insert.id)))
+        return true
     end
 
     command_undoers["Overwrite"] = function(command)
         print("Undoing Overwrite command")
+        local executed_mutations = command:get_parameter("executed_mutations") or {}
         local sequence_id = command:get_parameter("sequence_id")
-        local occlusion_actions = command:get_parameter("occlusion_actions") or {}
-        local clip_id = command:get_parameter("clip_id")
-
-        -- Delete the inserted clip
-        if clip_id and clip_id ~= "" then
-            command_helper.delete_clips_by_id(command, sequence_id, {clip_id})
+        
+        if not executed_mutations or #executed_mutations == 0 then
+            print("WARNING: UndoOverwrite: No executed mutations to undo.")
+            return false
         end
 
-        -- Restore occluded clips
-        if occlusion_actions and #occlusion_actions > 0 then
-            revert_occlusion_actions(occlusion_actions, command, sequence_id)
-        end
-
-        print("✅ Undo Overwrite: Restored overlapped clips and selection state")
-        return true
-    end
-
+                local started, begin_err = db:begin_transaction()
+                if not started then
+                    print("ERROR: UndoOverwrite: Failed to begin transaction: " .. tostring(begin_err))
+                    return false
+                end
+        
+                local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+                if not ok then
+                    db:rollback_transaction(started)
+                    print("ERROR: UndoOverwrite: Failed to revert mutations: " .. tostring(err))
+                    return false
+                end
+        
+                local ok_commit, commit_err = db:commit_transaction(started)
+                if not ok_commit then
+                    db:rollback_transaction(started)
+                    return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+                end
+        
+                print("✅ Undo Overwrite: Reverted all changes")
+                return true
+            end
     command_executors["UndoOverwrite"] = command_undoers["Overwrite"]
 
     return {
