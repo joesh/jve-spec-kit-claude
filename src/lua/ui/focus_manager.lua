@@ -233,8 +233,14 @@ function M.focus_panel(panel_id)
         return false
     end
 
+    -- Prefer the first declared focus widget (e.g., the tree inside the panel)
+    local target_widget = panel.widget
+    if panel.focus_widgets and panel.focus_widgets[1] then
+        target_widget = panel.focus_widgets[1]
+    end
+
     -- Qt will trigger the focus event which will call our handler
-    qt_set_focus(panel.widget)
+    qt_set_focus(target_widget)
     return true
 end
 
