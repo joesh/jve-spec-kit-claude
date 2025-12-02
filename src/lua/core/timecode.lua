@@ -94,11 +94,16 @@ end
 
 -- Format ruler label
 function M.format_ruler_label(time_ms, frame_rate, hint)
+    local time_obj = time_ms
+    -- Ruler callers pass milliseconds as numbers; normalize to Rational seconds for formatting
+    if type(time_ms) == "number" then
+        local rate = frame_utils.normalize_rate(frame_rate)
+        time_obj = Rational.from_seconds(time_ms / 1000.0, rate.fps_numerator, rate.fps_denominator)
+    end
+
     if hint == "frames" or not hint then
         -- Full Timecode
-        local r = Rational.from_seconds(time_ms / 1000.0) -- Approx
-        -- Better: use frame_utils
-        return frame_utils.format_timecode(time_ms, frame_rate)
+        return frame_utils.format_timecode(time_obj, frame_rate)
     elseif hint == "seconds" then
         -- MM:SS
         local seconds = math.floor(time_ms / 1000.0)

@@ -62,6 +62,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local duration_rat = Rational.hydrate(duration_raw, seq_fps_num, seq_fps_den)
         local source_in_rat = Rational.hydrate(source_in_raw, seq_fps_num, seq_fps_den) or Rational.new(0, seq_fps_num, seq_fps_den)
         local source_out_rat = Rational.hydrate(source_out_raw, seq_fps_num, seq_fps_den)
+        -- Rescale any hydrated values to the sequence rate so math stays consistent with viewport/rendering
+        if duration_rat then duration_rat = duration_rat:rescale(seq_fps_num, seq_fps_den) end
+        if source_in_rat then source_in_rat = source_in_rat:rescale(seq_fps_num, seq_fps_den) end
+        if source_out_rat then source_out_rat = source_out_rat:rescale(seq_fps_num, seq_fps_den) end
 
         if master_clip then
             if (not media_id or media_id == "") and master_clip.media_id then
@@ -84,6 +88,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 source_in_rat = master_clip.source_in or source_in_rat
                 source_out_rat = master_clip.source_out or (source_in_rat + duration_rat)
             end
+            if duration_rat then duration_rat = duration_rat:rescale(seq_fps_num, seq_fps_den) end
+            if source_in_rat then source_in_rat = source_in_rat:rescale(seq_fps_num, seq_fps_den) end
+            if source_out_rat then source_out_rat = source_out_rat:rescale(seq_fps_num, seq_fps_den) end
             copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
@@ -132,6 +139,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             rate_den = seq_fps_den,
         }
         local clip_to_insert = Clip.create(clip_name, media_id, clip_opts)
+        -- Persist clip id on the command for replay/undo bookkeeping
+        command:set_parameter("clip_id", clip_to_insert.id)
         -- Add the new clip to the planned mutations
         table.insert(planned_mutations, clip_mutator.plan_insert(clip_to_insert))
 
