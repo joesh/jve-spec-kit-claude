@@ -80,7 +80,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local sequence = Sequence.create(name, project_id, frame_rate, width, height)
+        local existing_id = command:get_parameter("sequence_id")
+        local sequence = Sequence.create(name, project_id, frame_rate, width, height, {
+            id = existing_id
+        })
 
         command:set_parameter("sequence_id", sequence.id)
 
@@ -110,8 +113,34 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
 
+    command_undoers["CreateSequence"] = function(command)
+        print("Undoing CreateSequence command")
+        local sequence_id = command:get_parameter("sequence_id")
+        if not sequence_id or sequence_id == "" then
+            print("WARNING: UndoCreateSequence: Missing sequence_id")
+            return false
+        end
+
+        local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
+        if not stmt then
+            print("ERROR: UndoCreateSequence: Failed to prepare delete statement")
+            return false
+        end
+        stmt:bind_value(1, sequence_id)
+        local ok = stmt:exec()
+        stmt:finalize()
+        if not ok then
+            print("ERROR: UndoCreateSequence failed: " .. tostring(db:last_error() or "unknown"))
+            return false
+        end
+        print(string.format("✅ Undo CreateSequence: Removed sequence %s", tostring(sequence_id)))
+        return true
+    end
+    command_executors["UndoCreateSequence"] = command_undoers["CreateSequence"]
+
     return {
-        executor = command_executors["CreateSequence"]
+        executor = command_executors["CreateSequence"],
+        undoer = command_undoers["CreateSequence"]
     }
 end
 

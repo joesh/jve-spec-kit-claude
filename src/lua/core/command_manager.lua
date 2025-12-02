@@ -674,6 +674,28 @@ function M.redo()
                          history.save_undo_position()
                          state_mgr.restore_selection_from_serialized(cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
                          
+                         -- Re-apply timeline mutations if present (mirror undo behaviour)
+                         local timeline_state = require('ui.timeline.timeline_state')
+                         local reload_sequence_id = extract_sequence_id(cmd)
+                         local mutations = cmd:get_parameter("__timeline_mutations")
+                         local applied_mutations = false
+
+                         if mutations and timeline_state.apply_mutations then
+                             if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+                                 applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
+                             else
+                                 for _, bucket in pairs(mutations) do
+                                     if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
+                                         applied_mutations = true
+                                     end
+                                 end
+                             end
+                         end
+
+                         if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
+                             timeline_state.reload_clips(reload_sequence_id)
+                         end
+                         
                          notify_command_event({
                             event = "redo",
                             command = cmd,
@@ -722,6 +744,32 @@ function M.execute_undo(original_command)
         
         state_mgr.restore_selection_from_serialized(original_command.selected_clip_ids_pre, original_command.selected_edge_infos_pre, original_command.selected_gap_infos_pre)
 
+        -- Handle mutations for Undo
+        local timeline_state = require('ui.timeline.timeline_state')
+        local reload_sequence_id = extract_sequence_id(original_command)
+        local mutations = original_command:get_parameter("__timeline_mutations")
+        local applied_mutations = false
+
+        if mutations and timeline_state.apply_mutations then
+             if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+                applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
+             else
+                for _, bucket in pairs(mutations) do
+                     if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
+                        applied_mutations = true
+                     end
+                end
+             end
+        end
+
+        if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
+             timeline_state.reload_clips(reload_sequence_id)
+        end
+
+        if original_command.playhead_value ~= nil and timeline_state.set_playhead_position then
+            timeline_state.set_playhead_position(original_command.playhead_value)
+        end
+
         print(string.format("  Undo successful! Moved to position: %s", tostring(history.get_current_sequence_number())))
         
         notify_command_event({
@@ -755,6 +803,10 @@ function M.register_executor(command_type, executor, undoer)
     registry.register_executor(command_type, executor, undoer)
 end
 
+function M.unregister_executor(command_type)
+    registry.unregister_executor(command_type)
+end
+
 -- Revert to sequence (Debug/Dev tool)
 function M.revert_to_sequence(sequence_number)
     print(string.format("Reverting to sequence: %d", sequence_number))
@@ -782,6 +834,90 @@ function M.get_current_state()
     state_command:set_parameter("sequence_number", history.get_last_sequence_number())
     state_command:set_parameter("timestamp", os.time())
     return state_command
+end
+
+-- Replay events for a sequence (lightweight, UI-oriented replay)
+function M.replay_events(sequence_id, target_sequence_number)
+    if not db then
+        print("WARNING: replay_events: No database connection")
+        return false
+    end
+
+    local seq_id = sequence_id or active_sequence_id or "default_sequence"
+    local target_seq = target_sequence_number
+    if type(target_seq) ~= "number" then
+        target_seq = history.get_current_sequence_number() or 0
+    end
+
+    -- Gracefully handle missing sequence rows (e.g., after deletes)
+    local has_sequence = false
+    local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+    if seq_query then
+        seq_query:bind_value(1, seq_id)
+        if seq_query:exec() and seq_query:next() then
+            has_sequence = true
+        end
+        seq_query:finalize()
+    end
+
+    if not has_sequence then
+        print(string.format("WARNING: replay_events: sequence '%s' missing; skipping replay", tostring(seq_id)))
+        return true
+    end
+
+    local ok_ts, timeline_state = pcall(require, 'ui.timeline.timeline_state')
+    if not ok_ts or type(timeline_state) ~= "table" then
+        return true
+    end
+
+    local viewport_snapshot = nil
+    if timeline_state.capture_viewport then
+        viewport_snapshot = timeline_state.capture_viewport()
+    end
+    if timeline_state.push_viewport_guard then
+        pcall(timeline_state.push_viewport_guard)
+    end
+
+    local function restore_view()
+        if timeline_state.pop_viewport_guard then
+            pcall(timeline_state.pop_viewport_guard)
+        end
+        if viewport_snapshot and timeline_state.restore_viewport then
+            pcall(timeline_state.restore_viewport, viewport_snapshot)
+        end
+    end
+
+    local ok, err = pcall(function()
+        if target_seq == 0 then
+            if timeline_state.set_selection then
+                timeline_state.set_selection({})
+            end
+            if timeline_state.clear_edge_selection then
+                timeline_state.clear_edge_selection()
+            end
+            if timeline_state.clear_gap_selection then
+                timeline_state.clear_gap_selection()
+            end
+            if timeline_state.set_playhead_position then
+                timeline_state.set_playhead_position(0)
+            elseif timeline_state.set_playhead_time then
+                timeline_state.set_playhead_time(0)
+            end
+        end
+
+        if timeline_state.reload_clips then
+            timeline_state.reload_clips(seq_id)
+        end
+    end)
+
+    restore_view()
+
+    if not ok then
+        print(string.format("WARNING: replay_events: timeline reload failed: %s", tostring(err)))
+        return false
+    end
+
+    return true
 end
 
 -- Replay from sequence

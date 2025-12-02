@@ -28,12 +28,12 @@ assert(db:exec(SCHEMA_SQL))
 db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('test_project', 'Test Project', strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('test_sequence', 'test_project', 'Test Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'test_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at)
+    VALUES ('test_sequence', 'test_project', 'Test Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at)
+    VALUES ('default_sequence', 'test_project', 'Default Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
 command_manager.init(db, 'default_sequence', 'test_project')
@@ -50,14 +50,12 @@ local function execute_import_media(cmd)
         project_id = 'test_project',
         file_path = file_path,
         name = file_path:match('([^/]+)$'),
-        duration_value = 10000,
-        timebase_type = "video_frames",
-        timebase_rate = 30.0,
-        frame_rate = 30.0,
+        duration_frames = 3000,
+        fps_numerator = 30,
+        fps_denominator = 1,
         width = 1920,
         height = 1080,
         audio_channels = 2,
-        audio_sample_rate = 48000,
         codec = 'h264'
     })
     if media and media:save(db) then
@@ -67,7 +65,21 @@ local function execute_import_media(cmd)
     return false
 end
 
-command_manager.register_executor("ImportMedia", execute_import_media)
+local function undo_import_media(cmd)
+    local media_id = cmd:get_parameter("media_id")
+    if not media_id or media_id == "" then
+        return true
+    end
+    local stmt = db:prepare("DELETE FROM media WHERE id = ?")
+    if stmt then
+        stmt:bind_value(1, media_id)
+        stmt:exec()
+        stmt:finalize()
+    end
+    return true
+end
+
+command_manager.register_executor("ImportMedia", execute_import_media, undo_import_media)
 
 -- Import first media file
 local import1 = Command.create("ImportMedia", "test_project")

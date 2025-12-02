@@ -17,6 +17,7 @@ local Command = require('command')
 local function install_timeline_stub()
     local timeline_state = {
         playhead_value = 0,
+        playhead_position = 0,
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},
@@ -30,7 +31,7 @@ local function install_timeline_stub()
     end
 
     function timeline_state.get_playhead_position()
-        return timeline_state.playhead_position
+        return timeline_state.playhead_position or 0
     end
 
     function timeline_state.set_playhead_position(ms)
@@ -119,9 +120,24 @@ local function init_database(path)
     db:exec(require('import_schema'))
 
     db:exec([[
-        INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
+        INSERT INTO projects (id, name, created_at, modified_at)
+        VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+        INSERT INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height,
+            view_start_frame, view_duration_frames, playhead_frame,
+            selected_clip_ids, selected_edge_infos, selected_gap_infos,
+            current_sequence_number, created_at, modified_at
+        )
+        VALUES (
+            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            30, 1, 48000,
+            1920, 1080,
+            0, 300, 0,
+            '[]', '[]', '[]',
+            0, strftime('%s','now'), strftime('%s','now')
+        );
     ]])
 
     return db
