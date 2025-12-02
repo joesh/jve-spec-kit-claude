@@ -147,6 +147,11 @@ function M.create(widget, state_module)
 
         -- Get sequence frame rate
         local frame_rate = get_frame_rate()
+        local fps = frame_rate.fps_numerator / frame_rate.fps_denominator
+        if fps <= 0 then
+            fps = 24
+        end
+        local frame_ms = 1000.0 / fps
 
         -- Calculate appropriate frame-based interval
         local pixels_per_ms = width / viewport_duration
@@ -171,7 +176,21 @@ function M.create(widget, state_module)
         local minor_interval = subdivisions > 0 and (interval_ms / (subdivisions + 1)) or nil
 
         -- Draw time markers at frame-accurate positions
-        local start_marker = math.floor(viewport_start / interval_ms) * interval_ms
+        local function align_start()
+            if format_hint == "seconds" then
+                local unit = interval_ms
+                return math.floor((viewport_start / unit) + 1e-6) * unit
+            elseif format_hint == "minutes" then
+                local unit = interval_ms
+                return math.floor((viewport_start / unit) + 1e-6) * unit
+            else
+                -- frames or sub-second
+                local unit = interval_ms
+                return math.floor((viewport_start / unit) + 1e-6) * unit
+            end
+        end
+
+        local start_marker = align_start()
         local last_label_end = -math.huge
 
         local function to_pixel(time_ms)
@@ -190,12 +209,18 @@ function M.create(widget, state_module)
             timeline.add_line(ruler.widget, x, baseline - height, x, baseline, color, 1)
         end
 
-        local time_ms = start_marker
-        while time_ms <= viewport_end do
-            local x = to_pixel(time_ms)
+        local idx = 0
+        while true do
+            local time_ms = start_marker + (interval_ms * idx)
+            if time_ms > viewport_end + 0.5 then
+                break
+            end
+            -- snap to nearest frame to avoid drifting frame labels (e.g., 00:00:21:01)
+            local snapped_ms = math.floor((time_ms / frame_ms) + 0.5) * frame_ms
+            local x = to_pixel(snapped_ms)
             if x then
                 -- Timecode label with appropriate precision
-                local label = timecode.format_ruler_label(time_ms, frame_rate, format_hint)
+                local label = timecode.format_ruler_label(snapped_ms, frame_rate, format_hint)
                 local label_width = estimate_label_width(label)
                 local label_start = x - (label_width / 2)
                 if label_start < 0 then
@@ -217,7 +242,8 @@ function M.create(widget, state_module)
                     for sub = 1, subdivisions do
                         local minor_time = time_ms + (minor_interval * sub)
                         if minor_time >= viewport_start and minor_time <= viewport_end then
-                            local minor_x = to_pixel(minor_time)
+                            local minor_snapped = math.floor((minor_time / frame_ms) + 0.5) * frame_ms
+                            local minor_x = to_pixel(minor_snapped)
                             if minor_x then
                                 if subdivisions >= 4 and sub % 2 == 0 then
                                     draw_tick_at(minor_x, MEDIUM_TICK_HEIGHT, MEDIUM_TICK_COLOR)
@@ -229,7 +255,7 @@ function M.create(widget, state_module)
                     end
                 end
             end
-            time_ms = time_ms + interval_ms
+            idx = idx + 1
         end
 
         -- Draw playhead marker if in visible range

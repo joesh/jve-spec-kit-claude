@@ -211,20 +211,22 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
     }
 
     local duration = max_end_time - min_start
-    -- Add margin?
+    -- Add a 10% buffer at the end so zoom-fit isn't tight against the last clip
+    local buffer = duration / 10
+    local fit_duration = duration + buffer
     
     if state.set_viewport_duration_frames_value then
         -- Legacy setter name? Or V5 uses set_viewport_duration?
         -- Check timeline_state.lua. It uses set_viewport_duration.
-        state.set_viewport_duration(duration)
+        state.set_viewport_duration(fit_duration)
     elseif state.set_viewport_duration then
-        state.set_viewport_duration(duration)
+        state.set_viewport_duration(fit_duration)
     end
     if state.set_viewport_start_time then
         state.set_viewport_start_time(min_start)
     end
 
-    print(string.format("🔍 Zoomed to fit: %s visible", tostring(duration)))
+    print(string.format("🔍 Zoomed to fit: %s visible (buffered)", tostring(fit_duration)))
     return true
 end
 

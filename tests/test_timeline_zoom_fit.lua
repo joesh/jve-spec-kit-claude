@@ -12,11 +12,17 @@ local function with_db(fn)
     local db = database.get_connection()
     assert(db, "failed to open db connection")
     assert(db:exec(import_schema), "failed to apply schema")
-    assert(db:exec([[INSERT INTO projects(id,name,created_at,modified_at,settings) VALUES('proj','Test',0,0,'{}')]]))
-    assert(db:exec([[INSERT INTO sequences(id,project_id,name,frame_rate,audio_sample_rate,width,height) VALUES('seq','proj','Sequence',24,48000,1920,1080)]]))
-    assert(db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,timebase_type,timebase_rate,track_index,enabled) VALUES
-        ('v1','seq','V1','VIDEO','video_frames',24,1,1),
-        ('v2','seq','V2','VIDEO','video_frames',24,2,1)
+    assert(db:exec([[INSERT INTO projects(id,name,created_at,modified_at,settings) VALUES('proj','Test',strftime('%s','now'),strftime('%s','now'),'{}')]]))
+    assert(db:exec([[
+        INSERT INTO sequences(
+            id,project_id,name,kind,fps_numerator,fps_denominator,audio_rate,width,height,
+            view_start_frame,view_duration_frames,playhead_frame,
+            selected_clip_ids,selected_edge_infos,selected_gap_infos,current_sequence_number,created_at,modified_at)
+        VALUES('seq','proj','Sequence','timeline',24,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,strftime('%s','now'),strftime('%s','now'))
+    ]]))
+    assert(db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan) VALUES
+        ('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0),
+        ('v2','seq','V2','VIDEO',2,1,0,0,0,1.0,0.0)
     ]]))
     fn(db, db_path)
 end
@@ -36,33 +42,42 @@ end
 
 local function assert_view(expected_start, expected_duration)
     local view = current_view()
-    assert(view.start_value == expected_start, string.format("start_value expected %d got %d", expected_start, view.start_value))
-    assert(view.duration == expected_duration, string.format("duration expected %d got %d", expected_duration, view.duration))
+    local start_frames = (type(view.start_value) == "table" and view.start_value.frames) or view.start_value
+    local duration_frames = (type(view.duration) == "table" and view.duration.frames) or view.duration
+    assert(start_frames == expected_start, string.format("start_value expected %d got %s", expected_start, tostring(start_frames)))
+    assert(duration_frames == expected_duration, string.format("duration expected %d got %s", expected_duration, tostring(duration_frames)))
 end
 
 -- Regression: ZoomFit updates viewport to cover all clips and toggles back.
 with_db(function(db)
     -- Seed two clips with gap
-    assert(db:exec([[INSERT INTO clips(id,project_id,clip_kind,track_id,media_id,start_value,duration_value,source_in_value,source_out_value,timebase_type,timebase_rate,enabled) VALUES
-        ('c1','proj','timeline','v1',NULL,0,2000,0,2000,'video_frames',24,1),
-        ('c2','proj','timeline','v1',NULL,5000,1000,0,1000,'video_frames',24,1)
+    assert(db:exec([[INSERT INTO clips(id,project_id,clip_kind,track_id,media_id,owner_sequence_id,timeline_start_frame,duration_frames,source_in_frame,source_out_frame,fps_numerator,fps_denominator,enabled,offline,created_at,modified_at) VALUES
+        ('c1','proj','timeline','v1',NULL,'seq',0,2000,0,2000,24,1,1,0,strftime('%s','now'),strftime('%s','now')),
+        ('c2','proj','timeline','v1',NULL,'seq',5000,1000,0,1000,24,1,1,0,strftime('%s','now'),strftime('%s','now'))
     ]]))
 
     reload_state()
+    local initial_duration = (function()
+        local v = timeline_state.get_viewport_duration()
+        return (type(v) == "table" and v.frames) or v
+    end)()
+
     -- Prime snapshot for toggle
-    assert_view(0, timeline_state.get_viewport_duration())
+    assert_view(0, initial_duration)
 
     local ok = keyboard_shortcuts.handle_command("TimelineZoomFit")
     assert(ok ~= false, "zoom fit should succeed")
 
     local view_after_fit = current_view()
-    assert(view_after_fit.start_value == 0, "zoom fit should start at 0")
-    assert(view_after_fit.duration >= 6000, "zoom fit should cover all clips")
+    local fit_start = (type(view_after_fit.start_value) == "table" and view_after_fit.start_value.frames) or view_after_fit.start_value
+    local fit_duration = (type(view_after_fit.duration) == "table" and view_after_fit.duration.frames) or view_after_fit.duration
+    assert(fit_start == 0, "zoom fit should start at 0")
+    assert(fit_duration >= 6600, "zoom fit should cover all clips with 10% buffer")
 
     -- Toggle back to previous view
     local ok2 = keyboard_shortcuts.handle_command("TimelineZoomFit")
     assert(ok2 ~= false, "zoom fit toggle should succeed")
-    assert_view(0, timeline_state.get_viewport_duration()) -- back to initial
+    assert_view(0, initial_duration) -- back to initial
 end)
 
 print("✅ timeline zoom fit regression passed")
