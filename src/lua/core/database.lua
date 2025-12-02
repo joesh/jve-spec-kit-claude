@@ -236,24 +236,39 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         owner_sequence_id = owner_sequence_id,
         track_sequence_id = track_sequence_id,
         
-        -- Rational Properties
-        timeline_start = Rational.new(query:value(10) or 0, fps_num, fps_den),
-        duration = Rational.new(query:value(11) or 0, fps_num, fps_den),
-        source_in = Rational.new(query:value(12) or 0, fps_num, fps_den),
-        source_out = Rational.new(query:value(13) or 0, fps_num, fps_den),
+                        -- Rational Properties
         
-        rate = {
-            fps_numerator = fps_num,
-            fps_denominator = fps_den
-        },
+                        timeline_start = Rational.new(query:value(10) or 0, fps_num, fps_den),
         
-        enabled = query:value(14) == 1,
-        offline = query:value(15) == 1,
-        media_name = media_name,
-        media_path = media_path
-    }
-
-    if not clip.name or clip.name == "" then
+                        duration = Rational.new(query:value(11) or 0, fps_num, fps_den),
+        
+                        source_in = Rational.new(query:value(12) or 0, fps_num, fps_den),
+        
+                        source_out = Rational.new(query:value(13) or 0, fps_num, fps_den),
+        
+                        
+        
+                        rate = {
+        
+                            fps_numerator = fps_num,
+        
+                            fps_denominator = fps_den
+        
+                        },
+        
+                        
+        
+                        enabled = query:value(14) == 1,
+        
+                        offline = query:value(15) == 1,
+        
+                        media_name = media_name,
+        
+                        media_path = media_path
+        
+                    }
+        
+                    if not clip.name or clip.name == "" then
         clip.name = "Clip " .. (clip_id and clip_id:sub(1, 8) or "")
     end
 
@@ -685,10 +700,10 @@ function M.update_clip_position(clip_id, start_value, duration_value)
         error("FATAL: update_clip_position() requires clip_id parameter")
     end
     if not start_value then
-        error("FATAL: update_clip_position() requires start_value parameter")
+        error("FATAL: update_clip_position() requires start_time parameter")
     end
     if not duration_value then
-        error("FATAL: update_clip_position() requires duration_value parameter")
+        error("FATAL: update_clip_position() requires duration parameter")
     end
 
     if not db_connection then

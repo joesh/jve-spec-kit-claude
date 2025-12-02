@@ -9,7 +9,8 @@ package.path = package.path
 require("test_env")
 
 local database = require("core.database")
-local command_impl = require("core.command_implementations")
+-- core.command_implementations is deleted
+-- local command_impl = require("core.command_implementations")
 local Command = require("command")
 
 local SCHEMA_SQL = [[
@@ -61,21 +62,24 @@ local function run_test()
     os.remove(tmp_db)
     assert(database.init(tmp_db))
     local conn = database.get_connection()
-    assert(conn:exec(SCHEMA_SQL))
+    -- Schema already loaded by database.init(), just insert test data
     assert(conn:exec(DATA_SQL))
 
-    local executors = {}
-    local undoers = {}
-    command_impl.register_commands(executors, undoers, conn)
+    local command_manager = require("core.command_manager")
+    command_manager.init(conn, nil, "default_project")
 
     local cmd = Command.create("CreateSequence", "default_project")
     cmd:set_parameter("project_id", "default_project")
     cmd:set_parameter("name", "Sequence Under Test")
-    cmd:set_parameter("frame_rate", 30)
+    cmd:set_parameter("frame_rate", 30)  -- CreateSequence accepts frame_rate, converts internally
     cmd:set_parameter("width", 1920)
     cmd:set_parameter("height", 1080)
 
-    assert(executors["CreateSequence"](cmd), "CreateSequence executor failed")
+    local result = command_manager.execute(cmd)
+    if not result or not result.success then
+        local err_msg = result and result.error_message or "unknown error"
+        error(string.format("CreateSequence command failed: %s", err_msg))
+    end
     local sequence_id = cmd:get_parameter("sequence_id")
     assert(sequence_id and sequence_id ~= "", "sequence_id was not set")
 

@@ -72,21 +72,43 @@ assert(database.init(db_path))
 local db = database.get_connection()
 
 db:exec(require('import_schema'))
+db:exec("PRAGMA foreign_keys = ON;")
+db:exec([[
+    CREATE TABLE IF NOT EXISTS properties (
+        id TEXT PRIMARY KEY,
+        clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+        property_name TEXT NOT NULL,
+        property_value TEXT,
+        property_type TEXT,
+        default_value TEXT
+    );
+]])
 
 local now = os.time()
 db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('test_project', 'Insert Test Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-        timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
-        viewport_start_value, viewport_duration_frames_value, current_sequence_number)
-    VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
-        24.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240, NULL);
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height,
+        view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    )
+    VALUES (
+        'timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
+        24, 1, 48000,
+        1920, 1080,
+        0, 240, 0,
+        '[]', '[]', '[]',
+        0, %d, %d
+    );
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index)
-    VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 'video_frames', 24.0, 1);
-]], now, now))
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now))
 
 stub_timeline_state()
 command_manager.init(db, 'timeline_seq', 'test_project')
@@ -106,29 +128,23 @@ media_reader.import_media = function(_, _, _, existing_media_id)
     local conn = database.get_connection()
     assert(conn, "media import stub: database not initialized")
     local now_ts = os.time()
-    local media_stmt = conn:prepare([[
-        INSERT OR REPLACE INTO media (
-            id, project_id, name, file_path, duration_value, timebase_type, timebase_rate,
-            frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
-    ]])
-    assert(media_stmt, "media import stub: failed to prepare media insert")
-    media_stmt:bind_value(1, media_id)
-    media_stmt:bind_value(2, "test_project")
-    media_stmt:bind_value(3, "media.mov")
-    media_stmt:bind_value(4, "/tmp/jve/media.mov")
-    media_stmt:bind_value(5, metadata.duration_ms)
-    media_stmt:bind_value(6, metadata.has_video and "video_frames" or "audio_samples")
-    media_stmt:bind_value(7, metadata.video and metadata.video.frame_rate or metadata.audio.sample_rate or 1000)
-    media_stmt:bind_value(8, metadata.video and metadata.video.frame_rate or 0)
-    media_stmt:bind_value(9, metadata.video and metadata.video.width or 0)
-    media_stmt:bind_value(10, metadata.video and metadata.video.height or 0)
-    media_stmt:bind_value(11, metadata.audio and metadata.audio.channels or 0)
-    media_stmt:bind_value(12, metadata.video and metadata.video.codec or metadata.audio.codec or "")
-    media_stmt:bind_value(13, now_ts)
-    media_stmt:bind_value(14, now_ts)
-    assert(media_stmt:exec(), "media import stub: failed to insert media row")
-    media_stmt:finalize()
+    local Media = require("models.media")
+    local media = Media.create({
+        id = media_id,
+        project_id = "test_project",
+        name = "media.mov",
+        file_path = "/tmp/jve/media.mov",
+        duration = metadata.duration_ms,
+        frame_rate = metadata.video and metadata.video.frame_rate or 0,
+        width = metadata.video and metadata.video.width or 0,
+        height = metadata.video and metadata.video.height or 0,
+        audio_channels = metadata.audio and metadata.audio.channels or 0,
+        codec = metadata.video and metadata.video.codec or metadata.audio.codec or "",
+        created_at = now_ts,
+        modified_at = now_ts
+    })
+    assert(media, "media import stub: failed to create media record")
+    assert(media:save(conn), "media import stub: failed to insert media row")
     return media_id, metadata
 end
 

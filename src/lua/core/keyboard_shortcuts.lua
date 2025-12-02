@@ -900,17 +900,13 @@ function keyboard_shortcuts.handle_key(event)
             if #edge_infos > 1 then
                 local batch_cmd = Command.create("BatchRippleEdit", "default_project")
                 batch_cmd:set_parameter("edge_infos", edge_infos)
-                -- delta_ms parameter name is legacy, but logic should handle Rational if passed
-                -- Using 'delta_time' or similar would be better V5, but existing commands use delta_ms/frames.
-                -- RippleEdit supports delta_frames (int) or delta_ms (Rational/float).
-                -- Let's use delta_ms param but pass Rational.
-                batch_cmd:set_parameter("delta_ms", nudge_ms) 
+                batch_cmd:set_parameter("delta_frames", nudge_ms.frames)
                 batch_cmd:set_parameter("sequence_id", "default_sequence")
                 result = command_manager.execute(batch_cmd)
             elseif #edge_infos == 1 then
                 local ripple_cmd = Command.create("RippleEdit", "default_project")
                 ripple_cmd:set_parameter("edge_info", edge_infos[1])
-                ripple_cmd:set_parameter("delta_ms", nudge_ms)
+                ripple_cmd:set_parameter("delta_frames", nudge_ms.frames)
                 ripple_cmd:set_parameter("sequence_id", "default_sequence")
                 result = command_manager.execute(ripple_cmd)
             end

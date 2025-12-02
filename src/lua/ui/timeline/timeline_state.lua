@@ -55,6 +55,7 @@ M.get_viewport_duration = viewport.get_viewport_duration
 M.set_viewport_duration = viewport.set_viewport_duration
 M.get_playhead_position = viewport.get_playhead_position
 M.set_playhead_position = viewport.set_playhead_position
+M.set_playhead_value = viewport.set_playhead_position -- Alias for legacy compatibility
 M.time_to_pixel = viewport.time_to_pixel
 M.pixel_to_time = viewport.pixel_to_time
 M.capture_viewport = function()
@@ -85,10 +86,34 @@ M.get_default_audio_track_id = function() return tracks.get_primary_id("AUDIO") 
 M.get_clips = clips.get_all
 M.get_clip_by_id = clips.get_by_id
 M.get_clips_for_track = clips.get_for_track
-M.apply_mutations = clips.apply_mutations
+local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_callback)
+    local mutations = sequence_or_mutations
+    local callback = maybe_mutations
+
+    -- Accept legacy signature apply_mutations(sequence_id, mutations, callback)
+    if type(sequence_or_mutations) == "string" or type(sequence_or_mutations) == "number" then
+        mutations = maybe_mutations
+        callback = persist_callback
+    end
+
+    if type(mutations) ~= "table" then
+        return false
+    end
+    return clips.apply_mutations(mutations, callback)
+end
+
+M.apply_mutations = apply_mutations
 M.update_clip = function() error("Use commands") end
 M.add_clip = function() error("Use commands") end
 M.remove_clip = function() error("Use commands") end
+M._internal_add_clip_from_command = function(clip)
+    if not clip then return false end
+    return apply_mutations({inserts = {clip}})
+end
+M._internal_remove_clip_from_command = function(clip_id)
+    if not clip_id then return false end
+    return apply_mutations({deletes = {clip_id}})
+end
 M.validate_clip_fresh = function(clip)
     if not clip then return false, "Nil clip" end
     if not clip._version then return false, "No version" end

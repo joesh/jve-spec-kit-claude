@@ -18,11 +18,11 @@ local function setup_db(path)
     local now = os.time()
     db:exec(string.format([[
         INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', %d, %d);
-        INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames)
-        VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 240);
+        INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
+        VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
-    ]], now, now))
+    ]], now, now, now, now))
 
     return db
 end
@@ -141,17 +141,15 @@ end
 local function execute_batch_split(split_value_ms, clip_ids)
     local json = dkjson
     local specs = {}
+    -- Convert MS to Frames (approx 30fps)
+    local frames = math.floor(split_value_ms * 30.0 / 1000.0 + 0.5)
+    
     for _, clip in ipairs(clip_ids) do
         table.insert(specs, {
             command_type = "SplitClip",
             parameters = {
                 clip_id = clip.id or clip,
-                split_value = split_value_ms -- SplitClip likely expects MS if legacy? Or Frames?
-                -- SplitClip command implementation needs checking. Assuming it uses Rational conversion internally?
-                -- If SplitClip expects Rational, we might need to pass Rational object if it checks type.
-                -- But JSON serialization converts to table/number.
-                -- Let's assume SplitClip expects milliseconds if legacy, or frames if V5.
-                -- I should check SplitClip.
+                split_value = { frames = frames, fps_numerator = 30, fps_denominator = 1 }
             }
         })
     end

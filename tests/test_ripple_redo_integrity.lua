@@ -19,15 +19,15 @@ local function setup_db(path)
     conn:exec(require('import_schema'))
 
     assert(conn:exec([[
-INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 10000);
-INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)
+VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 10000, 0, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     ]]))
 
     local executors, undoers = {}, {}
-    command_impl.register_commands(executors, undoers, conn)
+    -- command_impl.register_commands(executors, undoers, conn)
     command_manager.init(conn, 'default_sequence', 'default_project')
     timeline_state.init('default_sequence')
 
@@ -37,9 +37,9 @@ VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 3
             project_id = cmd:get_parameter("project_id") or 'default_project',
             file_path = cmd:get_parameter("file_path"),
             name = cmd:get_parameter("file_name"),
-            duration_value = cmd:get_parameter("duration_value") or cmd:get_parameter("duration"),
-            timebase_type = "video_frames",
-            timebase_rate = 30.0,
+            duration_frames = cmd:get_parameter("duration_value") or cmd:get_parameter("duration"),
+            fps_numerator = 30,
+            fps_denominator = 1,
             frame_rate = cmd:get_parameter("frame_rate") or 30.0,
             width = 1920,
             height = 1080,
@@ -96,18 +96,37 @@ assert(stmt:exec() and stmt:next(), "Inserted clip not found")
 local clip_id = stmt:value(0)
 stmt:finalize()
 
+local function delete_delta_frames(clip_id)
+    local dur_stmt = db:prepare([[
+        SELECT duration_frames, fps_numerator, fps_denominator
+        FROM clips
+        WHERE id = ?
+    ]])
+    assert(dur_stmt, "failed to prepare clip duration lookup")
+    assert(dur_stmt:bind_value(1, clip_id))
+    assert(dur_stmt:exec() and dur_stmt:next(), "Failed to load clip duration for ripple delete")
+    local duration_frames = dur_stmt:value(0)
+    local fps_num = dur_stmt:value(1)
+    local fps_den = dur_stmt:value(2)
+    dur_stmt:finalize()
+
+    local extra_one_second = math.ceil(fps_num / fps_den)
+    -- Overshoot by ~1s worth of frames to guarantee deletion
+    return -(duration_frames + extra_one_second)
+end
+
 local ripple_cmd = Command.create("RippleEdit", "default_project")
 ripple_cmd:set_parameter("edge_info", {clip_id = clip_id, edge_type = "gap_before", track_id = "track_default_v1"})
-ripple_cmd:set_parameter("delta_ms", -5000000)  -- Delete the clip entirely
+ripple_cmd:set_parameter("delta_frames", delete_delta_frames(clip_id))  -- computed negative delta large enough to remove the clip
 ripple_cmd:set_parameter("sequence_id", "default_sequence")
 exec(ripple_cmd)
 
 local function snapshot_clips()
     local stmt = db:prepare([[
-        SELECT id, track_id, start_value, duration_value, source_in_value, source_out_value
+        SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips
         WHERE clip_kind = 'timeline'
-        ORDER BY track_id, start_value
+        ORDER BY track_id, timeline_start_frame
     ]])
     assert(stmt:exec(), "Failed to fetch clips for snapshot")
 
@@ -192,10 +211,10 @@ insert_clip(1713800, 2332838, 1713800)
 
 local function fetch_clips_ordered()
     local stmt = db:prepare([[
-        SELECT id, start_value, duration_value
+        SELECT id, timeline_start_frame, duration_frames
         FROM clips
         WHERE clip_kind = 'timeline'
-        ORDER BY start_value
+        ORDER BY timeline_start_frame
     ]])
     assert(stmt:exec(), "Failed to fetch clip ordering")
     local clips = {}
@@ -216,10 +235,10 @@ assert(#initial_clips == 2, string.format("expected two clips before ripple, got
 local first_initial = initial_clips[1]
 local second_initial = initial_clips[2]
 
-local extend_delta = 1900329
+local extend_delta_frames = math.floor((1900329 * 30 / 1000) + 0.5) -- convert ms to frames at 30fps
 local extend_cmd = Command.create("RippleEdit", "default_project")
 extend_cmd:set_parameter("edge_info", {clip_id = first_initial.id, edge_type = "out", track_id = "track_default_v1"})
-extend_cmd:set_parameter("delta_ms", extend_delta)
+extend_cmd:set_parameter("delta_frames", extend_delta_frames)
 extend_cmd:set_parameter("sequence_id", "default_sequence")
 exec(extend_cmd)
 

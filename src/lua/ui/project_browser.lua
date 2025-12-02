@@ -957,7 +957,7 @@ function M.create()
 
     -- Set layout spacing
     qt_constants.CONTROL.SET_LAYOUT_SPACING(layout, 0)
-    qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 0)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 0, 0, 0, 0)
 
     -- Create tab bar similar to timeline tabs
     local colors = ui_constants.COLORS or {}

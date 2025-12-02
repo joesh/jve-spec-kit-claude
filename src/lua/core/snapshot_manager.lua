@@ -39,10 +39,13 @@ end
 
 local function fetch_sequence_record(db, sequence_id)
     local query = db:prepare([[
-        SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
-               timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos,
-               view_start_frame, view_duration_frames, mark_in_frame, mark_out_frame,
-               current_sequence_number, audio_rate
+        SELECT id, project_id, name, kind,
+               fps_numerator, fps_denominator, audio_rate,
+               width, height,
+               view_start_frame, view_duration_frames, playhead_frame,
+               mark_in_frame, mark_out_frame,
+               selected_clip_ids, selected_edge_infos, selected_gap_infos,
+               current_sequence_number
         FROM sequences
         WHERE id = ?
     ]])
@@ -62,18 +65,18 @@ local function fetch_sequence_record(db, sequence_id)
             kind = query:value(3),
             fps_numerator = query:value(4),
             fps_denominator = query:value(5),
-            width = query:value(6),
-            height = query:value(7),
-            timecode_start_frame = query:value(8),
-            playhead_frame = query:value(9),
-            selected_clip_ids = query:value(10),
-            selected_edge_infos = query:value(11),
-            view_start_frame = query:value(12),
-            view_duration_frames = query:value(13),
-            mark_in_frame = query:value(14),
-            mark_out_frame = query:value(15),
-            current_sequence_number = query:value(16),
-            audio_rate = query:value(17)
+            audio_rate = query:value(6),
+            width = query:value(7),
+            height = query:value(8),
+            view_start_frame = query:value(9),
+            view_duration_frames = query:value(10),
+            playhead_frame = query:value(11),
+            mark_in_frame = query:value(12),
+            mark_out_frame = query:value(13),
+            selected_clip_ids = query:value(14),
+            selected_edge_infos = query:value(15),
+            selected_gap_infos = query:value(16),
+            current_sequence_number = query:value(17)
         }
     end
 
@@ -246,14 +249,14 @@ local function deserialize_snapshot_payload(json_str)
         require_field("deserialize_snapshot_payload", "sequence", "project_id", payload.sequence.project_id)
         require_field("deserialize_snapshot_payload", "sequence", "name", payload.sequence.name)
         require_field("deserialize_snapshot_payload", "sequence", "kind", payload.sequence.kind)
-        require_field("deserialize_snapshot_payload", "sequence", "frame_rate", payload.sequence.frame_rate)
-        require_field("deserialize_snapshot_payload", "sequence", "audio_sample_rate", payload.sequence.audio_sample_rate)
+        require_field("deserialize_snapshot_payload", "sequence", "fps_numerator", payload.sequence.fps_numerator)
+        require_field("deserialize_snapshot_payload", "sequence", "fps_denominator", payload.sequence.fps_denominator)
+        require_field("deserialize_snapshot_payload", "sequence", "audio_rate", payload.sequence.audio_rate)
         require_field("deserialize_snapshot_payload", "sequence", "width", payload.sequence.width)
         require_field("deserialize_snapshot_payload", "sequence", "height", payload.sequence.height)
-        require_field("deserialize_snapshot_payload", "sequence", "timecode_start_frame", payload.sequence.timecode_start_frame)
-        require_field("deserialize_snapshot_payload", "sequence", "playhead_value", payload.sequence.playhead_value)
-        require_field("deserialize_snapshot_payload", "sequence", "viewport_start_value", payload.sequence.viewport_start_value)
-        require_field("deserialize_snapshot_payload", "sequence", "viewport_duration_frames_value", payload.sequence.viewport_duration_frames_value)
+        require_field("deserialize_snapshot_payload", "sequence", "view_start_frame", payload.sequence.view_start_frame)
+        require_field("deserialize_snapshot_payload", "sequence", "view_duration_frames", payload.sequence.view_duration_frames)
+        require_field("deserialize_snapshot_payload", "sequence", "playhead_frame", payload.sequence.playhead_frame)
     end
 
     local tracks = {}
@@ -264,15 +267,11 @@ local function deserialize_snapshot_payload(json_str)
             require_field("deserialize_snapshot_payload", "track", "name", track.name)
             require_field("deserialize_snapshot_payload", "track", "track_type", track.track_type)
             require_field("deserialize_snapshot_payload", "track", "track_index", track.track_index)
-            require_field("deserialize_snapshot_payload", "track", "timebase_type", track.timebase_type)
-            require_field("deserialize_snapshot_payload", "track", "timebase_rate", track.timebase_rate)
             tracks[#tracks + 1] = {
                 id = track.id,
                 sequence_id = track.sequence_id,
                 name = track.name,
                 track_type = track.track_type,
-                timebase_type = track.timebase_type,
-                timebase_rate = track.timebase_rate,
                 track_index = track.track_index,
                 enabled = track.enabled,
                 locked = track.locked,

@@ -17,7 +17,9 @@ local event_log_stub = {
 package.loaded["core.event_log"] = event_log_stub
 
 local database = require("core.database")
-local command_impl = require("core.command_implementations")
+local command_manager = require("core.command_manager")
+-- core.command_implementations is deleted
+-- local command_impl = require("core.command_implementations")
 local Command = require("command")
 local timeline_state = require("ui.timeline.timeline_state")
 
@@ -27,14 +29,18 @@ local BASE_DATA_SQL = [[
     INSERT INTO projects (id, name, created_at, modified_at, settings)
     VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'), '{}');
 
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height, selected_clip_ids, selected_edge_infos, audio_sample_rate, viewport_start_value, viewport_duration_frames_value, timecode_start_frame, playhead_value)
-    VALUES ('seq_a', 'default_project', 'Seq A', 30.0, 1920, 1080, '[]', '[]', 48000, 0, 10000, 0, 0);
+    INSERT INTO sequences (
+        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at
+    )
+    VALUES ('seq_a', 'default_project', 'Seq A', 'timeline', 30, 1, 48000, 1920, 1080, 0, 10000, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES
-        ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1),
-        ('seq_a_v2', 'seq_a', 'V2', 'VIDEO', 'video_frames', 30.0, 2, 1),
-        ('seq_a_a1', 'seq_a', 'A1', 'AUDIO', 'audio_samples', 48000, 1, 1),
-        ('seq_a_a2', 'seq_a', 'A2', 'AUDIO', 'audio_samples', 48000, 2, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES
+        ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),
+        ('seq_a_v2', 'seq_a', 'V2', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0),
+        ('seq_a_a1', 'seq_a', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0),
+        ('seq_a_a2', 'seq_a', 'A2', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]]
 
 local function setup_database(path)
@@ -56,9 +62,7 @@ local tmp_db = os.tmpname() .. ".db"
 local conn = setup_database(tmp_db)
 assert(conn, "failed to initialize test database")
 
-local executors = {}
-local undoers = {}
-command_impl.register_commands(executors, undoers, conn)
+command_manager.init(conn, "seq_a", "default_project")
 
 local function track_id(sequence_id, track_type, index)
     local stmt = conn:prepare([[
@@ -106,7 +110,8 @@ create_cmd:set_parameter("name", "Seq B")
 create_cmd:set_parameter("frame_rate", 30)
 create_cmd:set_parameter("width", 1920)
 create_cmd:set_parameter("height", 1080)
-assert(executors["CreateSequence"](create_cmd), "CreateSequence command failed")
+local create_result = command_manager.execute(create_cmd)
+assert(create_result.success, "CreateSequence command failed")
 local seq_b = create_cmd:get_parameter("sequence_id")
 assert(seq_b and seq_b ~= "", "missing seq_b id")
 

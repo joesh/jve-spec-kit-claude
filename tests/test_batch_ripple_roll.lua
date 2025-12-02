@@ -15,109 +15,7 @@ os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))
 local db = database.get_connection()
-
-    local schema = [[
-        CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            created_at INTEGER,
-            modified_at INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS sequences (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            name TEXT,
-            kind TEXT,
-            fps_numerator INTEGER DEFAULT 30,
-            fps_denominator INTEGER DEFAULT 1,
-            audio_rate INTEGER DEFAULT 48000,
-            width INTEGER DEFAULT 1920,
-            height INTEGER DEFAULT 1080,
-            timecode_start_frame INTEGER DEFAULT 0,
-            playhead_frame INTEGER DEFAULT 0,
-            view_start_frame INTEGER DEFAULT 0,
-            view_duration_frames INTEGER DEFAULT 300,
-            selected_clip_ids TEXT,
-            selected_edge_infos TEXT,
-            mark_in_frame INTEGER,
-            mark_out_frame INTEGER,
-            current_sequence_number INTEGER,
-            created_at INTEGER,
-            modified_at INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS tracks (
-            id TEXT PRIMARY KEY,
-            sequence_id TEXT,
-            name TEXT,
-            track_type TEXT,
-            track_index INTEGER,
-            enabled INTEGER DEFAULT 1
-        );
-        CREATE TABLE IF NOT EXISTS media (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            name TEXT,
-            file_path TEXT,
-            duration_frames INTEGER,
-            fps_numerator INTEGER DEFAULT 30,
-            fps_denominator INTEGER DEFAULT 1,
-            width INTEGER,
-            height INTEGER,
-            audio_channels INTEGER,
-            codec TEXT,
-            created_at INTEGER,
-            modified_at INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT,
-            name TEXT,
-            track_id TEXT,
-            media_id TEXT,
-            owner_sequence_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            timeline_start_frame INTEGER,
-            duration_frames INTEGER,
-            source_in_frame INTEGER,
-            source_out_frame INTEGER,
-            fps_numerator INTEGER DEFAULT 30,
-            fps_denominator INTEGER DEFAULT 1,
-            enabled INTEGER DEFAULT 1,
-            offline INTEGER DEFAULT 0,
-            created_at INTEGER,
-            modified_at INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS commands (
-            id TEXT PRIMARY KEY,
-            parent_sequence_number INTEGER,
-            sequence_number INTEGER,
-            command_type TEXT,
-            command_args TEXT,
-            pre_hash TEXT,
-            post_hash TEXT,
-            timestamp INTEGER,
-            playhead_value INTEGER,
-            playhead_rate REAL,
-            selected_clip_ids TEXT,
-            selected_edge_infos TEXT,
-            selected_gap_infos TEXT,
-            selected_clip_ids_pre TEXT,
-            selected_edge_infos_pre TEXT,
-            selected_gap_infos_pre TEXT
-        );
-        CREATE TABLE IF NOT EXISTS properties (
-            id TEXT PRIMARY KEY,
-            clip_id TEXT,
-            property_name TEXT,
-            property_value TEXT,
-            property_type TEXT,
-            default_value TEXT
-        );
-    ]]
-
-assert(db:exec(schema))
+db:exec(require('import_schema'))
 
 local now = os.time()
 
@@ -125,8 +23,8 @@ local seed = string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, timecode_start_frame, playhead_frame, selected_clip_ids, selected_edge_infos, view_start_frame, view_duration_frames)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, selected_clip_ids, selected_edge_infos, view_start_frame, view_duration_frames, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, '[]', '[]', 0, 240, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
@@ -141,7 +39,7 @@ local seed = string.format([[
          30, 30, 0, 30, 30, 1, 1, 0, %d, %d),
         ('clip_c', 'default_project', 'timeline', 'C', 'track_v1', 'default_sequence',
          60, 30, 0, 30, 30, 1, 1, 0, %d, %d);
-]], now, now, now, now, now, now, now, now)
+]], now, now, now, now, now, now, now, now, now, now)
 
 assert(db:exec(seed))
 
@@ -211,7 +109,8 @@ end
 local function exec_batch(edge_infos, delta_ms)
     local batch_cmd = Command.create("BatchRippleEdit", "default_project")
     batch_cmd:set_parameter("edge_infos", edge_infos)
-    batch_cmd:set_parameter("delta_ms", delta_ms)
+    local frames = math.floor((delta_ms * 30 / 1000) + 0.5)
+    batch_cmd:set_parameter("delta_frames", frames)
     batch_cmd:set_parameter("sequence_id", "default_sequence")
     local result = command_manager.execute(batch_cmd)
     assert(result.success, result.error_message or "BatchRippleEdit failed")

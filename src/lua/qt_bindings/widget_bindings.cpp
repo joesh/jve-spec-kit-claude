@@ -1,11 +1,18 @@
 #include "binding_macros.h"
+#include "../simple_lua_engine.h"
 #include <QMainWindow>
 #include <QLabel>
 #include <QLineEdit>
 #include <QScrollArea>
 
 
-LUA_BIND_WIDGET_CREATOR(lua_create_main_window, QMainWindow)
+int lua_create_main_window(lua_State* L) {
+    QMainWindow* window = new QMainWindow();
+    // Preserve reference so the engine can retrieve it after Lua runs
+    SimpleLuaEngine::s_lastCreatedMainWindow = window;
+    lua_push_widget(L, window);
+    return 1;
+}
 LUA_BIND_WIDGET_CREATOR(lua_create_widget, QWidget)
 LUA_BIND_WIDGET_CREATOR_WITH_TEXT(lua_create_label, QLabel)
 

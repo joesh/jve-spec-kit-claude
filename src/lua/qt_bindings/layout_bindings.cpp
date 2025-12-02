@@ -111,37 +111,65 @@ int lua_set_splitter_sizes(lua_State* L) {
 }
 
 int lua_set_layout_margins(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    void* userdata = lua_to_widget(L, 1);
+    if (!userdata) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
     int left = luaL_checkinteger(L, 2);
     int top = luaL_checkinteger(L, 3);
     int right = luaL_checkinteger(L, 4);
     int bottom = luaL_checkinteger(L, 5);
-    
-    if (QLayout* layout = w ? w->layout() : nullptr) {
-        layout->setContentsMargins(left, top, right, bottom);
-        lua_pushboolean(L, 1);
-    } else if (QLayout* l = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(lua_to_widget(L, 1))))) {
+
+    // Try as QWidget first
+    if (QWidget* w = qobject_cast<QWidget*>(static_cast<QObject*>(userdata))) {
+        if (QLayout* layout = w->layout()) {
+            layout->setContentsMargins(left, top, right, bottom);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+
+    // Try as QLayout directly
+    if (QLayout* l = qobject_cast<QLayout*>(static_cast<QObject*>(userdata))) {
          l->setContentsMargins(left, top, right, bottom);
          lua_pushboolean(L, 1);
-    } else {
-        lua_pushboolean(L, 0);
+         return 1;
     }
+
+    // Neither QWidget nor QLayout
+    lua_pushboolean(L, 0);
     return 1;
 }
 
 int lua_set_layout_spacing(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    void* userdata = lua_to_widget(L, 1);
+    if (!userdata) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
     int spacing = luaL_checkinteger(L, 2);
-    
-    if (QLayout* layout = w ? w->layout() : nullptr) {
-        layout->setSpacing(spacing);
-        lua_pushboolean(L, 1);
-    } else if (QLayout* l = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(lua_to_widget(L, 1))))) {
+
+    // Try as QWidget first
+    if (QWidget* w = qobject_cast<QWidget*>(static_cast<QObject*>(userdata))) {
+        if (QLayout* layout = w->layout()) {
+            layout->setSpacing(spacing);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+
+    // Try as QLayout directly
+    if (QLayout* l = qobject_cast<QLayout*>(static_cast<QObject*>(userdata))) {
          l->setSpacing(spacing);
          lua_pushboolean(L, 1);
-    } else {
-        lua_pushboolean(L, 0);
+         return 1;
     }
+
+    // Neither QWidget nor QLayout
+    lua_pushboolean(L, 0);
     return 1;
 }
 

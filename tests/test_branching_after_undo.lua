@@ -32,77 +32,17 @@ local function init_db(path)
     local db = database.get_connection()
     assert(db)
 
-    local schema = [[
-        CREATE TABLE projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at INTEGER,
-            modified_at INTEGER,
-            settings TEXT DEFAULT '{}'
-        );
+    db:exec(require('import_schema'))
 
-        CREATE TABLE sequences (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'timeline',
-            frame_rate REAL NOT NULL,
-            audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
-            width INTEGER NOT NULL,
-            height INTEGER NOT NULL,
-            timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-            playhead_value INTEGER NOT NULL DEFAULT 0,
-            selected_clip_ids TEXT,
-            selected_edge_infos TEXT,
-            viewport_start_value INTEGER NOT NULL DEFAULT 0,
-            viewport_duration_frames_value INTEGER NOT NULL DEFAULT 300,
-            mark_in_value INTEGER,
-            mark_out_value INTEGER,
-            current_sequence_number INTEGER
-        );
-
-        CREATE TABLE tracks (
-            id TEXT PRIMARY KEY,
-            sequence_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            track_type TEXT NOT NULL,
-            timebase_type TEXT NOT NULL,
-            timebase_rate REAL NOT NULL,
-            track_index INTEGER NOT NULL
-        );
-
-        CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_value INTEGER DEFAULT 0,
-        playhead_rate REAL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_gap_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]',
-        selected_gap_infos_pre TEXT DEFAULT '[]'
-    );
-    ]]
-
-    local ok, err = db:exec(schema)
+    local now = os.time()
+    local ok, err = db:exec(string.format([[INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', %d, %d);]], now, now))
     assert(ok, err)
-
-    ok, err = db:exec([[INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');]])
+    ok, err = db:exec(string.format([[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+                                               playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
+                        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d);]], now, now))
     assert(ok, err)
-    ok, err = db:exec([[INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                                               timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-                        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);]])
-    assert(ok, err)
-    ok, err = db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index)
-                        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1);]])
+    ok, err = db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+                        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);]])
     assert(ok, err)
 
     return db
@@ -114,6 +54,9 @@ local function register_test_command()
     command_manager.register_executor("TestOp", function(command)
         local label = command:get_parameter("label") or "?"
         table.insert(executed_labels, label)
+        return true
+    end, function(command)
+        -- Undo logic (noop for test state logic, as executed_labels is reset manually in test)
         return true
     end)
 end
@@ -128,8 +71,8 @@ stub_timeline_state()
 local db_path = "/tmp/jve/test_branching_after_undo.db"
 init_db(db_path)
 
-register_test_command()
 command_manager.init(database.get_connection(), 'default_sequence', 'default_project')
+register_test_command()
 
 -- Execute initial command (acts like the XML import)
 reset_log()

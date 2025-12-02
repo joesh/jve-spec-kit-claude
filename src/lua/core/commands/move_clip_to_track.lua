@@ -89,6 +89,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local original_timeline_start = clip.timeline_start
+        local original_state = command_helper.capture_clip_state(clip)
 
         -- Check for pending_new_start_value
         local pending_new_start_rat = command:get_parameter("pending_new_start_rat")
@@ -108,15 +109,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Resolve Occlusions on Target Track
-        -- Must happen before saving the moved clip to clear space
         local target_start = clip.timeline_start
         local target_duration = pending_duration_rat or clip.duration
         
-        local ok_occ, err_occ, actions = clip_mutator.resolve_occlusions(db, {
+        local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_occlusions(db, {
             track_id = target_track_id,
             timeline_start = target_start,
             duration = target_duration,
-            exclude_clip_id = clip.id -- Don't trim self if we are just moving on same track (though track_id changed here)
+            exclude_clip_id = clip.id 
         })
         
         if not ok_occ then
@@ -124,48 +124,30 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
         
-        record_occlusion_actions(command, mutation_sequence, actions)
-
+        -- Plan the move itself
         clip.track_id = target_track_id
+        -- Pending start/duration were already applied to `clip` object above if pending_new_start_rat was set?
+        -- Wait, lines 87-90:
+        -- if pending_new_start_rat then
+        --    clip.timeline_start = pending_new_start_rat
+        -- end
+        -- So `clip` is already modified in memory.
+        
+        table.insert(planned_mutations, clip_mutator.plan_update(clip, original_state))
 
-        local save_opts = nil
-        local skip_occlusion = command:get_parameter("skip_occlusion") == true
-        if skip_occlusion or pending_new_start_rat then
-            save_opts = save_opts or {}
-            if skip_occlusion then
-                save_opts.skip_occlusion = true
-            end
-            if pending_new_start_rat then
-                local current_clip_duration = pending_duration_rat or clip.duration
-                save_opts.pending_clips = save_opts.pending_clips or {}
-                save_opts.pending_clips[clip.id] = {
-                    timeline_start = pending_new_start_rat,
-                    duration = current_clip_duration,
-                    -- Tolerance needs to be rational or removed from here
-                    -- For now, use a default Rational tolerance
-                    tolerance = Rational.new(1, current_clip_duration.fps_numerator, current_clip_duration.fps_denominator) -- 1 frame tolerance
-                }
-            end
+        -- Debug
+        for i, m in ipairs(planned_mutations) do
+            print(string.format("DEBUG Mutation %d: %s id=%s track=%s start=%s dur=%s", 
+                i, m.type, tostring(m.clip_id), tostring(m.track_id), tostring(m.timeline_start_frame), tostring(m.duration_frames)))
         end
 
-        if not clip:save(db, save_opts) then
-            print(string.format("WARNING: MoveClipToTrack: Failed to save clip %s", clip_id))
-            return false
+        -- Execute all mutations
+        local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
+        if not ok_apply then
+            return false, "Failed to apply mutations: " .. tostring(apply_err)
         end
 
-        local update = {
-            clip_id = clip.id,
-            track_id = clip.track_id,
-            track_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
-            timeline_start = clip.timeline_start,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out
-        }
-
-        local update_sequence = clip.owner_sequence_id or clip.track_sequence_id or mutation_sequence
-        update.track_sequence_id = update_sequence
-        command_helper.add_update_mutation(command, update_sequence, update)
+        command:set_parameter("executed_mutations", planned_mutations)
 
         print(string.format("✅ Moved clip %s to track %s at %s", clip_id, target_track_id, tostring(clip.timeline_start)))
         return true
@@ -174,55 +156,41 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_undoers["UndoMoveClipToTrack"] = function(command)
         print("Executing UndoMoveClipToTrack command")
 
-        local clip_id = command:get_parameter("clip_id")
-        local original_track_id = command:get_parameter("original_track_id")
-        local original_timeline_start = command:get_parameter("original_timeline_start_rat")
+        local executed_mutations = command:get_parameter("executed_mutations")
+        -- Fallback for legacy undo if executed_mutations missing? 
+        -- The old undoer logic is incompatible with the new occlusion handling (doesn't restore deleted clips).
+        -- So we enforce new logic.
         
-        -- Hydrate original_timeline_start if needed
-        if type(original_timeline_start) == "table" and original_timeline_start.frames and not getmetatable(original_timeline_start) then
-            original_timeline_start = Rational.new(original_timeline_start.frames, original_timeline_start.fps_numerator, original_timeline_start.fps_denominator)
+        if not executed_mutations then
+             print("WARNING: UndoMoveClipToTrack: No executed mutations found (legacy command?)")
+             return false
+        end
+        
+        -- We need sequence_id to record UI mutations during revert
+        -- It's not passed explicitly, but we can try to resolve it or pass nil (UI falls back to reload)
+        local sequence_id = nil -- Not critical for DB consistency
+
+        local started, begin_err = db:begin_transaction()
+        if not started then
+            print("WARNING: UndoMoveClipToTrack: Proceeding without transaction: " .. tostring(begin_err))
         end
 
-        if not clip_id or clip_id == "" then
-            print("WARNING: UndoMoveClipToTrack: Missing clip_id")
+        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+        if not ok then
+            if started then db:rollback_transaction(started) end
+            print("ERROR: UndoMoveClipToTrack: Failed to revert mutations: " .. tostring(err))
             return false
         end
-
-        if not original_track_id or original_track_id == "" then
-            print("WARNING: UndoMoveClipToTrack: Missing original_track_id parameter")
-            return false
+        
+        if started then
+            local ok_commit, commit_err = db:commit_transaction(started)
+            if not ok_commit then
+                db:rollback_transaction(started)
+                return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+            end
         end
 
-        local clip = Clip.load(clip_id, db)
-
-        if not clip then
-            print(string.format("WARNING: UndoMoveClipToTrack: Clip %s not found", clip_id))
-            return false
-        end
-
-        clip.track_id = original_track_id
-        if original_timeline_start then
-            clip.timeline_start = original_timeline_start
-        end
-
-        if not clip:save(db) then
-            print(string.format("WARNING: UndoMoveClipToTrack: Failed to save clip %s", clip_id))
-            return false
-        end
-
-        local update = {
-            clip_id = clip.id,
-            track_id = clip.track_id,
-            track_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
-            timeline_start = clip.timeline_start,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out
-        }
-
-        command_helper.add_update_mutation(command, clip.owner_sequence_id or clip.track_sequence_id, update)
-
-        print(string.format("✅ Restored clip %s to original track %s at %s", clip_id, original_track_id, tostring(clip.timeline_start)))
+        print("✅ Restored clip move and occlusions")
         return true
     end
 

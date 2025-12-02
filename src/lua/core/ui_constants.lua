@@ -281,8 +281,8 @@ ui_constants.TIMELINE = {
     TRACK_HEADER_WIDTH = 150,    -- Width of track header labels in pixels
     DRAG_THRESHOLD = 5,          -- Pixels of movement before starting drag operation
     NOTIFY_DEBOUNCE_MS = 16,     -- Milliseconds (~60fps) for state change debouncing
-    EDGE_ZONE_PX = 16,           -- Pixels from clip edge to detect edge selection for ripple edits
-    ROLL_ZONE_PX = 32,           -- Pixels centered on edit point that trigger roll selection/preview
+    EDGE_ZONE_PX = 8,            -- Pixels from clip edge to detect edge selection for ripple edits
+    ROLL_ZONE_PX = 16,           -- Pixels centered on edit point that trigger roll selection/preview
     EDIT_POINT_ZONE = 4,         -- Pixels - must be close to center for edit point detection
     SPLITTER_HANDLE_HEIGHT = 7,  -- Qt default vertical splitter handle height in pixels
 }

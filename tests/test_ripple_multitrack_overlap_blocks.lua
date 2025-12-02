@@ -18,43 +18,57 @@ local function setup_db(db_path)
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', %d, %d);
 
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 600);
+        INSERT INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height, view_start_frame, view_duration_frames, playhead_frame,
+            created_at, modified_at
+        )
+        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 1000, 1, 48000, 1920, 1080, 0, 600, 0, %d, %d);
 
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v2', 'default_sequence', 'V2', 'VIDEO', 'video_frames', 30.0, 2, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES ('track_v2', 'default_sequence', 'V2', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 
-        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec)
-        VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 120000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw');
+        INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+        VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 120000, 1000, 1, 1920, 1080, 0, 'raw', '{}', %d, %d);
 
         -- Track V1: left clip then a gap, then right clip
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
+                           timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                           fps_numerator, fps_denominator, enabled, offline,
                            created_at, modified_at)
         VALUES ('v1_left', 'default_project', 'timeline', 'V1 Left', 'track_v1', 'media1', 'default_sequence',
-                2000, 2000, 0, 2000, 'video_frames', 30.0, 1, 0, %d, %d),
+                2000, 2000, 0, 2000, 1000, 1, 1, 0, %d, %d),
                ('v1_right', 'default_project', 'timeline', 'V1 Right', 'track_v1', 'media1', 'default_sequence',
-                8000, 2000, 2000, 4000, 'video_frames', 30.0, 1, 0, %d, %d);
+                8000, 2000, 2000, 4000, 1000, 1, 1, 0, %d, %d);
 
         -- Track V2: upstream clip ending at 3000, downstream clip that will be pulled left by ripple
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
+                           timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                           fps_numerator, fps_denominator, enabled, offline,
                            created_at, modified_at)
         VALUES ('v2_left', 'default_project', 'timeline', 'V2 Left', 'track_v2', 'media1', 'default_sequence',
-                0, 6000, 0, 6000, 'video_frames', 30.0, 1, 0, %d, %d),
+                0, 6000, 0, 6000, 1000, 1, 1, 0, %d, %d),
                ('v2_right', 'default_project', 'timeline', 'V2 Right', 'track_v2', 'media1', 'default_sequence',
-                9000, 2000, 3000, 5000, 'video_frames', 30.0, 1, 0, %d, %d);
-    ]], now, now, now, now, now, now, now, now, now, now)))
+                9000, 2000, 3000, 5000, 1000, 1, 1, 0, %d, %d);
+    ]],
+        now, now,     -- projects
+        now, now,     -- sequences
+        now, now,     -- media
+        now, now,     -- v1_left
+        now, now,     -- v1_right
+        now, now,     -- v2_left
+        now, now      -- v2_right
+    )))
 
     command_manager.init(db, "default_sequence", "default_project")
     return db
 end
 
 local function fetch_start(db, id)
-    local stmt = db:prepare("SELECT start_value FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found " .. tostring(id))
     local v = tonumber(stmt:value(0)) or 0
@@ -71,7 +85,7 @@ cmd:set_parameter("edge_infos", {
     {clip_id = "v1_right", edge_type = "gap_before", track_id = "track_v1"},
     {clip_id = "v2_right", edge_type = "gap_before", track_id = "track_v2"},
 })
-cmd:set_parameter("delta_ms", -6000) -- larger than the smallest gap (V2’s 4s)
+cmd:set_parameter("delta_frames", -6000) -- fps=1000, so 6000ms -> 6000 frames; larger than the smallest gap (V2’s 4s)
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)

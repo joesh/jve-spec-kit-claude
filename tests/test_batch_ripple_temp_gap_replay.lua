@@ -82,7 +82,7 @@ local edge_infos = {
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", edge_infos)
-cmd:set_parameter("delta_ms", -500)  -- Close the gap by 500ms
+cmd:set_parameter("delta_frames", -15)  -- 500ms @30fps
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)

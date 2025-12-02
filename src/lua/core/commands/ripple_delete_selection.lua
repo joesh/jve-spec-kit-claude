@@ -18,8 +18,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local merged = {}
         for _, seg in ipairs(segments) do
-            local start_value = seg.start_value or 0
-            local duration = math.max(0, seg.duration or 0)
+            local start_value = seg.start_value
+            local duration = seg.duration
+
+            if start_value == nil then start_value = 0 end
+            if duration == nil then duration = 0 end
+
+            local is_rat_start = type(start_value) == "table"
+            local is_rat_dur = type(duration) == "table"
+
+            if is_rat_start and not is_rat_dur then
+                duration = require("core.rational").new(duration, start_value.fps_numerator, start_value.fps_denominator)
+            elseif is_rat_dur and not is_rat_start then
+                start_value = require("core.rational").new(start_value, duration.fps_numerator, duration.fps_denominator)
+            end
+
+            if type(duration) == "number" then
+                duration = math.max(0, duration)
+            elseif type(duration) == "table" and duration.frames and duration.frames < 0 then
+                 duration = require("core.rational").new(0, duration.fps_numerator, duration.fps_denominator)
+            end
+
             local end_time = start_value + duration
             if end_time > start_value then
                 local last = merged[#merged]
@@ -93,13 +112,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local clip_ids_for_delete = {}
         local window_start = nil
         local window_end = nil
+        local function clip_start_frames(clip)
+            if clip.timeline_start and clip.timeline_start.frames then
+                return clip.timeline_start.frames
+            end
+            return clip.start_value or 0
+        end
+        local function clip_duration_frames(clip)
+            if clip.duration and clip.duration.frames then
+                return clip.duration.frames
+            end
+            return clip.duration or 0
+        end
 
         for _, clip_id in ipairs(clip_ids) do
             local clip = Clip.load_optional(clip_id, db)
             if clip then
                 clips[#clips + 1] = clip
-                local clip_start = clip.start_value or 0
-                local clip_end = clip_start + (clip.duration or 0)
+                local clip_start = clip_start_frames(clip)
+                local clip_end = clip_start + clip_duration_frames(clip)
                 window_start = window_start and math.min(window_start, clip_start) or clip_start
                 window_end = window_end and math.max(window_end, clip_end) or clip_end
                 table.insert(clip_ids_for_delete, clip.id)
@@ -116,8 +147,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         window_start = window_start or 0
         window_end = window_end or window_start
         local shift_amount = window_end - window_start
-        if shift_amount < 0 then
-            shift_amount = 0
+        -- Handle Rational < number comparison (Lua 5.1 compat)
+        local is_negative = false
+        if type(shift_amount) == "number" then
+            is_negative = shift_amount < 0
+        elseif type(shift_amount) == "table" and shift_amount.frames then
+            is_negative = shift_amount.frames < 0
+        end
+
+        if is_negative then
+            if type(shift_amount) == "number" then
+                shift_amount = 0
+            else
+                shift_amount = require("core.rational").new(0, shift_amount.fps_numerator, shift_amount.fps_denominator)
+            end
         end
 
         local sequence_id = command:get_parameter("sequence_id")
@@ -153,15 +196,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         for _, clip in ipairs(clips) do
             table.insert(deleted_states, command_helper.capture_clip_state(clip))
-            total_removed_duration = total_removed_duration + (clip.duration or 0)
+            local dur_frames = clip_duration_frames(clip)
+            local start_frames = clip_start_frames(clip)
+            total_removed_duration = total_removed_duration + dur_frames
             selected_by_track[clip.track_id] = selected_by_track[clip.track_id] or {}
             table.insert(selected_by_track[clip.track_id], {
-                start_value = clip.start_value or 0,
-                duration = clip.duration or 0
+                start_value = start_frames,
+                duration = dur_frames
             })
             table.insert(global_segments_raw, {
-                start_value = clip.start_value or 0,
-                duration = clip.duration or 0
+                start_value = start_frames,
+                duration = dur_frames
             })
         end
 
@@ -216,21 +261,36 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local cumulative_removed = 0
 
                 local function process_shift_candidate(shifted_id, original_start)
-                    while seg_index <= #segments and (segments[seg_index].end_time or (segments[seg_index].start_value + (segments[seg_index].duration or 0))) <= original_start do
-                        cumulative_removed = cumulative_removed + (segments[seg_index].duration or 0)
-                        seg_index = seg_index + 1
+                    while seg_index <= #segments do
+                        local seg = segments[seg_index]
+                        local seg_end_val = seg.end_time
+                        
+                        if type(seg_end_val) == "table" and seg_end_val.frames then
+                            seg_end_val = seg_end_val.frames
+                        end
+                        
+                        if seg_end_val <= original_start then
+                            local dur = seg.duration or 0
+                            if type(dur) == "table" and dur.frames then dur = dur.frames end
+                            cumulative_removed = cumulative_removed + dur
+                            seg_index = seg_index + 1
+                        else
+                            break
+                        end
                     end
 
                     if cumulative_removed > 0 then
                         local shift_clip = Clip.load_optional(shifted_id, db)
                         if shift_clip then
-                            local new_start = math.max(0, original_start - cumulative_removed)
-                            shift_clip.start_value = new_start
+                            local fps_num = (shift_clip.rate and shift_clip.rate.fps_numerator) or shift_clip.fps_numerator or 30
+                            local fps_den = (shift_clip.rate and shift_clip.rate.fps_denominator) or shift_clip.fps_denominator or 1
+                            local new_start_frames = math.max(0, original_start - cumulative_removed)
+                            shift_clip.timeline_start = require("core.rational").new(new_start_frames, fps_num, fps_den)
                             if shift_clip:save(db, {skip_occlusion = true}) then
                                 table.insert(shifted_clips, {
                                     clip_id = shifted_id,
                                     original_start = original_start,
-                                    new_start = new_start,
+                                    new_start = new_start_frames,
                                 })
                                 local update_payload = command_helper.clip_update_payload(shift_clip, sequence_id)
                                 if update_payload then
@@ -262,7 +322,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
 
                 if not processed then
-                    local shift_query = db:prepare([[SELECT id, start_value FROM clips WHERE track_id = ? ORDER BY start_value ASC]])
+                    local shift_query = db:prepare([[SELECT id, timeline_start_frame FROM clips WHERE track_id = ? ORDER BY timeline_start_frame ASC]])
                     if not shift_query then
                         print("ERROR: RippleDeleteSelection: Failed to prepare per-track shift query")
                         return false
@@ -314,8 +374,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        print(string.format("✅ Ripple delete selection: removed %d clip(s), shifted %d clip(s) by %dms",
-            #clips, #shifted_clips, shift_amount))
+        print(string.format("✅ Ripple delete selection: removed %d clip(s), shifted %d clip(s) by %s",
+            #clips, #shifted_clips, tostring(shift_amount)))
         return true
     end
 
@@ -328,7 +388,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, info in ipairs(shifted_clips) do
             local clip = Clip.load_optional(info.clip_id, db)
             if clip and info.original_start then
-                clip.start_value = info.original_start
+                local fps_num = (clip.rate and clip.rate.fps_numerator) or clip.fps_numerator or 30
+                local fps_den = (clip.rate and clip.rate.fps_denominator) or clip.fps_denominator or 1
+                clip.timeline_start = require("core.rational").new(info.original_start, fps_num, fps_den)
                 if not clip:save(db, {skip_occlusion = true}) then
                     print(string.format("WARNING: RippleDeleteSelection undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
                 else
@@ -343,6 +405,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, state in ipairs(deleted_states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
+                restored:save(db, {skip_occlusion = true})
                 local insert_payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id)
                 if insert_payload then
                     command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)

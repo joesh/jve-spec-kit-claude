@@ -98,7 +98,7 @@ do
 
     local cmd = Command.create("BatchRippleEdit", "default_project")
     cmd:set_parameter("edge_infos", {{clip_id="clip_one", edge_type="out", track_id="v1"}})
-    cmd:set_parameter("delta_ms", -800)
+    cmd:set_parameter("delta_frames", -24) -- 800ms at 30fps
     cmd:set_parameter("sequence_id", "default_sequence")
     cmd:set_parameter("__label", "single_track_overlap")
     run_command(cmd)
@@ -131,7 +131,7 @@ do
         {clip_id="clip_v1", edge_type="out", track_id="v1"},
         {clip_id="clip_a1", edge_type="out", track_id="a1"}
     })
-    cmd:set_parameter("delta_ms", -800)
+    cmd:set_parameter("delta_frames", -24) -- 800ms at 30fps
     cmd:set_parameter("sequence_id", "default_sequence")
     cmd:set_parameter("__label", "linked_av_overlap")
     run_command(cmd)
@@ -166,7 +166,7 @@ do
 
     local cmd = Command.create("BatchRippleEdit", "default_project")
     cmd:set_parameter("edge_infos", {{clip_id="gap_clip", edge_type="gap_before", track_id="track1"}})
-    cmd:set_parameter("delta_ms", -1000)
+    cmd:set_parameter("delta_frames", -30) -- 1000ms at 30fps
     cmd:set_parameter("sequence_id", "default_sequence")
     cmd:set_parameter("__label", "gap_before_overlap")
     run_command(cmd)
@@ -198,7 +198,7 @@ do
 
     local cmd = Command.create("RippleEdit", "default_project")
     cmd:set_parameter("edge_info", {clip_id="gap_clip", edge_type="gap_before", track_id="track1"})
-    cmd:set_parameter("delta_ms", -1000)
+    cmd:set_parameter("delta_frames", -30) -- 1000ms at 30fps
     cmd:set_parameter("sequence_id", "default_sequence")
     cmd:set_parameter("__label", "ripple_gap_before_overlap")
     run_command(cmd)

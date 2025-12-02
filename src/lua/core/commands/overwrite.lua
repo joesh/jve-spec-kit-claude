@@ -147,6 +147,33 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not ok_apply then
             return false, "Failed to apply clip_mutator actions: " .. tostring(apply_err)
         end
+
+        -- Populate timeline mutation bucket for UI without falling back to reloads
+        for _, mut in ipairs(planned_mutations) do
+            if mut.type == "delete" then
+                command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
+            elseif mut.type == "update" then
+                local updated = Clip.load_optional(mut.clip_id, db)
+                if updated then
+                    local payload = {
+                        clip_id = updated.id,
+                        track_id = updated.track_id,
+                        track_sequence_id = updated.owner_sequence_id or sequence_id,
+                        start_value = updated.timeline_start and updated.timeline_start.frames,
+                        duration_value = updated.duration and updated.duration.frames,
+                        source_in_value = updated.source_in and updated.source_in.frames,
+                        source_out_value = updated.source_out and updated.source_out.frames,
+                        enabled = updated.enabled
+                    }
+                    command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
+                end
+            elseif mut.type == "insert" then
+                local payload = command_helper.clip_insert_payload(clip_to_insert, sequence_id)
+                if payload then
+                    command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
+                end
+            end
+        end
         
         -- Record mutations for undo AFTER successful commit
         command:set_parameter("executed_mutations", planned_mutations)

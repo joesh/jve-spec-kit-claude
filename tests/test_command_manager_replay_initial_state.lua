@@ -53,24 +53,29 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 local now = os.time()
-db:exec(string.format([[
+local exec_result, exec_err = db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('test_project', 'Replay Test Project', %d, %d);
 
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-        timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,
-        viewport_start_value, viewport_duration_frames_value, current_sequence_number)
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+        playhead_frame, selected_clip_ids, selected_edge_infos,
+        view_start_frame, view_duration_frames, current_sequence_number, created_at, modified_at)
     VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
-        24.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240, NULL);
+        24, 1, 48000, 1920, 1080, 0, '[]', '[]', 0, 240, NULL, %d, %d);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index)
-    VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 'video_frames', 24.0, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
+    VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 1);
 
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled)
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, created_at, modified_at)
     VALUES ('clip_001', 'test_project', 'timeline', 'Existing Clip',
-        'track_v1', 'timeline_seq', 0, 2000, 0, 2000, 'video_frames', 24.0, 1);
-]], now, now))
+        'track_v1', 'timeline_seq', 0, 2000, 0, 2000, 24, 1, 1, %d, %d);
+]], now, now, now, now, now, now))
+
+if not exec_result then
+    error(string.format("Failed to execute test setup SQL: %s", tostring(exec_err)))
+end
 
 -- No commands yet, but timeline has existing clip
 command_manager.init(db, "timeline_seq", "test_project")
@@ -82,8 +87,8 @@ assert_equal(#initial_clips, 1, "Expected database.load_clips to see existing ti
 local before_clip_count = row_count(db, "SELECT COUNT(*) FROM clips WHERE owner_sequence_id = 'timeline_seq'")
 assert_equal(before_clip_count, 1, "Expected initial timeline clip to exist before replay")
 
-local replay_success = command_manager.replay_events("timeline_seq", 0)
-assert_equal(replay_success, true, "Replay should succeed even when only initial state exists")
+local replay_result = command_manager.replay_from_sequence(0)
+assert_equal(replay_result.success, true, "Replay should succeed even when only initial state exists")
 
 local after_clip_count = row_count(db, "SELECT COUNT(*) FROM clips WHERE owner_sequence_id = 'timeline_seq'")
 assert_equal(after_clip_count, 1, "Initial timeline clip must persist after replay")

@@ -21,6 +21,7 @@ local SCHEMA_SQL = require('import_schema')
 local function install_timeline_stub()
     local timeline_state = {
         playhead_value = 0,
+        playhead_position = 0,
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},
@@ -33,14 +34,15 @@ local function install_timeline_stub()
     local function refresh_sequence_frame_rate(sequence_id)
         local db = database.get_connection()
         assert(db, "timeline_state: database not initialized")
-        local stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+        local stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
         assert(stmt, "timeline_state: failed to prepare frame rate lookup")
         stmt:bind_value(1, sequence_id)
         assert(stmt:exec() and stmt:next(), string.format("timeline_state: missing sequence %s", tostring(sequence_id)))
-        local rate = stmt:value(0)
+        local num = stmt:value(0) or 0
+        local den = stmt:value(1) or 1
         stmt:finalize()
-        assert(rate and rate > 0, "timeline_state: invalid frame rate")
-        timeline_state.sequence_frame_rate = rate
+        assert(num > 0 and den > 0, "timeline_state: invalid frame rate")
+        timeline_state.sequence_frame_rate = num / den
     end
 
     function timeline_state.get_sequence_id()
@@ -140,9 +142,22 @@ local function init_database(path)
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
+        INSERT INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height,
+            view_start_frame, view_duration_frames, playhead_frame,
+            selected_clip_ids, selected_edge_infos, selected_gap_infos,
+            current_sequence_number, created_at, modified_at
+        )
+        VALUES (
+            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            30, 1, 48000,
+            1920, 1080,
+            0, 300, 0,
+            '[]', '[]', '[]',
+            0, strftime('%s','now'), strftime('%s','now')
+        );
     ]]))
     return db
 end

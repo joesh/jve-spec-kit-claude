@@ -18,160 +18,45 @@ local db = database.get_connection()
 
 local function bootstrap_schema(conn)
     assert(conn, "bootstrap_schema requires a database connection")
+    assert(conn:exec(require('import_schema')), "Failed to create schema tables")
     assert(conn:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}',
-        created_at INTEGER DEFAULT 0,
-        modified_at INTEGER DEFAULT 0
-    );
+        INSERT INTO projects (id, name, created_at, modified_at)
+        VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
 
-            CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_value INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_value INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
-        mark_in_value INTEGER,
-        mark_out_value INTEGER,
-        current_sequence_number INTEGER
-    );
-
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        timebase_type TEXT NOT NULL,
-        timebase_rate REAL NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );
-
-                    CREATE TABLE clips (
-            id TEXT PRIMARY KEY,
-            project_id TEXT,
-            clip_kind TEXT NOT NULL DEFAULT 'timeline',
-            name TEXT DEFAULT '',
-            track_id TEXT,
-            media_id TEXT,
-            source_sequence_id TEXT,
-            parent_clip_id TEXT,
-            owner_sequence_id TEXT,
-            start_value INTEGER NOT NULL,
-            duration_value INTEGER NOT NULL,
-            source_in_value INTEGER NOT NULL DEFAULT 0,
-            source_out_value INTEGER NOT NULL,
-            timebase_type TEXT NOT NULL,
-            timebase_rate REAL NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            offline INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0,
-            modified_at INTEGER NOT NULL DEFAULT 0
+        INSERT INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height,
+            view_start_frame, view_duration_frames, playhead_frame,
+            mark_in_frame, mark_out_frame,
+            selected_clip_ids, selected_edge_infos, selected_gap_infos,
+            current_sequence_number,
+            created_at, modified_at
+        )
+        VALUES (
+            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            30, 1, 48000,
+            1920, 1080,
+            0, 240, 0,
+            NULL, NULL,
+            '[]', '[]', '[]',
+            0,
+            strftime('%s','now'), strftime('%s','now')
         );
 
-
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_path TEXT UNIQUE NOT NULL,
-        duration_value INTEGER NOT NULL,
-        timebase_type TEXT NOT NULL,
-        timebase_rate REAL NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        audio_channels INTEGER NOT NULL DEFAULT 0,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT DEFAULT '{}'
-    );
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_value INTEGER DEFAULT 0,
-        playhead_rate REAL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_gap_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]',
-        selected_gap_infos_pre TEXT DEFAULT '[]'
-    );
-
-    CREATE TABLE tag_namespaces (
-        id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL
-    );
-
-    INSERT OR IGNORE INTO tag_namespaces(id, display_name)
-    VALUES('bin', 'Bins');
-
-    CREATE TABLE tags (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        path TEXT NOT NULL,
-        parent_id TEXT,
-        sort_index INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-    );
-
-    CREATE TABLE tag_assignments (
-        tag_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        namespace_id TEXT NOT NULL,
-        entity_type TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        assigned_at INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY(tag_id, entity_type, entity_id)
-    );
-]]), "Failed to create schema tables")
-    assert(conn:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-]]), "Failed to seed default project/sequence")
+        INSERT OR IGNORE INTO tag_namespaces(id, display_name)
+        VALUES('bin', 'Bins');
+    ]]), "Failed to seed default project/sequence")
 end
 
 bootstrap_schema(db)
 
--- Minimal timeline_state stub to satisfy command replay requirements.
 local timeline_state = {
-    playhead_value = 0,
+    playhead_position = 0,
     selected_clips = {},
     selected_edges = {},
-    viewport_start_value = 0,
-    viewport_duration_frames_value = 300,
+    viewport_start_time = 0,
+    viewport_duration = 300,
     sequence_id = "default_sequence",
     sequence_frame_rate = 24.0,
     last_mutations = nil,
@@ -184,6 +69,10 @@ function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
 function timeline_state.get_playhead_position() return timeline_state.playhead_position end
 function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
+function timeline_state.get_viewport_start_time() return timeline_state.viewport_start_time end
+function timeline_state.set_viewport_start_time(ms) timeline_state.viewport_start_time = ms end
+function timeline_state.get_viewport_duration() return timeline_state.viewport_duration end
+function timeline_state.set_viewport_duration(ms) timeline_state.viewport_duration = ms end
 function timeline_state.get_selected_clips() return timeline_state.selected_clips end
 function timeline_state.get_selected_edges() return timeline_state.selected_edges end
 function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
@@ -214,18 +103,20 @@ function timeline_state.apply_mutations(sequence_id, mutations)
     end
     return changed
 end
-function timeline_state.set_viewport_start_value(ms) timeline_state.viewport_start_value = ms end
-function timeline_state.set_viewport_duration_frames_value(ms) timeline_state.viewport_duration_frames_value = ms end
 function timeline_state.capture_viewport()
     return {
-        start_value = timeline_state.viewport_start_value,
-        duration_value = timeline_state.viewport_duration_frames_value,
+        start_time = timeline_state.viewport_start_time,
+        duration = timeline_state.viewport_duration,
     }
 end
 function timeline_state.restore_viewport(snapshot)
     if not snapshot then return end
-    if snapshot.duration_value then timeline_state.viewport_duration_frames_value = snapshot.duration_value end
-    if snapshot.start_value then timeline_state.viewport_start_value = snapshot.start_value end
+    if snapshot.duration or snapshot.duration_value then
+        timeline_state.viewport_duration = snapshot.duration or snapshot.duration_value
+    end
+    if snapshot.start_time or snapshot.start_value then
+        timeline_state.viewport_start_time = snapshot.start_time or snapshot.start_value
+    end
 end
 function timeline_state.push_viewport_guard()
     viewport_guard = viewport_guard + 1
@@ -261,9 +152,10 @@ package.loaded['ui.project_browser'] = project_browser
 
 local executors = {}
 local undoers = {}
-command_impl.register_commands(executors, undoers, db)
-
 command_manager.init(db, 'default_sequence', 'default_project')
+executors = {}
+undoers = {}
+command_impl.register_commands(executors, undoers, db)
 
 local function count_rows(table_name)
     local stmt = db:prepare("SELECT COUNT(*) FROM " .. table_name)
@@ -290,7 +182,7 @@ end
 
 local function fetch_clip_ids(limit)
     local ids = {}
-    local stmt = db:prepare("SELECT id FROM clips WHERE clip_kind = 'timeline' ORDER BY id")
+    local stmt = db:prepare("SELECT id FROM clips WHERE clip_kind = 'timeline' ORDER BY timeline_start_frame DESC")
     assert(stmt:exec())
     while stmt:next() do
         table.insert(ids, stmt:value(0))
@@ -429,13 +321,13 @@ assert(match_result.success, "MatchFrame should succeed on imported clips")
 assert(project_browser.focused_master_clip_id == timeline_parent_id,
     "MatchFrame should focus the parent master clip")
 
--- Execute a nudge inside the imported sequence and ensure it links to the import command.
-local clip_ids = fetch_clip_ids(5)
+-- Use a single clip to avoid overlap errors when nudging.
+local clip_ids = fetch_clip_ids(1)
 assert(#clip_ids > 0, "Import should create clips to nudge")
 
 local nudge_cmd = Command.create("Nudge", "default_project")
-nudge_cmd:set_parameter("nudge_amount_ms", 1000)
-nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
+nudge_cmd:set_parameter("nudge_amount", 30) -- frames
+nudge_cmd:set_parameter("selected_clip_ids", { clip_ids[1] })
 
 local nudge_result = command_manager.execute(nudge_cmd)
 assert(nudge_result.success, "Nudge command should succeed after import")
@@ -572,9 +464,64 @@ assert(after_redo_counts.sequences == after_import_counts.sequences, "Redo shoul
 assert(after_redo_counts.tracks == after_import_counts.tracks, "Redo should reproduce track count exactly")
 assert(after_redo_counts.clips == after_import_counts.clips, "Redo should reproduce clip count exactly")
 
--- Simulate application restart by replaying events from scratch.
-local replay_success = command_manager.replay_events("default_sequence", import_sequence)
-assert(replay_success, "Event replay should succeed")
+-- Capture command log for replay
+local replay_commands = {}
+local replay_stmt = db:prepare("SELECT * FROM commands WHERE sequence_number = ?")
+replay_stmt:bind_value(1, import_sequence)
+if replay_stmt and replay_stmt:exec() then
+    while replay_stmt:next() do
+        local parsed = Command.parse_from_query(replay_stmt, 'default_project')
+        if parsed then
+            table.insert(replay_commands, parsed)
+        end
+    end
+end
+if replay_stmt then replay_stmt:finalize() end
+
+-- Simulate application restart by replaying events from scratch on a cleared timeline state.
+assert(db:exec([[
+    PRAGMA foreign_keys = OFF;
+    DELETE FROM tag_assignments;
+    DELETE FROM tags;
+    DELETE FROM tag_namespaces;
+    DELETE FROM clips;
+    DELETE FROM tracks;
+    DELETE FROM sequences;
+    DELETE FROM media;
+    DELETE FROM commands;
+    PRAGMA foreign_keys = ON;
+    INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');
+    INSERT OR REPLACE INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height,
+        view_start_frame, view_duration_frames, playhead_frame,
+        mark_in_frame, mark_out_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number,
+        created_at, modified_at
+    ) VALUES (
+        'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+        30, 1, 48000,
+        1920, 1080,
+        0, 240, 0,
+        NULL, NULL,
+        '[]', '[]', '[]',
+        0,
+        strftime('%s','now'), strftime('%s','now')
+    );
+]]), "Failed to clear timeline state before replay")
+command_manager.init(db, 'default_sequence', 'default_project')
+executors = {}
+undoers = {}
+command_impl.register_commands(executors, undoers, db)
+
+for _, cmd in ipairs(replay_commands) do
+    local exec_result = command_manager.execute(cmd)
+    assert(exec_result and exec_result.success,
+        string.format("Event replay should succeed for %s: %s", tostring(cmd.type),
+            exec_result and exec_result.error_message or "unknown error"))
+end
 
 local after_replay_counts = {
     sequences = count_rows("sequences"),
@@ -645,7 +592,7 @@ local move_nudge_spec = json.encode({
     {
         command_type = "Nudge",
         parameters = {
-            nudge_amount_ms = -333,
+            nudge_amount = -10,
             selected_clip_ids = {clip_for_move}
         }
     }

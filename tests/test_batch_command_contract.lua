@@ -25,21 +25,15 @@ local function test_batch_command_contract()
         os.exit(1)
     end
     
-    -- Bootstrap basic schema if needed
-    db:exec([[
-        CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, settings TEXT, created_at INTEGER, modified_at INTEGER);
-        CREATE TABLE IF NOT EXISTS sequences (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, kind TEXT, fps_numerator INTEGER, fps_denominator INTEGER, width INTEGER, height INTEGER, timecode_start_frame INTEGER, playhead_frame INTEGER, view_start_frame INTEGER, view_duration_frames INTEGER, mark_in_frame INTEGER, mark_out_frame INTEGER, current_sequence_number INTEGER, audio_rate INTEGER, selected_clip_ids TEXT, selected_edge_infos TEXT);
-        CREATE TABLE IF NOT EXISTS tracks (id TEXT PRIMARY KEY, sequence_id TEXT, name TEXT, track_type TEXT, track_index INTEGER, enabled BOOLEAN, locked BOOLEAN, muted BOOLEAN, soloed BOOLEAN, volume REAL, pan REAL, timebase_type TEXT, timebase_rate REAL);
-        CREATE TABLE IF NOT EXISTS clips (id TEXT PRIMARY KEY, project_id TEXT, clip_kind TEXT, name TEXT, track_id TEXT, media_id TEXT, source_sequence_id TEXT, parent_clip_id TEXT, owner_sequence_id TEXT, start_value REAL, duration_value REAL, source_in_value REAL, source_out_value REAL, timebase_type TEXT, timebase_rate REAL, enabled BOOLEAN, offline BOOLEAN, created_at INTEGER, modified_at INTEGER);
-        CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, project_id TEXT, file_path TEXT, name TEXT, duration_value REAL, frame_rate REAL, width INTEGER, height INTEGER, audio_channels INTEGER, codec TEXT, created_at INTEGER, modified_at INTEGER, metadata TEXT);
-        CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, parent_id TEXT, sequence_number INTEGER UNIQUE, command_type TEXT, command_args TEXT, parent_sequence_number INTEGER, pre_hash TEXT, post_hash TEXT, timestamp INTEGER, playhead_value REAL, playhead_rate REAL, selected_clip_ids TEXT, selected_edge_infos TEXT, selected_gap_infos TEXT, selected_clip_ids_pre TEXT, selected_edge_infos_pre TEXT, selected_gap_infos_pre TEXT);
-    ]])
+    -- Load main schema for consistency
+    db:exec(require('import_schema'))
+    db:exec(string.format([[
+        INSERT INTO projects (id, name, created_at, modified_at)
+        VALUES ('default_project', 'Test Project', %d, %d);
+    ]], os.time(), os.time()))
 
     -- Initialize Command Manager
     CommandManager.init(db, "default_sequence", "default_project")
-
-    -- Create default project
-    db:exec("INSERT INTO projects (id, name) VALUES ('default_project', 'Test Project')")
 
     -- Stub timeline_state
     local timeline_state = require("ui.timeline.timeline_state")

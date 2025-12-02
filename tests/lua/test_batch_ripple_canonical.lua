@@ -242,7 +242,7 @@ local function run_scenario(scenario)
 
     local cmd = Command.create("BatchRippleEdit", "default_project")
     cmd:set_parameter("edge_infos", scenario.edges)
-    cmd:set_parameter("delta_ms", scenario.delta_ms)
+    cmd:set_parameter("delta_frames", scenario.delta_frames)
     cmd:set_parameter("sequence_id", "default_sequence")
 
     -- Debug ranges for first scenario before execution
@@ -296,7 +296,8 @@ local scenarios = {
             {clip_id = "clip_v1_second", edge_type = "gap_before", track_id = "video1"},
             {clip_id = "clip_v2_mid", edge_type = "in", track_id = "video2"}
         },
-        delta_ms = 1000,
+        -- 1000ms at 30fps = 30 frames
+        delta_frames = 30,
         expect = {
             clip_v1_second = {start_value = 2000, duration_value = 2000},
             clip_v2_mid = {duration_value = 1000, source_in_value = 2000}
@@ -315,7 +316,7 @@ local scenarios = {
             {clip_id = "clip_v1_second", edge_type = "gap_before", track_id = "video1"},
             {clip_id = "clip_v2_mid", edge_type = "out", track_id = "video2"}
         },
-        delta_ms = -1000,
+        delta_frames = -30,
         expect = {
             clip_v1_second = {start_value = 2000, duration_value = 2000},
             clip_v2_mid = {duration_value = 2000, source_out_value = 2000}
@@ -332,7 +333,7 @@ local scenarios = {
         edges = {
             {clip_id = "clip_one", edge_type = "out", track_id = "video1"}
         },
-        delta_ms = -500,
+        delta_frames = -15,
         expect = {
             clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
             clip_two = {start_value = 600}
@@ -350,7 +351,7 @@ local scenarios = {
             {clip_id = "clip_one", edge_type = "out", track_id = "video1"},
             {clip_id = "clip_two", edge_type = "out", track_id = "video1"}
         },
-        delta_ms = -500,
+        delta_frames = -15,
         expect = {
             clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
             clip_two = {start_value = 600, duration_value = 500, source_out_value = 1500}

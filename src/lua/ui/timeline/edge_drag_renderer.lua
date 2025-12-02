@@ -103,23 +103,15 @@ end
 local function build_preview_edge(edge, shared_delta, requested_delta, trim_constraints, colors)
     local normalized_edge = edge_utils.normalize_edge_type(edge.edge_type)
     local constraints = constraint_for_edge(trim_constraints, edge)
-    local clamped_delta, at_limit = clamp_edge_delta(edge, shared_delta, trim_constraints)
-    
-    if constraints and requested_delta and requested_delta ~= shared_delta then
-        -- Check closeness to limit
-        local min_d = constraints.min_delta or -math.huge
-        local max_d = constraints.max_delta or math.huge
-        
-        if shared_delta == min_d or shared_delta == max_d then
+    local clamped_delta, _ = clamp_edge_delta(edge, shared_delta, trim_constraints)
+
+    -- Flag limit only if this edge's own constraint was the limiter
+    local at_limit = false
+    if constraints and requested_delta then
+        if constraints.max_delta and requested_delta > constraints.max_delta and clamped_delta == constraints.max_delta then
             at_limit = true
-        end
-        
-        -- Rational close check? Assume strict equality for Rational, or epsilon for float
-        if not is_rational(shared_delta) then
-             local eps = 0.0001
-             if shared_delta <= min_d + eps or shared_delta >= max_d - eps then
-                at_limit = true
-             end
+        elseif constraints.min_delta and requested_delta < constraints.min_delta and clamped_delta == constraints.min_delta then
+            at_limit = true
         end
     end
     
@@ -132,6 +124,7 @@ local function build_preview_edge(edge, shared_delta, requested_delta, trim_cons
         edge_type = normalized_edge,
         target_track_id = edge.track_id,
         delta = clamped_delta,
+        delta_ms = (type(clamped_delta) == "number") and clamped_delta or (clamped_delta.frames and clamped_delta.frames * 1000 / (clamped_delta.fps_numerator or 1) or clamped_delta),
         at_limit = at_limit,
         color = color
     }

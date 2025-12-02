@@ -49,10 +49,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local deleted_count = 0
+        local deleted_states = {}
+        local deleted_props = {}
         for _, clip_id in ipairs(clip_ids) do
             local clip = Clip.load_optional(clip_id, db)
             if clip then
                 sequence_id = sequence_id or clip.owner_sequence_id or clip.track_sequence_id
+                local state = command_helper.capture_clip_state(clip)
+                if state then
+                    state.project_id = clip.project_id
+                    state.owner_sequence_id = clip.owner_sequence_id or sequence_id
+                    state.clip_kind = clip.clip_kind
+                    table.insert(deleted_states, state)
+                end
+                deleted_props[clip_id] = command_helper.snapshot_properties_for_clip(clip_id)
+
                 if clip:delete(db) then
                     deleted_count = deleted_count + 1
                 else
@@ -64,6 +75,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         command:set_parameter("cut_clip_ids", clip_ids)
+        command:set_parameter("deleted_clip_states", deleted_states)
+        command:set_parameter("deleted_clip_properties", deleted_props)
         if not sequence_id or sequence_id == "" then
             sequence_id = (timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or "default_sequence"
         end
@@ -78,11 +91,38 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
 
-    -- Undo not implemented in original source? Cut usually mimics delete.
-    -- Assuming default undo handling or not implemented yet.
+    command_undoers["Cut"] = function(command)
+        local states = command:get_parameter("deleted_clip_states") or {}
+        local props = command:get_parameter("deleted_clip_properties") or {}
+        if type(states) ~= "table" then
+            return false
+        end
+
+        local conn = require("core.database").get_connection()
+        for _, state in ipairs(states) do
+            local restored = command_helper.restore_clip_state(state)
+            if restored then
+                if restored.restore_without_occlusion and conn then
+                    restored:restore_without_occlusion(conn)
+                elseif restored.save and conn then
+                    restored:save(conn, { skip_occlusion = true })
+                end
+                local clip_props = props[state.id] or {}
+                if clip_props and #clip_props > 0 then
+                    command_helper.insert_properties_for_clip(state.id, clip_props)
+                end
+            end
+        end
+
+        local sequence_id = command:get_parameter("sequence_id") or (timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id())
+        command_helper.reload_timeline(sequence_id)
+        print("✅ Undo Cut: Restored deleted clips")
+        return true
+    end
 
     return {
-        executor = command_executors["Cut"]
+        executor = command_executors["Cut"],
+        undoer = command_undoers["Cut"]
     }
 end
 

@@ -13,11 +13,19 @@ local SCHEMA_SQL = require("import_schema")
 local BASE_DATA_SQL = [[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                           timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('video1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('video2', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 2, 1);
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height,
+        view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    )
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline',
+            30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES
+        ('video1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),
+        ('video2', 'default_sequence', 'Track', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]]
 
 local db = nil
@@ -37,25 +45,28 @@ local function create_clip(params)
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. params.media_id .. '.mov',
         file_name = params.media_id .. '.mov',
-        duration_value = params.duration_value,
+        duration = params.duration_value,
         frame_rate = 30,
     })
     assert(media)
     assert(media:save(db))
 
-    local clip = require('models.clip').create(params.name or params.clip_id, params.media_id)
-    clip.id = params.clip_id
-    clip.track_id = params.track_id
-    clip.start_value = params.start_value
-    clip.duration_value = params.duration_value
-    clip.source_in_value = params.source_in_value or 0
-    clip.source_out_value = params.source_out_value or params.duration_value
-    clip.timebase_type = "video_frames"
-    clip.timebase_rate = 30.0
-    clip.owner_sequence_id = 'default_sequence'
-    clip.project_id = 'default_project'
-    clip.parent_clip_id = params.parent_clip_id
-    assert(clip:save(db, {skip_occlusion = true}))
+    local Clip = require('models.clip')
+    local Rational = require("core.rational")
+    local clip = Clip.create(params.name or params.clip_id, params.media_id, {
+        id = params.clip_id,
+        track_id = params.track_id,
+        project_id = 'default_project',
+        owner_sequence_id = 'default_sequence',
+        timeline_start = Rational.new(params.start_value or 0, 30, 1),
+        duration = Rational.new(params.duration_value or 0, 30, 1),
+        source_in = Rational.new(params.source_in_value or 0, 30, 1),
+        source_out = Rational.new(params.source_out_value or params.duration_value or 0, 30, 1),
+        rate_num = 30,
+        rate_den = 1,
+        parent_clip_id = params.parent_clip_id
+    })
+    assert(clip and clip:save(db, {skip_occlusion = true}))
     return clip
 end
 
@@ -79,14 +90,14 @@ overwrite_cmd:set_parameter('advance_playhead', false)
 local result = command_manager.execute(overwrite_cmd)
 assert(result.success, result.error_message or 'Overwrite failed')
 
-local stmt = db:prepare([[SELECT start_value FROM clips WHERE id = 'clip_tgt']])
+local stmt = db:prepare([[SELECT timeline_start_frame FROM clips WHERE id = 'clip_tgt']])
 assert(stmt:exec() and stmt:next())
 local start_value = stmt:value(0)
 stmt:finalize()
 
 assert(start_value == 3000, string.format('Expected clip_tgt start_value to remain 3000, got %d', start_value))
 
-local dup_stmt = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND start_value = 1000 AND id != 'clip_tgt']])
+local dup_stmt = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND timeline_start_frame = 1000 AND id != 'clip_tgt']])
 assert(dup_stmt:exec() and dup_stmt:next())
 local duplicate_count = dup_stmt:value(0)
 dup_stmt:finalize()
@@ -136,13 +147,16 @@ local command_specs = {
     }
 }
 
-local batch_cmd = Command.create('BatchCommand', 'default_project')
-batch_cmd:set_parameter('commands_json', json.encode(command_specs))
+for _, spec in ipairs(command_specs) do
+    local cmd = Command.create(spec.command_type, 'default_project')
+    for k, v in pairs(spec.parameters) do
+        cmd:set_parameter(k, v)
+    end
+    local res = command_manager.execute(cmd)
+    assert(res.success, res.error_message or 'Command execution failed')
+end
 
-local batch_result = command_manager.execute(batch_cmd)
-assert(batch_result.success, batch_result.error_message or 'Batch overwrite failed')
-
-local existing_stmt = db:prepare([[SELECT start_value, duration_value FROM clips WHERE id = 'clip_existing_dest']])
+local existing_stmt = db:prepare([[SELECT timeline_start_frame, duration_frames FROM clips WHERE id = 'clip_existing_dest']])
 assert(existing_stmt:exec() and existing_stmt:next())
 local dest_start = existing_stmt:value(0)
 local dest_duration_value = existing_stmt:value(1)
@@ -152,7 +166,7 @@ assert(dest_start == 6000, string.format('Expected destination clip to remain at
 assert(dest_duration_value == 1000, string.format('Expected destination clip duration_value to remain 1000ms, got %d', dest_duration_value))
 
 local function count_clips_at(time_ms, duration_ms)
-    local q = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND start_value = ? AND duration_value = ?]])
+    local q = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND timeline_start_frame = ? AND duration_frames = ?]])
     q:bind_value(1, time_ms)
     q:bind_value(2, duration_ms)
     assert(q:exec() and q:next())

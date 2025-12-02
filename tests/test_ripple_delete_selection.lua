@@ -17,18 +17,24 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 db:exec([[
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v2', 'default_sequence', 'Video 2', 'VIDEO', 'video_frames', 30.0, 2, 1);
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        created_at, modified_at
+    )
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v2', 'default_sequence', 'Video 2', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
 local function clips_snapshot()
     local clips = {}
-    local stmt = db:prepare("SELECT id, track_id, start_value, duration_value FROM clips ORDER BY start_value")
+    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips ORDER BY timeline_start_frame")
     assert(stmt:exec())
     while stmt:next() do
         clips[#clips + 1] = {
@@ -56,6 +62,7 @@ local timeline_state = {
     selected_edges = {},
     selected_gaps = {},
     playhead_value = 0,
+    playhead_position = 0,
     viewport_start_value = 0,
     viewport_duration_frames_value = 10000,
 }
@@ -85,9 +92,12 @@ function timeline_state.get_clips()
     return timeline_state.clips
 end
 function timeline_state.get_sequence_id() return "default_sequence" end
-function timeline_state.get_sequence_frame_rate() return 30.0 end
+function timeline_state.get_sequence_frame_rate() return {fps_numerator = 30, fps_denominator = 1} end
 function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
+function timeline_state.set_playhead_position(time_ms)
+    timeline_state.playhead_position = time_ms
+    timeline_state.playhead_value = time_ms
+end
 function timeline_state.push_viewport_guard() return 1 end
 function timeline_state.pop_viewport_guard() return 0 end
 function timeline_state.capture_viewport()
@@ -121,7 +131,7 @@ package.loaded['ui.timeline.timeline_state'] = timeline_state
 
 local executors = {}
 local undoers = {}
-command_impl.register_commands(executors, undoers, db)
+-- command_impl.register_commands(executors, undoers, db)
 command_manager.init(db, 'default_sequence', 'default_project')
 
 local function create_clip_command(params)
@@ -134,20 +144,27 @@ local function create_clip_command(params)
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. clip_id .. '.mov',
         file_name = clip_id .. '.mov',
-        duration = clip_duration,
-        frame_rate = 30
+        duration_frames = clip_duration,
+        fps_numerator = 30,
+        fps_denominator = 1
     })
     assert(media, "failed to create media for clip " .. tostring(clip_id))
     assert(media:save(db), "failed to save media for clip " .. tostring(clip_id))
 
-    local clip = require('models.clip').create("Test Clip", media_id)
-    clip.id = params.clip_id
-    clip.track_id = params.track_id
-    clip.start_value = params.start_value
-    clip.duration = params.duration
-    clip.source_in = 0
-    clip.source_out = params.duration
-    clip.enabled = true
+    local Rational = require('core.rational')
+    local clip = require('models.clip').create("Test Clip", media_id, {
+        id = params.clip_id,
+        project_id = 'default_project',
+        track_id = params.track_id,
+        owner_sequence_id = 'default_sequence',
+        timeline_start = Rational.new(params.start_value, 30, 1),
+        duration = Rational.new(params.duration, 30, 1),
+        source_in = Rational.new(0, 30, 1),
+        source_out = Rational.new(params.duration, 30, 1),
+        rate_num = 30,
+        rate_den = 1,
+        enabled = true
+    })
     return clip:save(db, {skip_occlusion = true})
 end
 

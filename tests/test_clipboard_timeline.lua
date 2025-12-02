@@ -29,34 +29,37 @@ local BASE_DATA_SQL = string.format([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_a1', 'default_sequence', 'Audio 1', 'AUDIO', 1, 1);
 ]], now, now, now, now)
 
-local db = nil
+
 
 local function reload_clips_into_state(state)
-    if not state or not state.clips then return end
     state.clips = {}
     local stmt = db:prepare([[
-        SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame 
+        SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips
     ]])
     if not stmt then return end -- Should handle error
-    while stmt:exec() and stmt:next() do
-        local clip = {
-            id = stmt:value(0),
-            track_id = stmt:value(1),
-            start_value = stmt:value(2) * 1000.0 / 30.0, -- Approx MS for legacy test logic
-            duration_value = stmt:value(3) * 1000.0 / 30.0,
-            source_in_value = stmt:value(4) * 1000.0 / 30.0,
-            source_out_value = stmt:value(5) * 1000.0 / 30.0,
-            enabled = true
-        }
-        table.insert(state.clips, clip)
-        if state.clip_lookup then
-            state.clip_lookup[clip.id] = clip
+    if stmt:exec() then
+        while stmt:next() do
+            local clip_id = stmt:value(0)
+            local clip = {
+                id = clip_id,
+                track_id = stmt:value(1),
+                start_value = stmt:value(2) * 1000.0 / 30.0, -- Approx MS for legacy test logic
+                duration_value = stmt:value(3) * 1000.0 / 30.0,
+                source_in_value = stmt:value(4) * 1000.0 / 30.0,
+                source_out_value = stmt:value(5) * 1000.0 / 30.0,
+                enabled = true
+            }
+            table.insert(state.clips, clip)
+            if state.clip_lookup then
+                state.clip_lookup[clip.id] = clip
+            end
         end
+    else
+        print("DEBUG: reload_clips query failed")
     end
     stmt:finalize()
 end
-
 local timeline_state = {
     playhead_value = 0,
     selected_clips = {},
@@ -78,7 +81,12 @@ function timeline_state.get_sequence_frame_rate() return timeline_state.sequence
 function timeline_state.get_playhead_position() return timeline_state.playhead_position end
 function timeline_state.set_playhead_position(ms) timeline_state.playhead_position = ms end
 function timeline_state.reload_clips()
-    reload_clips_into_state(timeline_state)
+    local clips = database.load_clips(timeline_state.sequence_id)
+    timeline_state.clips = clips
+    timeline_state.clip_lookup = {}
+    for _, clip in ipairs(clips) do
+        timeline_state.clip_lookup[clip.id] = clip
+    end
 end
 function timeline_state.get_clips()
     timeline_state.reload_clips()
@@ -120,33 +128,34 @@ local clipboard_actions = require('core.clipboard_actions')
 local function setup_database(path)
     os.remove(path)
     assert(database.init(path))
-    db = database.get_connection()
-    assert(db:exec(SCHEMA_SQL))
+    local conn = database.get_connection()
+    assert(conn:exec(SCHEMA_SQL))
+    assert(conn:exec(BASE_DATA_SQL))
     local executors = {}
     local undoers = {}
     -- command_impl.register_commands(executors, undoers, db) -- Removed
-    command_manager.init(db, 'default_sequence', 'default_project')
+    command_manager.init(conn, 'default_sequence', 'default_project')
 
     timeline_state.playhead_position = 0
     timeline_state.selected_clips = {}
     timeline_state.clip_lookup = {}
-    reload_clips_into_state(timeline_state)
+    timeline_state.reload_clips()
     clipboard.clear()
 end
 
 local function reopen_database(path)
     assert(database.set_path(path))
-    db = database.get_connection()
+    local conn = database.get_connection()
 
     local executors = {}
     local undoers = {}
     -- command_impl.register_commands(executors, undoers, db)
-    command_manager.init(db, 'default_sequence', 'default_project')
+    command_manager.init(conn, 'default_sequence', 'default_project')
 
     timeline_state.playhead_position = 0
     timeline_state.selected_clips = {}
     timeline_state.clip_lookup = {}
-    reload_clips_into_state(timeline_state)
+    timeline_state.reload_clips()
 end
 
 local function create_media_record(media_id, duration_value)
@@ -156,10 +165,10 @@ local function create_media_record(media_id, duration_value)
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. media_id .. '.mov',
         file_name = media_id .. '.mov',
-        duration_value = duration_value,
+        duration_frames = math.floor(duration_value * 24 / 1000), -- Convert ms to frames approx
         frame_rate = 24
     })
-    assert(media:save(db))
+    assert(media:save(database.get_connection()))
 end
 
 local function insert_clip_via_command(params)
@@ -179,9 +188,21 @@ local function insert_clip_via_command(params)
 end
 
 local function get_clip_start_value(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+    local conn = database.get_connection()
+    local stmt = conn:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
-    assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(clip_id))
+    if not (stmt:exec() and stmt:next()) then
+        print("DEBUG: clip not found: " .. tostring(clip_id) .. ". Available clips:")
+        local list = conn:prepare("SELECT id FROM clips")
+        if list:exec() then
+            while list:next() do
+                print("  - " .. list:value(0))
+            end
+        end
+        list:finalize()
+        stmt:finalize()
+        error("clip not found: " .. tostring(clip_id))
+    end
     local start_value = stmt:value(0) * 1000.0 / 30.0
     stmt:finalize()
     return start_value
@@ -206,10 +227,12 @@ setup_database(TEST_DB)
 insert_clip_via_command({
     clip_id = "clip_original",
     media_id = "media_original",
-    track_id = "video1",
+    track_id = "track_v1",
     start_value = 1000,
     duration_value = 800
 })
+
+
 
 timeline_state.reload_clips()
 local base_clip = timeline_state.clip_lookup["clip_original"]
@@ -227,23 +250,26 @@ timeline_state.set_selection({})
 local paste_ok, paste_err = clipboard_actions.paste()
 assert(paste_ok, paste_err or "paste failed")
 
-local verify_stmt = db:prepare([[
-    SELECT COUNT(*) AS cnt, MIN(start_value)
+local verify_conn = database.get_connection()
+local verify_stmt = verify_conn:prepare([[
+    SELECT COUNT(*) AS cnt, MIN(timeline_start_frame)
     FROM clips
     WHERE clip_kind = 'timeline' AND id != 'clip_original'
 ]])
 assert(verify_stmt:exec() and verify_stmt:next())
 local pasted_count = verify_stmt:value(0)
-local pasted_start = verify_stmt:value(1)
+local pasted_start_frame = verify_stmt:value(1)
+local pasted_start_ms = pasted_start_frame * 1000.0 / 30.0
 verify_stmt:finalize()
 
 assert(pasted_count == 1, "expected exactly one pasted clip")
-assert(pasted_start == 4000, string.format("pasted clip start_value should be 4000ms (got %s)", tostring(pasted_start)))
+assert(math.abs(pasted_start_ms - 4000) < 1, string.format("pasted clip start should be 4000ms (got %f)", pasted_start_ms))
 
 local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo Paste should succeed")
 
-local count_stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+local count_conn = database.get_connection()
+local count_stmt = count_conn:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
 assert(count_stmt:exec() and count_stmt:next())
 assert(count_stmt:value(0) == 1, "undo should restore original clip only")
 count_stmt:finalize()
@@ -258,23 +284,27 @@ local REGRESSION_DB = "/tmp/jve/test_clipboard_timeline_regression.db"
 setup_database(REGRESSION_DB)
 
 -- Build baseline timeline with multiple commands (mirrors real-world history)
-insert_clip_via_command({clip_id = "clip_src", media_id = "media_src", track_id = "video1", start_value = 0, duration_value = 2000})
-insert_clip_via_command({clip_id = "clip_mid", media_id = "media_mid", track_id = "video1", start_value = 4543560, duration_value = 1500})
-insert_clip_via_command({clip_id = "clip_tail", media_id = "media_tail", track_id = "video1", start_value = 9087120, duration_value = 1500})
+insert_clip_via_command({clip_id = "clip_src", media_id = "media_src", track_id = "track_v1", start_value = 0, duration_value = 2000})
+insert_clip_via_command({clip_id = "clip_mid", media_id = "media_mid", track_id = "track_v1", start_value = 4543560, duration_value = 1500})
+insert_clip_via_command({clip_id = "clip_tail", media_id = "media_tail", track_id = "track_v1", start_value = 9087120, duration_value = 1500})
+
+-- Verify clip_tail exists before batch
+local pre_batch_start = get_clip_start_value("clip_tail")
+print("DEBUG: Pre-batch clip_tail start: " .. tostring(pre_batch_start))
 
 execute_batch({
     {
         command_type = "MoveClipToTrack",
         parameters = {
             clip_id = "clip_src",
-            target_track_id = "video2",
+            target_track_id = "track_a1", -- Use existing audio track as target
             project_id = "default_project"
         }
     },
     {
         command_type = "Nudge",
         parameters = {
-            nudge_amount_ms = -1636537,
+            nudge_amount = -49096, -- Frames (approx -1636537ms @ 30fps)
             selected_clip_ids = {"clip_src"},
             project_id = "default_project",
             sequence_id = "default_sequence"
@@ -327,7 +357,7 @@ setup_database(CUT_DB)
 insert_clip_via_command({
     clip_id = "cut_clip",
     media_id = "cut_media",
-    track_id = "video1",
+    track_id = "track_v1",
     start_value = 5000,
     duration_value = 1200
 })
@@ -355,14 +385,14 @@ setup_database(RIPPLE_DB)
 insert_clip_via_command({
     clip_id = "ripple_clip_a",
     media_id = "ripple_media_a",
-    track_id = "video1",
+    track_id = "track_v1",
     start_value = 0,
     duration_value = 1000
 })
 insert_clip_via_command({
     clip_id = "ripple_clip_b",
     media_id = "ripple_media_b",
-    track_id = "video1",
+    track_id = "track_v1",
     start_value = 2000,
     duration_value = 1500
 })

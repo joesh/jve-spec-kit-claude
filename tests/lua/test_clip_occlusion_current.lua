@@ -249,7 +249,7 @@ do
         {clip_id="v1_right", edge_type="gap_before", track_id="v1"},
         {clip_id="v2_left", edge_type="out", track_id="v2"}
     })
-    cmd:set_parameter("delta_ms", -3000)
+    cmd:set_parameter("delta_frames", -90) -- 3000ms at 30fps
     cmd:set_parameter("sequence_id", "sequence")
     local result = command_manager.execute(cmd)
     assert_true("BatchRipple gap close", result.success)

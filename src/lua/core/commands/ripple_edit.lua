@@ -135,7 +135,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
              return {success = false, error_message = "RippleEdit missing parameters"}
         end
         
-        local sequence_id = command_helper.resolve_sequence_for_track(nil, raw_edge_info.track_id)
+        local edge_info = raw_edge_info
+        if type(raw_edge_info.clip_id) == "string" and raw_edge_info.clip_id:find("^temp_gap_") then
+            edge_info = {}
+            for k, v in pairs(raw_edge_info) do edge_info[k] = v end
+            edge_info.clip_id = edge_info.clip_id:gsub("^temp_gap_", "")
+            command:set_parameter("edge_info", edge_info)
+        end
+
+        local sequence_id = command_helper.resolve_sequence_for_track(nil, edge_info.track_id)
         if not sequence_id or sequence_id == "" then sequence_id = "default_sequence" end
         
         local all_clips = database.load_clips(sequence_id)
@@ -156,14 +164,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             seq_stmt:finalize()
         end
         
+        -- Strict input: delta must be Rational via delta_ms (Rational/table) or integer frames
         local delta_rat
         if delta_frames then
             delta_rat = Rational.new(delta_frames, seq_fps_num, seq_fps_den)
-        else
-            delta_rat = Rational.from_seconds(delta_ms / 1000.0, seq_fps_num, seq_fps_den)
+        elseif delta_ms then
+            if type(delta_ms) == "number" then
+                error("RippleEdit: delta_ms must be Rational, not number")
+            end
+            if getmetatable(delta_ms) == Rational.metatable then
+                delta_rat = delta_ms:rescale(seq_fps_num, seq_fps_den)
+            elseif type(delta_ms) == "table" and delta_ms.frames then
+                delta_rat = Rational.new(delta_ms.frames, delta_ms.fps_numerator or seq_fps_num, delta_ms.fps_denominator or seq_fps_den)
+            else
+                error("RippleEdit: delta_ms must be Rational-like")
+            end
+        end
+        if not delta_rat or not delta_rat.frames then
+            return {success = false, error_message = "RippleEdit missing valid delta"}
         end
 
-        local clip = Clip.load(raw_edge_info.clip_id, db)
+        local clip = Clip.load(edge_info.clip_id, db)
         if not clip then
              print("ERROR: RippleEdit: Clip not found")
              return {success = false, error_message = "Clip not found"}
@@ -192,7 +213,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                          -- Current source out
                          local current_out = clip.source_out
                          
-                         if raw_edge_info.edge_type == "out" then
+                         if edge_info.edge_type == "out" then
                              -- Extending tail: New Out = Current Out + Delta
                              -- Limit: New Out <= Media Duration
                              -- Current Out + Delta <= Media Duration
@@ -201,7 +222,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                              if clamped_delta > max_delta then
                                  clamped_delta = max_delta
                              end
-                         elseif raw_edge_info.edge_type == "in" then
+                         elseif edge_info.edge_type == "in" then
                              -- Extending head (moving In left): New In = Current In + Delta (Delta is negative)
                              -- Limit: New In >= 0
                              -- Current In + Delta >= 0
@@ -217,24 +238,104 @@ function M.register(command_executors, command_undoers, db, set_last_error)
              end
         end
 
+        if edge_info.edge_type == "gap_before" and clamped_delta < Rational.new(0, seq_fps_num, seq_fps_den) then
+            local closest_end = nil
+            for _, other in ipairs(all_clips) do
+                if other.track_id == clip.track_id and other.id ~= clip.id then
+                    local other_end = other.timeline_start + other.duration
+                    if other_end <= original_start_rat and (not closest_end or other_end > closest_end) then
+                        closest_end = other_end
+                    end
+                end
+            end
+
+            if closest_end then
+                local gap = original_start_rat - closest_end
+                local max_close = Rational.new(-gap.frames, gap.fps_numerator, gap.fps_denominator)
+                if clamped_delta < max_close then
+                    clamped_delta = max_close
+                end
+            end
+        end
+
+        if edge_info.edge_type == "gap_after" and clamped_delta > Rational.new(0, seq_fps_num, seq_fps_den) then
+            local next_start = nil
+            for _, other in ipairs(all_clips) do
+                if other.track_id == clip.track_id and other.id ~= clip.id then
+                    if other.timeline_start >= original_end_rat then
+                        if not next_start or other.timeline_start < next_start then
+                            next_start = other.timeline_start
+                        end
+                    end
+                end
+            end
+            if next_start then
+                local gap = next_start - original_end_rat
+                if clamped_delta > gap then
+                    clamped_delta = gap
+                end
+            end
+        end
+
         delta_rat = clamped_delta
+        local clamped_delta_ms = (delta_rat.frames * 1000) / (seq_fps_num / seq_fps_den)
+        command:set_parameter("clamped_delta_ms", clamped_delta_ms)
 
         local original_clip_state = nil
         if not dry_run and not is_gap_clip then
             original_clip_state = command_helper.capture_clip_state(clip)
         end
 
-        local ripple_time, success, deleted_clip = apply_edge_ripple(clip, raw_edge_info.edge_type, delta_rat)
-        if not success then
-             return {success = false, error_message = "Ripple operation failed"}
+        local ripple_time = original_end_rat
+        local shift_rat
+        local deleted_clip = nil
+        local success = true
+
+        if edge_info.edge_type == "gap_before" then
+            -- Gap closure/expansion: slide the entire clip (and downstream clips) by delta
+            local new_start = clip.timeline_start + delta_rat
+            if new_start < Rational.new(0, seq_fps_num, seq_fps_den) then
+                local new_end = new_start + clip.duration
+                if new_end <= Rational.new(0, seq_fps_num, seq_fps_den) then
+                    deleted_clip = true
+                    shift_rat = -clip.duration
+                else
+                    new_start = Rational.new(0, seq_fps_num, seq_fps_den)
+                    shift_rat = new_start - clip.timeline_start
+                    clip.timeline_start = new_start
+                end
+            else
+                shift_rat = new_start - clip.timeline_start
+                clip.timeline_start = new_start
+            end
+            ripple_time = original_start_rat -- shift co-timed clips on other tracks as well
+        elseif edge_info.edge_type == "gap_after" then
+            -- Shift downstream clips relative to the trailing gap after this clip
+            shift_rat = -delta_rat
+            ripple_time = original_end_rat
+        else
+            local _, apply_ok, apply_deleted = apply_edge_ripple(clip, edge_info.edge_type, delta_rat)
+            success = apply_ok
+            deleted_clip = apply_deleted
+            if not success then
+                 return {success = false, error_message = "Ripple operation failed"}
+            end
+            local new_end_rat = clip.timeline_start + clip.duration
+            shift_rat = new_end_rat - original_end_rat
+            ripple_time = original_end_rat
         end
         
-        local new_end_rat = clip.timeline_start + clip.duration
-        local shift_rat = new_end_rat - original_end_rat
+        if shift_rat.frames == 0 and not deleted_clip
+            and clip.timeline_start == original_start_rat
+            and clip.duration == original_duration_rat then
+            command:set_parameter("__suppress_if_unchanged", true)
+            command:set_parameter("__skip_selection_snapshot", true)
+            return {success = true}
+        end
 
         if not dry_run then
             print(string.format("RippleEdit: edge=%s, delta=%s, shift=%s",
-                raw_edge_info.edge_type, tostring(delta_rat), tostring(shift_rat)))
+                edge_info.edge_type, tostring(delta_rat), tostring(shift_rat)))
         end
 
         if deleted_clip and not is_gap_clip then
@@ -242,7 +343,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local excluded_ids = {[clip.id] = true}
-        local clips_to_shift = collect_downstream_clips(all_clips, excluded_ids, original_end_rat)
+        local clips_to_shift = collect_downstream_clips(all_clips, excluded_ids, ripple_time)
 
         if dry_run then
             return true, {
@@ -260,7 +361,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not is_gap_clip then
                 if deleted_clip then
                     if not clip:delete(db) then
-                        print(string.format("ERROR: RippleEdit: Failed to delete clip %s", raw_edge_info.clip_id:sub(1,8)))
+                        print(string.format("ERROR: RippleEdit: Failed to delete clip %s", edge_info.clip_id:sub(1,8)))
                         return false
                     end
                     command_helper.add_delete_mutation(command, sequence_id, clip.id)
@@ -268,7 +369,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     local save_opts = nil
                     local ok, actions = clip:save(db, save_opts)
                     if not ok then
-                        print(string.format("ERROR: RippleEdit: Failed to save clip %s", raw_edge_info.clip_id:sub(1,8)))
+                        print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
                         return false
                     end
                     append_actions(occlusion_actions, actions)

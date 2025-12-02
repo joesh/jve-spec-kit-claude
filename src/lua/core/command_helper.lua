@@ -523,29 +523,38 @@ function M.apply_mutations(db, mutations)
     end
 
     for _, mut in ipairs(mutations) do
-        -- print(string.format("DEBUG: Mutation %s id=%s start=%s dur=%s", mut.type, tostring(mut.clip_id), tostring(mut.timeline_start_frame), tostring(mut.duration_frames)))
         if mut.type == "update" then
+            -- Validate required fields before attempting UPDATE
+            if not mut.clip_id or mut.clip_id == "" then
+                return false, "Mutation missing clip_id for UPDATE operation"
+            end
+            if not mut.timeline_start_frame then
+                return false, string.format("Mutation for clip %s missing timeline_start_frame", mut.clip_id)
+            end
+            if not mut.duration_frames or mut.duration_frames <= 0 then
+                return false, string.format("Mutation for clip %s has invalid duration: %s",
+                                             mut.clip_id, tostring(mut.duration_frames))
+            end
+
             local stmt = db:prepare([[
                 UPDATE clips
-                SET timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
+                SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
                 WHERE id = ?
             ]])
             if not stmt then
                 return false, "Failed to prepare UPDATE statement for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
             end
-            stmt:bind_value(1, mut.timeline_start_frame)
-            stmt:bind_value(2, mut.duration_frames)
-            stmt:bind_value(3, mut.source_in_frame)
-            stmt:bind_value(4, mut.source_out_frame)
-            stmt:bind_value(5, mut.enabled)
-            stmt:bind_value(6, mut.clip_id)
+            stmt:bind_value(1, mut.track_id)
+            stmt:bind_value(2, mut.timeline_start_frame)
+            stmt:bind_value(3, mut.duration_frames)
+            stmt:bind_value(4, mut.source_in_frame)
+            stmt:bind_value(5, mut.source_out_frame)
+            stmt:bind_value(6, mut.enabled)
+            stmt:bind_value(7, mut.clip_id)
             local ok = stmt:exec()
             stmt:finalize()
             if not ok then
                 return false, "Failed to execute UPDATE for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
-            end
-            if db:changes() == 0 then
-                return false, "UPDATE affected 0 rows for clip " .. tostring(mut.clip_id)
             end
         elseif mut.type == "delete" then
             local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
@@ -672,7 +681,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
 
             local stmt = db:prepare([[
                 UPDATE clips
-                SET timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
+                SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
                 WHERE id = ?
             ]])
             if not stmt then return false, "Failed to prepare undo update" end
@@ -682,12 +691,13 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 return v or 0
             end
 
-            stmt:bind_value(1, val_frames(prev.timeline_start or prev.start_value))
-            stmt:bind_value(2, val_frames(prev.duration))
-            stmt:bind_value(3, val_frames(prev.source_in))
-            stmt:bind_value(4, val_frames(prev.source_out))
-            stmt:bind_value(5, prev.enabled and 1 or 0)
-            stmt:bind_value(6, prev.id)
+            stmt:bind_value(1, prev.track_id)
+            stmt:bind_value(2, val_frames(prev.timeline_start or prev.start_value))
+            stmt:bind_value(3, val_frames(prev.duration))
+            stmt:bind_value(4, val_frames(prev.source_in))
+            stmt:bind_value(5, val_frames(prev.source_out))
+            stmt:bind_value(6, prev.enabled and 1 or 0)
+            stmt:bind_value(7, prev.id)
             
             local ok = stmt:exec()
             stmt:finalize()

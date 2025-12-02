@@ -13,93 +13,24 @@ require("test_env")
 local database = require("core.database")
 local timeline_state = require("ui.timeline.timeline_state")
 
-local SCHEMA_SQL = [[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_value INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_value INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        timebase_type TEXT NOT NULL,
-        timebase_rate REAL NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        clip_kind TEXT NOT NULL,
-        name TEXT,
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_value INTEGER NOT NULL,
-        duration_value INTEGER NOT NULL,
-        source_in_value INTEGER NOT NULL,
-        source_out_value INTEGER NOT NULL,
-        timebase_type TEXT NOT NULL,
-        timebase_rate REAL NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT,
-        file_path TEXT,
-        duration_value INTEGER,
-        timebase_type TEXT NOT NULL,
-        timebase_rate REAL NOT NULL,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        audio_channels INTEGER,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT
-    );
-]]
+local SCHEMA_SQL = require("import_schema")
 
 local DATA_SQL = [[
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO sequences (
+        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    )
     VALUES
-        ('seq_a', 'default_project', 'Active Seq', 30.0, 48000, 1920, 1080, 0, 0, 0, 240),
-        ('seq_b', 'default_project', 'Background Seq', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+        ('seq_a', 'default_project', 'Active Seq', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now')),
+        ('seq_b', 'default_project', 'Background Seq', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES
-        ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1),
-        ('seq_b_v1', 'seq_b', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+        ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),
+        ('seq_b_v1', 'seq_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]]
 
 local tmp_db = os.tmpname() .. ".db"

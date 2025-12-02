@@ -21,14 +21,15 @@ local timeline_state = {
 local function refresh_sequence_frame_rate(sequence_id)
     local db = database.get_connection()
     assert(db, "timeline_state: database not initialized")
-    local stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+    local stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
     assert(stmt, "timeline_state: failed to prepare frame rate lookup")
     stmt:bind_value(1, sequence_id)
     assert(stmt:exec() and stmt:next(), string.format("timeline_state: missing sequence %s", tostring(sequence_id)))
-    local rate = stmt:value(0)
+    local num = stmt:value(0) or 0
+    local den = stmt:value(1) or 1
     stmt:finalize()
-    assert(rate and rate > 0, "timeline_state: invalid frame rate")
-    timeline_state.sequence_frame_rate = rate
+    assert(num > 0 and den > 0, "timeline_state: invalid frame rate")
+    timeline_state.sequence_frame_rate = num / den
 end
 
 function timeline_state.capture_viewport()
@@ -52,7 +53,12 @@ function timeline_state.reload_clips(sequence_id)
     timeline_state.reload_calls = timeline_state.reload_calls + 1
     if sequence_id and sequence_id ~= "" then
         timeline_state.sequence_id = sequence_id
-        refresh_sequence_frame_rate(sequence_id)
+        local ok = pcall(refresh_sequence_frame_rate, sequence_id)
+        if not ok then
+            -- Fallback if sequence was deleted during undo
+            timeline_state.sequence_id = "default_sequence"
+            timeline_state.sequence_frame_rate = nil
+        end
     end
 end
 function timeline_state.normalize_edge_selection() return false end
@@ -78,9 +84,22 @@ local function init_db(path)
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('default_sequence', 'default_project', 'Default', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 400);
+        INSERT INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height,
+            view_start_frame, view_duration_frames, playhead_frame,
+            selected_clip_ids, selected_edge_infos, selected_gap_infos,
+            current_sequence_number, created_at, modified_at
+        )
+        VALUES (
+            'default_sequence', 'default_project', 'Default', 'timeline',
+            30, 1, 48000,
+            1920, 1080,
+            0, 400, 0,
+            '[]', '[]', '[]',
+            0, strftime('%s','now'), strftime('%s','now')
+        );
     ]]))
     return db
 end

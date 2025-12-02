@@ -18,7 +18,7 @@ local function assert_eq(label, actual, expected)
     end
 end
 
-local function run_test(name, layout, edges, delta_ms, expectations)
+local function run_test(name, layout, edges, delta_frames, expectations)
     local path = os.tmpname() .. ".jvp"
     os.remove(path)
     assert(database.set_path(path))
@@ -66,7 +66,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     local cmd = Command.create("BatchRippleEdit", "default_project")
     cmd:set_parameter("edge_infos", edges)
-    cmd:set_parameter("delta_ms", delta_ms)
+    cmd:set_parameter("delta_frames", delta_frames)
     cmd:set_parameter("sequence_id", "default_sequence")
 
     local result = command_manager.execute(cmd)
@@ -114,7 +114,7 @@ run_test(
     {
         {clip_id = "clip_one", edge_type = "out", track_id = "video1"}
     },
-    -500,
+    -12, -- 500ms at 24fps
     {
         clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
         clip_two = {start_value = 600}

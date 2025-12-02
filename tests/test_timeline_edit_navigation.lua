@@ -5,10 +5,10 @@
 
 require('test_env')
 
-local dkjson = require('dkjson')
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
+local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_timeline_edit_navigation.db"
 os.remove(TEST_DB)
@@ -50,12 +50,12 @@ db:exec([[
 ]])
 
 local timeline_state = {
-    playhead_value = 2500,
+    playhead_position = Rational.new(2500, 1000, 1),
     clips = {
-        {id = 'clip_a', start_value = 0, duration_value = 1500},
-        {id = 'clip_c', start_value = 1200, duration_value = 1200},
-        {id = 'clip_b', start_value = 3000, duration_value = 1500},
-        {id = 'clip_d', start_value = 5000, duration_value = 1200},
+        {id = 'clip_a', start_value = 0, duration_value = 1500, timeline_start = Rational.new(0, 1000, 1), duration = Rational.new(1500, 1000, 1)},
+        {id = 'clip_c', start_value = 1200, duration_value = 1200, timeline_start = Rational.new(1200, 1000, 1), duration = Rational.new(1200, 1000, 1)},
+        {id = 'clip_b', start_value = 3000, duration_value = 1500, timeline_start = Rational.new(3000, 1000, 1), duration = Rational.new(1500, 1000, 1)},
+        {id = 'clip_d', start_value = 5000, duration_value = 1200, timeline_start = Rational.new(5000, 1000, 1), duration = Rational.new(1200, 1000, 1)},
     },
     viewport_start_value = 0,
     viewport_duration_frames_value = 10000
@@ -71,6 +71,7 @@ function timeline_state.persist_state_to_db() end
 function timeline_state.get_playhead_position() return timeline_state.playhead_position end
 function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
 function timeline_state.get_clips() return timeline_state.clips end
+function timeline_state.get_sequence_frame_rate() return {fps_numerator = 1000, fps_denominator = 1} end
 
 local viewport_guard = 0
 
@@ -111,28 +112,33 @@ package.loaded['ui.timeline.timeline_state'] = timeline_state
 
 local executors = {}
 local undoers = {}
-command_impl.register_commands(executors, undoers, db)
+-- command_impl.register_commands(executors, undoers, db)
 
 command_manager.init(db, 'default_sequence', 'default_project')
 
 print("=== Timeline Edit Navigation Tests ===\n")
 
+local function frames(val)
+    if type(val) == "table" and val.frames then return val.frames end
+    return val
+end
+
 local result = command_manager.execute("GoToPrevEdit")
 assert(result.success == true, "GoToPrevEdit should succeed")
-assert(timeline_state.playhead_position == 2400,
-    string.format("GoToPrevEdit expected 2400, got %d", timeline_state.playhead_position))
+assert(frames(timeline_state.playhead_position) == 2400,
+    string.format("GoToPrevEdit expected 2400, got %s", tostring(frames(timeline_state.playhead_position))))
 
 timeline_state.playhead_position = 3200
 
 result = command_manager.execute("GoToNextEdit")
 assert(result.success == true, "GoToNextEdit should succeed")
-assert(timeline_state.playhead_position == 4500,
-    string.format("GoToNextEdit expected 4500, got %d", timeline_state.playhead_position))
+assert(frames(timeline_state.playhead_position) == 4500,
+    string.format("GoToNextEdit expected 4500, got %s", tostring(frames(timeline_state.playhead_position))))
 
 timeline_state.playhead_position = 6200
 result = command_manager.execute("GoToNextEdit")
 assert(result.success == true, "GoToNextEdit should succeed even at timeline end")
-assert(timeline_state.playhead_position == 6200,
-    string.format("GoToNextEdit at end should stay at 6200, got %d", timeline_state.playhead_position))
+assert(frames(timeline_state.playhead_position) == 6200,
+    string.format("GoToNextEdit at end should stay at 6200, got %s", tostring(frames(timeline_state.playhead_position))))
 
 print("✅ GoToPrevEdit/GoToNextEdit navigation commands adjust playhead correctly")

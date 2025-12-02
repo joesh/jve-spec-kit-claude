@@ -9,6 +9,35 @@ package.loaded['core.command_manager'] = {}
 package.loaded['command'] = {}
 package.loaded['ui.timeline.timeline_ruler'] = {}
 package.loaded['ui.timeline.timeline_scrollbar'] = {}
+package.loaded['ui.timeline.timeline_view'] = { create = function() return {} end }
+package.loaded['ui.selection_hub'] = { register_listener = function() end, set_active_panel = function() end }
+package.loaded['core.database'] = {}
+package.loaded['core.profile_scope'] = function() return function() end end
+package.loaded['inspectable'] = {
+    clip = function() return { get_schema_id = function() end, get = function() return "" end } end,
+    sequence = function() return { get_schema_id = function() end, get = function() return "" end } end
+}
+
+-- Minimal Qt constants stub so timeline_panel can be required without C++ bindings
+_G.qt_constants = {
+    WIDGET = {
+        CREATE = function() return {} end,
+        SET_PARENT = function() end
+    },
+    LAYOUT = {
+        CREATE_HBOX = function() return {} end,
+        CREATE_VBOX = function() return {} end,
+        ADD_WIDGET = function() end,
+        SET_ON_WIDGET = function() end,
+        SET_SPLITTER_SIZES = function() end
+    },
+    DISPLAY = {
+        SET_VISIBLE = function() end
+    },
+    PROPERTIES = {
+        SET_STYLE = function() end
+    }
+}
 
 print("Testing centralized constants integration (Rule 2.14 compliance)...\n")
 

@@ -3,6 +3,7 @@ local uuid = require("uuid")
 local database = require("core.database")
 local Clip = require("models.clip")
 local command_helper = require("core.command_helper")
+local Rational = require("core.rational")
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["DuplicateMasterClip"] = function(command)
@@ -31,20 +32,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local clip_name = command:get_parameter("name") or snapshot.name or "Master Clip Copy"
-        local duration = snapshot.duration or ((snapshot.source_out or 0) - (snapshot.source_in or 0))
-        if duration <= 0 then
-            duration = 1
-        end
+        local rate_num = snapshot.rate_num or snapshot.fps_numerator or 24
+        local rate_den = snapshot.rate_den or snapshot.fps_denominator or 1
+        local timeline_start = Rational.new(snapshot.start_value or 0, rate_num, rate_den)
+        local duration = Rational.new(snapshot.duration_value or snapshot.duration or ((snapshot.source_out_value or snapshot.source_out or 0) - (snapshot.source_in_value or snapshot.source_in or 0)) or 1, rate_num, rate_den)
+        local source_in = Rational.new(snapshot.source_in_value or snapshot.source_in or 0, rate_num, rate_den)
+        local source_out = Rational.new(snapshot.source_out_value or snapshot.source_out or (source_in.frames + duration.frames), rate_num, rate_den)
 
         local clip_opts = {
             id = new_clip_id,
             project_id = project_id,
             clip_kind = "master",
             source_sequence_id = snapshot.source_sequence_id,
-            start_value = snapshot.start_value or 0,
+            timeline_start = timeline_start,
             duration = duration,
-            source_in = snapshot.source_in or 0,
-            source_out = snapshot.source_out or ((snapshot.source_in or 0) + duration),
+            source_in = source_in,
+            source_out = source_out,
+            rate_num = rate_num,
+            rate_den = rate_den,
             enabled = snapshot.enabled ~= false,
             offline = snapshot.offline == true,
         }

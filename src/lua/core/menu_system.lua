@@ -28,6 +28,7 @@ local project_browser = nil
 local timeline_panel = nil
 local clipboard_actions = require("core.clipboard_actions")
 local profile_scope = require("core.profile_scope")
+local Rational = require("core.rational")
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
@@ -697,12 +698,17 @@ local function create_action_callback(command_name, params)
 
             local timeline_state = timeline_panel.get_state()
             local current_duration = timeline_state.get_viewport_duration()
-            local new_duration = math.max(1000, current_duration * 0.8)  -- Zoom in 20%, min 1 second
+            local new_duration = current_duration * 0.8  -- Rational arithmetic
+            
+            -- Clamp to min 1 second (Rational)
+            local min_dur = Rational.from_seconds(1.0, new_duration.fps_numerator, new_duration.fps_denominator)
+            new_duration = Rational.max(min_dur, new_duration)
+            
             if keyboard_shortcuts.clear_zoom_toggle then
                 keyboard_shortcuts.clear_zoom_toggle()
             end
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("🔍 Zoomed in: %.2fs visible", new_duration / 1000))
+            print(string.format("🔍 Zoomed in: %s visible", tostring(new_duration)))
 
         elseif command_name == "TimelineZoomOut" then
             -- Zoom out: increase viewport duration (show more time)
@@ -713,12 +719,13 @@ local function create_action_callback(command_name, params)
 
             local timeline_state = timeline_panel.get_state()
             local current_duration = timeline_state.get_viewport_duration()
-            local new_duration = current_duration * 1.25  -- Zoom out 25%
+            local new_duration = current_duration * 1.25  -- Rational arithmetic
+            
             if keyboard_shortcuts.clear_zoom_toggle then
                 keyboard_shortcuts.clear_zoom_toggle()
             end
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("🔍 Zoomed out: %.2fs visible", new_duration / 1000))
+            print(string.format("🔍 Zoomed out: %s visible", tostring(new_duration)))
 
         elseif command_name == "TimelineZoomFit" then
             -- Zoom to fit: show entire timeline

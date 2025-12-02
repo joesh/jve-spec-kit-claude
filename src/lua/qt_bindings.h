@@ -9,6 +9,8 @@ extern "C" {
 // Forward declaration
 class SimpleLuaEngine;
 
+extern const char* WIDGET_METATABLE;
+
 /**
  * Qt bindings for Lua
  * Provides real Qt widget creation and management from Lua
@@ -44,6 +46,7 @@ int lua_add_widget_to_layout(lua_State* L);
 int lua_add_stretch_to_layout(lua_State* L);
 int lua_set_central_widget(lua_State* L);
 int lua_set_splitter_sizes(lua_State* L);
+int lua_get_splitter_sizes(lua_State* L);
 
 // Menu functions
 int lua_get_menu_bar(lua_State* L);

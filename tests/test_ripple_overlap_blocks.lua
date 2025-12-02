@@ -20,25 +20,36 @@ local function seed_db(db_path)
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', %d, %d);
 
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
+        INSERT INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height, view_start_frame, view_duration_frames, playhead_frame,
+            created_at, modified_at
+        )
+        VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 1000, 1, 48000, 1920, 1080, 0, 300, 0, %d, %d);
 
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-        VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec)
-        VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 5000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw');
+        INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+        VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 5000, 1000, 1, 1920, 1080, 0, 'raw', '{}', %d, %d);
 
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
+                           timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                           fps_numerator, fps_denominator, enabled, offline,
                            created_at, modified_at)
         VALUES
             ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'media1', 'default_sequence',
-             0, 2000, 0, 2000, 'video_frames', 30.0, 1, 0, %d, %d),
+             0, 2000, 0, 2000, 1000, 1, 1, 0, %d, %d),
             ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'media1', 'default_sequence',
-             3000, 2000, 1000, 3000, 'video_frames', 30.0, 1, 0, %d, %d);
-    ]], now, now, now, now, now, now, now, now)
+             3000, 2000, 1000, 3000, 1000, 1, 1, 0, %d, %d);
+    ]],
+        now, now,     -- projects
+        now, now,     -- sequences
+        now, now,     -- media
+        now, now,     -- clip_left
+        now, now      -- clip_right
+    )
     assert(seeded_db:exec(seed))
     command_manager.init(seeded_db, "default_sequence", "default_project")
     return seeded_db
@@ -46,7 +57,7 @@ end
 
 local timeline_state = require("ui.timeline.timeline_state")
 timeline_state.capture_viewport = function()
-    return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 30.0}
+    return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 1000.0}
 end
 timeline_state.push_viewport_guard = function() end
 timeline_state.pop_viewport_guard = function() end
@@ -60,12 +71,13 @@ timeline_state.set_playhead_position = function(_) end
 timeline_state.get_playhead_position = function() return 0 end
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.get_sequence_id = function() return "default_sequence" end
+timeline_state.get_sequence_frame_rate = function() return {fps_numerator = 1000, fps_denominator = 1} end
 timeline_state.reload_clips = function(_) end
 timeline_state.consume_mutation_failure = function() return nil end
 timeline_state.apply_mutations = function(_, _) return true end
 
 local function fetch_start(db_conn, id)
-    local stmt = db_conn:prepare("SELECT start_value FROM clips WHERE id = ?")
+    local stmt = db_conn:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found " .. tostring(id))
     local v = tonumber(stmt:value(0)) or 0
@@ -86,7 +98,7 @@ local function run_case(db_path, use_batch)
         cmd = Command.create("RippleEdit", "default_project")
         cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})
     end
-    cmd:set_parameter("delta_ms", -1500) -- would overlap left clip if not clamped
+    cmd:set_parameter("delta_frames", -1500) -- 1ms per frame at 1000fps
     cmd:set_parameter("sequence_id", "default_sequence")
 
     local result = command_manager.execute(cmd)
@@ -121,11 +133,11 @@ assert(start_batch == 2000, "batch ripple should clamp gap-before edges identica
 local function run_zero_gap(db_path)
     local db_conn = seed_db(db_path)
     -- Move right clip to butt against left (gap=0)
-    assert(db_conn:exec("UPDATE clips SET start_value = 2000 WHERE id = 'clip_right'"))
+    assert(db_conn:exec("UPDATE clips SET timeline_start_frame = 2000 WHERE id = 'clip_right'"))
 
     local cmd = Command.create("RippleEdit", "default_project")
     cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})
-    cmd:set_parameter("delta_ms", -500) -- no gap to close
+    cmd:set_parameter("delta_frames", -500)
     cmd:set_parameter("sequence_id", "default_sequence")
 
     local result = command_manager.execute(cmd)

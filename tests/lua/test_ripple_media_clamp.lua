@@ -188,7 +188,7 @@ local cmd = new_cmd()
 cmd:set_parameter('edge_infos', {
     { clip_id = 'clip_out', edge_type = 'out', track_id = 'track_v1' }
 })
-cmd:set_parameter('delta_ms', 1000)
+cmd:set_parameter('delta_frames', 30) -- 1000ms at 30fps
 cmd:set_parameter('sequence_id', 'test_sequence')
 
 assert_eq('execute media clamp out', executor(cmd), true)
@@ -226,7 +226,7 @@ cmd = new_cmd()
 cmd:set_parameter('edge_infos', {
     { clip_id = 'clip_in', edge_type = 'in', track_id = 'track_v1' }
 })
-cmd:set_parameter('delta_ms', -1000)
+cmd:set_parameter('delta_frames', -30) -- 1000ms at 30fps
 cmd:set_parameter('sequence_id', 'test_sequence')
 
 assert_eq('execute media clamp in', executor(cmd), true)
@@ -262,7 +262,7 @@ mock_db:store_clip({
 
 cmd = new_cmd()
 cmd:set_parameter('edge_info', { clip_id = 'ripple_clip', edge_type = 'out', track_id = 'track_v1' })
-cmd:set_parameter('delta_ms', 2000)
+cmd:set_parameter('delta_frames', 60) -- 2000ms at 30fps
 cmd:set_parameter('sequence_id', 'test_sequence')
 
 assert_eq('execute ripple clamp out', ripple_executor(cmd), true)

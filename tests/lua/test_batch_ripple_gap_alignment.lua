@@ -126,7 +126,7 @@ local function seed_project(db, layout)
     end
 end
 
-local function run_scenario(name, layout, edges, delta_ms, expectations)
+local function run_scenario(name, layout, edges, delta_frames, expectations)
     local path = os.tmpname() .. ".db"
     os.remove(path)
     assert(database.set_path(path))
@@ -140,7 +140,7 @@ local function run_scenario(name, layout, edges, delta_ms, expectations)
 
     local cmd = Command.create("BatchRippleEdit", "default_project")
     cmd:set_parameter("edge_infos", edges)
-    cmd:set_parameter("delta_ms", delta_ms)
+    cmd:set_parameter("delta_frames", delta_frames)
     cmd:set_parameter("sequence_id", "default_sequence")
 
     local result = command_manager.execute(cmd)
@@ -208,7 +208,7 @@ run_scenario(
         {clip_id = "clip_v2_a", edge_type = "out", track_id = "track_v2"},
         {clip_id = "clip_v1_b", edge_type = "gap_before", track_id = "track_v1"}
     },
-    -600,
+    -18, -- 600ms at 30fps
     {
         clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
@@ -230,7 +230,7 @@ run_scenario(
         {clip_id = "clip_v1_b", edge_type = "gap_before", track_id = "track_v1"},
         {clip_id = "clip_v2_a", edge_type = "out", track_id = "track_v2"}
     },
-    -600,
+    -18, -- 600ms at 30fps
     {
         clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
@@ -252,7 +252,7 @@ run_scenario(
         {clip_id = "clip_v2_a", edge_type = "out", track_id = "track_v2"},
         {clip_id = "clip_v1_a", edge_type = "gap_after", track_id = "track_v1"}
     },
-    -600,
+    -18, -- 600ms at 30fps
     {
         clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
@@ -274,7 +274,7 @@ run_scenario(
         {clip_id = "clip_v1_a", edge_type = "gap_after", track_id = "track_v1"},
         {clip_id = "clip_v2_a", edge_type = "out", track_id = "track_v2"}
     },
-    -600,
+    -18, -- 600ms at 30fps
     {
         clip_v1_b = {start_value = 4400},
         clip_v2_a = {duration = 2400, source_out = 2400}
@@ -294,7 +294,7 @@ run_scenario(
     {
         {clip_id = "clip_v1_b", edge_type = "gap_before", track_id = "track_v1"}
     },
-    -400,
+    -12, -- 400ms at 30fps
     {
         clip_v1_b = {start_value = 4600}
     }
@@ -315,7 +315,7 @@ run_scenario(
         {clip_id = "clip_v2_a", edge_type = "out", track_id = "track_v2"},
         {clip_id = "clip_v1_b", edge_type = "gap_before", track_id = "track_v1"}
     },
-    -500,
+    -15, -- 500ms at 30fps
     {
         clip_v1_b = {start_value = 4000},
         clip_v2_a = {duration = 1500, source_out = 1500}

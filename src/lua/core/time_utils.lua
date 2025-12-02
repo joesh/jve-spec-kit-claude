@@ -104,12 +104,25 @@ end
 
 -- Convert a Rational object to milliseconds (double precision).
 function M.to_milliseconds(rt)
-    if getmetatable(rt) ~= Rational.metatable then
-        print("DEBUG: M.to_milliseconds: rt metatable = " .. tostring(getmetatable(rt)))
-        print("DEBUG: M.to_milliseconds: Rational.metatable = " .. tostring(Rational.metatable))
-        error("M.to_milliseconds: rt must be a Rational object", 2)
+    if type(rt) == "number" then
+        -- Treat bare numbers as milliseconds
+        return rt
     end
-    return rt:to_seconds() * 1000.0
+    if rt and type(rt) == "table" then
+        -- Try common Rational shape or method
+        if getmetatable(rt) == Rational.metatable or rt.to_seconds then
+            local ok, seconds = pcall(function() return rt:to_seconds() end)
+            if ok then
+                return seconds * 1000.0
+            end
+        end
+        -- As a fallback, try hydrating
+        local hydrated = Rational.hydrate and Rational.hydrate(rt)
+        if hydrated then
+            return hydrated:to_seconds() * 1000.0
+        end
+    end
+    error("M.to_milliseconds: rt must be a Rational object or millisecond number", 2)
 end
 
 return M

@@ -267,7 +267,8 @@ local move_cmd = Command.create("MoveClipToTrack", "project")
 move_cmd:set_parameter("clip_id", mover_for_nudge.id)
 move_cmd:set_parameter("target_track_id", "track_nudge_v1")
 move_cmd:set_parameter("sequence_id", "sequence")
-assert(command_manager.execute(move_cmd).success, "Move command should succeed")
+local res = command_manager.execute(move_cmd)
+assert(res.success, "Move command should succeed: " .. tostring(res.error_message))
 
 local nudge_cmd = Command.create("Nudge", "project")
 -- Nudge amount in Rational
@@ -298,7 +299,9 @@ local media_row = Media.create({
     file_path = "/tmp/jve/media_ripple.mov",
     file_name = "media_ripple.mov",
     duration = Rational.new(150, 30, 1),
-    frame_rate = 30.0
+    frame_rate = 30.0,
+    created_at = os.time(),
+    modified_at = os.time()
 })
 assert(media_row:save(db), "failed saving media for ripple test")
 
@@ -327,9 +330,9 @@ assert(ripple_after.duration == 5000, string.format("ripple duration should clam
 print("✅ RippleEdit clamps extension to media duration")
 
 print("Test 5: Insert splits overlapping clip")
-local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", file_name = "base.mov", duration = Rational.new(180, 30, 1), frame_rate = 30})
+local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", file_name = "base.mov", duration = Rational.new(180, 30, 1), frame_rate = 30, created_at = os.time(), modified_at = os.time()})
 assert(base_media:save(db), "failed to save base media")
-local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", file_name = "new.mov", duration = Rational.new(30, 30, 1), frame_rate = 30})
+local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", file_name = "new.mov", duration = Rational.new(30, 30, 1), frame_rate = 30, created_at = os.time(), modified_at = os.time()})
 assert(new_media:save(db), "failed to save new media")
 
 local base_clip = Clip.create("Base Split", "media_split_base", {

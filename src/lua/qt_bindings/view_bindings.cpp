@@ -282,21 +282,25 @@ int lua_is_tree_item_expanded(lua_State* L) {
 int lua_set_tree_item_data(lua_State* L) {
     QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
     lua_Integer item_id = luaL_checkinteger(L, 2);
-    const char* key = luaL_checkstring(L, 3);
-    const char* value = luaL_checkstring(L, 4);
 
     QTreeWidgetItem* item = getTreeItemById(tree, item_id);
-    if (item) {
-        // Store data in Qt::UserRole + 1 as a QVariantMap or similar?
-        // Simple approach: Store string in data(0, UserRole) as JSON or just string if single key.
-        // But key-value implies a map.
-        // For simplicity/legacy compatibility: assume we store a string value for a key in different columns or roles?
-        // Or maybe UserRole with a QHash?
-        // Let's assume we store in UserRole of column 0 as a map if we want structured data, 
-        // but typical usage might be simple string tagging.
-        
-        // Re-reading intent: usually set_tree_item_data(id, key, value) implies custom properties.
-        // We'll use Qt::UserRole and a QVariantMap.
+    if (!item) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Support both calling patterns:
+    // 3 args: (tree, item_id, json_string) - store JSON directly
+    // 4 args: (tree, item_id, key, value) - store key-value in map
+    if (lua_gettop(L) == 3) {
+        // Store JSON string directly
+        const char* json_data = luaL_checkstring(L, 3);
+        item->setData(0, Qt::UserRole, QString::fromUtf8(json_data));
+        lua_pushboolean(L, 1);
+    } else if (lua_gettop(L) >= 4) {
+        // Store key-value in map
+        const char* key = luaL_checkstring(L, 3);
+        const char* value = luaL_checkstring(L, 4);
         QVariant current = item->data(0, Qt::UserRole);
         QVariantMap map = current.toMap();
         map[QString::fromUtf8(key)] = QString::fromUtf8(value);

@@ -5,7 +5,11 @@
 
 package.path = package.path .. ";./src/lua/?.lua;./src/lua/ui/?.lua"
 
-local resolve_db_importer = require("importers.resolve_database_importer")
+local ok, resolve_db_importer = pcall(require, "importers.resolve_database_importer")
+if not ok then
+    io.stderr:write("[skip] resolve_database_importer requires lsqlite3 (", tostring(resolve_db_importer), ")\n")
+    os.exit(0)
+end
 
 print("=== DaVinci Resolve SQLite Database Importer Test ===\n")
 

@@ -5,6 +5,7 @@ local M = {}
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local frame_utils = require("core.frame_utils")
+local Rational = require("core.rational")
 
 function M.handle_release(view, drag_state, modifiers)
     local state_module = view.state
@@ -42,8 +43,17 @@ function M.handle_release(view, drag_state, modifiers)
              local cmd = Command.create("Nudge", active_proj)
              local ids = {}
              for _, c in ipairs(clips) do table.insert(ids, c.id) end
+
+             local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or {fps_numerator = 30, fps_denominator = 1}
+             local fps_num = rate.fps_numerator or 30
+             local fps_den = rate.fps_denominator or 1
+             local nudge_rat = Rational.from_seconds(delta_ms / 1000.0, fps_num, fps_den)
+
              cmd:set_parameter("sequence_id", active_seq)
+             cmd:set_parameter("fps_numerator", fps_num)
+             cmd:set_parameter("fps_denominator", fps_den)
              cmd:set_parameter("nudge_amount_ms", delta_ms)
+             cmd:set_parameter("nudge_amount_rat", nudge_rat)
              cmd:set_parameter("selected_clip_ids", ids)
              command_manager.execute(cmd)
         end
@@ -63,9 +73,14 @@ function M.handle_release(view, drag_state, modifiers)
         end
         
         if #edge_infos > 0 then
+            local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or {fps_numerator = 30, fps_denominator = 1}
+            local fps_num = rate.fps_numerator or 30
+            local fps_den = rate.fps_denominator or 1
+            local delta_rat = Rational.from_seconds(delta_ms / 1000.0, fps_num, fps_den)
+
             local cmd = Command.create("BatchRippleEdit", active_proj)
             cmd:set_parameter("edge_infos", edge_infos)
-            cmd:set_parameter("delta_ms", delta_ms)
+            cmd:set_parameter("delta_frames", delta_rat.frames)
             cmd:set_parameter("sequence_id", active_seq)
             command_manager.execute(cmd)
         end

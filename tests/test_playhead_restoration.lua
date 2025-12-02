@@ -62,7 +62,7 @@ function mock_timeline_state.get_sequence_id()
     return mock_timeline_state.sequence_id or "default_sequence"
 end
 function mock_timeline_state.get_sequence_frame_rate()
-    return 30.0
+    return {fps_numerator = 30, fps_denominator = 1}
 end
 
 local viewport_guard = 0
@@ -125,16 +125,20 @@ db:exec([[
         ('test_project', 'Test Project', strftime('%s','now'), strftime('%s','now')),
         ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                           timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        created_at, modified_at
+    )
     VALUES
-        ('test_sequence', 'test_project', 'Test Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300),
-        ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 300);
+        ('test_sequence', 'test_project', 'Test Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 300, 0, strftime('%s','now'), strftime('%s','now')),
+        ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 300, 0, strftime('%s','now'), strftime('%s','now'));
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES
-        ('track_v1', 'test_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1),
-        ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
+        ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),
+        ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
 do

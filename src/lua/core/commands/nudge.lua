@@ -38,16 +38,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local nudge_amount_rat = command:get_parameter("nudge_amount_rat")
+        local nudge_amount_frames = command:get_parameter("nudge_amount") -- Integer frames
+
         local selected_clip_ids = command:get_parameter("selected_clip_ids")
         local selected_edges = command:get_parameter("selected_edges")
         
-        -- Strict Rational validation
+        -- Strict Rational validation: callers must provide Rational (or Rational-shaped table) at the leaf
         if type(nudge_amount_rat) == "number" then
             error("Nudge: nudge_amount_rat must be a Rational object, not a number.")
         end
         if type(nudge_amount_rat) == "table" and nudge_amount_rat.frames and not getmetatable(nudge_amount_rat) then
-            nudge_amount_rat = Rational.new(nudge_amount_rat.frames, nudge_amount_rat.fps_numerator, nudge_amount_rat.fps_denominator)
+            -- Accept plain table payloads (e.g. JSON) as Rational
+            local fps_num = nudge_amount_rat.fps_numerator or 30
+            local fps_den = nudge_amount_rat.fps_denominator or 1
+            nudge_amount_rat = Rational.new(nudge_amount_rat.frames, fps_num, fps_den)
         end
+
+        -- Optional legacy frame integer fallback if provided alongside sequence rate
+        if (not nudge_amount_rat) and nudge_amount_frames then
+            local rate = timeline_state and timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate() or {fps_numerator = 30, fps_denominator = 1}
+            if type(rate) == "number" then rate = {fps_numerator = rate, fps_denominator = 1} end
+            local fps_num = rate.fps_numerator or 30
+            local fps_den = rate.fps_denominator or 1
+            nudge_amount_rat = Rational.new(nudge_amount_frames, fps_num, fps_den)
+        end
+
         if not nudge_amount_rat or not nudge_amount_rat.frames then
             error("Nudge: Invalid nudge_amount_rat (missing frames)")
         end
@@ -170,6 +185,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
+        local planned_mutations = {}
+        local original_states_map = {}
+
+        local function register_original_state(clip)
+            if not clip or not clip.id then return end
+            if not original_states_map[clip.id] then
+                original_states_map[clip.id] = command_helper.capture_clip_state(clip)
+            end
+        end
+
         if selected_edges and #selected_edges > 0 then
             nudge_type = "edges"
             local preview_clips = {}
@@ -181,6 +206,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     print(string.format("WARNING: Nudge: Clip %s not found", edge_info.clip_id:sub(1,8)))
                     goto continue
                 end
+                
+                register_original_state(clip)
                 
                 -- Ensure the clip's rate is valid for Rational calculations
                 local clip_rate_num = clip.rate.fps_numerator
@@ -228,10 +255,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     })
                 else
                     mutated_clip_ids[clip.id] = true
-                    if not clip:save(db) then
-                        print(string.format("ERROR: Nudge: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
-                        return false
-                    end
+                    table.insert(planned_mutations, clip_mutator.plan_update(clip, original_states_map[clip.id]))
                     register_update(clip)
                 end
 
@@ -285,6 +309,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     clips_to_move[clip_id] = nil
                     goto continue_collect_block
                 end
+                
+                register_original_state(clip)
                 
                 -- Nudge clip
                 local new_start = clip.timeline_start + nudge_amount_rat
@@ -354,15 +380,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             if any_change then
-                -- This part heavily uses clip_mutator and timeline_state.
-                -- These modules need to be Rational-aware.
-                -- For now, pass Rational and assume they will handle.
-                local neighbor_windows = nil
-                if timeline_state and timeline_state.describe_track_neighbors and #neighbor_clip_ids > 0 then
-                    -- Expects Rational in V5
-                    neighbor_windows = timeline_state.describe_track_neighbors(active_sequence_id, neighbor_clip_ids)
-                end
-
+                -- Collect mutations for occlusions
                 for track_id, group in pairs(track_groups) do
                     if group.after_max and group.after_min then
                         local block_duration = group.after_max - group.after_min
@@ -370,27 +388,30 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             block_duration = Rational.max(block_duration, group.before_max - group.before_min)
                         end
                         
-                        -- Passing Rational directly to clip_mutator.resolve_occlusions
                         local ok, err, actions = clip_mutator.resolve_occlusions(db, {
                             track_id = track_id,
                             timeline_start = group.after_min,
                             duration = block_duration,
-                            pending_clips = group.pending -- These are now Rational
+                            pending_clips = group.pending
                         })
                         if not ok then
                             print(string.format("ERROR: Nudge: Failed to resolve occlusions on track %s: %s", tostring(track_id), tostring(err)))
                             return false
                         end
-                        record_occlusion_actions(command, group.sequence_id, actions)
+                        
+                        -- Process occlusion actions
+                        if actions then
+                            for _, action in ipairs(actions) do
+                                table.insert(planned_mutations, action)
+                            end
+                        end
                     end
                 end
 
+                -- Collect updates for nudged clips
                 for _, clip in ipairs(move_targets) do
                     clip.timeline_start = clip.__new_start or clip.timeline_start
-                    if not clip:save(db, {skip_occlusion = true}) then
-                        print(string.format("ERROR: Nudge: Failed to save clip %s", clip.id:sub(1,8)))
-                        return false
-                    end
+                    table.insert(planned_mutations, clip_mutator.plan_update(clip, original_states_map[clip.id]))
                     register_update(clip)
                 end
             end
@@ -413,6 +434,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         command:set_parameter("nudge_type", nudge_type)
+        command:set_parameter("executed_mutations", planned_mutations)
+
+        -- Execute all mutations
+        local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
+        if not ok_apply then
+            return false, "Failed to apply mutations: " .. tostring(apply_err)
+        end
 
         local captured_mutations = apply_updates_if_needed(active_sequence_id)
         if not captured_mutations then
@@ -433,22 +461,36 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_undoers["UndoNudge"] = function(command)
         print("Executing UndoNudge command")
 
-        local nudge_amount_rat = command:get_parameter("nudge_amount_rat")
+        local executed_mutations = command:get_parameter("executed_mutations")
+        local sequence_id = command:get_parameter("sequence_id")
         
-        -- Hydrate Rational if needed (from JSON)
-        if type(nudge_amount_rat) == "table" and nudge_amount_rat.frames and (not getmetatable(nudge_amount_rat) or not getmetatable(nudge_amount_rat).__lt) then
-             nudge_amount_rat = Rational.new(nudge_amount_rat.frames, nudge_amount_rat.fps_numerator, nudge_amount_rat.fps_denominator)
+        if not executed_mutations then
+             print("WARNING: UndoNudge: No executed mutations found (legacy command?)")
+             return false
+        end
+
+        local started, begin_err = db:begin_transaction()
+        if not started then
+            print("WARNING: UndoNudge: Proceeding without transaction: " .. tostring(begin_err))
+        end
+
+        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+        if not ok then
+            if started then db:rollback_transaction(started) end
+            print("ERROR: UndoNudge: Failed to revert mutations: " .. tostring(err))
+            return false
         end
         
-        -- Apply negative nudge amount for undo
-        command:set_parameter("nudge_amount_rat", -nudge_amount_rat)
+        if started then
+            local ok_commit, commit_err = db:commit_transaction(started)
+            if not ok_commit then
+                db:rollback_transaction(started)
+                return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+            end
+        end
 
-        local result = command_executors["Nudge"](command)
-
-        -- Restore original nudge amount for re-undoing
-        command:set_parameter("nudge_amount_rat", nudge_amount_rat) -- Restore original for consistent undo/redo stack
-
-        return result
+        print("✅ Restored nudged clips and occlusions")
+        return true
     end
 
     command_executors["UndoNudge"] = command_undoers["UndoNudge"]

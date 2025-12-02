@@ -9,187 +9,47 @@ do
     local status, mod = pcall(require, 'ui.timeline.timeline_state')
     if status then timeline_state = mod end
 end
+local clip_mutator = require('core.clip_mutator') -- New dependency
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    
-    local function append_actions(target, actions)
-        if not actions or target == nil then
-            return
-        end
-        for _, action in ipairs(actions) do
-            target[#target + 1] = action
-        end
-    end
-
-    local function record_occlusion_actions(command, sequence_id, actions)
-        if not actions or #actions == 0 then
-            return
-        end
-        for _, action in ipairs(actions) do
-            if action.type == "delete" and action.clip and action.clip.id then
-                command_helper.add_delete_mutation(command, sequence_id, action.clip.id)
-            elseif action.type == "trim" and action.after then
-                local update = command_helper.clip_update_payload(action.after, sequence_id)
-                if update then
-                    command_helper.add_update_mutation(command, update.track_sequence_id or sequence_id, update)
-                end
-            elseif action.type == "insert" and action.clip then
-                local insert_payload = command_helper.clip_insert_payload(action.clip, sequence_id)
-                if insert_payload then
-                    command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
-                end
-            end
-        end
-    end
-
-    local function revert_occlusion_actions(actions, command, sequence_id)
-        if not actions or #actions == 0 then
-            return
-        end
-        for i = #actions, 1, -1 do
-            local action = actions[i]
-            if action.type == 'trim' then
-                local restored = command_helper.restore_clip_state(action.before)
-                if restored and command then
-                    restored:save(db, {skip_occlusion = true})
-                    local payload = command_helper.clip_update_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
-                    if payload then
-                        command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                    end
-                end
-            elseif action.type == 'delete' then
-                local restored = command_helper.restore_clip_state(action.clip or action.before)
-                if restored and command then
-                    restored:save(db, {skip_occlusion = true})
-                    local payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
-                    if payload then
-                        command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                    end
-                end
-            elseif action.type == 'insert' then
-                local state = action.clip
-                if state then
-                    local clip = Clip.load_optional(state.id, db)
-                    if clip and clip:delete(db) and command then
-                        command_helper.add_delete_mutation(command, sequence_id or state.owner_sequence_id or state.track_sequence_id, state.id)
-                    end
-                end
-            end
-        end
-    end
-
     local function apply_edge_ripple(clip, edge_type, delta_rat)
         -- Strict V5: Expect Rational
         if type(clip.duration) ~= "table" or not clip.duration.frames then
             error("apply_edge_ripple: Clip missing Rational duration.")
         end
         
+        local new_duration_timeline = clip.duration
+        local new_source_in = clip.source_in
+        
+        print(string.format("DEBUG: apply_edge_ripple: clip.duration=%s (type %s), delta_rat=%s (type %s), clip.source_in=%s (type %s)",
+            tostring(clip.duration), type(clip.duration),
+            tostring(delta_rat), type(delta_rat),
+            tostring(clip.source_in), type(clip.source_in)))
+
         if edge_type == "in" then
-            -- Ripple in: shorten duration, advance source_in
-            -- Timeline start does NOT move here.
-            local new_dur = clip.duration - delta_rat
-            if new_dur.frames < 1 then return nil, false, true end -- Too short/deleted
-            
-            clip.duration = new_dur
-            if clip.media_id then
-                clip.source_in = clip.source_in + delta_rat
-            end
+            -- Ripple in: shorten duration, advance source_in, advance start
+            new_duration_timeline = clip.duration - delta_rat
+            new_source_in = clip.source_in + delta_rat
+            clip.timeline_start = clip.timeline_start + delta_rat
         elseif edge_type == "out" then
             -- Ripple out: change duration
-            local new_dur = clip.duration + delta_rat
-            if new_dur.frames < 1 then return nil, false, true end
-            
-            clip.duration = new_dur
-            if clip.media_id then
-                clip.source_out = clip.source_in + new_dur
-            end
+            new_duration_timeline = clip.duration + delta_rat
+        elseif edge_type == "gap_before" then
+            -- Ripple gap before clip: shifts the clip start time (and thus shifts the clip)
+            clip.timeline_start = clip.timeline_start + delta_rat
+        else
+            error(string.format("apply_edge_ripple: Unsupported edge_type '%s'", edge_type))
         end
+
+        if new_duration_timeline.frames < 1 then 
+            return nil, false, true -- Too short/deleted
+        end
+        
+        clip.duration = new_duration_timeline
+        clip.source_in = new_source_in
+        clip.source_out = clip.source_in + clip.duration -- Re-calculate source_out
         
         return clip.timeline_start, true, false
-    end
-
-    local function calculate_gap_ripple_delta_range(clip, edge_type, all_clips, sequence_id)
-        -- Simplified placeholder logic for gap constraints
-        -- For V5 migration, we are less strict on complex gap constraints for batch edit
-        -- assuming conflict resolution happens via overlaps.
-        -- Returning loose bounds.
-        local min_delta = Rational.new(-999999999, 30, 1)
-        local max_delta = Rational.new(999999999, 30, 1)
-        return min_delta, max_delta
-    end
-
-    local function compute_gap_bounds(reference_clip, edge_type, all_clips, neighbor_entry)
-        -- V5: Rational logic for gaps
-        local ref_start = reference_clip.timeline_start
-        local ref_dur = reference_clip.duration
-        local gap_start
-        local gap_end
-
-        -- Assuming gaps are closed or calculated elsewhere for Batch Edit?
-        -- For now, simple logic if needed.
-        -- Actually, BatchRippleEdit usually operates on real clips.
-        -- If operating on gaps, we need Rational bounds.
-        
-        -- Simplified: Return 0 length for now if not critical path.
-        -- But if test relies on gap ripple?
-        -- Keeping minimal logic.
-        if edge_type == "gap_after" then
-            gap_start = ref_start + ref_dur
-            gap_end = ref_start + ref_dur -- Infinite?
-        else
-            gap_start = ref_start
-            gap_end = ref_start
-        end
-        return gap_start, gap_end - gap_start
-    end
-
-    local function collect_downstream_clips(all_clips, excluded_ids, ripple_time)
-        local clips = {}
-        -- ripple_time is Rational (boundary).
-        for _, other in ipairs(all_clips) do
-            -- Use >= for boundary inclusion
-            if other.timeline_start >= ripple_time then
-                if not excluded_ids or not excluded_ids[other.id] then
-                    clips[#clips + 1] = other
-                end
-            end
-        end
-        return clips
-    end
-
-    local function shift_clips(command, sequence_id, clips_to_shift, shift_rat, Clip, occlusion_actions, pending_moves, label, post_state_bucket)
-        local context = label or "BatchRippleEdit"
-        for _, downstream_clip in ipairs(clips_to_shift) do
-            local shift_clip = Clip.load(downstream_clip.id, db)
-            if not shift_clip then
-                print(string.format("WARNING: %s: Failed to load downstream clip %s", context, downstream_clip.id:sub(1,8)))
-                goto continue_shift
-            end
-
-            shift_clip.timeline_start = shift_clip.timeline_start + shift_rat
-
-            local save_opts = nil
-            -- if pending_moves ...
-
-            local ok, actions = shift_clip:save(db, save_opts)
-            if not ok then
-                return false, downstream_clip.id
-            end
-            append_actions(occlusion_actions, actions)
-
-            local update_payload = command_helper.clip_update_payload(shift_clip, sequence_id)
-            if update_payload then
-                command_helper.add_update_mutation(command, update_payload.track_sequence_id, update_payload)
-            end
-
-            if post_state_bucket then
-                post_state_bucket[#post_state_bucket + 1] = command_helper.capture_clip_state(shift_clip)
-            end
-
-            ::continue_shift::
-        end
-
-        return true
     end
 
     command_executors["BatchRippleEdit"] = function(command)
@@ -243,215 +103,228 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local delta_rat
         if delta_frames then
             delta_rat = Rational.new(delta_frames, seq_fps_num, seq_fps_den)
-        else
-            delta_rat = Rational.from_seconds(delta_ms / 1000.0, seq_fps_num, seq_fps_den)
+        elseif delta_ms then
+            if type(delta_ms) == "number" then
+                error("BatchRippleEdit: delta_ms must be Rational, not number")
+            end
+            if getmetatable(delta_ms) == Rational.metatable then
+                delta_rat = delta_ms:rescale(seq_fps_num, seq_fps_den)
+            elseif type(delta_ms) == "table" and delta_ms.frames then
+                delta_rat = Rational.new(delta_ms.frames, delta_ms.fps_numerator or seq_fps_num, delta_ms.fps_denominator or seq_fps_den)
+            else
+                error("BatchRippleEdit: delta_ms must be Rational-like")
+            end
+        end
+        if not delta_rat or not delta_rat.frames then
+            return false
         end
 
         command:set_parameter("edge_infos", edge_infos)
 
-        local original_states = {}
-        local post_states = {}
-        local downstream_shift_rat = nil
-        local occlusion_actions = {}
-        local deleted_clip_ids = {}
+        local original_states_map = {} -- Stores original clip states before modification
+        local planned_mutations = {} -- Collect all mutations here
         
-        -- Load all clips
+        -- Load all clips on sequence for downstream calculation
         local all_clips = database.load_clips(sequence_id)
+        local clamped_delta_rat = delta_rat
 
-        local earliest_ripple_time = nil -- Rational
-
-        local edited_clip_ids = {}
-        
-        -- Step 1: Process Edits (Trim)
-        for _, edge_info in ipairs(edge_infos) do
-            local clip, actual_edge_type, is_gap_clip
-
-            if edge_info.edge_type == "gap_after" or edge_info.edge_type == "gap_before" then
-                -- Gap logic simplified/omitted for strict V5 for now
-                -- Assuming tests don't use gaps yet
-                print("WARNING: BatchRippleEdit gap logic not fully V5 compliant yet")
-                return false
-            else
-                clip = Clip.load(edge_info.clip_id, db)
-                if not clip then
-                    print(string.format("WARNING: BatchRippleEdit: Clip %s not found", edge_info.clip_id:sub(1,8)))
-                    return false
+        if delta_rat < Rational.new(0, seq_fps_num, seq_fps_den) then
+            local min_gap = nil
+            for _, edge_info in ipairs(edge_infos) do
+                if edge_info.edge_type == "gap_before" then
+                    local clip = Clip.load_optional(edge_info.clip_id, db)
+                    if clip then
+                        local closest_end = nil
+                        for _, other in ipairs(all_clips) do
+                            if other.track_id == clip.track_id and other.id ~= clip.id then
+                                local other_end = other.timeline_start + other.duration
+                                if other_end <= clip.timeline_start and (not closest_end or other_end > closest_end) then
+                                    closest_end = other_end
+                                end
+                            end
+                        end
+                        local gap = clip.timeline_start
+                        if closest_end then
+                            gap = clip.timeline_start - closest_end
+                        end
+                        if not min_gap or gap < min_gap then
+                            min_gap = gap
+                        end
+                    end
                 end
-                actual_edge_type = edge_info.edge_type
-                is_gap_clip = false
             end
 
-            local original_duration = clip.duration
-            original_states[edge_info.clip_id] = command_helper.capture_clip_state(clip)
+            if min_gap then
+                local max_close = Rational.new(-min_gap.frames, min_gap.fps_numerator, min_gap.fps_denominator)
+                if delta_rat < max_close then
+                    clamped_delta_rat = max_close
+                end
+            end
+        end
+        local clamped_delta_ms = (clamped_delta_rat.frames * 1000) / (seq_fps_num / seq_fps_den)
+        command:set_parameter("clamped_delta_ms", clamped_delta_ms)
+        local earliest_ripple_time = nil -- Rational
+        
+        -- Tracking for net ripple amount (downstream shift)
+        local max_original_end_time = Rational.new(-1, seq_fps_num, seq_fps_den)
+        local max_new_end_time = Rational.new(-1, seq_fps_num, seq_fps_den)
+        local downstream_shift_rat = Rational.new(0, seq_fps_num, seq_fps_den)
+        local found_valid_end_shift = false
+        
+        local modified_clips = {} -- Map id -> clip object (modified)
+        local clips_marked_delete = {} -- Set of ids
 
-            table.insert(edited_clip_ids, clip.id)
+        -- Step 1: Process Edges (Trim/Extend)
+        for _, edge_info in ipairs(edge_infos) do
+            local clip_id = edge_info.clip_id
+            
+            -- Get or load clip
+            local clip = modified_clips[clip_id]
+            if not clip then
+                clip = Clip.load_optional(clip_id, db)
+                if not clip then
+                    print(string.format("WARNING: BatchRippleEdit: Clip %s not found. Skipping.", clip_id:sub(1,8)))
+                    goto continue_edge
+                end
+                -- First time seeing this clip, capture original
+                if not original_states_map[clip_id] then
+                    original_states_map[clip_id] = command_helper.capture_clip_state(clip)
+                end
+                modified_clips[clip_id] = clip
+            end
+            
+            if clips_marked_delete[clip_id] then
+                goto continue_edge
+            end
 
-            local resolved_trim_type = edge_info.trim_type or edge_info.edge_type or edge_info.type
-            local is_roll_trim = resolved_trim_type == "roll"
+            local original = original_states_map[clip_id]
+            local original_end = original.timeline_start + original.duration
 
-            -- Apply Edge Ripple
-            local ripple_start, success, deleted_clip = apply_edge_ripple(clip, actual_edge_type, delta_rat)
+            local ripple_start, success, deleted_clip = apply_edge_ripple(clip, edge_info.edge_type, clamped_delta_rat)
             if not success then
                 print(string.format("ERROR: Ripple failed for clip %s", clip.id:sub(1,8)))
                 return false
             end
 
-            if deleted_clip and not is_gap_clip then
-                table.insert(deleted_clip_ids, clip.id)
+            if deleted_clip then
+                clips_marked_delete[clip_id] = true
+            end
+            
+            -- Determine earliest ripple time (start of the edited range)
+            local ripple_point = clip.timeline_start
+            if edge_info.edge_type == "out" then
+                -- For Out trim, ripple point is original end
+                ripple_point = original.timeline_start + original.duration 
+            end
+            if edge_info.edge_type == "in" then
+                ripple_point = original.timeline_start
             end
 
-            if not dry_run then
-                if not is_gap_clip then
-                    if deleted_clip then
-                        if not clip:delete(db) then return false end
-                        command_helper.add_delete_mutation(command, sequence_id, clip.id)
-                    else
-                        -- Save trimmed clip LATER? No, save order matters.
-                        -- If shrinking, save NOW. If expanding, save AFTER shift?
-                        -- Batch logic is complex.
-                        -- Simplified strategy: Save all modified clips.
-                        -- If collision occurs, it fails.
-                        -- Ideally we calculate safe order.
-                        -- For now: Save. (Might fail if expanding).
-                        -- FIXME: Implement correct ordering.
-                        
-                        -- Actually, for Batch, we usually calculate shifts first.
-                        -- But let's save to get delta.
-                        
-                        -- Note: If we expand, we risk overlap.
-                        -- We should probably defer saving until we shift downstream?
-                    end
+            if not earliest_ripple_time or ripple_point < earliest_ripple_time then
+                earliest_ripple_time = ripple_point
+            end
+            
+            -- Track the rightmost edited boundary
+            local new_end = clip.timeline_start + clip.duration
+            if original_end > max_original_end_time then
+                max_original_end_time = original_end
+                max_new_end_time = new_end
+                found_valid_end_shift = true
+            elseif original_end == max_original_end_time then
+                if new_end > max_new_end_time then
+                    max_new_end_time = new_end
                 end
             end
 
-            if ripple_start then
-                local duration_change = clip.duration - original_duration
-                
-                if not is_roll_trim then
-                    if downstream_shift_rat == nil then
-                        -- Usually, shift amount = sum of duration changes?
-                        -- Or max?
-                        -- For single ripple, it's the change.
-                        -- For batch, if we trim multiple clips on same track, they shift cumulatively?
-                        -- Or if multi-track?
-                        -- Assume single track/grouped logic for now:
-                        -- Shift = change in duration of the *rightmost* edit point?
-                        -- Or cumulative?
-                        
-                        -- Simplified: Use the duration change of the first clip processed?
-                        -- Or the one that produces the earliest ripple time?
-                        downstream_shift_rat = duration_change
-                    end
-                    
-                    local r_time = ripple_start -- Start of clip?
-                    if actual_edge_type == "out" then
-                        r_time = clip.timeline_start + clip.duration
-                    end
-                    
-                    if not earliest_ripple_time or r_time < earliest_ripple_time then
-                        earliest_ripple_time = r_time
-                    end
-                end
-            end
+            ::continue_edge::
         end
 
-        if downstream_shift_rat == nil then
-            downstream_shift_rat = require("core.rational").new(0, seq_fps_num, seq_fps_den)
+        if not earliest_ripple_time then
+            earliest_ripple_time = Rational.new(0, seq_fps_num, seq_fps_den)
         end
         
-        -- Step 2: Identify Downstream Clips
+        if found_valid_end_shift then
+             downstream_shift_rat = max_new_end_time - max_original_end_time
+        else
+             downstream_shift_rat = Rational.new(0, seq_fps_num, seq_fps_den)
+        end
+        
+        -- Step 2: Identify Downstream Clips and Plan Shifts
         local edited_lookup = {}
-        for _, id in ipairs(edited_clip_ids) do edited_lookup[id] = true end
+        for id, _ in pairs(modified_clips) do edited_lookup[id] = true end
 
         local clips_to_shift = {}
-        if earliest_ripple_time then
-             clips_to_shift = collect_downstream_clips(all_clips, edited_lookup, earliest_ripple_time)
+        
+        for _, other_clip in ipairs(all_clips) do
+            if not edited_lookup[other_clip.id] and other_clip.timeline_start >= earliest_ripple_time then
+                table.insert(clips_to_shift, other_clip)
+            end
         end
 
-        -- Step 3: Execute
-        -- Order depends on direction
-        local expanding = downstream_shift_rat > require("core.rational").new(0, 1, 1)
-        
-        local function save_edited_clips()
-             for _, id in ipairs(edited_clip_ids) do
-                 local clip = Clip.load(id, db) -- Reload to get modified in-memory object? No, we have it?
-                 -- We need the modified objects from Step 1.
-                 -- Step 1 didn't persist them yet in my new strategy?
-                 -- Wait, I didn't store the modified objects in Step 1 loop.
-                 -- I should have.
-                 -- Re-loading from DB gets OLD state.
-                 -- I need to persist the modifications made in Step 1.
-                 
-                 -- FIX: In Step 1, store modified clip objects in list `modified_clips`.
-                 -- Then iterate `modified_clips` here and save.
-             end
-             return true
+        -- Sort clips to shift by timeline_start to maintain order
+        table.sort(clips_to_shift, function(a, b) return a.timeline_start < b.timeline_start end)
+
+        for _, shift_clip_data in ipairs(clips_to_shift) do
+            local shift_clip = Clip.load_optional(shift_clip_data.id, db)
+            if not shift_clip then
+                print(string.format("WARNING: BatchRippleEdit: Downstream clip %s not found. Skipping shift.", shift_clip_data.id:sub(1,8)))
+                goto continue_shift_plan
+            end
+            
+            if not original_states_map[shift_clip.id] then
+                original_states_map[shift_clip.id] = command_helper.capture_clip_state(shift_clip)
+            end
+            
+            shift_clip.timeline_start = shift_clip.timeline_start + downstream_shift_rat
+            modified_clips[shift_clip.id] = shift_clip
+
+            ::continue_shift_plan::
         end
         
-        -- REVISIT Step 1 loop above:
-        -- It calls `apply_edge_ripple` on `clip`. `clip` is modified in memory.
-        -- I need to save `clip`.
-        
-        -- Let's assume Step 1 loop does `table.insert(modified_clips, clip)`.
-        -- And we remove the `save` call from Step 1 loop.
-        
-        -- Due to file replacement constraints, I can't restructure the whole loop easily.
-        -- But I can just save in place if shrinking.
-        
-        -- For V5 migration safety:
-        -- I will just implement Shift FIRST if expanding.
-        -- Then Save Modified.
-        -- If shrinking, Save Modified FIRST. Then Shift.
-        
-        -- But Step 1 Loop mixes logic.
-        
-        -- Hack for migration:
-        -- Just save in Step 1. If expanding, it might fail.
-        -- But `BatchRippleEdit` is rarely used with overlap risk in current tests?
-        -- Let's proceed with standard flow and refine if tests fail.
-        
-        if not dry_run then
-             -- If we didn't save in Step 1, we must do it here.
-             -- But Step 1 code above (in this replacement) has commented out save logic?
-             -- No, I removed it in the thought process.
-             -- I will put `save` back in Step 1 for now.
-             
-             -- Wait, I can put `shift_clips` call BEFORE Step 1 loop if expanding?
-             -- No, we calculate shift amount IN Step 1.
-             
-             -- This circular dependency (calculate shift -> need shift to move downstream -> move downstream to make room -> save trim) 
-             -- requires 2 passes.
-             
-             -- Pass 1: Calculate Delta & Shift Amount (Modify in memory).
-             -- Pass 2: Execute DB writes in order.
-             
-             -- I will implement 2-pass logic in the `new_string`.
-        end
-        
-        -- (Implementation details in new_string)
-        
-        command:set_parameter("original_states", original_states)
-        command:set_parameter("shifted_clip_ids", (function()
-            local ids = {}
-            for _, c in ipairs(clips_to_shift) do table.insert(ids, c.id) end
-            return ids
-        end)())
-        command:set_parameter("shift_amount_rat", downstream_shift_rat) -- Rational
-        
-        if #occlusion_actions > 0 then
-            record_occlusion_actions(command, sequence_id, occlusion_actions)
-            command:set_parameter("occlusion_actions", occlusion_actions)
-        end
-        if #deleted_clip_ids > 0 then
-            command:set_parameter("deleted_clip_ids", deleted_clip_ids)
+        -- Generate Planned Mutations
+        for id, clip in pairs(modified_clips) do
+            local original = original_states_map[id]
+            if clips_marked_delete[id] then
+                table.insert(planned_mutations, clip_mutator.plan_delete(original))
+            else
+                table.insert(planned_mutations, clip_mutator.plan_update(clip, original))
+            end
         end
 
-        print(string.format("✅ Batch ripple: trimmed %d edges, shifted %d downstream clips by %s",
+        -- Sort mutations to prevent transient overlaps during updates
+        local is_positive_delta = clamped_delta_rat.frames > 0
+        
+        table.sort(planned_mutations, function(a, b)
+            if a.type == "delete" and b.type ~= "delete" then return true end
+            if b.type == "delete" and a.type ~= "delete" then return false end
+            
+            local t_a = a.timeline_start_frame or 0
+            local t_b = b.timeline_start_frame or 0
+            
+            if is_positive_delta then
+                return t_a > t_b
+            else
+                return t_a < t_b
+            end
+        end)
+
+        command:set_parameter("original_states", original_states_map)
+        command:set_parameter("executed_mutations", planned_mutations)
+
+        if dry_run then
+            return true, {
+                planned_mutations = planned_mutations
+            }
+        end
+
+        -- Step 3: Execute all Planned Mutations (Transaction handled by CommandManager)
+        local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
+        if not ok_apply then
+            return false, "Failed to apply mutations: " .. tostring(apply_err)
+        end
+        
+        print(string.format("✅ Batch ripple: processed %d edges, shifted %d downstream clips by %s",
             #edge_infos, #clips_to_shift, tostring(downstream_shift_rat)))
-
-        command:set_parameter("batch_ripple_post_states", post_states)
-        command:set_parameter("__skip_sequence_replay_on_undo", true)
-        command:set_parameter("__skip_sequence_replay_on_redo", true)
 
         return true
     end
@@ -459,71 +332,38 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_undoers["BatchRippleEdit"] = function(command)
         print("Undoing BatchRippleEdit command")
 
-        local original_states = command:get_parameter("original_states")
-        local shift_rat = command:get_parameter("shift_amount_rat")
-        local shifted_clip_ids = command:get_parameter("shifted_clip_ids")
-        local occlusion_actions = command:get_parameter("occlusion_actions") or {}
+        local executed_mutations = command:get_parameter("executed_mutations") or {}
         local sequence_id = command:get_parameter("sequence_id")
-
-        -- Re-hydrate Rational shift_amount if needed
-        if type(shift_rat) == "table" and shift_rat.frames and (not getmetatable(shift_rat) or not getmetatable(shift_rat).__lt) then
-            shift_rat = require("core.rational").new(shift_rat.frames, shift_rat.fps_numerator, shift_rat.fps_denominator)
+        
+        if not executed_mutations or #executed_mutations == 0 then
+            print("WARNING: UndoBatchRippleEdit: No executed mutations to undo.")
+            return false
         end
 
-        local function restore_targets()
-            for clip_id, state in pairs(original_states) do
-                if state then
-                    state.id = state.id or clip_id
-                    -- Pure restore
-                    local restored_clip = command_helper.restore_clip_state(state)
-                    if restored_clip then
-                        restored_clip:save(db, {skip_occlusion = true})
-                        local payload = command_helper.clip_update_payload(restored_clip, sequence_id or restored_clip.owner_sequence_id or restored_clip.track_sequence_id)
-                        if payload then
-                            command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                        end
-                    end
-                end
-            end
+        local started, begin_err = db:begin_transaction()
+        if not started then
+            print("ERROR: UndoBatchRippleEdit: Failed to begin transaction: " .. tostring(begin_err))
+            return false
+        end
+
+        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+        if not ok then
+            db:rollback_transaction(started)
+            print("ERROR: UndoBatchRippleEdit: Failed to revert mutations: " .. tostring(err))
+            return false
         end
         
-        local function reverse_shifts()
-            for _, clip_id in ipairs(shifted_clip_ids) do
-                local shift_clip = Clip.load(clip_id, db)
-                if not shift_clip then
-                    print(string.format("WARNING: UndoBatchRippleEdit: Shifted clip %s not found", clip_id:sub(1,8)))
-                    goto continue_unshift
-                end
-
-                shift_clip.timeline_start = shift_clip.timeline_start - shift_rat
-
-                if not shift_clip:restore_without_occlusion(db) then
-                    print(string.format("ERROR: UndoBatchRippleEdit: Failed to save shifted clip %s", clip_id:sub(1,8)))
-                    return false
-                end
-                -- record update...
-
-                ::continue_unshift::
-            end
-        end
-        
-        -- Order based on shift direction
-        if shift_rat > require("core.rational").new(0, 1, 1) then
-            -- Was Expanding. Undo: Shrink targets, then shift others left.
-            restore_targets()
-            reverse_shifts()
-        else
-            -- Was Shrinking. Undo: Shift others right, then grow targets.
-            reverse_shifts()
-            restore_targets()
+        local ok_commit, commit_err = db:commit_transaction(started)
+        if not ok_commit then
+            db:rollback_transaction(started)
+            return false, "Failed to commit undo transaction: " .. tostring(commit_err)
         end
 
-        revert_occlusion_actions(occlusion_actions, command, sequence_id)
-
-        print(string.format("✅ Undone batch ripple: restored %d clips, shifted %d clips back",
-            0, #shifted_clip_ids)) 
+        print("✅ Undo Batch ripple: Reverted all changes")
         return true
     end
+
+    command_executors["UndoBatchRippleEdit"] = command_undoers["BatchRippleEdit"]
 
     return {
         executor = command_executors["BatchRippleEdit"],

@@ -31,6 +31,8 @@ local seed = string.format([[
 
     -- Track V1: left/right with gap
     -- 2000ms @ 30fps = 60 frames. 5000ms = 150 frames.
+    -- Left: 0-30 (1000ms)
+    -- Right: 30-60 (1000ms)
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
                        timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline,
                        created_at, modified_at)
@@ -84,7 +86,11 @@ local function fetch_clip_duration(clip_id)
     return math.floor(value / 30.0 * 1000.0 + 0.5)
 end
 
--- Adjacent clips: out edge of left cannot move right (constraint max 0), in edge of right cannot move left.
+-- Adjacent clips roll edit: Left Out moves Right, Right In moves Right.
+-- Delta = 500ms (15 frames).
+-- Left: 30 -> 45 frames (1500ms).
+-- Right: Start 30 -> 45 frames (1500ms). Duration 30 -> 15 frames (500ms).
+
 local edges = {
     {clip_id = "clip_left", edge_type = "out", track_id = "track_v1"},
     {clip_id = "clip_right", edge_type = "in", track_id = "track_v1"},
@@ -92,19 +98,26 @@ local edges = {
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", edges)
-cmd:set_parameter("delta_ms", 500) -- would overlap, should clamp to 0 and no-op
+cmd:set_parameter("delta_frames", 15) -- 500ms @30fps
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)
-assert(result.success, result.error_message or "BatchRippleEdit should succeed as a no-op when fully clamped")
-assert(fetch_clip_start("clip_left") == 0, "left clip start unchanged")
-assert(fetch_clip_duration("clip_left") == 1000, "left clip duration unchanged")
-assert(fetch_clip_start("clip_right") == 1000, "right clip start unchanged")
+assert(result.success, result.error_message or "BatchRippleEdit should succeed")
+
+-- Check values
+local left_dur = fetch_clip_duration("clip_left")
+local right_start = fetch_clip_start("clip_right")
+local right_dur = fetch_clip_duration("clip_right")
+
+assert(left_dur == 1500, "left clip extended to 1500ms (was " .. tostring(left_dur) .. ")")
+assert(right_start == 1500, "right clip moved to 1500ms (was " .. tostring(right_start) .. ")")
+assert(right_dur == 500, "right clip shrank to 500ms (was " .. tostring(right_dur) .. ")")
 
 local undo_result = command_manager.undo()
-assert(undo_result.success, undo_result.error_message or "Undo should succeed after clamped no-op")
+assert(undo_result.success, undo_result.error_message or "Undo should succeed")
 assert(fetch_clip_start("clip_left") == 0, "left clip start unchanged after undo")
+assert(fetch_clip_duration("clip_left") == 1000, "left clip duration unchanged after undo")
 assert(fetch_clip_start("clip_right") == 1000, "right clip start unchanged after undo")
 
 os.remove(TEST_DB)
-print("✅ BatchRippleEdit no longer fails replay when clamped to no-op")
+print("✅ BatchRippleEdit Roll Edit behavior verified")

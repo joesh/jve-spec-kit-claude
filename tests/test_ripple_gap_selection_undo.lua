@@ -19,25 +19,30 @@ assert(db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                          timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 600);
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        created_at, modified_at
+    )
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 600, 0, %d, %d);
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-    INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec)
-    VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 10000, 'video_frames', 30.0, 30.0, 1920, 1080, 0, 'raw');
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media1', 'default_project', 'Media', 'synthetic://media1', 10000, 30, 1, 1920, 1080, 0, 'raw', '{}', %d, %d);
 
     -- Two clips with a 1000ms gap between them (left ends at 3000, right starts at 4000)
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                       start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline,
+                       timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                       fps_numerator, fps_denominator, enabled, offline,
                        created_at, modified_at)
     VALUES ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'media1', 'default_sequence',
-            0, 3000, 0, 3000, 'video_frames', 30.0, 1, 0, %d, %d),
+            0, 3000, 0, 3000, 30, 1, 1, 0, %d, %d),
            ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'media1', 'default_sequence',
-            4000, 2000, 3000, 5000, 'video_frames', 30.0, 1, 0, %d, %d);
-]], now, now, now, now, now, now, now, now)))
+            4000, 2000, 3000, 5000, 30, 1, 1, 0, %d, %d);
+]], now, now, now, now, now, now, now, now, now, now)))
 
 local timeline_state = require("ui.timeline.timeline_state")
 
@@ -72,6 +77,7 @@ timeline_state.set_playhead_position = function(_) end
 timeline_state.get_playhead_position = function() return 0 end
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.get_sequence_id = function() return "default_sequence" end
+timeline_state.get_sequence_frame_rate = function() return {fps_numerator = 30, fps_denominator = 1} end
 timeline_state.reload_clips = function(_) end
 timeline_state.consume_mutation_failure = function() return nil end
 timeline_state.apply_mutations = function(_, _) return true end
@@ -80,7 +86,7 @@ command_manager.init(db, "default_sequence", "default_project")
 
 local ripple_cmd = Command.create("RippleEdit", "default_project")
 ripple_cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})
-ripple_cmd:set_parameter("delta_ms", -1000) -- close the gap
+ripple_cmd:set_parameter("delta_frames", -30) -- close the 1s gap at 30fps
 ripple_cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(ripple_cmd)

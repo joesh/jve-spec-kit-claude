@@ -225,10 +225,14 @@ if not project_display_name then
 end
 
 -- Create main window
+print("🔨 About to create main window...")
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
+print("✅ Main window created successfully")
+print("🎨 Applying main window stylesheet...")
 assert(ui_constants and ui_constants.STYLES and type(ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR) == "string" and ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR ~= "",
     "MAIN_WINDOW_TITLE_BAR style is required for main window styling")
 qt_set_widget_stylesheet(main_window, ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR)
+print("✅ Stylesheet applied")
 local window_title = project_display_name
 qt_constants.PROPERTIES.SET_TITLE(main_window, window_title)
 if qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE then

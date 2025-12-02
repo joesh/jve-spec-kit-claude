@@ -84,6 +84,20 @@ local function load_schema()
     end
 end
 
+local function validate_readmodel_schema()
+    if not readmodel_db then return false end
+    -- Try to prepare the V5 insert statement to verify column existence and types
+    local stmt = readmodel_db:prepare([[
+        INSERT INTO tl_clips(seq_id,clip_id,media_id,track,t_in,t_out,src_in,src_out,enable,attrs_json)
+        VALUES(?,?,?,?,?,?,?,?,?,json('{}'))
+    ]])
+    if not stmt then
+        return false
+    end
+    stmt:finalize()
+    return true
+end
+
 local function open_readmodel(path)
     close_readmodel()
 
@@ -104,6 +118,23 @@ local function open_readmodel(path)
     end
 
     load_schema()
+    
+    if not validate_readmodel_schema() then
+        print("event_log: Read model schema mismatch detected. Rebuilding database...")
+        close_readmodel()
+        os.remove(path)
+        os.remove(path .. "-wal")
+        os.remove(path .. "-shm")
+        
+        db, err = sqlite3.open(path)
+        if not db then
+             error(string.format("event_log: failed to re-open read model database: %s", err or "unknown error"))
+        end
+        readmodel_db = db
+        readmodel_db:exec("PRAGMA journal_mode = WAL;")
+        readmodel_db:exec("PRAGMA foreign_keys = ON;")
+        load_schema()
+    end
 end
 
 local function derive_root(project_path)
@@ -156,7 +187,7 @@ local function apply_timeline_event(payload)
             VALUES(?,?,?,?,?,?,?,?,?,json('{}'))
         ]])
         if not stmt then
-            return false, "event_log: failed to prepare tl_clips insert"
+            return false, "event_log: failed to prepare tl_clips insert: " .. (readmodel_db:last_error() or "unknown")
         end
         stmt:bind_value(1, payload.seq_id)
         stmt:bind_value(2, payload.clip_id)

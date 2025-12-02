@@ -7,7 +7,19 @@ local function is_toggle_key(event)
     if not event then
         return false
     end
-    local keycode = tonumber(event.key)
+
+    local keycode = nil
+    local t = type(event)
+    if t == "table" then
+        keycode = tonumber(event.key)
+    elseif t == "number" or t == "string" then
+        keycode = tonumber(event)
+    end
+
+    if not keycode then
+        return false
+    end
+
     return keycode == KEY_RETURN or keycode == KEY_ENTER
 end
 

@@ -35,17 +35,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        -- SCORCHED EARTH: Strict Rational Input
-        -- We do not accept numbers (legacy milliseconds). Input must be a Rational object or struct.
-        local split_rat = split_val_param
-        if type(split_rat) == "number" then
-            error("SplitClip: split_value must be a Rational object, not a number.")
-        end
-        
-        -- Hydrate if necessary (e.g. from JSON without metatable)
-        if type(split_rat) == "table" and split_rat.frames and not getmetatable(split_rat) then
-            split_rat = Rational.new(split_rat.frames, split_rat.fps_numerator, split_rat.fps_denominator)
-        end
+        -- Strict Rational Input: do not accept bare numbers
+        local split_rat = Rational.hydrate(split_val_param)
         
         if not split_rat or not split_rat.frames then
             error("SplitClip: Invalid split_value (missing frames)")

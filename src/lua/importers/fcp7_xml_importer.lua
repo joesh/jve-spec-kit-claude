@@ -182,6 +182,8 @@ end
 
 -- Parse clip item
 local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info)
+    local rate_num = math.floor(frame_rate * 1000)
+    local rate_den = 1000
     local clip_info = {
         original_id = get_attr(clipitem_node, "id"),
         id = get_attr(clipitem_node, "id"),
@@ -192,9 +194,9 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         timeline_start = nil,
         timeline_end = nil,
         start_value = nil,
-        duration = 0,
-        source_in = 0,
-        source_out = 0,
+        duration = Rational.new(0, rate_num, rate_den),
+        source_in = Rational.new(0, rate_num, rate_den),
+        source_out = Rational.new(0, rate_num, rate_den),
         enabled = true,
         frame_rate = frame_rate,
         raw_duration = nil
@@ -254,7 +256,7 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
             end
         elseif name == "duration" then
             local raw_duration = parse_time(child:text(), clip_info.frame_rate)
-            if raw_duration and raw_duration > 0 then
+            if raw_duration and raw_duration.frames and raw_duration.frames > 0 then
                 clip_info.raw_duration = raw_duration
             end
         elseif name == "start" then
@@ -760,6 +762,9 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         local default_duration_rational = Rational.new(1000, fps_num, fps_den)
 
         local duration = (clip_info.media and clip_info.media.duration) or clip_info.duration or default_duration_rational
+        if type(duration) == "number" then
+            duration = Rational.new(duration, fps_num, fps_den)
+        end
         if duration.frames <= 0 then
             duration = default_duration_rational
         end
@@ -773,10 +778,12 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             id = reuse_id,
             project_id = project_id,
             clip_kind = "master",
-            start_value = zero_rational, -- Master clips always start at 0 timeline position
+            timeline_start = zero_rational, -- Master clips always start at 0 timeline position
             duration = duration,
             source_in = source_in,
             source_out = source_out,
+            rate_num = fps_num,
+            rate_den = fps_den,
             enabled = clip_info.enabled ~= false,
             offline = clip_info.offline == true
         })
@@ -869,11 +876,14 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             parsed_result.media_files[key] = media_info
         end
 
-        local fps_num = math.floor(frame_rate * 1000)
+        local fps_num = math.floor((clip_info.frame_rate or 24) * 1000)
         local fps_den = 1000
         local one_rational = Rational.new(1, fps_num, fps_den)
 
         local duration = media_info.duration
+        if type(duration) == "number" then
+            duration = Rational.new(duration, fps_num, fps_den)
+        end
         if (not duration or duration.frames <= 0) and clip_info.duration and clip_info.duration.frames > 0 then
             duration = clip_info.duration
         end
@@ -920,10 +930,6 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     local function create_clip(track_id, clip_info, clip_key, master_bin_id)
         local media_id = ensure_media(clip_info)
         local master_clip_id = ensure_master_clip(clip_info, clip_key, media_id)
-        local clip = Clip.create(clip_info.name or "Clip", media_id)
-        if not clip then
-            return false, "Failed to allocate clip"
-        end
 
         if master_bin_id and master_bin_id ~= "" and master_clip_id then
             local bucket = pending_bin_assignments[master_bin_id]
@@ -935,14 +941,6 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 bucket[master_clip_id] = true
                 bin_assignment_dirty = true
             end
-        end
-
-        local reuse_id = resolve_reuse_id('clips', clip_key)
-        if not reuse_id and clip_info.original_id and clip_info.original_id ~= "" then
-            reuse_id = clip_info.original_id
-        end
-        if reuse_id then
-            clip.id = reuse_id
         end
 
         local fps_num = math.floor(clip_info.frame_rate * 1000)
@@ -959,13 +957,29 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             source_out = source_in + duration
         end
 
-        clip.track_id = track_id
-        clip.parent_clip_id = master_clip_id or clip.parent_clip_id
-        clip.start_value = start_value
-        clip.duration = duration
-        clip.source_in = source_in
-        clip.source_out = source_out
-        clip.enabled = clip_info.enabled ~= false
+        local reuse_id = resolve_reuse_id('clips', clip_key)
+        if not reuse_id and clip_info.original_id and clip_info.original_id ~= "" then
+            reuse_id = clip_info.original_id
+        end
+
+        local clip = Clip.create(clip_info.name or "Clip", media_id, {
+            id = reuse_id,
+            project_id = project_id,
+            track_id = track_id,
+            parent_clip_id = master_clip_id,
+            owner_sequence_id = clip_info.owner_sequence_id,
+            timeline_start = start_value,
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out,
+            rate_num = fps_num,
+            rate_den = fps_den,
+            enabled = clip_info.enabled ~= false,
+            offline = clip_info.offline == true
+        })
+        if not clip then
+            return false, "Failed to allocate clip"
+        end
 
         if not clip:save(conn) then
             return false, "Failed to save clip"
@@ -978,9 +992,12 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return true
     end
 
-    local function create_clip_set(sequence_key, track_key, track_id, clips, master_bin_id)
+    local function create_clip_set(sequence_key, track_key, track_id, clips, master_bin_id, sequence_id)
         for clip_index, clip_info in ipairs(clips or {}) do
             local clip_key = track_key .. "::" .. (clip_info.original_id or clip_index)
+            if not clip_info.owner_sequence_id or clip_info.owner_sequence_id == "" then
+                clip_info.owner_sequence_id = sequence_id or result.sequence_id_map[sequence_key]
+            end
             local ok, err = create_clip(track_id, clip_info, clip_key, master_bin_id)
             if not ok then
                 return false, err
@@ -1029,7 +1046,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         table.insert(result.track_ids, track.id)
         result.track_id_map[track_key] = track.id
 
-        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips, master_bin_id)
+        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips, master_bin_id, sequence_id)
         if not ok then
             return false, err
         end

@@ -65,6 +65,7 @@ local function plan_update(row, original)
     return {
         type = "update",
         clip_id = row.id,
+        track_id = row.track_id,
         timeline_start_frame = get_frames(row.timeline_start or row.start_value),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
@@ -83,6 +84,9 @@ local function plan_delete(row)
 end
 
 local function plan_insert(row)
+    -- Prefer explicit fps fields, but fall back to rate table used by Clip objects
+    local fps_num = row.fps_numerator or (row.rate and row.rate.fps_numerator) or 30
+    local fps_den = row.fps_denominator or (row.rate and row.rate.fps_denominator) or 1
     return {
         type = "insert",
         clip_id = row.id,
@@ -95,8 +99,8 @@ local function plan_insert(row)
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in or 0),
         source_out_frame = get_frames(row.source_out or (row.source_in or 0) + row.duration),
-        fps_numerator = row.fps_numerator or 30,
-        fps_denominator = row.fps_denominator or 1,
+        fps_numerator = fps_num,
+        fps_denominator = fps_den,
         enabled = row.enabled and 1 or 0,
         created_at = row.created_at or os.time(),
         modified_at = row.modified_at or os.time()
@@ -338,8 +342,8 @@ function ClipMutator.resolve_occlusions(db, params)
             local new_duration = original_end - target_start
             
             local trim_amount = target_start - clip_start
-            
-            row.start_value = target_start
+
+            row.timeline_start = target_start
             row.duration = new_duration
             
             local dur_frames = get_frames(row.duration)
@@ -388,7 +392,7 @@ function ClipMutator.resolve_occlusions(db, params)
                     name = original.name,
                     track_id = original.track_id,
                     media_id = original.media_id,
-                    start_value = target_right_start,
+                    timeline_start = target_right_start,
                     duration = right_duration,
                     source_in = base_in + shift_amount,
                     source_out = original_out,

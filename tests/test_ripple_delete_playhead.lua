@@ -9,6 +9,7 @@ local Command = require('command')
 local Media = require('models.media')
 local Clip = require('models.clip')
 local timeline_state = require('ui.timeline.timeline_state')
+local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_ripple_delete_playhead.db"
 os.remove(TEST_DB)
@@ -19,13 +20,19 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 db:exec([[
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v2', 'default_sequence', 'Video 2', 'VIDEO', 'video_frames', 30.0, 2, 1);
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        created_at, modified_at
+    )
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v2', 'default_sequence', 'Video 2', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
 local function create_media(id, duration_value)
@@ -34,8 +41,9 @@ local function create_media(id, duration_value)
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. id .. '.mov',
         name = id .. '.mov',
-        duration_value = duration_value,
-        frame_rate = 30,
+        duration_frames = duration_value,
+        fps_numerator = 30,
+        fps_denominator = 1,
         width = 1920,
         height = 1080,
         audio_channels = 2
@@ -50,12 +58,12 @@ local function create_clip(id, track_id, start_value, duration_value, media_id)
         project_id = 'default_project',
         track_id = track_id,
         owner_sequence_id = 'default_sequence',
-        start_value = start_value,
-        duration_value = duration_value,
-        source_in_value = 0,
-        source_out_value = duration_value,
-        timebase_type = "video_frames",
-        timebase_rate = 30.0,
+        timeline_start = Rational.new(start_value, 30, 1),
+        duration = Rational.new(duration_value, 30, 1),
+        source_in = Rational.new(0, 30, 1),
+        source_out = Rational.new(duration_value, 30, 1),
+        rate_num = 30,
+        rate_den = 1,
         enabled = true,
         offline = false
     })
@@ -80,10 +88,10 @@ timeline_state.init('default_sequence')
 
 local executors = {}
 local undoers = {}
-command_impl.register_commands(executors, undoers, db)
+-- command_impl.register_commands(executors, undoers, db)
 command_manager.init(db, 'default_sequence', 'default_project')
 
-local original_playhead = 8888
+local original_playhead = Rational.new(8888, 30, 1)
 timeline_state.set_playhead_position(original_playhead)
 
 local cmd = Command.create("RippleDeleteSelection", "default_project")
@@ -96,7 +104,8 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed for ripple delete")
 
 local restored = timeline_state.get_playhead_position()
-assert(restored == original_playhead,
-    string.format("Undo should restore playhead to %d, got %d", original_playhead, restored))
+local restored_frames = (type(restored) == "table" and restored.frames) or restored
+assert(restored_frames == original_playhead.frames,
+    string.format("Undo should restore playhead to %d, got %s", original_playhead.frames, tostring(restored_frames)))
 
 print("✅ RippleDeleteSelection undo restores playhead using real timeline_state")

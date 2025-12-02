@@ -40,8 +40,16 @@ function timeline_state.get_playhead_position()
 end
 
 function timeline_state.set_playhead_position(value)
-    timeline_state.playhead = value
-    table.insert(timeline_moves, value)
+    local numeric = value
+    if type(value) == "table" and value.frames then
+        numeric = value.frames
+    end
+    timeline_state.playhead = numeric
+    table.insert(timeline_moves, numeric)
+end
+
+function timeline_state.set_playhead_value(value)
+    return timeline_state.set_playhead_position(value)
 end
 
 function timeline_state.get_mark_in()

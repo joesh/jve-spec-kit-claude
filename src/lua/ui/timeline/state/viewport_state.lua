@@ -40,8 +40,9 @@ local function calculate_timeline_extent()
         end
     end
 
-    local buffer = Rational.new(10000, seq_fps.fps_numerator, seq_fps.fps_denominator)
-    local min_extent = Rational.new(60000, seq_fps.fps_numerator, seq_fps.fps_denominator)
+    -- Use seconds (not raw frames) for buffer and minimum extent to avoid multi-hour baselines
+    local buffer = Rational.from_seconds(10, seq_fps.fps_numerator, seq_fps.fps_denominator)
+    local min_extent = Rational.from_seconds(60, seq_fps.fps_numerator, seq_fps.fps_denominator)
 
     return Rational.max(min_extent, max_end + buffer)
 end

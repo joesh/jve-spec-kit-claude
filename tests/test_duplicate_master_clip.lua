@@ -18,17 +18,19 @@ db:exec(require('import_schema'))
 db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 24.0, 48000, 1920, 1080, 0, 0, 0, 240);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 24.0, 1, 1);
-    INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate)
-    VALUES ('media_master', 'default_project', 'Master Source', '/tmp/jve/master.mov', 2000, 'video_frames', 24.0, 24.0);
-    INSERT INTO clips (id, project_id, clip_kind, name, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline)
-    VALUES ('master_clip', 'default_project', 'master', 'Master Clip', 'media_master', 0, 2000, 0, 2000, 'video_frames', 24.0, 1, 0);
-    INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value)
-    VALUES ('prop1', 'master_clip', 'ColorBalance', '{"value":"warm"}', 'STRING', '{}');
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+                           view_start_frame, view_duration_frames, playhead_frame, mark_in_frame, mark_out_frame,
+                           selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 24, 1, 48000, 1920, 1080,
+            0, 240, 0, NULL, NULL, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_master', 'default_project', 'Master Source', '/tmp/jve/master.mov', 2000, 24, 1, 1920, 1080, 2, 'h264', '{}', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO clips (id, project_id, clip_kind, name, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('master_clip', 'default_project', 'master', 'Master Clip', 'media_master', NULL, 0, 2000, 0, 2000, 24, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
 
+    INSERT INTO tag_namespaces (id, display_name) VALUES ('bin', 'Bins');
     INSERT INTO tags (id, project_id, namespace_id, name, path, sort_index)
     VALUES ('bin_target', 'default_project', 'bin', 'Target Bin', 'Target Bin', 1);
 ]])

@@ -12,6 +12,7 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
 local SCHEMA_SQL = require('import_schema')
+local Rational = require('core.rational')
 
 local timeline_state = {
     sequence_id = "default_sequence",
@@ -22,7 +23,7 @@ local timeline_state = {
 }
 
 function timeline_state.capture_viewport()
-    return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 30}
+    return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 1000}
 end
 function timeline_state.push_viewport_guard() end
 function timeline_state.pop_viewport_guard() end
@@ -36,7 +37,7 @@ function timeline_state.clear_edge_selection() end
 function timeline_state.clear_gap_selection() end
 function timeline_state.set_playhead_position(ms) timeline_state.playhead = ms end
 function timeline_state.get_playhead_position() return timeline_state.playhead end
-function timeline_state.get_sequence_frame_rate() return 24.0 end
+function timeline_state.get_sequence_frame_rate() return {fps_numerator = 1000, fps_denominator = 1} end
 function timeline_state.get_sequence_audio_sample_rate() return 48000 end
 function timeline_state.get_sequence_id() return timeline_state.sequence_id end
 function timeline_state.normalize_edge_selection() return false end
@@ -65,16 +66,16 @@ local function init_database(path)
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-        INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-        INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled, locked, muted, soloed, volume, pan)
-        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1, 0, 0, 0, 0, 0);
-        INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES ('media_stub', 'default_project', 'Stub', '/tmp/jve/stub.mov', 1000, 'video_frames', 30.0, 30.0, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)
+        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 1000, 1, 48000, 1920, 1080, 0, 240, 0, strftime('%s','now'), strftime('%s','now'));
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 0, 0);
+        INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES ('media_stub', 'default_project', 'Stub', '/tmp/jve/stub.mov', 1000, 1000, 1, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id,
-                           start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline, created_at, modified_at)
+                           timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
         VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_stub', NULL, NULL, 'default_sequence',
-                0, 1000, 0, 1000, 'video_frames', 30.0, 1, 0, strftime('%s','now'), strftime('%s','now'));
+                0, 1000, 0, 1000, 1000, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
     ]]))
     return db
 end
@@ -100,7 +101,7 @@ reset_timeline_stub()
 
 local split_cmd = Command.create("SplitClip", "default_project")
 split_cmd:set_parameter("clip_id", "clip_a")
-split_cmd:set_parameter("split_value", 600)
+split_cmd:set_parameter("split_value", Rational.new(600, 1000, 1))
 split_cmd:set_parameter("sequence_id", "default_sequence")
 
 local split_result = command_manager.execute(split_cmd)
@@ -118,9 +119,9 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "UndoSplitClip failed")
 
 local stmt = db:prepare([[
-    SELECT id, start_value, duration_value
+    SELECT id, timeline_start_frame, duration_frames
     FROM clips
-    ORDER BY start_value
+    ORDER BY timeline_start_frame
 ]])
 assert(stmt and stmt:exec(), "Failed to query clips after undo")
 local clip_count = 0

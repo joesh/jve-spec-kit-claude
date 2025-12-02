@@ -28,6 +28,7 @@ local function stub_timeline_state()
     timeline_state.get_selected_edges = function() return {} end
     timeline_state.set_playhead_position = function(_) end
     timeline_state.get_playhead_position = function() return 0 end
+    timeline_state.get_sequence_frame_rate = function() return 30 end
     timeline_state.get_project_id = function() return "default_project" end
     timeline_state.get_sequence_id = function() return current_sequence_id end
     timeline_state.reload_clips = function(sequence_id)
@@ -69,9 +70,23 @@ exec(db, string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Sequence 1', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-]], now, now))
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height,
+        view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    )
+    VALUES (
+        'default_sequence', 'default_project', 'Sequence 1', 'timeline',
+        30, 1, 48000,
+        1920, 1080,
+        0, 240, 0,
+        '[]', '[]', '[]',
+        0, %d, %d
+    );
+]], now, now, now, now))
 
 stub_timeline_state()
 

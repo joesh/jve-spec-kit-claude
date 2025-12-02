@@ -31,22 +31,82 @@ function M.parse_from_query(query, project_id)
         return nil
     end
 
-    -- Assuming query result has these columns:
-    -- id, type, project_id, sequence_number, status, parameters, pre_hash, post_hash, created_at, executed_at
-    local command = {
-        id = query:value(0),
-        type = query:value(1),
-        project_id = query:value(2) or project_id,
-        sequence_number = query:value(3) or 0,
-        status = query:value(4) or "Created",
-        parameters = {},  -- TODO: Parse JSON parameters from query:value(5)
-        pre_hash = query:value(6) or "",
-        post_hash = query:value(7) or "",
-        created_at = query:value(8) or os.time(),
-        executed_at = query:value(9),
-        playhead_value = query:value(10),
-        playhead_rate = query:value(11)
-    }
+    local column_count = 0
+    if query.record then
+        local rec = query:record()
+        if rec and rec.count then
+            column_count = rec:count()
+        end
+    end
+    local command = nil
+
+    -- Two supported layouts:
+    -- 1) SELECT * FROM commands (schema order)
+    -- 2) Explicit column list from command_manager.get_command_at_sequence
+    if column_count >= 17 then
+        local args_json = query:value(4)
+        local args_table = {}
+        if args_json and args_json ~= "" then
+            local ok, decoded = pcall(json.decode, args_json)
+            if ok and type(decoded) == "table" then
+                args_table = decoded
+            end
+        end
+
+        command = {
+            id = query:value(0),
+            parent_id = query:value(1),
+            sequence_number = query:value(2) or 0,
+            type = query:value(3),
+            parameters = args_table,
+            parent_sequence_number = query:value(5),
+            pre_hash = query:value(6) or "",
+            post_hash = query:value(7) or "",
+            created_at = query:value(8) or os.time(),
+            executed_at = query:value(8),
+            playhead_value = query:value(9),
+            playhead_rate = query:value(10),
+            selected_clip_ids = query:value(11),
+            selected_edge_infos = query:value(12),
+            selected_gap_infos = query:value(13),
+            selected_clip_ids_pre = query:value(14),
+            selected_edge_infos_pre = query:value(15),
+            selected_gap_infos_pre = query:value(16),
+            status = query:value(17) or "Created"
+        }
+        command.project_id = project_id or args_table.project_id
+    else
+        local args_json = query:value(2)
+        local args_table = {}
+        if args_json and args_json ~= "" then
+            local ok, decoded = pcall(json.decode, args_json)
+            if ok and type(decoded) == "table" then
+                args_table = decoded
+            end
+        end
+
+        command = {
+            id = query:value(0),
+            type = query:value(1),
+            parameters = args_table,
+            sequence_number = query:value(3) or 0,
+            parent_sequence_number = query:value(4),
+            pre_hash = query:value(5) or "",
+            post_hash = query:value(6) or "",
+            created_at = query:value(7) or os.time(),
+            executed_at = query:value(7),
+            playhead_value = query:value(8),
+            playhead_rate = query:value(9),
+            selected_clip_ids = query:value(10),
+            selected_edge_infos = query:value(11),
+            selected_gap_infos = query:value(12),
+            selected_clip_ids_pre = query:value(13),
+            selected_edge_infos_pre = query:value(14),
+            selected_gap_infos_pre = query:value(15),
+            status = query:value(16) or "Created"
+        }
+        command.project_id = project_id or args_table.project_id
+    end
 
     setmetatable(command, {__index = M})
     return command

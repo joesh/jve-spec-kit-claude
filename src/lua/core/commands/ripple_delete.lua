@@ -14,6 +14,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local gap_start_rat = command:get_parameter("gap_start")
         local gap_duration_rat = command:get_parameter("gap_duration")
         local sequence_id = command:get_parameter("sequence_id")
+        local rate_num = command:get_parameter("fps_numerator") or 30
+        local rate_den = command:get_parameter("fps_denominator") or 1
 
         -- Validate Rational inputs
         if not track_id then
@@ -21,17 +23,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
         
-        if type(gap_start_rat) == "number" or type(gap_duration_rat) == "number" then
-            error("RippleDelete: gap parameters must be Rational objects, not numbers.")
+        -- Hydrate from table/number if needed (e.g. from JSON or UI)
+        local function hydrate_rat(val)
+            if Rational.hydrate then
+                return Rational.hydrate(val, rate_num, rate_den)
+            end
+            return val
         end
-        
-        -- Hydrate from table if needed (e.g. from JSON)
-        if type(gap_start_rat) == "table" and gap_start_rat.frames and not getmetatable(gap_start_rat) then
-            gap_start_rat = Rational.new(gap_start_rat.frames, gap_start_rat.fps_numerator, gap_start_rat.fps_denominator)
-        end
-        if type(gap_duration_rat) == "table" and gap_duration_rat.frames and not getmetatable(gap_duration_rat) then
-            gap_duration_rat = Rational.new(gap_duration_rat.frames, gap_duration_rat.fps_numerator, gap_duration_rat.fps_denominator)
-        end
+
+        gap_start_rat = hydrate_rat(gap_start_rat)
+        gap_duration_rat = hydrate_rat(gap_duration_rat)
         
         if not gap_start_rat or not gap_start_rat.frames then
             error("RippleDelete: Invalid gap_start (missing frames)")

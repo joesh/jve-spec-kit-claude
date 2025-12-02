@@ -20,6 +20,68 @@ end
 
 local M = {}
 
+-- Rational serialization helpers for JSON compatibility
+-- Rational objects have metatables that don't serialize, so convert to plain tables
+local function serialize_rational(rational_obj)
+    if not rational_obj then return nil end
+
+    -- Rational objects have: frames, fps_numerator, fps_denominator
+    return {
+        frames = rational_obj.frames,
+        num = rational_obj.fps_numerator,
+        den = rational_obj.fps_denominator
+    }
+end
+
+local function deserialize_rational(table_obj)
+    if not table_obj or not table_obj.frames then return nil end
+
+    local Rational = require("core.rational")
+    return Rational.new(table_obj.frames, table_obj.num, table_obj.den)
+end
+
+local function get_active_sequence_rate()
+    local conn = database.get_connection()
+    if not conn then
+        print("WARNING: No database connection for sequence rate detection, defaulting to 30fps")
+        return 30, 1
+    end
+
+    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+                        or "default_sequence"
+
+    local query = conn:prepare([[
+        SELECT fps_numerator, fps_denominator
+        FROM sequences
+        WHERE id = ?
+    ]])
+
+    if not query then
+        print("WARNING: Failed to prepare sequence rate query, defaulting to 30fps")
+        return 30, 1
+    end
+
+    query:bind_value(1, sequence_id)
+    if query:exec() and query:next() then
+        local num = query:value(0)
+        local den = query:value(1)
+        query:finalize()
+
+        -- Validate frame rate values
+        if num and num > 0 and den and den > 0 then
+            return num, den
+        else
+            print(string.format("WARNING: Invalid sequence frame rate %s/%s, defaulting to 30fps",
+                                tostring(num), tostring(den)))
+            return 30, 1
+        end
+    end
+
+    query:finalize()
+    print("WARNING: Sequence not found, defaulting to 30fps")
+    return 30, 1
+end
+
 local function load_clip_properties(clip_id)
     local props = {}
     if not clip_id or clip_id == "" then
@@ -79,17 +141,19 @@ local function copy_timeline_selection()
     end
 
     local clip_payloads = {}
-    local earliest_start = math.huge
+    local earliest_start_frame = math.huge
 
     for _, raw in ipairs(selected) do
         local clip = resolve_clip_entry(raw)
-        if clip and clip.id and clip.track_id and clip.start_value then
+        if clip and clip.id and clip.track_id and clip.timeline_start then
+            
+            local start_frame = clip.timeline_start.frames
+            
             if clip.media_id == nil and clip.parent_clip_id == nil then
                 goto continue
             end
 
-            earliest_start = math.min(earliest_start, clip.start_value)
-            local duration = clip.duration or ((clip.source_out or 0) - (clip.source_in or 0))
+            earliest_start_frame = math.min(earliest_start_frame, start_frame)
 
             clip_payloads[#clip_payloads + 1] = {
                 original_id = clip.id,
@@ -99,10 +163,13 @@ local function copy_timeline_selection()
                 source_sequence_id = clip.source_sequence_id,
                 owner_sequence_id = clip.owner_sequence_id,
                 clip_kind = clip.clip_kind,
-                start_value = clip.start_value,
-                duration = duration,
-                source_in = clip.source_in or 0,
-                source_out = clip.source_out or ((clip.source_in or 0) + duration),
+
+                -- Serialize Rational objects to plain tables for JSON
+                timeline_start = serialize_rational(clip.timeline_start),
+                duration = serialize_rational(clip.duration),
+                source_in = serialize_rational(clip.source_in),
+                source_out = serialize_rational(clip.source_out),
+
                 name = clip.name,
                 offline = clip.offline,
                 copied_properties = load_clip_properties(clip.id)
@@ -115,19 +182,20 @@ local function copy_timeline_selection()
         return false, "Timeline selection missing media"
     end
 
-    if earliest_start == math.huge then
-        earliest_start = clip_payloads[1].start_value or 0
+    if earliest_start_frame == math.huge then
+        earliest_start_frame = (clip_payloads[1].timeline_start and clip_payloads[1].timeline_start.frames or 0)
     end
 
     for _, entry in ipairs(clip_payloads) do
-        entry.offset = (entry.start_value or 0) - earliest_start
+        local entry_start_frame = (entry.timeline_start and entry.timeline_start.frames or 0)
+        entry.offset_frames = entry_start_frame - earliest_start_frame
     end
 
     local payload = {
         kind = "timeline_clips",
         project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or "default_project",
         sequence_id = (timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or "default_sequence",
-        reference_start = earliest_start,
+        reference_start_frame = earliest_start_frame,
         clips = clip_payloads,
         count = #clip_payloads
     }
@@ -144,13 +212,21 @@ local function paste_timeline(payload)
 
     local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
     if payload.sequence_id and payload.sequence_id ~= active_sequence_id then
-        return false, string.format("Clipboard sequence '%s' differs from active sequence '%s'",
+        return false, string.format("Clipboard sequence '%s' differs from active sequence_id '%s'",
             tostring(payload.sequence_id), tostring(active_sequence_id))
     end
 
     local project_id = (timeline_state.get_project_id and timeline_state.get_project_id())
         or payload.project_id or "default_project"
-    local playhead = (timeline_state.get_playhead_position and timeline_state.get_playhead_position()) or 0
+
+    local Rational = require("core.rational")
+    local playhead_ms = (timeline_state.get_playhead_position and timeline_state.get_playhead_position()) or 0
+
+    -- Get active sequence frame rate from database
+    local seq_fps_num, seq_fps_den = get_active_sequence_rate()
+
+    -- Convert playhead (milliseconds) to frames at sequence rate
+    local playhead_frames = math.floor((playhead_ms / 1000.0) * (seq_fps_num / seq_fps_den))
 
     local clips = payload.clips or {}
     if #clips == 0 then
@@ -160,9 +236,32 @@ local function paste_timeline(payload)
     local specs = {}
     local new_selection = {}
 
-    for _, clip in ipairs(clips) do
-        if clip.track_id and (clip.media_id or clip.parent_clip_id) then
-            local overwrite_time = playhead + (clip.offset or 0)
+    for _, clip_data in ipairs(clips) do
+        if clip_data.track_id and (clip_data.media_id or clip_data.parent_clip_id) then
+
+            -- Deserialize Rational objects from JSON tables
+            local timeline_start = deserialize_rational(clip_data.timeline_start)
+            local duration = deserialize_rational(clip_data.duration)
+            local source_in = deserialize_rational(clip_data.source_in)
+            local source_out = deserialize_rational(clip_data.source_out)
+
+            if not timeline_start or not duration then
+                print(string.format("WARNING: Skipping clip %s - missing timing data",
+                                    clip_data.original_id or "unknown"))
+                goto continue
+            end
+
+            -- Calculate offset from reference point
+            local offset_frames = clip_data.offset_frames or 0
+            local paste_start_frame = playhead_frames + offset_frames
+
+            -- Create new Rational at paste position (preserving original clip's frame rate)
+            local overwrite_time = Rational.new(
+                paste_start_frame,
+                timeline_start.fps_numerator,
+                timeline_start.fps_denominator
+            )
+
             local clip_id = uuid.generate()
 
             local spec = {
@@ -170,22 +269,23 @@ local function paste_timeline(payload)
                 parameters = {
                     project_id = project_id,
                     sequence_id = active_sequence_id,
-                    track_id = clip.track_id,
-                    media_id = clip.media_id,
-                    master_clip_id = clip.parent_clip_id,
+                    track_id = clip_data.track_id,
+                    media_id = clip_data.media_id,
+                    master_clip_id = clip_data.parent_clip_id,
                     overwrite_time = overwrite_time,
-                    duration = clip.duration,
-                    source_in = clip.source_in,
-                    source_out = clip.source_out,
-                    clip_name = clip.name,
+                    duration = duration,
+                    source_in = source_in,
+                    source_out = source_out,
+                    clip_name = clip_data.name,
                     clip_id = clip_id,
-                    copied_properties = clip.copied_properties,
+                    copied_properties = clip_data.copied_properties,
                     advance_playhead = false
                 }
             }
             specs[#specs + 1] = spec
             new_selection[#new_selection + 1] = {id = clip_id}
         end
+        ::continue::
     end
 
     if #specs == 0 then

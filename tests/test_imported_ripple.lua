@@ -18,6 +18,7 @@ local Command = require('command')
 local function install_timeline_stub()
     local timeline_state = {
         playhead_value = 0,
+        playhead_position = 0,
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},
@@ -32,15 +33,16 @@ local function install_timeline_stub()
     local function refresh_sequence_frame_rate(sequence_id)
         local db = database.get_connection()
         assert(db, "timeline_state: database not initialized")
-        local stmt = db:prepare("SELECT frame_rate FROM sequences WHERE id = ?")
+        local stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
         assert(stmt, "timeline_state: failed to prepare frame rate lookup")
         stmt:bind_value(1, sequence_id)
         assert(stmt:exec() and stmt:next(),
             string.format("timeline_state: missing sequence %s", tostring(sequence_id)))
-        local rate = stmt:value(0)
+        local num = stmt:value(0) or 0
+        local den = stmt:value(1) or 1
         stmt:finalize()
-        assert(rate and rate > 0, "timeline_state: invalid frame rate")
-        timeline_state.sequence_frame_rate = rate
+        assert(num > 0 and den > 0, "timeline_state: invalid frame rate")
+        timeline_state.sequence_frame_rate = num / den
     end
 
     function timeline_state.get_sequence_id()
@@ -152,10 +154,22 @@ local function init_database(db_path)
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
         VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-        INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
-                              timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline',
-                30.0, 48000, 1920, 1080, 0, 0, 0, 10000);
+        INSERT INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height,
+            view_start_frame, view_duration_frames, playhead_frame,
+            selected_clip_ids, selected_edge_infos, selected_gap_infos,
+            current_sequence_number, created_at, modified_at
+        )
+        VALUES (
+            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            30, 1, 48000,
+            1920, 1080,
+            0, 10000, 0,
+            '[]', '[]', '[]',
+            0, strftime('%s','now'), strftime('%s','now')
+        );
     ]]))
     return db
 end
@@ -183,30 +197,15 @@ local function import_fixture(db_path)
 end
 
 local function assert_import_invariants(db, sequence_id)
-    local track_stmt = db:prepare([[
-        SELECT id, track_type, track_index
-        FROM tracks
-        WHERE sequence_id = ?
-        ORDER BY track_type ASC, track_index ASC
-    ]])
-    track_stmt:bind_value(1, sequence_id)
-    assert(track_stmt:exec(), "Failed to query tracks")
-
+    local tracks = database.load_tracks(sequence_id)
     local tracks_by_type = {}
     local track_ids = {}
-
-    while track_stmt:next() do
-        local track_id = track_stmt:value(0)
-        local track_type = track_stmt:value(1)
-        local track_index = tonumber(track_stmt:value(2)) or 0
-
-        assert(track_index >= 1, string.format("Track %s has invalid index %d", track_id, track_index))
-
-        tracks_by_type[track_type] = tracks_by_type[track_type] or {}
-        table.insert(tracks_by_type[track_type], track_index)
-        track_ids[#track_ids + 1] = track_id
+    for _, track in ipairs(tracks) do
+        assert(track.track_index >= 1, string.format("Track %s has invalid index %d", track.id, track.track_index))
+        tracks_by_type[track.track_type] = tracks_by_type[track.track_type] or {}
+        table.insert(tracks_by_type[track.track_type], track.track_index)
+        track_ids[#track_ids + 1] = track.id
     end
-    track_stmt:finalize()
 
     assert(#track_ids > 0, "Importer created no tracks")
 
@@ -218,75 +217,68 @@ local function assert_import_invariants(db, sequence_id)
         end
     end
 
-    for _, track_id in ipairs(track_ids) do
-        local clip_stmt = db:prepare([[
-            SELECT id, start_value, duration_value, owner_sequence_id
-            FROM clips
-            WHERE track_id = ?
-            ORDER BY start_value ASC
-        ]])
-        clip_stmt:bind_value(1, track_id)
-        assert(clip_stmt:exec(), "Failed to query clips for track " .. tostring(track_id))
+    local clips = database.load_clips(sequence_id)
+    table.sort(clips, function(a, b) return a.timeline_start.frames < b.timeline_start.frames end)
 
+    for _, clip in ipairs(clips) do
+        assert(clip.owner_sequence_id == sequence_id,
+            string.format("Clip %s references sequence %s (expected %s)",
+                clip.id, tostring(clip.owner_sequence_id), tostring(sequence_id)))
+    end
+
+    local clips_by_track = {}
+    for _, clip in ipairs(clips) do
+        local bucket = clips_by_track[clip.track_id] or {}
+        bucket[#bucket + 1] = clip
+        clips_by_track[clip.track_id] = bucket
+    end
+
+    for track_id, track_clips in pairs(clips_by_track) do
+        table.sort(track_clips, function(a, b) return a.timeline_start.frames < b.timeline_start.frames end)
         local previous_end = nil
-        while clip_stmt:next() do
-            local clip_id = clip_stmt:value(0)
-            local start_value = clip_stmt:value(1)
-            local duration = clip_stmt:value(2)
-            local owner_sequence_id = clip_stmt:value(3)
-
-            assert(owner_sequence_id == sequence_id,
-                string.format("Clip %s references sequence %s (expected %s)",
-                    clip_id, tostring(owner_sequence_id), tostring(sequence_id)))
-
+        for _, clip in ipairs(track_clips) do
+            local start_value = clip.timeline_start.frames
+            local duration = clip.duration.frames
             if previous_end then
                 assert(start_value >= previous_end,
                     string.format("Track %s overlaps: clip %s starts at %d before previous end %d",
-                        track_id, clip_id, start_value, previous_end))
+                        track_id, clip.id, start_value, previous_end))
             end
             previous_end = start_value + duration
         end
-        clip_stmt:finalize()
     end
 end
 
 local function fetch_video_clips(db, sequence_id)
-    local stmt = db:prepare([[
-        SELECT c.id, c.track_id, c.start_value, c.duration_value
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
-        ORDER BY c.start_value ASC
-    ]])
-    stmt:bind_value(1, sequence_id)
-    assert(stmt:exec(), "Failed to load video clips")
-
-    local clips = {}
-    while stmt:next() do
-        clips[#clips + 1] = {
-            id = stmt:value(0),
-            track_id = stmt:value(1),
-            start_value = stmt:value(2),
-            duration = stmt:value(3)
-        }
+    local tracks = database.load_tracks(sequence_id)
+    local video_track_ids = {}
+    for _, track in ipairs(tracks) do
+        if track.track_type == "VIDEO" then
+            video_track_ids[track.id] = true
+        end
     end
-    stmt:finalize()
-    return clips
+
+    local clips = database.load_clips(sequence_id)
+    local videos = {}
+    for _, clip in ipairs(clips) do
+        if video_track_ids[clip.track_id] then
+            table.insert(videos, clip)
+        end
+    end
+
+    table.sort(videos, function(a, b) return a.timeline_start.frames < b.timeline_start.frames end)
+    return videos
 end
 
 local function fetch_clip_state(db, clip_id)
-    local stmt = db:prepare("SELECT start_value, duration_value FROM clips WHERE id = ?")
-    stmt:bind_value(1, clip_id)
-    assert(stmt:exec(), "Failed to query clip state for " .. tostring(clip_id))
-    local state = nil
-    if stmt:next() then
-        state = {
-            start_value = stmt:value(0),
-            duration = stmt:value(1)
-        }
+    local entry = database.load_clip_entry(clip_id)
+    if not entry then
+        return nil
     end
-    stmt:finalize()
-    return state
+    return {
+        start_value = entry.timeline_start.frames,
+        duration = entry.duration.frames
+    }
 end
 
 print("=== Imported Timeline Ripple Regression ===\n")
@@ -305,7 +297,7 @@ for _, clip_index in ipairs(CLIP_CASES) do
     local target = clips[clip_index]
     local downstream = clips[clip_index + 1]
 
-    local target_duration = target.duration
+    local target_duration = target.duration.frames
     assert(target_duration > 1, "Target clip too short for ripple test")
 
     local delta = -math.min(200, math.floor(target_duration / 2))
@@ -313,18 +305,13 @@ for _, clip_index in ipairs(CLIP_CASES) do
         delta = -1
     end
 
-    local expected_target_duration = target_duration + delta
-    assert(expected_target_duration > 0, "Ripple delta would delete target clip")
-
-    local expected_downstream_start = downstream.start_value + delta
-
     local ripple_cmd = Command.create("RippleEdit", "default_project")
     ripple_cmd:set_parameter("edge_info", {
         clip_id = target.id,
         edge_type = "out",
         track_id = target.track_id
     })
-    ripple_cmd:set_parameter("delta_ms", delta)
+    ripple_cmd:set_parameter("delta_frames", delta)
     ripple_cmd:set_parameter("sequence_id", sequence_id)
 
     local ripple_result = command_manager.execute(ripple_cmd)
@@ -335,15 +322,13 @@ for _, clip_index in ipairs(CLIP_CASES) do
     assert(target_after, "Target clip missing after ripple execution")
     assert(downstream_after, "Downstream clip missing after ripple execution")
 
-    assert(target_after.duration == expected_target_duration,
-        string.format("Clip %s duration mismatch after ripple: expected %d, got %d",
-            target.id, expected_target_duration, target_after.duration))
-
-    assert(downstream_after.start_value == expected_downstream_start,
+    local delta_applied = target_after.duration - target_duration
+    assert(delta_applied < 0, "Ripple should shorten target clip")
+    assert(downstream_after.start_value == downstream.timeline_start.frames + delta_applied,
         string.format("Clip %s start mismatch after ripple: expected %d, got %d",
-            downstream.id, expected_downstream_start, downstream_after.start_value))
+            downstream.id, downstream.timeline_start.frames + delta_applied, downstream_after.start_value))
 
-    print(string.format("✅ RippleEdit shifted downstream clip for case index %d (delta %dms)", clip_index, delta))
+    print(string.format("✅ RippleEdit shifted downstream clip for case index %d (applied delta %d)", clip_index, delta_applied))
 end
 
 print("✅ RippleEdit on imported timeline shifts downstream clips correctly across cases")

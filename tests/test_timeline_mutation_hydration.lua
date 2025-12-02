@@ -16,22 +16,42 @@ local function setup_db()
     assert(conn:exec(require('import_schema')))
 
     assert(conn:exec([[
-        INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, viewport_start_value, viewport_duration_frames_value)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30.0, 48000, 1920, 1080, 0, 0, 0, 240);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO media (id, project_id, file_path, name, duration_value, timebase_type, timebase_rate, frame_rate)
-    VALUES ('media_a', 'default_project', '/tmp/jve/a.mov', 'Media A', 4000, 'video_frames', 30.0, 30.0);
-    INSERT INTO media (id, project_id, file_path, name, duration_value, timebase_type, timebase_rate, frame_rate)
-    VALUES ('media_b', 'default_project', '/tmp/jve/b.mov', 'Media B', 4000, 'video_frames', 30.0, 30.0);
-    INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, media_id)
-    VALUES ('clip_a', 'default_project', 'track_v1', 'default_sequence', 0, 4000, 0, 4000, 'video_frames', 30.0, 'media_a');
-    INSERT INTO clips (id, project_id, track_id, owner_sequence_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, media_id)
-    VALUES ('clip_b', 'default_project', 'track_v1', 'default_sequence', 4000, 4000, 0, 4000, 'video_frames', 30.0, 'media_b');
+        INSERT INTO projects (id, name, created_at, modified_at)
+        VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    )
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline',
+        30, 1, 48000, 1920, 1080, 0, 240, 0,
+        '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_a', 'default_project', 'Media A', '/tmp/jve/a.mov', 4000, 30, 1, 1920, 1080, 0, 'prores', '{}', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_b', 'default_project', 'Media B', '/tmp/jve/b.mov', 4000, 30, 1, 1920, 1080, 0, 'prores', '{}', strftime('%s','now'), strftime('%s','now'));
+
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_a', 'default_sequence',
+        0, 4000, 0, 4000, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
+
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_b', 'default_project', 'timeline', 'Clip B', 'track_v1', 'media_b', 'default_sequence',
+        4000, 4000, 0, 4000, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
     ]]))
 
-command_impl.register_commands({}, {}, conn)
+-- command_impl.register_commands({}, {}, conn)
 command_manager.init(conn, 'default_sequence', 'default_project')
 end
 
@@ -60,7 +80,7 @@ ripple_cmd:set_parameter("edge_info", {
     edge_type = "out",
     track_id = "track_v1"
 })
-ripple_cmd:set_parameter("delta_ms", -250)
+ripple_cmd:set_parameter("delta_frames", -8) -- 250ms at 30fps rounds to 8 frames
 ripple_cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(ripple_cmd)
@@ -69,6 +89,6 @@ assert(reload_count == 0, "Hydrated mutation should not trigger reload fallback"
 
 local hydrated_clip = timeline_state.get_clip_by_id('clip_b')
 assert(hydrated_clip, "clip_b should be hydrated back into state")
-assert(hydrated_clip.duration < 4000, "Ripple trim should update hydrated clip")
+assert(hydrated_clip.duration.frames < 4000, "Ripple trim should update hydrated clip")
 
 print("✅ Timeline state hydrates missing clips during mutation replay without reload fallback")

@@ -6,16 +6,23 @@ package.path = package.path
     .. ";./?.lua"
     .. ";./?/init.lua"
 
+local Rational = require('core.rational')
 local roll_detector = require('ui.timeline.roll_detector')
 
-local function make_clip(id, track_id, start_value, duration_value)
+local function make_clip(id, track_id, start_value, duration_value, fps_num, fps_den)
+    fps_num = fps_num or 1000
+    fps_den = fps_den or 1
     return {
         id = id,
         track_id = track_id,
+        timeline_start = Rational.new(start_value, fps_num, fps_den),
+        duration = Rational.new(duration_value, fps_num, fps_den),
         start_value = start_value,
         duration_value = duration_value,
+        fps_numerator = fps_num,
+        fps_denominator = fps_den,
         timebase_type = "video_frames",
-        timebase_rate = 30
+        timebase_rate = fps_num / fps_den
     }
 end
 
@@ -35,7 +42,7 @@ do
     assert(selection and #selection == 2, "Expected roll selection for clip pair")
     assert(selection[1].edge_type == "out" and selection[2].edge_type == "in", "Clip pair selection should use in/out edges")
     assert(pair and pair.roll_kind == "clip_clip", "Expected clip_clip metadata")
-    assert(math.abs((pair.edit_time or 0) - 1000) < 1, "Edit time should match clip boundary")
+    assert(math.abs((pair.edit_time and pair.edit_time.frames or 0) - 1000) < 1, "Edit time should match clip boundary")
 end
 
 do
