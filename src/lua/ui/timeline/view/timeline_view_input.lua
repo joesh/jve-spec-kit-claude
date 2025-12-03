@@ -296,9 +296,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         elseif view.drag_state then
             view.pending_gap_click = nil
             local current_time = state.pixel_to_time(x, width)
-            
+
             if keyboard_shortcuts.is_snapping_enabled() then
-                local tol = magnetic_snapping.calculate_tolerance(state.get_viewport_duration(), width)
                 if view.drag_state.type == "clips" then
                     local delta = current_time - view.drag_state.start_value
                     local best_snap = nil
@@ -307,11 +306,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                         local new_in = c.timeline_start + delta
                         local new_out = new_in + c.duration
                         local ex_in = {{clip_id=c.id, edge_type="in"}}
-                        local _, si_in = magnetic_snapping.apply_snap(state, new_in, true, {}, ex_in, tol)
-                        if si_in.snapped and si_in.distance < best_dist then best_snap = {time=si_in.time, original=new_in}; best_dist = si_in.distance end
+                        local _, si_in = magnetic_snapping.apply_snap(state, new_in, true, {}, ex_in, width)
+                        if si_in.snapped and si_in.distance_px < best_dist then best_snap = {time=si_in.snap_point.time, original=new_in}; best_dist = si_in.distance_px end
                         local ex_out = {{clip_id=c.id, edge_type="out"}}
-                        local _, si_out = magnetic_snapping.apply_snap(state, new_out, true, {}, ex_out, tol)
-                        if si_out.snapped and si_out.distance < best_dist then best_snap = {time=si_out.time, original=new_out}; best_dist = si_out.distance end
+                        local _, si_out = magnetic_snapping.apply_snap(state, new_out, true, {}, ex_out, width)
+                        if si_out.snapped and si_out.distance_px < best_dist then best_snap = {time=si_out.snap_point.time, original=new_out}; best_dist = si_out.distance_px end
                     end
                     if best_snap then current_time = current_time + (best_snap.time - best_snap.original) end
                 elseif view.drag_state.type == "edges" then
@@ -321,8 +320,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     for _, edge in ipairs(view.drag_state.edges) do
                         local new_edge = edge.original_time + delta
                         local ex = {{clip_id=edge.clip_id, edge_type=edge.edge_type}}
-                        local _, si = magnetic_snapping.apply_snap(state, new_edge, true, {}, ex, tol)
-                        if si.snapped and si.distance < best_dist then best_snap = {time=si.time, original=new_edge}; best_dist = si.distance end
+                        local _, si = magnetic_snapping.apply_snap(state, new_edge, true, {}, ex, width)
+                        if si.snapped and si.distance_px < best_dist then best_snap = {time=si.snap_point.time, original=new_edge}; best_dist = si.distance_px end
                     end
                     if best_snap then current_time = current_time + (best_snap.time - best_snap.original) end
                 end

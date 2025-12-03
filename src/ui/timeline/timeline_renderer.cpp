@@ -4,6 +4,7 @@
 #include <QResizeEvent>
 #include <QApplication>
 #include <QWheelEvent>
+#include <QtDebug>
 
 namespace JVE {
 
@@ -178,6 +179,14 @@ void TimelineRenderer::mousePressEvent(QMouseEvent* event)
             lua_setfield(lua_state_, -2, "x");
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
+            lua_pushnumber(lua_state_, event->globalPosition().x());
+            lua_setfield(lua_state_, -2, "gx");
+            lua_pushnumber(lua_state_, event->globalPosition().y());
+            lua_setfield(lua_state_, -2, "gy");
+            lua_pushnumber(lua_state_, event->globalPosition().x());
+            lua_setfield(lua_state_, -2, "gx");
+            lua_pushnumber(lua_state_, event->globalPosition().y());
+            lua_setfield(lua_state_, -2, "gy");
 
             Qt::KeyboardModifiers mods = event->modifiers();
             Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
@@ -206,6 +215,8 @@ void TimelineRenderer::mousePressEvent(QMouseEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
+                const char* error_msg = lua_tostring(lua_state_, -1);
+                qWarning() << "Lua error in mousePressEvent:" << (error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -227,6 +238,10 @@ void TimelineRenderer::mouseReleaseEvent(QMouseEvent* event)
             lua_setfield(lua_state_, -2, "x");
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
+            lua_pushnumber(lua_state_, event->globalPosition().x());
+            lua_setfield(lua_state_, -2, "gx");
+            lua_pushnumber(lua_state_, event->globalPosition().y());
+            lua_setfield(lua_state_, -2, "gy");
 
             Qt::KeyboardModifiers mods = event->modifiers();
             Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
@@ -253,6 +268,8 @@ void TimelineRenderer::mouseReleaseEvent(QMouseEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
+                const char* error_msg = lua_tostring(lua_state_, -1);
+                qWarning() << "Lua error in mouseReleaseEvent:" << (error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -274,6 +291,10 @@ void TimelineRenderer::mouseMoveEvent(QMouseEvent* event)
             lua_setfield(lua_state_, -2, "x");
             lua_pushnumber(lua_state_, event->position().y());
             lua_setfield(lua_state_, -2, "y");
+            lua_pushnumber(lua_state_, event->globalPosition().x());
+            lua_setfield(lua_state_, -2, "gx");
+            lua_pushnumber(lua_state_, event->globalPosition().y());
+            lua_setfield(lua_state_, -2, "gy");
 
             Qt::KeyboardModifiers mods = event->modifiers();
             Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
@@ -300,6 +321,8 @@ void TimelineRenderer::mouseMoveEvent(QMouseEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
+                const char* error_msg = lua_tostring(lua_state_, -1);
+                qWarning() << "Lua error in mouseMoveEvent:" << (error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -355,6 +378,8 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
+                const char* error_msg = lua_tostring(lua_state_, -1);
+                qWarning() << "Lua error in wheelEvent:" << (error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -386,6 +411,8 @@ void TimelineRenderer::keyPressEvent(QKeyEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
+                const char* error_msg = lua_tostring(lua_state_, -1);
+                qWarning() << "Lua error in keyPressEvent:" << (error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -412,6 +439,8 @@ void TimelineRenderer::resizeEvent(QResizeEvent* event)
 
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
+                const char* error_msg = lua_tostring(lua_state_, -1);
+                qWarning() << "Lua error in resizeEvent:" << (error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -641,4 +670,3 @@ int lua_timeline_set_lua_state(lua_State* L)
     }
     return 1;
 }
-
