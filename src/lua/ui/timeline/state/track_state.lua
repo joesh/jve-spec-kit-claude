@@ -60,4 +60,14 @@ function M.get_primary_id(track_type)
     return nil
 end
 
+function M.get_by_id(track_id)
+    if not track_id then return nil end
+    for _, track in ipairs(data.state.tracks) do
+        if track.id == track_id then
+            return track
+        end
+    end
+    return nil
+end
+
 return M

@@ -56,6 +56,24 @@ local function find_clip(id)
     return nil
 end
 
+local function assert_no_overlaps()
+    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips ORDER BY track_id, timeline_start_frame")
+    local prev = {}
+    while stmt:next() do
+        local id = stmt:value(0)
+        local track = stmt:value(1)
+        local start = tonumber(stmt:value(2))
+        local dur = tonumber(stmt:value(3))
+        if prev[track] then
+            local prev_end = prev[track].start + prev[track].dur
+            assert(start >= prev_end, string.format("Overlap detected on %s: %s starts at %d before previous end %d",
+                track, id, start, prev_end))
+        end
+        prev[track] = {start = start, dur = dur}
+    end
+    stmt:finalize()
+end
+
 local timeline_state = {
     clips = {},
     selected_clips = {},
@@ -177,6 +195,11 @@ command_manager.register_executor("TestCreateClip", function(cmd)
         media_id = cmd:get_parameter("media_id")
     })
 end)
+command_manager.register_undoer("TestCreateClip", function(cmd)
+    -- Test helper command is not meant to be undone in production; tests should not push it onto undo stack.
+    -- Returning false will surface an error if an undo is attempted.
+    return false, "TestCreateClip is a setup-only helper and should not be undone"
+end)
 
 local clip_specs = {
     {id = "clip_a", start = 0, duration = 1000},
@@ -227,6 +250,7 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed for RippleDeleteSelection")
 assert(timeline_state.playhead_position == original_playhead,
     string.format("Undo should restore playhead to %d, got %d", original_playhead, timeline_state.playhead_position))
+assert_no_overlaps()
 
 local after_undo = clips_snapshot()
 assert(#after_undo == 3, "Expected 3 clips after undo")
@@ -344,6 +368,7 @@ assert(timeline_state.selected_clips and timeline_state.selected_clips[1]
 assert(timeline_state.playhead_position == selection_playhead,
     string.format("Undo should restore playhead to %d, got %d",
         selection_playhead, timeline_state.playhead_position))
+assert_no_overlaps()
 
 local restored_v2 = find_clip("mt_v2_post")
 assert(restored_v2.start_value == 2000,

@@ -17,6 +17,20 @@ local function get_conn()
     return conn
 end
 
+local function lookup_track_sequence(track_id)
+    local conn = get_conn()
+    if not conn or not track_id then return nil end
+    local stmt = conn:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
+    if not stmt then return nil end
+    stmt:bind_value(1, track_id)
+    local seq = nil
+    if stmt:exec() and stmt:next() then
+        seq = stmt:value(0)
+    end
+    stmt:finalize()
+    return seq
+end
+
 function M.trim_string(value)
     if type(value) ~= "string" then
         return ""
@@ -59,10 +73,8 @@ end
 
 function M.ensure_timeline_mutation_bucket(command, sequence_id)
     if not sequence_id then
-        if command and command.type then
-            print(string.format("WARNING: %s: Missing sequence_id for timeline mutation bucket", tostring(command.type)))
-        end
-        return nil
+        local cmd_type = command and command.type or "unknown_command"
+        error(string.format("%s: Missing sequence_id for timeline mutation bucket", tostring(cmd_type)), 2)
     end
     local mutations = command:get_parameter("__timeline_mutations")
     if not mutations then
@@ -282,6 +294,12 @@ function M.restore_clip_state(state)
     local conn = get_conn()
     if not conn then return nil end
 
+    -- Fill missing ownership if possible
+    local seq_id = state.owner_sequence_id or state.track_sequence_id or lookup_track_sequence(state.track_id)
+    state.owner_sequence_id = state.owner_sequence_id or seq_id
+    state.track_sequence_id = state.track_sequence_id or seq_id
+    state.project_id = state.project_id or "default_project"
+
     local clip = Clip.load_optional(state.id, conn)
     
     if not clip then
@@ -292,8 +310,9 @@ function M.restore_clip_state(state)
             clip_kind = state.clip_kind,
             track_id = state.track_id,
             parent_clip_id = state.parent_clip_id,
-            owner_sequence_id = state.owner_sequence_id,
+            owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
             source_sequence_id = state.source_sequence_id,
+            track_sequence_id = state.track_sequence_id or state.owner_sequence_id,
             
             timeline_start = state.timeline_start,
             duration = state.duration,
@@ -303,6 +322,7 @@ function M.restore_clip_state(state)
             enabled = state.enabled ~= false,
             offline = state.offline,
         })
+        clip:restore_without_occlusion(conn)
     else
         -- Update existing
         clip.track_id = state.track_id or clip.track_id
@@ -311,6 +331,7 @@ function M.restore_clip_state(state)
         clip.source_in = state.source_in
         clip.source_out = state.source_out
         clip.enabled = state.enabled ~= false
+        clip:restore_without_occlusion(conn)
     end
     
     return clip
@@ -320,12 +341,19 @@ function M.capture_clip_state(clip)
     if not clip then return nil end
     return {
         id = clip.id,
+        project_id = clip.project_id,
+        clip_kind = clip.clip_kind,
+        owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
+        track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
+        parent_clip_id = clip.parent_clip_id,
+        source_sequence_id = clip.source_sequence_id,
         track_id = clip.track_id,
         media_id = clip.media_id,
         timeline_start = clip.timeline_start,
         duration = clip.duration,
         source_in = clip.source_in,
         source_out = clip.source_out,
+        name = clip.name,
         enabled = clip.enabled
     }
 end
@@ -618,11 +646,11 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         if mut.type == "insert" then
             -- Undo Insert = Delete
             local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
-            if not stmt then return false, "Failed to prepare undo insert" end
+            if not stmt then return false, "Failed to prepare undo insert: " .. tostring(db:last_error()) end
             stmt:bind_value(1, mut.clip_id)
             local ok = stmt:exec()
             stmt:finalize()
-            if not ok then return false, "Failed to execute undo insert" end
+            if not ok then return false, "Failed to execute undo insert: " .. tostring(db:last_error()) end
             
             if command then
                 M.add_delete_mutation(command, sequence_id, mut.clip_id)
@@ -642,7 +670,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ]])
-            if not stmt then return false, "Failed to prepare undo delete" end
+            if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
             
             -- Helper to extract frame count
             local function val_frames(v)
@@ -684,7 +712,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
                 WHERE id = ?
             ]])
-            if not stmt then return false, "Failed to prepare undo update" end
+            if not stmt then return false, "Failed to prepare undo update: " .. tostring(db:last_error()) end
 
             local function val_frames(v)
                 if type(v) == "table" and v.frames then return v.frames end
@@ -701,7 +729,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
             
             local ok = stmt:exec()
             stmt:finalize()
-            if not ok then return false, "Failed to execute undo update" end
+            if not ok then return false, "Failed to execute undo update: " .. (db:last_error() or "") end
             
             if command then
                 M.add_update_mutation(command, sequence_id, {clip_id = prev.id})

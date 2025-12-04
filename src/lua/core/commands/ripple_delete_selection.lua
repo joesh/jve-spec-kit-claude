@@ -385,6 +385,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local shift_amount = command:get_parameter("ripple_selection_shift_amount") or command:get_parameter("ripple_selection_total_removed") or 0
         local sequence_id = command:get_parameter("ripple_selection_sequence_id")
 
+        local failed = false
+
         for _, info in ipairs(shifted_clips) do
             local clip = Clip.load_optional(info.clip_id, db)
             if clip and info.original_start then
@@ -393,6 +395,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clip.timeline_start = require("core.rational").new(info.original_start, fps_num, fps_den)
                 if not clip:save(db, {skip_occlusion = true}) then
                     print(string.format("WARNING: RippleDeleteSelection undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
+                    failed = true
                 else
                     local update_payload = command_helper.clip_update_payload(clip, sequence_id)
                     if update_payload then
@@ -405,10 +408,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, state in ipairs(deleted_states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
-                restored:save(db, {skip_occlusion = true})
-                local insert_payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id)
-                if insert_payload then
-                    command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
+                local ok = restored:save(db, {skip_occlusion = true})
+                if not ok then
+                    print(string.format("WARNING: RippleDeleteSelection undo: Failed to reinsert deleted clip %s", tostring(restored.id)))
+                    failed = true
+                else
+                    local insert_payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id)
+                    if insert_payload then
+                        command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
+                    end
                 end
             end
         end
@@ -416,6 +424,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- flush_timeline_mutations assumed handled by manager
 
         print(string.format("✅ Undo RippleDeleteSelection: restored %d clip(s)", #deleted_states))
+        if failed then
+            return false, "RippleDeleteSelection undo: one or more clips failed to restore (overlap/DB error)"
+        end
         return true
     end
 

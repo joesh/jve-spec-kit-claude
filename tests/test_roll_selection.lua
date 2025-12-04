@@ -35,7 +35,7 @@ do
     local clip_b = make_clip("clip_b", "track_v1", 1000, 500)
     local entries = {
         {clip = clip_a, edge = "out", distance = 3},
-        {clip = clip_b, edge = "in", distance = 4},
+        {clip = clip_b, edge = "in", distance = 3},
     }
 
     local selection, pair = roll_detector.find_best_roll_pair(entries, 250, 1920, always_allow_roll)
@@ -52,12 +52,7 @@ do
     }
 
     local selection, pair = roll_detector.find_best_roll_pair(entries, 400, 1920, always_allow_roll)
-    assert(selection and #selection == 2, "Expected roll selection for clip-gap boundary")
-    assert(selection[1].edge_type == "out", "Roll selection should include clip out edge for gap")
-    assert(selection[2].edge_type == "gap_after", "Roll selection should include gap edge")
-    assert(pair and pair.roll_kind == "clip_gap_after", "Metadata should reflect clip-gap pair")
-    assert(pair.left_target.edge_type == "out", "Left target should be clip out edge")
-    assert(pair.right_target.edge_type == "gap_after", "Right target should be gap edge")
+    assert(selection == nil and pair == nil, "Gap-only edge should not trigger roll selection")
 end
 
 print("✅ roll selection tests passed")

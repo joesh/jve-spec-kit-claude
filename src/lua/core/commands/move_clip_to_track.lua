@@ -77,6 +77,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
         clip.owner_sequence_id = clip.owner_sequence_id or mutation_sequence
+        command:set_parameter("sequence_id", mutation_sequence)
+        command:set_parameter("__snapshot_sequence_ids", {mutation_sequence})
 
         command:set_parameter("original_track_id", clip.track_id)
 
@@ -111,12 +113,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Resolve Occlusions on Target Track
         local target_start = clip.timeline_start
         local target_duration = pending_duration_rat or clip.duration
-        
+        local pending_clips = command:get_parameter("pending_clips")
+
         local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_occlusions(db, {
             track_id = target_track_id,
             timeline_start = target_start,
             duration = target_duration,
-            exclude_clip_id = clip.id 
+            exclude_clip_id = clip.id,
+            pending_clips = pending_clips
         })
         
         if not ok_occ then
@@ -162,13 +166,35 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- So we enforce new logic.
         
         if not executed_mutations then
-             print("WARNING: UndoMoveClipToTrack: No executed mutations found (legacy command?)")
-             return false
+             local msg = "UndoMoveClipToTrack: No executed mutations found (legacy command?)"
+             print("WARNING: " .. msg)
+             return {success = false, error_message = msg}
         end
         
         -- We need sequence_id to record UI mutations during revert
-        -- It's not passed explicitly, but we can try to resolve it or pass nil (UI falls back to reload)
-        local sequence_id = nil -- Not critical for DB consistency
+        -- Prefer explicit sequence id saved on the command; fall back to snapshot targets or mutation provenance.
+        local sequence_id = command:get_parameter("sequence_id")
+        if (not sequence_id or sequence_id == "") then
+            local snap = command:get_parameter("__snapshot_sequence_ids")
+            if type(snap) == "table" and #snap > 0 then
+                sequence_id = snap[1]
+            end
+        end
+        if (not sequence_id or sequence_id == "") and type(executed_mutations) == "table" then
+            for _, mut in ipairs(executed_mutations) do
+                if mut.previous and mut.previous.track_sequence_id then
+                    sequence_id = mut.previous.track_sequence_id
+                    break
+                end
+                if mut.previous and mut.previous.owner_sequence_id then
+                    sequence_id = mut.previous.owner_sequence_id
+                    break
+                end
+            end
+        end
+        if sequence_id and sequence_id ~= "" then
+            command:set_parameter("sequence_id", sequence_id)
+        end
 
         local started, begin_err = db:begin_transaction()
         if not started then
@@ -178,23 +204,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
         if not ok then
             if started then db:rollback_transaction(started) end
-            print("ERROR: UndoMoveClipToTrack: Failed to revert mutations: " .. tostring(err))
-            return false
+            local msg = "UndoMoveClipToTrack: Failed to revert mutations: " .. tostring(err)
+            print("ERROR: " .. msg)
+            return {success = false, error_message = msg}
         end
         
         if started then
             local ok_commit, commit_err = db:commit_transaction(started)
             if not ok_commit then
                 db:rollback_transaction(started)
-                return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+                local msg = "Failed to commit undo transaction: " .. tostring(commit_err)
+                print("ERROR: " .. msg)
+                return {success = false, error_message = msg}
             end
         end
 
         print("✅ Restored clip move and occlusions")
-        return true
+        return {success = true}
     end
 
     command_executors["UndoMoveClipToTrack"] = command_undoers["UndoMoveClipToTrack"]
+    -- Register undoer under the execute type so command_manager picks it directly.
+    command_undoers["MoveClipToTrack"] = command_undoers["UndoMoveClipToTrack"]
 
     return {
         executor = command_executors["MoveClipToTrack"],

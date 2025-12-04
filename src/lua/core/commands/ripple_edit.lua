@@ -346,14 +346,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local clips_to_shift = collect_downstream_clips(all_clips, excluded_ids, ripple_time)
 
         if dry_run then
+            local preview_shifts = {}
+            for _, downstream_clip in ipairs(clips_to_shift or {}) do
+                local start_val = downstream_clip.timeline_start or downstream_clip.start_time
+                local new_start = start_val + shift_rat
+                table.insert(preview_shifts, {
+                    clip_id = downstream_clip.id,
+                    new_start_value = new_start,
+                    new_start_time = new_start
+                })
+            end
             return true, {
-                clamped_delta_ms = delta_rat.frames * 1000 / (seq_fps_num/seq_fps_den), -- approx for UI
+                clamped_delta_ms = delta_rat.frames * 1000 / (seq_fps_num/seq_fps_den),
                 affected_clip = {
                     clip_id = clip.id,
                     new_start_value = clip.timeline_start,
-                    new_duration = clip.duration
+                    new_start_time = clip.timeline_start,
+                    new_duration = clip.duration,
+                    edge_type = edge_info.edge_type
                 },
-                shifted_clips = {}
+                shifted_clips = preview_shifts
             }
         end
 

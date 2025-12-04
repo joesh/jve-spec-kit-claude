@@ -1,0 +1,45 @@
+{
+  "screenshots":{
+    "screenshot_interval_ms":1000,
+    "screenshot_count":0,
+    "ring_buffer":"tests/captures/capture-1764822477/screenshots"
+  },
+  "test_format_version":"1.0",
+  "video_recording":{
+    "duration_seconds":0,
+    "youtube_uploaded":false
+  },
+  "database_snapshots":[],
+  "capture_metadata":{
+    "user_expected_behavior":"Clips should maintain gap",
+    "user_description":"User noticed clip overlap",
+    "capture_type":"user_submitted",
+    "jve_version":"0.1.0-dev",
+    "platform":"Darwin",
+    "capture_timestamp":"2025-12-04T04:27:57Z"
+  },
+  "log_output":[],
+  "command_log":[{
+      "id":"c7",
+      "timestamp_ms":3,
+      "command":"ManualTestCommand",
+      "parameters":{
+        "test":true
+      },
+      "result":{
+        "success":true
+      }
+    }],
+  "gesture_log":[{
+      "type":"key_press",
+      "modifiers":["Shift"],
+      "id":"g12",
+      "timestamp_ms":3,
+      "key":"A"
+    }],
+  "window_geometry":[],
+  "test_name":"User noticed clip overlap",
+  "category":"user_report",
+  "test_id":"capture-1764822477",
+  "tags":["user_submitted","manual"]
+}

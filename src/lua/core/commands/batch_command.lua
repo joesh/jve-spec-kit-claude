@@ -53,7 +53,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["BatchCommand"] = function(command)
         print("Executing BatchCommand")
 
-        local commands_json = command:get_parameter("commands_json")
+        local commands_json = command:get_parameter("executed_commands_json") or command:get_parameter("commands_json")
         if not commands_json or commands_json == "" then
             print("ERROR: BatchCommand: No commands provided")
             return false
@@ -78,6 +78,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not child_project_id or child_project_id == "" then
                 child_project_id = batch_project_id
                 spec.project_id = child_project_id
+            end
+
+            if command:get_parameter("sequence_id") and (not spec.parameters or not spec.parameters.sequence_id) then
+                spec.parameters = spec.parameters or {}
+                spec.parameters.sequence_id = command:get_parameter("sequence_id")
             end
 
             local cmd = Command.create(spec.command_type, child_project_id)

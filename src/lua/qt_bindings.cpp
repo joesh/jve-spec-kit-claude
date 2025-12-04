@@ -13,8 +13,6 @@
 #include "qt_bindings/menu_bindings.cpp"
 #include "qt_bindings/dialog_bindings.cpp"
 #include "qt_bindings/misc_bindings.cpp"
-#include "qt_bindings/database_bindings.cpp" // Include implementation directly as per unity build pattern
-#include "qt_bindings/database_bindings.h" // Include the new database bindings header
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
@@ -201,7 +199,6 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_scroll_area_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_scroll_handler");
 
     // Register new database binding functions
-    register_database_bindings(L);
 
     // Register JSON functions globally
     lua_pushcfunction(L, lua_json_encode); lua_setglobal(L, "qt_json_encode");

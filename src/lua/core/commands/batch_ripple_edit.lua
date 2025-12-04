@@ -11,6 +11,38 @@ do
 end
 local clip_mutator = require('core.clip_mutator') -- New dependency
 
+local function compute_neighbor_bounds(all_clips, original_state, clip_id)
+    if not original_state or not original_state.track_id then
+        return nil, nil
+    end
+    local track_id = original_state.track_id
+    local start_value = original_state.timeline_start
+    local duration_value = original_state.duration
+    if not start_value or not duration_value then
+        return nil, nil
+    end
+    local clip_end = start_value + duration_value
+    local prev_end = nil
+    local next_start = nil
+    for _, other in ipairs(all_clips or {}) do
+        if other.id ~= clip_id and other.track_id == track_id then
+            local other_start = other.timeline_start
+            local other_end = other.timeline_start + other.duration
+            if other_end <= start_value then
+                if not prev_end or other_end > prev_end then
+                    prev_end = other_end
+                end
+            end
+            if other_start >= clip_end then
+                if not next_start or other_start < next_start then
+                    next_start = other_start
+                end
+            end
+        end
+    end
+    return prev_end, next_start
+end
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function apply_edge_ripple(clip, edge_type, delta_rat)
         -- Strict V5: Expect Rational
@@ -123,6 +155,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local original_states_map = {} -- Stores original clip states before modification
         local planned_mutations = {} -- Collect all mutations here
+        local preview_affected_clips = {}
+        local preview_shifted_clips = {}
+        local neighbor_bounds_cache = {}
+        local preloaded_clips = {}
+        local global_min_frames = -math.huge
+        local global_max_frames = math.huge
         
         -- Load all clips on sequence for downstream calculation
         local all_clips = database.load_clips(sequence_id)
@@ -161,7 +199,90 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
         end
-        local clamped_delta_ms = (clamped_delta_rat.frames * 1000) / (seq_fps_num / seq_fps_den)
+        -- Prepopulate original states and neighbor bounds to constrain delta frames
+        for _, edge_info in ipairs(edge_infos) do
+            local clip_id = edge_info.clip_id
+            local clip = preloaded_clips[clip_id]
+            if not clip then
+                clip = Clip.load_optional(clip_id, db)
+                preloaded_clips[clip_id] = clip
+            end
+            if clip then
+                if not original_states_map[clip_id] then
+                    original_states_map[clip_id] = command_helper.capture_clip_state(clip)
+                end
+                if not neighbor_bounds_cache[clip_id] then
+                    local prev_bound, next_bound = compute_neighbor_bounds(all_clips, original_states_map[clip_id], clip_id)
+                    neighbor_bounds_cache[clip_id] = {prev = prev_bound, next = next_bound}
+                end
+                local original = original_states_map[clip_id]
+                local treat_start = (edge_info.edge_type == "in" or edge_info.edge_type == "gap_before")
+                local treat_end = (edge_info.edge_type == "out" or edge_info.edge_type == "gap_after")
+                if treat_start and neighbor_bounds_cache[clip_id].prev then
+                    local delta_min = (neighbor_bounds_cache[clip_id].prev - original.timeline_start).frames
+                    if delta_min > global_min_frames then
+                        global_min_frames = delta_min
+                    end
+                end
+                if treat_end and neighbor_bounds_cache[clip_id].next then
+                    local delta_max = (neighbor_bounds_cache[clip_id].next - (original.timeline_start + original.duration)).frames
+                    if delta_max < global_max_frames then
+                        global_max_frames = delta_max
+                    end
+                end
+            end
+        end
+
+        -- Determine earliest ripple point from original states
+        local earliest_ripple_hint = nil
+        for _, edge_info in ipairs(edge_infos) do
+            local original = original_states_map[edge_info.clip_id]
+            if original then
+                local point = original.timeline_start
+                if edge_info.edge_type == "out" then
+                    point = original.timeline_start + original.duration
+                end
+                if not earliest_ripple_hint or point < earliest_ripple_hint then
+                    earliest_ripple_hint = point
+                end
+            end
+        end
+
+        -- Clamp delta further so downstream shift cannot overlap other tracks
+        if earliest_ripple_hint then
+            for _, clip in ipairs(all_clips or {}) do
+                if clip.id and clip.timeline_start and clip.timeline_start >= earliest_ripple_hint then
+                    local original = command_helper.capture_clip_state(clip)
+                    local prev_bound, next_bound = compute_neighbor_bounds(all_clips, original, clip.id)
+                    if prev_bound then
+                        local delta_min = (prev_bound - clip.timeline_start).frames
+                        if delta_min > global_min_frames then
+                            global_min_frames = delta_min
+                        end
+                    end
+                    if next_bound then
+                        local delta_max = (next_bound - (clip.timeline_start + clip.duration)).frames
+                        if delta_max < global_max_frames then
+                            global_max_frames = delta_max
+                        end
+                    end
+                end
+            end
+        end
+
+        local delta_frames = clamped_delta_rat.frames
+        if global_min_frames ~= -math.huge and global_max_frames ~= math.huge and global_min_frames > global_max_frames then
+            delta_frames = 0
+        else
+            if global_min_frames ~= -math.huge and delta_frames < global_min_frames then
+                delta_frames = global_min_frames
+            end
+            if global_max_frames ~= math.huge and delta_frames > global_max_frames then
+                delta_frames = global_max_frames
+            end
+        end
+        clamped_delta_rat = Rational.new(delta_frames, seq_fps_num, seq_fps_den)
+        local clamped_delta_ms = (delta_frames * 1000) / (seq_fps_num / seq_fps_den)
         command:set_parameter("clamped_delta_ms", clamped_delta_ms)
         local earliest_ripple_time = nil -- Rational
         
@@ -180,6 +301,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             
             -- Get or load clip
             local clip = modified_clips[clip_id]
+            if not clip then
+                clip = preloaded_clips[clip_id]
+            end
             if not clip then
                 clip = Clip.load_optional(clip_id, db)
                 if not clip then
@@ -204,6 +328,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not success then
                 print(string.format("ERROR: Ripple failed for clip %s", clip.id:sub(1,8)))
                 return false
+            end
+
+            if dry_run then
+                local preview_clip_id = clip.id
+                if type(preview_clip_id) == "string" and preview_clip_id:find("^temp_gap_") then
+                    preview_clip_id = edge_info.clip_id
+                end
+                table.insert(preview_affected_clips, {
+                    clip_id = preview_clip_id,
+                    new_start_value = clip.timeline_start,
+                    new_duration = clip.duration,
+                    edge_type = edge_info.edge_type
+                })
             end
 
             if deleted_clip then
@@ -234,6 +371,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if new_end > max_new_end_time then
                     max_new_end_time = new_end
                 end
+            end
+
+            if dry_run then
+                local preview_clip_id = clip.id
+                if type(preview_clip_id) == "string" and preview_clip_id:find("^temp_gap_") then
+                    preview_clip_id = edge_info.clip_id
+                end
+                table.insert(preview_affected_clips, {
+                    clip_id = preview_clip_id,
+                    new_start_value = clip.timeline_start,
+                    new_duration = clip.duration,
+                    edge_type = edge_info.edge_type
+                })
             end
 
             ::continue_edge::
@@ -280,7 +430,50 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             ::continue_shift_plan::
         end
-        
+
+        local function compute_shift_bounds()
+            local min_frames = -math.huge
+            local max_frames = math.huge
+            for _, shift_clip_data in ipairs(clips_to_shift) do
+                local original = {
+                    timeline_start = shift_clip_data.timeline_start,
+                    duration = shift_clip_data.duration,
+                    track_id = shift_clip_data.track_id
+                }
+                local prev_bound, next_bound = compute_neighbor_bounds(all_clips, original, shift_clip_data.id)
+                if prev_bound then
+                    local bound = (prev_bound - original.timeline_start).frames
+                    if bound > min_frames then min_frames = bound end
+                end
+                if next_bound then
+                    local bound = (next_bound - (original.timeline_start + original.duration)).frames
+                    if bound < max_frames then max_frames = bound end
+                end
+            end
+            return min_frames, max_frames
+        end
+
+        local min_shift_frames, max_shift_frames = compute_shift_bounds()
+        local desired_shift_frames = downstream_shift_rat.frames
+        local adjusted_frames = desired_shift_frames
+        if min_shift_frames ~= -math.huge and desired_shift_frames < min_shift_frames then
+            adjusted_frames = min_shift_frames
+        end
+        if max_shift_frames ~= math.huge and desired_shift_frames > max_shift_frames then
+            adjusted_frames = max_shift_frames
+        end
+        if adjusted_frames ~= desired_shift_frames then
+            local retry_count = command:get_parameter("__retry_delta_count") or 0
+            if retry_count > 5 then
+                return false, "Failed to clamp ripple delta without overlap (retry limit)"
+            end
+            command:set_parameter("__retry_delta_count", retry_count + 1)
+            command:set_parameter("delta_frames", adjusted_frames)
+            command:set_parameter("delta_ms", nil)
+            command:set_parameter("clamped_delta_ms", (adjusted_frames * 1000) / (seq_fps_num / seq_fps_den))
+            return command_executors["BatchRippleEdit"](command)
+        end
+
         -- Generate Planned Mutations
         for id, clip in pairs(modified_clips) do
             local original = original_states_map[id]
@@ -308,12 +501,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end)
 
+        if dry_run then
+            preview_shifted_clips = {}
+            for _, shift_clip in ipairs(clips_to_shift or {}) do
+                local new_start = shift_clip.timeline_start + downstream_shift_rat
+                table.insert(preview_shifted_clips, {
+                    clip_id = shift_clip.id,
+                    new_start_value = new_start
+                })
+            end
+        end
+
         command:set_parameter("original_states", original_states_map)
         command:set_parameter("executed_mutations", planned_mutations)
 
         if dry_run then
             return true, {
-                planned_mutations = planned_mutations
+                planned_mutations = planned_mutations,
+                affected_clips = preview_affected_clips,
+                shifted_clips = preview_shifted_clips,
+                clamped_delta_ms = clamped_delta_ms
             }
         end
 

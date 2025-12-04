@@ -204,6 +204,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["UndoInsert"] = command_undoers["Insert"]
+    command_undoers["UndoInsert"] = command_undoers["Insert"]
 
     return {
         executor = command_executors["Insert"],

@@ -5,6 +5,8 @@ local M = {}
 local ui_constants = require("core.ui_constants")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local Rational = require("core.rational")
+local Command = require("command")
+local command_manager = require("core.command_manager")
 
 local function timeline_scroll_debug_enabled()
     local flag = os.getenv("JVE_TIMELINE_SCROLL_DEBUG")
@@ -15,6 +17,214 @@ end
 
 local function timeline_scroll_debug_now()
     return os.clock() * 1000
+end
+
+local function frames_to_rational(frames, fps_num, fps_den)
+    return Rational.new(frames or 0, fps_num, fps_den)
+end
+
+local function build_edge_signature(edges)
+    local parts = {}
+    for _, edge in ipairs(edges or {}) do
+        local clip_id = edge.clip_id or ""
+        local edge_type = edge.edge_type or ""
+        table.insert(parts, clip_id .. ":" .. edge_type)
+    end
+    return table.concat(parts, "|")
+end
+
+local function normalize_batch_preview(planned_mutations, fps_num, fps_den)
+    local preview = {
+        affected_clips = {},
+        shifted_clips = {}
+    }
+    if not planned_mutations then
+        return preview
+    end
+
+    for _, mutation in ipairs(planned_mutations) do
+        if mutation.type == "update" then
+            local entry = {
+                clip_id = mutation.clip_id,
+                new_start_value = frames_to_rational(mutation.timeline_start_frame, fps_num, fps_den),
+                new_duration = frames_to_rational(mutation.duration_frames, fps_num, fps_den)
+            }
+            table.insert(preview.affected_clips, entry)
+
+            local previous = mutation.previous
+            if previous and previous.timeline_start and entry.new_start_value ~= previous.timeline_start then
+                table.insert(preview.shifted_clips, {
+                    clip_id = mutation.clip_id,
+                    new_start_value = entry.new_start_value
+                })
+            end
+        elseif mutation.type == "insert" then
+            table.insert(preview.shifted_clips, {
+                clip_id = mutation.clip_id,
+                new_start_value = frames_to_rational(mutation.timeline_start_frame, fps_num, fps_den)
+            })
+        end
+    end
+
+    return preview
+end
+
+local function ensure_edge_preview(view, state_module)
+    local debug_enabled = os.getenv("JVE_DEBUG_EDGE_PREVIEW") == "1"
+    local function debug(msg)
+        if debug_enabled then print("[edge-preview] " .. msg) end
+    end
+
+    local drag_state = view.drag_state
+    if not drag_state or drag_state.type ~= "edges" then
+        if drag_state then
+            drag_state.preview_data = nil
+            drag_state.preview_request_token = nil
+            drag_state.preview_clamped_delta = nil
+        end
+        debug("no drag_state or not edges; skipping preview")
+        return
+    end
+
+    local edges = drag_state.edges or {}
+    if #edges == 0 then
+        drag_state.preview_data = nil
+        drag_state.preview_request_token = nil
+        drag_state.preview_clamped_delta = nil
+        debug("no edges available")
+        return
+    end
+
+    local delta_rat = drag_state.delta_rational
+    if not delta_rat then
+        drag_state.preview_data = nil
+        drag_state.preview_request_token = nil
+        drag_state.preview_clamped_delta = nil
+        debug("missing delta_rational")
+        return
+    end
+
+    local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id()
+    local project_id = state_module.get_project_id and state_module.get_project_id()
+    if not sequence_id or sequence_id == "" or not project_id or project_id == "" then
+        drag_state.preview_request_token = nil
+        drag_state.preview_data = nil
+        debug("missing sequence/project id")
+        return
+    end
+
+    local seq_rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or {}
+    local fps_num = seq_rate.fps_numerator or 30
+    local fps_den = seq_rate.fps_denominator or 1
+
+    local signature = build_edge_signature(edges)
+    local token = string.format("%s@%d", signature, delta_rat.frames or 0)
+    if drag_state.preview_request_token == token and drag_state.preview_data then
+        debug("preview already computed for token " .. token)
+        return
+    end
+
+    debug("requesting preview for token " .. token)
+
+    local clip_lookup = {}
+    for _, clip in ipairs(state_module.get_clips() or {}) do
+        clip_lookup[clip.id] = clip.track_id
+    end
+
+    local cmd = nil
+    local executor = nil
+    if #edges == 1 then
+        local edge = edges[1]
+        cmd = Command.create("RippleEdit", project_id)
+        cmd:set_parameter("edge_info", {
+            clip_id = edge.clip_id,
+            edge_type = edge.edge_type,
+            track_id = edge.track_id or clip_lookup[edge.clip_id],
+            trim_type = edge.trim_type
+        })
+        cmd:set_parameter("sequence_id", sequence_id)
+        cmd:set_parameter("delta_frames", delta_rat.frames)
+        cmd:set_parameter("dry_run", true)
+        executor = command_manager.get_executor("RippleEdit")
+    else
+        local edge_infos = {}
+        for _, edge in ipairs(edges) do
+            table.insert(edge_infos, {
+                clip_id = edge.clip_id,
+                edge_type = edge.edge_type,
+                track_id = edge.track_id or clip_lookup[edge.clip_id],
+                trim_type = edge.trim_type
+            })
+        end
+        cmd = Command.create("BatchRippleEdit", project_id)
+        cmd:set_parameter("edge_infos", edge_infos)
+        cmd:set_parameter("sequence_id", sequence_id)
+        cmd:set_parameter("delta_frames", delta_rat.frames)
+        cmd:set_parameter("dry_run", true)
+        executor = command_manager.get_executor("BatchRippleEdit")
+    end
+
+    if not executor then
+        drag_state.preview_data = nil
+        drag_state.preview_request_token = nil
+        drag_state.preview_clamped_delta = nil
+        debug("executor not available for dry run")
+        return
+    end
+
+    local ok, result, payload = pcall(executor, cmd)
+    if not ok then
+        drag_state.preview_data = nil
+        drag_state.preview_request_token = nil
+        drag_state.preview_clamped_delta = nil
+        debug("dry run threw error: " .. tostring(result))
+        return
+    end
+
+    if result == false then
+        drag_state.preview_data = nil
+        drag_state.preview_request_token = nil
+        drag_state.preview_clamped_delta = nil
+        debug("dry run returned false")
+        return
+    end
+
+    if #edges == 1 then
+        if debug_enabled and type(payload) == "table" then
+            local keys = {}
+            for k, _ in pairs(payload) do table.insert(keys, tostring(k)) end
+            debug("single-edge payload keys: " .. table.concat(keys, ","))
+        end
+        drag_state.preview_data = payload or {}
+    elseif type(result) == "table" and result.planned_mutations then
+        local planned = result.planned_mutations
+        debug("dry run returned " .. tostring(#(planned or {})) .. " planned mutations")
+        drag_state.preview_data = normalize_batch_preview(planned, fps_num, fps_den)
+    else
+        local mutations = {}
+        if type(payload) == "table" and payload.planned_mutations then
+            mutations = payload.planned_mutations
+            debug("dry run payload contains planned_mutations=" .. tostring(#(mutations or {})))
+        elseif type(payload) == "table" and payload.executed_mutations then
+            mutations = payload.executed_mutations
+            debug("dry run payload missing planned_mutations; using executed_mutations count=" .. tostring(#mutations))
+        elseif type(payload) == "table" then
+            mutations = payload
+            debug("dry run payload treated as mutation list count=" .. tostring(#mutations))
+        end
+        drag_state.preview_data = normalize_batch_preview(mutations, fps_num, fps_den)
+    end
+
+    drag_state.preview_request_token = token
+    debug("preview ready; affected=" .. tostring(#(drag_state.preview_data.affected_clips or {})))
+
+    local clamped_ms = cmd.get_parameter and cmd:get_parameter("clamped_delta_ms")
+    if clamped_ms then
+        local clamped_frames = math.floor((clamped_ms * fps_num / 1000) + 0.5)
+        drag_state.preview_clamped_delta = Rational.new(clamped_frames, fps_num, fps_den)
+    else
+        drag_state.preview_clamped_delta = nil
+    end
 end
 
 local function get_track_with_offset(state_module, track_id, offset)
@@ -230,12 +440,23 @@ function M.render(view)
     -- Draw Selected Gaps
     local selected_gaps = state_module.get_selected_gaps and state_module.get_selected_gaps() or {}
     if #selected_gaps > 0 then
+        local seq_rate = state_module.get_sequence_frame_rate()
+        local fps_num = (seq_rate and seq_rate.fps_numerator) or 30
+        local fps_den = (seq_rate and seq_rate.fps_denominator) or 1
         for _, gap in ipairs(selected_gaps) do
+            local start_rat = gap.start_value
+            local dur_rat = gap.duration
+            if getmetatable(start_rat) ~= Rational.metatable then
+                start_rat = Rational.hydrate and Rational.hydrate(start_rat, fps_num, fps_den) or start_rat
+            end
+            if getmetatable(dur_rat) ~= Rational.metatable then
+                dur_rat = Rational.hydrate and Rational.hydrate(dur_rat, fps_num, fps_den) or dur_rat
+            end
             local gap_y = view.get_track_y_by_id(gap.track_id, height)
             if gap_y >= 0 then
                 local th = view.get_track_visual_height(gap.track_id)
-                local sx = state_module.time_to_pixel(gap.start_value, width)
-                local ex = state_module.time_to_pixel(gap.start_value + gap.duration, width)
+                local sx = state_module.time_to_pixel(start_rat, width)
+                local ex = state_module.time_to_pixel(start_rat + dur_rat, width)
                 local w = ex - sx
                 if w > 0 then
                     local gt = gap_y + 5
@@ -298,16 +519,33 @@ function M.render(view)
         draw_clips(delta_rat, true, function(c) return dragging_ids[c.id] end, preview_hint)
     end
 
-    if view.drag_state and view.drag_state.type == "edges" then
-        local delta_rat = view.drag_state.delta_rational or Rational.new(0, 1, 1)
-        local delta_ms = view.drag_state.delta_ms or 0
-        local all_clips = state_module.get_clips()
-        
-        if view.drag_state.preview_data and view.drag_state.preview_data.affected_clips then
-            -- Draw direct feedback from dry run
-            local affected = view.drag_state.preview_data.affected_clips
-            if not affected and view.drag_state.preview_data.affected_clip then affected = {view.drag_state.preview_data.affected_clip} end
-            
+    local dragging_edges = view.drag_state and view.drag_state.type == "edges"
+    local all_clips = state_module.get_clips()
+    local seq_rate = state_module.get_sequence_frame_rate()
+    local fps_num = (seq_rate and seq_rate.fps_numerator) or 30
+    local fps_den = (seq_rate and seq_rate.fps_denominator) or 1
+    local zero_delta = Rational.new(0, fps_num, fps_den)
+    local edge_delta = zero_delta
+    local edges_to_render = state_module.get_selected_edges() or {}
+
+    if dragging_edges then
+        ensure_edge_preview(view, state_module)
+        if view.drag_state.preview_clamped_delta ~= nil then
+            edge_delta = view.drag_state.preview_clamped_delta
+        elseif view.drag_state.delta_rational then
+            edge_delta = view.drag_state.delta_rational
+        elseif view.drag_state.delta_ms then
+            edge_delta = view.drag_state.delta_ms
+        end
+        edges_to_render = view.drag_state.edges or edges_to_render
+
+        local preview_data = view.drag_state.preview_data
+        if preview_data then
+            local affected = preview_data.affected_clips
+            if not affected and preview_data.affected_clip then
+                affected = {preview_data.affected_clip}
+            end
+
             for _, aff in ipairs(affected or {}) do
                 local c
                 for _, clip in ipairs(all_clips) do if clip.id == aff.clip_id then c = clip break end end
@@ -316,9 +554,8 @@ function M.render(view)
                     if cy >= 0 then
                         local th = view.get_track_visual_height(c.track_id)
                         local new_start = aff.new_start_value or c.timeline_start
-                        -- Handle new_duration Rational/Number
                         local new_dur = aff.new_duration
-                        if type(new_dur) == "number" then 
+                        if type(new_dur) == "number" then
                             local fps = state_module.get_sequence_frame_rate()
                             new_dur = Rational.new(new_dur, fps.fps_numerator, fps.fps_denominator)
                         end
@@ -328,14 +565,14 @@ function M.render(view)
                         local cy = cy + 5
                         local col = "#ffff00"
                         timeline.add_rect(view.widget, sx, cy, cw, 2, col)
-                        timeline.add_rect(view.widget, sx, cy+ch-2, cw, 2, col)
+                        timeline.add_rect(view.widget, sx, cy + ch - 2, cw, 2, col)
                         timeline.add_rect(view.widget, sx, cy, 2, ch, col)
-                        timeline.add_rect(view.widget, sx+cw-2, cy, 2, ch, col)
+                        timeline.add_rect(view.widget, sx + cw - 2, cy, 2, ch, col)
                     end
                 end
             end
-            
-            for _, shift in ipairs(view.drag_state.preview_data.shifted_clips or {}) do
+
+            for _, shift in ipairs(preview_data.shifted_clips or {}) do
                 local c
                 for _, clip in ipairs(all_clips) do if clip.id == shift.clip_id then c = clip break end end
                 if c then
@@ -353,65 +590,50 @@ function M.render(view)
                         local cy = cy + 5
                         local col = "#ffff00"
                         timeline.add_rect(view.widget, sx, cy, cw, 2, col)
-                        timeline.add_rect(view.widget, sx, cy+ch-2, cw, 2, col)
+                        timeline.add_rect(view.widget, sx, cy + ch - 2, cw, 2, col)
                         timeline.add_rect(view.widget, sx, cy, 2, ch, col)
-                        timeline.add_rect(view.widget, sx+cw-2, cy, 2, ch, col)
+                        timeline.add_rect(view.widget, sx + cw - 2, cy, 2, ch, col)
                     end
                 end
             end
-        else
-            -- Fallback Edge Preview (Selection or Drag without dry run)
-            local edges = view.drag_state.edges or state_module.get_selected_edges()
-            local delta_prev = delta_ms
-            if view.drag_state.preview_clamped_delta ~= nil then delta_prev = view.drag_state.preview_clamped_delta end
-            
-            -- Need trim constraints? Assumed view has them or we fetch them?
-            -- To keep it simple, we re-fetch or rely on view passing them?
-            -- Original code fetched them inside render. We'll do same.
-            local constraints_module = require('core.timeline_constraints')
-            local db_mod = require('core.database')
-            local seq_id = state_module.get_sequence_id()
-            local constraints_clips = db_mod.load_clips(seq_id) or {}
-            local constraints = {}
-            -- (Constraint logic omitted for brevity - assuming edge_drag_renderer handles null constraints gracefully or we just skip full constraint calc here for now to save space, 
-            -- BUT `build_preview_edges` needs them for clamping.
-            -- For the refactor, I should ideally move constraint logic to `drag_handler` or helper.)
-            -- I will skip detailed constraint recalc here and pass empty if needed, but let's try to support it minimal.
-            
-            local previews = edge_drag_renderer.build_preview_edges(edges, delta_prev, {}, state_module.colors)
-            
-            for _, p in ipairs(previews) do
-                local c
-                for _, clip in ipairs(all_clips) do if clip.id == p.clip_id then c = clip break end end
-                if c then
-                    local cy = view.get_track_y_by_id(c.track_id, height)
-                    if cy >= 0 then
-                        local th = view.get_track_visual_height(c.track_id)
-                        local start = c.timeline_start
-                        local dur = c.duration
-                        if p.edge_type == "in" or p.edge_type == "gap_before" then
-                            start = start + p.delta
-                            dur = dur - p.delta
-                        elseif p.edge_type == "out" or p.edge_type == "gap_after" then
-                            dur = dur + p.delta
-                        end
-                        local sx = state_module.time_to_pixel(start, width)
-                        local cw = math.floor((dur / viewport_duration_rational) * width) - 1
-                        local ch = th - 10
-                        local cy = cy + 5
-                        local ex = (p.edge_type == "in" or p.edge_type == "gap_before") and sx or (sx + cw)
-                        local is_in = (p.edge_type == "in" or p.edge_type == "gap_after") -- bracket direction
-                        local col = p.color
-                        local bw = 8; local bt = 2
-                        if is_in then
-                            timeline.add_rect(view.widget, ex, cy, bt, ch, col)
-                            timeline.add_rect(view.widget, ex, cy, bw, bt, col)
-                            timeline.add_rect(view.widget, ex, cy+ch-bt, bw, bt, col)
-                        else
-                            timeline.add_rect(view.widget, ex-bt, cy, bt, ch, col)
-                            timeline.add_rect(view.widget, ex-bw, cy, bw, bt, col)
-                            timeline.add_rect(view.widget, ex-bw, cy+ch-bt, bw, bt, col)
-                        end
+        end
+    end
+
+    if edges_to_render and #edges_to_render > 0 then
+        local previews = edge_drag_renderer.build_preview_edges(edges_to_render, edge_delta, {}, state_module.colors)
+
+        for _, p in ipairs(previews) do
+            local c
+            for _, clip in ipairs(all_clips) do if clip.id == p.clip_id then c = clip break end end
+            if c then
+                local cy = view.get_track_y_by_id(c.track_id, height)
+                if cy >= 0 then
+                    local th = view.get_track_visual_height(c.track_id)
+                    local start = c.timeline_start
+                    local dur = c.duration
+                    if p.edge_type == "in" or p.edge_type == "gap_before" then
+                        start = start + p.delta
+                        dur = dur - p.delta
+                    elseif p.edge_type == "out" or p.edge_type == "gap_after" then
+                        dur = dur + p.delta
+                    end
+                    local sx = state_module.time_to_pixel(start, width)
+                    local cw = math.floor((dur / viewport_duration_rational) * width) - 1
+                    local ch = th - 10
+                    local cy = cy + 5
+                    local ex = (p.edge_type == "in" or p.edge_type == "gap_before") and sx or (sx + cw)
+                    local is_in = (p.edge_type == "in" or p.edge_type == "gap_after")
+                    local col = dragging_edges and 0xFFFFFFFF or p.color
+                    local bw = 8
+                    local bt = 2
+                    if is_in then
+                        timeline.add_rect(view.widget, ex, cy, bt, ch, col)
+                        timeline.add_rect(view.widget, ex, cy, bw, bt, col)
+                        timeline.add_rect(view.widget, ex, cy + ch - bt, bw, bt, col)
+                    else
+                        timeline.add_rect(view.widget, ex - bt, cy, bt, ch, col)
+                        timeline.add_rect(view.widget, ex - bw, cy, bw, bt, col)
+                        timeline.add_rect(view.widget, ex - bw, cy + ch - bt, bw, bt, col)
                     end
                 end
             end

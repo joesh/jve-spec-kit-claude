@@ -114,13 +114,14 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     local clip_x = state.time_to_pixel(clip.timeline_start, width)
                     local clip_width = math.max(0, math.floor((clip.duration / state.get_viewport_duration()) * width) - 1)
                     local clip_end_x = clip_x + clip_width
-                    
+
                     local dist_left = math.abs(x - clip_x)
                     if dist_left <= EDGE_ZONE then
                         table.insert(clips_at_position, {
                             clip = clip,
                             edge = (x >= clip_x) and "in" or "gap_before",
-                            distance = dist_left
+                            distance = dist_left,
+                            px = clip_x
                         })
                     end
                     local dist_right = math.abs(x - clip_end_x)
@@ -128,7 +129,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                         table.insert(clips_at_position, {
                             clip = clip,
                             edge = (x <= clip_end_x) and "out" or "gap_after",
-                            distance = dist_right
+                            distance = dist_right,
+                            px = clip_end_x
                         })
                     end
                 end
@@ -136,16 +138,16 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         end
 
         if #clips_at_position > 0 then
-            local best_sel, best_pair = roll_detector.find_best_roll_pair(clips_at_position, x, width, state.detect_roll_between_clips)
+            local best_sel, best_pair = roll_detector.find_best_roll_pair(
+                clips_at_position, x, width, state.detect_roll_between_clips)
             local target_edges = {}
             if best_sel and best_pair then
-                -- Logic for roll selection
-                -- Simplified for brevity: use best_sel
                 target_edges = best_sel
             else
-                -- Find closest
                 local closest = clips_at_position[1]
-                for _, info in ipairs(clips_at_position) do if info.distance < closest.distance then closest = info end end
+                for _, info in ipairs(clips_at_position) do
+                    if info.distance < closest.distance then closest = info end
+                end
                 table.insert(target_edges, {
                     clip_id = closest.clip.id,
                     edge_type = edge_utils.normalize_edge_type(closest.edge),
@@ -354,13 +356,55 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.panel_drag_move(view.widget, x, y)
         else
             -- Hover cursor update
-            -- Simplified: just set arrow or resize
-            -- (Could copy robust logic, but this is enough for refactor structure)
             local EDGE_ZONE = ui_constants.TIMELINE.EDGE_ZONE_PX
             local cursor = "arrow"
-            local clips_at_position = {}
-            -- Hit test for edges... (Simplified copy from above)
-            -- ... (If needed, copy full logic)
+
+            local track_id = view.get_track_id_at_y and view.get_track_id_at_y(y, height)
+            if track_id then
+                local hits = {}
+                for _, clip in ipairs(state.get_clips()) do
+                    if clip.track_id == track_id then
+                        local clip_y = view.get_track_y_by_id(clip.track_id, height)
+                        if clip_y >= 0 then
+                            local track_height = view.get_track_visual_height(clip.track_id)
+                            if y >= clip_y and y <= clip_y + track_height then
+                                local clip_x = state.time_to_pixel(clip.timeline_start, width)
+                                local clip_width = math.max(0, math.floor((clip.duration / state.get_viewport_duration()) * width) - 1)
+                                local clip_end_x = clip_x + clip_width
+
+                                local dist_left = math.abs(x - clip_x)
+                                if dist_left <= EDGE_ZONE then
+                                    table.insert(hits, {clip = clip, edge = (x >= clip_x) and "in" or "gap_before", distance = dist_left, px = clip_x})
+                                end
+                                local dist_right = math.abs(x - clip_end_x)
+                                if dist_right <= EDGE_ZONE then
+                                    table.insert(hits, {clip = clip, edge = (x <= clip_end_x) and "out" or "gap_after", distance = dist_right, px = clip_end_x})
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if #hits > 0 then
+                    local selection, pair = roll_detector.find_best_roll_pair(hits, x, width, state.detect_roll_between_clips)
+                    if selection and pair then
+                        cursor = "split_h"
+                    else
+                        local closest = hits[1]
+                        for _, info in ipairs(hits) do
+                            if info.distance < closest.distance then closest = info end
+                        end
+                        if closest then
+                            if closest.px and x >= closest.px then
+                                cursor = "size_horz"
+                            else
+                                cursor = "size_horz"
+                            end
+                        end
+                    end
+                end
+            end
+
             qt_set_widget_cursor(view.widget, cursor)
         end
 

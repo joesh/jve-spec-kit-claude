@@ -145,32 +145,60 @@ end
 
 function M.time_to_pixel(time_obj, viewport_width)
     local state = data.state
-    local time_ms
-    if type(time_obj) == "table" and time_obj.to_seconds then
-        time_ms = time_obj:to_seconds() * 1000.0
+    local rate = state.sequence_frame_rate
+    local time_rt
+    if getmetatable(time_obj) == Rational.metatable then
+        time_rt = time_obj
+    elseif type(time_obj) == "table" and time_obj.to_seconds then
+        time_rt = Rational.hydrate(time_obj)
+    elseif type(time_obj) == "table" then
+        time_rt = Rational.hydrate(time_obj)
+    elseif type(time_obj) == "number" then
+        if time_obj % 1 ~= 0 then
+            error("time_to_pixel: numeric inputs must be integer frame counts", 2)
+        end
+        time_rt = Rational.new(time_obj, rate.fps_numerator, rate.fps_denominator)
     else
-        time_ms = tonumber(time_obj) or 0
+        time_rt = Rational.new(0, rate.fps_numerator, rate.fps_denominator)
     end
 
-    local start_ms = state.viewport_start_time:to_seconds() * 1000.0
-    local duration_ms = state.viewport_duration:to_seconds() * 1000.0
-    
-    if duration_ms <= 0 then return 0 end
-    
-    local pixels_per_ms = viewport_width / duration_ms
-    return math.floor((time_ms - start_ms) * pixels_per_ms)
+    local start_rt = Rational.hydrate(state.viewport_start_time, rate.fps_numerator, rate.fps_denominator)
+    local duration_rt = Rational.hydrate(state.viewport_duration, rate.fps_numerator, rate.fps_denominator)
+
+    if not start_rt or not duration_rt then
+        return 0
+    end
+
+    local time_rescaled = time_rt:rescale(rate.fps_numerator, rate.fps_denominator)
+    local start_rescaled = start_rt:rescale(rate.fps_numerator, rate.fps_denominator)
+    local duration_rescaled = duration_rt:rescale(rate.fps_numerator, rate.fps_denominator)
+
+    local duration_frames = duration_rescaled.frames
+    if duration_frames <= 0 then return 0 end
+
+    local delta_frames = time_rescaled.frames - start_rescaled.frames
+    local pixels_per_frame = viewport_width / duration_frames
+    return math.floor(delta_frames * pixels_per_frame)
 end
 
 function M.pixel_to_time(pixel, viewport_width)
     local state = data.state
-    local start_ms = state.viewport_start_time:to_seconds() * 1000.0
-    local duration_ms = state.viewport_duration:to_seconds() * 1000.0
-    
-    local pixels_per_ms = viewport_width / duration_ms
-    local time_ms = start_ms + (pixel / pixels_per_ms)
-    
     local rate = state.sequence_frame_rate
-    return Rational.from_seconds(time_ms / 1000.0, rate.fps_numerator, rate.fps_denominator)
+    local start_rt = Rational.hydrate(state.viewport_start_time, rate.fps_numerator, rate.fps_denominator)
+    local duration_rt = Rational.hydrate(state.viewport_duration, rate.fps_numerator, rate.fps_denominator)
+    if not start_rt or not duration_rt then
+        return Rational.new(0, rate.fps_numerator, rate.fps_denominator)
+    end
+
+    local duration_frames = duration_rt:rescale(rate.fps_numerator, rate.fps_denominator).frames
+    if duration_frames <= 0 then
+        return start_rt
+    end
+
+    local pixels_per_frame = viewport_width / duration_frames
+    local delta_frames = pixel / pixels_per_frame
+    local frames_value = start_rt:rescale(rate.fps_numerator, rate.fps_denominator).frames + delta_frames
+    return Rational.new(math.floor(frames_value + 0.5), rate.fps_numerator, rate.fps_denominator)
 end
 
 function M.push_viewport_guard()

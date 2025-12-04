@@ -90,11 +90,11 @@ if ui_constants.TIMELINE.NOTIFY_DEBOUNCE_MS ~= 16 then
     constants_ok = false
     table.insert(errors, "NOTIFY_DEBOUNCE_MS incorrect")
 end
-if ui_constants.TIMELINE.EDGE_ZONE_PX ~= 8 then
+if ui_constants.TIMELINE.EDGE_ZONE_PX ~= 7 then
     constants_ok = false
     table.insert(errors, "EDGE_ZONE_PX incorrect")
 end
-if ui_constants.TIMELINE.ROLL_ZONE_PX ~= 16 then
+if ui_constants.TIMELINE.ROLL_ZONE_PX ~= 7 then
     constants_ok = false
     table.insert(errors, "ROLL_ZONE_PX incorrect")
 end

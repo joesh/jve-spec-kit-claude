@@ -148,9 +148,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-# Legacy C++ contract/integration tests are disabled by default; Lua suite is authoritative.
-option(ENABLE_LEGACY_CPP_TESTS "Build legacy Qt/SQLite contract and integration tests" OFF)
-
+# C++/Qt tests (on by default)
 # Unit tests (no unit tests currently - they would go in tests/unit/)
 # Note: New timeline tests are standalone and defined below
 

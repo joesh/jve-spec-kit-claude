@@ -7,6 +7,8 @@ local uuid = require("uuid")
     return {
         id = row.id,
         project_id = row.project_id,
+        clip_kind = row.clip_kind,
+        name = row.name,
         track_id = row.track_id,
         media_id = row.media_id,
         start_value = row.start_value,

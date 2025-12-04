@@ -5,6 +5,7 @@
 
 local M = {}
 local timecode = require("core.timecode")
+local Rational = require("core.rational")
 local frame_utils = require("core.frame_utils")
 local profile_scope = require("core.profile_scope")
 
@@ -54,15 +55,6 @@ function M.create(widget, state_module)
         return frame_utils.default_frame_rate
     end
 
-    local function to_ms(val)
-        if type(val) == "table" and val.to_seconds then
-            return val:to_seconds() * 1000.0
-        elseif type(val) == "number" then
-            return val
-        end
-        return 0
-    end
-
     -- Render the ruler
     local function render()
         if not ruler.widget then
@@ -75,18 +67,18 @@ function M.create(widget, state_module)
         -- Clear previous drawing commands
         timeline.clear_commands(ruler.widget)
 
-        -- Get viewport state (Convert to MS for rendering logic)
-        local viewport_start = to_ms(state_module.get_viewport_start_time())
-        local viewport_duration = to_ms(state_module.get_viewport_duration())
-        local viewport_end = viewport_start + viewport_duration
-        local playhead_value = to_ms(state_module.get_playhead_position())
+        -- Get viewport state (Rational)
+        local viewport_start_rt = state_module.get_viewport_start_time()
+        local viewport_duration_rt = state_module.get_viewport_duration()
+        local viewport_end_rt = viewport_start_rt + viewport_duration_rt
+        local playhead_rt = state_module.get_playhead_position()
 
         -- Ruler background
         timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
         timeline.add_rect(ruler.widget, 0, M.RULER_HEIGHT - BASELINE_HEIGHT, width, BASELINE_HEIGHT, BASELINE_COLOR)
 
-        local mark_in = to_ms(state_module.get_mark_in and state_module.get_mark_in())
-        local mark_out = to_ms(state_module.get_mark_out and state_module.get_mark_out())
+        local mark_in_rt = state_module.get_mark_in and state_module.get_mark_in()
+        local mark_out_rt = state_module.get_mark_out and state_module.get_mark_out()
         local explicit_mark_in = state_module.has_explicit_mark_in and state_module.has_explicit_mark_in()
         local explicit_mark_out = state_module.has_explicit_mark_out and state_module.has_explicit_mark_out()
 
@@ -103,9 +95,11 @@ function M.create(widget, state_module)
             local edge_color = colors.mark_range_edge or colors.playhead or "#ff6b6b"
             local handle_width = 2
 
-            if mark_in and mark_out and mark_out > mark_in then
-                local visible_start = math.max(mark_in, viewport_start)
-                local visible_end = math.min(mark_out, viewport_end)
+            if mark_in_rt and mark_out_rt and mark_out_rt > mark_in_rt then
+                local visible_start = mark_in_rt
+                if visible_start < viewport_start_rt then visible_start = viewport_start_rt end
+                local visible_end = mark_out_rt
+                if visible_end > viewport_end_rt then visible_end = viewport_end_rt end
                 if visible_end > visible_start then
                     local start_x = state_module.time_to_pixel(visible_start, width)
                     local end_x = state_module.time_to_pixel(visible_end, width)
@@ -120,14 +114,14 @@ function M.create(widget, state_module)
                 end
             end
 
-            local function draw_handle(time_ms)
-                if not time_ms then
+            local function draw_handle(time_rt)
+                if not time_rt then
                     return
                 end
-                if time_ms < viewport_start or time_ms > viewport_end then
+                if time_rt < viewport_start_rt or time_rt > viewport_end_rt then
                     return
                 end
-                local x = state_module.time_to_pixel(time_ms, width)
+                local x = state_module.time_to_pixel(time_rt, width)
                 local handle_x = x - math.floor(handle_width / 2)
                 if handle_x < 0 then
                     handle_x = 0
@@ -151,15 +145,21 @@ function M.create(widget, state_module)
         if fps <= 0 then
             fps = 24
         end
-        local frame_ms = 1000.0 / fps
 
         -- Calculate appropriate frame-based interval
-        local pixels_per_ms = width / viewport_duration
-        local interval_ms, format_hint, interval_value = timecode.get_ruler_interval(
-            viewport_duration,
+        local viewport_start_frames = viewport_start_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
+        local viewport_end_frames = viewport_end_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
+        local viewport_duration_frames = viewport_duration_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
+        if viewport_duration_frames <= 0 then
+            return
+        end
+
+        local pixels_per_frame = width / viewport_duration_frames
+        local interval_frames, format_hint, interval_value = timecode.get_ruler_interval(
+            viewport_duration_frames,
             frame_rate,
             100,  -- target pixel spacing
-            pixels_per_ms
+            pixels_per_frame
         )
 
         local subdivisions = 0
@@ -173,31 +173,35 @@ function M.create(widget, state_module)
             subdivisions = 5
         end
 
-        local minor_interval = subdivisions > 0 and (interval_ms / (subdivisions + 1)) or nil
+        local minor_interval = nil
+        if subdivisions > 0 then
+            minor_interval = interval_frames / (subdivisions + 1)
+        end
 
         -- Draw time markers at frame-accurate positions
         local function align_start()
             if format_hint == "seconds" then
-                local unit = interval_ms
-                return math.floor((viewport_start / unit) + 1e-6) * unit
+                local unit_frames = interval_frames
+                return math.floor((viewport_start_frames / unit_frames) + 1e-6) * unit_frames
             elseif format_hint == "minutes" then
-                local unit = interval_ms
-                return math.floor((viewport_start / unit) + 1e-6) * unit
+                local unit_frames = interval_frames
+                return math.floor((viewport_start_frames / unit_frames) + 1e-6) * unit_frames
             else
                 -- frames or sub-second
-                local unit = interval_ms
-                return math.floor((viewport_start / unit) + 1e-6) * unit
+                local unit_frames = interval_frames
+                return math.floor((viewport_start_frames / unit_frames) + 1e-6) * unit_frames
             end
         end
 
         local start_marker = align_start()
         local last_label_end = -math.huge
 
-        local function to_pixel(time_ms)
-            if time_ms < viewport_start or time_ms > viewport_end then
+        local function to_pixel(frame_pos)
+            if frame_pos < viewport_start_frames or frame_pos > viewport_end_frames then
                 return nil
             end
-            local x = state_module.time_to_pixel(time_ms, width)
+            local tick_rt = Rational.new(frame_pos, frame_rate.fps_numerator, frame_rate.fps_denominator)
+            local x = state_module.time_to_pixel(tick_rt, width)
             if x < 0 or x > width then
                 return nil
             end
@@ -211,16 +215,16 @@ function M.create(widget, state_module)
 
         local idx = 0
         while true do
-            local time_ms = start_marker + (interval_ms * idx)
-            if time_ms > viewport_end + 0.5 then
+            local frame_pos = start_marker + (interval_frames * idx)
+            if frame_pos > viewport_end_frames + 0.5 then
                 break
             end
-            -- snap to nearest frame to avoid drifting frame labels (e.g., 00:00:21:01)
-            local snapped_ms = math.floor((time_ms / frame_ms) + 0.5) * frame_ms
-            local x = to_pixel(snapped_ms)
+            -- snap to nearest frame (already frame-based)
+            local snapped_frames = math.floor(frame_pos + 0.5)
+            local x = to_pixel(snapped_frames)
             if x then
                 -- Timecode label with appropriate precision
-                local label = timecode.format_ruler_label(snapped_ms, frame_rate, format_hint)
+                local label = timecode.format_ruler_label(snapped_frames, frame_rate)
                 local label_width = estimate_label_width(label)
                 local label_start = x - (label_width / 2)
                 if label_start < 0 then
@@ -240,10 +244,10 @@ function M.create(widget, state_module)
 
                 if minor_interval then
                     for sub = 1, subdivisions do
-                        local minor_time = time_ms + (minor_interval * sub)
-                        if minor_time >= viewport_start and minor_time <= viewport_end then
-                            local minor_snapped = math.floor((minor_time / frame_ms) + 0.5) * frame_ms
-                            local minor_x = to_pixel(minor_snapped)
+                        local minor_frame = snapped_frames + (minor_interval * sub)
+                        local minor_int = math.floor(minor_frame + 0.5)
+                        if minor_int >= viewport_start_frames and minor_int <= viewport_end_frames then
+                            local minor_x = to_pixel(minor_int)
                             if minor_x then
                                 if subdivisions >= 4 and sub % 2 == 0 then
                                     draw_tick_at(minor_x, MEDIUM_TICK_HEIGHT, MEDIUM_TICK_COLOR)
@@ -259,8 +263,8 @@ function M.create(widget, state_module)
         end
 
         -- Draw playhead marker if in visible range
-        if playhead_value >= viewport_start and playhead_value <= viewport_end then
-            local playhead_x = state_module.time_to_pixel(playhead_value, width)
+        if playhead_rt >= viewport_start_rt and playhead_rt <= viewport_end_rt then
+            local playhead_x = state_module.time_to_pixel(playhead_rt, width)
 
             -- Small triangle at playhead position
             local handle_size = 8
@@ -284,8 +288,7 @@ function M.create(widget, state_module)
         if event_type == "press" then
             -- Check if clicking on playhead
             local playhead_rat = state_module.get_playhead_position()
-            local playhead_ms = to_ms(playhead_rat)
-            local playhead_x = state_module.time_to_pixel(playhead_ms, width)
+            local playhead_x = state_module.time_to_pixel(playhead_rat, width)
 
             if math.abs(x - playhead_x) < 10 then
                 state_module.set_dragging_playhead(true)

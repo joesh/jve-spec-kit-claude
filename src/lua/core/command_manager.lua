@@ -668,41 +668,48 @@ function M.redo()
              if cmd then
                  local executor = registry.get_executor(cmd.type)
                  if executor then
-                     local success, result = pcall(executor, cmd)
-                     if success then
-                         history.set_current_sequence_number(cmd.sequence_number)
-                         history.save_undo_position()
-                         state_mgr.restore_selection_from_serialized(cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
-                         
-                         -- Re-apply timeline mutations if present (mirror undo behaviour)
-                         local timeline_state = require('ui.timeline.timeline_state')
-                         local reload_sequence_id = extract_sequence_id(cmd)
-                         local mutations = cmd:get_parameter("__timeline_mutations")
-                         local applied_mutations = false
+                     local ok, exec_result = pcall(executor, cmd)
+                     if ok then
+                         local success, err_msg = normalize_executor_result(exec_result)
+                         if success then
+                             history.set_current_sequence_number(cmd.sequence_number)
+                             history.save_undo_position()
+                             state_mgr.restore_selection_from_serialized(cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
+                             
+                             -- Re-apply timeline mutations if present (mirror undo behaviour)
+                             local timeline_state = require('ui.timeline.timeline_state')
+                             local reload_sequence_id = extract_sequence_id(cmd)
+                             local mutations = cmd:get_parameter("__timeline_mutations")
+                             local applied_mutations = false
 
-                         if mutations and timeline_state.apply_mutations then
-                             if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
-                                 applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
-                             else
-                                 for _, bucket in pairs(mutations) do
-                                     if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
-                                         applied_mutations = true
+                             if mutations and timeline_state.apply_mutations then
+                                 if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+                                     applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
+                                 else
+                                     for _, bucket in pairs(mutations) do
+                                         if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
+                                             applied_mutations = true
+                                         end
                                      end
                                  end
                              end
-                         end
 
-                         if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-                             timeline_state.reload_clips(reload_sequence_id)
+                             if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
+                                 timeline_state.reload_clips(reload_sequence_id)
+                             end
+                             
+                             notify_command_event({
+                                event = "redo",
+                                command = cmd,
+                                project_id = cmd.project_id,
+                                sequence_number = cmd.sequence_number
+                            })
+                            return { success = true }
+                         else
+                            last_error_message = err_msg or "Redo executor returned false"
                          end
-                         
-                         notify_command_event({
-                            event = "redo",
-                            command = cmd,
-                            project_id = cmd.project_id,
-                            sequence_number = cmd.sequence_number
-                        })
-                        return { success = true }
+                     else
+                        last_error_message = tostring(exec_result)
                      end
                  end
              end
@@ -718,19 +725,30 @@ function M.execute_undo(original_command)
     
     -- Get undoer if explicitly registered (overrides command:create_undo logic if needed)
     local undoer = registry.get_undoer(original_command.type)
-    local execution_success = false
-    
-    if undoer then
-        local success, err = pcall(undoer, original_command)
-        execution_success = success
-        if not success then last_error_message = tostring(err) end
-    else
-        local executor = registry.get_executor(undo_command.type)
-        if executor then
-             local success, err = pcall(executor, undo_command)
-             execution_success = success
-             if not success then last_error_message = tostring(err) end
+    if not undoer then
+        -- Try to auto-load the undo module, but fail hard if still missing to avoid replaying the forward command.
+        registry.load_command_module("Undo" .. tostring(original_command.type))
+        undoer = registry.get_undoer(original_command.type)
+        if not undoer then
+            local msg = string.format("No undoer registered for %s", tostring(original_command.type))
+            print("ERROR: " .. msg)
+            return { success = false, error_message = msg }
         end
+    end
+    local execution_success = false
+    local undo_error_message = ""
+    
+    local ok, exec_result, extra = pcall(undoer, original_command)
+    if ok then
+        local success, err_msg = normalize_executor_result(exec_result)
+        if (not success) and (not err_msg or err_msg == "") and type(extra) == "string" then
+            err_msg = extra
+        end
+        execution_success = success
+        undo_error_message = err_msg or ""
+    else
+        execution_success = false
+        undo_error_message = tostring(exec_result)
     end
 
     local result = { success = false, error_message = "", result_data = "" }
@@ -778,7 +796,9 @@ function M.execute_undo(original_command)
             project_id = original_command.project_id
         })
     else
+        last_error_message = undo_error_message ~= "" and undo_error_message or last_error_message
         result.error_message = last_error_message or "Undo execution failed"
+        print("ERROR: Undo failed: " .. result.error_message)
     end
 
     return result
@@ -801,6 +821,11 @@ end
 -- Delegate registration to registry
 function M.register_executor(command_type, executor, undoer)
     registry.register_executor(command_type, executor, undoer)
+end
+
+-- Convenience for tests: register an undoer separately.
+function M.register_undoer(command_type, undoer)
+    registry.register_undoer(command_type, undoer)
 end
 
 function M.unregister_executor(command_type)
@@ -1029,6 +1054,10 @@ end
 
 function M.register_stack_resolver(command_type, resolver)
     -- history.register_stack_resolver(command_type, resolver)
+end
+
+function M.get_executor(command_type)
+    return registry.get_executor(command_type)
 end
 
 return M

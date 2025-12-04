@@ -9,16 +9,20 @@ package.path = package.path
 require('test_env')
 
 local timecode = require('core.timecode')
+local Rational = require('core.rational')
 
--- Ensure formatting tolerates millisecond inputs that land on fractional frames.
 local rate = {fps_numerator = 24, fps_denominator = 1}
 
--- 208.333... ms is 5 frames at 24fps (since 1 frame ≈ 41.6667 ms)
-local label = timecode.format_ruler_label(208.33333333333, rate, "frames")
-assert(label ~= nil and label ~= "", "format_ruler_label should produce a label for ms input")
+-- Rational input on fractional frames (5 frames @24fps)
+local label = timecode.format_ruler_label(Rational.new(5, 24, 1), rate)
+assert(label ~= nil and label ~= "", "format_ruler_label should produce a label for Rational input")
 
--- Also verify a smaller ms value doesn't throw
-local label2 = timecode.format_ruler_label(41.666666666667, rate, "frames")
-assert(label2 ~= nil and label2 ~= "", "format_ruler_label should handle sub-second ms input")
+-- Numeric frames input
+local label2 = timecode.format_ruler_label(5, rate)
+assert(label2 ~= nil and label2 ~= "", "format_ruler_label should handle numeric frame input")
 
-print("✅ timecode.format_ruler_label handles millisecond inputs on fractional frames")
+-- Fractional numeric inputs should be rejected
+local ok = pcall(function() return timecode.format_ruler_label(41.6666, rate) end)
+assert(not ok, "format_ruler_label should reject fractional numeric inputs")
+
+print("✅ timecode.format_ruler_label handles frame-based inputs")

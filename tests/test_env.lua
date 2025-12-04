@@ -1,5 +1,23 @@
 local M = {}
 
+-- Ensure repo lua modules are on the path (core, dkjson, etc.)
+do
+    local here = debug.getinfo(1, "S").source:sub(2)
+    local prefix = here:match("^(.*)/tests/test_env.lua$")
+    local root = prefix or "."
+    local paths = {
+        root .. "/?.lua",
+        root .. "/?/init.lua",
+        root .. "/src/lua/?.lua",
+        root .. "/src/lua/?/init.lua",
+        root .. "/tests/?.lua",
+        root .. "/tests/?/init.lua",
+        root .. "/../src/lua/?.lua",
+        root .. "/../src/lua/?/init.lua",
+    }
+    package.path = table.concat(paths, ";") .. ";" .. package.path
+end
+
 -- Provide deterministic JSON helpers via bundled dkjson
 local function ensure_json_helpers()
     if _G.qt_json_encode and _G.qt_json_decode then

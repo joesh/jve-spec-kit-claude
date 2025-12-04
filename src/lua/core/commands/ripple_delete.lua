@@ -62,15 +62,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Ensure global gap is clear (V5: using frames)
         local function ensure_global_gap_is_clear()
-            -- We need to check if any clip overlaps the gap interval in FRAME space.
-            -- Since all clips in a sequence share the sequence FPS for positioning (timeline_start_frame),
-            -- we can compare frames directly if we assume normalization.
-            -- However, strict comparison requires Rational comparison.
-            
+            -- We need to check if any clip overlaps the gap interval.
+            -- Use track -> sequence join to avoid relying on owner_sequence_id being populated.
             local gap_query = db:prepare([[
-                SELECT id, track_id, timeline_start_frame, duration_frames, fps_numerator, fps_denominator
-                FROM clips
-                WHERE owner_sequence_id = ?
+                SELECT c.id, c.track_id, c.timeline_start_frame, c.duration_frames, c.fps_numerator, c.fps_denominator
+                FROM clips c
+                JOIN tracks t ON c.track_id = t.id
+                WHERE t.sequence_id = ?
             ]])
             
             if not gap_query then
@@ -130,9 +128,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Optimization: Do this in Lua to handle Rational comparison robustly
         local moved_clips = {}
         local query = db:prepare([[
-            SELECT id, timeline_start_frame, track_id, fps_numerator, fps_denominator
-            FROM clips
-            WHERE owner_sequence_id = ?
+            SELECT c.id, c.timeline_start_frame, c.track_id, c.fps_numerator, c.fps_denominator
+            FROM clips c
+            JOIN tracks t ON c.track_id = t.id
+            WHERE t.sequence_id = ?
         ]])
         
         if not query then
@@ -211,6 +210,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("ripple_sequence_id", sequence_id)
         command:set_parameter("ripple_gap_duration", gap_duration_rat)
         command:set_parameter("ripple_moved_clips", moved_clips)
+        -- Clear post-selection so redo doesn't leave stray clip selection (we removed the gap).
+        command.selected_clip_ids = "[]"
+        command.selected_edge_infos = "[]"
+        command.selected_gap_infos = "[]"
 
         print(string.format("✅ Ripple deleted gap on track %s (moved %d clip(s) across sequence %s)", tostring(track_id), #moved_clips, tostring(sequence_id)))
         return true
@@ -231,6 +234,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             return val
         end
+
+        -- Restore from rightmost to leftmost to avoid transient overlaps while moving clips back.
+        table.sort(moved_clips, function(a, b)
+            local sa = restore_rat(a.original_start)
+            local sb = restore_rat(b.original_start)
+            if getmetatable(sa) == Rational.metatable and getmetatable(sb) == Rational.metatable then
+                return sa > sb
+            end
+            return (sa or 0) > (sb or 0)
+        end)
 
         for _, info in ipairs(moved_clips) do
             local clip = Clip.load(info.clip_id, db)

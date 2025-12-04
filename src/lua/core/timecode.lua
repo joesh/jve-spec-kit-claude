@@ -61,23 +61,27 @@ function M.parse_timecode(timecode, frame_rate)
     return Rational.new(total_frames, rate.fps_numerator, rate.fps_denominator)
 end
 
--- Calculate appropriate ruler interval
--- Returns: interval_ms, format_hint, interval_value (in hint units)
-function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, pixels_per_ms)
-    return frame_utils.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, pixels_per_ms)
+-- Calculate appropriate ruler interval in frames
+-- Returns: interval_frames, format_hint, interval_value (in hint units)
+function M.get_ruler_interval(viewport_duration_frames, frame_rate, target_pixels, pixels_per_frame)
+    return frame_utils.get_ruler_interval(viewport_duration_frames, frame_rate, target_pixels, pixels_per_frame)
 end
 
 -- Format ruler label
-function M.format_ruler_label(time_ms, frame_rate, hint)
-    local time_obj = time_ms
-    -- Ruler callers pass milliseconds as numbers; normalize to Rational seconds for formatting
-    if type(time_ms) == "number" then
-        local rate = frame_utils.normalize_rate(frame_rate)
-        time_obj = Rational.from_seconds(time_ms / 1000.0, rate.fps_numerator, rate.fps_denominator)
+function M.format_ruler_label(time_obj, frame_rate)
+    -- Accept Rational or frame count; convert to Rational time.
+    local rate = frame_utils.normalize_rate(frame_rate)
+    local tc_obj
+    if getmetatable(time_obj) == Rational.metatable then
+        tc_obj = time_obj
+    elseif type(time_obj) == "number" then
+        tc_obj = Rational.new(time_obj, rate.fps_numerator, rate.fps_denominator)
+    else
+        tc_obj = Rational.new(0, rate.fps_numerator, rate.fps_denominator)
     end
 
     -- Always emit full timecode (HH:MM:SS:FF) for ruler labels to avoid ambiguous MM:SS displays.
-    return frame_utils.format_timecode(time_obj, frame_rate)
+    return frame_utils.format_timecode(tc_obj, frame_rate)
 end
 
 return M

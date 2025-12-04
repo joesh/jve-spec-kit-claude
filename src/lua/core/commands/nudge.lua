@@ -408,6 +408,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     end
                 end
 
+                -- Apply moved clips in an order that avoids transient overlaps.
+                table.sort(move_targets, function(a, b)
+                    if nudge_amount_rat.frames >= 0 then
+                        return a.timeline_start > b.timeline_start -- move right: update rightmost first
+                    else
+                        return a.timeline_start < b.timeline_start -- move left: update leftmost first
+                    end
+                end)
+
                 -- Collect updates for nudged clips
                 for _, clip in ipairs(move_targets) do
                     clip.timeline_start = clip.__new_start or clip.timeline_start
@@ -494,6 +503,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["UndoNudge"] = command_undoers["UndoNudge"]
+    -- Ensure undoer is registered under the base command type so command_manager can find it.
+    command_undoers["Nudge"] = command_undoers["UndoNudge"]
 
     return {
         executor = command_executors["Nudge"],

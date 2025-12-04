@@ -1,4 +1,5 @@
 local edge_utils = require('ui.timeline.edge_utils')
+local ui_constants = require("core.ui_constants")
 
 local RollDetector = {}
 
@@ -68,8 +69,10 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
                             left_clip, right_clip = right_clip, left_clip
                             left_distance, right_distance = right_distance, left_distance
                         end
-
-                        if detect_roll_between_clips(left_clip, right_clip, click_x, viewport_width) then
+                        -- Require cursor to be inside a tight roll zone near the shared boundary.
+                        local roll_radius = math.min((ui_constants.TIMELINE.ROLL_ZONE_PX or 7) / 2, (ui_constants.TIMELINE.EDGE_ZONE_PX or 7) / 2)
+                        if (left_distance or math.huge) <= roll_radius and (right_distance or math.huge) <= roll_radius
+                            and detect_roll_between_clips(left_clip, right_clip, click_x, viewport_width) then
                             local score = math.max(left_distance or 0, right_distance or 0)
                             local left_target = {clip_id = left_clip.id, edge_type = "out"}
                             local right_target = {clip_id = right_clip.id, edge_type = "in"}
@@ -88,45 +91,7 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
         end
     end
 
-    local gap_candidates = {}
-    for _, entry in ipairs(entries) do
-        local edge = edge_utils.normalize_edge_type(entry.edge)
-        if edge == "gap_after" or edge == "gap_before" then
-            table.insert(gap_candidates, entry)
-        end
-    end
-
-    for _, entry in ipairs(gap_candidates) do
-        local clip = entry.clip
-        if clip then
-            local score = entry.distance or math.huge
-            local left_target
-            local right_target
-            local edit_time
-            local roll_kind
-
-            if entry.edge == "gap_after" then
-                left_target = {clip_id = clip.id, edge_type = "out"}
-                right_target = {clip_id = clip.id, edge_type = "gap_after"}
-                edit_time = clip.timeline_start + clip.duration
-                roll_kind = "clip_gap_after"
-            else -- gap_before
-                left_target = {clip_id = clip.id, edge_type = "gap_before"}
-                right_target = {clip_id = clip.id, edge_type = "in"}
-                edit_time = clip.timeline_start
-                roll_kind = "gap_before_clip"
-            end
-
-            local selection = build_selection(left_target, right_target)
-            local pair_meta = {
-                edit_time = edit_time,
-                left_target = left_target,
-                right_target = right_target,
-                roll_kind = roll_kind
-            }
-            best = evaluate_candidate(best, score, selection, pair_meta)
-        end
-    end
+    -- Do not auto-roll on solitary gap edges; require a real neighboring clip pair.
 
     if not best then
         return nil, nil, math.huge

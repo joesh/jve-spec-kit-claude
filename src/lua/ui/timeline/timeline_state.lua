@@ -50,9 +50,13 @@ M.remove_listener = data.remove_listener
 
 -- Viewport & Playhead
 M.get_viewport_start_time = viewport.get_viewport_start_time
-M.set_viewport_start_time = viewport.set_viewport_start_time
+M.set_viewport_start_time = function(time_obj)
+    return viewport.set_viewport_start_time(time_obj, core.persist_state_to_db)
+end
 M.get_viewport_duration = viewport.get_viewport_duration
-M.set_viewport_duration = viewport.set_viewport_duration
+M.set_viewport_duration = function(duration_obj)
+    return viewport.set_viewport_duration(duration_obj, core.persist_state_to_db)
+end
 M.get_playhead_position = viewport.get_playhead_position
 M.set_playhead_position = viewport.set_playhead_position
 M.set_playhead_value = viewport.set_playhead_position -- Alias for legacy compatibility
@@ -78,6 +82,7 @@ M.get_video_tracks = tracks.get_video_tracks
 M.get_audio_tracks = tracks.get_audio_tracks
 M.get_track_height = tracks.get_height
 M.set_track_height = tracks.set_height
+M.get_track_by_id = tracks.get_by_id
 M.get_primary_track_id = tracks.get_primary_id
 M.get_default_video_track_id = function() return tracks.get_primary_id("VIDEO") end
 M.get_default_audio_track_id = function() return tracks.get_primary_id("AUDIO") end
@@ -181,14 +186,19 @@ end
 
 M.detect_roll_between_clips = function(c1, c2, x, w)
     local ui_constants = require("core.ui_constants")
-    local ROLL = ui_constants.TIMELINE.ROLL_ZONE_PX
-    local sx = M.time_to_pixel(c1.timeline_start + c1.duration, w)
-    local ex = M.time_to_pixel(c2.timeline_start, w)
-    if ex - sx < ROLL then
-        local mid = (sx + ex) / 2
-        if math.abs(x - mid) <= ROLL/2 then return true end
+    local ROLL = ui_constants.TIMELINE.ROLL_ZONE_PX or 0
+    local boundary_left = c1.timeline_start + c1.duration
+    local boundary_right = c2.timeline_start
+
+    local sx = M.time_to_pixel(boundary_left, w)
+    local ex = M.time_to_pixel(boundary_right, w)
+    local span = math.abs(ex - sx)
+    if span > ROLL then
+        return false
     end
-    return false
+
+    local mid = (sx + ex) / 2
+    return math.abs(x - mid) <= (ROLL / 2)
 end
 
 return M

@@ -25,10 +25,13 @@ local state = {
     get_sequence_fps_numerator = function() return sequence_fps_num end,
     get_sequence_fps_denominator = function() return sequence_fps_den end,
     get_playhead_position = function() return time_utils.from_frames(12, sequence_fps_num, sequence_fps_den) end, -- 0.5 seconds at 24fps
+    time_to_pixel = function(rt, _viewport_width_px)
+        return time_utils.to_frames(rt, sequence_fps_num, sequence_fps_den)
+    end,
     get_clips = function()
         return {
-            {id = "clip_a", timeline_start_frame = time_utils.from_frames(24, sequence_fps_num, sequence_fps_den), duration_frames = time_utils.from_frames(12, sequence_fps_num, sequence_fps_den)},  -- 1s start, ~0.5s duration
-            {id = "clip_b", timeline_start_frame = time_utils.from_frames(60, sequence_fps_num, sequence_fps_den), duration_frames = time_utils.from_frames(12, sequence_fps_num, sequence_fps_den)},  -- 2.5s start
+            {id = "clip_a", timeline_start = time_utils.from_frames(24, sequence_fps_num, sequence_fps_den), duration = time_utils.from_frames(12, sequence_fps_num, sequence_fps_den)},  -- 1s start, ~0.5s duration
+            {id = "clip_b", timeline_start = time_utils.from_frames(60, sequence_fps_num, sequence_fps_den), duration = time_utils.from_frames(12, sequence_fps_num, sequence_fps_den)},  -- 2.5s start
         }
     end
 }

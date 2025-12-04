@@ -165,15 +165,15 @@ function M.parse_timecode(timecode, frame_rate)
 end
 
 -- Calculate a "nice" ruler interval (prefers 1/2/5 * 10^k frame buckets)
--- Returns: interval_ms, format_hint, interval_value (in hint units)
-function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, pixels_per_ms)
-    local target_ms = target_pixels / (pixels_per_ms > 0 and pixels_per_ms or 1)
+-- All inputs/outputs are in frames (integers) except hint value which is expressed in hint units.
+-- Returns: interval_frames, format_hint ("frames"/"seconds"/"minutes"), interval_value (in hint units)
+function M.get_ruler_interval(viewport_duration_frames, frame_rate, target_pixels, pixels_per_frame)
+    local target_frames = target_pixels / (pixels_per_frame > 0 and pixels_per_frame or 1)
     local rate = M.normalize_rate(frame_rate)
     local fps = rate.fps_numerator / rate.fps_denominator
     if fps <= 0 then
         fps = 24
     end
-    local frame_ms = 1000.0 / fps
 
     local seen = {}
     local candidates = {}
@@ -184,8 +184,7 @@ function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, p
             frames = 1
         end
         local rounded_frames = math.max(1, math.floor(frames + 0.5))
-        local interval_ms = rounded_frames * frame_ms
-        local key = math.floor(interval_ms * 1000 + 0.5)
+        local key = rounded_frames
         if seen[key] then
             return
         end
@@ -205,10 +204,9 @@ function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, p
         end
 
         table.insert(candidates, {
-            ms = interval_ms,
+            frames = rounded_frames,
             hint = hint,
             value = value,
-            frames = rounded_frames,
         })
     end
 
@@ -226,7 +224,7 @@ function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, p
     add_interval_from_seconds(2 / fps)
 
     -- For mid/large viewports prefer time-based buckets over fine frame buckets
-    if viewport_duration_ms and viewport_duration_ms >= 2500 then
+    if viewport_duration_frames and viewport_duration_frames >= (fps * 2.5) then
         local filtered = {}
         for _, cand in ipairs(candidates) do
             if not (cand.hint == "frames" and cand.frames < fps) then
@@ -239,7 +237,7 @@ function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, p
     end
 
     table.sort(candidates, function(a, b)
-        return a.ms < b.ms
+        return a.frames < b.frames
     end)
 
     local desired_spacing_px = target_pixels
@@ -250,9 +248,9 @@ function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, p
 
     -- Prefer the smallest interval that keeps spacing reasonably close to target
     for _, cand in ipairs(candidates) do
-        local spacing = cand.ms * pixels_per_ms
+        local spacing = cand.frames * pixels_per_frame
         if spacing >= min_spacing_px then
-            if not best or spacing < best_spacing or (spacing == best_spacing and cand.ms < best.ms) then
+            if not best or spacing < best_spacing or (spacing == best_spacing and cand.frames < best.frames) then
                 best = cand
                 best_spacing = spacing
             end
@@ -262,8 +260,8 @@ function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, p
     -- Fallback: pick the largest interval if everything was too small
     if not best then
         for _, cand in ipairs(candidates) do
-            local spacing = cand.ms * pixels_per_ms
-            if not best or spacing > best_spacing or (spacing == best_spacing and cand.ms < best.ms) then
+            local spacing = cand.frames * pixels_per_frame
+            if not best or spacing > best_spacing or (spacing == best_spacing and cand.frames < best.frames) then
                 best = cand
                 best_spacing = spacing
             end
@@ -272,17 +270,17 @@ function M.get_ruler_interval(viewport_duration_ms, frame_rate, target_pixels, p
 
     -- If we landed on a mid-frame bucket (e.g., 12 frames at 24fps) while viewing several seconds,
     -- prefer to round up to the next whole-second bucket for cleaner labels.
-    if best and best.hint == "frames" and best.frames >= (fps / 2) and viewport_duration_ms >= 2000 then
-        local one_second_ms = frame_ms * fps
+    if best and best.hint == "frames" and best.frames >= (fps / 2) and viewport_duration_frames >= (fps * 2) then
+        local one_second_frames = fps
         for _, cand in ipairs(candidates) do
-            if cand.ms >= one_second_ms then
+            if cand.frames >= one_second_frames then
                 best = cand
                 break
             end
         end
     end
 
-    return best.ms, best.hint, best.value
+    return best.frames, best.hint, best.value
 end
 
 return M

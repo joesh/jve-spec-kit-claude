@@ -25,6 +25,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
+        local sequence_id = command:get_parameter("sequence_id")
+            or clip.owner_sequence_id
+            or clip.track_sequence_id
+            or (clip.track and clip.track.sequence_id)
+
+        if sequence_id then
+            command:set_parameter("sequence_id", sequence_id)
+        end
+
         local clip_state = command_helper.capture_clip_state(clip)
         command:set_parameter("deleted_clip_state", clip_state)
         command:set_parameter("deleted_clip_properties", command_helper.snapshot_properties_for_clip(clip_id))
@@ -59,6 +68,59 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local properties = command:get_parameter("deleted_clip_properties") or {}
         if #properties > 0 then
             command_helper.insert_properties_for_clip(clip_state.id, properties)
+        end
+
+        -- Ensure timeline cache gets the restored clip without requiring a full reload.
+        -- Replace forward-delete mutations with an insert mutation for this undo.
+        local seq_id = command:get_parameter("sequence_id") or clip_state.owner_sequence_id or clip_state.track_sequence_id
+        local restored_clip = Clip.load_optional(clip_state.id, db)
+        local payload = nil
+        local target_seq = seq_id
+        if restored_clip then
+            payload = command_helper.clip_insert_payload(restored_clip, seq_id)
+            target_seq = target_seq or (payload and (payload.track_sequence_id or payload.owner_sequence_id)) or restored_clip.owner_sequence_id
+        else
+            -- fallback payload built from captured state
+            payload = command_helper.clip_insert_payload({
+                id = clip_state.id,
+                project_id = clip_state.project_id or command:get_parameter("project_id"),
+                clip_kind = clip_state.clip_kind or "timeline",
+                track_id = clip_state.track_id,
+                owner_sequence_id = clip_state.owner_sequence_id or seq_id,
+                track_sequence_id = clip_state.track_sequence_id or seq_id,
+                timeline_start = clip_state.timeline_start,
+                duration = clip_state.duration,
+                source_in = clip_state.source_in,
+                source_out = clip_state.source_out,
+                enabled = clip_state.enabled ~= false
+            }, seq_id)
+            target_seq = target_seq or clip_state.owner_sequence_id or clip_state.track_sequence_id or seq_id
+        end
+
+        if target_seq then
+            local bucket = {
+                sequence_id = target_seq,
+                inserts = {},
+                updates = {},
+                deletes = {}
+            }
+            if payload then
+                table.insert(bucket.inserts, payload)
+            end
+            command.parameters["__timeline_mutations"] = {[target_seq] = bucket}
+        else
+            command:set_parameter("__timeline_mutations", nil)
+        end
+
+        if not command:get_parameter("__timeline_mutations") then
+            local msg = string.format(
+                "DeleteClip undo failed to set timeline mutations (seq_id=%s, payload=%s, clip_loaded=%s)",
+                tostring(seq_id),
+                payload and "yes" or "nil",
+                restored_clip and "yes" or "nil"
+            )
+            print("ERROR: " .. msg)
+            return false, msg
         end
         print(string.format("✅ Undo DeleteClip: Restored clip %s", clip_state.id))
         return true
