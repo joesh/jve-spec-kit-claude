@@ -54,12 +54,16 @@ set(CORE_SOURCES
     src/core/persistence/migrations.cpp
     src/core/persistence/schema_validator.cpp
     src/core/persistence/sql_executor.cpp
-    
+
     src/core/common/uuid_generator.cpp
     src/core/resource_paths.cpp
 
     src/lua/simple_lua_engine.cpp
     src/lua/qt_bindings.cpp
+
+    # Bug reporter system
+    src/bug_reporter/gesture_logger.cpp
+    src/bug_reporter/qt_bindings_bug_reporter.cpp
 )
 
 set(UI_SOURCES

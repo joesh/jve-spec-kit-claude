@@ -222,6 +222,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_global_key_handler); lua_setglobal(L, "qt_set_global_key_handler");
     lua_pushcfunction(L, lua_set_focus_handler); lua_setglobal(L, "qt_set_focus_handler");
     lua_pushcfunction(L, lua_show_confirm_dialog); lua_setglobal(L, "qt_show_confirm_dialog");
+    lua_pushcfunction(L, lua_show_dialog); lua_setglobal(L, "qt_show_dialog");
     lua_pushcfunction(L, lua_show_menu_popup); lua_setglobal(L, "qt_show_menu_popup");
 
     // Populate 'qt_constants.MENU' subtable

@@ -86,6 +86,7 @@ int lua_activate_window(lua_State* L);
 
 // Dialog functions
 int lua_show_confirm_dialog(lua_State* L);
+int lua_show_dialog(lua_State* L);
 
 // Control functions
 int lua_set_scroll_area_widget(lua_State* L);

@@ -8,6 +8,10 @@
 #include <QSplitterHandle>
 #include <QStyle>
 #include <QMetaObject>
+#include <QPainter>
+#include <QPixmap>
+#include <QPolygon>
+#include <QColor>
 
 #ifdef Q_OS_MAC
 #include <objc/objc-runtime.h>
@@ -37,6 +41,47 @@ static const QHash<QString, Qt::CursorShape>& getCursorShapeMap() {
         {"size_all", Qt::SizeAllCursor}
     };
     return map;
+}
+
+static QCursor make_trim_cursor(bool is_left)
+{
+    QPixmap pix(24, 24);
+    pix.fill(Qt::transparent);
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::white);
+    painter.setPen(Qt::NoPen);
+
+    QPolygon arrow;
+    if (is_left) {
+        arrow << QPoint(6, 12) << QPoint(16, 6) << QPoint(16, 18);
+        painter.drawPolygon(arrow);
+        painter.setBrush(QColor(200, 200, 200));
+        painter.drawRect(16, 5, 3, 14);
+        painter.end();
+        return QCursor(pix, 6, 12);
+    } else {
+        arrow << QPoint(18, 12) << QPoint(8, 6) << QPoint(8, 18);
+        painter.drawPolygon(arrow);
+        painter.setBrush(QColor(200, 200, 200));
+        painter.drawRect(5, 5, 3, 14);
+        painter.end();
+        return QCursor(pix, 18, 12);
+    }
+}
+
+static const QCursor& getCustomCursor(const QString& name)
+{
+    static const QCursor trim_left_cursor = make_trim_cursor(true);
+    static const QCursor trim_right_cursor = make_trim_cursor(false);
+    if (name == "trim_left") {
+        return trim_left_cursor;
+    }
+    if (name == "trim_right") {
+        return trim_right_cursor;
+    }
+    static const QCursor default_cursor(Qt::ArrowCursor);
+    return default_cursor;
 }
 
 static const QHash<QString, Qt::FocusPolicy>& getFocusPolicyMap() {
@@ -196,7 +241,12 @@ int lua_set_widget_cursor(lua_State* L) {
     const char* cursor_type = luaL_checkstring(L, 2);
     if (!widget) return luaL_error(L, "qt_set_widget_cursor: widget required");
 
-    Qt::CursorShape shape = getCursorShapeMap().value(QString::fromUtf8(cursor_type), Qt::ArrowCursor);
+    QString cursor_name = QString::fromUtf8(cursor_type);
+    if (cursor_name == "trim_left" || cursor_name == "trim_right") {
+        widget->setCursor(getCustomCursor(cursor_name));
+        return 0;
+    }
+    Qt::CursorShape shape = getCursorShapeMap().value(cursor_name, Qt::ArrowCursor);
     widget->setCursor(QCursor(shape));
     return 0;
 }
@@ -478,12 +528,30 @@ int qt_set_layout_alignment(lua_State* L) {
 int lua_set_parent(lua_State* L) {
     QWidget* child = static_cast<QWidget*>(lua_to_widget(L, 1));
     QWidget* parent = static_cast<QWidget*>(lua_to_widget(L, 2));
-    
+
     if (child) {
         child->setParent(parent);
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);
     }
+    return 1;
+}
+
+int lua_show_dialog(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+
+    if (!widget) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Show widget as modal dialog
+    widget->setWindowModality(Qt::ApplicationModal);
+    widget->show();
+    widget->raise();
+    widget->activateWindow();
+
+    lua_pushboolean(L, 1);
     return 1;
 }

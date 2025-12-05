@@ -2,6 +2,7 @@
 #include "qt_bindings.h"
 #include "ui/timeline/timeline_renderer.h"
 #include "core/resource_paths.h"
+#include "../bug_reporter/qt_bindings_bug_reporter.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -175,4 +176,8 @@ void SimpleLuaEngine::setupBindings()
 
     // Register timeline bindings
     registerTimelineBindings(L);
+
+    // Register bug reporter bindings
+    bug_reporter::registerBugReporterBindings(L);
+    qDebug() << "SimpleLuaEngine: Bug reporter bindings registered";
 }
