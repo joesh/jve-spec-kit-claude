@@ -16,6 +16,28 @@ debug.setmetatable(nil, {
   end
 })
 
+-- Global error handler for automatic bug capture
+local function global_error_handler(err)
+    local stack_trace = debug.traceback(tostring(err), 2)
+    print("❌ FATAL ERROR: " .. tostring(err))
+    print(stack_trace)
+
+    -- Capture bug report automatically on errors
+    local ok, bug_reporter = pcall(require, "bug_reporter.init")
+    if ok and bug_reporter then
+        local test_path = bug_reporter.capture_on_error(tostring(err), stack_trace)
+        if test_path then
+            print("📸 Bug report auto-captured: " .. test_path)
+            print("💡 Press F12 to review and submit")
+        end
+    end
+
+    return tostring(err) .. "\n" .. stack_trace
+end
+
+-- Install global error handler
+_G.error_handler = global_error_handler
+
 -- Disable print buffering for immediate output
 io.stdout:setvbuf("no")
 io.stderr:setvbuf("no")
@@ -217,6 +239,11 @@ else
     -- Initialize CommandManager with database
     command_manager.init(db_module.get_connection())
     print("✅ CommandManager initialized with database")
+
+    -- Initialize bug reporter (continuous background capture)
+    local bug_reporter = require("bug_reporter.init")
+    bug_reporter.init()
+    print("✅ Bug reporter initialized (background capture active)")
 end
 
 

@@ -48,6 +48,7 @@ local KEY = {
     F2 = 16777249,   -- 0x01000031
     F9 = 16777272,   -- 0x01000038
     F10 = 16777273,  -- 0x01000039
+    F12 = 16777275,  -- 0x0100003B
     Return = 16777220,
     Enter = 16777221,
 }
@@ -1135,6 +1136,27 @@ function keyboard_shortcuts.handle_key(event)
             else
                 print("❌ OVERWRITE failed: " .. (result.error_message or "unknown error"))
             end
+        end
+        return true
+    end
+
+    -- F12: Capture bug report (manual capture of last 5 minutes)
+    if key == KEY.F12 then
+        local bug_reporter = require("bug_reporter.init")
+        local test_path = bug_reporter.capture_manual("User pressed F12 - Manual bug report capture")
+
+        if test_path then
+            print("✅ Bug report captured: " .. test_path)
+            print("📋 Review dialog: Help → Bug Reporter → Review Last Capture")
+
+            -- Optional: Show submission dialog immediately
+            local submission_dialog = require("bug_reporter.ui.submission_dialog")
+            local dialog = submission_dialog.create(test_path)
+            if dialog then
+                qt_show_dialog(dialog)
+            end
+        else
+            print("❌ Bug report capture failed")
         end
         return true
     end

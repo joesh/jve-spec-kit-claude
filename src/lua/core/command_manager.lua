@@ -576,6 +576,18 @@ function M.execute(command_or_name, params)
     end
 
     exec_scope:finish(result.success and "success" or "failure")
+
+    -- Capture command execution for bug reporter
+    local capture_manager = require("bug_reporter.capture_manager")
+    if capture_manager.capture_enabled then
+        capture_manager:log_command(
+            command.type,
+            command.parameters,
+            result,
+            nil  -- gesture_id not currently tracked - could be added later
+        )
+    end
+
     return result
 end
 
