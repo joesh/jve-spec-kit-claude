@@ -2,28 +2,69 @@
 -- Export captured data to JSON test format
 
 local dkjson = require("dkjson")
+local utils = require("bug_reporter.utils")
+local logger = require("core.logger")
 
 local JsonExporter = {}
 
--- Export capture to JSON file
--- @param capture_data: Tables from capture_manager (gestures, commands, logs, screenshots)
--- @param metadata: Additional metadata (user_description, error_message, etc.)
--- @param output_dir: Directory to save JSON and artifacts
--- @return: Path to JSON file, or nil + error
+--- Export bug reporter capture data to structured JSON test format
+-- Creates a timestamped directory containing capture.json with all captured data
+-- (gestures, commands, logs, screenshots) plus saved screenshot files and optional
+-- slideshow video. The JSON follows the test format schema version 1.0.
+--
+-- @param capture_data table Required capture data from capture_manager {
+--   gestures: array - Ring buffer of user gestures with timestamps,
+--   commands: array - Ring buffer of executed commands,
+--   logs: array - Ring buffer of log messages,
+--   screenshots: array - Ring buffer of QPixmap screenshots
+-- }
+-- @param metadata table Optional metadata {
+--   user_description: string - User's description of the bug,
+--   error_message: string - Error message that triggered capture,
+--   lua_stack_trace: string - Lua stack trace if available,
+--   database_snapshot_after: string - Path to database backup,
+--   screenshot_interval_ms: number - Screenshot capture interval
+-- }
+-- @param output_dir string Required output directory path (e.g., "tests/captures")
+-- @return string|nil Success: Path to created capture.json file
+-- @return nil, string Failure: nil + error message
+-- @usage
+--   local path, err = JsonExporter.export(capture_manager_data, {
+--     error_message = "Clip split caused crash",
+--     user_description = "Splitting clip at 00:01:00 causes immediate crash"
+--   }, "tests/captures")
+--   if path then
+--     print("Exported to: " .. path)
+--   end
 function JsonExporter.export(capture_data, metadata, output_dir)
+    -- Validate parameters
+    if not capture_data then
+        return nil, "capture_data is required"
+    end
+
+    local valid, err = utils.validate_non_empty(output_dir, "output_dir")
+    if not valid then
+        return nil, err
+    end
+
+    metadata = metadata or {}
+
     -- Create output directory
     local timestamp = os.time()
     local capture_id = "capture-" .. timestamp
     local capture_dir = output_dir .. "/" .. capture_id
 
-    local success = os.execute("mkdir -p " .. capture_dir)
+    local success, err = utils.mkdir_p(capture_dir)
     if not success then
-        return nil, "Failed to create output directory: " .. capture_dir
+        return nil, err or ("Failed to create output directory: " .. capture_dir)
     end
 
     -- Export screenshots to disk
     local screenshot_dir = capture_dir .. "/screenshots"
-    os.execute("mkdir -p " .. screenshot_dir)
+    local screenshot_success, screenshot_err = utils.mkdir_p(screenshot_dir)
+    if not screenshot_success then
+        return nil, screenshot_err or ("Failed to create screenshot directory: " .. screenshot_dir)
+    end
 
     local screenshot_count = JsonExporter.export_screenshots(
         capture_data.screenshots,
@@ -41,9 +82,9 @@ function JsonExporter.export(capture_data, metadata, output_dir)
 
         if video_path then
             slideshow_path = video_path
-            print("[JsonExporter] Slideshow video generated: " .. video_path)
+            logger.info("bug_reporter", "Slideshow video generated: " .. video_path)
         else
-            print("[JsonExporter] Warning: Slideshow generation failed: " .. (err or "unknown"))
+            logger.warn("bug_reporter", "Slideshow generation failed: " .. (err or "unknown"))
         end
     end
 
@@ -80,7 +121,7 @@ function JsonExporter.export(capture_data, metadata, output_dir)
         screenshots = {
             ring_buffer = screenshot_dir,
             screenshot_count = screenshot_count,
-            screenshot_interval_ms = 1000,
+            screenshot_interval_ms = metadata.screenshot_interval_ms or 1000,
             slideshow_video = slideshow_path  -- Phase 3: Now implemented!
         },
 
@@ -94,7 +135,10 @@ function JsonExporter.export(capture_data, metadata, output_dir)
 
     -- Write JSON file
     local json_path = capture_dir .. "/capture.json"
-    local json_str = dkjson.encode(json_data, { indent = true })
+    local json_str, err = dkjson.encode(json_data, { indent = true })
+    if not json_str then
+        return nil, "Failed to encode JSON: " .. (err or "unknown error")
+    end
 
     local file = io.open(json_path, "w")
     if not file then
@@ -121,7 +165,7 @@ function JsonExporter.export_screenshots(screenshot_buffer, output_dir)
             if success then
                 count = count + 1
             else
-                print("[JsonExporter] Warning: Failed to save screenshot " .. i)
+                logger.warn("bug_reporter", "Failed to save screenshot " .. i)
             end
         end
     end

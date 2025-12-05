@@ -112,7 +112,7 @@ function DifferentialValidator.compare_command_results(original, replay)
 
             -- Fuzzy match: check if key parts of error message match
             -- (exact match is too brittle - line numbers may differ)
-            if not DifferentialValidator.error_messages_match(orig_error, replay_error) then
+            if not DifferentialValidator.error_messages_fuzzy_match(orig_error, replay_error) then
                 return {
                     match = false,
                     error = string.format(
@@ -171,7 +171,7 @@ function DifferentialValidator.compare_log_output(original, replay)
         end
 
         -- Fuzzy match messages
-        if not DifferentialValidator.log_messages_match(orig_log.message, replay_log.message) then
+        if not DifferentialValidator.log_messages_fuzzy_match(orig_log.message, replay_log.message) then
             return {
                 match = false,
                 error = string.format(
@@ -186,7 +186,7 @@ function DifferentialValidator.compare_log_output(original, replay)
 end
 
 -- Fuzzy match for error messages (ignores line numbers, small differences)
-function DifferentialValidator.error_messages_match(msg1, msg2)
+function DifferentialValidator.error_messages_fuzzy_match(msg1, msg2)
     -- Exact match
     if msg1 == msg2 then
         return true
@@ -205,9 +205,9 @@ function DifferentialValidator.error_messages_match(msg1, msg2)
 end
 
 -- Fuzzy match for log messages
-function DifferentialValidator.log_messages_match(msg1, msg2)
+function DifferentialValidator.log_messages_fuzzy_match(msg1, msg2)
     -- Same logic as error messages
-    return DifferentialValidator.error_messages_match(msg1, msg2)
+    return DifferentialValidator.error_messages_fuzzy_match(msg1, msg2)
 end
 
 -- Generate a detailed diff report

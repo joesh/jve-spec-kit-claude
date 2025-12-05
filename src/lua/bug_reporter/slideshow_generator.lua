@@ -1,6 +1,8 @@
 -- slideshow_generator.lua
 -- Generate MP4 slideshow videos from screenshot sequences using ffmpeg
 
+local utils = require("bug_reporter.utils")
+local logger = require("core.logger")
 local SlideshowGenerator = {}
 
 -- Check if ffmpeg is available on the system
@@ -20,21 +22,42 @@ function SlideshowGenerator.check_ffmpeg()
     end
 end
 
--- Generate slideshow video from screenshot directory
--- @param screenshot_dir: Directory containing screenshot_001.png, screenshot_002.png, etc.
--- @param screenshot_count: Number of screenshots
--- @param output_path: (optional) Output video path, defaults to screenshot_dir/../slideshow.mp4
--- @return: Path to generated video, or nil + error
+--- Generate MP4 slideshow video from sequential screenshots using FFmpeg
+-- Creates an MP4 video from numbered screenshots (screenshot_001.png, etc.) using FFmpeg.
+-- Video is generated at 2fps (each image shown for 0.5 seconds) with H.264 codec.
+-- Requires FFmpeg to be installed and available in PATH.
+--
+-- @param screenshot_dir string Directory containing screenshot_NNN.png files (required, non-empty)
+-- @param screenshot_count number Number of screenshots to include (required, must be > 0)
+-- @param output_path string Optional output video path (defaults to screenshot_dir/../slideshow.mp4)
+-- @return string|nil Success: Path to generated MP4 file
+-- @return nil, string Failure: nil + error message ("ffmpeg not available", "no screenshots", etc.)
+-- @usage
+--   local video, err = SlideshowGenerator.generate("tests/captures/cap-123/screenshots", 30)
+--   if video then
+--     print("Generated: " .. video .. " (" .. (file_size / 1024 / 1024) .. " MB)")
+--   else
+--     print("Failed: " .. err)
+--   end
 function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_path)
+    -- Validate parameters
+    local valid, err = utils.validate_non_empty(screenshot_dir, "screenshot_dir")
+    if not valid then
+        return nil, err
+    end
+
+    if not screenshot_count or screenshot_count == 0 then
+        return nil, "No screenshots to process"
+    end
+
+    if type(screenshot_count) ~= "number" or screenshot_count < 0 then
+        return nil, "screenshot_count must be a positive number"
+    end
+
     -- Check if ffmpeg is available
     local has_ffmpeg, ffmpeg_info = SlideshowGenerator.check_ffmpeg()
     if not has_ffmpeg then
         return nil, "ffmpeg not available: " .. ffmpeg_info
-    end
-
-    -- Check if screenshot directory exists and has files
-    if screenshot_count == 0 then
-        return nil, "No screenshots to process"
     end
 
     -- Default output path
@@ -54,12 +77,12 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
     local cmd = string.format(
         "ffmpeg -framerate 2 -i '%s/screenshot_%%03d.png' " ..
         "-c:v libx264 -pix_fmt yuv420p -y '%s' 2>&1",
-        screenshot_dir,
-        output_path
+        utils.shell_escape(screenshot_dir),
+        utils.shell_escape(output_path)
     )
 
-    print("[SlideshowGenerator] Running ffmpeg...")
-    print("[SlideshowGenerator] Command: " .. cmd)
+    logger.info("bug_reporter", "Running ffmpeg...")
+    logger.debug("bug_reporter", "Command: " .. cmd)
 
     -- Execute ffmpeg
     local handle = io.popen(cmd)
@@ -72,8 +95,8 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
 
     -- Check if ffmpeg succeeded
     if not success then
-        print("[SlideshowGenerator] ffmpeg output:")
-        print(output)
+        logger.error("bug_reporter", "ffmpeg output:")
+        logger.error("bug_reporter", output)
         return nil, "ffmpeg failed to generate video"
     end
 
@@ -86,7 +109,7 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
 
     -- Get file size for reporting
     local size = SlideshowGenerator.get_file_size(output_path)
-    print(string.format("[SlideshowGenerator] Generated %s (%.2f MB)",
+    logger.info("bug_reporter", string.format("Generated %s (%.2f MB)",
         output_path, size / (1024 * 1024)))
 
     return output_path
@@ -94,7 +117,7 @@ end
 
 -- Get file size in bytes
 function SlideshowGenerator.get_file_size(path)
-    local handle = io.popen("wc -c < '" .. path .. "' 2>/dev/null")
+    local handle = io.popen("wc -c < '" .. utils.shell_escape(path) .. "' 2>/dev/null")
     if not handle then
         return 0
     end

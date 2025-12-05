@@ -2,11 +2,21 @@
 -- Continuous ring buffer capture system for bug reporting
 -- Captures gestures, commands, logs, and screenshots in memory
 
+local utils = require("bug_reporter.utils")
+local logger = require("core.logger")
+
+-- Configuration constants
+local MAX_GESTURES_IN_BUFFER = 200
+local MAX_CAPTURE_TIME_MINUTES = 5
+local MAX_CAPTURE_TIME_MS = MAX_CAPTURE_TIME_MINUTES * 60 * 1000  -- 5 minutes = 300000ms
+local SCREENSHOT_INTERVAL_SECONDS = 1
+local SCREENSHOT_INTERVAL_MS = SCREENSHOT_INTERVAL_SECONDS * 1000  -- 1 second = 1000ms
+
 local CaptureManager = {
     -- Configuration
-    max_gestures = 200,
-    max_time_ms = 300000,  -- 5 minutes
-    screenshot_interval_ms = 1000,  -- 1 second
+    max_gestures = MAX_GESTURES_IN_BUFFER,
+    max_time_ms = MAX_CAPTURE_TIME_MS,
+    screenshot_interval_ms = SCREENSHOT_INTERVAL_MS,
     capture_enabled = true,  -- User preference
 
     -- Ring buffers
@@ -23,6 +33,7 @@ local CaptureManager = {
 
 -- Initialize capture manager
 function CaptureManager:init()
+    -- Use os.clock() for monotonic, high-resolution timing (not affected by system clock changes)
     self.session_start_time = os.clock()
     self.gesture_ring_buffer = {}
     self.command_ring_buffer = {}
@@ -31,15 +42,17 @@ function CaptureManager:init()
     self.next_gesture_id = 1
     self.next_command_id = 1
 
-    print("[CaptureManager] Initialized (capture_enabled=" .. tostring(self.capture_enabled) .. ")")
+    logger.info("bug_reporter", "Capture manager initialized (enabled=" .. tostring(self.capture_enabled) .. ")")
 end
 
 -- Get elapsed milliseconds since session start
+-- Uses os.clock() for monotonic, millisecond-precision timing
+-- os.clock() is not affected by system clock changes and provides sub-second resolution
 function CaptureManager:get_elapsed_ms()
     if not self.session_start_time then
         self.session_start_time = os.clock()
     end
-    return math.floor((os.clock() - self.session_start_time) * 1000)
+    return (os.clock() - self.session_start_time) * 1000
 end
 
 -- Log a gesture event
@@ -117,36 +130,86 @@ function CaptureManager:capture_screenshot()
 end
 
 -- Trim all ring buffers to stay within limits
+-- Optimized to avoid O(n²) by batching removals
 function CaptureManager:trim_buffers()
     local current_time = self:get_elapsed_ms()
     local cutoff_time = current_time - self.max_time_ms
 
+    -- Helper: Find number of items to remove from start of buffer
+    local function count_removals(buffer, cutoff_time, max_count)
+        local count_remove = 0
+        local time_remove = 0
+
+        -- Count items exceeding max count
+        if max_count and #buffer > max_count then
+            count_remove = #buffer - max_count
+        end
+
+        -- Count items older than cutoff time
+        for i, entry in ipairs(buffer) do
+            if entry.timestamp_ms >= cutoff_time then
+                break
+            end
+            time_remove = i
+        end
+
+        return math.max(count_remove, time_remove)
+    end
+
+    -- Helper: Batch remove items from buffer start
+    local function batch_remove(buffer, count, cleanup_fn)
+        if count <= 0 then
+            return
+        end
+
+        -- Call cleanup function on items being removed (if provided)
+        if cleanup_fn then
+            for i = 1, count do
+                if buffer[i] then
+                    cleanup_fn(buffer[i])
+                end
+            end
+        end
+
+        -- Create new buffer with remaining items
+        local new_buffer = {}
+        for i = count + 1, #buffer do
+            table.insert(new_buffer, buffer[i])
+        end
+
+        -- Replace buffer contents
+        for i = 1, #buffer do
+            buffer[i] = nil
+        end
+        for i, entry in ipairs(new_buffer) do
+            buffer[i] = entry
+        end
+    end
+
     -- Trim gestures by count AND time
-    while #self.gesture_ring_buffer > self.max_gestures do
-        table.remove(self.gesture_ring_buffer, 1)
-    end
-    while #self.gesture_ring_buffer > 0 and
-          self.gesture_ring_buffer[1].timestamp_ms < cutoff_time do
-        table.remove(self.gesture_ring_buffer, 1)
-    end
+    local gesture_remove = count_removals(self.gesture_ring_buffer, cutoff_time, self.max_gestures)
+    batch_remove(self.gesture_ring_buffer, gesture_remove)
 
     -- Trim commands by time only (they're sparse)
-    while #self.command_ring_buffer > 0 and
-          self.command_ring_buffer[1].timestamp_ms < cutoff_time do
-        table.remove(self.command_ring_buffer, 1)
-    end
+    local command_remove = count_removals(self.command_ring_buffer, cutoff_time, nil)
+    batch_remove(self.command_ring_buffer, command_remove)
 
     -- Trim log messages by time only
-    while #self.log_ring_buffer > 0 and
-          self.log_ring_buffer[1].timestamp_ms < cutoff_time do
-        table.remove(self.log_ring_buffer, 1)
-    end
+    local log_remove = count_removals(self.log_ring_buffer, cutoff_time, nil)
+    batch_remove(self.log_ring_buffer, log_remove)
 
     -- Trim screenshots by time only (they're dense at 1/second)
-    while #self.screenshot_ring_buffer > 0 and
-          self.screenshot_ring_buffer[1].timestamp_ms < cutoff_time do
-        table.remove(self.screenshot_ring_buffer, 1)
+    -- Screenshots contain QPixmap userdata that may need explicit cleanup
+    local screenshot_remove = count_removals(self.screenshot_ring_buffer, cutoff_time, nil)
+    local function cleanup_screenshot(entry)
+        -- Attempt to explicitly clean up QPixmap if delete() method exists
+        -- Otherwise rely on Lua GC with __gc metamethod
+        if entry.image and type(entry.image.delete) == "function" then
+            entry.image:delete()
+        end
+        entry.image = nil
     end
+    batch_remove(self.screenshot_ring_buffer, screenshot_remove, cleanup_screenshot)
 end
 
 -- Get buffer statistics (for debugging/preferences display)
@@ -190,16 +253,24 @@ end
 -- Enable/disable capture (from preferences)
 function CaptureManager:set_enabled(enabled)
     self.capture_enabled = enabled
-    print("[CaptureManager] Capture " .. (enabled and "enabled" or "disabled"))
+    logger.info("bug_reporter", "Capture " .. (enabled and "enabled" or "disabled"))
 end
 
 -- Clear all buffers (for testing or user request)
 function CaptureManager:clear_buffers()
+    -- Explicitly clean up QPixmap objects in screenshot buffer
+    for _, entry in ipairs(self.screenshot_ring_buffer) do
+        if entry.image and type(entry.image.delete) == "function" then
+            entry.image:delete()
+        end
+        entry.image = nil
+    end
+
     self.gesture_ring_buffer = {}
     self.command_ring_buffer = {}
     self.log_ring_buffer = {}
     self.screenshot_ring_buffer = {}
-    print("[CaptureManager] Buffers cleared")
+    logger.info("bug_reporter", "Buffers cleared")
 end
 
 -- Export current capture to disk (Phase 2 implementation)
@@ -216,7 +287,7 @@ function CaptureManager:export_capture(metadata)
         db_snapshot_path = "tests/captures/bug-" .. os.time() .. ".db"
         local success, err = database.backup_to_file(db_snapshot_path)
         if not success then
-            print("[CaptureManager] Warning: Database backup failed: " .. (err or "unknown"))
+            logger.warn("bug_reporter", "Database backup failed: " .. (err or "unknown"))
             db_snapshot_path = nil
         end
     end
@@ -229,8 +300,9 @@ function CaptureManager:export_capture(metadata)
         screenshots = self.screenshot_ring_buffer
     }
 
-    -- Add database snapshot to metadata
+    -- Add capture configuration to metadata
     metadata.database_snapshot_after = db_snapshot_path
+    metadata.screenshot_interval_ms = self.screenshot_interval_ms
 
     -- Set default output directory
     local output_dir = metadata.output_dir or "tests/captures"
@@ -242,11 +314,11 @@ function CaptureManager:export_capture(metadata)
     self.capture_enabled = was_enabled
 
     if not json_path then
-        print("[CaptureManager] Export failed: " .. (err or "unknown error"))
+        logger.error("bug_reporter", "Export failed: " .. (err or "unknown error"))
         return nil, err
     end
 
-    print("[CaptureManager] Exported capture to: " .. json_path)
+    logger.info("bug_reporter", "Exported capture to: " .. json_path)
     return json_path
 end
 

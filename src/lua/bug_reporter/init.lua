@@ -2,6 +2,7 @@
 -- Bug reporter initialization and Qt bindings integration
 
 local capture_manager = require("bug_reporter.capture_manager")
+local logger = require("core.logger")
 
 local BugReporter = {
     screenshot_timer = nil,
@@ -19,7 +20,7 @@ function BugReporter.init()
     -- Start screenshot timer
     BugReporter.start_screenshot_timer()
 
-    print("[BugReporter] Initialized successfully")
+    logger.info("bug_reporter", "Initialized successfully")
 end
 
 -- Install gesture logger with callback to capture_manager
@@ -30,7 +31,7 @@ function BugReporter.install_gesture_logger()
 
     -- Check if Qt binding is available
     if not install_gesture_logger then
-        print("[BugReporter] Warning: install_gesture_logger not available (Qt bindings not loaded)")
+        logger.warn("bug_reporter", "install_gesture_logger not available (Qt bindings not loaded)")
         return
     end
 
@@ -40,14 +41,19 @@ function BugReporter.install_gesture_logger()
     end)
 
     BugReporter.gesture_logger_installed = true
-    print("[BugReporter] Gesture logger installed")
+    logger.info("bug_reporter", "Gesture logger installed")
 end
 
 -- Start screenshot timer (captures every 1 second)
 function BugReporter.start_screenshot_timer()
+    -- If timer already running, don't create another
+    if BugReporter.screenshot_timer then
+        return
+    end
+
     -- Check if Qt binding is available
     if not create_timer then
-        print("[BugReporter] Warning: create_timer not available (Qt bindings not loaded)")
+        logger.warn("bug_reporter", "create_timer not available (Qt bindings not loaded)")
         return
     end
 
@@ -60,8 +66,14 @@ function BugReporter.start_screenshot_timer()
         end
     )
 
+    -- Check if timer creation succeeded
+    if not BugReporter.screenshot_timer then
+        logger.error("bug_reporter", "Failed to create screenshot timer")
+        return
+    end
+
     BugReporter.screenshot_timer:start()
-    print("[BugReporter] Screenshot timer started (1 second interval)")
+    logger.info("bug_reporter", "Screenshot timer started (1 second interval)")
 end
 
 -- Capture a screenshot
@@ -112,7 +124,7 @@ function BugReporter.set_enabled(enabled)
         end
     end
 
-    print("[BugReporter] " .. (enabled and "Enabled" or "Disabled"))
+    logger.info("bug_reporter", enabled and "Enabled" or "Disabled")
 end
 
 -- Get statistics (delegates to capture_manager)
@@ -140,16 +152,16 @@ function BugReporter.capture_on_error(error_message, stack_trace)
     local json_path = BugReporter.export_capture(metadata)
 
     if json_path then
-        print("\n" .. string.rep("=", 60))
-        print("BUG CAPTURED")
-        print(string.rep("=", 60))
-        print("Error:", error_message)
-        print("Capture saved to:", json_path)
-        print("\nThis capture includes:")
-        print("  - Last 5 minutes of gestures and commands")
-        print("  - Screenshots from the session")
-        print("  - Full error stack trace")
-        print(string.rep("=", 60) .. "\n")
+        logger.info("bug_reporter", "\n" .. string.rep("=", 60))
+        logger.info("bug_reporter", "BUG CAPTURED")
+        logger.info("bug_reporter", string.rep("=", 60))
+        logger.error("bug_reporter", "Error: " .. (error_message or "unknown"))
+        logger.info("bug_reporter", "Capture saved to: " .. json_path)
+        logger.info("bug_reporter", "\nThis capture includes:")
+        logger.info("bug_reporter", "  - Last 5 minutes of gestures and commands")
+        logger.info("bug_reporter", "  - Screenshots from the session")
+        logger.info("bug_reporter", "  - Full error stack trace")
+        logger.info("bug_reporter", string.rep("=", 60) .. "\n")
     end
 
     return json_path
@@ -169,7 +181,7 @@ function BugReporter.capture_manual(description, expected_behavior)
     local json_path = BugReporter.export_capture(metadata)
 
     if json_path then
-        print("[BugReporter] Manual capture saved to:", json_path)
+        logger.info("bug_reporter", "Manual capture saved to: " .. json_path)
     end
 
     return json_path

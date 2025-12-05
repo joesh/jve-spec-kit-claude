@@ -3,6 +3,9 @@
 
 local GestureReplayEngine = {}
 
+-- Check if Qt bindings are available (will be true when running in JVE)
+local has_qt_bindings = type(post_mouse_event) == "function"
+
 -- Convert gesture log entry to Qt event parameters
 -- @param gesture_entry: Gesture log entry from JSON test
 -- @return: Event type and parameters table for qt_bindings
@@ -71,26 +74,88 @@ function GestureReplayEngine.gesture_to_event_params(gesture_entry)
     return event_type, params
 end
 
+-- Post a gesture event using Qt bindings
+-- @param gesture_entry: Gesture log entry from JSON test
+-- @return: Success boolean, error message
+function GestureReplayEngine.post_gesture_event(gesture_entry)
+    if not has_qt_bindings then
+        return false, "Qt bindings not available (not running in JVE)"
+    end
+
+    local gesture = gesture_entry.gesture
+
+    if gesture.type == "mouse_press" or gesture.type == "mouse_release" or gesture.type == "mouse_move" then
+        local event_type_map = {
+            mouse_press = "MouseButtonPress",
+            mouse_release = "MouseButtonRelease",
+            mouse_move = "MouseMove"
+        }
+
+        -- For mouse_move events, pass no button (Qt::NoButton)
+        -- For press/release events, use the actual button that was pressed
+        local button = "no_button"
+        if gesture.type == "mouse_press" or gesture.type == "mouse_release" then
+            button = gesture.button or "left"
+        end
+
+        -- Use the buttons bitmask from the gesture if available (currently held buttons)
+        -- For mouse_move, this represents which buttons are held during the move
+        local buttons = gesture.buttons or {}
+
+        local success, err = post_mouse_event(
+            event_type_map[gesture.type],
+            gesture.screen_x,
+            gesture.screen_y,
+            button,
+            buttons,
+            gesture.modifiers or {}
+        )
+        return success, err
+    elseif gesture.type == "key_press" or gesture.type == "key_release" then
+        local event_type_map = {
+            key_press = "KeyPress",
+            key_release = "KeyRelease"
+        }
+
+        local success, err = post_key_event(
+            event_type_map[gesture.type],
+            gesture.key or "",
+            gesture.text or "",
+            gesture.modifiers or {}
+        )
+        return success, err
+    else
+        return false, "Unknown gesture type: " .. tostring(gesture.type)
+    end
+end
+
 -- Replay a sequence of gestures with timing
 -- @param gesture_log: Array of gesture log entries (from JSON test)
--- @param post_event_callback: Function(event_type, params) to post Qt event
--- @param options: Optional parameters (speed_multiplier, max_delay_ms)
--- @return: Success boolean
-function GestureReplayEngine.replay_gestures(gesture_log, post_event_callback, options)
+-- @param options: Optional parameters (speed_multiplier, max_delay_ms, process_events)
+-- @return: Success boolean, error message
+function GestureReplayEngine.replay_gestures(gesture_log, options)
+    if not has_qt_bindings then
+        return false, "Qt bindings not available (not running in JVE)"
+    end
+
     options = options or {}
     local speed_multiplier = options.speed_multiplier or 1.0
     local max_delay_ms = options.max_delay_ms or 5000  -- Cap delays at 5 seconds
+    local process_events_enabled = options.process_events ~= false  -- Default true
 
     if #gesture_log == 0 then
         return true  -- Nothing to replay
     end
 
     -- First gesture happens immediately
-    local event_type, params = GestureReplayEngine.gesture_to_event_params(gesture_log[1])
-    if not event_type then
-        return false, params  -- Error message in params
+    local success, err = GestureReplayEngine.post_gesture_event(gesture_log[1])
+    if not success then
+        return false, err
     end
-    post_event_callback(event_type, params)
+
+    if process_events_enabled then
+        process_events()
+    end
 
     -- Subsequent gestures happen with timing delays
     for i = 2, #gesture_log do
@@ -102,15 +167,17 @@ function GestureReplayEngine.replay_gestures(gesture_log, post_event_callback, o
         delay_ms = math.min(delay_ms, max_delay_ms)
 
         if delay_ms > 0 then
-            -- Sleep (will need C++ binding for precise timing)
-            -- For now, we'll assume post_event_callback handles timing
+            sleep_ms(delay_ms)
         end
 
-        local event_type, params = GestureReplayEngine.gesture_to_event_params(gesture_log[i])
-        if not event_type then
-            return false, params
+        local success, err = GestureReplayEngine.post_gesture_event(gesture_log[i])
+        if not success then
+            return false, err
         end
-        post_event_callback(event_type, params)
+
+        if process_events_enabled then
+            process_events()
+        end
     end
 
     return true

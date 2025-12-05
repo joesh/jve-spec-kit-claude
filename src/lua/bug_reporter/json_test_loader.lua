@@ -2,6 +2,8 @@
 -- Load and parse JSON test files
 
 local dkjson = require("dkjson")
+local logger = require("core.logger")
+local utils = require("bug_reporter.utils")
 
 local JsonTestLoader = {}
 
@@ -9,6 +11,12 @@ local JsonTestLoader = {}
 -- @param json_path: Path to JSON test file
 -- @return: Test object, or nil + error
 function JsonTestLoader.load(json_path)
+    -- Validate parameters
+    local valid, err = utils.validate_non_empty(json_path, "json_path")
+    if not valid then
+        return nil, err
+    end
+
     local file = io.open(json_path, "r")
     if not file then
         return nil, "Failed to open test file: " .. json_path
@@ -39,6 +47,12 @@ end
 -- @param dir_path: Path to directory containing test JSON files
 -- @return: Array of test objects, or nil + error
 function JsonTestLoader.load_directory(dir_path)
+    -- Validate parameters
+    local valid, err = utils.validate_non_empty(dir_path, "dir_path")
+    if not valid then
+        return nil, err
+    end
+
     -- Get list of JSON files in directory
     local handle = io.popen("find '" .. dir_path .. "' -name '*.json' -type f 2>/dev/null")
     if not handle then
@@ -76,9 +90,9 @@ function JsonTestLoader.load_directory(dir_path)
 
     -- Report errors but continue
     if #errors > 0 then
-        print("[JsonTestLoader] Warning: " .. #errors .. " test(s) failed to load")
+        logger.warn("bug_reporter", #errors .. " test(s) failed to load")
         for _, error_info in ipairs(errors) do
-            print("  " .. error_info.file .. ": " .. error_info.error)
+            logger.warn("bug_reporter", "  " .. error_info.file .. ": " .. error_info.error)
         end
     end
 
