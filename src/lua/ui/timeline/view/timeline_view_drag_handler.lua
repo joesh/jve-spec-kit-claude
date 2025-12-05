@@ -40,6 +40,10 @@ function M.handle_release(view, drag_state, modifiers)
         end
 
         local all_tracks = state_module.get_all_tracks()
+        local track_index_lookup = {}
+        for idx, track in ipairs(all_tracks or {}) do
+            track_index_lookup[track.id] = idx
+        end
         -- Prefer the anchor clip (the one the user grabbed) as the reference for track offset.
         local reference_clip = current_clips[1]
         if drag_state.anchor_clip_id then
@@ -50,17 +54,8 @@ function M.handle_release(view, drag_state, modifiers)
                 end
             end
         end
-        local reference_track_index = nil
-        local target_track_index = nil
-
-        for i, track in ipairs(all_tracks) do
-            if track.id == reference_clip.track_id then
-                reference_track_index = i
-            end
-            if track.id == target_track_id then
-                target_track_index = i
-            end
-        end
+        local reference_track_index = track_index_lookup[reference_clip.track_id]
+        local target_track_index = track_index_lookup[target_track_id]
 
         local track_offset = 0
         if reference_track_index and target_track_index then
@@ -71,6 +66,16 @@ function M.handle_release(view, drag_state, modifiers)
 
         -- Track moves: embed pending_new_start when there is a time delta.
         if track_offset ~= 0 then
+            if track_offset > 0 then
+                table.sort(current_clips, function(a, b)
+                    return (track_index_lookup[a.track_id] or 0) > (track_index_lookup[b.track_id] or 0)
+                end)
+            elseif track_offset < 0 then
+                table.sort(current_clips, function(a, b)
+                    return (track_index_lookup[a.track_id] or 0) < (track_index_lookup[b.track_id] or 0)
+                end)
+            end
+
             -- Build pending_clips so occlusion resolution ignores other clips in the same drag batch.
             local pending_clips = {}
             for _, c in ipairs(current_clips) do
@@ -81,13 +86,7 @@ function M.handle_release(view, drag_state, modifiers)
             end
 
             for _, clip in ipairs(current_clips) do
-                local clip_track_index = nil
-                for i, track in ipairs(all_tracks) do
-                    if track.id == clip.track_id then
-                        clip_track_index = i
-                        break
-                    end
-                end
+                local clip_track_index = track_index_lookup[clip.track_id]
 
                 if clip_track_index then
                     local new_track_index = clip_track_index + track_offset
