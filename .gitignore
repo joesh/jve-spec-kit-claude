@@ -69,6 +69,10 @@ eventlog/
 tests/captures/
 tests/**/captures/
 
+# Event journals (runtime artifacts)
+:memory:.events/
+**/events.jsonl
+
 # Package files
 *.deb
 *.rpm
