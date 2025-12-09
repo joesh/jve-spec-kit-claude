@@ -7,11 +7,95 @@ local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local widget_parenting = require("core.widget_parenting")
+local frame_utils = require("core.frame_utils")
+local timeline_state = require("ui.timeline.timeline_state")
+local inspectable_factory = require("inspectable")
+local metadata_schemas = require("ui.metadata_schemas")
+local collapsible_section = require("ui.collapsible_section")
+local profile_scope = require("core.profile_scope")
+
+local FIELD_TYPES = metadata_schemas.FIELD_TYPES
+
+local PROPERTY_TYPE_MAP = {
+  [FIELD_TYPES.STRING] = "STRING",
+  [FIELD_TYPES.TEXT_AREA] = "STRING",
+  [FIELD_TYPES.DROPDOWN] = "ENUM",
+  [FIELD_TYPES.INTEGER] = "NUMBER",
+  [FIELD_TYPES.DOUBLE] = "NUMBER",
+  [FIELD_TYPES.BOOLEAN] = "BOOLEAN",
+  [FIELD_TYPES.TIMECODE] = "NUMBER",
+}
+
+local function normalize_default_value(field_type, raw_value)
+  if raw_value == nil then
+    return nil
+  end
+
+  if field_type == FIELD_TYPES.INTEGER then
+    local num = tonumber(raw_value)
+    return num and math.floor(num) or nil
+  elseif field_type == FIELD_TYPES.DOUBLE then
+    return tonumber(raw_value)
+  elseif field_type == FIELD_TYPES.BOOLEAN then
+    if type(raw_value) == "boolean" then
+      return raw_value
+    end
+    if type(raw_value) == "number" then
+      return raw_value ~= 0
+    end
+    if type(raw_value) == "string" then
+      local lowered = raw_value:lower()
+      if lowered == "true" or lowered == "yes" or lowered == "on" then
+        return true
+      elseif lowered == "false" or lowered == "no" or lowered == "off" then
+        return false
+      end
+    end
+    return nil
+  elseif field_type == FIELD_TYPES.TIMECODE then
+    if type(raw_value) == "number" then
+      return raw_value
+    elseif type(raw_value) == "string" and raw_value ~= "" then
+      local parsed = frame_utils.parse_timecode(raw_value, current_frame_rate())
+      return parsed
+    end
+    return nil
+  else
+    if raw_value == nil then
+      return nil
+    end
+    return tostring(raw_value)
+  end
+end
 
 -- Helper for detailed error logging
 local log_detailed_error = error_system.log_detailed_error
 
 local widget_pool = require("ui.inspector.widget_pool")
+
+local refresh_selection_label -- forward declaration
+
+-- Track timeline state subscriptions so the inspector refreshes when
+-- underlying clips/sequences change (e.g., undo/redo, external commands).
+local timeline_listener_registered = false
+local function ensure_timeline_listener()
+  if timeline_listener_registered then
+    return
+  end
+  if timeline_state and timeline_state.add_listener then
+    timeline_state.add_listener(profile_scope.wrap("inspector.timeline_listener", function()
+      if not M.root then
+        return
+      end
+      if M._active_schema_id ~= "clip" and M._active_schema_id ~= "sequence" then
+        return
+      end
+      refresh_active_inspection()
+      refresh_selection_label()
+    end))
+    timeline_listener_registered = true
+  end
+end
 
 local M = {
   _panel = nil,
@@ -24,16 +108,172 @@ local M = {
   _header_text = "",      -- Stored header text
   _batch_enabled = false, -- Stored batch state
   _selection_label = nil, -- Label showing current selection
-  _field_widgets = {},    -- Map of field names to widget references (now pooled)
-  _current_clip = nil,    -- Currently displayed clip data
-  _selected_clips = {},   -- All currently selected clips (for multi-edit)
+  _selection_label_base = "", -- Base text before mark summary
+  _selection_label_include_marks = false, -- Whether to append mark summary
+  _field_widgets = {},    -- Active schema field widget map
+  _field_widgets_by_schema = {}, -- Cached widgets per schema
+  _current_inspectable = nil, -- Currently focused inspectable entity
+  _selected_items = {},   -- Selection payloads from selection hub
+  _multi_inspectables = nil, -- Inspectables participating in multi-edit
   _apply_button = nil,    -- Apply button for multi-edit
   _multi_edit_mode = false, -- Whether we're in multi-edit mode
-  _sections = {},         -- Table of all sections {section_name = {section_obj, widget, fields}}
+  _sections = {},         -- Active schema sections
+  _sections_by_schema = {}, -- Cached schema sections
+  _active_schema_id = nil,
   _content_widget = nil,  -- The content widget that holds all sections (for redraws)
+  _content_layout = nil,
   _widgets_initialized = false, -- Track if widgets have been created
   _suppress_field_updates_depth = 0,
+  _schemas_active = false, -- Whether schema sections should be interactive/visible
+  _sections_visible_state = nil, -- Tracks last visibility applied to schema sections
 }
+
+local function format_timecode(time_input, override_rate)
+  if not time_input then
+    return "00:00:00:00"
+  end
+
+  local frame_rate = override_rate
+  local rate_valid = false
+  if type(frame_rate) == "number" and frame_rate > 0 then
+      rate_valid = true
+  elseif type(frame_rate) == "table" and frame_rate.fps_numerator then
+      rate_valid = true
+  end
+
+  if not rate_valid then
+    if timeline_state and timeline_state.get_sequence_frame_rate then
+      frame_rate = timeline_state.get_sequence_frame_rate()
+    end
+  end
+  frame_rate = frame_rate or frame_utils.default_frame_rate
+
+  local ok, formatted = pcall(frame_utils.format_timecode, time_input, frame_rate)
+  if ok and formatted then
+    return formatted
+  end
+
+  return "00:00:00:00"
+end
+
+local function current_frame_rate()
+  if timeline_state and timeline_state.get_sequence_frame_rate then
+    local ok, rate = pcall(timeline_state.get_sequence_frame_rate)
+    if ok then
+        if type(rate) == "table" or (type(rate) == "number" and rate > 0) then
+            return rate
+        end
+    end
+  end
+  return frame_utils.default_frame_rate
+end
+
+local function build_mark_summary()
+  if not timeline_state or not timeline_state.get_mark_in then
+    return nil
+  end
+
+  local mark_in = timeline_state.get_mark_in()
+  local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out() or nil
+  local frame_rate = current_frame_rate()
+
+  local in_text = mark_in and format_timecode(mark_in, frame_rate) or "--"
+  local out_text = mark_out and format_timecode(mark_out, frame_rate) or "--"
+
+  local duration_text = "--"
+  if mark_in and mark_out and mark_out >= mark_in then
+    duration_text = format_timecode(mark_out - mark_in, frame_rate)
+  elseif mark_in and mark_out and mark_out < mark_in then
+    duration_text = "00:00:00:00"
+  end
+
+  return string.format("In: %s  Out: %s  Dur: %s", in_text, out_text, duration_text)
+end
+
+local function append_mark_summary_if_timeline(label_text)
+  local summary = build_mark_summary()
+  if not summary then
+    return label_text
+  end
+
+  if label_text and label_text ~= "" then
+    return string.format("%s\n%s", label_text, summary)
+  end
+  return summary
+end
+
+local function compute_selection_label_text(base_text, include_marks)
+  local text = base_text or ""
+  if include_marks then
+    text = append_mark_summary_if_timeline(text)
+  end
+  return text
+end
+
+refresh_selection_label = function()
+  if not M._selection_label then
+    return
+  end
+  local text = compute_selection_label_text(M._selection_label_base, M._selection_label_include_marks)
+  local ok, err = pcall(qt_constants.PROPERTIES.SET_TEXT, M._selection_label, text)
+  if not ok then
+    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      "[inspector][view] Failed to refresh selection label: " .. log_detailed_error(err))
+  end
+end
+
+local function set_selection_label(base_text, include_marks)
+  M._selection_label_base = base_text or ""
+  M._selection_label_include_marks = not not include_marks
+  refresh_selection_label()
+end
+
+local function get_field_key(field)
+  if field and field.key and field.key ~= "" then
+    return field.key
+  end
+  local label = field and (field.label or field.name) or "field"
+  return label:lower():gsub("%s+", "_")
+end
+
+local function refresh_active_inspection()
+  local targets = nil
+  if M._multi_edit_mode and M._multi_inspectables and #M._multi_inspectables > 0 then
+    targets = M._multi_inspectables
+  elseif M._current_inspectable then
+    targets = { M._current_inspectable }
+  end
+
+  if not targets or not M._active_schema_id then
+    return
+  end
+
+  local needs_refresh = false
+  for _, inspectable in ipairs(targets) do
+    if inspectable and inspectable.refresh then
+      local ok, err = pcall(inspectable.refresh, inspectable)
+      if not ok then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+          string.format("[inspector][view] Failed to refresh inspectable: %s", tostring(err)))
+      else
+        needs_refresh = true
+      end
+    end
+  end
+
+  if not needs_refresh then
+    return
+  end
+
+  suppress_field_updates()
+  if M._multi_edit_mode and M._multi_inspectables then
+    M.load_multi_clip_data(M._multi_inspectables)
+  elseif M._current_inspectable then
+    M.load_clip_data(M._current_inspectable)
+  end
+  resume_field_updates()
+  refresh_selection_label()
+end
 
 local function suppress_field_updates()
   M._suppress_field_updates_depth = (M._suppress_field_updates_depth or 0) + 1
@@ -49,23 +289,365 @@ local function field_updates_suppressed()
   return (M._suppress_field_updates_depth or 0) > 0
 end
 
+local function set_sections_visible(visible)
+  for _, section_data in pairs(M._sections) do
+    if section_data.widget then
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, section_data.widget, visible)
+    end
+  end
+  M._sections_visible_state = visible
+  if M._content_widget then
+    pcall(qt_update_widget, M._content_widget)
+  end
+end
+
+local function build_schema_for_id(schema_id)
+  if not schema_id then
+    return
+  end
+
+  if M._sections_by_schema[schema_id] then
+    return
+  end
+
+  local sections = {}
+  local field_widgets = {}
+  local definitions = metadata_schemas.get_sections(schema_id)
+
+  for _, definition in ipairs(definitions) do
+    local section_result = collapsible_section.create_section(definition.name, M._content_widget)
+    if section_result and section_result.success and section_result.return_values then
+      local section_widget = section_result.return_values.section_widget
+      local section_obj = section_result.return_values.section
+      local field_names = {}
+
+      for _, field in ipairs(definition.schema.fields or {}) do
+        M.add_schema_field_to_section(section_obj, field, field_widgets)
+        table.insert(field_names, field.label or field.name or "")
+      end
+
+      if M._content_layout then
+        pcall(qt_constants.LAYOUT.ADD_WIDGET, M._content_layout, section_widget, "AlignTop")
+      end
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, section_widget, false)
+
+      sections[definition.name] = {
+        section_obj = section_obj,
+        widget = section_widget,
+        fields = field_names
+      }
+    end
+  end
+
+  M._sections_by_schema[schema_id] = sections
+  M._field_widgets_by_schema[schema_id] = field_widgets
+end
+
+local function activate_schema(schema_id)
+  if M._active_schema_id and M._sections_by_schema[M._active_schema_id] then
+    for _, section_data in pairs(M._sections_by_schema[M._active_schema_id]) do
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, section_data.widget, false)
+    end
+  end
+
+  if not schema_id then
+    M._sections = {}
+    M._field_widgets = {}
+    M._active_schema_id = nil
+    return
+  end
+
+  build_schema_for_id(schema_id)
+
+  M._sections = M._sections_by_schema[schema_id] or {}
+  M._field_widgets = M._field_widgets_by_schema[schema_id] or {}
+  M._active_schema_id = schema_id
+end
+
+local function read_widget_value(field_info)
+  if not field_info or not field_info.get_value then
+    return nil
+  end
+  return field_info:get_value()
+end
+
+local function create_inspector_field(section, field, field_widgets)
+  field_widgets = field_widgets or M._field_widgets
+
+  local field_type = field.type or FIELD_TYPES.STRING
+  local label_text = field.label or field.key or "Field"
+  local field_key = get_field_key(field)
+
+  local container_ok, container = pcall(qt_constants.WIDGET.CREATE)
+  if not container_ok or not container then
+    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      "[inspector][view] Failed to create container for field: " .. label_text)
+    return
+  end
+
+  local layout_ok, layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
+  if not layout_ok or not layout then
+    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      "[inspector][view] Failed to create layout for field: " .. label_text)
+    return
+  end
+
+  pcall(qt_constants.LAYOUT.SET_ON_WIDGET, container, layout)
+  pcall(qt_constants.LAYOUT.SET_MARGINS, layout, 0, 2, 4, 2)
+  pcall(qt_constants.LAYOUT.SET_SPACING, layout, 6)
+
+  local label_widget = widget_pool.rent("label", { text = label_text })
+  if label_widget then
+    local label_style = [[
+      QLabel {
+        color: ]] .. ui_constants.COLORS.GENERAL_LABEL_COLOR .. [[;
+        font-size: ]] .. ui_constants.FONTS.DEFAULT_FONT_SIZE .. [[;
+        padding: 4px 6px 2px 4px;
+        min-width: 120px;
+      }
+    ]]
+    pcall(qt_constants.PROPERTIES.SET_STYLE, label_widget, label_style)
+    pcall(qt_constants.PROPERTIES.SET_ALIGNMENT, label_widget, qt_constants.PROPERTIES.ALIGN_RIGHT)
+    pcall(qt_constants.LAYOUT.ADD_WIDGET, layout, label_widget, "AlignBaseline")
+  end
+
+  local widget_type = "line_edit"
+  local control_widget
+
+  if field_type == FIELD_TYPES.BOOLEAN then
+    control_widget = widget_pool.rent("checkbox", {
+      label = "",
+      checked = field.default and true or false
+    })
+    widget_type = "checkbox"
+  else
+    local default_text = field.default
+    if default_text ~= nil and type(default_text) ~= "string" then
+      default_text = tostring(default_text)
+    end
+    control_widget = widget_pool.rent("line_edit", {
+      text = default_text or "",
+      placeholder = ""
+    })
+
+    if field_type == FIELD_TYPES.TEXT_AREA and control_widget then
+      pcall(qt_constants.PROPERTIES.SET_MIN_HEIGHT, control_widget, 60)
+    end
+  end
+
+  if not control_widget then
+    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      "[inspector][view] Failed to create control widget for field: " .. label_text)
+    return
+  end
+
+  pcall(qt_constants.LAYOUT.ADD_WIDGET, layout, control_widget, "AlignBaseline")
+  pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, layout, control_widget, 1)
+  pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, control_widget, "Expanding", "Fixed")
+
+  local entry = {
+    field = field,
+    field_key = field_key,
+    field_type = field_type,
+    widget = control_widget,
+    widget_type = widget_type,
+    mixed = false,
+    options = field.options,
+    pending_value = nil,
+  }
+
+  function entry:set_placeholder(text)
+    if self.widget_type == "line_edit" then
+      pcall(qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT, self.widget, text or "")
+    end
+  end
+
+  function entry:clear_placeholder()
+    if self.widget_type == "line_edit" then
+      self:set_placeholder("")
+    end
+  end
+
+  function entry:set_mixed(is_mixed)
+    self.mixed = not not is_mixed
+    if self.widget_type == "line_edit" then
+      if self.mixed then
+        self:set_placeholder("<mixed>")
+        pcall(qt_constants.PROPERTIES.SET_TEXT, self.widget, "")
+      else
+        self:set_placeholder("")
+      end
+    elseif self.widget_type == "checkbox" and self.mixed then
+      -- Visual fallback for mixed checkbox state
+      pcall(qt_constants.PROPERTIES.SET_CHECKED, self.widget, false)
+    end
+  end
+
+  function entry:set_value(value)
+    self.mixed = false
+    self.pending_value = nil
+    if self.widget_type == "checkbox" then
+      pcall(qt_constants.PROPERTIES.SET_CHECKED, self.widget, value and true or false)
+      return
+    end
+
+    local text_value = ""
+    if value ~= nil then
+      if self.field_type == FIELD_TYPES.TIMECODE then
+        if type(value) == "number" or (type(value) == "table" and value.frames) then
+          text_value = format_timecode(value, current_frame_rate())
+        else
+          text_value = tostring(value)
+        end
+      else
+        text_value = tostring(value)
+      end
+    end
+
+    pcall(qt_constants.PROPERTIES.SET_TEXT, self.widget, text_value)
+  end
+
+  function entry:get_value()
+    if self.mixed then
+      return nil
+    end
+
+    if self.widget_type == "checkbox" then
+      local ok, checked = pcall(qt_constants.PROPERTIES.GET_CHECKED, self.widget)
+      if ok then
+        return checked and true or false
+      end
+      return nil
+    end
+
+    local ok, text = pcall(qt_constants.PROPERTIES.GET_TEXT, self.widget)
+    if not ok then
+      return nil
+    end
+
+    text = text or ""
+
+    if self.field_type == FIELD_TYPES.INTEGER then
+      if text == "" then
+        return nil
+      end
+      return tonumber(text)
+    elseif self.field_type == FIELD_TYPES.DOUBLE then
+      if text == "" then
+        return nil
+      end
+      return tonumber(text)
+    elseif self.field_type == FIELD_TYPES.TIMECODE then
+      if text == "" then
+        return nil
+      end
+      local value, err = frame_utils.parse_timecode(text, current_frame_rate())
+      if not value then
+        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+          string.format("[inspector][view] Invalid timecode '%s' for field %s: %s",
+            text, self.field_key, tostring(err)))
+        return nil
+      end
+      return value
+    else
+      return text
+    end
+  end
+
+  field_widgets[field_key] = entry
+
+  if widget_type == "checkbox" then
+    local click_connection, click_err = widget_pool.connect_signal(control_widget, "clicked", function()
+      if field_updates_suppressed() or M._multi_edit_mode then
+        return
+      end
+      entry:set_mixed(false)
+      M.save_field_value(field_key)
+    end)
+    if not click_connection then
+      local message = string.format(
+        "[inspector][view] Failed to connect checkbox click handler for field '%s': %s",
+        field_key,
+        click_err and (click_err.message or tostring(click_err)) or "unknown error"
+      )
+      error(message)
+    end
+  elseif widget_type == "line_edit" then
+    local editing_connection, editing_err = widget_pool.connect_signal(control_widget, "editingFinished", function()
+      if field_updates_suppressed() then
+        return
+      end
+      entry:set_mixed(false)
+      if M._multi_edit_mode then
+        entry.pending_value = nil
+        return
+      end
+
+      local value = entry.pending_value
+      if value == nil then
+        value = read_widget_value(entry)
+      end
+      entry.pending_value = nil
+      M.save_field_value(field_key, value)
+    end)
+
+    if not editing_connection then
+      local message = string.format(
+        "[inspector][view] Failed to connect editingFinished for field '%s': %s",
+        field_key,
+        editing_err and (editing_err.message or tostring(editing_err)) or "unknown error"
+      )
+      error(message)
+    end
+
+    local text_connection, text_err = widget_pool.connect_signal(control_widget, "textChanged", function()
+      if field_updates_suppressed() then
+        return
+      end
+      entry:set_mixed(false)
+      if M._multi_edit_mode then
+        return
+      end
+      entry.pending_value = read_widget_value(entry)
+    end)
+
+    if not text_connection then
+      local message = string.format(
+        "[inspector][view] Failed to connect textChanged for field '%s': %s",
+        field_key,
+        text_err and (text_err.message or tostring(text_err)) or "unknown error"
+      )
+      error(message)
+    end
+  else
+    error(string.format("[inspector][view] Unsupported widget type '%s' for field '%s'", widget_type, field_key))
+  end
+
+  if section and section.addContentWidget then
+    local add_result = section:addContentWidget(container)
+    if add_result and add_result.success == false then
+      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+        "Failed to add widget for field '" .. label_text .. "' to section")
+    end
+  end
+end
+
+M.add_schema_field_to_section = create_inspector_field
+
 local function reset_all_fields()
   if not M._field_widgets then
     return
   end
   suppress_field_updates()
-  local props = qt_constants.PROPERTIES or {}
-  local set_placeholder = props.SET_PLACEHOLDER_TEXT
-  local set_text = props.SET_TEXT
-  for _, field_info in pairs(M._field_widgets) do
-    local widget = field_info.widget
-    if widget then
-      if set_placeholder then
-        pcall(set_placeholder, widget, "")
-      end
-      if set_text then
-        pcall(set_text, widget, "")
-      end
+  for _, entry in pairs(M._field_widgets) do
+    if entry.set_mixed then
+      entry:set_mixed(false)
+    end
+    if entry.clear_placeholder then
+      entry:clear_placeholder()
+    end
+    if entry.set_value then
+      entry:set_value(nil)
     end
   end
   resume_field_updates()
@@ -113,6 +695,7 @@ function M.init(panel_handle)
   end
 
   M._panel = panel_handle
+  ensure_timeline_listener()
 
   -- Initialize view state with proper FFI approach
   M._header_text = ""
@@ -153,20 +736,7 @@ function M.set_batch_enabled(enabled)
 end
 
 function M.create_schema_driven_inspector()
-  -- print("🚨 DEBUG: create_schema_driven_inspector() function STARTED")
-  local metadata_schemas = require("ui.metadata_schemas")
-  local collapsible_section = require("ui.collapsible_section")
-  -- print("🚨 DEBUG: modules loaded successfully")
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Creating schema-driven inspector")
-  local schemas = metadata_schemas.get_clip_inspector_schemas()
-  
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Schemas loaded, type: " .. type(schemas) .. ", count: " .. (schemas and #schemas or "nil"))
-  if schemas then
-    for section_name, schema in pairs(schemas) do
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Found schema: " .. section_name)
-    end
-  end
-  
   if not M.root then
     return error_system.create_error({
       message = "No root panel mounted",
@@ -177,8 +747,76 @@ function M.create_schema_driven_inspector()
 
   -- M.root is a simple widget container created by CREATE_INSPECTOR()
   -- Following metadata_system.lua pattern: create our own scroll area inside the container
-  
-  -- Create scroll area inside the container
+
+  -- Root layout holds header widgets (search, selection) and the scroll area
+  local root_layout_success, root_layout = pcall(qt_constants.LAYOUT.CREATE_VBOX)
+  if not root_layout_success or not root_layout then
+    return error_system.create_error({message = "Failed to create root layout"})
+  end
+  pcall(qt_constants.LAYOUT.SET_ON_WIDGET, M.root, root_layout)
+  pcall(qt_constants.LAYOUT.SET_MARGINS, root_layout, 0, 0, 0, 0)
+  pcall(qt_constants.LAYOUT.SET_SPACING, root_layout, 6)
+  pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, M.root, "Preferred", "Expanding")
+
+  -- Search row (kept visible while scrolling Inspector sections)
+  local search_container_success, search_container = pcall(qt_constants.WIDGET.CREATE)
+  if search_container_success and search_container then
+    local search_layout_success, search_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
+    if search_layout_success and search_layout then
+      pcall(qt_constants.LAYOUT.SET_ON_WIDGET, search_container, search_layout)
+      pcall(qt_constants.LAYOUT.SET_MARGINS, search_layout, 0, 0, 0, 0)
+      pcall(qt_constants.LAYOUT.SET_SPACING, search_layout, 4)
+
+      local search_input_success, search_input = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, "Search properties...")
+      if search_input_success and search_input then
+        M._search_input = search_input
+        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, search_input, "Expanding", "Fixed")
+        pcall(qt_constants.LAYOUT.ADD_WIDGET, search_layout, search_input, "AlignBaseline")
+        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, search_layout, search_input, 1)
+
+        -- Connect text changed handler directly
+        local handler_name = "inspector_search_handler"
+        _G[handler_name] = function()
+          local current_text_success, current_text = pcall(qt_constants.PROPERTIES.GET_TEXT, search_input)
+          if current_text_success then
+            M.apply_search_filter(current_text or "")
+          end
+        end
+
+        local success, err = pcall(function()
+          qt_set_line_edit_text_changed_handler(search_input, handler_name)
+        end)
+
+        if not success then
+          logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Text changed handler not available: " .. tostring(err))
+        end
+      end
+    end
+    pcall(qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY, search_container, "Expanding", "Fixed")
+    pcall(qt_constants.LAYOUT.ADD_WIDGET, root_layout, search_container)
+    pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, root_layout, search_container, 0)
+  end
+
+  -- Selection label (clip/timeline name) kept fixed above the scroll area
+  local selection_label_success, selection_label = pcall(qt_constants.WIDGET.CREATE_LABEL, "No clip selected")
+  if selection_label_success and selection_label then
+    pcall(qt_constants.PROPERTIES.SET_STYLE, selection_label, [[
+      QLabel {
+        background: #3a3a3a;
+        color: white;
+        padding: 10px;
+        font-size: 14px;
+        font-weight: bold;
+      }
+    ]])
+    pcall(qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY, selection_label, "Expanding", "Fixed")
+    pcall(qt_constants.LAYOUT.ADD_WIDGET, root_layout, selection_label)
+    pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, selection_label, "Expanding", "Fixed")
+    M._selection_label = selection_label
+    pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, root_layout, selection_label, 0)
+  end
+
+  -- Create scroll area inside the container (holds collapsible sections)
   local scroll_area_success, scroll_area = pcall(qt_constants.WIDGET.CREATE_SCROLL_AREA)
   if not scroll_area_success then
     return error_system.create_error({message = "Failed to create scroll area"})
@@ -205,57 +843,10 @@ function M.create_schema_driven_inspector()
 
   -- Set layout on content widget
   pcall(qt_constants.LAYOUT.SET_ON_WIDGET, content_widget, content_layout)
+  M._content_layout = content_layout
 
   -- Set content widget on scroll area
   pcall(qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET, scroll_area, content_widget)
-
-  -- Create layout for the container and add scroll area to it
-  local container_layout_success, container_layout = pcall(qt_constants.LAYOUT.CREATE_VBOX)
-  if container_layout_success then
-    pcall(qt_constants.LAYOUT.SET_ON_WIDGET, M.root, container_layout)
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, container_layout, scroll_area)
-  end
-
-  -- Create search field at top
-  local search_input_success, search_input = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, "Search properties...")
-  if search_input_success then
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, content_layout, search_input)
-    M._search_input = search_input
-
-    -- Connect text changed handler directly
-    local handler_name = "inspector_search_handler"
-    _G[handler_name] = function()
-      local current_text_success, current_text = pcall(qt_constants.PROPERTIES.GET_TEXT, search_input)
-      if current_text_success then
-        M.apply_search_filter(current_text or "")
-      end
-    end
-
-    -- Use C++ function directly - call with pcall to handle if not yet registered
-    local success, err = pcall(function()
-      qt_set_line_edit_text_changed_handler(search_input, handler_name)
-    end)
-
-    if not success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Text changed handler not available: " .. tostring(err))
-    end
-  end
-
-  -- Create selection status label
-  local selection_label_success, selection_label = pcall(qt_constants.WIDGET.CREATE_LABEL, "No clip selected")
-  if selection_label_success then
-    pcall(qt_constants.PROPERTIES.SET_STYLE, selection_label, [[
-      QLabel {
-        background: #3a3a3a;
-        color: white;
-        padding: 10px;
-        font-size: 14px;
-        font-weight: bold;
-      }
-    ]])
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, content_layout, selection_label)
-    M._selection_label = selection_label
-  end
 
   -- Create Apply button for multi-edit (hidden by default)
   local apply_button_success, apply_button = pcall(qt_constants.WIDGET.CREATE_BUTTON, "Apply Changes")
@@ -288,43 +879,13 @@ function M.create_schema_driven_inspector()
     end)
   end
 
-  -- Create collapsible sections from metadata schemas
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Starting schema loop...")
-  if schemas then
-    for section_name, schema in pairs(schemas) do
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Processing schema: " .. section_name)
-      local section_result = collapsible_section.create_section(section_name, M._content_widget)
-      if section_result and section_result.success and section_result.return_values then
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Section created successfully: " .. section_name)
+  -- Add scroll area after header widgets so content lists scroll independently
+  pcall(qt_constants.LAYOUT.ADD_WIDGET, root_layout, scroll_area)
+  pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, root_layout, scroll_area, 1)
 
-        -- Store section and field names for filtering
-        M._sections[section_name] = {
-          section_obj = section_result.return_values.section,
-          widget = section_result.return_values.section_widget,
-          fields = {}
-        }
-
-        -- Add schema fields to the section
-        for _, field in ipairs(schema.fields) do
-          M.add_schema_field_to_section(section_result.return_values.section, field)
-          -- Track field names for search
-          table.insert(M._sections[section_name].fields, field.label or field.name or "")
-        end
-
-        -- Add section to content layout with AlignTop to prevent excessive spacing
-        local add_success, add_error = pcall(qt_constants.LAYOUT.ADD_WIDGET, content_layout, section_result.return_values.section_widget, "AlignTop")
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Add section to layout: " .. section_name .. " success=" .. tostring(add_success) .. " error=" .. tostring(add_error))
-
-        if add_success then
-          pcall(qt_constants.DISPLAY.SHOW, section_result.return_values.section_widget)
-        end
-      else
-        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Failed to create section: " .. section_name)
-      end
-    end
-  else
-    logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No schemas available!")
-  end
+  -- Pre-build schema sections (hidden by default)
+  build_schema_for_id("clip")
+  build_schema_for_id("sequence")
 
   -- Add stretch at the end to push all content to the top
   pcall(qt_constants.LAYOUT.ADD_STRETCH, content_layout, 1)
@@ -334,541 +895,6 @@ function M.create_schema_driven_inspector()
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] ✅ Schema-driven inspector created")
   return error_system.create_success({message = "Schema-driven inspector created successfully"})
-end
-
-function M.add_schema_field_to_section(section, field)
-    -- Based on original working metadata_system.lua implementation
-    local field_type = field.type
-    local label = field.label
-
-    -- print("DEBUG FIELD TYPE: label=" .. label .. ", field_type=" .. tostring(field_type) .. ", field.min=" .. tostring(field.min) .. ", field.max=" .. tostring(field.max))
-    logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Creating field: " .. label .. " (type: " .. field_type .. ")")
-    
-    -- Create DaVinci Resolve style horizontal layout: right-aligned label + narrow gutter + field
-    local field_container_success, field_container = pcall(qt_constants.WIDGET.CREATE)
-    if not field_container_success or not field_container then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to create field container for: " .. label)
-        return
-    end
-
-
-    -- Create horizontal layout for label+field pair (movie credits style)
-    local field_layout_success, field_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
-    if not field_layout_success or not field_layout then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to create field layout for: " .. label)
-        return
-    end
-
-    -- Set layout on container
-    local set_layout_success, set_layout_error = pcall(qt_constants.LAYOUT.SET_ON_WIDGET, field_container, field_layout)
-    if not set_layout_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to set field layout: " .. tostring(set_layout_error))
-        return
-    end
-
-    -- Configure tight spacing and zero margins for DaVinci Resolve professional layout
-    local field_spacing_success, field_spacing_error = pcall(qt_constants.LAYOUT.SET_SPACING, field_layout, 2)
-    if not field_spacing_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field spacing: " .. tostring(field_spacing_error))
-    end
-
-    -- Add right margin to match left indentation for centered appearance
-    local field_margins_success, field_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, field_layout, 0, 2, 4, 2)
-    if not field_margins_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field margins: " .. tostring(field_margins_error))
-    end
-
-    -- Create label for the field (empty label for checkboxes to maintain alignment)
-    local label_text = (field_type == "boolean") and "" or label
-    local label_success, label_widget = pcall(qt_constants.WIDGET.CREATE_LABEL, label_text)
-    if label_success and label_widget then
-        -- Text-aligned layout: labels width based on longest label text + small indent
-        -- Note: 4px top padding to align baseline with QLineEdit (which has 2px padding + 1px border)
-        local label_style = [[
-            QLabel {
-                color: ]] .. ui_constants.COLORS.GENERAL_LABEL_COLOR .. [[;
-                font-size: ]] .. ui_constants.FONTS.DEFAULT_FONT_SIZE .. [[;
-                font-weight: normal;
-                padding: 4px 6px 2px 4px;
-                min-width: 100px;
-            }
-        ]]
-        local label_style_success, label_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, label_widget, label_style)
-        if not label_style_success then
-            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to apply DaVinci style to label '" .. label .. "': " .. tostring(label_style_error))
-        end
-
-        -- Set right alignment using proper Qt alignment (movie credits style)
-        local label_alignment_success, label_alignment_error = pcall(qt_constants.PROPERTIES.SET_ALIGNMENT, label_widget, qt_constants.PROPERTIES.ALIGN_RIGHT)
-        if not label_alignment_success then
-            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set label right alignment: " .. tostring(label_alignment_error))
-        end
-
-        -- Set fixed size policy for labels to maintain consistent text-aligned width
-        local label_size_policy_success, label_size_policy_error = pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, label_widget, 0, 1)
-        if not label_size_policy_success then
-            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set label size policy: " .. tostring(label_size_policy_error))
-        end
-
-        -- Add label to horizontal layout (left side) with baseline alignment
-        local add_label_success, add_label_error = pcall(qt_constants.LAYOUT.ADD_WIDGET, field_layout, label_widget, "AlignBaseline")
-        if not add_label_success then
-            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to add label to field layout: " .. tostring(add_label_error))
-        end
-    end
-
-    -- Create control widget based on field type
-    local control_success, control_widget
-    -- print("DEBUG: Field type for '" .. label .. "': " .. tostring(field_type) .. ", min=" .. tostring(field.min) .. ", max=" .. tostring(field.max))
-
-    if field_type == "string" then
-        -- Rent widget from pool instead of creating new one
-        control_widget = widget_pool.rent("line_edit", {
-            text = field.default or "",
-            placeholder = ""
-        })
-        control_success = (control_widget ~= nil)
-        if control_success then
-            logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Rented line edit widget from pool")
-        end
-
-    elseif field_type == "integer" then
-        -- Check if field has min/max range defined - if so, create slider + line edit
-        if field.min and field.max then
-            -- Create container widget for slider + line edit
-            local container_success, container_widget = pcall(qt_constants.WIDGET.CREATE)
-            if container_success then
-                -- Create horizontal layout for slider + value display
-                local hbox_success, hbox_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
-                if hbox_success then
-                    control_success, control_widget = true, container_widget
-                    -- Set layout on container widget
-                    pcall(qt_constants.LAYOUT.SET_LAYOUT, container_widget, hbox_layout)
-                    pcall(qt_constants.LAYOUT.SET_SPACING, hbox_layout, 4)
-                    pcall(qt_constants.LAYOUT.SET_MARGINS, hbox_layout, 0, 0, 0, 0)
-
-                    -- Create slider widget
-                    local slider_success, slider_widget = pcall(qt_constants.WIDGET.CREATE_SLIDER, "horizontal")
-                    if slider_success then
-                        -- Set slider range (integers can be used directly)
-                        pcall(qt_constants.PROPERTIES.SET_SLIDER_RANGE, slider_widget, field.min, field.max)
-                        pcall(qt_constants.PROPERTIES.SET_SLIDER_VALUE, slider_widget, field.default or field.min)
-
-                        -- Style slider to match DaVinci Resolve
-                        local slider_style =
-                            "QSlider::groove:horizontal { " ..
-                            "background: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                            "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                            "height: 4px; " ..
-                            "border-radius: 2px; " ..
-                            "} " ..
-                            "QSlider::handle:horizontal { " ..
-                            "background: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                            "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                            "width: 12px; " ..
-                            "margin: -4px 0; " ..
-                            "border-radius: 6px; " ..
-                            "} " ..
-                            "QSlider::handle:horizontal:hover { " ..
-                            "background: " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                            "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                            "}"
-                        pcall(qt_constants.PROPERTIES.SET_STYLE, slider_widget, slider_style)
-                        pcall(qt_constants.LAYOUT.ADD_WIDGET_TO_LAYOUT, hbox_layout, slider_widget)
-                    end
-
-                    -- Create line edit for numeric value display
-                    local line_edit_success, line_edit_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or field.min or 0))
-                    if line_edit_success then
-                        -- Style line edit to match DaVinci Resolve
-                        local line_edit_style =
-                            "QLineEdit { " ..
-                            "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                            "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                            "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                            "border-radius: 3px; " ..
-                            "padding: 2px 6px; " ..
-                            "min-width: 50px; " ..
-                            "max-width: 80px; " ..
-                            "} " ..
-                            "QLineEdit:focus { " ..
-                            "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                            "background-color: " .. ui_constants.COLORS.FIELD_FOCUS_BACKGROUND_COLOR .. "; " ..
-                            "}"
-                        pcall(qt_constants.PROPERTIES.SET_STYLE, line_edit_widget, line_edit_style)
-                        pcall(qt_constants.LAYOUT.ADD_WIDGET_TO_LAYOUT, hbox_layout, line_edit_widget)
-                    end
-                end
-            else
-                control_success = false
-            end
-        else
-            -- No range defined, use simple line edit from pool
-            control_widget = widget_pool.rent("line_edit", {
-                text = tostring(field.default or 0)
-            })
-            control_success = (control_widget ~= nil)
-        end
-
-    elseif field_type == "double" then
-        -- Check if field has min/max range defined - if so, create slider + text field
-        if field.min and field.max then
-            -- Create slider widget
-            local slider_success, slider_widget = pcall(qt_constants.WIDGET.CREATE_SLIDER, "horizontal")
-            if slider_success then
-                -- Set slider range (convert double to int scale: multiply by 100 for 2 decimal precision)
-                local scale = 100
-                local min_val = math.floor(field.min * scale)
-                local max_val = math.floor(field.max * scale)
-                local current_val = math.floor((field.default or field.min) * scale)
-                pcall(qt_constants.PROPERTIES.SET_SLIDER_RANGE, slider_widget, min_val, max_val)
-                pcall(qt_constants.PROPERTIES.SET_SLIDER_VALUE, slider_widget, current_val)
-
-                -- Style slider to match DaVinci Resolve
-                local slider_style =
-                    "QSlider { " ..
-                    "margin-right: 4px; " ..  -- Space between slider and text field
-                    "} " ..
-                    "QSlider::groove:horizontal { " ..
-                    "background: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                    "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                    "height: 4px; " ..
-                    "border-radius: 2px; " ..
-                    "} " ..
-                    "QSlider::handle:horizontal { " ..
-                    "background: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                    "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                    "width: 12px; " ..
-                    "margin: -4px 0; " ..
-                    "border-radius: 6px; " ..
-                    "} " ..
-                    "QSlider::handle:horizontal:hover { " ..
-                    "background: " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                    "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                    "}"
-                pcall(qt_constants.PROPERTIES.SET_STYLE, slider_widget, slider_style)
-
-                -- Use slider as the control widget
-                control_success, control_widget = true, slider_widget
-            else
-                -- Fallback to line edit if slider creation fails
-                control_success, control_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or field.min or 0.0))
-            end
-        else
-            -- No range defined, use simple line edit from pool
-            control_widget = widget_pool.rent("line_edit", {
-                text = tostring(field.default or 0.0)
-            })
-            control_success = (control_widget ~= nil)
-        end
-
-    elseif field_type == "dropdown" then
-        -- Create combobox widget
-        local combobox_success, combobox_widget = pcall(qt_constants.WIDGET.CREATE_COMBOBOX)
-        if combobox_success then
-            control_success, control_widget = true, combobox_widget
-            -- Add items from options
-            if field.options then
-                for _, option in ipairs(field.options) do
-                    pcall(qt_constants.PROPERTIES.ADD_COMBOBOX_ITEM, control_widget, option)
-                end
-            end
-            -- Set current selection
-            if field.default then
-                pcall(qt_constants.PROPERTIES.SET_COMBOBOX_CURRENT_TEXT, control_widget, tostring(field.default))
-            end
-            -- Style combobox to match DaVinci Resolve
-            local combobox_style =
-                "QComboBox { " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                "border-radius: 3px; " ..
-                "padding: 2px 6px; " ..
-                "} " ..
-                "QComboBox:focus { " ..
-                "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                "} " ..
-                "QComboBox::drop-down { " ..
-                "border: none; " ..
-                "} " ..
-                "QComboBox::down-arrow { " ..
-                "image: none; " ..
-                "border-left: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                "width: 12px; " ..
-                "}"
-            pcall(qt_constants.PROPERTIES.SET_STYLE, control_widget, combobox_style)
-        else
-            control_success = false
-        end
-
-    elseif field_type == "boolean" then
-        -- Rent checkbox widget from pool
-        control_widget = widget_pool.rent("checkbox", {
-            label = label,
-            checked = field.default or false
-        })
-        control_success = (control_widget ~= nil)
-
-    else
-        -- Default to line edit for unknown types, from pool
-        control_widget = widget_pool.rent("line_edit", {
-            text = tostring(field.default or "")
-        })
-        control_success = (control_widget ~= nil)
-    end
-
-    if not control_success or not control_widget then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to create control widget for field: " .. label)
-        return
-    end
-
-    -- Store widget reference with field key for data binding
-    local field_key = field.key or label:lower():gsub("%s+", "_")
-    M._field_widgets[field_key] = {
-        widget = control_widget,
-        field = field
-    }
-
-    -- Wire up change handler for text fields to save data
-    -- Skip for double fields with min/max (those use slider+line edit container)
-    local is_slider_field = field_type == "double" and field.min and field.max
-    if (field_type == "string" or field_type == "integer" or field_type == "double") and not is_slider_field then
-        -- Use widget pool's signal connection tracking
-        widget_pool.connect_signal(control_widget, "textChanged", function(new_text)
-            if type(M.save_field_value) ~= "function" then
-                -- Module is still initializing; skip until save handler is ready
-                return
-            end
-            if field_updates_suppressed() then
-                return
-            end
-            -- Convert text to appropriate type
-            local typed_value = new_text
-            if field_type == "integer" then
-                typed_value = tonumber(new_text) or 0
-            elseif field_type == "double" then
-                typed_value = tonumber(new_text) or 0.0
-            end
-
-            M.save_field_value(field_key, typed_value)
-        end)
-    end
-
-    -- Add field widget to horizontal layout (right side) with baseline alignment
-    local add_field_success, add_field_error = pcall(qt_constants.LAYOUT.ADD_WIDGET, field_layout, control_widget, "AlignBaseline")
-    if not add_field_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to add field to layout: " .. tostring(add_field_error))
-    end
-
-    -- For slider fields with min/max, also add a text field
-    if field_type == "double" and field.min and field.max then
-        local text_widget_success, text_widget = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default or field.min or 0.0))
-        if text_widget_success then
-            local text_style =
-                "QLineEdit { " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_BACKGROUND_COLOR .. "; " ..
-                "color: " .. ui_constants.COLORS.FIELD_TEXT_COLOR .. "; " ..
-                "border: 1px solid " .. ui_constants.COLORS.FIELD_BORDER_COLOR .. "; " ..
-                "border-radius: 3px; " ..
-                "padding: 2px 6px; " ..
-                "min-width: 50px; " ..
-                "max-width: 80px; " ..
-                "} " ..
-                "QLineEdit:focus { " ..
-                "border: 1px solid " .. ui_constants.COLORS.FOCUS_BORDER_COLOR .. "; " ..
-                "background-color: " .. ui_constants.COLORS.FIELD_FOCUS_BACKGROUND_COLOR .. "; " ..
-                "}"
-            pcall(qt_constants.PROPERTIES.SET_STYLE, text_widget, text_style)
-            pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, text_widget, "Fixed", "Fixed")
-            pcall(qt_constants.LAYOUT.ADD_WIDGET, field_layout, text_widget, "AlignBaseline")
-        end
-    end
-
-    -- Set stretch factor for field to expand and fill remaining space after fixed-width labels
-    local field_stretch_success, field_stretch_error = pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, field_layout, control_widget, 1)
-    if not field_stretch_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field stretch factor: " .. tostring(field_stretch_error))
-    end
-
-    -- Set responsive size policy for input fields: horizontal expanding, vertical minimum
-    local field_size_policy_success, field_size_policy_error = pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, control_widget, 7, 1)
-    if not field_size_policy_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to set field size policy: " .. tostring(field_size_policy_error))
-    end
-
-    -- Show the field container with proper visibility chain
-    local show_container_success, show_container_error = pcall(qt_constants.DISPLAY.SHOW, field_container)
-    if not show_container_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Warning: Failed to show field container: " .. tostring(show_container_error))
-    end
-
-    -- Add the complete field container to section (DaVinci Resolve movie credits layout)
-    if section and section.addContentWidget then
-        local add_result = section:addContentWidget(field_container)
-        if add_result and add_result.success == false then
-            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Failed to add field '" .. label .. "' to section")
-        end
-    else
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "No valid section provided for field: " .. label)
-    end
-end
-
-function M.create_collapsible_section(parent_layout, section_name, schema)
-  -- Create section header with triangle
-  local is_collapsed = false
-  local header_success, header_label = pcall(qt_constants.WIDGET.CREATE_LABEL, "▼ " .. section_name)
-
-  -- Create content container
-  local container_success, container = pcall(qt_constants.WIDGET.CREATE)
-  if not container_success then return end
-
-  local container_layout_success, container_layout = pcall(qt_constants.LAYOUT.CREATE_VBOX)
-  if not container_layout_success then return end
-
-  pcall(qt_constants.LAYOUT.SET_ON_WIDGET, container, container_layout)
-  pcall(qt_constants.CONTROL.SET_LAYOUT_SPACING, container_layout, 2)
-  pcall(qt_constants.CONTROL.SET_LAYOUT_MARGINS, container_layout, 0)
-
-  -- Create properties from schema fields
-  for _, field in ipairs(schema.fields) do
-    M.create_schema_field(container_layout, field)
-  end
-
-  -- Add click handler to toggle collapse
-  if header_success and header_label then
-    local qt_signals = require("core.qt_signals")
-    qt_signals.connect(header_label, "click", function()
-      is_collapsed = not is_collapsed
-      if is_collapsed then
-        pcall(qt_constants.PROPERTIES.SET_TEXT, header_label, "▶ " .. section_name)
-        pcall(qt_constants.DISPLAY.SET_VISIBLE, container, false)
-      else
-        pcall(qt_constants.PROPERTIES.SET_TEXT, header_label, "▼ " .. section_name)
-        pcall(qt_constants.DISPLAY.SET_VISIBLE, container, true)
-      end
-    end)
-
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, parent_layout, header_label)
-  end
-
-  pcall(qt_constants.LAYOUT.ADD_WIDGET, parent_layout, container)
-end
-
-function M.create_schema_field(parent_layout, field)
-  local row_success, row_widget = pcall(qt_constants.WIDGET.CREATE)
-  if not row_success then return end
-
-  local row_layout_success, row_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
-  if not row_layout_success then return end
-
-  pcall(qt_constants.LAYOUT.SET_ON_WIDGET, row_widget, row_layout)
-  pcall(qt_constants.CONTROL.SET_LAYOUT_SPACING, row_layout, 4)
-  pcall(qt_constants.CONTROL.SET_LAYOUT_MARGINS, row_layout, 0)
-
-  -- Create label with fixed width for alignment
-  local label_success, label = pcall(qt_constants.WIDGET.CREATE_LABEL, field.label)
-  if label_success then
-    pcall(qt_constants.PROPERTIES.SET_SIZE, label, 100, 20)  -- Fixed width for label
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, label)
-  end
-
-  -- Create control based on field type
-  local control_success, control
-  if field.type == "string" or field.type == "integer" or field.type == "double" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default))
-  elseif field.type == "boolean" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default and "true" or "false")
-  elseif field.type == "dropdown" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default)
-  elseif field.type == "text_area" then
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, field.default)
-  else
-    control_success, control = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(field.default))
-  end
-
-  if control_success then
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, control)
-    -- Make control stretch to fill available space
-    pcall(qt_constants.CONTROL.SET_LAYOUT_STRETCH_FACTOR, row_layout, control, 1)
-  end
-
-  pcall(qt_constants.LAYOUT.ADD_WIDGET, parent_layout, row_widget)
-end
-
-function M.create_property_section(parent_layout, section_name, properties)
-  -- Create section header
-  local header_success, header_label = pcall(qt_constants.WIDGET.CREATE_LABEL, "● " .. section_name)
-  if header_success and header_label then
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, parent_layout, header_label)
-  end
-
-  -- Create properties container
-  local container_success, container = pcall(qt_constants.WIDGET.CREATE)
-  if not container_success or not container then
-    return false
-  end
-
-  local container_layout_success, container_layout = pcall(qt_constants.LAYOUT.CREATE_VBOX)
-  if not container_layout_success or not container_layout then
-    return false
-  end
-
-  pcall(qt_constants.LAYOUT.SET_ON_WIDGET, container, container_layout)
-
-  -- Add properties
-  for _, prop in ipairs(properties) do
-    M.create_property_control(container_layout, prop)
-  end
-
-  pcall(qt_constants.LAYOUT.ADD_WIDGET, parent_layout, container)
-  return true
-end
-
-function M.create_property_control(parent_layout, property)
-  local row_success, row_widget = pcall(qt_constants.WIDGET.CREATE)
-  if not row_success or not row_widget then
-    return false
-  end
-
-  local row_layout_success, row_layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
-  if not row_layout_success or not row_layout then
-    return false
-  end
-
-  pcall(qt_constants.LAYOUT.SET_ON_WIDGET, row_widget, row_layout)
-
-  -- Create label
-  local label_success, label = pcall(qt_constants.WIDGET.CREATE_LABEL, property.name)
-  if label_success and label then
-    pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, label)
-  end
-
-  -- Create control based on type
-  if property.type == "text" then
-    local input_success, input = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, property.value)
-    if input_success and input then
-      pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, input)
-    end
-  elseif property.type == "number" then
-    local input_success, input = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(property.value))
-    if input_success and input then
-      pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, input)
-    end
-  elseif property.type == "slider" then
-    local input_success, input = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, tostring(property.value))
-    if input_success and input then
-      pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, input)
-    end
-  elseif property.type == "dropdown" then
-    local input_success, input = pcall(qt_constants.WIDGET.CREATE_LINE_EDIT, property.value)
-    if input_success and input then
-      pcall(qt_constants.LAYOUT.ADD_WIDGET, row_layout, input)
-    end
-  end
-
-  pcall(qt_constants.LAYOUT.ADD_WIDGET, parent_layout, row_widget)
-  return true
 end
 
 function M.set_filter(text)
@@ -901,6 +927,11 @@ function M.apply_search_filter(query)
   local search_text = M._filter:lower()
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Applying search filter: '" .. search_text .. "'")
+
+  if not M._schemas_active then
+    set_sections_visible(false)
+    return
+  end
 
   -- If empty search, show all sections
   if search_text == "" then
@@ -964,37 +995,61 @@ function M.ensure_search_row()
 end
 
 -- Save field value to current clip
-function M.save_field_value(field_key, value)
-  if not M._current_clip then
-    -- Inspector loads its schema before any timeline selection exists; suppress saves until we have a clip.
+function M.save_field_value(field_key, explicit_value)
+  if M._multi_edit_mode then
     return
   end
   if field_updates_suppressed() then
     return
   end
 
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Saving field '%s' = '%s' to clip %s", field_key, tostring(value), M._current_clip.id))
+  local entry = M._field_widgets[field_key]
+  if not entry then
+    return
+  end
 
-  -- Update via command system for proper undo/redo and persistence
-  local Command = require("command")
-  local command_manager = require("core.command_manager")
+  local property_type = PROPERTY_TYPE_MAP[entry.field_type]
+  if not property_type then
+    logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+      string.format("[inspector][view] Unsupported field type '%s' for field '%s'", tostring(entry.field_type), tostring(field_key)))
+    return
+  end
 
-  local cmd = Command.create("SetClipProperty", "default_project")
-  cmd:set_parameter("clip_id", M._current_clip.id)
-  cmd:set_parameter("property_name", field_key)
-  cmd:set_parameter("value", value)
+  local inspectable = M._current_inspectable
+  if not inspectable then
+    return
+  end
 
-  local result = command_manager.execute(cmd)
+  local value = explicit_value
+  if value == nil then
+    value = read_widget_value(entry)
+  end
 
-  if result.success then
-    -- Update local reference (command already updated database)
-    M._current_clip[field_key] = value
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      string.format("[inspector][view] ✅ Saved field '%s' to clip %s", field_key, M._current_clip.id))
+  if value == nil then
+    resume_field_updates()
+    return
+  end
+
+  local normalized_default = normalize_default_value(entry.field_type, entry.field and entry.field.default)
+
+  local payload = {
+    value = value,
+    property_type = property_type,
+    default_value = normalized_default
+  }
+
+  suppress_field_updates()
+  local ok, err = inspectable:set(field_key, payload)
+  if ok then
+    if entry.set_mixed then
+      entry:set_mixed(false)
+    end
+    entry:set_value(value)
   else
     logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      string.format("[inspector][view] ❌ Failed to save field '%s': %s", field_key, result.error_message or "unknown error"))
+      string.format("[inspector][view] Failed to save field '%s': %s", field_key, tostring(err)))
   end
+  resume_field_updates()
 end
 
 -- Expose save function globally for manual testing
@@ -1004,107 +1059,57 @@ end
 
 -- Save all modified fields from widgets back to current clip
 function M.save_all_fields()
-  if not M._current_clip then
-    return
-  end
   if field_updates_suppressed() then
     return
   end
+  if not M._current_inspectable then
+    return
+  end
 
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Saving all modified fields for clip: " .. M._current_clip.id)
-
-  -- Read all widget values and update clip
-  for field_key, field_info in pairs(M._field_widgets) do
-    local widget = field_info.widget
-    local field_type = field_info.field.type
-    local field = field_info.field
-    local typed_value = nil
-
-    -- Get value based on widget type
-    if field_type == "boolean" then
-      -- Checkbox widget
-      local get_checked_success, is_checked = pcall(qt_constants.PROPERTIES.GET_CHECKED, widget)
-      if get_checked_success then
-        typed_value = is_checked
+  for field_key, entry in pairs(M._field_widgets) do
+    local value = read_widget_value(entry)
+    if value ~= nil then
+      local property_type = PROPERTY_TYPE_MAP[entry.field_type]
+      if property_type then
+        M._current_inspectable:set(field_key, {
+          value = value,
+          property_type = property_type,
+          default_value = entry.field and entry.field.default
+        })
       end
-    elseif field_type == "dropdown" then
-      -- Combobox widget
-      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT, widget)
-      if get_text_success then
-        typed_value = text_value
-      end
-    elseif field_type == "double" and field.min and field.max then
-      -- Slider widget (for ranged doubles)
-      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
-      if get_value_success then
-        -- Convert scaled int back to double
-        typed_value = slider_value / 100.0
-      end
-    elseif field_type == "integer" and field.min and field.max then
-      -- Could be slider or line edit - try both
-      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
-      if get_value_success then
-        typed_value = slider_value
-      else
-        -- Try as line edit
-        local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
-        if get_text_success and text_value then
-          typed_value = tonumber(text_value) or 0
-        end
-      end
-    else
-      -- Line edit widget (string, integer, double without range)
-      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
-      if get_text_success and text_value then
-        if field_type == "integer" then
-          typed_value = tonumber(text_value) or 0
-        elseif field_type == "double" then
-          typed_value = tonumber(text_value) or 0.0
-        else
-          typed_value = text_value
-        end
-      end
-    end
-
-    -- Update clip if value changed and we got a value
-    if typed_value ~= nil and M._current_clip[field_key] ~= typed_value then
-      M._current_clip[field_key] = typed_value
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Updated %s.%s = %s", M._current_clip.id, field_key, tostring(typed_value)))
     end
   end
 end
 
 -- Load clip data into widgets
-function M.load_clip_data(clip)
-  if not clip then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No clip to load")
+function M.load_clip_data(inspectable)
+  if not inspectable then
+    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No inspectable entity to load")
     return
   end
 
-  -- Save previous clip's data before loading new one
-  if M._current_clip and M._current_clip ~= clip then
-    M.save_all_fields()
-  end
-
-  M._current_clip = clip
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Loading clip data: " .. clip.name)
+  M._current_inspectable = inspectable
+  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Loading inspectable data for schema " .. inspectable:get_schema_id())
 
   suppress_field_updates()
 
-  -- Populate all field widgets from clip data
-  for field_key, field_info in pairs(M._field_widgets) do
-    local widget = field_info.widget
-    local value = clip[field_key] or field_info.field.default or ""
+  for field_key, entry in pairs(M._field_widgets) do
+    if entry.clear_placeholder then
+      entry:clear_placeholder()
+    end
+    if entry.set_mixed then
+      entry:set_mixed(false)
+    end
 
-    -- Convert value to string for display
-    local display_value = tostring(value)
+    local ok, value = pcall(inspectable.get, inspectable, field_key)
+    if not ok then
+      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+        string.format("[inspector][view] Failed to read field '%s': %s", field_key, tostring(value)))
+      value = nil
+    end
 
-    -- Clear any placeholder text from multi-edit mode
-    pcall(qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT, widget, "")
-
-    local set_text_success, set_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, widget, display_value)
-    if not set_text_success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, string.format("[inspector][view] Failed to set field '%s': %s", field_key, tostring(set_text_error)))
+    if entry.set_value then
+      entry:set_value(value)
     end
   end
 
@@ -1112,44 +1117,58 @@ function M.load_clip_data(clip)
 end
 
 -- Update inspector when selection changes
-function M.load_multi_clip_data(clips)
-  if not clips or #clips == 0 then return end
+function M.load_multi_clip_data(inspectables)
+  if not inspectables or #inspectables == 0 then
+    return
+  end
 
-  M._selected_clips = clips
   M._multi_edit_mode = true
-  M._current_clip = nil
+  M._multi_inspectables = inspectables
+  M._current_inspectable = nil
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Loading multi-clip data: " .. #clips .. " clips")
+      "[inspector][view] Loading multi-inspectable data: " .. #inspectables .. " items")
 
   suppress_field_updates()
 
-  -- For each field, check if all clips have the same value
-  for field_key, field_info in pairs(M._field_widgets) do
-    local widget = field_info.widget
-    local first_value = clips[1][field_key]
+  for field_key, entry in pairs(M._field_widgets) do
+    local ok_first, first_value = pcall(inspectables[1].get, inspectables[1], field_key)
+    if not ok_first then
+      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
+        string.format("[inspector][view] Failed to read field '%s' from first inspectable: %s",
+          field_key, tostring(first_value)))
+      first_value = nil
+    end
+
     local all_same = true
 
-    -- Check if all clips have the same value
-    for i = 2, #clips do
-      if clips[i][field_key] ~= first_value then
+    for i = 2, #inspectables do
+      local ok_candidate, candidate = pcall(inspectables[i].get, inspectables[i], field_key)
+      if not ok_candidate or candidate ~= first_value then
         all_same = false
         break
       end
     end
 
-    -- Display value or placeholder
     if all_same then
-      local display_value = tostring(first_value or field_info.field.default or "")
-      pcall(qt_constants.PROPERTIES.SET_TEXT, widget, display_value)
+      if entry.clear_placeholder then
+        entry:clear_placeholder()
+      end
+      if entry.set_mixed then
+        entry:set_mixed(false)
+      end
+      if entry.set_value then
+        entry:set_value(first_value)
+      end
     else
-      -- Show placeholder for mixed values
-      pcall(qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT, widget, "<mixed>")
-      pcall(qt_constants.PROPERTIES.SET_TEXT, widget, "")
+      if entry.set_mixed then
+        entry:set_mixed(true)
+      elseif entry.set_value then
+        entry:set_value(nil)
+      end
     end
   end
 
-  -- Show Apply button
   if M._apply_button then
     pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, true)
   end
@@ -1157,216 +1176,46 @@ function M.load_multi_clip_data(clips)
   resume_field_updates()
 end
 
-function M.apply_multi_edit()
-  if not M._multi_edit_mode or #M._selected_clips == 0 then
+local function apply_multi_edit_new()
+  if not M._multi_edit_mode or not M._multi_inspectables or #M._multi_inspectables == 0 then
     return
   end
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Applying multi-edit to " .. #M._selected_clips .. " clips")
+      "[inspector][view] Applying multi-edit to " .. #M._multi_inspectables .. " items")
 
-  local db = require("core.database")
-
-  -- Read current values from widgets and apply to all selected clips
-  for field_key, field_info in pairs(M._field_widgets) do
-    local widget = field_info.widget
-    local field_type = field_info.field.type
-    local field = field_info.field
-    local typed_value = nil
-
-    -- Get value based on widget type
-    if field_type == "boolean" then
-      local get_checked_success, is_checked = pcall(qt_constants.PROPERTIES.GET_CHECKED, widget)
-      if get_checked_success then
-        typed_value = is_checked
-      end
-    elseif field_type == "dropdown" then
-      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT, widget)
-      if get_text_success and text_value ~= "" then
-        typed_value = text_value
-      end
-    elseif field_type == "double" and field.min and field.max then
-      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
-      if get_value_success then
-        typed_value = slider_value / 100.0
-      end
-    elseif field_type == "integer" and field.min and field.max then
-      local get_value_success, slider_value = pcall(qt_constants.PROPERTIES.GET_SLIDER_VALUE, widget)
-      if get_value_success then
-        typed_value = slider_value
-      else
-        local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
-        if get_text_success and text_value and text_value ~= "" then
-          typed_value = tonumber(text_value) or 0
-        end
-      end
-    else
-      -- Line edit widget
-      local get_text_success, text_value = pcall(qt_constants.PROPERTIES.GET_TEXT, widget)
-      if get_text_success and text_value and text_value ~= "" then
-        if field_type == "integer" then
-          typed_value = tonumber(text_value) or 0
-        elseif field_type == "double" then
-          typed_value = tonumber(text_value) or 0.0
-        else
-          typed_value = text_value
-        end
-      end
-    end
-
-    -- Apply to all selected clips via command system
-    if typed_value ~= nil then
-      local Command = require("command")
-      local command_manager = require("core.command_manager")
-      local json = require("dkjson")
-
-      -- Build array of command specs for batch operation
-      local command_specs = {}
-      for _, clip in ipairs(M._selected_clips) do
-        table.insert(command_specs, {
-          command_type = "SetClipProperty",
-          parameters = {
-            clip_id = clip.id,
-            property_name = field_key,
-            value = typed_value
-          }
-        })
-      end
-
-      -- Execute as single batch command (single undo entry)
-      local commands_json = json.encode(command_specs)
-      local batch_cmd = Command.create("BatchCommand", "default_project")
-      batch_cmd:set_parameter("commands_json", commands_json)
-
-      local result = command_manager.execute(batch_cmd)
-
-      if result.success then
-        -- Update local references for all clips
-        for _, clip in ipairs(M._selected_clips) do
-          clip[field_key] = typed_value
-        end
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            string.format("[inspector][view] Batch updated %d clips: %s = %s",
-              #M._selected_clips, field_key, tostring(typed_value)))
-      else
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            string.format("[inspector][view] Batch update failed: %s",
-              result.error_message or "unknown error"))
-      end
+  local pending = {}
+  for field_key, entry in pairs(M._field_widgets) do
+    local value = read_widget_value(entry)
+    if value ~= nil then
+      pending[field_key] = value
     end
   end
-end
 
-function M.update_selection(selected_items, source_panel)
-  selected_items = selected_items or {}
-  source_panel = source_panel or "timeline"
-
-  if source_panel ~= "timeline" then
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      string.format("[inspector][view] Selection from %s (%d item(s))", source_panel, #selected_items))
-
-    M._current_clip = nil
-    M._selected_clips = {}
-    M._multi_edit_mode = false
-    reset_all_fields()
-    if M._apply_button then
-      pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
-    end
-
-    if M._selection_label then
-      local label_text
-      if source_panel == "project_browser" then
-        if #selected_items == 0 then
-          label_text = "Project Browser: No selection"
-        elseif #selected_items == 1 then
-          local item = selected_items[1]
-          if item.item_type == "media" then
-            label_text = string.format("Project Browser Media:\n%s", item.name or item.file_name or item.media_id or "Untitled")
-          elseif item.item_type == "timeline" then
-            label_text = string.format("Project Browser Timeline:\n%s", item.name or item.id or "Untitled")
-          else
-            label_text = "Project Browser: 1 item selected"
-          end
-        else
-          label_text = string.format("Project Browser: %d items selected", #selected_items)
-        end
-      elseif source_panel == "viewer" then
-        if #selected_items == 0 then
-          label_text = "Viewer: No clip loaded"
-        elseif #selected_items == 1 then
-          local item = selected_items[1]
-          if item.item_type == "viewer_media" then
-            label_text = string.format("Viewer Clip:\n%s", item.name or item.media_id or "Untitled")
-          elseif item.item_type == "viewer_timeline" then
-            label_text = string.format("Viewer Timeline:\n%s", item.name or item.id or "Untitled")
-          else
-            label_text = "Viewer: 1 item selected"
-          end
-        else
-          label_text = string.format("Viewer: %d items selected", #selected_items)
-        end
-      else
-        if #selected_items == 0 then
-          label_text = string.format("%s: No selection", source_panel)
-        else
-          label_text = string.format("%s: %d item(s) selected", source_panel, #selected_items)
-        end
-      end
-
-      local ok, err = pcall(qt_constants.PROPERTIES.SET_TEXT, M._selection_label, label_text)
+  for _, inspectable in ipairs(M._multi_inspectables) do
+    for field_key, value in pairs(pending) do
+      local ok, err = inspectable:set(field_key, value)
       if not ok then
         logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-          "[inspector][view] Failed to update selection label for non-timeline selection: " .. tostring(err))
+            string.format("[inspector][view] Failed to save %s during multi-edit: %s", field_key, tostring(err)))
       end
     end
-    return
   end
 
-  local selected_clips = selected_items
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-    "[inspector][view] Timeline selection changed: " .. #selected_clips .. " clip(s)")
-  M._selected_clips = selected_clips
-
-  if M._selection_label then
-    local label_text = ""
-    if #selected_clips == 1 then
-      local clip = selected_clips[1]
-      label_text = string.format("Timeline Clip: %s\nID: %s\nStart: %dms\nDuration: %dms",
-        clip.name or clip.id, clip.id, clip.start_time or 0, clip.duration or 0)
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Showing clip: " .. (clip.name or clip.id))
-
-      M._multi_edit_mode = false
-      if M._apply_button then
-        pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
+  for field_key, value in pairs(pending) do
+    local entry = M._field_widgets[field_key]
+    if entry then
+      if entry.set_mixed then
+        entry:set_mixed(false)
       end
-
-      M.load_clip_data(clip)
-    elseif #selected_clips > 1 then
-      label_text = string.format("Timeline: %d clips selected", #selected_clips)
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Multiple clips selected")
-
-      M.load_multi_clip_data(selected_clips)
-    else
-      label_text = "Timeline: No clip selected"
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No timeline selection")
-      M._current_clip = nil
-      M._multi_edit_mode = false
-      if M._apply_button then
-        pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
+      if entry.set_value then
+        entry:set_value(value)
       end
-      reset_all_fields()
     end
-
-    local set_text_success, set_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, M._selection_label, label_text)
-    if not set_text_success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Failed to update selection label: " .. tostring(set_text_error))
-    else
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Selection label updated successfully")
-    end
-  else
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No selection label widget available!")
   end
 end
+
+M.apply_multi_edit = apply_multi_edit_new
 
 function M.get_focus_widgets()
   local widgets = {}
@@ -1381,5 +1230,147 @@ function M.get_focus_widgets()
   end
   return widgets
 end
+
+local function resolve_inspectables(selected_items, source_panel)
+  local inspectables = {}
+  local schema_id = nil
+  local names = {}
+
+  for _, item in ipairs(selected_items or {}) do
+    local inspectable = item.inspectable
+
+    if not inspectable then
+      if item.item_type == "timeline_sequence" or item.item_type == "timeline" then
+        local ok, seq = pcall(inspectable_factory.sequence, {
+          sequence_id = item.sequence_id or item.id,
+          project_id = item.project_id,
+          sequence = item.sequence
+        })
+        if ok then
+          inspectable = seq
+        end
+      elseif item.item_type == "timeline_clip" or item.item_type == "master_clip" then
+        if item.clip_id then
+          local ok, clip = pcall(inspectable_factory.clip, {
+            clip_id = item.clip_id,
+            project_id = item.project_id,
+            sequence_id = item.sequence_id,
+            clip = item.clip
+          })
+          if ok then
+            inspectable = clip
+          end
+        end
+      end
+    end
+
+    if inspectable then
+      local current_schema = inspectable:get_schema_id()
+      if schema_id and schema_id ~= current_schema then
+        return {}, nil, { mixed = true }
+      end
+      schema_id = schema_id or current_schema
+      table.insert(inspectables, inspectable)
+      local display = item.display_name
+      if not display and inspectable.get_display_name then
+        display = inspectable:get_display_name()
+      end
+      table.insert(names, display or "")
+    end
+  end
+
+  return inspectables, schema_id, names
+end
+
+local function update_selection_new(selected_items, source_panel)
+  selected_items = selected_items or {}
+  source_panel = source_panel or "timeline"
+
+  if source_panel == "inspector" then
+    return
+  end
+
+  local inspectables, schema_id, names = resolve_inspectables(selected_items, source_panel)
+
+  if not schema_id or #inspectables == 0 then
+    M._current_inspectable = nil
+    M._multi_edit_mode = false
+    M._multi_inspectables = nil
+    M._schemas_active = false
+    set_sections_visible(false)
+    reset_all_fields()
+    if M._apply_button then
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
+    end
+    local message = "Inspector: No editable selection"
+    set_selection_label(message, source_panel == "timeline")
+    return
+  end
+
+  activate_schema(schema_id)
+  M._schemas_active = true
+  set_sections_visible(true)
+  M.apply_search_filter(M._filter)
+
+  local multi_supported = true
+  for _, inspectable in ipairs(inspectables) do
+    if not (inspectable.supports_multi_edit and inspectable:supports_multi_edit()) then
+      multi_supported = false
+      break
+    end
+  end
+
+  if #inspectables == 1 then
+    M._multi_edit_mode = false
+    M._multi_inspectables = nil
+    if M._apply_button then
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
+    end
+    M.load_clip_data(inspectables[1])
+    local label = names[1]
+    if not label and inspectables[1].get_display_name then
+      local ok, display = pcall(inspectables[1].get_display_name, inspectables[1])
+      if ok then
+        label = display
+      end
+    end
+    label = label or "Inspector"
+
+    if schema_id == "sequence" then
+      label = string.format("Timeline: %s", label)
+    else
+      label = string.format("Clip: %s", label)
+    end
+    local include_marks = (source_panel == "timeline" or schema_id == "sequence")
+    set_selection_label(label, include_marks)
+  elseif multi_supported then
+    M._multi_edit_mode = true
+    M._multi_inspectables = inspectables
+    if M._apply_button then
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, true)
+    end
+    local label_prefix = (schema_id == "sequence") and "Timelines" or "Clips"
+    local label = string.format("%s: %d selected", label_prefix, #inspectables)
+    local include_marks = (source_panel == "timeline" or schema_id == "sequence")
+    set_selection_label(label, include_marks)
+    M.load_multi_clip_data(inspectables)
+  else
+    M._multi_edit_mode = false
+    M._multi_inspectables = nil
+    if M._apply_button then
+      pcall(qt_constants.DISPLAY.SET_VISIBLE, M._apply_button, false)
+    end
+
+    local label_prefix = (schema_id == "sequence") and "Timelines" or "Clips"
+    local label = string.format("%s: %d selected (read-only)", label_prefix, #inspectables)
+    local include_marks = (source_panel == "timeline" or schema_id == "sequence")
+    set_selection_label(label, include_marks)
+
+    -- Show the first item's data for context while keeping inspector read-only
+    M.load_clip_data(inspectables[1])
+  end
+end
+
+M.update_selection = update_selection_new
 
 return M

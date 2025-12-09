@@ -1,0 +1,58 @@
+#!/usr/bin/env luajit
+
+package.path = package.path
+    .. ";../src/lua/?.lua"
+    .. ";../src/lua/?/init.lua"
+    .. ";./?.lua"
+    .. ";./?/init.lua"
+
+local Rational = require('core.rational')
+local roll_detector = require('ui.timeline.roll_detector')
+
+local function make_clip(id, track_id, start_value, duration_value, fps_num, fps_den)
+    fps_num = fps_num or 1000
+    fps_den = fps_den or 1
+    return {
+        id = id,
+        track_id = track_id,
+        timeline_start = Rational.new(start_value, fps_num, fps_den),
+        duration = Rational.new(duration_value, fps_num, fps_den),
+        start_value = start_value,
+        duration_value = duration_value,
+        fps_numerator = fps_num,
+        fps_denominator = fps_den,
+        timebase_type = "video_frames",
+        timebase_rate = fps_num / fps_den
+    }
+end
+
+local function always_allow_roll()
+    return true
+end
+
+do
+    local clip_a = make_clip("clip_a", "track_v1", 0, 1000)
+    local clip_b = make_clip("clip_b", "track_v1", 1000, 500)
+    local entries = {
+        {clip = clip_a, edge = "out", distance = 3},
+        {clip = clip_b, edge = "in", distance = 3},
+    }
+
+    local selection, pair = roll_detector.find_best_roll_pair(entries, 250, 1920, always_allow_roll)
+    assert(selection and #selection == 2, "Expected roll selection for clip pair")
+    assert(selection[1].edge_type == "out" and selection[2].edge_type == "in", "Clip pair selection should use in/out edges")
+    assert(pair and pair.roll_kind == "clip_clip", "Expected clip_clip metadata")
+    assert(math.abs((pair.edit_time and pair.edit_time.frames or 0) - 1000) < 1, "Edit time should match clip boundary")
+end
+
+do
+    local clip_a = make_clip("clip_gap", "track_v1", 0, 800)
+    local entries = {
+        {clip = clip_a, edge = "gap_after", distance = 2}
+    }
+
+    local selection, pair = roll_detector.find_best_roll_pair(entries, 400, 1920, always_allow_roll)
+    assert(selection == nil and pair == nil, "Gap-only edge should not trigger roll selection")
+end
+
+print("✅ roll selection tests passed")

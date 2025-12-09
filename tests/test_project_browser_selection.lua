@@ -23,7 +23,7 @@ local media_lookup = {
         id = "media_a",
         name = "Clip A",
         file_name = "clip_a.mov",
-        file_path = "/tmp/clip_a.mov",
+        file_path = "/tmp/jve/clip_a.mov",
         duration = 1500,
         frame_rate = 24,
         width = 1920,
@@ -35,7 +35,7 @@ local media_lookup = {
         id = "media_b",
         name = "Clip B",
         file_name = "clip_b.mov",
-        file_path = "/tmp/clip_b.mov",
+        file_path = "/tmp/jve/clip_b.mov",
         duration = 3200,
         frame_rate = 23.976,
         width = 3840,
@@ -43,6 +43,27 @@ local media_lookup = {
         codec = "H.264",
         metadata = { ["camera:make"] = "Sony" },
     },
+}
+
+local master_lookup = {
+    clip_a = {
+        clip_id = "clip_a",
+        media_id = "media_a",
+        name = "Clip A",
+        duration = 1500,
+        project_id = "default_project",
+        metadata = {},
+        media = media_lookup.media_a
+    },
+    clip_b = {
+        clip_id = "clip_b",
+        media_id = "media_b",
+        name = "Clip B",
+        duration = 3200,
+        project_id = "default_project",
+        metadata = {},
+        media = media_lookup.media_b
+    }
 }
 
 local sequence_lookup = {
@@ -56,14 +77,14 @@ local sequence_lookup = {
     }
 }
 
--- Multi-select two media clips
+-- Multi-select two master clips
 local normalized = browser_state.update_selection({
-    {type = "clip", media_id = "media_a"},
-    {type = "clip", media_id = "media_b"},
-}, { media_lookup = media_lookup })
+    {type = "master_clip", clip_id = "clip_a"},
+    {type = "master_clip", clip_id = "clip_b"},
+}, { media_lookup = media_lookup, master_lookup = master_lookup, project_id = "default_project" })
 
-assert(#normalized == 2, "Expected two media entries after normalization")
-assert(normalized[1].item_type == "media", "Media selection should normalize to item_type=media")
+assert(#normalized == 2, "Expected two master clip entries after normalization")
+assert(normalized[1].item_type == "master_clip", "Selection should normalize to item_type=master_clip")
 assert(normalized[1].metadata["camera:make"] == "Arri", "Metadata JSON should decode for media")
 assert(normalized[2].metadata["camera:make"] == "Sony", "Table metadata should pass through for media")
 assert(last_selection == normalized, "Selection hub listener should receive the same table instance")

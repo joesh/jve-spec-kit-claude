@@ -5,29 +5,32 @@
 
 local M = {}
 local timecode = require("core.timecode")
-local db = require("core.database")
+local Rational = require("core.rational")
+local frame_utils = require("core.frame_utils")
+local profile_scope = require("core.profile_scope")
 
 M.RULER_HEIGHT = 32
+local MIN_LABEL_SPACING = 20
+local AVERAGE_CHAR_WIDTH = 7.0
 
--- Cache sequence frame rate
-local cached_frame_rate = nil
+local BACKGROUND_COLOR = "#1e1e1e"
+local BASELINE_COLOR = "#3b3b3b"
+local MAJOR_TICK_COLOR = "#585858"
+local MEDIUM_TICK_COLOR = "#585858"
+local MINOR_TICK_COLOR = "#585858"
+local LABEL_COLOR = "#b2b2b2"
 
--- Get frame rate from sequence (cached)
-local function get_frame_rate()
-    if cached_frame_rate then
-        return cached_frame_rate
+local BASELINE_HEIGHT = 1
+local MAJOR_TICK_HEIGHT = 10
+local MEDIUM_TICK_HEIGHT = 5
+local MINOR_TICK_HEIGHT = 3
+local LABEL_Y = 18
+
+local function estimate_label_width(label)
+    if not label or label == "" then
+        return 0
     end
-
-    local db_conn = db.get_connection()
-    if db_conn then
-        local query = db_conn:prepare("SELECT frame_rate FROM sequences WHERE id = 'default_sequence'")
-        if query and query:exec() and query:next() then
-            cached_frame_rate = query:value(0) or 30.0
-        end
-    end
-
-    cached_frame_rate = cached_frame_rate or 30.0
-    return cached_frame_rate
+    return #label * AVERAGE_CHAR_WIDTH
 end
 
 -- Create a new timeline ruler widget
@@ -39,6 +42,18 @@ function M.create(widget, state_module)
         widget = widget,
         state = state_module,
     }
+
+    local function get_frame_rate()
+        if state_module and state_module.get_sequence_frame_rate then
+            local rate = state_module.get_sequence_frame_rate()
+            if type(rate) == "table" and rate.fps_numerator then
+                return rate
+            elseif type(rate) == "number" and rate > 0 then
+                return rate
+            end
+        end
+        return frame_utils.default_frame_rate
+    end
 
     -- Render the ruler
     local function render()
@@ -52,48 +67,204 @@ function M.create(widget, state_module)
         -- Clear previous drawing commands
         timeline.clear_commands(ruler.widget)
 
-        -- Get viewport state
-        local viewport_start = state_module.get_viewport_start_time()
-        local viewport_duration = state_module.get_viewport_duration()
-        local viewport_end = viewport_start + viewport_duration
-        local playhead_time = state_module.get_playhead_time()
+        -- Get viewport state (Rational)
+        local viewport_start_rt = state_module.get_viewport_start_time()
+        local viewport_duration_rt = state_module.get_viewport_duration()
+        local viewport_end_rt = viewport_start_rt + viewport_duration_rt
+        local playhead_rt = state_module.get_playhead_position()
 
         -- Ruler background
-        timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, "#2a2a2a")
+        timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
+        timeline.add_rect(ruler.widget, 0, M.RULER_HEIGHT - BASELINE_HEIGHT, width, BASELINE_HEIGHT, BASELINE_COLOR)
 
-        -- Get sequence frame rate
-        local frame_rate = get_frame_rate()
+        local mark_in_rt = state_module.get_mark_in and state_module.get_mark_in()
+        local mark_out_rt = state_module.get_mark_out and state_module.get_mark_out()
+        local explicit_mark_in = state_module.has_explicit_mark_in and state_module.has_explicit_mark_in()
+        local explicit_mark_out = state_module.has_explicit_mark_out and state_module.has_explicit_mark_out()
 
-        -- Calculate appropriate frame-based interval
-        local pixels_per_ms = width / viewport_duration
-        local interval_ms, format_hint, interval_value = timecode.get_ruler_interval(
-            viewport_duration,
-            frame_rate,
-            100,  -- target pixel spacing
-            pixels_per_ms
-        )
+        local function draw_mark_region()
+            if (not mark_in) and (not mark_out) then
+                return
+            end
 
-        -- Draw time markers at frame-accurate positions
-        local start_marker = math.floor(viewport_start / interval_ms) * interval_ms
+            local colors = state_module.colors or {}
+            local fill_color = colors.mark_range_fill
+            if not fill_color then
+                error("timeline_state.colors.mark_range_fill is nil; expected translucent color for mark range overlay")
+            end
+            local edge_color = colors.mark_range_edge or colors.playhead or "#ff6b6b"
+            local handle_width = 2
 
-        for time_ms = start_marker, viewport_end, interval_ms do
-            if time_ms >= viewport_start then
-                local x = state_module.time_to_pixel(time_ms, width)
-
-                if x >= 0 and x <= width then
-                    -- Tick mark
-                    timeline.add_line(ruler.widget, x, M.RULER_HEIGHT - 10, x, M.RULER_HEIGHT, "#555555", 1)
-
-                    -- Timecode label with appropriate precision
-                    local label = timecode.format_ruler_label(time_ms, frame_rate, format_hint)
-                    timeline.add_text(ruler.widget, x + 3, 18, label, "#cccccc")
+            if mark_in_rt and mark_out_rt and mark_out_rt > mark_in_rt then
+                local visible_start = mark_in_rt
+                if visible_start < viewport_start_rt then visible_start = viewport_start_rt end
+                local visible_end = mark_out_rt
+                if visible_end > viewport_end_rt then visible_end = viewport_end_rt end
+                if visible_end > visible_start then
+                    local start_x = state_module.time_to_pixel(visible_start, width)
+                    local end_x = state_module.time_to_pixel(visible_end, width)
+                    if end_x <= start_x then
+                        end_x = start_x + 1
+                    end
+                    local region_width = end_x - start_x
+                    if region_width <= 0 then
+                        region_width = 1
+                    end
+                    timeline.add_rect(ruler.widget, start_x, 0, region_width, M.RULER_HEIGHT, fill_color)
                 end
+            end
+
+            local function draw_handle(time_rt)
+                if not time_rt then
+                    return
+                end
+                if time_rt < viewport_start_rt or time_rt > viewport_end_rt then
+                    return
+                end
+                local x = state_module.time_to_pixel(time_rt, width)
+                local handle_x = x - math.floor(handle_width / 2)
+                if handle_x < 0 then
+                    handle_x = 0
+                end
+                timeline.add_rect(ruler.widget, handle_x, 0, math.max(handle_width, 2), M.RULER_HEIGHT, edge_color)
+            end
+
+            if explicit_mark_in then
+                draw_handle(mark_in)
+            end
+            if explicit_mark_out then
+                draw_handle(mark_out)
             end
         end
 
+        draw_mark_region()
+
+        -- Get sequence frame rate
+        local frame_rate = get_frame_rate()
+        local fps = frame_rate.fps_numerator / frame_rate.fps_denominator
+        if fps <= 0 then
+            fps = 24
+        end
+
+        -- Calculate appropriate frame-based interval
+        local viewport_start_frames = viewport_start_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
+        local viewport_end_frames = viewport_end_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
+        local viewport_duration_frames = viewport_duration_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
+        if viewport_duration_frames <= 0 then
+            return
+        end
+
+        local pixels_per_frame = width / viewport_duration_frames
+        local interval_frames, format_hint, interval_value = timecode.get_ruler_interval(
+            viewport_duration_frames,
+            frame_rate,
+            100,  -- target pixel spacing
+            pixels_per_frame
+        )
+
+        local subdivisions = 0
+        if format_hint == "frames" then
+            if interval_value and interval_value > 1 then
+                subdivisions = math.min(4, interval_value - 1)
+            end
+        elseif format_hint == "seconds" then
+            subdivisions = 4
+        elseif format_hint == "minutes" then
+            subdivisions = 5
+        end
+
+        local minor_interval = nil
+        if subdivisions > 0 then
+            minor_interval = interval_frames / (subdivisions + 1)
+        end
+
+        -- Draw time markers at frame-accurate positions
+        local function align_start()
+            if format_hint == "seconds" then
+                local unit_frames = interval_frames
+                return math.floor((viewport_start_frames / unit_frames) + 1e-6) * unit_frames
+            elseif format_hint == "minutes" then
+                local unit_frames = interval_frames
+                return math.floor((viewport_start_frames / unit_frames) + 1e-6) * unit_frames
+            else
+                -- frames or sub-second
+                local unit_frames = interval_frames
+                return math.floor((viewport_start_frames / unit_frames) + 1e-6) * unit_frames
+            end
+        end
+
+        local start_marker = align_start()
+        local last_label_end = -math.huge
+
+        local function to_pixel(frame_pos)
+            if frame_pos < viewport_start_frames or frame_pos > viewport_end_frames then
+                return nil
+            end
+            local tick_rt = Rational.new(frame_pos, frame_rate.fps_numerator, frame_rate.fps_denominator)
+            local x = state_module.time_to_pixel(tick_rt, width)
+            if x < 0 or x > width then
+                return nil
+            end
+            return x
+        end
+
+        local function draw_tick_at(x, height, color)
+            local baseline = M.RULER_HEIGHT - BASELINE_HEIGHT
+            timeline.add_line(ruler.widget, x, baseline - height, x, baseline, color, 1)
+        end
+
+        local idx = 0
+        while true do
+            local frame_pos = start_marker + (interval_frames * idx)
+            if frame_pos > viewport_end_frames + 0.5 then
+                break
+            end
+            -- snap to nearest frame (already frame-based)
+            local snapped_frames = math.floor(frame_pos + 0.5)
+            local x = to_pixel(snapped_frames)
+            if x then
+                -- Timecode label with appropriate precision
+                local label = timecode.format_ruler_label(snapped_frames, frame_rate)
+                local label_width = estimate_label_width(label)
+                local label_start = x - (label_width / 2)
+                if label_start < 0 then
+                    label_start = 0
+                elseif label_start + label_width > width then
+                    label_start = width - label_width
+                end
+
+                local show_label = (label_start - last_label_end) >= MIN_LABEL_SPACING
+                if show_label then
+                    draw_tick_at(x, MAJOR_TICK_HEIGHT, MAJOR_TICK_COLOR)
+                    timeline.add_text(ruler.widget, label_start, LABEL_Y, label, LABEL_COLOR)
+                    last_label_end = label_start + label_width
+                else
+                    draw_tick_at(x, MEDIUM_TICK_HEIGHT, MEDIUM_TICK_COLOR)
+                end
+
+                if minor_interval then
+                    for sub = 1, subdivisions do
+                        local minor_frame = snapped_frames + (minor_interval * sub)
+                        local minor_int = math.floor(minor_frame + 0.5)
+                        if minor_int >= viewport_start_frames and minor_int <= viewport_end_frames then
+                            local minor_x = to_pixel(minor_int)
+                            if minor_x then
+                                if subdivisions >= 4 and sub % 2 == 0 then
+                                    draw_tick_at(minor_x, MEDIUM_TICK_HEIGHT, MEDIUM_TICK_COLOR)
+                                else
+                                    draw_tick_at(minor_x, MINOR_TICK_HEIGHT, MINOR_TICK_COLOR)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            idx = idx + 1
+        end
+
         -- Draw playhead marker if in visible range
-        if playhead_time >= viewport_start and playhead_time <= viewport_end then
-            local playhead_x = state_module.time_to_pixel(playhead_time, width)
+        if playhead_rt >= viewport_start_rt and playhead_rt <= viewport_end_rt then
+            local playhead_x = state_module.time_to_pixel(playhead_rt, width)
 
             -- Small triangle at playhead position
             local handle_size = 8
@@ -114,31 +285,26 @@ function M.create(widget, state_module)
         local width, height = timeline.get_dimensions(ruler.widget)
         local frame_rate = get_frame_rate()
 
-        -- Helper to snap time to nearest frame boundary
-        local function snap_to_frame(time_ms)
-            local frames = timecode.ms_to_frames(time_ms, frame_rate)
-            return timecode.frames_to_ms(frames, frame_rate)
-        end
-
         if event_type == "press" then
             -- Check if clicking on playhead
-            local playhead_time = state_module.get_playhead_time()
-            local playhead_x = state_module.time_to_pixel(playhead_time, width)
+            local playhead_rat = state_module.get_playhead_position()
+            local playhead_x = state_module.time_to_pixel(playhead_rat, width)
 
             if math.abs(x - playhead_x) < 10 then
                 state_module.set_dragging_playhead(true)
             else
                 -- Click anywhere on ruler to set playhead (snap to frame)
-                local time = state_module.pixel_to_time(x, width)
-                local snapped_time = snap_to_frame(time)
-                state_module.set_playhead_time(snapped_time)
+                local time_rat = state_module.pixel_to_time(x, width)
+                local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
+                state_module.set_playhead_value(snapped_rat)
+                state_module.set_dragging_playhead(true)
             end
 
         elseif event_type == "move" then
             if state_module.is_dragging_playhead() then
-                local time = state_module.pixel_to_time(x, width)
-                local snapped_time = snap_to_frame(time)
-                state_module.set_playhead_time(snapped_time)
+                local time_rat = state_module.pixel_to_time(x, width)
+                local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
+                state_module.set_playhead_value(snapped_rat)
             end
 
         elseif event_type == "release" then
@@ -181,7 +347,7 @@ function M.create(widget, state_module)
     timeline.set_mouse_event_handler(widget, handler_name)
 
     -- Listen to state changes
-    state_module.add_listener(render)
+    state_module.add_listener(profile_scope.wrap("timeline_ruler.render", render))
 
     -- Initial render
     render()

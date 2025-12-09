@@ -52,85 +52,9 @@ local function init_db(path)
     assert(database.set_path(path))
     local db = database.get_connection()
 
-    db:exec([[CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );]])
-
-    db:exec([[CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        current_sequence_number INTEGER
-    );]])
-
-    db:exec([[CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        name TEXT,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        locked INTEGER NOT NULL DEFAULT 0,
-        muted INTEGER NOT NULL DEFAULT 0,
-        soloed INTEGER NOT NULL DEFAULT 0,
-        volume REAL NOT NULL DEFAULT 1.0,
-        pan REAL NOT NULL DEFAULT 0.0
-    );]])
-
-    db:exec([[CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        file_path TEXT UNIQUE,
-        name TEXT,
-        duration INTEGER NOT NULL DEFAULT 0,
-        frame_rate REAL NOT NULL DEFAULT 0,
-        width INTEGER NOT NULL DEFAULT 0,
-        height INTEGER NOT NULL DEFAULT 0,
-        audio_channels INTEGER NOT NULL DEFAULT 0,
-        codec TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0,
-        metadata TEXT NOT NULL DEFAULT '{}'
-    );]])
-
-    db:exec([[CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
-        media_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );]])
-
-    db:exec([[CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );]])
-
-    db:exec([[INSERT INTO projects (id, name) VALUES ('test_project', 'Test Project');]])
+    db:exec(require('import_schema'))
+    db:exec([[INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');]])
+    db:exec([[INSERT INTO projects (id, name, created_at, modified_at) VALUES ('test_project', 'Test Project', strftime('%s','now'), strftime('%s','now'));]])
     return db
 end
 
@@ -138,7 +62,7 @@ local function run_test()
     local xml_path = os.tmpname() .. '.xml'
     write_bad_xml(xml_path)
 
-    local db_path = '/tmp/test_import_bad_xml.db'
+    local db_path = '/tmp/jve/test_import_bad_xml.db'
     local db = init_db(db_path)
 
     local parsed = fcp7_importer.import_xml(xml_path, 'test_project')

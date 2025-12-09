@@ -23,11 +23,11 @@ function M.debounce(fn, delay_ms)
         -- Schedule execution after delay
         -- Note: This is a simple Lua-based debounce
         -- For better timing, could integrate with Qt timer system
-        local start_time = os.clock()
+        local start_value = os.clock()
 
         -- Execute function after delay
         local function check_and_execute()
-            local elapsed = (os.clock() - start_time) * 1000
+            local elapsed = (os.clock() - start_value) * 1000
             if elapsed >= delay_ms then
                 fn(table.unpack(pending_args))
                 timer = nil

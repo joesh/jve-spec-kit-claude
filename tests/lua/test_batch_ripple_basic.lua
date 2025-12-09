@@ -18,53 +18,40 @@ local function assert_eq(label, actual, expected)
     end
 end
 
-local function run_test(name, layout, edges, delta_ms, expectations)
+local function run_test(name, layout, edges, delta_frames, expectations)
     local path = os.tmpname() .. ".jvp"
     os.remove(path)
     assert(database.set_path(path))
     local db = database.get_connection()
     _G.db = db
 
-    local schema = [[
-        CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, modified_at INTEGER, settings TEXT);
-        CREATE TABLE sequences (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, frame_rate REAL, width INTEGER, height INTEGER, timecode_start INTEGER, playhead_time INTEGER, selected_clip_ids TEXT DEFAULT '[]', selected_edge_infos TEXT DEFAULT '[]', current_sequence_number INTEGER);
-        CREATE TABLE tracks (id TEXT PRIMARY KEY, sequence_id TEXT, name TEXT, track_type TEXT, track_index INTEGER, enabled INTEGER);
-        CREATE TABLE media (id TEXT PRIMARY KEY, project_id TEXT, name TEXT, file_path TEXT, duration INTEGER, frame_rate REAL, width INTEGER, height INTEGER, audio_channels INTEGER, codec TEXT, created_at INTEGER, modified_at INTEGER);
-        CREATE TABLE clips (id TEXT PRIMARY KEY, track_id TEXT, media_id TEXT, start_time INTEGER, duration INTEGER, source_in INTEGER, source_out INTEGER, enabled INTEGER);
-        CREATE TABLE commands (id TEXT PRIMARY KEY, parent_id TEXT, parent_sequence_number INTEGER, sequence_number INTEGER, command_type TEXT, command_args TEXT, pre_hash TEXT, post_hash TEXT, timestamp INTEGER, playhead_time INTEGER, selected_clip_ids TEXT, selected_edge_infos TEXT, selected_clip_ids_pre TEXT, selected_edge_infos_pre TEXT);
-    ]]
-
-    for stmt in schema:gmatch("[^;]+;") do
-        local s = db:prepare(stmt)
-        assert(s)
-        assert(s:exec())
-        s:finalize()
-    end
+    local SCHEMA_SQL = require("import_schema")
+    assert(db:exec(SCHEMA_SQL))
 
     local inserts = {
         "INSERT INTO projects VALUES ('default_project','Test',0,0,'{}')",
-        "INSERT INTO sequences VALUES ('default_sequence','default_project','Seq',30,1920,1080,0,0,'[]','[]',NULL)"
+        "INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos, viewport_start_value, viewport_duration_frames_value) VALUES ('default_sequence','default_project','Seq','timeline',24,48000,1920,1080,0,0,'[]','[]',0,240)"
     }
 
     for _, track in ipairs(layout.tracks) do
         table.insert(inserts, string.format(
-            "INSERT INTO tracks VALUES ('%s','default_sequence','%s','VIDEO',%d,1)",
+            "INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('%s', 'default_sequence', 'Track', '%s', 'video_frames', 24.0, %d, 1,0,0,0,1.0,0.0)",
             track.id, track.name or track.id, track.index
         ))
     end
 
     for _, media in ipairs(layout.media) do
         table.insert(inserts, string.format(
-            "INSERT INTO media VALUES ('%s','default_project','%s','/tmp/%s.mov',%d,30,1920,1080,2,'prores',0,0)",
+            "INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at, metadata) VALUES ('%s','default_project','%s','/tmp/%s.mov',%d,'video_frames',24.0,24.0,1920,1080,2,'prores',0,0,'{}')",
             media.id, media.name or media.id, media.id, media.duration
         ))
     end
 
     for _, clip in ipairs(layout.clips) do
         table.insert(inserts, string.format(
-            "INSERT INTO clips VALUES ('%s','%s','%s',%d,%d,%d,%d,1)",
-            clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration,
-            clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration
+            "INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled, offline) VALUES ('%s','default_project','timeline','', '%s','%s',NULL,NULL,'default_sequence',%d,%d,%d,%d,'video_frames',24.0,1,0)",
+            clip.id, clip.track_id, clip.media_id, clip.start_value or clip.start_value, clip.duration or clip.duration_value,
+            clip.source_in or clip.source_in_value or 0, clip.source_out or clip.source_out_value or (clip.source_in or clip.source_in_value or 0) + (clip.duration or clip.duration_value)
         ))
     end
 
@@ -79,7 +66,7 @@ local function run_test(name, layout, edges, delta_ms, expectations)
 
     local cmd = Command.create("BatchRippleEdit", "default_project")
     cmd:set_parameter("edge_infos", edges)
-    cmd:set_parameter("delta_ms", delta_ms)
+    cmd:set_parameter("delta_frames", delta_frames)
     cmd:set_parameter("sequence_id", "default_sequence")
 
     local result = command_manager.execute(cmd)
@@ -93,14 +80,14 @@ local function run_test(name, layout, edges, delta_ms, expectations)
     for clip_id, expected in pairs(expectations) do
         for _, clip in ipairs(clips) do
             if clip.id == clip_id then
-                if expected.start_time ~= nil then
-                    assert_eq(name .. " start_time", clip.start_time, expected.start_time)
+                if expected.start_value ~= nil then
+                    assert_eq(name .. " start_value", clip.start_value, expected.start_value)
                 end
-                if expected.duration ~= nil then
-                    assert_eq(name .. " duration", clip.duration, expected.duration)
+                if expected.duration_value ~= nil then
+                    assert_eq(name .. " duration_value", clip.duration_value, expected.duration_value)
                 end
-                if expected.source_out ~= nil then
-                    assert_eq(name .. " source_out", clip.source_out, expected.source_out)
+                if expected.source_out_value ~= nil then
+                    assert_eq(name .. " source_out_value", clip.source_out_value, expected.source_out_value)
                 end
             end
         end
@@ -120,17 +107,17 @@ run_test(
             {id = "media_v1", duration = 480000}
         },
         clips = {
-            {id = "clip_one", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 1000, source_in = 0, source_out = 1000},
-            {id = "clip_two", track_id = "video1", media_id = "media_v1", start_time = 1100, duration = 1000, source_in = 1000, source_out = 2000}
+            {id = "clip_one", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 1000, source_in_value = 0, source_out_value = 1000},
+            {id = "clip_two", track_id = "video1", media_id = "media_v1", start_value = 1100, duration_value = 1000, source_in_value = 1000, source_out_value = 2000}
         }
     },
     {
         {clip_id = "clip_one", edge_type = "out", track_id = "video1"}
     },
-    -500,
+    -12, -- 500ms at 24fps
     {
-        clip_one = {start_time = 0, duration = 500, source_out = 500},
-        clip_two = {start_time = 600}
+        clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
+        clip_two = {start_value = 600}
     }
 )
 

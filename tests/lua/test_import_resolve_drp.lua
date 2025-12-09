@@ -85,19 +85,24 @@ local schema_statements = {
         modified_at INTEGER,
         settings TEXT
     )]],
-    [[CREATE TABLE sequences (
+    [[CREATE TABLE IF NOT EXISTS sequences (
         id TEXT PRIMARY KEY,
-        project_id TEXT,
-        name TEXT,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        timecode_start INTEGER,
-        playhead_time INTEGER,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
+        frame_rate REAL NOT NULL,
+        width INTEGER NOT NULL,
+        height INTEGER NOT NULL,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 10000,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
         current_sequence_number INTEGER
-    )]],
+    );]],
     [[CREATE TABLE tracks (
         id TEXT PRIMARY KEY,
         sequence_id TEXT,
@@ -128,13 +133,20 @@ local schema_statements = {
     )]],
     [[CREATE TABLE clips (
         id TEXT PRIMARY KEY,
+        project_id TEXT,
+        clip_kind TEXT NOT NULL DEFAULT 'timeline',
+        name TEXT DEFAULT '',
         track_id TEXT,
         media_id TEXT,
-        start_time INTEGER,
-        duration INTEGER,
-        source_in INTEGER,
-        source_out INTEGER,
-        enabled INTEGER
+        source_sequence_id TEXT,
+        parent_clip_id TEXT,
+        owner_sequence_id TEXT,
+        start_value INTEGER NOT NULL,
+        duration INTEGER NOT NULL,
+        source_in INTEGER NOT NULL DEFAULT 0,
+        source_out INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        offline INTEGER NOT NULL DEFAULT 0
     )]],
     [[CREATE TABLE commands (
         id TEXT PRIMARY KEY,
@@ -146,7 +158,7 @@ local schema_statements = {
         pre_hash TEXT,
         post_hash TEXT,
         timestamp INTEGER,
-        playhead_time INTEGER,
+        playhead_value INTEGER,
         selected_clip_ids TEXT,
         selected_edge_infos TEXT,
         selected_clip_ids_pre TEXT,
@@ -159,7 +171,7 @@ for _, statement in ipairs(schema_statements) do
 end
 
 exec_sql(db, "INSERT INTO projects VALUES ('default_project','Default',0,0,'{}')")
-exec_sql(db, "INSERT INTO sequences VALUES ('default_sequence','default_project','Default Timeline',30,1920,1080,0,0,'[]','[]',NULL)")
+exec_sql(db, "INSERT INTO sequences VALUES ('default_sequence','default_project','Default Timeline','timeline',30,1920,1080,0,0,'[]','[]',NULL)")
 
 command_manager.init(db)
 

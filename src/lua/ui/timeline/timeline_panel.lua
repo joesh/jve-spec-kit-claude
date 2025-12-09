@@ -9,46 +9,329 @@ local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 local database = require("core.database")
 local command_manager = require("core.command_manager")
+local inspectable_factory = require("inspectable")
+local profile_scope = require("core.profile_scope")
 
 local M = {}
 
 -- Constants
-local SPLITTER_HANDLE_HEIGHT = ui_constants.TIMELINE.SPLITTER_HANDLE_HEIGHT
+local DEFAULT_TRACK_HEIGHT = timeline_state.dimensions.default_track_height or ui_constants.TIMELINE.TRACK_HEIGHT or 50
+local MIN_TRACK_HEIGHT = 30
+local HEADER_BORDER_THICKNESS = 2
+local MIN_HEADER_HEIGHT = math.max(12, MIN_TRACK_HEIGHT - HEADER_BORDER_THICKNESS)
+
+local function clamp_track_height(height)
+    return math.max(MIN_TRACK_HEIGHT, height or DEFAULT_TRACK_HEIGHT)
+end
+
+local function content_to_header(track_height)
+    local clamped = clamp_track_height(track_height)
+    return math.max(MIN_HEADER_HEIGHT, clamped - HEADER_BORDER_THICKNESS)
+end
+
+local function header_to_content(header_height)
+    local clamped_header = math.max(MIN_HEADER_HEIGHT, header_height or content_to_header(DEFAULT_TRACK_HEIGHT))
+    return clamp_track_height(clamped_header + HEADER_BORDER_THICKNESS)
+end
 
 -- Store references
 local state = nil
 local video_view_ref = nil
 local audio_view_ref = nil
+local tab_order = {}
+local tab_bar_tabs_layout = nil
+local tab_bar_tabs_container = nil
+local recycle_bin = qt_constants.WIDGET.CREATE()
+if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+    qt_constants.DISPLAY.SET_VISIBLE(recycle_bin, false)
+end
+
+local colors = ui_constants.COLORS or {}
+local selection_color = colors.SELECTION_BORDER_COLOR or "#e64b3d"
+local inactive_text_color = colors.GENERAL_LABEL_COLOR or "#9a9a9a"
+local active_text_color = selection_color
+local hover_text_color = colors.WHITE_TEXT_COLOR or "#ffffff"
+
+local function build_tab_button_style(text_color, border_color, font_weight)
+    return string.format([[
+        QPushButton {
+            background: transparent;
+            color: %s;
+            border: none;
+            border-bottom: 2px solid %s;
+            padding: 4px 10px;
+            font-weight: %s;
+        }
+        QPushButton:hover {
+            color: %s;
+        }
+    ]], text_color, border_color, font_weight, hover_text_color)
+end
+
+local function build_close_button_style(text_color)
+    return string.format([[
+        QPushButton {
+            background: transparent;
+            color: %s;
+            border: none;
+            padding: 0 6px;
+        }
+        QPushButton:hover {
+            color: %s;
+        }
+    ]], text_color, selection_color)
+end
+local open_tabs = {}
+local tab_handler_seq = 0
+local tab_command_listener = nil
 
 local function normalize_timeline_selection(clips)
+    local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
+    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+
     if not clips or #clips == 0 then
+        local ok, inspectable = pcall(inspectable_factory.sequence, {
+            sequence_id = sequence_id,
+            project_id = project_id
+        })
+        if ok and inspectable then
+            return {{
+                item_type = "timeline_sequence",
+                sequence_id = sequence_id,
+                inspectable = inspectable,
+                schema = inspectable:get_schema_id(),
+                display_name = inspectable:get("name") or "Timeline",
+                project_id = project_id
+            }}
+        end
         return {}
     end
+
     local normalized = {}
     for _, clip in ipairs(clips) do
-        if clip then
-            local copy = {}
-            for k, v in pairs(clip) do
-                copy[k] = v
+        if clip and clip.id then
+            local ok, inspectable = pcall(inspectable_factory.clip, {
+                clip_id = clip.id,
+                project_id = project_id,
+                sequence_id = sequence_id,
+                clip = clip
+            })
+            if ok and inspectable then
+                table.insert(normalized, {
+                    item_type = "timeline_clip",
+                    clip = clip,
+                    inspectable = inspectable,
+                    schema = inspectable:get_schema_id(),
+                    display_name = clip.label or clip.name or clip.id,
+                    project_id = project_id,
+                    sequence_id = sequence_id
+                })
             end
-            copy.item_type = "timeline_clip"
-            table.insert(normalized, copy)
         end
     end
     return normalized
+end
+
+local function apply_tab_style(tab, is_active)
+    if not tab or not tab.button or not qt_constants.PROPERTIES.SET_STYLE then
+        return
+    end
+    local text_color = is_active and active_text_color or inactive_text_color
+    local border_color = is_active and selection_color or "transparent"
+    local font_weight = is_active and "bold" or "normal"
+    qt_constants.PROPERTIES.SET_STYLE(tab.button, build_tab_button_style(text_color, border_color, font_weight))
+    if tab.close_button and qt_constants.PROPERTIES.SET_STYLE then
+        qt_constants.PROPERTIES.SET_STYLE(tab.close_button, build_close_button_style(text_color))
+    end
 end
 function M.set_inspector(_)
     -- Inspector updates are routed through selection_hub in layout wiring.
 end
 
-function M.set_project_browser(browser)
-    if state then
-        state.set_project_browser(browser)
+function M.get_state()
+    return timeline_state  -- Return the module, not the local state variable
+end
+
+local function get_sequence_display_name(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return "Untitled Sequence"
+    end
+    local record = database.load_sequence_record(sequence_id)
+    if record and record.name and record.name ~= "" then
+        return record.name
+    end
+    return sequence_id
+end
+
+local function register_tab_handler(callback)
+    tab_handler_seq = tab_handler_seq + 1
+    local name = "__timeline_tab_handler_" .. tostring(tab_handler_seq)
+    _G[name] = function(...)
+        callback(...)
+    end
+    return name
+end
+
+local function update_tab_styles(active_sequence_id)
+    for id, tab in pairs(open_tabs) do
+        apply_tab_style(tab, id == active_sequence_id)
     end
 end
 
-function M.get_state()
-    return timeline_state  -- Return the module, not the local state variable
+local function remove_from_tab_order(sequence_id)
+    for index = #tab_order, 1, -1 do
+        if tab_order[index] == sequence_id then
+            table.remove(tab_order, index)
+            break
+        end
+    end
+end
+
+local function close_tab(sequence_id)
+    local tab = open_tabs[sequence_id]
+    if not tab then
+        return
+    end
+
+    if qt_constants.WIDGET.SET_PARENT then
+        qt_constants.WIDGET.SET_PARENT(tab.container, recycle_bin)
+    end
+    if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+        qt_constants.DISPLAY.SET_VISIBLE(tab.container, false)
+    end
+
+    if tab.handler then
+        _G[tab.handler] = nil
+    end
+    if tab.close_handler then
+        _G[tab.close_handler] = nil
+    end
+
+    open_tabs[sequence_id] = nil
+    remove_from_tab_order(sequence_id)
+
+    local current_sequence = state.get_sequence_id and state.get_sequence_id()
+    if current_sequence == sequence_id then
+        local next_id = tab_order[#tab_order] or tab_order[1]
+        if next_id then
+            M.load_sequence(next_id)
+        else
+            local fallback = "default_sequence"
+            ensure_tab_for_sequence(fallback)
+            M.load_sequence(fallback)
+        end
+    else
+        update_tab_styles(current_sequence)
+    end
+end
+
+local function ensure_tab_for_sequence(sequence_id)
+    if not tab_bar_tabs_layout or not sequence_id or sequence_id == "" then
+        return
+    end
+
+    local display_name = get_sequence_display_name(sequence_id)
+    local existing = open_tabs[sequence_id]
+    if existing then
+        if display_name ~= existing.name then
+            qt_constants.PROPERTIES.SET_TEXT(existing.button, display_name)
+            existing.name = display_name
+        end
+        return
+    end
+
+    local container = qt_constants.WIDGET.CREATE()
+    local container_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(container_layout, 0)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(container_layout, 0, 0, 0, 0)
+    qt_constants.LAYOUT.SET_ON_WIDGET(container, container_layout)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(container, "Fixed", "Fixed")
+
+    local text_button = qt_constants.WIDGET.CREATE_BUTTON(display_name)
+    qt_constants.PROPERTIES.SET_STYLE(text_button, build_tab_button_style(inactive_text_color, "transparent", "normal"))
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(text_button, "Fixed", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(container_layout, text_button)
+
+    local close_button = qt_constants.WIDGET.CREATE_BUTTON("×")
+    qt_constants.PROPERTIES.SET_STYLE(close_button, build_close_button_style(inactive_text_color))
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(close_button, "Fixed", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(container_layout, close_button)
+
+    local handler_name = register_tab_handler(function()
+        if state and state.get_sequence_id then
+            local current = state.get_sequence_id()
+            if current ~= sequence_id then
+                M.load_sequence(sequence_id)
+            end
+        end
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(text_button, handler_name)
+
+    local close_handler_name = register_tab_handler(function()
+        close_tab(sequence_id)
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(close_button, close_handler_name)
+
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_tabs_layout, container)
+
+    open_tabs[sequence_id] = {
+        container = container,
+        button = text_button,
+        close_button = close_button,
+        name = display_name,
+        handler = handler_name,
+        close_handler = close_handler_name
+    }
+    table.insert(tab_order, sequence_id)
+end
+
+local function handle_tab_command_event(event)
+    if not event or event.event ~= "execute" then
+        return
+    end
+
+    local command = event.command
+    if not command or command.type ~= "RenameItem" then
+        return
+    end
+
+    local get_param = command.get_parameter
+    local target_type = nil
+    local target_id = nil
+    local new_name = nil
+    if type(get_param) == "function" then
+        target_type = command:get_parameter("target_type")
+        target_id = command:get_parameter("target_id")
+        new_name = command:get_parameter("new_name")
+    elseif command.parameters then
+        target_type = command.parameters.target_type
+        target_id = command.parameters.target_id
+        new_name = command.parameters.new_name
+    end
+
+    if target_type ~= "sequence" or not target_id or new_name == nil then
+        return
+    end
+
+    local tab = open_tabs[target_id]
+    if tab and tab.button and new_name ~= "" then
+        qt_constants.PROPERTIES.SET_TEXT(tab.button, new_name)
+        tab.name = new_name
+    end
+end
+
+local function build_track_header_stylesheet(background_color)
+    return string.format([[
+        QLabel {
+            background: %s;
+            color: #cccccc;
+            padding-left: 10px;
+            border-left: 1px solid #222232;
+            border-right: 1px solid #222232;
+            border-top: 0px;
+            border-bottom: 0px;
+        }
+    ]], background_color or "#111111")
 end
 
 -- Helper function to create video headers with splitters
@@ -71,24 +354,22 @@ local function create_video_headers()
     qt_constants.LAYOUT.ADD_WIDGET(video_splitter, stretch_widget)
 
     -- Add tracks in REVERSE order (V3, V2, V1)
+    local video_header_heights = {}
     for i = #video_tracks, 1, -1 do
         local track = video_tracks[i]
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(header, [[
-            QLabel {
-                background: #3a3a5a;
-                color: #cccccc;
-                padding-left: 10px;
-                border: 1px solid #222232;
-            }
-        ]])
+        local track_height = clamp_track_height(state.get_track_height and state.get_track_height(track.id) or DEFAULT_TRACK_HEIGHT)
+        local header_height = content_to_header(track_height)
+
+        qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.video_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
-        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
-        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.default_track_height)
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
+        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
         video_headers[i] = header
+        video_header_heights[i] = header_height
     end
 
     -- Install handlers: Handle N resizes Track N
@@ -146,7 +427,7 @@ local function create_video_headers()
                 print(string.format("Handler %s called: event_type=%s", this_handler_name, event_type))
                 if event_type == "press" then
                     print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], 20)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], MIN_HEADER_HEIGHT)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], 16777215)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(video_splitter)
@@ -155,19 +436,20 @@ local function create_video_headers()
                     print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
                     -- Lock at exact height to prevent unwanted resizing during main boundary drag
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], new_height)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], new_height)
+                    local clamped_header = math.max(MIN_HEADER_HEIGHT, new_height)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], clamped_header)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], clamped_header)
                     -- Reset: stretch widget absorbs space, tracks fixed
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, 0, 1)
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(video_splitter, captured_qt_pos_below, 0)
 
-                    -- Add handle height to track height so timeline renders track + handle space
-                    state.set_track_height(captured_track_id, new_height + SPLITTER_HANDLE_HEIGHT)
+                    local new_track_height = header_to_content(clamped_header)
+                    state.set_track_height(captured_track_id, new_track_height)
 
                     -- Update splitter minimum height to accommodate new track sizes
                     local total_height = 0
                     for _, track in ipairs(state.get_video_tracks()) do
-                        total_height = total_height + state.get_track_height(track.id)
+                        total_height = total_height + content_to_header(state.get_track_height(track.id))
                     end
                     qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_splitter, total_height)
                     print(string.format("  Updated video_splitter min height to %dpx", total_height))
@@ -182,7 +464,9 @@ local function create_video_headers()
     -- Set initial sizes: stretch widget gets 0, tracks get their natural height
     local initial_sizes = {0}  -- Stretch widget starts at 0
     for i = 1, #video_tracks do
-        table.insert(initial_sizes, timeline_state.dimensions.default_track_height)
+        local source_index = #video_tracks - i + 1
+        local header_height = video_header_heights[source_index] or content_to_header(DEFAULT_TRACK_HEIGHT)
+        table.insert(initial_sizes, header_height)
     end
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(video_splitter, initial_sizes)
 
@@ -198,7 +482,7 @@ local function create_video_headers()
         -- Calculate total height needed for all video tracks
         local total_height = 0
         for _, track in ipairs(state.get_video_tracks()) do
-            total_height = total_height + state.get_track_height(track.id)
+            total_height = total_height + content_to_header(state.get_track_height(track.id))
         end
         print(string.format("  Setting video_splitter min height to %dpx", total_height))
         -- Set splitter minimum height to accommodate all tracks
@@ -207,11 +491,6 @@ local function create_video_headers()
     print("Registering video_splitter_moved handler...")
     qt_set_splitter_moved_handler(video_splitter, "video_splitter_moved")
     print("  Handler registered")
-
-    -- Initialize track heights in state (header height + handle height)
-    for _, track in ipairs(video_tracks) do
-        state.set_track_height(track.id, timeline_state.dimensions.default_track_height + SPLITTER_HANDLE_HEIGHT)
-    end
 
     -- Hide the handle above V3 (between stretch widget and V3) - handle index 0
     qt_hide_splitter_handle(video_splitter, 0)
@@ -229,23 +508,21 @@ local function create_audio_headers()
     local handler_name = "audio_splitter_event_" .. tostring(audio_splitter):gsub("[^%w]", "_")
 
     -- Add tracks in normal order (A1, A2, A3)
+    local audio_header_heights = {}
     for i, track in ipairs(audio_tracks) do
         local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(header, [[
-            QLabel {
-                background: #3a4a3a;
-                color: #cccccc;
-                padding-left: 10px;
-                border: 1px solid #222222;
-            }
-        ]])
+        local track_height = clamp_track_height(state.get_track_height and state.get_track_height(track.id) or DEFAULT_TRACK_HEIGHT)
+        local header_height = content_to_header(track_height)
+
+        qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.audio_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
-        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, timeline_state.dimensions.default_track_height)
-        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, timeline_state.dimensions.default_track_height)
+        qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
+        qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
         audio_headers[i] = header
+        audio_header_heights[i] = header_height
     end
 
     -- Add stretch widget at bottom to push tracks up (A1 is anchor at top)
@@ -300,7 +577,7 @@ local function create_audio_headers()
             _G[this_handler_name] = function(event_type, y)
                 if event_type == "press" then
                     print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], 20)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], MIN_HEADER_HEIGHT)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], 16777215)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(audio_splitter)
@@ -309,16 +586,17 @@ local function create_audio_headers()
                     print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
                     -- Lock at exact height to prevent unwanted resizing during main boundary drag
-                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], new_height)
-                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], new_height)
+                    local clamped_header = math.max(MIN_HEADER_HEIGHT, new_height)
+                    qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], clamped_header)
+                    qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], clamped_header)
                     -- Reset stretch factors: stretch widget absorbs, tracks fixed
                     qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, #audio_tracks, 1)  -- Stretch widget
                     for i = 0, #audio_tracks - 1 do
                         qt_constants.LAYOUT.SET_SPLITTER_STRETCH_FACTOR(audio_splitter, i, 0)  -- Tracks fixed
                     end
 
-                    -- Add handle height to track height so timeline renders track + handle space
-                    state.set_track_height(captured_track_id, new_height + SPLITTER_HANDLE_HEIGHT)
+                    local new_track_height = header_to_content(clamped_header)
+                    state.set_track_height(captured_track_id, new_track_height)
                 end
             end
             print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
@@ -330,7 +608,8 @@ local function create_audio_headers()
     -- Set initial sizes: tracks get their natural height, stretch widget gets 0
     local initial_sizes = {}
     for i = 1, #audio_tracks do
-        table.insert(initial_sizes, timeline_state.dimensions.default_track_height)
+        local header_height = audio_header_heights[i] or content_to_header(DEFAULT_TRACK_HEIGHT)
+        table.insert(initial_sizes, header_height)
     end
     table.insert(initial_sizes, 0)  -- Stretch widget starts at 0
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(audio_splitter, initial_sizes)
@@ -346,17 +625,12 @@ local function create_audio_headers()
         -- Calculate total height needed for all audio tracks
         local total_height = 0
         for _, track in ipairs(state.get_audio_tracks()) do
-            total_height = total_height + state.get_track_height(track.id)
+            total_height = total_height + content_to_header(state.get_track_height(track.id))
         end
         -- Set splitter minimum height to accommodate all tracks
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_splitter, total_height)
     end
     qt_set_splitter_moved_handler(audio_splitter, "audio_splitter_moved")
-
-    -- Initialize track heights in state (header height + handle height)
-    for _, track in ipairs(audio_tracks) do
-        state.set_track_height(track.id, timeline_state.dimensions.default_track_height + SPLITTER_HANDLE_HEIGHT)
-    end
 
     -- Hide the handle below A3 (between A3 and stretch widget) - last handle index
     qt_hide_splitter_handle(audio_splitter, #audio_tracks)
@@ -439,11 +713,54 @@ function M.create()
     local initial_selection = state.get_selected_clips and state.get_selected_clips() or {}
     selection_hub.update_selection("timeline", normalize_timeline_selection(initial_selection))
 
+    local last_mark_signature = nil
+    if #initial_selection == 0 then
+        local mark_in = state.get_mark_in and state.get_mark_in() or nil
+        local mark_out = state.get_mark_out and state.get_mark_out() or nil
+        last_mark_signature = tostring(mark_in) .. ":" .. tostring(mark_out)
+    end
+    state.add_listener(profile_scope.wrap("timeline_panel.selection_listener", function()
+        local selected = state.get_selected_clips and state.get_selected_clips() or {}
+
+        -- Re-broadcast selection when only the timeline itself is selected and marks change.
+        if #selected == 0 then
+            local mark_in = state.get_mark_in and state.get_mark_in() or nil
+            local mark_out = state.get_mark_out and state.get_mark_out() or nil
+            local signature = tostring(mark_in) .. ":" .. tostring(mark_out)
+            if signature ~= last_mark_signature then
+                last_mark_signature = signature
+                selection_hub.update_selection("timeline", normalize_timeline_selection(selected))
+            end
+        else
+            last_mark_signature = nil
+        end
+    end))
+
     -- Main container
     local container = qt_constants.WIDGET.CREATE()
     local main_layout = qt_constants.LAYOUT.CREATE_VBOX()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(main_layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(main_layout, 0, 0, 0, 0)
+
+    -- Tab bar for open sequences
+    local tab_bar_widget = qt_constants.WIDGET.CREATE()
+    local tab_bar_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_bar_layout, 6)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_layout, 12, 6, 12, 0)
+    qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_widget, tab_bar_layout)
+    qt_constants.PROPERTIES.SET_STYLE(tab_bar_widget, string.format(
+        [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
+        colors.PANEL_BACKGROUND_COLOR or "#1f1f1f",
+        colors.SCROLL_BORDER_COLOR or "#111111"
+    ))
+    tab_bar_tabs_container = qt_constants.WIDGET.CREATE()
+    tab_bar_tabs_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_bar_tabs_layout, 4)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_tabs_layout, 0, 0, 0, 0)
+    qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_tabs_container, tab_bar_tabs_layout)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_tabs_container, "Expanding", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_tabs_container)
+    qt_constants.LAYOUT.ADD_STRETCH(tab_bar_layout, 1)
 
     -- Create main horizontal splitter: Headers Column | Timeline Area Column
     local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
@@ -572,7 +889,6 @@ function M.create()
     -- Create rubber band for drag selection (parented to splitter so it can span both views)
     -- Note: rubber band starts hidden (QRubberBand::hide() called in C++)
     local rubber_band = qt_constants.WIDGET.CREATE_RUBBER_BAND(vertical_splitter)
-    state.set_rubber_band(rubber_band)  -- Store in state for access from timeline views
 
     -- Panel drag coordination callbacks
     -- Called by view during drag to update rubber band geometry
@@ -641,15 +957,15 @@ function M.create()
         -- Convert splitter rectangle to time range
         -- We need to map to a timeline view widget to get proper width for time conversion
         local viewport_width, _ = timeline.get_dimensions(video_widget)
-        local start_time = state.pixel_to_time(rect_x, viewport_width)
+        local start_value = state.pixel_to_time(rect_x, viewport_width)
         local end_time = state.pixel_to_time(rect_x + rect_width, viewport_width)
 
         -- Find all clips that intersect with the selection rectangle
         local selected_clips = {}
         for _, clip in ipairs(state.get_clips()) do
             -- Check time overlap
-            local clip_end_time = clip.start_time + clip.duration
-            local time_overlaps = not (clip_end_time < start_time or clip.start_time > end_time)
+            local clip_end_time = clip.timeline_start + clip.duration
+            local time_overlaps = not (clip_end_time < start_value or clip.timeline_start > end_time)
 
             if time_overlaps then
 
@@ -770,6 +1086,7 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(main_splitter, timeline_area)
 
     -- Add main splitter to main layout (gets all available vertical space)
+    qt_constants.LAYOUT.ADD_WIDGET(main_layout, tab_bar_widget)
     qt_constants.LAYOUT.ADD_WIDGET(main_layout, main_splitter)
     qt_set_layout_stretch_factor(main_layout, main_splitter, 1)
 
@@ -860,6 +1177,19 @@ function M.create()
 
     print("Multi-view timeline panel created successfully")
 
+    local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or "default_sequence"
+    ensure_tab_for_sequence(initial_sequence_id)
+    update_tab_styles(initial_sequence_id)
+
+    if not tab_command_listener and command_manager and command_manager.add_listener then
+        tab_command_listener = command_manager.add_listener(profile_scope.wrap(
+            "timeline_panel.command_listener",
+            function(event)
+                handle_tab_command_event(event)
+            end
+        ))
+    end
+
     return container
 end
 
@@ -897,6 +1227,9 @@ function M.load_sequence(sequence_id)
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {1, 1})
         end
     end
+
+    ensure_tab_for_sequence(sequence_id)
+    update_tab_styles(sequence_id)
 end
 
 -- Check if timeline is currently dragging clips or edges

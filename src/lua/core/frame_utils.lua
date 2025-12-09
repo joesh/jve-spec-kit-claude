@@ -1,85 +1,116 @@
 -- Frame Utilities: Frame-accurate timing calculations for NLE operations
--- All video editing operations must align to frame boundaries for proper playback
+-- Refactored to use Rational Time objects
+
+local Rational = require("core.rational")
 
 local M = {}
 
--- Default frame rate (can be overridden per-sequence)
-M.default_frame_rate = 30.0
+-- Default frame rate: 30/1 (integer tuple)
+M.default_frame_rate = { fps_numerator = 30, fps_denominator = 1 }
 
--- Calculate frame duration in milliseconds
+-- Helper: Normalize rate input to table
+function M.normalize_rate(rate)
+    if not rate then
+        return M.default_frame_rate
+    end
+    if type(rate) == "table" and rate.fps_numerator then
+        return rate
+    end
+    if type(rate) == "number" then
+        return { fps_numerator = math.floor(rate + 0.5), fps_denominator = 1 }
+    end
+    return M.default_frame_rate
+end
+
+-- Calculate frame duration (Rational object)
+function M.frame_duration(frame_rate)
+    local rate = M.normalize_rate(frame_rate)
+    -- 1 frame duration = 1 / (num/den) = den/num seconds?
+    -- No, 1 frame IS 1 unit in the timebase.
+    -- Rational(1, rate.num, rate.den) represents 1 frame's duration in time.
+    return Rational.new(1, rate.fps_numerator, rate.fps_denominator)
+end
+
+-- Legacy helper: frame duration in ms (float)
 function M.frame_duration_ms(frame_rate)
-    frame_rate = frame_rate or M.default_frame_rate
-    return 1000.0 / frame_rate
+    local rate = M.normalize_rate(frame_rate)
+    return (rate.fps_denominator / rate.fps_numerator) * 1000.0
 end
 
--- Calculate frame number at given time
--- Returns: frame_number (0-based), exact_match (boolean)
-function M.time_to_frame(time_ms, frame_rate)
-    frame_rate = frame_rate or M.default_frame_rate
-    local frame_duration = M.frame_duration_ms(frame_rate)
-    local frame_number = time_ms / frame_duration
-    local rounded = math.floor(frame_number + 0.5)
-    local exact = math.abs(frame_number - rounded) < 0.001
-    return rounded, exact
+-- Convert Rational time to frame number (integer)
+function M.time_to_frame(time_obj, frame_rate)
+    local rate = M.normalize_rate(frame_rate)
+    local r = Rational.hydrate(time_obj, rate.fps_numerator, rate.fps_denominator)
+    
+    if not r then return 0, false end
+    
+    -- Rescale if necessary
+    if r.fps_numerator ~= rate.fps_numerator or r.fps_denominator ~= rate.fps_denominator then
+        local rescaled = r:rescale(rate.fps_numerator, rate.fps_denominator)
+        return rescaled.frames, true
+    end
+    return r.frames, true
 end
 
--- Convert frame number to time in milliseconds
+-- Convert frame number to Rational time
 function M.frame_to_time(frame_number, frame_rate)
-    frame_rate = frame_rate or M.default_frame_rate
-    local frame_duration = M.frame_duration_ms(frame_rate)
-    return math.floor(frame_number * frame_duration + 0.5)
+    local rate = M.normalize_rate(frame_rate)
+    return Rational.new(frame_number, rate.fps_numerator, rate.fps_denominator)
 end
 
 -- Snap time to nearest frame boundary
--- mode: "round" (default), "floor", "ceil"
-function M.snap_to_frame(time_ms, frame_rate, mode)
-    frame_rate = frame_rate or M.default_frame_rate
-    mode = mode or "round"
-
-    local frame_duration = M.frame_duration_ms(frame_rate)
-    local frame_number = time_ms / frame_duration
-
-    if mode == "floor" then
-        frame_number = math.floor(frame_number)
-    elseif mode == "ceil" then
-        frame_number = math.ceil(frame_number)
-    else  -- "round"
-        frame_number = math.floor(frame_number + 0.5)
+function M.snap_to_frame(time_obj, frame_rate)
+    local rate = M.normalize_rate(frame_rate)
+    local r = Rational.hydrate(time_obj, rate.fps_numerator, rate.fps_denominator)
+    
+    if not r then
+        return Rational.new(0, rate.fps_numerator, rate.fps_denominator)
     end
-
-    return M.frame_to_time(frame_number, frame_rate)
-end
-
--- Check if time is on a frame boundary
-function M.is_frame_aligned(time_ms, frame_rate, tolerance_ms)
-    frame_rate = frame_rate or M.default_frame_rate
-    tolerance_ms = tolerance_ms or 0.5
-
-    local snapped = M.snap_to_frame(time_ms, frame_rate)
-    return math.abs(time_ms - snapped) < tolerance_ms
+    
+    return r:rescale(rate.fps_numerator, rate.fps_denominator)
 end
 
 -- Snap a delta (relative change) to frame boundaries
--- This is different from snapping absolute time - we want the delta itself to be frame-multiple
-function M.snap_delta_to_frame(delta_ms, frame_rate)
-    frame_rate = frame_rate or M.default_frame_rate
-    local frame_duration = M.frame_duration_ms(frame_rate)
-
-    -- Round to nearest multiple of frame duration
-    local frame_count = math.floor(delta_ms / frame_duration + 0.5)
-    return math.floor(frame_count * frame_duration + 0.5)
+-- Returns Rational
+function M.snap_delta_to_frame(delta, frame_rate)
+    return M.snap_to_frame(delta, frame_rate)
 end
 
 -- Format time as timecode string (HH:MM:SS:FF)
-function M.format_timecode(time_ms, frame_rate, drop_frame)
-    frame_rate = frame_rate or M.default_frame_rate
-    drop_frame = drop_frame or false
+function M.format_timecode(time_obj, frame_rate, opts)
+    local rate = M.normalize_rate(frame_rate)
+    local r = Rational.hydrate(time_obj, rate.fps_numerator, rate.fps_denominator)
+    
+    -- Get total frames
+    local total_frames
+    local sign = ""
+    
+    if r then
+        local rescaled = r:rescale(rate.fps_numerator, rate.fps_denominator)
+        total_frames = rescaled.frames
+        if total_frames < 0 then
+            sign = "-"
+            total_frames = -total_frames
+        end
+    else
+        total_frames = 0
+    end
 
-    local total_frames = math.floor(time_ms / M.frame_duration_ms(frame_rate))
+    local drop_frame = false
+    local separator = ":"
+    if type(opts) == "table" then
+        drop_frame = opts.drop_frame or false
+        separator = opts.separator or separator
+    end
 
-    -- Drop-frame timecode is complex - for now just do non-drop
-    local frames_per_second = math.floor(frame_rate)
-    local frames_per_minute = frames_per_second * 60
+    -- Standard NLE Timecode math (Non-Drop for now)
+    -- Rate calculation:
+    -- 24/1 -> 24
+    -- 30000/1001 -> 29.97 -> 30 (NDF)
+    local fps = math.floor((rate.fps_numerator / rate.fps_denominator) + 0.5)
+    if fps == 0 then fps = 1 end
+
+    local frames_per_minute = fps * 60
     local frames_per_hour = frames_per_minute * 60
 
     local hours = math.floor(total_frames / frames_per_hour)
@@ -88,60 +119,168 @@ function M.format_timecode(time_ms, frame_rate, drop_frame)
     local minutes = math.floor(remaining / frames_per_minute)
     remaining = remaining % frames_per_minute
 
-    local seconds = math.floor(remaining / frames_per_second)
-    local frames = remaining % frames_per_second
+    local seconds = math.floor(remaining / fps)
+    local frames = remaining % fps
 
-    local separator = drop_frame and ";" or ":"
-    return string.format("%02d:%02d:%02d%s%02d", hours, minutes, seconds, separator, frames)
+    local sep = drop_frame and ";" or separator
+    return string.format("%s%02d%s%02d%s%02d%s%02d", sign, hours, sep, minutes, sep, seconds, sep, frames)
 end
 
--- Parse timecode string to milliseconds
-function M.parse_timecode(timecode_str, frame_rate)
-    frame_rate = frame_rate or M.default_frame_rate
-
-    -- Match HH:MM:SS:FF or HH:MM:SS;FF (drop frame)
-    local hours, minutes, seconds, frames = timecode_str:match("(%d+):(%d+):(%d+)[:;](%d+)")
-
-    if not hours then
-        return nil, "Invalid timecode format"
+-- Parse a timecode string into a Rational time using the provided frame rate.
+function M.parse_timecode(timecode, frame_rate)
+    local rate = M.normalize_rate(frame_rate)
+    if not timecode or timecode == "" then
+        return nil
     end
 
-    hours = tonumber(hours)
-    minutes = tonumber(minutes)
-    seconds = tonumber(seconds)
-    frames = tonumber(frames)
+    local trimmed = timecode:match("^%s*(.-)%s*$")
+    if not trimmed or trimmed == "" then
+        return nil
+    end
 
-    local total_frames = frames +
-                        (seconds * frame_rate) +
-                        (minutes * 60 * frame_rate) +
-                        (hours * 60 * 60 * frame_rate)
+    local sign = 1
+    if trimmed:sub(1, 1) == "-" then
+        sign = -1
+        trimmed = trimmed:sub(2)
+    elseif trimmed:sub(1, 1) == "+" then
+        trimmed = trimmed:sub(2)
+    end
 
-    return M.frame_to_time(total_frames, frame_rate)
+    local parts = {}
+    for token in trimmed:gmatch("[%d]+") do
+        table.insert(parts, tonumber(token))
+    end
+    if #parts < 4 then
+        return nil
+    end
+
+    local hh, mm, ss, ff = parts[1], parts[2], parts[3], parts[4]
+    local fps = math.floor((rate.fps_numerator / rate.fps_denominator) + 0.5)
+    if fps <= 0 then fps = 1 end
+
+    local total_frames = ff + (ss * fps) + (mm * 60 * fps) + (hh * 3600 * fps)
+    if sign < 0 then total_frames = -total_frames end
+
+    return Rational.new(total_frames, rate.fps_numerator, rate.fps_denominator)
 end
 
--- Validate that clip boundaries are frame-aligned
-function M.validate_clip_alignment(clip, frame_rate)
-    frame_rate = frame_rate or M.default_frame_rate
-
-    local errors = {}
-
-    if not M.is_frame_aligned(clip.start_time, frame_rate) then
-        table.insert(errors, string.format("start_time %dms not frame-aligned", clip.start_time))
+-- Calculate a "nice" ruler interval (prefers 1/2/5 * 10^k frame buckets)
+-- All inputs/outputs are in frames (integers) except hint value which is expressed in hint units.
+-- Returns: interval_frames, format_hint ("frames"/"seconds"/"minutes"), interval_value (in hint units)
+function M.get_ruler_interval(viewport_duration_frames, frame_rate, target_pixels, pixels_per_frame)
+    local target_frames = target_pixels / (pixels_per_frame > 0 and pixels_per_frame or 1)
+    local rate = M.normalize_rate(frame_rate)
+    local fps = rate.fps_numerator / rate.fps_denominator
+    if fps <= 0 then
+        fps = 24
     end
 
-    if not M.is_frame_aligned(clip.duration, frame_rate) then
-        table.insert(errors, string.format("duration %dms not frame-aligned", clip.duration))
+    local seen = {}
+    local candidates = {}
+
+    local function add_interval_from_seconds(seconds)
+        local frames = seconds * fps
+        if frames < 1 then
+            frames = 1
+        end
+        local rounded_frames = math.max(1, math.floor(frames + 0.5))
+        local key = rounded_frames
+        if seen[key] then
+            return
+        end
+        seen[key] = true
+
+        local hint
+        local value
+        if rounded_frames < fps then
+            hint = "frames"
+            value = rounded_frames
+        elseif rounded_frames < fps * 60 then
+            hint = "seconds"
+            value = rounded_frames / fps
+        else
+            hint = "minutes"
+            value = rounded_frames / (fps * 60)
+        end
+
+        table.insert(candidates, {
+            frames = rounded_frames,
+            hint = hint,
+            value = value,
+        })
     end
 
-    if clip.source_in and not M.is_frame_aligned(clip.source_in, frame_rate) then
-        table.insert(errors, string.format("source_in %dms not frame-aligned", clip.source_in))
+    local multipliers = {1, 2, 5}
+    -- Generate 1/2/5 * 10^k second buckets (covers sub-second through minutes)
+    for k = -3, 4 do
+        local scale = 10 ^ k
+        for _, m in ipairs(multipliers) do
+            add_interval_from_seconds(m * scale)
+        end
     end
 
-    if clip.source_out and not M.is_frame_aligned(clip.source_out, frame_rate) then
-        table.insert(errors, string.format("source_out %dms not frame-aligned", clip.source_out))
+    -- Ensure single-frame and a couple of tiny multiples are always considered
+    add_interval_from_seconds(1 / fps)
+    add_interval_from_seconds(2 / fps)
+
+    -- For mid/large viewports prefer time-based buckets over fine frame buckets
+    if viewport_duration_frames and viewport_duration_frames >= (fps * 2.5) then
+        local filtered = {}
+        for _, cand in ipairs(candidates) do
+            if not (cand.hint == "frames" and cand.frames < fps) then
+                table.insert(filtered, cand)
+            end
+        end
+        if #filtered > 0 then
+            candidates = filtered
+        end
     end
 
-    return #errors == 0, errors
+    table.sort(candidates, function(a, b)
+        return a.frames < b.frames
+    end)
+
+    local desired_spacing_px = target_pixels
+    local min_spacing_px = desired_spacing_px * 0.7
+
+    local best = nil
+    local best_spacing = nil
+
+    -- Prefer the smallest interval that keeps spacing reasonably close to target
+    for _, cand in ipairs(candidates) do
+        local spacing = cand.frames * pixels_per_frame
+        if spacing >= min_spacing_px then
+            if not best or spacing < best_spacing or (spacing == best_spacing and cand.frames < best.frames) then
+                best = cand
+                best_spacing = spacing
+            end
+        end
+    end
+
+    -- Fallback: pick the largest interval if everything was too small
+    if not best then
+        for _, cand in ipairs(candidates) do
+            local spacing = cand.frames * pixels_per_frame
+            if not best or spacing > best_spacing or (spacing == best_spacing and cand.frames < best.frames) then
+                best = cand
+                best_spacing = spacing
+            end
+        end
+    end
+
+    -- If we landed on a mid-frame bucket (e.g., 12 frames at 24fps) while viewing several seconds,
+    -- prefer to round up to the next whole-second bucket for cleaner labels.
+    if best and best.hint == "frames" and best.frames >= (fps / 2) and viewport_duration_frames >= (fps * 2) then
+        local one_second_frames = fps
+        for _, cand in ipairs(candidates) do
+            if cand.frames >= one_second_frames then
+                best = cand
+                break
+            end
+        end
+    end
+
+    return best.frames, best.hint, best.value
 end
 
 return M

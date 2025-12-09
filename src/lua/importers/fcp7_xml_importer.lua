@@ -4,28 +4,37 @@
 
 local M = {}
 local uuid = require("uuid")
+local Rational = require("core.rational")
 
 -- Parse FCP7 time value (rational number like "900/30")
 -- Returns milliseconds
 local function parse_time(time_str, frame_rate)
+    local seq_fps_num = math.floor(frame_rate * 1000)
+    local seq_fps_den = 1000
+
     if not time_str or time_str == "" then
-        return 0
+        return Rational.new(0, seq_fps_num, seq_fps_den)
     end
 
     -- Handle rational format "numerator/denominator"
     local numerator, denominator = time_str:match("(%d+)/(%d+)")
     if numerator and denominator then
-        local frames = tonumber(numerator) / tonumber(denominator)
-        return math.floor((frames / frame_rate) * 1000)
+        local frames_num = tonumber(numerator)
+        local frames_den = tonumber(denominator)
+        
+        -- FCP7 XML "frames/timebase" means 'frames_num' frames at 'frames_den' FPS.
+        -- We need to rescale this to the sequence's effective frame_rate (seq_fps_num/seq_fps_den)
+        local temp_rational = Rational.new(frames_num, frames_den, 1)
+        return temp_rational:rescale(seq_fps_num, seq_fps_den)
     end
 
-    -- Handle plain integer frames
+    -- Handle plain integer frames (FCP7 time is often just a frame count at the sequence's frame_rate)
     local frames = tonumber(time_str)
     if frames then
-        return math.floor((frames / frame_rate) * 1000)
+        return Rational.new(frames, seq_fps_num, seq_fps_den)
     end
 
-    return 0
+    return Rational.new(0, seq_fps_num, seq_fps_den)
 end
 
 local function collect_children(node)
@@ -173,6 +182,8 @@ end
 
 -- Parse clip item
 local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info)
+    local rate_num = math.floor(frame_rate * 1000)
+    local rate_den = 1000
     local clip_info = {
         original_id = get_attr(clipitem_node, "id"),
         id = get_attr(clipitem_node, "id"),
@@ -180,12 +191,15 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         file_id = nil,
         media_key = nil,
         track_id = track_id,
-        start_time = 0,
-        duration = 0,
-        source_in = 0,
-        source_out = 0,
+        timeline_start = nil,
+        timeline_end = nil,
+        start_value = nil,
+        duration = Rational.new(0, rate_num, rate_den),
+        source_in = Rational.new(0, rate_num, rate_den),
+        source_out = Rational.new(0, rate_num, rate_den),
         enabled = true,
-        frame_rate = frame_rate
+        frame_rate = frame_rate,
+        raw_duration = nil
     }
 
     local children = collect_children(clipitem_node)
@@ -209,16 +223,46 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
             if media_info then
                 clip_info.file_id = media_info.id
                 clip_info.media_key = media_info.key
-                clip_info.media = media_info
                 if sequence_info and media_info.key then
+                    local existing = sequence_info.media_files[media_info.key]
+                    if existing then
+                        local function copy_if_present(field, allow_zero)
+                            local value = media_info[field]
+                            local is_string = type(value) == "string"
+                            local is_number = type(value) == "number"
+                            local keep =
+                                (is_string and value ~= nil and value ~= "") or
+                                (is_number and (allow_zero or value ~= 0)) or
+                                (value ~= nil and not is_string and not is_number)
+                            if keep then
+                                existing[field] = value
+                            end
+                        end
+                        copy_if_present("path", false)
+                        copy_if_present("name", false)
+                        copy_if_present("duration", false)
+                        copy_if_present("frame_rate", false)
+                        copy_if_present("width", false)
+                        copy_if_present("height", false)
+                        copy_if_present("audio_channels", false)
+                        media_info = existing
+                    else
+                        sequence_info.media_files[media_info.key] = media_info
+                    end
+                elseif sequence_info then
                     sequence_info.media_files[media_info.key] = media_info
                 end
+                clip_info.media = media_info
+            end
+        elseif name == "duration" then
+            local raw_duration = parse_time(child:text(), clip_info.frame_rate)
+            if raw_duration and raw_duration.frames and raw_duration.frames > 0 then
+                clip_info.raw_duration = raw_duration
             end
         elseif name == "start" then
-            clip_info.start_time = parse_time(child:text(), clip_info.frame_rate)
+            clip_info.timeline_start = parse_time(child:text(), clip_info.frame_rate)
         elseif name == "end" then
-            local end_time = parse_time(child:text(), clip_info.frame_rate)
-            clip_info.duration = end_time - clip_info.start_time
+            clip_info.timeline_end = parse_time(child:text(), clip_info.frame_rate)
         elseif name == "in" then
             clip_info.source_in = parse_time(child:text(), clip_info.frame_rate)
         elseif name == "out" then
@@ -228,8 +272,14 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         end
     end
 
-    if clip_info.duration <= 0 and clip_info.source_out > clip_info.source_in then
+    if clip_info.duration and clip_info.duration.frames <= 0 and clip_info.source_out and clip_info.source_out.frames > clip_info.source_in.frames then
         clip_info.duration = clip_info.source_out - clip_info.source_in
+    end
+    if clip_info.duration and clip_info.duration.frames <= 0 and clip_info.raw_duration and clip_info.raw_duration.frames > 0 then
+        clip_info.duration = clip_info.raw_duration
+    end
+    if clip_info.duration and clip_info.duration.frames <= 0 and clip_info.timeline_start and clip_info.timeline_end and clip_info.timeline_end > clip_info.timeline_start then
+        clip_info.duration = clip_info.timeline_end - clip_info.timeline_start
     end
 
     return clip_info
@@ -247,12 +297,78 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
         clips = {}
     }
 
+    local prev_end_time = nil
+
+    local function finalize_clip_timing(clip_info)
+        local start = clip_info.timeline_start
+        local fps_num = math.floor(clip_info.frame_rate * 1000)
+        local fps_den = 1000
+        local zero_rational = Rational.new(0, fps_num, fps_den)
+
+        if start and start < zero_rational then
+            start = nil
+        end
+
+        local finish = clip_info.timeline_end
+        if finish and finish < zero_rational then
+            finish = nil
+        end
+
+        local duration = clip_info.duration
+        if duration and duration.frames <= 0 then
+            duration = nil
+        end
+
+        if not duration and clip_info.source_out and clip_info.source_in and clip_info.source_out > clip_info.source_in then
+            duration = clip_info.source_out - clip_info.source_in
+            if duration and duration.frames <= 0 then
+                duration = nil
+            end
+        end
+
+        if not start and prev_end_time then
+            start = prev_end_time
+            if duration and not finish then
+                finish = start + duration
+            end
+        end
+
+        if not duration and start and finish then
+            duration = finish - start
+        end
+
+        if not start or not duration or duration.frames <= 0 then
+            error(string.format(
+                "FCP7 XML importer: unable to determine timing for clip '%s'",
+                clip_info.name or clip_info.original_id or "<unnamed clip>"
+            ))
+        end
+
+        if not finish then
+            finish = start + duration
+        end
+
+        if finish < start then
+            error(string.format(
+                "FCP7 XML importer: invalid timing for clip '%s' (finish < start)",
+                clip_info.name or clip_info.original_id or "<unnamed clip>"
+            ))
+        end
+
+        clip_info.timeline_start = start
+        clip_info.timeline_end = finish
+        clip_info.start_value = start
+        clip_info.duration = duration
+        prev_end_time = finish
+    end
+
     local children = collect_children(track_node)
     for _, child in ipairs(children) do
         if child:name() == "clipitem" then
             -- Generate track ID (will be created in database)
             local track_id = string.format("%s%d", track_type:sub(1,1):lower(), track_index)
             local clip = parse_clipitem(child, frame_rate, track_id, sequence_info)
+            finalize_clip_timing(clip)
             table.insert(track_info.clips, clip)
         elseif child:name() == "enabled" then
             track_info.enabled = (child:text():upper() == "TRUE")
@@ -435,6 +551,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     replay_context = replay_context or {}
 
     local database = require("core.database")
+    local tag_service = require("core.tag_service")
     local Sequence = require("models.sequence")
     local Track = require("models.track")
     local Clip = require("models.clip")
@@ -500,6 +617,39 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
     local media_lookup = {}
     local recorded_media_ids = {}
+    local master_lookup = {}
+    local recorded_master_ids = {}
+
+    local bins = tag_service.list(project_id)
+    local bins_by_name = {}
+    for _, bin in ipairs(bins) do
+        if bin.name and bin.id then
+            bins_by_name[bin.name:lower()] = bin
+        end
+    end
+    local bins_dirty = false
+
+    local project_settings = database.get_project_settings(project_id) or {}
+    local pending_bin_assignments = {}
+    local bin_assignment_dirty = false
+
+    local sequence_master_bins = {}
+
+    local function ensure_master_bin(sequence_name)
+        local base_name = (sequence_name and sequence_name ~= "") and sequence_name or "Imported Sequence"
+        local bin_label = string.format("%s Master Clips", base_name)
+        local key = bin_label:lower()
+        local existing = bins_by_name[key]
+        if existing then
+            return existing.id
+        end
+        local bin_id = uuid.generate_with_prefix("bin")
+        local bin_entry = {id = bin_id, name = bin_label}
+        table.insert(bins, bin_entry)
+        bins_by_name[key] = bin_entry
+        bins_dirty = true
+        return bin_id
+    end
 
     local function record_media_id(key, id)
         if not key or key == "" or not id then
@@ -512,6 +662,146 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             table.insert(result.media_ids, id)
         end
         result.media_id_map[key] = id
+    end
+
+    local function remember_master_mapping(key, id)
+        if not key or key == "" or not id or id == "" then
+            return
+        end
+        master_lookup[key] = id
+        result.clip_id_map[key] = id
+    end
+
+    local function record_master_clip_id(key, id)
+        if not id or id == "" then
+            return
+        end
+        if key and key ~= "" then
+            remember_master_mapping(key, id)
+        end
+        if not recorded_master_ids[id] then
+            recorded_master_ids[id] = true
+            table.insert(result.clip_ids, id)
+        end
+    end
+
+    local function find_existing_master_clip(media_id)
+        if not media_id or media_id == "" then
+            return nil
+        end
+        local stmt = conn:prepare([[
+            SELECT id
+            FROM clips
+            WHERE clip_kind = 'master'
+              AND media_id = ?
+              AND (project_id = ? OR project_id IS NULL)
+            LIMIT 1
+        ]])
+        if not stmt then
+            return nil
+        end
+        stmt:bind_value(1, media_id)
+        stmt:bind_value(2, project_id)
+        local existing_id = nil
+        if stmt:exec() and stmt:next() then
+            existing_id = stmt:value(0)
+        end
+        stmt:finalize()
+        return existing_id
+    end
+
+    local function build_master_key(clip_info, clip_key)
+        if not clip_info then
+            return nil
+        end
+        local base =
+            clip_info.master_clip_key or
+            clip_info.media_key or
+            clip_info.file_id or
+            clip_info.original_id or
+            clip_info.name or
+            clip_key
+        if not base or base == "" then
+            return nil
+        end
+        return "master::" .. tostring(base)
+    end
+
+    local function ensure_master_clip(clip_info, clip_key, media_id)
+        if not clip_info or not media_id or media_id == "" then
+            return nil
+        end
+
+        local key = build_master_key(clip_info, clip_key)
+        if key and master_lookup[key] then
+            return master_lookup[key]
+        end
+
+        local existing_id = find_existing_master_clip(media_id)
+        if existing_id then
+            if key then
+                remember_master_mapping(key, existing_id)
+            end
+            clip_info.master_clip_id = existing_id
+            return existing_id
+        end
+
+        local reuse_id = key and resolve_reuse_id('clips', key) or nil
+
+        local name = clip_info.name
+        if (not name or name == "") and clip_info.media and clip_info.media.name then
+            name = clip_info.media.name
+        end
+        if not name or name == "" then
+            name = "Imported Master Clip"
+        end
+
+        local fps_num = math.floor(clip_info.frame_rate * 1000)
+        local fps_den = 1000
+        local zero_rational = Rational.new(0, fps_num, fps_den)
+        local default_duration_rational = Rational.new(1000, fps_num, fps_den)
+
+        local duration = (clip_info.media and clip_info.media.duration) or clip_info.duration or default_duration_rational
+        if type(duration) == "number" then
+            duration = Rational.new(duration, fps_num, fps_den)
+        end
+        if duration.frames <= 0 then
+            duration = default_duration_rational
+        end
+        local source_in = clip_info.source_in or zero_rational
+        local source_out = clip_info.source_out or (source_in + duration)
+        if source_out < source_in then -- Rational comparison
+            source_out = source_in + duration
+        end
+
+        local master_clip = Clip.create(name, media_id, {
+            id = reuse_id,
+            project_id = project_id,
+            clip_kind = "master",
+            timeline_start = zero_rational, -- Master clips always start at 0 timeline position
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out,
+            rate_num = fps_num,
+            rate_den = fps_den,
+            enabled = clip_info.enabled ~= false,
+            offline = clip_info.offline == true
+        })
+
+        if not master_clip then
+            return nil
+        end
+
+        if not master_clip:save(conn, {skip_occlusion = true}) then
+            return nil
+        end
+
+        clip_info.master_clip_id = master_clip.id
+        if key then
+            master_lookup[key] = master_clip.id
+        end
+        record_master_clip_id(key, master_clip.id)
+        return master_clip.id
     end
 
     local function find_existing_media_id(file_path)
@@ -586,12 +876,19 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             parsed_result.media_files[key] = media_info
         end
 
+        local fps_num = math.floor((clip_info.frame_rate or 24) * 1000)
+        local fps_den = 1000
+        local one_rational = Rational.new(1, fps_num, fps_den)
+
         local duration = media_info.duration
-        if (not duration or duration <= 0) and clip_info.duration and clip_info.duration > 0 then
+        if type(duration) == "number" then
+            duration = Rational.new(duration, fps_num, fps_den)
+        end
+        if (not duration or duration.frames <= 0) and clip_info.duration and clip_info.duration.frames > 0 then
             duration = clip_info.duration
         end
-        if not duration or duration <= 0 then
-            duration = 1
+        if not duration or duration.frames <= 0 then
+            duration = one_rational
         end
 
         local file_path = media_info.path
@@ -600,22 +897,12 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             print(string.format("WARNING: create_entities: missing file path for media %s; using placeholder %s", tostring(key), file_path))
         end
 
-        local frame_rate = media_info.frame_rate or clip_info.frame_rate or 30.0
-
-        local reuse_id = nil
-        if key then
-            reuse_id = resolve_reuse_id('media', key)
-            if not reuse_id then
-                reuse_id = find_existing_media_id(file_path)
-            end
-        end
-
         local media = Media.create({
             id = reuse_id,
             project_id = project_id,
             file_path = file_path,
             name = media_info.name or tostring(key or file_path),
-            duration = math.floor(duration),
+            duration = duration,
             frame_rate = frame_rate,
             width = media_info.width,
             height = media_info.height,
@@ -640,30 +927,59 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return media.id
     end
 
-    local function create_clip(track_id, clip_info, clip_key)
+    local function create_clip(track_id, clip_info, clip_key, master_bin_id)
         local media_id = ensure_media(clip_info)
-        local clip = Clip.create(clip_info.name or "Clip", media_id)
-        if not clip then
-            return false, "Failed to allocate clip"
+        local master_clip_id = ensure_master_clip(clip_info, clip_key, media_id)
+
+        if master_bin_id and master_bin_id ~= "" and master_clip_id then
+            local bucket = pending_bin_assignments[master_bin_id]
+            if not bucket then
+                bucket = {}
+                pending_bin_assignments[master_bin_id] = bucket
+            end
+            if not bucket[master_clip_id] then
+                bucket[master_clip_id] = true
+                bin_assignment_dirty = true
+            end
+        end
+
+        local fps_num = math.floor(clip_info.frame_rate * 1000)
+        local fps_den = 1000
+        local zero_rational = Rational.new(0, fps_num, fps_den)
+        local one_rational = Rational.new(1, fps_num, fps_den)
+        
+        local start_value = clip_info.start_value or zero_rational
+        local duration = clip_info.duration or one_rational
+        duration = Rational.max(duration, one_rational) -- Ensure duration is at least 1 Rational frame
+        local source_in = clip_info.source_in or zero_rational
+        local source_out = clip_info.source_out or (source_in + duration)
+        if source_out < source_in then
+            source_out = source_in + duration
         end
 
         local reuse_id = resolve_reuse_id('clips', clip_key)
         if not reuse_id and clip_info.original_id and clip_info.original_id ~= "" then
             reuse_id = clip_info.original_id
         end
-        if reuse_id then
-            clip.id = reuse_id
-        end
 
-        clip.track_id = track_id
-        clip.start_time = math.floor(clip_info.start_time or 0)
-        clip.duration = math.max(math.floor(clip_info.duration or 0), 1)
-        clip.source_in = math.floor(clip_info.source_in or 0)
-        clip.source_out = math.floor(clip_info.source_out or (clip.source_in + clip.duration))
-        if clip.source_out <= clip.source_in then
-            clip.source_out = clip.source_in + clip.duration
+        local clip = Clip.create(clip_info.name or "Clip", media_id, {
+            id = reuse_id,
+            project_id = project_id,
+            track_id = track_id,
+            parent_clip_id = master_clip_id,
+            owner_sequence_id = clip_info.owner_sequence_id,
+            timeline_start = start_value,
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out,
+            rate_num = fps_num,
+            rate_den = fps_den,
+            enabled = clip_info.enabled ~= false,
+            offline = clip_info.offline == true
+        })
+        if not clip then
+            return false, "Failed to allocate clip"
         end
-        clip.enabled = clip_info.enabled ~= false
 
         if not clip:save(conn) then
             return false, "Failed to save clip"
@@ -676,10 +992,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return true
     end
 
-    local function create_clip_set(sequence_key, track_key, track_id, clips)
+    local function create_clip_set(sequence_key, track_key, track_id, clips, master_bin_id, sequence_id)
         for clip_index, clip_info in ipairs(clips or {}) do
             local clip_key = track_key .. "::" .. (clip_info.original_id or clip_index)
-            local ok, err = create_clip(track_id, clip_info, clip_key)
+            if not clip_info.owner_sequence_id or clip_info.owner_sequence_id == "" then
+                clip_info.owner_sequence_id = sequence_id or result.sequence_id_map[sequence_key]
+            end
+            local ok, err = create_clip(track_id, clip_info, clip_key, master_bin_id)
             if not ok then
                 return false, err
             end
@@ -687,7 +1006,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return true
     end
 
-    local function create_track(sequence_key, sequence_id, track_info, kind)
+    local function create_track(sequence_key, sequence_id, track_info, kind, master_bin_id)
         local name = track_info.name
         if not name or name == "" then
             if kind == "VIDEO" then
@@ -727,12 +1046,48 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         table.insert(result.track_ids, track.id)
         result.track_id_map[track_key] = track.id
 
-        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips)
+        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips, master_bin_id, sequence_id)
         if not ok then
             return false, err
         end
 
         return true
+    end
+
+    local transaction_active = false
+    local savepoint_name = string.format("import_fcp7_%s", uuid.generate():gsub("-", ""))
+
+    local function begin_transaction()
+        if transaction_active then
+            return true
+        end
+        local ok, err = conn:exec(string.format("SAVEPOINT %s;", savepoint_name))
+        if ok == false then
+            return false, err or "SAVEPOINT failed"
+        end
+        transaction_active = true
+        return true
+    end
+
+    local function commit_transaction()
+        if not transaction_active then
+            return true
+        end
+        local ok, err = conn:exec(string.format("RELEASE SAVEPOINT %s;", savepoint_name))
+        if ok == false then
+            return false, err or "RELEASE SAVEPOINT failed"
+        end
+        transaction_active = false
+        return true
+    end
+
+    local function rollback_transaction()
+        if not transaction_active then
+            return
+        end
+        conn:exec(string.format("ROLLBACK TO SAVEPOINT %s;", savepoint_name))
+        conn:exec(string.format("RELEASE SAVEPOINT %s;", savepoint_name))
+        transaction_active = false
     end
 
     local function rollback_partial()
@@ -773,6 +1128,11 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         end
     end
 
+    local txn_ok, txn_err = begin_transaction()
+    if not txn_ok then
+        return {success = false, error = string.format("Failed to begin import transaction: %s", tostring(txn_err))}
+    end
+
     local ok, err = pcall(function()
         for seq_index, seq_info in ipairs(parsed_result.sequences or {}) do
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
@@ -795,16 +1155,18 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
             table.insert(result.sequence_ids, sequence.id)
             result.sequence_id_map[sequence_key] = sequence.id
+            local master_bin_id = ensure_master_bin(seq_info.name)
+            sequence_master_bins[sequence_key] = master_bin_id
 
             for track_index, track_info in ipairs(seq_info.video_tracks or {}) do
-                local success, track_err = create_track(sequence_key, sequence.id, track_info, "VIDEO")
+                local success, track_err = create_track(sequence_key, sequence.id, track_info, "VIDEO", master_bin_id)
                 if not success then
                     error(track_err)
                 end
             end
 
             for track_index, track_info in ipairs(seq_info.audio_tracks or {}) do
-                local success, track_err = create_track(sequence_key, sequence.id, track_info, "AUDIO")
+                local success, track_err = create_track(sequence_key, sequence.id, track_info, "AUDIO", master_bin_id)
                 if not success then
                     error(track_err)
                 end
@@ -813,8 +1175,45 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     end)
 
     if not ok then
+        rollback_transaction()
         rollback_partial()
         return {success = false, error = err}
+    end
+
+    local commit_ok, commit_err = commit_transaction()
+    if commit_ok == false then
+        rollback_transaction()
+        rollback_partial()
+        return {success = false, error = string.format("Failed to commit import transaction: %s", tostring(commit_err))}
+    end
+
+    local bins_saved = true
+    if bins_dirty then
+        local ok, err = tag_service.save_hierarchy(project_id, bins)
+        if not ok then
+            bins_saved = false
+            print("WARNING: Failed to persist bin hierarchy: " .. tostring(err))
+        end
+    end
+    if bin_assignment_dirty and bins_saved then
+        for bin_id, clip_lookup in pairs(pending_bin_assignments) do
+            if type(bin_id) == "string" and bin_id ~= "" then
+                local clip_ids = {}
+                for clip_id in pairs(clip_lookup) do
+                    table.insert(clip_ids, clip_id)
+                end
+                if #clip_ids > 0 then
+                    local ok, assign_err = tag_service.assign_master_clips(project_id, clip_ids, bin_id)
+                    if not ok then
+                        print(string.format(
+                            "WARNING: Failed to persist %d master clip assignments for bin %s: %s",
+                            #clip_ids, tostring(bin_id), tostring(assign_err or "unknown error")))
+                    end
+                end
+            end
+        end
+    elseif bin_assignment_dirty and not bins_saved then
+        print("WARNING: Skipping master clip bin assignment because bin hierarchy could not be saved")
     end
 
     return result

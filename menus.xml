@@ -48,13 +48,13 @@
     <item name="Link Clips" command="LinkClips" shortcut="Cmd+L"/>
     <item name="Unlink Clips" command="UnlinkClips" shortcut="Cmd+Shift+L"/>
     <separator/>
-    <item name="Nudge Left" command="Nudge" params="{delta_ms=-33}" shortcut="Left"/>
-    <item name="Nudge Right" command="Nudge" params="{delta_ms=33}" shortcut="Right"/>
+    <item name="Nudge Left" command="Nudge" params="{delta_ms=-33}"/>
+    <item name="Nudge Right" command="Nudge" params="{delta_ms=33}"/>
     <separator/>
     <item name="Enable/Disable" command="ToggleClipEnabled" shortcut="D"/>
     <separator/>
     <item name="Match Frame" command="MatchFrame" shortcut="F"/>
-    <item name="Reveal in Browser" command="RevealInBrowser" shortcut="Shift+F"/>
+    <item name="Reveal in Filesystem" command="RevealInFilesystem" shortcut="Shift+F"/>
   </menu>
 
   <!-- Timeline Menu -->
@@ -78,7 +78,7 @@
   <!-- Media Menu -->
   <menu name="Media">
     <item name="New Bin" command="NewBin" shortcut="Cmd+Shift+N"/>
-    <item name="Rename..." command="RenameMedia" shortcut="F2"/>
+    <item name="Rename..." command="RenameItem" shortcut="F2"/>
     <separator/>
     <item name="Relink Media..." command="ShowRelinkDialog"/>
     <item name="Consolidate Media..." command="ConsolidateMedia"/>
@@ -93,6 +93,8 @@
     <item name="Show Timeline" command="ShowTimeline" checkable="true"/>
     <item name="Show Inspector" command="ShowInspector" checkable="true"/>
     <item name="Show Viewer" command="ShowViewer" checkable="true"/>
+    <separator/>
+    <item name="Toggle Panel Maximize" command="ToggleMaximizePanel" shortcut="~"/>
     <separator/>
     <menu name="Workspace">
       <item name="Editing" command="LoadWorkspace" params="{name='editing'}"/>

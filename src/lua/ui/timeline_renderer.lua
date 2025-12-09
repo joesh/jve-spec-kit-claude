@@ -20,7 +20,7 @@ local SELECTED_CLIP_COLOR = timeline_state.colors.clip_selected
 function TimelineRenderer.new(timeline_widget)
     local self = {
         timeline = timeline_widget,
-        playhead_time = 0,
+        playhead_value = 0,
         zoom_level = 1.0,
         tracks = {"Video 1", "Audio 1", "Audio 2"}
     }
@@ -28,8 +28,8 @@ function TimelineRenderer.new(timeline_widget)
     return self
 end
 
-function TimelineRenderer:set_playhead_time(time)
-    self.playhead_time = time
+function TimelineRenderer:set_playhead_value(time)
+    self.playhead_value = time
 end
 
 function TimelineRenderer:set_zoom_level(zoom)
@@ -52,10 +52,10 @@ function TimelineRenderer:draw_ruler(width)
     
     -- Draw time markers
     local seconds_per_marker = 1
-    local start_time = 0
+    local start_value = 0
     local end_time = (width - TRACK_HEADER_WIDTH) / (100 * self.zoom_level)
     
-    for time = start_time, end_time, seconds_per_marker do
+    for time = start_value, end_time, seconds_per_marker do
         local x = self:time_to_pixel(time)
         if x < width then
             -- Draw marker line
@@ -102,6 +102,14 @@ function TimelineRenderer:draw_clips(instances, selection)
     for i, track in ipairs(self.tracks) do
         track_indices[track] = i
     end
+
+    local selected_lookup = nil
+    if selection and selection.instances then
+        selected_lookup = {}
+        for _, selected_id in ipairs(selection.instances) do
+            selected_lookup[selected_id] = true
+        end
+    end
     
     -- Draw clips for each instance
     for instance_id, instance in pairs(instances) do
@@ -117,13 +125,8 @@ function TimelineRenderer:draw_clips(instances, selection)
                 
                 -- Choose color based on selection
                 local clip_color = CLIP_COLOR
-                if selection and selection.instances then
-                    for _, selected_id in ipairs(selection.instances) do
-                        if selected_id == instance_id then
-                            clip_color = SELECTED_CLIP_COLOR
-                            break
-                        end
-                    end
+                if selected_lookup and selected_lookup[instance_id] then
+                    clip_color = SELECTED_CLIP_COLOR
                 end
                 
                 -- Draw clip rectangle
@@ -146,7 +149,7 @@ function TimelineRenderer:draw_clips(instances, selection)
 end
 
 function TimelineRenderer:draw_playhead(height)
-    local x = self:time_to_pixel(self.playhead_time)
+    local x = self:time_to_pixel(self.playhead_value)
     
     -- Draw playhead line
     timeline_add_line(self.timeline, x, 0, x, height, PLAYHEAD_COLOR, 2)

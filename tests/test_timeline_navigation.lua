@@ -8,106 +8,51 @@ require('test_env')
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
+local Rational = require('core.rational')
 
-local TEST_DB = "/tmp/test_timeline_navigation.db"
+local TEST_DB = "/tmp/jve/test_timeline_navigation.db"
 os.remove(TEST_DB)
 
 database.init(TEST_DB)
 local db = database.get_connection()
 
+db:exec(require('import_schema'))
+
 db:exec([[
-    CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER NOT NULL DEFAULT 0,
-        frame_rate REAL
-    );
-
-    CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 10000, 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
 db:exec([[
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'VIDEO', 1, 1);
-]])
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_clip_a', 'default_project', 'clip_a.mov', '/tmp/jve/clip_a.mov', 1000, 30, 1, 1920, 1080, 0, '', '{}', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_clip_b', 'default_project', 'clip_b.mov', '/tmp/jve/clip_b.mov', 1500, 30, 1, 1920, 1080, 0, '', '{}', strftime('%s','now'), strftime('%s','now'));
 
-db:exec([[
-    INSERT INTO media (id, name, file_path, duration, frame_rate)
-    VALUES ('media_clip_a', 'clip_a.mov', '/tmp/clip_a.mov', 1000, 30.0);
-    INSERT INTO media (id, name, file_path, duration, frame_rate)
-    VALUES ('media_clip_b', 'clip_b.mov', '/tmp/clip_b.mov', 1500, 30.0);
-
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_a', 'track_v1', 'media_clip_a', 0, 1000, 0, 1000, 1);
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip_b', 'track_v1', 'media_clip_b', 2000, 1500, 0, 1500, 1);
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_clip_a', 'default_sequence',
+        0, 1000, 0, 1000, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_b', 'default_project', 'timeline', 'Clip B', 'track_v1', 'media_clip_b', 'default_sequence',
+        2000, 1500, 0, 1500, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
 ]])
 
 local timeline_state = {
-    playhead_time = 500,
+    playhead_position = Rational.new(500, 30, 1),
     clips = {
-        {id = 'clip_a', start_time = 0, duration = 1000},
-        {id = 'clip_b', start_time = 2000, duration = 1500}
+        {id = 'clip_a', timeline_start = Rational.new(0, 30, 1), duration = Rational.new(1000, 30, 1)},
+        {id = 'clip_b', timeline_start = Rational.new(2000, 30, 1), duration = Rational.new(1500, 30, 1)}
     },
-    viewport_start_time = 0,
-    viewport_duration = 10000
+    viewport_start_value = Rational.new(0, 30, 1),
+    viewport_duration_frames_value = Rational.new(10000, 30, 1)
 }
 
 function timeline_state.get_selected_clips() return {} end
@@ -117,16 +62,23 @@ function timeline_state.clear_edge_selection() end
 function timeline_state.set_selection(_) end
 function timeline_state.reload_clips() end
 function timeline_state.persist_state_to_db() end
-function timeline_state.get_playhead_time() return timeline_state.playhead_time end
-function timeline_state.set_playhead_time(time_ms) timeline_state.playhead_time = time_ms end
+function timeline_state.get_playhead_position() return timeline_state.playhead_position end
+function timeline_state.set_playhead_position(time_val)
+    if type(time_val) == "number" then
+        timeline_state.playhead_position = Rational.new(time_val, 30, 1)
+    else
+        timeline_state.playhead_position = time_val
+    end
+end
 function timeline_state.get_clips() return timeline_state.clips end
+function timeline_state.get_sequence_frame_rate() return {fps_numerator = 30, fps_denominator = 1} end
 
 local viewport_guard = 0
 
 function timeline_state.capture_viewport()
     return {
-        start_time = timeline_state.viewport_start_time,
-        duration = timeline_state.viewport_duration,
+        start_value = timeline_state.viewport_start_value,
+        duration = timeline_state.viewport_duration_frames_value,
     }
 end
 
@@ -136,11 +88,11 @@ function timeline_state.restore_viewport(snapshot)
     end
 
     if snapshot.duration then
-        timeline_state.viewport_duration = snapshot.duration
+        timeline_state.viewport_duration_frames_value = snapshot.duration
     end
 
-    if snapshot.start_time then
-        timeline_state.viewport_start_time = snapshot.start_time
+    if snapshot.start_value then
+        timeline_state.viewport_start_value = snapshot.start_value
     end
 end
 
@@ -160,7 +112,7 @@ package.loaded['ui.timeline.timeline_state'] = timeline_state
 
 local executors = {}
 local undoers = {}
-command_impl.register_commands(executors, undoers, db)
+-- command_impl.register_commands(executors, undoers, db)
 
 command_manager.init(db, 'default_sequence', 'default_project')
 
@@ -168,13 +120,17 @@ print("=== Timeline Navigation Command Tests ===\n")
 
 local result = command_manager.execute("GoToStart")
 assert(result.success == true, "GoToStart should succeed")
-assert(timeline_state.playhead_time == 0, "GoToStart must set playhead to 0")
+local start_pos = timeline_state.get_playhead_position()
+local start_frames = (type(start_pos) == "table" and start_pos.frames) or start_pos
+assert(start_frames == 0, "GoToStart must set playhead to 0")
 
-timeline_state.playhead_time = 321 -- ensure we move again
+timeline_state.playhead_position = 321 -- ensure we move again
 
 result = command_manager.execute("GoToEnd")
 assert(result.success == true, "GoToEnd should succeed")
-assert(timeline_state.playhead_time == 3500,
-    string.format("GoToEnd must set playhead to timeline end (expected 3500, got %d)", timeline_state.playhead_time))
+local end_pos = timeline_state.get_playhead_position()
+local end_frames = (type(end_pos) == "table" and end_pos.frames) or end_pos
+assert(end_frames == 3500,
+    string.format("GoToEnd must set playhead to timeline end (expected 3500, got %s)", tostring(end_frames)))
 
 print("✅ GoToStart/GoToEnd navigation commands adjust playhead correctly")

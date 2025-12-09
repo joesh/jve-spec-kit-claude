@@ -1,5 +1,31 @@
 local M = {}
 
+-- Ensure repo lua modules are on the path (core, dkjson, etc.)
+local repo_root
+do
+    local here = debug.getinfo(1, "S").source:sub(2)
+    local prefix = here:match("^(.*)/tests/test_env.lua$")
+    repo_root = prefix or "."
+    local paths = {
+        repo_root .. "/?.lua",
+        repo_root .. "/?/init.lua",
+        repo_root .. "/src/lua/?.lua",
+        repo_root .. "/src/lua/?/init.lua",
+        repo_root .. "/tests/?.lua",
+        repo_root .. "/tests/?/init.lua",
+        repo_root .. "/../src/lua/?.lua",
+        repo_root .. "/../src/lua/?/init.lua",
+    }
+    package.path = table.concat(paths, ";") .. ";" .. package.path
+end
+M.repo_root = repo_root
+
+function M.resolve_repo_path(relative)
+    if not relative or relative == "" then return repo_root end
+    if relative:sub(1, 1) == "/" then return relative end
+    return repo_root .. "/" .. relative
+end
+
 -- Provide deterministic JSON helpers via bundled dkjson
 local function ensure_json_helpers()
     if _G.qt_json_encode and _G.qt_json_decode then
@@ -48,5 +74,54 @@ end
 
 ensure_json_helpers()
 ensure_timer_stub()
+
+-- Ensure temp workspace exists for all tests
+do
+    local tmp_root = "/tmp/jve"
+    local ok, err = pcall(function() return os.execute(string.format("mkdir -p %q", tmp_root)) end)
+    if not ok then
+        -- Best-effort; tests that need it will fail loudly otherwise
+        io.stderr:write("WARNING: failed to create ", tmp_root, ": ", tostring(err), "\n")
+    end
+end
+
+-- Force nil calls to raise useful errors (parity with layout.lua)
+local function enforce_nil_call_protection()
+    if not debug or not debug.setmetatable then
+        return
+    end
+
+    local current = getmetatable(nil) or {}
+    if current.__call == nil then
+        current.__call = function()
+            error("attempt to call nil value", 2)
+        end
+        debug.setmetatable(nil, current)
+    end
+end
+
+enforce_nil_call_protection()
+
+-- Lightweight dependency guards for tests
+local function enforce(expected, fn)
+    if type(fn) ~= "function" then
+        error(string.format("Missing required dependency '%s'", tostring(expected)), 3)
+    end
+    return fn
+end
+
+local function enforce_table(tbl, specs)
+    if type(tbl) ~= "table" or type(specs) ~= "table" then
+        return
+    end
+    for key, descriptor in pairs(specs) do
+        local expected = descriptor or key
+        local candidate = tbl[key]
+        tbl[key] = enforce(expected, candidate)
+    end
+end
+
+M.enforce = enforce
+M.enforce_table = enforce_table
 
 return M

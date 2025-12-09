@@ -37,13 +37,24 @@ bool Migrations::applyMigrations(QSqlDatabase& database, const QString& projectP
     if (!versions.upgradeNeeded) {
         return SchemaValidator::verifyConstitutionalCompliance(database);
     }
-    
-    if (versions.isDowngrade) {
-        qCCritical(jveMigrations, "Database version %d is newer than supported version %d", versions.current, versions.target);
-        return false;
+
+    // Fresh database: apply the initial schema directly.
+    if (versions.current == 0) {
+        qCInfo(jveMigrations, "Applying initial schema (v%d)", schema::INITIAL_SCHEMA_VERSION);
+        if (!SqlExecutor::applyMigrationVersion(database, schema::INITIAL_SCHEMA_VERSION)) {
+            return false;
+        }
+        return SchemaValidator::validateSchema(database) &&
+               SchemaValidator::verifyConstitutionalCompliance(database);
     }
     
-    return executeVersionUpgrade(database, versions);
+    // No backward compatibility: schema mismatches are fatal.
+    if (versions.isDowngrade) {
+        qCCritical(jveMigrations, "Database version %d is newer than supported version %d", versions.current, versions.target);
+    } else {
+        qCCritical(jveMigrations, "Database version %d is older than required version %d and migrations are not supported. Delete or recreate the database.", versions.current, versions.target);
+    }
+    return false;
 }
 
 bool Migrations::createNewProject(const QString& projectPath)
@@ -105,60 +116,16 @@ Migrations::VersionInfo Migrations::determineVersionUpgrade(const QSqlDatabase& 
     if (info.current == info.target) {
         info.upgradeNeeded = false;
         qCInfo(jveMigrations, "Database already at latest schema version");
-    } else if (info.current > info.target) {
-        info.isDowngrade = true;
-    } else {
-        info.upgradeNeeded = true;
+        return info;
     }
+
+    // Any mismatch is a hard error; we do not attempt migrations.
+    if (info.current > info.target) {
+        info.isDowngrade = true;
+    }
+    info.upgradeNeeded = true;
     
     return info;
-}
-
-bool Migrations::executeVersionUpgrade(QSqlDatabase& database, const VersionInfo& versions)
-{
-    database.transaction();
-    
-    bool success = applyMigrationsInSequence(database, versions.current, versions.target);
-    
-    if (!success) {
-        database.rollback();
-        return false;
-    }
-    
-    if (!database.commit()) {
-        qCCritical(jveMigrations, "Failed to commit migrations: %s", qPrintable(database.lastError().text()));
-        return false;
-    }
-    
-    return validateFinalMigrationState(database);
-}
-
-bool Migrations::applyMigrationsInSequence(QSqlDatabase& database, int fromVersion, int toVersion)
-{
-    for (int version = fromVersion + 1; version <= toVersion; version++) {
-        qCInfo(jveMigrations, "Applying migration to version %d", version);
-        
-        if (!SqlExecutor::applyMigrationVersion(database, version)) {
-            qCCritical(jveMigrations, "Migration to version %d failed", version);
-            return false;
-        }
-    }
-    
-    return true;
-}
-
-bool Migrations::validateFinalMigrationState(const QSqlDatabase& database)
-{
-    bool valid = SchemaValidator::validateSchema(database) && 
-                SchemaValidator::verifyConstitutionalCompliance(database);
-    
-    if (valid) {
-        qCInfo(jveMigrations, "All migrations applied successfully");
-    } else {
-        qCCritical(jveMigrations, "Migration validation failed");
-    }
-    
-    return valid;
 }
 
 bool Migrations::prepareProjectFile(const QString& projectPath)
@@ -182,8 +149,6 @@ void Migrations::cleanupMigrationConnection(QSqlDatabase& database)
     database.close();
     QSqlDatabase::removeDatabase(connectionName);
 }
-
-
 
 
 

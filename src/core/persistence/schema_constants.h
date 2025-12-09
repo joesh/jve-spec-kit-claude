@@ -25,7 +25,10 @@ static const char* const REQUIRED_TABLES[] = {
     "clips", 
     "properties",
     "commands",
-    "snapshots"
+    "snapshots",
+    "tag_namespaces",
+    "tags",
+    "tag_assignments"
 };
 
 static const int REQUIRED_TABLES_COUNT = sizeof(REQUIRED_TABLES) / sizeof(REQUIRED_TABLES[0]);

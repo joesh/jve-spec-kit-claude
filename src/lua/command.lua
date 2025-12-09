@@ -2,6 +2,7 @@
 -- Provides command creation, parameter management, and serialization
 
 local uuid = require("uuid")
+local json = require("dkjson") -- Added
 
 local M = {}
 
@@ -30,20 +31,118 @@ function M.parse_from_query(query, project_id)
         return nil
     end
 
-    -- Assuming query result has these columns:
-    -- id, type, project_id, sequence_number, status, parameters, pre_hash, post_hash, created_at, executed_at
-    local command = {
-        id = query:value(0),
-        type = query:value(1),
-        project_id = query:value(2) or project_id,
-        sequence_number = query:value(3) or 0,
-        status = query:value(4) or "Created",
-        parameters = {},  -- TODO: Parse JSON parameters from query:value(5)
-        pre_hash = query:value(6) or "",
-        post_hash = query:value(7) or "",
-        created_at = query:value(8) or os.time(),
-        executed_at = query:value(9),
-    }
+    local column_count = 0
+    if query.record then
+        local rec = query:record()
+        if rec and rec.count then
+            column_count = rec:count()
+        end
+    end
+    local command = nil
+
+    -- Two supported layouts:
+    -- 1) SELECT * FROM commands (schema order)
+    -- 2) Explicit column list from command_manager.get_command_at_sequence
+    if column_count >= 17 then
+        local args_json = query:value(4)
+        local args_table = {}
+        if args_json and args_json ~= "" then
+            local ok, decoded = pcall(json.decode, args_json)
+            if ok and type(decoded) == "table" then
+                args_table = decoded
+            end
+        end
+
+        command = {
+            id = query:value(0),
+            parent_id = query:value(1),
+            sequence_number = query:value(2) or 0,
+            type = query:value(3),
+            parameters = args_table,
+            parent_sequence_number = query:value(5),
+            pre_hash = query:value(6) or "",
+            post_hash = query:value(7) or "",
+            created_at = query:value(8) or os.time(),
+            executed_at = query:value(8),
+            playhead_value = query:value(9),
+            playhead_rate = query:value(10),
+            selected_clip_ids = query:value(11),
+            selected_edge_infos = query:value(12),
+            selected_gap_infos = query:value(13),
+            selected_clip_ids_pre = query:value(14),
+            selected_edge_infos_pre = query:value(15),
+            selected_gap_infos_pre = query:value(16),
+            status = query:value(17) or "Created"
+        }
+        command.project_id = project_id or args_table.project_id
+    else
+        local args_json = query:value(2)
+        local args_table = {}
+        if args_json and args_json ~= "" then
+            local ok, decoded = pcall(json.decode, args_json)
+            if ok and type(decoded) == "table" then
+                args_table = decoded
+            end
+        end
+
+        command = {
+            id = query:value(0),
+            type = query:value(1),
+            parameters = args_table,
+            sequence_number = query:value(3) or 0,
+            parent_sequence_number = query:value(4),
+            pre_hash = query:value(5) or "",
+            post_hash = query:value(6) or "",
+            created_at = query:value(7) or os.time(),
+            executed_at = query:value(7),
+            playhead_value = query:value(8),
+            playhead_rate = query:value(9),
+            selected_clip_ids = query:value(10),
+            selected_edge_infos = query:value(11),
+            selected_gap_infos = query:value(12),
+            selected_clip_ids_pre = query:value(13),
+            selected_edge_infos_pre = query:value(14),
+            selected_gap_infos_pre = query:value(15),
+            status = query:value(16) or "Created"
+        }
+        command.project_id = project_id or args_table.project_id
+    end
+
+    setmetatable(command, {__index = M})
+    return command
+end
+
+-- Deserialize a command from a JSON string
+function M.deserialize(json_string)
+    if not json_string or json_string == "" then
+        return nil, "JSON string is empty"
+    end
+    local success, data = pcall(json.decode, json_string)
+    if not success then
+        return nil, "Failed to decode JSON: " .. tostring(data)
+    end
+
+    if not data or type(data) ~= "table" then
+        return nil, "Decoded JSON is not a table"
+    end
+
+    local command = M.create(data.type, data.project_id)
+    command.id = data.id or command.id
+    command.sequence_number = data.sequence_number or 0
+    command.status = data.status or "Created"
+    command.parameters = data.parameters or {}
+    command.pre_hash = data.pre_hash or ""
+    command.post_hash = data.post_hash or ""
+    command.created_at = data.created_at or os.time()
+    command.executed_at = data.executed_at
+    command.playhead_value = data.playhead_value
+    command.playhead_rate = data.playhead_rate
+    command.selected_clip_ids = data.selected_clip_ids
+    command.selected_edge_infos = data.selected_edge_infos
+    command.selected_gap_infos = data.selected_gap_infos
+    command.selected_clip_ids_pre = data.selected_clip_ids_pre
+    command.selected_edge_infos_pre = data.selected_edge_infos_pre
+    command.selected_gap_infos_pre = data.selected_gap_infos_pre
 
     setmetatable(command, {__index = M})
     return command
@@ -59,6 +158,10 @@ function M:get_parameter(key)
     return self.parameters[key]
 end
 
+function M:clear_parameter(key)
+    self.parameters[key] = nil
+end
+
 -- Get all parameters
 function M:get_all_parameters()
     return self.parameters
@@ -66,16 +169,47 @@ end
 
 -- Serialize command to JSON string
 function M:serialize()
-    -- Simple serialization (would use proper JSON library in production)
-    local parts = {
-        string.format('"id":"%s"', self.id),
-        string.format('"type":"%s"', self.type),
-        string.format('"project_id":"%s"', self.project_id),
-        string.format('"sequence_number":%d', self.sequence_number),
-        string.format('"status":"%s"', self.status),
+    local playhead_rate_val = 0
+    if type(self.playhead_rate) == "number" then
+        playhead_rate_val = self.playhead_rate
+    elseif type(self.playhead_rate) == "table" and self.playhead_rate.fps_numerator then
+        playhead_rate_val = self.playhead_rate.fps_numerator / (self.playhead_rate.fps_denominator or 1)
+    end
+
+    local db_playhead_value = nil
+    if type(self.playhead_value) == "number" then
+        db_playhead_value = self.playhead_value
+    elseif type(self.playhead_value) == "table" and self.playhead_value.frames ~= nil then
+        db_playhead_value = self.playhead_value.frames
+    end
+
+    local command_data_for_json = {
+        id = self.id,
+        type = self.type,
+        project_id = self.project_id,
+        sequence_number = self.sequence_number,
+        status = self.status,
+        parameters = self.parameters,
+        pre_hash = self.pre_hash,
+        post_hash = self.post_hash,
+        created_at = self.created_at,
+        executed_at = self.executed_at,
+        playhead_value = db_playhead_value,
+        playhead_rate = playhead_rate_val,
+        selected_clip_ids = self.selected_clip_ids,
+        selected_edge_infos = self.selected_edge_infos,
+        selected_gap_infos = self.selected_gap_infos,
+        selected_clip_ids_pre = self.selected_clip_ids_pre,
+        selected_edge_infos_pre = self.selected_edge_infos_pre,
+        selected_gap_infos_pre = self.selected_gap_infos_pre,
     }
 
-    return "{" .. table.concat(parts, ",") .. "}"
+    local success, json_str = pcall(json.encode, command_data_for_json)
+    if not success then
+        print(string.format("WARNING: Command:serialize: Failed to encode command to JSON: %s", tostring(json_str)))
+        return "{}"
+    end
+    return json_str
 end
 
 -- Create undo command
@@ -96,11 +230,10 @@ function M:save(db)
         print("WARNING: Command.save: No database provided")
         return false
     end
-
     -- Serialize parameters to JSON
     local params_json = "{}"
     if self.parameters and next(self.parameters) ~= nil then
-        local success, json_str = pcall(qt_json_encode, self.parameters)
+        local success, json_str = pcall(json.encode, self.parameters) -- Changed to json.encode
         if success then
             params_json = json_str
         else
@@ -125,6 +258,32 @@ function M:save(db)
     if exists_query:exec() and exists_query:next() then
         exists = exists_query:value(0) > 0
     end
+    exists_query:finalize()
+
+    local selected_clip_ids_json = self.selected_clip_ids or "[]"
+    local selected_edge_infos_json = self.selected_edge_infos or "[]"
+    local selected_gap_infos_json = self.selected_gap_infos or "[]"
+    local selected_clip_ids_pre_json = self.selected_clip_ids_pre or "[]"
+    local selected_edge_infos_pre_json = self.selected_edge_infos_pre or "[]"
+    local selected_gap_infos_pre_json = self.selected_gap_infos_pre or "[]"
+
+    local playhead_rate_val = 0
+    if type(self.playhead_rate) == "number" then
+        playhead_rate_val = self.playhead_rate
+    elseif type(self.playhead_rate) == "table" and self.playhead_rate.fps_numerator then
+        playhead_rate_val = self.playhead_rate.fps_numerator / (self.playhead_rate.fps_denominator or 1)
+    end
+
+    local db_playhead_value = nil
+    if type(self.playhead_value) == "number" then
+        db_playhead_value = self.playhead_value
+    elseif type(self.playhead_value) == "table" and self.playhead_value.frames ~= nil then
+        db_playhead_value = self.playhead_value.frames
+    end
+
+    if db_playhead_value == nil or playhead_rate_val <= 0 then
+        error("FATAL: Command.save requires playhead_value and valid playhead_rate")
+    end
 
     local query
     if exists then
@@ -132,9 +291,9 @@ function M:save(db)
         query = db:prepare([[
             UPDATE commands
             SET command_type = ?, sequence_number = ?, command_args = ?,
-                pre_hash = ?, post_hash = ?, timestamp = ?, playhead_time = ?,
-                selected_clip_ids = ?, selected_edge_infos = ?,
-                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?
+                pre_hash = ?, post_hash = ?, timestamp = ?, playhead_value = ?, playhead_rate = ?,
+                selected_clip_ids = ?, selected_edge_infos = ?, selected_gap_infos = ?,
+                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?
             WHERE id = ?
         ]])
         if not query then
@@ -152,17 +311,20 @@ function M:save(db)
         query:bind_value(4, self.pre_hash)
         query:bind_value(5, self.post_hash)
         query:bind_value(6, self.executed_at or os.time())
-        query:bind_value(7, self.playhead_time or 0)
-        query:bind_value(8, self.selected_clip_ids or "[]")
-        query:bind_value(9, self.selected_edge_infos or "[]")
-        query:bind_value(10, self.selected_clip_ids_pre or "[]")
-        query:bind_value(11, self.selected_edge_infos_pre or "[]")
-        query:bind_value(12, self.id)
+        query:bind_value(7, db_playhead_value)
+        query:bind_value(8, playhead_rate_val)
+        query:bind_value(9, selected_clip_ids_json)
+        query:bind_value(10, selected_edge_infos_json)
+        query:bind_value(11, selected_gap_infos_json)
+        query:bind_value(12, selected_clip_ids_pre_json)
+        query:bind_value(13, selected_edge_infos_pre_json)
+        query:bind_value(14, selected_gap_infos_pre_json)
+        query:bind_value(15, self.id)
     else
         -- INSERT
         query = db:prepare([[
-            INSERT INTO commands (id, parent_id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_time, selected_clip_ids, selected_edge_infos, selected_clip_ids_pre, selected_edge_infos_pre)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not query then
             local err = "unknown error"
@@ -174,25 +336,31 @@ function M:save(db)
         end
 
         query:bind_value(1, self.id)
-        query:bind_value(2, nil)  -- parent_id (for batching, not used yet)
-        query:bind_value(3, self.parent_sequence_number)  -- For undo tree
-        query:bind_value(4, self.sequence_number)
-        query:bind_value(5, self.type)
-        query:bind_value(6, params_json)
-        query:bind_value(7, self.pre_hash)
-        query:bind_value(8, self.post_hash)
-        query:bind_value(9, self.executed_at or os.time())
-        query:bind_value(10, self.playhead_time or 0)
-        query:bind_value(11, self.selected_clip_ids or "[]")
-        query:bind_value(12, self.selected_edge_infos or "[]")
-        query:bind_value(13, self.selected_clip_ids_pre or "[]")
-        query:bind_value(14, self.selected_edge_infos_pre or "[]")
+        -- parent_id removed
+        query:bind_value(2, self.parent_sequence_number)
+        query:bind_value(3, self.sequence_number)
+        query:bind_value(4, self.type)
+        query:bind_value(5, params_json)
+        query:bind_value(6, self.pre_hash)
+        query:bind_value(7, self.post_hash)
+        query:bind_value(8, self.executed_at or os.time())
+        query:bind_value(9, db_playhead_value)
+        query:bind_value(10, playhead_rate_val)
+        query:bind_value(11, selected_clip_ids_json)
+        query:bind_value(12, selected_edge_infos_json)
+        query:bind_value(13, selected_gap_infos_json)
+        query:bind_value(14, selected_clip_ids_pre_json)
+        query:bind_value(15, selected_edge_infos_pre_json)
+        query:bind_value(16, selected_gap_infos_pre_json)
     end
 
     if not query:exec() then
         print(string.format("WARNING: Command.save: Failed to save command: %s", query:last_error()))
+        query:finalize()
         return false
     end
+    
+    query:finalize()
 
     return true
 end

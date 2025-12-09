@@ -178,7 +178,7 @@ function Track:save(db)
 
     local ok = stmt:exec()
     if not ok then
-        print(string.format("WARNING: Track.save: failed for %s", self.id))
+        print(string.format("WARNING: Track.save: failed for %s with error: %s", self.id, stmt:last_error()))
     end
 
     stmt:finalize()

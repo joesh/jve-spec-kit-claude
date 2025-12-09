@@ -1,7 +1,8 @@
 #include "simple_lua_engine.h"
 #include "qt_bindings.h"
-#include "ui/timeline/scriptable_timeline.h"
+#include "ui/timeline/timeline_renderer.h"
 #include "core/resource_paths.h"
+#include "../bug_reporter/qt_bindings_bug_reporter.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -9,7 +10,7 @@
 SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
 {
     qDebug() << "SimpleLuaEngine: Initializing LuaJIT engine";
-    
+
     // Create new Lua state
     L = luaL_newstate();
     if (!L) {
@@ -175,4 +176,8 @@ void SimpleLuaEngine::setupBindings()
 
     // Register timeline bindings
     registerTimelineBindings(L);
+
+    // Register bug reporter bindings
+    bug_reporter::registerBugReporterBindings(L);
+    qDebug() << "SimpleLuaEngine: Bug reporter bindings registered";
 }

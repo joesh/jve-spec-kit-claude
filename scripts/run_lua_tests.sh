@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="${ROOT_DIR}/tests"
 
+# Ensure temp root exists for all tests
+mkdir -p /tmp/jve
+
 if ! command -v luajit >/dev/null 2>&1; then
   echo "[lua-tests] luajit is not installed or not on PATH." >&2
   echo "[lua-tests] Install LuaJIT (e.g., brew install luajit) before running the build." >&2

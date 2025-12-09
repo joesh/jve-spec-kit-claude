@@ -1,9 +1,11 @@
 -- Timeline Horizontal Scrollbar Module
 -- Custom scrollbar where:
--- - Thumb position represents viewport_start_time
+-- - Thumb position represents viewport_start_value
 -- - Thumb size represents viewport_duration (zoom level)
 -- - Dragging thumb = scroll
 -- - Stretching thumb edges = zoom
+
+local profile_scope = require("core.profile_scope")
 
 local M = {}
 
@@ -30,7 +32,7 @@ function M.create(widget, state_module)
         local max_time = 60000  -- Minimum 60 seconds
 
         for _, clip in ipairs(state_module.get_clips()) do
-            local clip_end = clip.start_time + clip.duration
+            local clip_end = clip.start_value + clip.duration
             if clip_end > max_time then
                 max_time = clip_end
             end
@@ -180,7 +182,7 @@ function M.create(widget, state_module)
     timeline.set_mouse_event_handler(widget, handler_name)
 
     -- Listen to state changes
-    state_module.add_listener(render)
+    state_module.add_listener(profile_scope.wrap("timeline_scrollbar.render", render))
 
     -- Initial render
     render()

@@ -1,0 +1,34 @@
+local M = {}
+local timeline_state = require('ui.timeline.timeline_state')
+
+function M.register(command_executors, command_undoers, db, set_last_error)
+    command_executors["DeselectAll"] = function(command)
+        local dry_run = command:get_parameter("dry_run")
+        if not dry_run then
+            print("Executing DeselectAll command")
+        end
+
+        if dry_run then
+            return true
+        end
+
+        local current_clips = timeline_state.get_selected_clips() or {}
+        local current_edges = timeline_state.get_selected_edges() or {}
+
+        if #current_clips == 0 and #current_edges == 0 then
+            print("DeselectAll: nothing currently selected")
+        end
+
+        timeline_state.set_selection({})
+        timeline_state.clear_edge_selection()
+
+        print("✅ Deselected all clips and edges")
+        return true
+    end
+
+    return {
+        executor = command_executors["DeselectAll"]
+    }
+end
+
+return M

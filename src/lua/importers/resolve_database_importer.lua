@@ -273,7 +273,7 @@ end
 --- Extract clips for a track
 -- @param db userdata: Resolve SQLite database handle
 -- @param track_id string: Resolve track ID
--- @return table: Array of clips {name, start_time, duration, source_in, source_out, media_id}
+-- @return table: Array of clips {name, start_value, duration, source_in, source_out, media_id}
 local function extract_clips(db, track_id)
     local clips = {}
 
@@ -301,7 +301,7 @@ local function extract_clips(db, track_id)
             while stmt:step() == sqlite3.ROW do
                 local clip = {
                     name = stmt:get_value(0) or "Untitled Clip",
-                    start_time = tonumber(stmt:get_value(1)) or 0,
+                    start_value = tonumber(stmt:get_value(1)) or 0,
                     duration = tonumber(stmt:get_value(2)) or 0,
                     source_in = tonumber(stmt:get_value(3)) or 0,
                     source_out = tonumber(stmt:get_value(4)) or 0,

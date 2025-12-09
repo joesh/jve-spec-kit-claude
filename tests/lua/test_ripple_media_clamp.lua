@@ -64,10 +64,10 @@ package.loaded['core.database'] = {
             table.insert(list, clip)
         end
         table.sort(list, function(a, b)
-            if a.start_time == b.start_time then
+            if a.start_value == b.start_value then
                 return a.id < b.id
             end
-            return a.start_time < b.start_time
+            return a.start_value < b.start_value
         end)
         return list
     end
@@ -158,104 +158,116 @@ end
 local executor = command_manager.get_executor('BatchRippleEdit')
 local ripple_executor = command_manager.get_executor('RippleEdit')
 
--- Test 1: Out-point extend clamps to media duration.
+-- Test 1: Out-point extend clamps to media duration_value.
 mock_db:reset()
-mock_db:store_media({ id = 'media_short', duration = 10000 })
+mock_db:store_media({ id = 'media_short', duration_value = 10000, timebase_type = 'video_frames', timebase_rate = 30 })
 mock_db:store_clip({
     id = 'clip_out',
     track_id = 'track_v1',
     media_id = 'media_short',
-    start_time = 1000,
-    duration = 9500,
-    source_in = 0,
-    source_out = 9500
+    start_value = 1000,
+    duration_value = 9500,
+    source_in_value = 0,
+    source_out_value = 9500,
+    timebase_type = 'video_frames',
+    timebase_rate = 30
 })
 mock_db:store_clip({
     id = 'clip_downstream',
     track_id = 'track_v1',
     media_id = 'media_short',
-    start_time = 12000,
-    duration = 2000,
-    source_in = 0,
-    source_out = 2000
+    start_value = 12000,
+    duration_value = 2000,
+    source_in_value = 0,
+    source_out_value = 2000,
+    timebase_type = 'video_frames',
+    timebase_rate = 30
 })
 
 local cmd = new_cmd()
 cmd:set_parameter('edge_infos', {
     { clip_id = 'clip_out', edge_type = 'out', track_id = 'track_v1' }
 })
-cmd:set_parameter('delta_ms', 1000)
+cmd:set_parameter('delta_frames', 30) -- 1000ms at 30fps
 cmd:set_parameter('sequence_id', 'test_sequence')
 
 assert_eq('execute media clamp out', executor(cmd), true)
-assert_eq('media clamp out duration', mock_db.clips['clip_out'].duration, 10000)
-assert_eq('media clamp out source_out', mock_db.clips['clip_out'].source_out, 10000)
-assert_eq('media clamp out downstream shift', mock_db.clips['clip_downstream'].start_time, 12500)
+assert_eq('media clamp out duration_value', mock_db.clips['clip_out'].duration_value, 10000)
+assert_eq('media clamp out source_out_value', mock_db.clips['clip_out'].source_out_value, 10000)
+assert_eq('media clamp out downstream shift', mock_db.clips['clip_downstream'].start_value, 12500)
 
 -- Test 2: In-point extend clamps to media start.
 mock_db:reset()
-mock_db:store_media({ id = 'media_short', duration = 12000 })
+mock_db:store_media({ id = 'media_short', duration_value = 12000, timebase_type = 'video_frames', timebase_rate = 30 })
 mock_db:store_clip({
     id = 'clip_in',
     track_id = 'track_v1',
     media_id = 'media_short',
-    start_time = 1000,
-    duration = 3000,
-    source_in = 500,
-    source_out = 3500
+    start_value = 1000,
+    duration_value = 3000,
+    source_in_value = 500,
+    source_out_value = 3500,
+    timebase_type = 'video_frames',
+    timebase_rate = 30
 })
 mock_db:store_clip({
     id = 'clip_in_downstream',
     track_id = 'track_v1',
     media_id = 'media_short',
-    start_time = 4500,
-    duration = 2000,
-    source_in = 0,
-    source_out = 2000
+    start_value = 4500,
+    duration_value = 2000,
+    source_in_value = 0,
+    source_out_value = 2000,
+    timebase_type = 'video_frames',
+    timebase_rate = 30
 })
 
 cmd = new_cmd()
 cmd:set_parameter('edge_infos', {
     { clip_id = 'clip_in', edge_type = 'in', track_id = 'track_v1' }
 })
-cmd:set_parameter('delta_ms', -1000)
+cmd:set_parameter('delta_frames', -30) -- 1000ms at 30fps
 cmd:set_parameter('sequence_id', 'test_sequence')
 
 assert_eq('execute media clamp in', executor(cmd), true)
-assert_eq('media clamp in duration', mock_db.clips['clip_in'].duration, 3500)
-assert_eq('media clamp in source_in', mock_db.clips['clip_in'].source_in, 0)
-assert_eq('media clamp in downstream shift', mock_db.clips['clip_in_downstream'].start_time, 5000)
+assert_eq('media clamp in duration_value', mock_db.clips['clip_in'].duration_value, 3500)
+assert_eq('media clamp in source_in_value', mock_db.clips['clip_in'].source_in_value, 0)
+assert_eq('media clamp in downstream shift', mock_db.clips['clip_in_downstream'].start_value, 5000)
 
 -- Test 3: RippleEdit also clamps to media limits.
 mock_db:reset()
-mock_db:store_media({ id = 'media_short', duration = 8000 })
+mock_db:store_media({ id = 'media_short', duration_value = 8000, timebase_type = 'video_frames', timebase_rate = 30 })
 mock_db:store_clip({
     id = 'ripple_clip',
     track_id = 'track_v1',
     media_id = 'media_short',
-    start_time = 1000,
-    duration = 7000,
-    source_in = 0,
-    source_out = 7000
+    start_value = 1000,
+    duration_value = 7000,
+    source_in_value = 0,
+    source_out_value = 7000,
+    timebase_type = 'video_frames',
+    timebase_rate = 30
 })
 mock_db:store_clip({
     id = 'ripple_downstream',
     track_id = 'track_v1',
     media_id = 'media_short',
-    start_time = 9000,
-    duration = 2000,
-    source_in = 0,
-    source_out = 2000
+    start_value = 9000,
+    duration_value = 2000,
+    source_in_value = 0,
+    source_out_value = 2000,
+    timebase_type = 'video_frames',
+    timebase_rate = 30
 })
 
 cmd = new_cmd()
 cmd:set_parameter('edge_info', { clip_id = 'ripple_clip', edge_type = 'out', track_id = 'track_v1' })
-cmd:set_parameter('delta_ms', 2000)
+cmd:set_parameter('delta_frames', 60) -- 2000ms at 30fps
 cmd:set_parameter('sequence_id', 'test_sequence')
 
 assert_eq('execute ripple clamp out', ripple_executor(cmd), true)
-assert_eq('ripple clamp out duration', mock_db.clips['ripple_clip'].duration, 8000)
-assert_eq('ripple clamp out source_out', mock_db.clips['ripple_clip'].source_out, 8000)
-assert_eq('ripple clamp out downstream shift', mock_db.clips['ripple_downstream'].start_time, 10000)
+assert_eq('ripple clamp out duration_value', mock_db.clips['ripple_clip'].duration_value, 8000)
+assert_eq('ripple clamp out source_out_value', mock_db.clips['ripple_clip'].source_out_value, 8000)
+assert_eq('ripple clamp out downstream shift', mock_db.clips['ripple_downstream'].start_value, 10000)
 
 print('✅ Ripple media clamp tests passed')

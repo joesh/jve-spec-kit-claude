@@ -1,0 +1,46 @@
+local M = {}
+local Project = require('models.project')
+local json = require("dkjson")
+
+function M.register(command_executors, command_undoers, db, set_last_error)
+    command_executors["SetupProject"] = function(command)
+        print("Executing SetupProject command")
+
+        local project_id = command:get_parameter("project_id")
+        local settings = command:get_parameter("settings")
+
+        if not project_id or project_id == "" then
+            print("WARNING: SetupProject: Missing required parameters")
+            return false
+        end
+
+        local project = Project.load(project_id, db)
+        if not project or project.id == "" then
+            print(string.format("WARNING: SetupProject: Project not found: %s", project_id))
+            return false
+        end
+
+        -- Store previous settings for undo
+        local previous_settings = project.settings
+        command:set_parameter("previous_settings", previous_settings)
+
+        -- Apply new settings
+        local settings_json = json.encode(settings)
+        project:set_settings(settings_json)
+
+        if project:save(db) then
+            print(string.format("Applied settings to project: %s", project_id))
+            return true
+        else
+            print("WARNING: Failed to save project settings")
+            return false
+        end
+    end
+
+    -- No undo defined in original source for SetupProject, assumed to be setup-only
+    return {
+        executor = command_executors["SetupProject"]
+    }
+end
+
+return M

@@ -1,0 +1,108 @@
+#!/usr/bin/env luajit
+
+-- Regression: inserting at the playhead in a fresh project should place the
+-- clip at time zero, and the viewport math must render it at the origin.
+
+package.path = package.path
+    .. ";../src/lua/?.lua"
+    .. ";../src/lua/?/init.lua"
+    .. ";./?.lua"
+    .. ";./?/init.lua"
+
+require('test_env')
+
+local database = require('core.database')
+local command_manager = require('core.command_manager')
+local timeline_state = require('ui.timeline.timeline_state')
+local Command = require('command')
+local Media = require('models.media')
+local Rational = require('core.rational')
+
+local DB_PATH = "/tmp/jve/test_timeline_insert_origin.db"
+os.remove(DB_PATH)
+
+assert(database.init(DB_PATH))
+local db = database.get_connection()
+assert(db:exec(require('import_schema')))
+
+-- Seed a default project/sequence/tracks (mirrors layout.lua defaults)
+assert(db:exec([[
+    INSERT INTO projects (id, name, created_at, modified_at, settings)
+    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'), '{}');
+
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height,
+        view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    )
+    VALUES (
+        'default_sequence', 'default_project', 'Sequence 1', 'timeline',
+        24, 1, 48000,
+        1920, 1080,
+        0, 240, 0,
+        '[]', '[]', '[]',
+        0, strftime('%s','now'), strftime('%s','now')
+    );
+
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]]))
+
+-- Prepare media: 1h16m22s@25fps (approx clip from the report)
+local media = Media.create({
+    id = "media_insert_origin",
+    project_id = "default_project",
+    file_path = "/tmp/jve/long_clip.mov",
+    name = "long_clip.mov",
+    duration_frames = 114567, -- 01:16:22:17 @ 25fps (as reported)
+    fps_numerator = 25,
+    fps_denominator = 1,
+    width = 2048,
+    height = 1080,
+    audio_channels = 2,
+    codec = "h264"
+})
+assert(media:save(db), "failed to save media")
+
+command_manager.init(db, "default_sequence", "default_project")
+timeline_state.init("default_sequence")
+
+local playhead = timeline_state.get_playhead_position()
+assert(playhead.frames == 0, "playhead should start at frame 0 for new sequence")
+
+local insert_cmd = Command.create("Insert", "default_project")
+insert_cmd:set_parameter("media_id", media.id)
+insert_cmd:set_parameter("sequence_id", "default_sequence")
+insert_cmd:set_parameter("track_id", "video1")
+insert_cmd:set_parameter("insert_time", playhead)
+insert_cmd:set_parameter("duration", media.duration)
+insert_cmd:set_parameter("source_in", Rational.new(0, 25, 1))
+insert_cmd:set_parameter("source_out", media.duration)
+insert_cmd:set_parameter("advance_playhead", true)
+
+local result = command_manager.execute(insert_cmd)
+assert(result.success, result.error_message or "Insert failed")
+
+local clips = database.load_clips("default_sequence")
+assert(clips and #clips == 1, "expected exactly one clip after insert")
+local clip = clips[1]
+
+assert(clip.timeline_start.frames == 0, string.format("clip should start at frame 0, got %s", tostring(clip.timeline_start.frames)))
+
+-- Verify rendering math keeps the clip at the origin for a 1000px viewport
+timeline_state.set_viewport_start_time(Rational.new(0, 24, 1))
+local px = timeline_state.time_to_pixel(clip.timeline_start, 1000)
+assert(px >= -1 and px <= 1, string.format("clip should render at viewport origin, got pixel=%s", tostring(px)))
+
+-- Playhead should advance to the end of the inserted clip when requested
+local final_playhead = timeline_state.get_playhead_position()
+local expected_frames = math.floor((media.duration.frames * 24 * media.duration.fps_denominator + media.duration.fps_numerator / 2)
+    / (media.duration.fps_numerator))
+assert(final_playhead.frames == expected_frames,
+    string.format("playhead should advance to clip end (%d), got %s", expected_frames, tostring(final_playhead.frames)))
+
+print("✅ Insert at playhead origin renders at timeline start")
+os.remove(DB_PATH)

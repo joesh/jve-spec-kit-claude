@@ -5,6 +5,7 @@
 local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
+local error_system = require("core.error_system")
 
 local M = {
     _pools = {
@@ -280,6 +281,8 @@ function M.connect_signal(widget, signal_name, handler)
 
     if signal_name == "textChanged" then
         result = qt_signals.onTextChanged(widget, wrapped_handler)
+    elseif signal_name == "editingFinished" then
+        result = qt_signals.connect(widget, "editingFinished", wrapped_handler)
     elseif signal_name == "clicked" then
         result = qt_signals.connect(widget, "clicked", wrapped_handler)
     elseif signal_name == "valueChanged" then
@@ -291,9 +294,29 @@ function M.connect_signal(widget, signal_name, handler)
     end
 
     if type(result) == "table" and result.success == false then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            "[widget_pool] Failed to connect signal '" .. signal_name .. "': " .. (result.message or "unknown error"))
-        return false
+        local message = string.format(
+            "[widget_pool] Failed to connect signal '%s': %s",
+            signal_name,
+            result.message or "unknown error"
+        )
+        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, message)
+        return nil, result
+    end
+
+    if result == nil then
+        local error_obj = error_system.create_error({
+            code = "QT_SIGNAL_CONNECTION_FAILED",
+            category = "ui",
+            message = string.format("Failed to connect signal '%s': connection handle was nil", signal_name),
+            operation = "widget_pool.connect_signal",
+            user_message = "Unable to connect Qt signal",
+            technical_details = {
+                signal = signal_name,
+                widget = tostring(widget)
+            }
+        })
+        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[widget_pool] " .. error_obj.message)
+        return nil, error_obj
     end
 
     -- Track connection for cleanup

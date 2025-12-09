@@ -31,6 +31,8 @@ find_package(Qt6 REQUIRED COMPONENTS
 
 # Find SQLite (usually comes with Qt6::Sql)
 find_package(SQLite3 REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(nlohmann_json REQUIRED)
 
 # LuaJIT for scripting
 find_package(PkgConfig REQUIRED)
@@ -44,39 +46,28 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
 )
 
 # Source files organization
 set(CORE_SOURCES
-    src/core/models/project.cpp
-    src/core/models/sequence.cpp
-    src/core/models/track.cpp
-    src/core/models/clip.cpp
-    src/core/models/media.cpp
-    src/core/models/property.cpp
-    
-    src/core/commands/command.cpp
-    src/core/commands/command_manager.cpp
-    
-    src/core/api/project_manager.cpp
-    src/core/api/selection_manager.cpp
-    
     src/core/persistence/migrations.cpp
-    src/core/persistence/project_persistence.cpp
     src/core/persistence/schema_validator.cpp
     src/core/persistence/sql_executor.cpp
-    
-    src/core/timeline/timeline_manager.cpp
-    
+
     src/core/common/uuid_generator.cpp
     src/core/resource_paths.cpp
 
     src/lua/simple_lua_engine.cpp
     src/lua/qt_bindings.cpp
+
+    # Bug reporter system
+    src/bug_reporter/gesture_logger.cpp
+    src/bug_reporter/qt_bindings_bug_reporter.cpp
 )
 
 set(UI_SOURCES
-    src/ui/timeline/scriptable_timeline.cpp
+    src/ui/timeline/timeline_renderer.cpp
     # Removed C++ UI implementations that violate architecture (should be Lua):
     # src/ui/keyboard_customization_dialog.cpp  (MOVED TO LUA - src/lua/ui/)
     # src/ui/selection/selection_manager.cpp
@@ -154,98 +145,22 @@ target_link_directories(JVEEditor PRIVATE
 # Testing
 enable_testing()
 
+## Disabled: eventlog golden replay (not used)
+
 # Enable automatic MOC, UIC and RCC processing
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-# Contract tests
-file(GLOB CONTRACT_TEST_SOURCES tests/contract/*.cpp)
-# Exclude tests for deleted UI components and broken tests
-list(FILTER CONTRACT_TEST_SOURCES EXCLUDE REGEX ".*(selection_system|selection_properties|clip_selection|edge_selection|uuid_determinism|command_execute|command_redo|command_undo).*")
-foreach(test_source ${CONTRACT_TEST_SOURCES})
-    get_filename_component(test_name ${test_source} NAME_WE)
-    add_executable(${test_name}
-        ${test_source}
-        tests/common/test_base.cpp
-    )
-    target_link_libraries(${test_name}
-        JVECore
-        Qt6::Test
-        Qt6::Core
-        Qt6::Gui
-        ${LUAJIT_LIBRARIES}
-    )
-    target_include_directories(${test_name} PUBLIC
-        ${CMAKE_SOURCE_DIR}
-        ${LUAJIT_INCLUDE_DIRS}
-    )
-    target_link_directories(${test_name} PRIVATE
-        ${LUAJIT_LIBRARY_DIRS}
-    )
-    add_test(NAME ${test_name} COMMAND ${test_name})
-endforeach()
-
-# Integration tests - Command replay invariant test
-add_executable(test_command_replay_invariant
-    tests/integration/test_command_replay_invariant.cpp
-)
-target_link_libraries(test_command_replay_invariant
-    JVECore
-    Qt6::Test
-    Qt6::Core
-    Qt6::Widgets
-    Qt6::Sql
-    Qt6::Gui
-    ${LUAJIT_LIBRARIES}
-)
-target_include_directories(test_command_replay_invariant PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${LUAJIT_INCLUDE_DIRS}
-)
-target_link_directories(test_command_replay_invariant PRIVATE
-    ${LUAJIT_LIBRARY_DIRS}
-)
-set_target_properties(test_command_replay_invariant PROPERTIES
-    AUTOMOC ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-add_test(NAME test_command_replay_invariant COMMAND test_command_replay_invariant)
-
-# Integration test - Canonical batch ripple drag regression
-add_executable(test_batch_ripple_gap_drag
-    tests/integration/test_batch_ripple_gap_drag.cpp
-)
-target_link_libraries(test_batch_ripple_gap_drag
-    JVECore
-    Qt6::Test
-    Qt6::Core
-    Qt6::Widgets
-    Qt6::Sql
-    Qt6::Gui
-    ${LUAJIT_LIBRARIES}
-)
-target_include_directories(test_batch_ripple_gap_drag PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${LUAJIT_INCLUDE_DIRS}
-)
-target_link_directories(test_batch_ripple_gap_drag PRIVATE
-    ${LUAJIT_LIBRARY_DIRS}
-)
-set_target_properties(test_batch_ripple_gap_drag PROPERTIES
-    AUTOMOC ON
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-)
-add_test(NAME test_batch_ripple_gap_drag COMMAND test_batch_ripple_gap_drag)
-
+# C++/Qt tests (on by default)
 # Unit tests (no unit tests currently - they would go in tests/unit/)
 # Note: New timeline tests are standalone and defined below
 
 # Standalone timeline widget test (no test_base dependency)
-add_executable(test_scriptable_timeline_widget
-    tests/unit/test_scriptable_timeline_widget.cpp
+add_executable(test_timeline_renderer_widget
+    tests/unit/test_timeline_renderer_widget.cpp
 )
-target_link_libraries(test_scriptable_timeline_widget
+target_link_libraries(test_timeline_renderer_widget
     JVECore
     Qt6::Test
     Qt6::Core
@@ -253,18 +168,18 @@ target_link_libraries(test_scriptable_timeline_widget
     Qt6::Gui
     ${LUAJIT_LIBRARIES}
 )
-target_include_directories(test_scriptable_timeline_widget PUBLIC
+target_include_directories(test_timeline_renderer_widget PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${LUAJIT_INCLUDE_DIRS}
 )
-target_link_directories(test_scriptable_timeline_widget PRIVATE
+target_link_directories(test_timeline_renderer_widget PRIVATE
     ${LUAJIT_LIBRARY_DIRS}
 )
-set_target_properties(test_scriptable_timeline_widget PROPERTIES
+set_target_properties(test_timeline_renderer_widget PROPERTIES
     AUTOMOC ON
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
-add_test(NAME test_scriptable_timeline_widget COMMAND test_scriptable_timeline_widget)
+add_test(NAME test_timeline_renderer_widget COMMAND test_timeline_renderer_widget)
 
 add_custom_target(lua_tests ALL
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
@@ -273,6 +188,10 @@ add_custom_target(lua_tests ALL
 )
 
 add_dependencies(lua_tests JVEEditor)
+add_test(NAME lua_suite
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
 
 # Standalone Lua timeline logic test (no test_base dependency)
 # Installation (not applicable for M1 Foundation tests)

@@ -84,13 +84,19 @@ local function setup_database(layout)
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
             name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'timeline',
             frame_rate REAL NOT NULL,
+            audio_sample_rate INTEGER NOT NULL,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
-            timecode_start INTEGER DEFAULT 0,
-            playhead_time INTEGER DEFAULT 0,
+            timecode_start_frame INTEGER DEFAULT 0,
+            playhead_value INTEGER DEFAULT 0,
             selected_clip_ids TEXT DEFAULT '[]',
             selected_edge_infos TEXT DEFAULT '[]',
+            viewport_start_value INTEGER NOT NULL DEFAULT 0,
+            viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
+            mark_in_value INTEGER,
+            mark_out_value INTEGER,
             current_sequence_number INTEGER
         )]],
         [[CREATE TABLE IF NOT EXISTS tracks (
@@ -98,6 +104,8 @@ local function setup_database(layout)
             sequence_id TEXT NOT NULL,
             name TEXT NOT NULL,
             track_type TEXT NOT NULL,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             track_index INTEGER NOT NULL,
             enabled INTEGER DEFAULT 1,
             locked INTEGER DEFAULT 0,
@@ -111,7 +119,9 @@ local function setup_database(layout)
             project_id TEXT NOT NULL,
             name TEXT NOT NULL,
             file_path TEXT NOT NULL,
-            duration INTEGER,
+            duration_value INTEGER,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             frame_rate REAL,
             width INTEGER,
             height INTEGER,
@@ -124,10 +134,12 @@ local function setup_database(layout)
             id TEXT PRIMARY KEY,
             track_id TEXT NOT NULL,
             media_id TEXT,
-            start_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL,
-            source_in INTEGER NOT NULL,
-            source_out INTEGER NOT NULL,
+            start_value INTEGER NOT NULL,
+            duration_value INTEGER NOT NULL,
+            source_in_value INTEGER NOT NULL,
+            source_out_value INTEGER NOT NULL,
+            timebase_type TEXT NOT NULL,
+            timebase_rate REAL NOT NULL,
             enabled INTEGER DEFAULT 1
         )]],
         [[CREATE TABLE IF NOT EXISTS commands (
@@ -140,7 +152,8 @@ local function setup_database(layout)
             pre_hash TEXT,
             post_hash TEXT,
             timestamp INTEGER,
-            playhead_time INTEGER DEFAULT 0,
+            playhead_value INTEGER DEFAULT 0,
+            playhead_rate REAL DEFAULT 0,
             selected_clip_ids TEXT DEFAULT '[]',
             selected_edge_infos TEXT DEFAULT '[]',
             selected_clip_ids_pre TEXT DEFAULT '[]',
@@ -156,8 +169,8 @@ local function setup_database(layout)
     end
 
     local media = layout.media or {
-        {id = "media_v1", duration = 48000},
-        {id = "media_v2", duration = 48000},
+        {id = "media_v1", duration_value = 48000},
+        {id = "media_v2", duration_value = 48000},
     }
 
     local tracks = layout.tracks or {
@@ -167,27 +180,27 @@ local function setup_database(layout)
 
     local inserts = {
         "INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES ('default_project', 'Test Project', 0, 0, '{}')",
-        "INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080, 0, 0, '[]', '[]')"
+        "INSERT INTO sequences (id, project_id, name, frame_rate, audio_sample_rate, width, height, timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos) VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 48000, 1920, 1080, 0, 0, '[]', '[]')"
     }
 
     for _, track in ipairs(tracks) do
         table.insert(inserts, string.format(
-            "INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('%s', 'default_sequence', '%s', '%s', %d, 1, 0, 0, 0, 1.0, 0.0)",
-            track.id, track.name or track.id, track.track_type, track.track_index
+            "INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('%s', 'default_sequence', '%s', '%s', '%s', %.3f, %d, 1, 0, 0, 0, 1.0, 0.0)",
+            track.id, track.name or track.id, track.track_type, track.timebase_type or "video_frames", track.timebase_rate or 30.0, track.track_index
         ))
     end
 
     for _, m in ipairs(media) do
         table.insert(inserts, string.format(
-            "INSERT INTO media (id, project_id, name, file_path, duration, frame_rate, width, height, audio_channels, codec, created_at, modified_at) VALUES ('%s', 'default_project', '%s', '/tmp/%s.mov', %d, 30.0, 1920, 1080, 2, 'prores', 0, 0)",
-            m.id, m.name or m.id, m.id, m.duration
+            "INSERT INTO media (id, project_id, name, file_path, duration_value, timebase_type, timebase_rate, frame_rate, width, height, audio_channels, codec, created_at, modified_at) VALUES ('%s', 'default_project', '%s', '/tmp/%s.mov', %d, '%s', %.3f, 30.0, 1920, 1080, 2, 'prores', 0, 0)",
+            m.id, m.name or m.id, m.id, m.duration_value, m.timebase_type or \"video_frames\", m.timebase_rate or 30.0
         ))
     end
 
     for _, clip in ipairs(layout.clips) do
         table.insert(inserts, string.format(
-            "INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, 1)",
-            clip.id, clip.track_id, clip.media_id, clip.start_time, clip.duration, clip.source_in or 0, clip.source_out or (clip.source_in or 0) + clip.duration
+            "INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, timebase_type, timebase_rate, enabled) VALUES ('%s', '%s', '%s', %d, %d, %d, %d, '%s', %.3f, 1)",
+            clip.id, clip.track_id, clip.media_id, clip.start_value, clip.duration_value, clip.source_in_value or 0, clip.source_out_value or (clip.source_in_value or 0) + clip.duration_value, clip.timebase_type or "video_frames", clip.timebase_rate or 30.0
         ))
     end
 
@@ -212,13 +225,13 @@ end
 
 local function fetch_clip(db, clip_id)
     local stmt = assert(db:prepare(string.format(
-        "SELECT start_time, duration, source_in, source_out FROM clips WHERE id = '%s'", clip_id)))
+        "SELECT start_value, duration_value, source_in_value, source_out_value FROM clips WHERE id = '%s'", clip_id)))
     assert(stmt:exec() and stmt:next(), "failed to fetch clip " .. clip_id)
     local clip = {
-        start_time = stmt:value(0),
-        duration = stmt:value(1),
-        source_in = stmt:value(2),
-        source_out = stmt:value(3)
+        start_value = stmt:value(0),
+        duration_value = stmt:value(1),
+        source_in_value = stmt:value(2),
+        source_out_value = stmt:value(3)
     }
     stmt:finalize()
     return clip
@@ -229,7 +242,7 @@ local function run_scenario(scenario)
 
     local cmd = Command.create("BatchRippleEdit", "default_project")
     cmd:set_parameter("edge_infos", scenario.edges)
-    cmd:set_parameter("delta_ms", scenario.delta_ms)
+    cmd:set_parameter("delta_frames", scenario.delta_frames)
     cmd:set_parameter("sequence_id", "default_sequence")
 
     -- Debug ranges for first scenario before execution
@@ -252,17 +265,17 @@ local function run_scenario(scenario)
 
     for clip_id, expected in pairs(scenario.expect) do
         local clip = fetch_clip(db, clip_id)
-        if expected.start_time ~= nil then
-            assert_eq(string.format("%s: start_time", scenario.name), clip.start_time, expected.start_time)
+        if expected.start_value ~= nil then
+            assert_eq(string.format("%s: start_value", scenario.name), clip.start_value, expected.start_value)
         end
-        if expected.duration ~= nil then
-            assert_eq(string.format("%s: duration", scenario.name), clip.duration, expected.duration)
+        if expected.duration_value ~= nil then
+            assert_eq(string.format("%s: duration_value", scenario.name), clip.duration_value, expected.duration_value)
         end
-        if expected.source_in ~= nil then
-            assert_eq(string.format("%s: source_in", scenario.name), clip.source_in, expected.source_in)
+        if expected.source_in_value ~= nil then
+            assert_eq(string.format("%s: source_in_value", scenario.name), clip.source_in_value, expected.source_in_value)
         end
-        if expected.source_out ~= nil then
-            assert_eq(string.format("%s: source_out", scenario.name), clip.source_out, expected.source_out)
+        if expected.source_out_value ~= nil then
+            assert_eq(string.format("%s: source_out_value", scenario.name), clip.source_out_value, expected.source_out_value)
         end
     end
 
@@ -274,73 +287,74 @@ local scenarios = {
         name = "gap_bracket_trim_left",
         layout = {
             clips = {
-                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 2000, source_in = 0, source_out = 2000},
-                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_time = 3000, duration = 2000, source_in = 2000, source_out = 4000},
-                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_time = 1000, duration = 2000, source_in = 1000, source_out = 3000}
+                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 2000, source_in_value = 0, source_out_value = 2000},
+                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_value = 3000, duration_value = 2000, source_in_value = 2000, source_out_value = 4000},
+                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_value = 1000, duration_value = 2000, source_in_value = 1000, source_out_value = 3000}
             }
         },
         edges = {
             {clip_id = "clip_v1_second", edge_type = "gap_before", track_id = "video1"},
             {clip_id = "clip_v2_mid", edge_type = "in", track_id = "video2"}
         },
-        delta_ms = 1000,
+        -- 1000ms at 30fps = 30 frames
+        delta_frames = 30,
         expect = {
-            clip_v1_second = {start_time = 2000, duration = 2000},
-            clip_v2_mid = {duration = 1000, source_in = 2000}
+            clip_v1_second = {start_value = 2000, duration_value = 2000},
+            clip_v2_mid = {duration_value = 1000, source_in_value = 2000}
         }
     },
     {
         name = "gap_bracket_out_trim_left",
         layout = {
             clips = {
-                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 2000, source_in = 0, source_out = 2000},
-                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_time = 3000, duration = 2000, source_in = 2000, source_out = 4000},
-                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_time = 1000, duration = 3000, source_in = 0, source_out = 3000}
+                {id = "clip_v1_first", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 2000, source_in_value = 0, source_out_value = 2000},
+                {id = "clip_v1_second", track_id = "video1", media_id = "media_v1", start_value = 3000, duration_value = 2000, source_in_value = 2000, source_out_value = 4000},
+                {id = "clip_v2_mid", track_id = "video2", media_id = "media_v2", start_value = 1000, duration_value = 3000, source_in_value = 0, source_out_value = 3000}
             }
         },
         edges = {
             {clip_id = "clip_v1_second", edge_type = "gap_before", track_id = "video1"},
             {clip_id = "clip_v2_mid", edge_type = "out", track_id = "video2"}
         },
-        delta_ms = -1000,
+        delta_frames = -30,
         expect = {
-            clip_v1_second = {start_time = 2000, duration = 2000},
-            clip_v2_mid = {duration = 2000, source_out = 2000}
+            clip_v1_second = {start_value = 2000, duration_value = 2000},
+            clip_v2_mid = {duration_value = 2000, source_out_value = 2000}
         }
     },
     {
         name = "single_track_out_trim_left",
         layout = {
             clips = {
-                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 1000, source_in = 0, source_out = 1000},
-                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_time = 1100, duration = 1000, source_in = 1000, source_out = 2000}
+                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 1000, source_in_value = 0, source_out_value = 1000},
+                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_value = 1100, duration_value = 1000, source_in_value = 1000, source_out_value = 2000}
             }
         },
         edges = {
             {clip_id = "clip_one", edge_type = "out", track_id = "video1"}
         },
-        delta_ms = -500,
+        delta_frames = -15,
         expect = {
-            clip_one = {start_time = 0, duration = 500, source_out = 500},
-            clip_two = {start_time = 600}
+            clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
+            clip_two = {start_value = 600}
         }
     },
     {
         name = "dual_out_trim_left",
         layout = {
             clips = {
-                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_time = 0, duration = 1000, source_in = 0, source_out = 1000},
-                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_time = 1100, duration = 1000, source_in = 1000, source_out = 2000}
+                {id = "clip_one", track_id = "video1", media_id = "media_v1", start_value = 0, duration_value = 1000, source_in_value = 0, source_out_value = 1000},
+                {id = "clip_two", track_id = "video1", media_id = "media_v1", start_value = 1100, duration_value = 1000, source_in_value = 1000, source_out_value = 2000}
             }
         },
         edges = {
             {clip_id = "clip_one", edge_type = "out", track_id = "video1"},
             {clip_id = "clip_two", edge_type = "out", track_id = "video1"}
         },
-        delta_ms = -500,
+        delta_frames = -15,
         expect = {
-            clip_one = {start_time = 0, duration = 500, source_out = 500},
-            clip_two = {start_time = 600, duration = 500, source_out = 1500}
+            clip_one = {start_value = 0, duration_value = 500, source_out_value = 500},
+            clip_two = {start_value = 600, duration_value = 500, source_out_value = 1500}
         }
     }
 }

@@ -22,8 +22,8 @@ public:
     static int timeline_update(lua_State* L);
     
 private:
-    // Helper to get ScriptableTimeline widget from Lua userdata
-    static class ScriptableTimeline* get_timeline_widget(lua_State* L, int index);
+    // Helper to get TimelineRenderer widget from Lua userdata
+    static class TimelineRenderer* get_timeline_widget(lua_State* L, int index);
 };
 
 } // namespace JVE

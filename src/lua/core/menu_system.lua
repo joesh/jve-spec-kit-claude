@@ -21,13 +21,20 @@ local M = {}
 
 local lxp = require("lxp")
 local keyboard_shortcut_registry = require("core.keyboard_shortcut_registry")
+local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local command_manager = nil
 local main_window = nil
 local project_browser = nil
 local timeline_panel = nil
+local clipboard_actions = require("core.clipboard_actions")
+local profile_scope = require("core.profile_scope")
+local Rational = require("core.rational")
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
+local actions_by_command = {}
+local undo_listener_token = nil
+local update_undo_redo_actions  -- forward declaration
 
 -- Qt bindings (loaded from qt_constants global)
 local qt = {
@@ -50,6 +57,26 @@ function M.init(window, cmd_mgr, proj_browser)
     main_window = window
     command_manager = cmd_mgr
     project_browser = proj_browser
+
+    if undo_listener_token and command_manager and command_manager.remove_listener then
+        command_manager.remove_listener(undo_listener_token)
+        undo_listener_token = nil
+    end
+
+    if command_manager and command_manager.add_listener then
+        undo_listener_token = command_manager.add_listener(profile_scope.wrap("menu_system.undo_listener", function(event)
+            if not event or not event.event then
+                return
+            end
+            if event.event == "execute" or event.event == "undo" or event.event == "redo" then
+                update_undo_redo_actions()
+            end
+        end))
+    end
+
+    if update_undo_redo_actions then
+        update_undo_redo_actions()
+    end
 end
 
 --- Set timeline panel reference (called after timeline is created)
@@ -250,6 +277,38 @@ local function parse_params(params_str)
     return params
 end
 
+local function register_action_for_command(command_name, action)
+    if not command_name or command_name == "" or not action then
+        return
+    end
+    local actions = actions_by_command[command_name]
+    if not actions then
+        actions = {}
+        actions_by_command[command_name] = actions
+    end
+    table.insert(actions, action)
+end
+
+local function set_actions_enabled_for_command(command_name, enabled)
+    local actions = actions_by_command[command_name]
+    if not actions then
+        return
+    end
+    for _, action in ipairs(actions) do
+        qt.SET_ACTION_ENABLED(action, enabled and true or false)
+    end
+end
+
+update_undo_redo_actions = function()
+    if not command_manager or not command_manager.can_undo or not command_manager.can_redo then
+        set_actions_enabled_for_command("Undo", false)
+        set_actions_enabled_for_command("Redo", false)
+        return
+    end
+    set_actions_enabled_for_command("Undo", command_manager.can_undo())
+    set_actions_enabled_for_command("Redo", command_manager.can_redo())
+end
+
 --- Create menu action callback
 -- @param command_name string: Command to execute
 -- @param params table: Command parameters
@@ -265,11 +324,19 @@ local function create_action_callback(command_name, params)
 
         -- Handle special commands that aren't normal execute() calls
         if command_name == "Undo" then
+            if command_manager.can_undo and not command_manager.can_undo() then
+                return
+            end
             print("⏪ Calling command_manager.undo()")
             command_manager.undo()
+            update_undo_redo_actions()
         elseif command_name == "Redo" then
+            if command_manager.can_redo and not command_manager.can_redo() then
+                return
+            end
             print("⏩ Calling command_manager.redo()")
             command_manager.redo()
+            update_undo_redo_actions()
         elseif command_name == "Quit" then
             print("👋 Quitting application")
             os.exit(0)
@@ -436,14 +503,14 @@ local function create_action_callback(command_name, params)
             end
 
             local timeline_state = timeline_panel.get_state()
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_position()
             local selected_clips = timeline_state.get_selected_clips()
 
             local target_clips
             if selected_clips and #selected_clips > 0 then
-                target_clips = timeline_state.get_clips_at_time(playhead_time, selected_clips)
+                target_clips = timeline_state.get_clips_at_time(playhead_value, selected_clips)
             else
-                target_clips = timeline_state.get_clips_at_time(playhead_time)
+                target_clips = timeline_state.get_clips_at_time(playhead_value)
             end
 
             if #target_clips == 0 then
@@ -460,16 +527,16 @@ local function create_action_callback(command_name, params)
             local specs = {}
 
             for _, clip in ipairs(target_clips) do
-                local start_time = clip.start_time
-                local end_time = clip.start_time + clip.duration
-                if playhead_time <= start_time or playhead_time >= end_time then
+                local start_value = clip.start_value
+                local end_time = clip.start_value + clip.duration
+                if playhead_value <= start_value or playhead_value >= end_time then
                     -- Skip invalid targets to avoid SplitClip errors
                 else
                     table.insert(specs, {
                         command_type = "SplitClip",
                         parameters = {
                             clip_id = clip.id,
-                            split_time = playhead_time
+                            split_time = playhead_value
                         }
                     })
                 end
@@ -481,6 +548,11 @@ local function create_action_callback(command_name, params)
             end
 
             local batch_cmd = Command.create("BatchCommand", "default_project")
+            local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+            if active_sequence_id and active_sequence_id ~= "" then
+                batch_cmd:set_parameter("sequence_id", active_sequence_id)
+                batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+            end
             batch_cmd:set_parameter("commands_json", json.encode(specs))
 
             local success, result = pcall(function()
@@ -508,14 +580,22 @@ local function create_action_callback(command_name, params)
                 return
             end
 
-            local selected_media = project_browser.get_selected_media()
-            if not selected_media then
+            local selected_clip = project_browser.get_selected_media()
+            if not selected_clip then
                 print("❌ INSERT: No media selected in project browser")
                 return
             end
 
+            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
+            if not media_id then
+                print("❌ INSERT: Selected clip missing media reference")
+                return
+            end
+
+            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
+
             local timeline_state = timeline_panel.get_state()
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_position()
 
             local Command = require("command")
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -527,20 +607,22 @@ local function create_action_callback(command_name, params)
             end
 
             local cmd = Command.create("Insert", project_id)
-            cmd:set_parameter("media_id", selected_media.id)
+            cmd:set_parameter("master_clip_id", selected_clip.clip_id)
+            cmd:set_parameter("media_id", media_id)
             cmd:set_parameter("sequence_id", sequence_id)
             cmd:set_parameter("track_id", track_id)
-            cmd:set_parameter("insert_time", playhead_time)
-            cmd:set_parameter("duration", selected_media.duration)
+            cmd:set_parameter("insert_time", playhead_value)
+            cmd:set_parameter("duration", clip_duration)
             cmd:set_parameter("source_in", 0)
-            cmd:set_parameter("source_out", selected_media.duration)
+            cmd:set_parameter("source_out", clip_duration)
+            cmd:set_parameter("project_id", project_id)
             cmd:set_parameter("advance_playhead", true)
 
             local success, result = pcall(function()
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ INSERT: Added %s at %dms, rippled subsequent clips", selected_media.name, playhead_time))
+                print(string.format("✅ INSERT: Added %s at %s, rippled subsequent clips", selected_clip.name or media_id, tostring(playhead_value)))
             else
                 print(string.format("❌ INSERT failed: %s", result and result.error_message or "unknown error"))
             end
@@ -560,14 +642,22 @@ local function create_action_callback(command_name, params)
                 return
             end
 
-            local selected_media = project_browser.get_selected_media()
-            if not selected_media then
+            local selected_clip = project_browser.get_selected_media()
+            if not selected_clip then
                 print("❌ OVERWRITE: No media selected in project browser")
                 return
             end
 
+            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
+            if not media_id then
+                print("❌ OVERWRITE: Selected clip missing media reference")
+                return
+            end
+
+            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
+
             local timeline_state = timeline_panel.get_state()
-            local playhead_time = timeline_state.get_playhead_time()
+            local playhead_value = timeline_state.get_playhead_position()
 
             local Command = require("command")
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -579,20 +669,22 @@ local function create_action_callback(command_name, params)
             end
 
             local cmd = Command.create("Overwrite", project_id)
-            cmd:set_parameter("media_id", selected_media.id)
+            cmd:set_parameter("master_clip_id", selected_clip.clip_id)
+            cmd:set_parameter("media_id", media_id)
             cmd:set_parameter("sequence_id", sequence_id)
             cmd:set_parameter("track_id", track_id)
-            cmd:set_parameter("overwrite_time", playhead_time)
-            cmd:set_parameter("duration", selected_media.duration)
+            cmd:set_parameter("overwrite_time", playhead_value)
+            cmd:set_parameter("duration", clip_duration)
             cmd:set_parameter("source_in", 0)
-            cmd:set_parameter("source_out", selected_media.duration)
+            cmd:set_parameter("source_out", clip_duration)
+            cmd:set_parameter("project_id", project_id)
             cmd:set_parameter("advance_playhead", true)
 
             local success, result = pcall(function()
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ OVERWRITE: Added %s at %dms, trimmed overlapping clips", selected_media.name, playhead_time))
+                print(string.format("✅ OVERWRITE: Added %s at %s, trimmed overlapping clips", selected_clip.name or media_id, tostring(playhead_value)))
             else
                 print(string.format("❌ OVERWRITE failed: %s", result and result.error_message or "unknown error"))
             end
@@ -606,9 +698,17 @@ local function create_action_callback(command_name, params)
 
             local timeline_state = timeline_panel.get_state()
             local current_duration = timeline_state.get_viewport_duration()
-            local new_duration = math.max(1000, current_duration * 0.8)  -- Zoom in 20%, min 1 second
+            local new_duration = current_duration * 0.8  -- Rational arithmetic
+            
+            -- Clamp to min 1 second (Rational)
+            local min_dur = Rational.from_seconds(1.0, new_duration.fps_numerator, new_duration.fps_denominator)
+            new_duration = Rational.max(min_dur, new_duration)
+            
+            if keyboard_shortcuts.clear_zoom_toggle then
+                keyboard_shortcuts.clear_zoom_toggle()
+            end
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("🔍 Zoomed in: %.2fs visible", new_duration / 1000))
+            print(string.format("🔍 Zoomed in: %s visible", tostring(new_duration)))
 
         elseif command_name == "TimelineZoomOut" then
             -- Zoom out: increase viewport duration (show more time)
@@ -619,9 +719,13 @@ local function create_action_callback(command_name, params)
 
             local timeline_state = timeline_panel.get_state()
             local current_duration = timeline_state.get_viewport_duration()
-            local new_duration = current_duration * 1.25  -- Zoom out 25%
+            local new_duration = current_duration * 1.25  -- Rational arithmetic
+            
+            if keyboard_shortcuts.clear_zoom_toggle then
+                keyboard_shortcuts.clear_zoom_toggle()
+            end
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("🔍 Zoomed out: %.2fs visible", new_duration / 1000))
+            print(string.format("🔍 Zoomed out: %s visible", tostring(new_duration)))
 
         elseif command_name == "TimelineZoomFit" then
             -- Zoom to fit: show entire timeline
@@ -631,26 +735,51 @@ local function create_action_callback(command_name, params)
             end
 
             local timeline_state = timeline_panel.get_state()
-            local clips = timeline_state.get_clips()
+            local ok = keyboard_shortcuts.toggle_zoom_fit(timeline_state)
+            if not ok then
+                -- toggle function already printed warning
+                return
+            end
 
-            -- Find rightmost clip edge
-            local max_time = 0
-            for _, clip in ipairs(clips) do
-                local clip_end = clip.start_time + clip.duration
-                if clip_end > max_time then
-                    max_time = clip_end
+        elseif command_name == "RenameItem" or command_name == "RenameMedia" then
+            local rename_started = false
+            if project_browser and project_browser.start_inline_rename then
+                -- Ensure project browser has matching selection when timeline clip is focused
+                if focus_manager and focus_manager.get_focused_panel then
+                    local focused_panel = focus_manager.get_focused_panel()
+                    print(string.format("Rename: focused panel=%s", tostring(focused_panel)))
+                    if focused_panel == "timeline" and timeline_panel and timeline_panel.get_state then
+                        local state = timeline_panel.get_state()
+                        if not state then
+                            print("Rename: timeline_panel.get_state() returned nil")
+                        end
+                        if state and state.get_selected_clips then
+                            local selected_clips = state.get_selected_clips()
+                            print(string.format("Rename: timeline selected clips=%d", selected_clips and #selected_clips or 0))
+                            local target_clip = selected_clips and selected_clips[1] or nil
+                            if target_clip then
+                                local master_id = target_clip.parent_clip_id or target_clip.id
+                                print(string.format("Rename: targeting master clip %s", tostring(master_id)))
+                                if master_id and project_browser.focus_master_clip then
+                                    local ok, focus_err = project_browser.focus_master_clip(master_id, {skip_activate = true})
+                                    if not ok then
+                                        print(string.format("Rename: focus_master_clip failed - %s", tostring(focus_err)))
+                                    end
+                                    if not ok then
+                                        -- keep going; inline rename will still attempt current selection
+                                    end
+                                end
+                            end
+                        end
+                    end
                 end
+                rename_started = project_browser.start_inline_rename()
+                print(string.format("Rename: start_inline_rename returned %s", tostring(rename_started)))
             end
-
-            if max_time > 0 then
-                -- Add 10% padding
-                local new_duration = max_time * 1.1
-                timeline_state.set_viewport_duration(new_duration)
-                timeline_state.set_viewport_start_time(0)
-                print(string.format("🔍 Zoomed to fit: %.2fs visible", new_duration / 1000))
-            else
-                print("⚠️  No clips to fit")
+            if not rename_started then
+                print("⚠️  Rename: No available item to rename")
             end
+            return
 
         elseif command_name == "Cut" then
             local result = command_manager.execute("Cut")
@@ -659,13 +788,21 @@ local function create_action_callback(command_name, params)
             else
                 print(string.format("⚠️  Cut returned error: %s", result.error_message or "unknown"))
             end
-        elseif command_name == "Copy" or command_name == "Paste" then
-            print(string.format("⚠️  Command '%s' not implemented yet", command_name))
-            print("   TODO: Implement clipboard operations")
+        elseif command_name == "Copy" then
+            local ok, err = clipboard_actions.copy()
+            if not ok then
+                print(string.format("⚠️  Copy failed: %s", err or "unknown error"))
+            end
+        elseif command_name == "Paste" then
+            local ok, err = clipboard_actions.paste()
+            if not ok then
+                print(string.format("⚠️  Paste failed: %s", err or "unknown error"))
+            end
         elseif command_name == "Delete" then
-            print("🗑️  Delete command - checking selection...")
-            print("⚠️  Delete command not fully wired to menu yet")
-            print("   For now, use Delete key which calls BatchCommand for selected clips")
+            if keyboard_shortcuts.perform_delete_action({shift = false}) then
+                return
+            end
+            print("⚠️  Delete command: nothing to delete in current context")
         else
             -- Regular command execution
             local command_params = params
@@ -716,6 +853,7 @@ local function build_menu(menu_elem, parent_menu, menu_path)
 
             if command_name then
                 qt.CONNECT_MENU_ACTION(action, create_action_callback(command_name, params))
+                register_action_for_command(command_name, action)
             end
 
         elseif child.tag == "separator" then
@@ -738,6 +876,8 @@ function M.load_from_file(xml_path)
     if not main_window then
         return false, "Menu system not initialized - call init() first"
     end
+
+    actions_by_command = {}
 
     -- Parse XML
     local root, err = parse_xml_file(xml_path)
@@ -765,6 +905,7 @@ function M.load_from_file(xml_path)
     end
 
     print(string.format("Menu system: Loaded %d menus from %s", #menus_elem.children, xml_path))
+    update_undo_redo_actions()
     return true
 end
 
@@ -772,14 +913,20 @@ end
 -- @param command_name string: Command name
 -- @param enabled boolean: Whether item should be enabled
 function M.set_item_enabled(command_name, enabled)
-    -- TODO: Track action objects by command name for state updates
+    set_actions_enabled_for_command(command_name, enabled ~= false)
 end
 
 --- Update menu item checked state
 -- @param command_name string: Command name
 -- @param checked boolean: Whether item should be checked
 function M.set_item_checked(command_name, checked)
-    -- TODO: Track action objects by command name for state updates
+    local actions = actions_by_command[command_name]
+    if not actions then
+        return
+    end
+    for _, action in ipairs(actions) do
+        qt.SET_ACTION_CHECKED(action, checked and true or false)
+    end
 end
 
 return M

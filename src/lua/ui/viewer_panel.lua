@@ -6,14 +6,26 @@ local frame_utils = require("core.frame_utils")
 local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 local json = require("dkjson")
+local inspectable_factory = require("inspectable")
 
 local M = {}
 
 local viewer_widget = nil
 local title_label = nil
 local content_label = nil
+local content_container = nil
 
 local DEFAULT_MESSAGE = "Double-click a clip in the Project Browser to load it here."
+
+local function get_fps_float(rate)
+    if type(rate) == "table" and rate.fps_numerator then
+        if rate.fps_denominator == 0 then return 0 end
+        return rate.fps_numerator / rate.fps_denominator
+    elseif type(rate) == "number" then
+        return rate
+    end
+    return 0
+end
 
 local function ensure_created()
     if not viewer_widget then
@@ -29,15 +41,27 @@ local function format_resolution(media)
 end
 
 local function format_duration(media)
-    if not media.duration or media.duration <= 0 then
+    if not media.duration then
         return nil
     end
+    -- Handle Rational comparison for duration > 0
+    local is_positive = false
+    if type(media.duration) == "table" and media.duration.frames then
+        is_positive = media.duration.frames > 0
+    elseif type(media.duration) == "number" then
+        is_positive = media.duration > 0
+    end
+    
+    if not is_positive then
+        return nil
+    end
+
     local frame_rate = media.frame_rate or frame_utils.default_frame_rate
     local ok, result = pcall(frame_utils.format_timecode, media.duration, frame_rate)
     if ok and result then
         return result
     end
-    return string.format("%d ms", media.duration)
+    return "00:00:00:00"
 end
 
 local function render_text(lines)
@@ -81,6 +105,12 @@ function M.create()
 
     viewer_widget = qt_constants.WIDGET.CREATE()
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
+    if qt_constants.LAYOUT.SET_SPACING then
+        pcall(qt_constants.LAYOUT.SET_SPACING, layout, 0)
+    end
+    if qt_constants.LAYOUT.SET_MARGINS then
+        pcall(qt_constants.LAYOUT.SET_MARGINS, layout, 0, 0, 0, 0)
+    end
 
     title_label = qt_constants.WIDGET.CREATE_LABEL("Source Viewer")
     qt_constants.PROPERTIES.SET_STYLE(title_label, [[
@@ -93,21 +123,42 @@ function M.create()
     ]])
     qt_constants.LAYOUT.ADD_WIDGET(layout, title_label)
 
+    content_container = qt_constants.WIDGET.CREATE()
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_container, "Expanding", "Expanding")
+    end
+    if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_STYLE then
+        qt_constants.PROPERTIES.SET_STYLE(content_container, [[
+            QWidget {
+                background: #000000;
+                border: 1px solid #1f1f1f;
+            }
+        ]])
+    end
+
+    local content_layout = qt_constants.LAYOUT.CREATE_VBOX()
+    if qt_constants.LAYOUT.SET_MARGINS then
+        pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 0, 0)
+    end
+    if qt_constants.LAYOUT.SET_SPACING then
+        pcall(qt_constants.LAYOUT.SET_SPACING, content_layout, 0)
+    end
+
     content_label = qt_constants.WIDGET.CREATE_LABEL(DEFAULT_MESSAGE)
     qt_constants.PROPERTIES.SET_STYLE(content_label, string.format([[
         QLabel {
-            background: #000000;
+            background: transparent;
             color: %s;
             padding: 16px;
             font-size: 13px;
         }
     ]], ui_constants.COLORS and (ui_constants.COLORS.TEXT_PRIMARY or "#d0d0d0") or "#d0d0d0"))
     if qt_constants.PROPERTIES.SET_ALIGNMENT then
-        qt_constants.PROPERTIES.SET_ALIGNMENT(content_label, qt_constants.PROPERTIES.ALIGN_TOP)
+        qt_constants.PROPERTIES.SET_ALIGNMENT(content_label, qt_constants.PROPERTIES.ALIGN_CENTER)
     end
     if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
-        -- Ignore the long-line size hint so the splitter width controls the panel
-        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_label, "ignored", "preferred")
+        -- Expand to fill the viewer area while keeping text centered
+        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_label, "Expanding", "Expanding")
     end
     if qt_constants.PROPERTIES.SET_MINIMUM_WIDTH then
         pcall(qt_constants.PROPERTIES.SET_MINIMUM_WIDTH, content_label, 0)
@@ -115,7 +166,16 @@ function M.create()
     if qt_constants.PROPERTIES.SET_WORD_WRAP then
         qt_constants.PROPERTIES.SET_WORD_WRAP(content_label, true)
     end
-    qt_constants.LAYOUT.ADD_WIDGET(layout, content_label)
+    qt_constants.LAYOUT.ADD_WIDGET(content_layout, content_label)
+    if qt_constants.LAYOUT.SET_STRETCH_FACTOR then
+        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, content_layout, content_label, 1)
+    end
+
+    qt_constants.LAYOUT.SET_ON_WIDGET(content_container, content_layout)
+    qt_constants.LAYOUT.ADD_WIDGET(layout, content_container)
+    if qt_constants.LAYOUT.SET_STRETCH_FACTOR then
+        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, layout, content_container, 1)
+    end
 
     qt_constants.LAYOUT.SET_ON_WIDGET(viewer_widget, layout)
 
@@ -167,8 +227,9 @@ function M.show_source_clip(media)
         table.insert(lines, "Resolution: " .. resolution)
     end
 
-    if media.frame_rate and media.frame_rate > 0 then
-        table.insert(lines, string.format("Frame Rate: %.2f fps", media.frame_rate))
+    local fps_val = get_fps_float(media.frame_rate)
+    if fps_val > 0 then
+        table.insert(lines, string.format("Frame Rate: %.2f fps", fps_val))
     end
 
     if media.codec and media.codec ~= "" then
@@ -183,6 +244,18 @@ function M.show_source_clip(media)
 
     render_text(lines)
 
+    local inspectable = nil
+    if media.clip_id or media.id then
+        local ok, clip_inspectable = pcall(inspectable_factory.clip, {
+            clip_id = media.clip_id or media.id,
+            project_id = media.project_id,
+            clip = media
+        })
+        if ok then
+            inspectable = clip_inspectable
+        end
+    end
+
     selection_hub.update_selection("viewer", {{
         item_type = "viewer_media",
         id = media.id,
@@ -195,6 +268,10 @@ function M.show_source_clip(media)
         codec = media.codec,
         file_path = media.file_path,
         metadata = normalize_metadata(media.metadata),
+        project_id = media.project_id,
+        inspectable = inspectable,
+        schema = inspectable and inspectable:get_schema_id() or nil,
+        display_name = media.name or media.file_name or media.id or "Untitled"
     }})
 end
 
@@ -212,8 +289,9 @@ function M.show_timeline(sequence)
     local lines = {}
     table.insert(lines, string.format("Timeline: %s", sequence.name or sequence.id or "Untitled"))
 
-    if sequence.frame_rate and sequence.frame_rate > 0 then
-        table.insert(lines, string.format("Frame Rate: %.2f fps", sequence.frame_rate))
+    local fps_val = get_fps_float(sequence.frame_rate)
+    if fps_val > 0 then
+        table.insert(lines, string.format("Frame Rate: %.2f fps", fps_val))
     end
 
     if sequence.width and sequence.height and sequence.width > 0 and sequence.height > 0 then
@@ -223,6 +301,16 @@ function M.show_timeline(sequence)
     render_text(lines)
 
     if sequence then
+        local inspectable = nil
+        local ok, seq_inspectable = pcall(inspectable_factory.sequence, {
+            sequence_id = sequence.id,
+            project_id = sequence.project_id,
+            sequence = sequence
+        })
+        if ok then
+            inspectable = seq_inspectable
+        end
+
         selection_hub.update_selection("viewer", {{
             item_type = "viewer_timeline",
             id = sequence.id,
@@ -231,6 +319,10 @@ function M.show_timeline(sequence)
             frame_rate = sequence.frame_rate,
             width = sequence.width,
             height = sequence.height,
+            inspectable = inspectable,
+            schema = inspectable and inspectable:get_schema_id() or nil,
+            display_name = sequence.name or sequence.id or "Untitled",
+            project_id = sequence.project_id
         }})
     else
         selection_hub.update_selection("viewer", {})

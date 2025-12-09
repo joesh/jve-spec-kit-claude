@@ -3,7 +3,7 @@
 ## **🔧 DEVELOPMENT RULES**
 
 ### **0. Todo Management & Session Continuity**
-- **ALWAYS use TodoWrite tool** for real-time task tracking
+- **ALWAYS write to TODO.md for real-time task tracking
 - **UPDATE immediately** when starting/completing/discovering tasks
 - **CHECK todo list FIRST** before asking what's next
 - **ONE task in_progress** at a time
@@ -36,6 +36,8 @@
 - **1.10**: Stay in Your Layer - Lua scripts call Qt bindings - never direct Qt; Use widget registry RAII handles - never manual memory management; Go through command dispatcher - never direct function calls
 - **1.11**: Never Change Architecture Without Permission - NEVER modify function calling patterns without explicit user approval; NEVER reorganize modules or interfaces without user consultation; NEVER replace one system with another without user decision; ALWAYS ask first before changing how components interact
 - **1.12**: External inputs must NEVER crash the system - all imported data (XML, DB, files) must be validated; degrade gracefully when metadata is missing; record warnings, extract whatever can be trusted, and keep the app running
+- **1.13**: Tags Are Canonical Organization - Bins are just the default `bin` tag namespace; every UI tree, importer, and command must talk to `tag_service`/`tag_assignments` (never `project_settings.bin_hierarchy` or `media_bin_map`); if tag tables are missing the build must fail loudly—absolutely no fallbacks or legacy shims unless Joe says otherwise.
+- **1.14**: Gap Materialization Invariant - Ripple/roll logic MUST treat gaps as first-class timeline items using the temporary gap clip pipeline documented in `docs/GAP_RESTORATION_PLAN.md`. Never bypass, delete, or “simplify” that materialization layer; any change that removes temp gaps or rewrites `gap_*` edges back into clip trims is an automatic regression.
 
 ### **2.x Development Standards**
 - **2.1**: Clear technical tone, no excessive enthusiasm/emojis
@@ -46,14 +48,14 @@
 - **2.5**: MANDATORY milestone commits - never leave progress uncommitted
 - **2.7**: Auto-approved dev commands (make/cmake/git status) - execute immediately
 - **2.7.1**: ALWAYS use make -j4 for parallel builds - never use plain make
-- **2.8**: Proper attribution: "Authored-By: Joe Shapiro <joe@shapiro.net> With-Help-From: Claude"
+- **2.8**: Proper attribution: "Authored-By: Joe Shapiro <joe@shapiro.net> With-Help-From: Codex"
 - **2.9**: ASSUME FAILURE UNTIL PROVEN OTHERWISE - Default assumption: Nothing is working until specifically verified
 - **2.10**: VERIFY THAT YOU DIDN'T BREAK ANYTHING - Always test existing functionality after making changes
 - **2.11**: Use decimal notation for rule numbering with logical categories - Rules numbered within categories (0.x Todo/Documentation, 1.x Core Development, 2.x Development Standards, 3.x Design Principles); count existing rules in category first; never renumber existing rules as they're referenced in commit messages
 - **2.12**: Follow the Error System - ALWAYS propagate errors through ErrorContext system; NEVER write ad-hoc error handling; EVERY operation must return success/error state
 - **2.13**: No Fallbacks or Default Values - NEVER use fallback values - they hide errors and mask problems; ALWAYS fail explicitly when required data is missing; NEVER assume defaults - get actual values or error; Surface all errors immediately - no silent failures
 - **2.14**: No Hardcoded Constants - NEVER hardcode magic numbers - create symbolic constants instead; CENTRALIZE all constants in dedicated header/module files; USE meaningful names that explain what the constant represents; DOCUMENT the purpose and units of each constant
-- **2.15**: No Backward Compatibility Without Permission - NEVER maintain backward compatibility without explicitly asking the user first; ALWAYS remove deprecated APIs immediately when creating new ones; NO legacy global exports - use proper module returns only; BREAK things cleanly rather than maintain confusing dual APIs
+- **2.15**: No Backward Compatibility - Default assumption: we DO NOT maintain backward compatibility for schemas, APIs, data stores, or workflows; delete legacy paths as soon as replacements exist; never add shims, migrations, or old-code preservation unless Joe explicitly reverses this rule
 - **2.16**: No Shortcuts - NEVER take shortcuts to avoid thorough implementation; Do the complete work required even if it takes longer; Shortcuts lead to broken implementations that take more time to fix than doing it right initially; Always implement the full solution properly
 - **2.17**: No Stub Functions - NEVER create stub functions that return dummy values or print messages instead of implementing real functionality; Stub functions mask architectural problems and prevent proper solutions; ALWAYS implement the complete functionality or fix the underlying architecture issue; Stub functions are forbidden - they hide real problems
 - **2.18**: FFI vs Business Logic Separation - FFI functions are one-to-one mappings with C++ Qt functions; FFI functions contain parameter validation (not business logic) and no application logic; Business logic functions contain application logic and call FFI functions when they need Qt functionality; NEVER have business logic functions call C++ directly - they must go through FFI functions; NEVER have FFI functions contain business logic - they are pure interfaces to C++
@@ -68,9 +70,11 @@
 - **2.26**: Functions Read Like Algorithms - Functions should read like high-level algorithms that call subfunctions to do the dirty work; NEVER mix high-level logic with low-level implementation details in the same function; Break complex operations into well-named helper functions that handle specific concerns; Main functions should tell the story of WHAT happens, helper functions handle HOW it happens
 - **2.27**: Short Functions and Logical File Splitting - Functions should be short and focused on a single responsibility; Files should be relatively short and split into logical units when they grow large; NEVER create monolithic functions that handle multiple concerns; Split large files into cohesive modules based on functionality; Aim for functions that fit on one screen and files that are easy to navigate
 - **2.28**: No Artificial Progress Inflation - One user request = one todo item, regardless of how many attempts it takes; Do not break single tasks into multiple sub-tasks to mark things "completed"; Progress is measured by user satisfaction, not number of completed attempts; Multiple debugging attempts are iterations within one task, not separate accomplishments; Only mark tasks complete when the user confirms the actual problem is solved
+- **2.29**: Snapshot Every BatchCommand - Whenever you queue multiple timeline operations inside a `BatchCommand`, you MUST set `sequence_id` to the active sequence and populate `__snapshot_sequence_ids` with that id. Without this, undo/redo/replay will appear to “do nothing” until a restart because the command manager doesn’t know which sequence to reload. Applies to delete, split, drag/duplicate, ripple, and any future batch operations.
+- **2.30**: Persist Track Heights Per Sequence - Every timeline sequence must write its track heights to SQLite (`sequence_track_layouts.track_heights_json`) whenever a header is resized, and that same height map must be reloaded verbatim on init. The most recently modified sequence becomes the project-wide template (`project_settings.track_height_template`), and any brand-new sequence must immediately adopt that template before saving its own layout. No fallbacks: if persistence fails, surface the error rather than silently using defaults.
 
 ### **3.x Design Principles**
-- **3.1**: Protocol versioning - backward compatibility for all persistent artifacts
+- **3.1**: Protocol versioning - support only the current protocol/schema; when formats change, bump the version and migrate forward without keeping the old behavior
 - **3.2**: Principle of least amazement - predictable behavior
 - **3.3**: Orthogonality - composable commands
 - **3.4**: Progressive disclosure - core workflow ≤3 clicks
@@ -79,6 +83,7 @@
 - **3.11**: Discoverable UI - tooltips on all non-obvious controls
 - **3.13**: No mysterious disabled controls without explanatory tooltips
 - **3.14**: No Marketing Speak - NEVER use marketing terms - no "professional", "enterprise", "robust", "powerful"; USE technical language - clear, direct, factual descriptions only; NO superlatives - describe what IS, not what's "amazing" or "best"; AVOID aspirational language - document verified reality, not goals
+- **3.15**: Tag-Driven Organization - Tags are the authoritative organization system; bins are simply the default tag namespace; the tree view is just one visualization of tags, so all organization features must operate on tag namespaces first and render them however the UI requires
 
 ---
 
@@ -373,3 +378,4 @@ class FFIParameterValidator {
 - NEVER use marketing speak. ALWAYS be truthful
 - always do a push after a ci
 - don't mark tasks complete until i agree
+- When asked to fix a bug, first add a regression test that fails. Only after demonstrating the failure may you implement the fix and verify the test passes.

@@ -192,8 +192,8 @@ metadata_schemas.clip_inspector_schemas = {
     ["Dynamic Media"] = {
         description = "Video production and workflow metadata",
         fields = {
-            create_field("dynamic:timecode_in", "Timecode In", metadata_schemas.FIELD_TYPES.STRING, "00:00:00:00"),
-            create_field("dynamic:timecode_out", "Timecode Out", metadata_schemas.FIELD_TYPES.STRING, "00:00:00:00"),
+            create_field("dynamic:timecode_in", "Timecode In", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
+            create_field("dynamic:timecode_out", "Timecode Out", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
             create_field("dynamic:good_take", "Good Take", metadata_schemas.FIELD_TYPES.BOOLEAN, false),
             create_field("dynamic:circle_take", "Circle Take", metadata_schemas.FIELD_TYPES.BOOLEAN, false),
             create_field("dynamic:sync_offset", "Sync Offset", metadata_schemas.FIELD_TYPES.STRING, ""),
@@ -213,6 +213,31 @@ metadata_schemas.clip_inspector_schemas = {
             create_field("exif:focal_length", "Focal Length", metadata_schemas.FIELD_TYPES.STRING, ""),
             create_field("exif:flash", "Flash", metadata_schemas.FIELD_TYPES.STRING, ""),
             create_field("exif:white_balance", "White Balance", metadata_schemas.FIELD_TYPES.STRING, "")
+        }
+    }
+}
+
+-- Timeline (sequence) schemas exposed when the inspector is focused on a sequence/timeline.
+metadata_schemas.sequence_inspector_schemas = {
+    ["Timeline Settings"] = {
+        description = "Core playback characteristics for the active timeline",
+        fields = {
+            create_field("name", "Timeline Name", metadata_schemas.FIELD_TYPES.STRING, ""),
+            create_field("frame_rate", "Frame Rate", metadata_schemas.FIELD_TYPES.DOUBLE, 24.0),
+            create_field("width", "Width", metadata_schemas.FIELD_TYPES.INTEGER, 1920),
+            create_field("height", "Height", metadata_schemas.FIELD_TYPES.INTEGER, 1080),
+            create_field("timecode_start_frame", "Start Timecode", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
+            create_field("playhead_value", "Playhead", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00")
+        }
+    },
+
+    ["Timeline Viewport"] = {
+        description = "Viewport defaults and edit marks for the sequence",
+        fields = {
+            create_field("viewport_start_value", "Viewport Start", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
+            create_field("viewport_duration_frames_value", "Viewport Duration", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:10:00"),
+            create_field("mark_in_value", "Mark In", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00"),
+            create_field("mark_out_value", "Mark Out", metadata_schemas.FIELD_TYPES.TIMECODE, "00:00:00:00")
         }
     }
 }
@@ -238,6 +263,10 @@ function metadata_schemas.get_clip_inspector_schemas()
     return metadata_schemas.clip_inspector_schemas
 end
 
+function metadata_schemas.get_sequence_inspector_schemas()
+    return metadata_schemas.sequence_inspector_schemas
+end
+
 -- Function to add custom schema (for user extensibility)
 function metadata_schemas.add_custom_schema(name, schema)
     metadata_schemas.clip_inspector_schemas[name] = schema
@@ -250,6 +279,56 @@ function metadata_schemas.add_custom_field(schema_name, field)
         return true
     end
     return false
+end
+
+local function resolve_schema_table(schema_id)
+    if schema_id == "clip" then
+        return metadata_schemas.clip_inspector_schemas
+    elseif schema_id == "sequence" then
+        return metadata_schemas.sequence_inspector_schemas
+    end
+    return nil
+end
+
+local function build_section_list(schema_table)
+    if not schema_table then
+        return {}
+    end
+
+    local names = {}
+    for name in pairs(schema_table) do
+        table.insert(names, name)
+    end
+    table.sort(names)
+
+    local sections = {}
+    for _, name in ipairs(names) do
+        table.insert(sections, {
+            name = name,
+            schema = schema_table[name]
+        })
+    end
+    return sections
+end
+
+function metadata_schemas.get_sections(schema_id)
+    return build_section_list(resolve_schema_table(schema_id))
+end
+
+function metadata_schemas.iter_fields_for_schema(schema_id)
+    local sections = metadata_schemas.get_sections(schema_id)
+    local flat = {}
+    for _, section in ipairs(sections) do
+        for _, field in ipairs(section.schema.fields or {}) do
+            table.insert(flat, field)
+        end
+    end
+
+    local index = 0
+    return function()
+        index = index + 1
+        return flat[index]
+    end
 end
 
 return metadata_schemas

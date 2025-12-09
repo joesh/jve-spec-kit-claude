@@ -9,6 +9,8 @@ extern "C" {
 // Forward declaration
 class SimpleLuaEngine;
 
+extern const char* WIDGET_METATABLE;
+
 /**
  * Qt bindings for Lua
  * Provides real Qt widget creation and management from Lua
@@ -44,6 +46,19 @@ int lua_add_widget_to_layout(lua_State* L);
 int lua_add_stretch_to_layout(lua_State* L);
 int lua_set_central_widget(lua_State* L);
 int lua_set_splitter_sizes(lua_State* L);
+int lua_get_splitter_sizes(lua_State* L);
+
+// Menu functions
+int lua_get_menu_bar(lua_State* L);
+int lua_create_menu(lua_State* L);
+int lua_add_menu_to_bar(lua_State* L);
+int lua_add_submenu(lua_State* L);
+int lua_create_menu_action(lua_State* L);
+int lua_connect_menu_action(lua_State* L);
+int lua_add_menu_separator(lua_State* L);
+int lua_set_action_enabled(lua_State* L);
+int lua_set_action_checked(lua_State* L);
+int lua_show_menu_popup(lua_State* L);
 
 // Property functions
 int lua_set_text(lua_State* L);
@@ -61,6 +76,7 @@ int lua_set_window_title(lua_State* L);
 int lua_set_size(lua_State* L);
 int lua_set_geometry(lua_State* L);
 int lua_set_style_sheet(lua_State* L);
+int lua_set_window_appearance(lua_State* L);
 
 // Display functions
 int lua_show_widget(lua_State* L);
@@ -68,14 +84,20 @@ int lua_set_visible(lua_State* L);
 int lua_raise_widget(lua_State* L);
 int lua_activate_window(lua_State* L);
 
+// Dialog functions
+int lua_show_confirm_dialog(lua_State* L);
+int lua_show_dialog(lua_State* L);
+
 // Control functions
 int lua_set_scroll_area_widget(lua_State* L);
 int lua_set_scroll_area_viewport_margins(lua_State* L);
+int lua_set_context_menu_handler(lua_State* L);
 
 // Tree widget functions
 int lua_set_tree_headers(lua_State* L);
 int lua_set_tree_column_width(lua_State* L);
 int lua_set_tree_indentation(lua_State* L);
+int lua_set_tree_expands_on_double_click(lua_State* L);
 int lua_add_tree_item(lua_State* L);
 int lua_add_tree_child_item(lua_State* L);
 int lua_get_tree_selected_index(lua_State* L);
@@ -83,16 +105,27 @@ int lua_clear_tree(lua_State* L);
 int lua_set_tree_item_expanded(lua_State* L);
 int lua_set_tree_item_data(lua_State* L);
 int lua_get_tree_item_data(lua_State* L);
+int lua_set_tree_item_text(lua_State* L);
+int lua_set_tree_item_editable(lua_State* L);
+int lua_edit_tree_item(lua_State* L);
 int lua_set_tree_selection_mode(lua_State* L);
 int lua_set_tree_selection_changed_handler(lua_State* L);
+int lua_set_tree_item_changed_handler(lua_State* L);
+int lua_set_tree_close_editor_handler(lua_State* L);
 int lua_set_tree_item_icon(lua_State* L);
 int lua_set_tree_item_double_click_handler(lua_State* L);
+int lua_set_tree_current_item(lua_State* L);
+int lua_get_tree_item_at(lua_State* L);
+int lua_set_tree_drag_drop_mode(lua_State* L);
+int lua_set_tree_drop_handler(lua_State* L);
+int lua_set_tree_key_handler(lua_State* L);
 
 // Signal handling functions
 int lua_set_button_click_handler(lua_State* L);
 int lua_set_widget_click_handler(lua_State* L);
 int lua_set_tree_item_click_handler(lua_State* L);
 int lua_set_line_edit_text_changed_handler(lua_State* L);
+int lua_set_line_edit_editing_finished_handler(lua_State* L);
 int lua_set_global_key_handler(lua_State* L);
 int lua_set_focus_handler(lua_State* L);
 int lua_set_focus_policy(lua_State* L);

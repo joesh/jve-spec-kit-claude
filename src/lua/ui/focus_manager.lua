@@ -170,9 +170,17 @@ function M.update_panel_visual(panel_id, is_focused)
     end
 
     if panel.highlight_widget then
+        if qt_update_widget then
+            pcall(qt_update_widget, panel.widget)
+        end
         local width, height = qt_constants.PROPERTIES.GET_SIZE(panel.widget)
         if width and height then
             qt_constants.PROPERTIES.SET_GEOMETRY(panel.highlight_widget, 0, 0, width, height)
+        else
+            local geo_ok, _, _, w, h = pcall(qt_constants.PROPERTIES.GET_GEOMETRY, panel.widget)
+            if geo_ok then
+                qt_constants.PROPERTIES.SET_GEOMETRY(panel.highlight_widget, 0, 0, w or 0, h or 0)
+            end
         end
 
         local highlight_style = string.format([[ 
@@ -193,6 +201,22 @@ function M.get_focused_panel()
     return focused_panel_id
 end
 
+function M.refresh_highlight(panel_id)
+    local target = panel_id or focused_panel_id
+    if not target then
+        return
+    end
+    local is_focused = (target == focused_panel_id)
+    M.update_panel_visual(target, is_focused)
+end
+
+function M.refresh_all_highlights()
+    for panel_id, _ in pairs(registered_panels) do
+        local is_focused = (panel_id == focused_panel_id)
+        M.update_panel_visual(panel_id, is_focused)
+    end
+end
+
 -- Get focused panel info
 function M.get_focused_panel_info()
     if not focused_panel_id then
@@ -209,8 +233,14 @@ function M.focus_panel(panel_id)
         return false
     end
 
+    -- Prefer the first declared focus widget (e.g., the tree inside the panel)
+    local target_widget = panel.widget
+    if panel.focus_widgets and panel.focus_widgets[1] then
+        target_widget = panel.focus_widgets[1]
+    end
+
     -- Qt will trigger the focus event which will call our handler
-    qt_set_focus(panel.widget)
+    qt_set_focus(target_widget)
     return true
 end
 

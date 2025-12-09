@@ -1,9 +1,13 @@
--- Application layout: 3 panels across top, timeline across bottom
-
 -- Add luarocks path for C modules (like lxp.so)
 package.cpath = package.cpath .. ';' .. os.getenv('HOME') .. '/.luarocks/lib/lua/5.1/?.so'
 package.path = package.path .. ';' .. os.getenv('HOME') .. '/.luarocks/share/lua/5.1/?.lua'
 package.path = package.path .. ';' .. os.getenv('HOME') .. '/.luarocks/share/lua/5.1/?/init.lua'
+
+local ui_constants = require("core.ui_constants")
+local qt_constants = require("core.qt_constants")
+local Project = require("models.project")
+
+local WINDOW_TITLE_PREFIX = "JVE Editor"
 
 -- Enable strict nil error handling - calling nil will raise an error with proper stack trace
 debug.setmetatable(nil, {
@@ -12,11 +16,35 @@ debug.setmetatable(nil, {
   end
 })
 
+-- Global error handler for automatic bug capture
+local function global_error_handler(err)
+    local stack_trace = debug.traceback(tostring(err), 2)
+    print("❌ FATAL ERROR: " .. tostring(err))
+    print(stack_trace)
+
+    -- Capture bug report automatically on errors
+    local ok, bug_reporter = pcall(require, "bug_reporter.init")
+    if ok and bug_reporter then
+        local test_path = bug_reporter.capture_on_error(tostring(err), stack_trace)
+        if test_path then
+            print("📸 Bug report auto-captured: " .. test_path)
+            print("💡 Press F12 to review and submit")
+        end
+    end
+
+    return tostring(err) .. "\n" .. stack_trace
+end
+
+-- Install global error handler
+_G.error_handler = global_error_handler
+
 -- Disable print buffering for immediate output
 io.stdout:setvbuf("no")
 io.stderr:setvbuf("no")
 
 print("🎬 Creating layout...")
+local layout_path = debug.getinfo(1, "S").source:sub(2)
+local layout_dir = layout_path:match("(.*/)")
 
 -- Initialize database connection
 print("💾 Initializing database...")
@@ -37,6 +65,9 @@ else
     os.execute('mkdir -p "' .. projects_dir .. '"')
 end
 
+local project_display_name = nil
+local active_project_id = nil
+
 -- Initialize command_manager module reference (will be initialized later)
 local command_manager = require("core.command_manager")
 
@@ -46,137 +77,199 @@ if not db_success then
     print("❌ Failed to open database connection")
 else
     print("✅ Database connection established")
-
-    -- Initialize database schema if needed
     local db_conn = db_module.get_connection()
-    if db_conn then
-        local schema_check, err = db_conn:prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")
-        if not schema_check then
-            print("❌ Failed to prepare schema check query: " .. tostring(err))
-        else
-            local has_schema = false
-            if schema_check:exec() then
-                has_schema = schema_check:next()
-            end
-
-            if not has_schema then
-                print("💾 Creating database schema...")
-                -- Read and execute schema.sql
-                local schema_file = io.open("src/core/persistence/schema.sql", "r")
-                if schema_file then
-                    local schema_sql = schema_file:read("*all")
-                    schema_file:close()
-
-                    -- Execute schema as a single batch using exec (not prepare)
-                    -- Note: LuaJIT FFI doesn't have exec(), so we need to use a different approach
-                    -- For now, just execute the critical CREATE TABLE statements
-                    local create_statements = {}
-                    for statement in schema_sql:gmatch("CREATE TABLE.-%;") do
-                        table.insert(create_statements, statement)
-                    end
-
-                    for _, statement in ipairs(create_statements) do
-                        local stmt, stmt_err = db_conn:prepare(statement)
-                        if stmt then
-                            local success = stmt:exec()
-                            if not success then
-                                print("❌ Failed to execute statement: " .. tostring(stmt:last_error()))
-                            end
-                        else
-                            print("❌ Failed to prepare CREATE TABLE: " .. tostring(stmt_err))
-                        end
-                    end
-                    print("✅ Database schema created")
-                else
-                    print("❌ Failed to open schema.sql")
-                end
-            end
-        end
-    else
-        print("❌ Database connection is nil")
+    if not db_conn then
+        error("FATAL: Database connection reported as established but is nil")
     end
+
+    -- Initialize database schema if needed before querying any tables
+    local schema_check, err = db_conn:prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")
+    if not schema_check then
+        error("FATAL: Failed to prepare schema check query: " .. tostring(err))
+    end
+
+    local has_schema = false
+    if schema_check:exec() then
+        has_schema = schema_check:next()
+    end
+    schema_check:finalize()
+
+    if not has_schema then
+        print("💾 Creating database schema...")
+        local schema_path = layout_dir .. "../../core/persistence/schema.sql"
+        local schema_file, ferr = io.open(schema_path, "r")
+        if not schema_file then
+            error("FATAL: Failed to open schema.sql at " .. schema_path .. ": " .. tostring(ferr))
+        end
+        local schema_sql = schema_file:read("*all")
+        schema_file:close()
+
+        local ok, exec_err = db_conn:exec(schema_sql)
+        if not ok then
+            error("FATAL: Failed to apply schema: " .. tostring(exec_err))
+        end
+        print("✅ Database schema created")
+    end
+
+    local function ensure_default_data()
+        local function table_count(sql)
+            local stmt, stmt_err = db_conn:prepare(sql)
+            if not stmt then
+                error("FATAL: Failed to prepare count query: " .. tostring(stmt_err))
+            end
+            local value = 0
+            if stmt:exec() and stmt:next() then
+                value = tonumber(stmt:value(0)) or 0
+            end
+            stmt:finalize()
+            return value
+        end
+
+        if table_count("SELECT COUNT(*) FROM projects") == 0 then
+            local insert_project = db_conn:prepare([[
+                INSERT INTO projects (id, name, created_at, modified_at, settings)
+                VALUES ('default_project', 'Untitled Project', strftime('%s', 'now'), strftime('%s', 'now'), '{}')
+            ]])
+            if not insert_project then
+                error("FATAL: Failed to prepare default project insert")
+            end
+            insert_project:exec()
+            insert_project:finalize()
+            print("✅ Inserted default project")
+        end
+
+        local sequence_id = nil
+        if table_count("SELECT COUNT(*) FROM sequences") == 0 then
+            local insert_sequence = db_conn:prepare([[
+                INSERT INTO sequences (
+                    id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+                    width, height, playhead_frame,
+                    selected_clip_ids, selected_edge_infos, selected_gap_infos,
+                    view_start_frame, view_duration_frames, created_at, modified_at
+                ) VALUES (
+                    'default_sequence', 'default_project', 'Sequence 1', 'timeline', 24, 1, 48000,
+                    1920, 1080, 0,
+                    '[]', '[]', '[]',
+                    0, 240, strftime('%s', 'now'), strftime('%s', 'now')
+                )
+            ]])
+            if not insert_sequence then
+                error("FATAL: Failed to prepare default sequence insert")
+            end
+            local ok_seq = insert_sequence:exec()
+            insert_sequence:finalize()
+            assert(ok_seq ~= false, "FATAL: Failed to insert default sequence")
+            sequence_id = "default_sequence"
+        else
+            local seq_stmt = db_conn:prepare("SELECT id, fps_numerator, fps_denominator, audio_rate FROM sequences LIMIT 1")
+            if not seq_stmt then
+                error("FATAL: Failed to query existing sequence")
+            end
+            local ok = seq_stmt:exec() and seq_stmt:next()
+            if ok then
+                sequence_id = seq_stmt:value(0)
+            end
+            seq_stmt:finalize()
+            assert(sequence_id, "FATAL: Existing sequence missing id")
+        end
+
+        -- Ensure tracks exist for the active sequence
+        local function insert_track(seq_id, id, name, track_type, track_index)
+            local stmt = db_conn:prepare([[
+                INSERT INTO tracks (
+                    id, sequence_id, name, track_type,
+                    track_index, enabled, locked, muted, soloed, volume, pan
+                )
+                VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, 1.0, 0.0)
+            ]])
+            if not stmt then
+                error("FATAL: Failed to prepare default track insert")
+            end
+            stmt:bind_value(1, id)
+            stmt:bind_value(2, seq_id)
+            stmt:bind_value(3, name)
+            stmt:bind_value(4, track_type)
+            stmt:bind_value(5, track_index)
+            local ok = stmt:exec()
+            stmt:finalize()
+            assert(ok ~= false, string.format("FATAL: Failed to insert track %s", tostring(id)))
+        end
+
+        -- Only seed tracks if none exist for the active sequence
+        local track_count_sql = string.format("SELECT COUNT(*) FROM tracks WHERE sequence_id = '%s'", sequence_id)
+        if table_count(track_count_sql) == 0 then
+            insert_track(sequence_id, "video1", "V1", "VIDEO", 1)
+            insert_track(sequence_id, "video2", "V2", "VIDEO", 2)
+            insert_track(sequence_id, "video3", "V3", "VIDEO", 3)
+            insert_track(sequence_id, "audio1", "A1", "AUDIO", 1)
+            insert_track(sequence_id, "audio2", "A2", "AUDIO", 2)
+            insert_track(sequence_id, "audio3", "A3", "AUDIO", 3)
+
+            local insert_media = db_conn:prepare([[
+                INSERT INTO media (
+                    id, project_id, name, file_path,
+                    duration_frames, fps_numerator, fps_denominator,
+                    width, height, audio_channels, codec,
+                    created_at, modified_at, metadata
+                )
+                VALUES (
+                    'media1', 'default_project', 'test.mp4', '/path/to/test.mp4',
+                    2400, 24, 1,
+                    1920, 1080, 2, 'h264',
+                    strftime('%s','now'), strftime('%s','now'), '{}'
+                )
+            ]])
+            if insert_media then
+                insert_media:exec()
+                insert_media:finalize()
+            end
+
+            print("✅ Inserted default sequence and tracks")
+        end
+    end
+
+    ensure_default_data()
+
+    active_project_id = db_module.get_current_project_id()
+    local project_record = Project.load(active_project_id)
+    assert(project_record and project_record.name and project_record.name ~= "",
+        string.format("Project '%s' missing name", tostring(active_project_id)))
+    project_display_name = project_record.name
 
     -- Initialize CommandManager with database
     command_manager.init(db_module.get_connection())
     print("✅ CommandManager initialized with database")
 
-    -- Create test project data if database is empty
-    local project_check = db_conn:prepare("SELECT COUNT(*) FROM projects")
-    if project_check and project_check:exec() and project_check:next() then
-        local project_count = project_check:value(0)
-        if project_count == 0 then
-            print("💾 Creating test project data...")
-            -- Insert test project
-            local insert_project = db_conn:prepare([[
-                INSERT INTO projects (id, name, created_at, modified_at, settings)
-                VALUES ('default_project', 'Untitled Project', strftime('%s', 'now'), strftime('%s', 'now'), '{}')
-            ]])
-            if insert_project then insert_project:exec() end
+    -- Initialize bug reporter (continuous background capture)
+    local bug_reporter = require("bug_reporter.init")
+    bug_reporter.init()
+    print("✅ Bug reporter initialized (background capture active)")
+end
 
-            -- Insert test sequence
-            local insert_sequence = db_conn:prepare([[
-                INSERT INTO sequences (id, project_id, name, frame_rate, width, height, timecode_start, playhead_time, selected_clip_ids, selected_edge_infos)
-                VALUES ('default_sequence', 'default_project', 'Sequence 1', 30.0, 1920, 1080, 0, 0, '[]', '[]')
-            ]])
-            if insert_sequence then insert_sequence:exec() end
 
-            -- Insert test tracks
-            -- Video tracks
-            local insert_video1 = db_conn:prepare([[
-                INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-                VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 1, 1)
-            ]])
-            if insert_video1 then insert_video1:exec() end
-
-            local insert_video2 = db_conn:prepare([[
-                INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-                VALUES ('video2', 'default_sequence', 'V2', 'VIDEO', 2, 1)
-            ]])
-            if insert_video2 then insert_video2:exec() end
-
-            local insert_video3 = db_conn:prepare([[
-                INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-                VALUES ('video3', 'default_sequence', 'V3', 'VIDEO', 3, 1)
-            ]])
-            if insert_video3 then insert_video3:exec() end
-
-            -- Audio tracks
-            local insert_audio1 = db_conn:prepare([[
-                INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-                VALUES ('audio1', 'default_sequence', 'A1', 'AUDIO', 1, 1)
-            ]])
-            if insert_audio1 then insert_audio1:exec() end
-
-            local insert_audio2 = db_conn:prepare([[
-                INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-                VALUES ('audio2', 'default_sequence', 'A2', 'AUDIO', 2, 1)
-            ]])
-            if insert_audio2 then insert_audio2:exec() end
-
-            local insert_audio3 = db_conn:prepare([[
-                INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-                VALUES ('audio3', 'default_sequence', 'A3', 'AUDIO', 3, 1)
-            ]])
-            if insert_audio3 then insert_audio3:exec() end
-
-            -- Insert test media
-            local insert_media = db_conn:prepare([[
-                INSERT INTO media (id, file_path, file_name, duration, frame_rate, metadata)
-                VALUES ('media1', '/path/to/test.mp4', 'test.mp4', 10000, 30.0, '{}')
-            ]])
-            if insert_media then insert_media:exec() end
-
-            -- Note: Test clips are now added via commands after timeline initialization
-            -- This ensures they're part of the event stream for proper undo/redo
-
-            print("✅ Test project data created")
-        end
-    end
+if not project_display_name then
+    error("FATAL: Unable to resolve project display name for window title")
 end
 
 -- Create main window
+print("🔨 About to create main window...")
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
-qt_constants.PROPERTIES.SET_TITLE(main_window, "JVE Editor - Correct Layout")
+print("✅ Main window created successfully")
+print("🎨 Applying main window stylesheet...")
+assert(ui_constants and ui_constants.STYLES and type(ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR) == "string" and ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR ~= "",
+    "MAIN_WINDOW_TITLE_BAR style is required for main window styling")
+qt_set_widget_stylesheet(main_window, ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR)
+print("✅ Stylesheet applied")
+local window_title = project_display_name
+qt_constants.PROPERTIES.SET_TITLE(main_window, window_title)
+if qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE then
+    local ok, appearance_set = pcall(qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE, main_window, "NSAppearanceNameDarkAqua")
+    if not ok or appearance_set ~= true then
+        print("WARNING: Failed to set window appearance to dark mode")
+    end
+else
+    print("WARNING: Window appearance binding unavailable; title bar color may remain default")
+end
 qt_constants.PROPERTIES.SET_SIZE(main_window, 1600, 900)
 
 -- Main vertical splitter (Top row | Timeline)
@@ -188,7 +281,11 @@ local top_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 -- 1. Project Browser (left) - create EARLY so menu system can reference it
 local selection_hub = require("ui.selection_hub")
 local project_browser_mod = require("ui.project_browser")
+local panel_manager = require("ui.panel_manager")
 local project_browser = project_browser_mod.create()
+if project_browser_mod.set_project_title then
+    project_browser_mod.set_project_title(project_display_name)
+end
 
 -- Initialize menu system AFTER project browser exists
 print("📋 Initializing menu system...")
@@ -196,7 +293,8 @@ local menu_system = require("core.menu_system")
 menu_system.init(main_window, command_manager, project_browser_mod)
 
 -- Load menus from XML
-local menu_success, menu_error = menu_system.load_from_file("menus.xml")
+local menu_path = layout_dir .. "../../../menus.xml"
+local menu_success, menu_error = menu_system.load_from_file(menu_path)
 if menu_success then
     print("✅ Menu system loaded successfully")
 else
@@ -240,9 +338,6 @@ if mount_result and mount_result.success then
     -- Wire up timeline to inspector
     timeline_panel_mod.set_inspector(view)
 
-    -- Wire up timeline to project browser for media insertion
-    timeline_panel_mod.set_project_browser(project_browser_mod)
-
     -- Wire up project browser to timeline for insert button
     project_browser_mod.set_timeline_panel(timeline_panel_mod)
     project_browser_mod.set_viewer_panel(viewer_panel_mod)
@@ -272,6 +367,12 @@ focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector", {
 })
 focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline", {
     focus_widgets = timeline_panel_mod.get_focus_widgets and timeline_panel_mod.get_focus_widgets() or nil
+})
+
+panel_manager.init({
+    main_splitter = main_splitter,
+    top_splitter = top_splitter,
+    focus_manager = focus_manager
 })
 
 -- Initialize all panels to unfocused state
@@ -329,16 +430,6 @@ qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {450, 450})
 qt_constants.LAYOUT.SET_CENTRAL_WIDGET(main_window, main_splitter)
 
 -- Apply dark theme
-qt_constants.PROPERTIES.SET_STYLE(main_window, [[
-    QMainWindow { background: #2b2b2b; }
-    QWidget { background: #2b2b2b; color: white; }
-    QLabel { background: #3a3a3a; color: white; border: 1px solid #555; padding: 8px; }
-    QSplitter { background: #2b2b2b; }
-    QSplitter::handle { background: #555; width: 2px; height: 2px; }
-    QTreeWidget { background: #353535; color: white; border: 1px solid #555; }
-    QLineEdit { background: #353535; color: white; border: 1px solid #555; padding: 4px; }
-]])
-
 -- Install global keyboard shortcut handler (skip in test mode to avoid crashes)
 local test_mode_flag = os.getenv("JVE_TEST_MODE")
 local is_test_mode = test_mode_flag == "1" or test_mode_flag == "true"

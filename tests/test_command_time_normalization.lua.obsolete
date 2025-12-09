@@ -1,0 +1,58 @@
+#!/usr/bin/env luajit
+
+package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua;./?/init.lua"
+
+local command_impl = require("core.command_implementations")
+local command_manager = require("core.command_manager")
+local database = require("core.database")
+local Command = require("command")
+
+-- Stubs to satisfy module init
+_G.qt_json_encode = _G.qt_json_encode or function(_) return "{}" end
+_G.qt_create_single_shot_timer = _G.qt_create_single_shot_timer or function(_, cb) cb(); return {} end
+
+local function assert_equal(actual, expected, message)
+    if actual ~= expected then
+        error(string.format("Assertion failed: %s\nExpected: %s\nActual:   %s", message or "", tostring(expected), tostring(actual)))
+    end
+end
+
+local import_schema = require("import_schema")
+
+local function setup_db()
+    local path = os.tmpname() .. ".jvp"
+    os.remove(path)
+    assert(database.set_path(path))
+    local db = database.get_connection()
+    assert(db:exec(import_schema))
+    db:exec("INSERT INTO projects (id,name,created_at,modified_at,settings) VALUES ('p','proj',0,0,'{}')")
+    db:exec("INSERT INTO sequences (id,project_id,name,kind,frame_rate,audio_sample_rate,width,height) VALUES ('s','p','Seq','timeline',24,48000,1920,1080)")
+    db:exec("INSERT INTO tracks (id,sequence_id,name,track_type,timebase_type,timebase_rate,track_index,enabled) VALUES ('v1','s','V1','VIDEO','video_frames',24,1,1)")
+    db:exec("INSERT INTO media (id,project_id,name,file_path,duration_value,timebase_type,timebase_rate) VALUES ('m1','p','Media','/tmp/m.mov',240,'video_frames',24)")
+    command_manager.init(db)
+    return db
+end
+
+do
+    local db = setup_db()
+    _G.db = db
+    local cmd = Command.create("InsertClipToTimeline", "p")
+    cmd:set_parameter("track_id", "v1")
+    cmd:set_parameter("media_id", "m1")
+    cmd:set_parameter("sequence_id", "s")
+    -- Provide RationalTime start/duration
+    cmd:set_parameter("start_value", {value = 48, rate = 24})       -- 2s
+    cmd:set_parameter("media_duration", {value = 24, rate = 24})    -- 1s
+    local res = command_manager.execute(cmd)
+    assert_equal(res and (res.success ~= false), true, "InsertClipToTimeline should succeed with RationalTime inputs")
+
+    local row = db:prepare("SELECT start_value, duration_value FROM clips WHERE track_id='v1'")
+    assert(row:exec() and row:next(), "Clip should be inserted")
+    local start_value = row:value(0)
+    local duration_value = row:value(1)
+    row:finalize()
+    assert_equal(start_value, 48, "Rational start_value should normalize to destination track units (frames @24fps)")
+    assert_equal(duration_value, 24, "Rational media_duration should normalize to destination track units (frames @24fps)")
+end
+
+print("✅ command time normalization tests passed")

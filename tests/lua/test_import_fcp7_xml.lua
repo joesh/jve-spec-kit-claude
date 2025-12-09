@@ -68,20 +68,28 @@ local schema_statements = {
         modified_at INTEGER,
         settings TEXT
     )]],
-    [[CREATE TABLE sequences (
+    [[CREATE TABLE IF NOT EXISTS sequences (
         id TEXT PRIMARY KEY,
-        project_id TEXT,
-        name TEXT,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        timecode_start INTEGER
-    )]],
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'timeline',
+        frame_rate REAL NOT NULL, audio_sample_rate INTEGER NOT NULL DEFAULT 48000,
+        width INTEGER NOT NULL,
+        height INTEGER NOT NULL,
+        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
+        playhead_value INTEGER NOT NULL DEFAULT 0,
+        selected_clip_ids TEXT,
+        selected_edge_infos TEXT,
+        viewport_start_value INTEGER NOT NULL DEFAULT 0,
+        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 240,
+        mark_in_value INTEGER,
+        mark_out_value INTEGER,
+        current_sequence_number INTEGER
+    );]],
     [[CREATE TABLE tracks (
         id TEXT PRIMARY KEY,
         sequence_id TEXT,
-        name TEXT,
-        track_type TEXT,
+        name TEXT, track_type TEXT, timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL,
         track_index INTEGER,
         enabled INTEGER,
         locked INTEGER,
@@ -95,8 +103,8 @@ local schema_statements = {
         project_id TEXT,
         name TEXT,
         file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
+        duration_value INTEGER,
+        timebase_type TEXT NOT NULL, timebase_rate REAL NOT NULL, frame_rate REAL,
         width INTEGER,
         height INTEGER,
         audio_channels INTEGER,
@@ -107,13 +115,45 @@ local schema_statements = {
     )]],
     [[CREATE TABLE clips (
         id TEXT PRIMARY KEY,
+        project_id TEXT,
+        clip_kind TEXT NOT NULL DEFAULT 'timeline',
+        name TEXT DEFAULT '',
         track_id TEXT,
         media_id TEXT,
-        start_time INTEGER,
-        duration INTEGER,
-        source_in INTEGER,
-        source_out INTEGER,
-        enabled INTEGER
+        source_sequence_id TEXT,
+        parent_clip_id TEXT,
+        owner_sequence_id TEXT,
+        start_value INTEGER NOT NULL,
+        duration_value INTEGER NOT NULL,
+        source_in_value INTEGER NOT NULL DEFAULT 0,
+        source_out_value INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        offline INTEGER NOT NULL DEFAULT 0
+    )]],
+    [[CREATE TABLE tag_namespaces (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL
+    )]],
+    [[INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins')]],
+    [[CREATE TABLE tags (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        namespace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        parent_id TEXT,
+        sort_index INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    )]],
+    [[CREATE TABLE tag_assignments (
+        tag_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        namespace_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        assigned_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(tag_id, entity_type, entity_id)
     )]]
 }
 
@@ -193,21 +233,21 @@ do
 end
 
 do
-    local row, stmt = fetch_one(db, "SELECT start_time, duration, source_out FROM clips LIMIT 1")
+    local row, stmt = fetch_one(db, "SELECT start_value, duration_value, source_out_value FROM clips LIMIT 1")
     assert_true("clip row", row ~= nil)
-    local start_time = row:value(0)
+    local start_value = row:value(0)
     local duration = row:value(1)
     local source_out = row:value(2)
-    assert_eq("clip start at zero", start_time, 0)
+    assert_eq("clip start at zero", start_value, 0)
     assert_true("clip duration positive", duration > 0)
-    assert_true("clip source_out > start", source_out > start_time)
+    assert_true("clip source_out > start", source_out > start_value)
     stmt:finalize()
 end
 
 do
     local row, stmt = fetch_one(
         db,
-        [[SELECT clips.start_time, clips.duration, clips.source_in, clips.source_out
+        [[SELECT clips.start_value, clips.duration_value, clips.source_in_value, clips.source_out_value
           FROM clips
           JOIN media ON clips.media_id = media.id
           WHERE media.name = ?
@@ -239,9 +279,17 @@ do
 end
 
 do
-    local row, stmt = fetch_one(db, "SELECT COUNT(*) FROM media WHERE file_path LIKE '%FogTL.mp4%'")
-    assert_true("fog media count row", row ~= nil)
-    assert_eq("fog clip with missing path omitted", row:value(0), 0)
+    local row, stmt = fetch_one(
+        db,
+        "SELECT file_path FROM media WHERE name = ?",
+        "FogTL.mp4"
+    )
+    assert_true("FogTL media present", row ~= nil)
+    assert_eq(
+        "FogTL path persisted",
+        row:value(0),
+        "/Users/Shared/Adobe/Premiere Pro/24.0/Tutorial/Going Home project/Footage/FogTL.mp4"
+    )
     stmt:finalize()
 end
 

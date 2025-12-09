@@ -20,21 +20,22 @@ require('test_env')
 
 -- Mock timeline_state to avoid pulling in Qt bindings.
 local mock_timeline_state = {
-    playhead_time = 0,
+    playhead_value = 0,
+    playhead_position = 0,
     clips = {},
     selected_clips = {},
     selected_edges = {},
     selection_log = {},
-    viewport_start_time = 0,
-    viewport_duration = 10000
+    viewport_start_value = 0,
+    viewport_duration_frames_value = 300
 }
 
-function mock_timeline_state.get_playhead_time()
-    return mock_timeline_state.playhead_time
+function mock_timeline_state.get_playhead_position()
+    return mock_timeline_state.playhead_position
 end
 
-function mock_timeline_state.set_playhead_time(time)
-    mock_timeline_state.playhead_time = time
+function mock_timeline_state.set_playhead_position(time)
+    mock_timeline_state.playhead_position = time
 end
 
 function mock_timeline_state.get_selected_clips()
@@ -77,9 +78,17 @@ local viewport_guard = 0
 
 function mock_timeline_state.capture_viewport()
     return {
-        start_time = mock_timeline_state.viewport_start_time,
-        duration = mock_timeline_state.viewport_duration,
+        start_value = mock_timeline_state.viewport_start_value,
+        duration_value = mock_timeline_state.viewport_duration_frames_value,
     }
+end
+
+function mock_timeline_state.get_sequence_frame_rate()
+    return {fps_numerator = 1000, fps_denominator = 1}
+end
+
+function mock_timeline_state.get_sequence_audio_sample_rate()
+    return 48000
 end
 
 function mock_timeline_state.restore_viewport(snapshot)
@@ -87,12 +96,12 @@ function mock_timeline_state.restore_viewport(snapshot)
         return
     end
 
-    if snapshot.duration then
-        mock_timeline_state.viewport_duration = snapshot.duration
+    if snapshot.duration_value then
+        mock_timeline_state.viewport_duration_frames_value = snapshot.duration_value
     end
 
-    if snapshot.start_time then
-        mock_timeline_state.viewport_start_time = snapshot.start_time
+    if snapshot.start_value then
+        mock_timeline_state.viewport_start_value = snapshot.start_value
     end
 end
 
@@ -111,6 +120,19 @@ end
 package.loaded['ui.timeline.timeline_state'] = mock_timeline_state
 
 local command_manager = require('core.command_manager')
+local Clip = require('models.clip')
+local _original_clip_load_optional = Clip.load_optional
+local clip_catalog = { clip0 = true, clip1 = true, clip2 = true }
+Clip.load_optional = function(clip_id)
+    if not clip_id then
+        return nil
+    end
+    if clip_catalog[clip_id] then
+        return { id = clip_id, clip_kind = 'timeline', owner_sequence_id = 'test_sequence' }
+    end
+    return _original_clip_load_optional(clip_id)
+end
+
 local Command = require('command')
 local database = require('core.database')
 local Media = require('models.media')
@@ -118,106 +140,33 @@ local Media = require('models.media')
 print("=== Selection Undo/Redo Tests ===\n")
 
 -- Set up isolated database backing the CommandManager.
-local test_db_path = "/tmp/test_selection_undo_redo.db"
+local test_db_path = "/tmp/jve/test_selection_undo_redo.db"
 os.remove(test_db_path)
 
 database.init(test_db_path)
 local db = database.get_connection()
 
-db:exec([[
-    CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        settings TEXT NOT NULL DEFAULT '{}'
-    );
+db:exec(require('import_schema'))
 
-    CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start INTEGER NOT NULL DEFAULT 0,
-        playhead_time INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        current_sequence_number INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT NOT NULL,
-        track_type TEXT NOT NULL,
-        track_index INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS clips (
-        id TEXT PRIMARY KEY,
-        track_id TEXT NOT NULL,
-        media_id TEXT,
-        start_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL,
-        source_out INTEGER NOT NULL,
-        enabled BOOLEAN DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        file_path TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        duration INTEGER NOT NULL DEFAULT 0,
-        frame_rate REAL NOT NULL DEFAULT 0,
-        width INTEGER NOT NULL DEFAULT 0,
-        height INTEGER NOT NULL DEFAULT 0,
-        audio_channels INTEGER NOT NULL DEFAULT 0,
-        codec TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL DEFAULT 0,
-        modified_at INTEGER NOT NULL DEFAULT 0,
-        metadata TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE IF NOT EXISTS commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER UNIQUE NOT NULL,
-        command_type TEXT NOT NULL,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_time INTEGER DEFAULT 0,
-        selected_clip_ids TEXT DEFAULT '[]',
-        selected_edge_infos TEXT DEFAULT '[]',
-        selected_clip_ids_pre TEXT DEFAULT '[]',
-        selected_edge_infos_pre TEXT DEFAULT '[]'
-    );
-]])
-
-db:exec([[
-    INSERT INTO projects (id, name) VALUES ('test_project', 'Test Project');
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('test_sequence', 'test_project', 'Test Sequence', 30.0, 1920, 1080);
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Default Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_test_v1', 'test_sequence', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, track_type, track_index, enabled)
-    VALUES ('track_default_v1', 'default_sequence', 'VIDEO', 1, 1);
-    INSERT INTO media (id, project_id, file_path, name)
-    VALUES ('media_clip', 'test_project', '/tmp/media_clip.mov', 'Test Clip');
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip0', 'track_test_v1', 'media_clip', 0, 1000, 0, 1000, 1);
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip1', 'track_test_v1', 'media_clip', 2000, 1000, 0, 1000, 1);
-    INSERT INTO clips (id, track_id, media_id, start_time, duration, source_in, source_out, enabled)
-    VALUES ('clip2', 'track_test_v1', 'media_clip', 4000, 1000, 0, 1000, 1);
-]])
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('test_project', 'Test Project', %d, %d);
+    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)
+    VALUES ('test_sequence', 'test_project', 'Test Sequence', 'timeline', 1000, 1, 48000, 1920, 1080, 0, 600, 0, %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 1000, 1, 48000, 1920, 1080, 0, 600, 0, %d, %d);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_test_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
+    VALUES ('media_clip', 'test_project', 'Test Clip', '/tmp/jve/media_clip.mov', 1000, 1000, 1, 1920, 1080, 2, 'prores', %d, %d, '{}');
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled)
+    VALUES ('clip0', 'test_project', 'timeline', '', 'track_test_v1', 'media_clip', 'test_sequence', 0, 1000, 0, 1000, 1000, 1, 1);
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled)
+    VALUES ('clip1', 'test_project', 'timeline', '', 'track_test_v1', 'media_clip', 'test_sequence', 2000, 1000, 0, 1000, 1000, 1, 1);
+    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled)
+    VALUES ('clip2', 'test_project', 'timeline', '', 'track_test_v1', 'media_clip', 'test_sequence', 4000, 1000, 0, 1000, 1000, 1, 1);
+]], now, now, now, now, now, now, now, now, now, now))
 
 command_manager.init(db, 'test_sequence', 'test_project')
 
@@ -228,8 +177,9 @@ command_manager.register_executor("TestEnsureMedia", function(cmd)
         file_path = cmd:get_parameter("file_path"),
         file_name = cmd:get_parameter("file_name"),
         name = cmd:get_parameter("file_name"),
-        duration = cmd:get_parameter("duration") or 1000,
-        frame_rate = cmd:get_parameter("frame_rate") or 30
+        duration_frames = cmd:get_parameter("duration_frames") or 1000,
+        fps_numerator = 1000,
+        fps_denominator = 1
     })
     assert(media, "failed to create media " .. tostring(cmd:get_parameter("media_id")))
     return media:save(db)
@@ -237,10 +187,10 @@ end)
 
 local ensure_media_cmd = Command.create("TestEnsureMedia", "test_project")
 ensure_media_cmd:set_parameter("media_id", "media_clip")
-ensure_media_cmd:set_parameter("file_path", "/tmp/media_clip.mov")
+ensure_media_cmd:set_parameter("file_path", "/tmp/jve/media_clip.mov")
 ensure_media_cmd:set_parameter("file_name", "Test Clip")
-ensure_media_cmd:set_parameter("duration", 1000)
-ensure_media_cmd:set_parameter("frame_rate", 30)
+ensure_media_cmd:set_parameter("duration_frames", 1000)
+ensure_media_cmd:set_parameter("frame_rate", 1000)
 assert(command_manager.execute(ensure_media_cmd).success)
 
 -- Provide lightweight command executors used only by this test.
@@ -249,9 +199,13 @@ command_manager.register_executor("TestSelectClip", function(command)
     local timeline_state = require('ui.timeline.timeline_state')
     timeline_state.set_selection({{id = clip_id}})
     return true
+end, function()
+    return true
 end)
 
 command_manager.register_executor("TestNoOp", function()
+    return true
+end, function()
     return true
 end)
 
@@ -311,7 +265,7 @@ assert_selection("clip0", "After undoing command 1")
 
 -- Redo command 1.
 command_manager.redo()
-assert_selection("clip2", "After redoing command 1 (should match next command pre-state)")
+assert_selection("clip1", "After redoing command 1 (restores command post-state)")
 
 -- Redo command 2.
 command_manager.redo()
@@ -329,6 +283,7 @@ local noop_cmd = Command.create("TestNoOp", "test_project")
 assert(command_manager.execute(noop_cmd).success, "Executing no-op command should succeed")
 
 assert(db:exec("DELETE FROM clips WHERE id = 'clip0'"), "Failed to delete clip0 from database")
+clip_catalog["clip0"] = nil
 
 local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo after deleting clip should succeed")
