@@ -189,6 +189,7 @@ function M.handle_release(view, drag_state, modifiers)
         local active_seq = state_module.get_sequence_id()
         local active_proj = state_module.get_project_id()
         local edges = drag_state.edges or {}
+        local lead_edge = drag_state.lead_edge
 
         if #edges == 0 then return end
 
@@ -213,19 +214,32 @@ function M.handle_release(view, drag_state, modifiers)
             track_by_clip[c.id] = c.track_id
         end
 
+        local function normalize_edge_entry(edge)
+            if not edge then return nil end
+            return {
+                clip_id = edge.clip_id,
+                edge_type = edge.edge_type,
+                track_id = edge.track_id or track_by_clip[edge.clip_id],
+                trim_type = edge.trim_type
+            }
+        end
+
         local edge_infos = {}
         for _, e in ipairs(edges) do
-            table.insert(edge_infos, {
-                clip_id = e.clip_id,
-                edge_type = e.edge_type,
-                track_id = e.track_id or track_by_clip[e.clip_id],
-                trim_type = e.trim_type
-            })
+            local normalized = normalize_edge_entry(e)
+            if normalized then
+                table.insert(edge_infos, normalized)
+            end
         end
+
+        local lead_edge_info = normalize_edge_entry(lead_edge)
 
         local cmd = Command.create("BatchRippleEdit", active_proj)
         cmd:set_parameter("edge_infos", edge_infos)
         cmd:set_parameter("delta_frames", delta_rat.frames)
+        if lead_edge_info then
+            cmd:set_parameter("lead_edge", lead_edge_info)
+        end
         if active_seq then cmd:set_parameter("sequence_id", active_seq) end
         local result = command_manager.execute(cmd)
         if not result.success then

@@ -12,6 +12,9 @@
 #include <QPixmap>
 #include <QPolygon>
 #include <QColor>
+#include <QPen>
+#include <QPainterPath>
+#include <QPainterPathStroker>
 
 #ifdef Q_OS_MAC
 #include <objc/objc-runtime.h>
@@ -43,42 +46,111 @@ static const QHash<QString, Qt::CursorShape>& getCursorShapeMap() {
     return map;
 }
 
-static QCursor make_trim_cursor(bool is_left)
+namespace {
+constexpr int kBracketHeight = 20;
+constexpr int kBracketBarWidth = 2;
+constexpr int kBracketArmLength = 3;
+constexpr int kBracketOutlineWidth = 1;
+constexpr int kBracketMargin = kBracketOutlineWidth;
+constexpr int kBracketShapeWidth = kBracketBarWidth + kBracketArmLength;
+constexpr int kBracketShapeHeight = kBracketHeight;
+
+QPainterPath buildBracketPath(bool facesLeft)
 {
-    QPixmap pix(24, 24);
+    QPainterPath path;
+    path.setFillRule(Qt::WindingFill);
+    const qreal verticalX = facesLeft ? kBracketArmLength : 0;
+    path.addRect(verticalX, 0, kBracketBarWidth, kBracketHeight);
+    if (facesLeft) {
+        path.addRect(0, 0, kBracketArmLength, kBracketBarWidth);
+        path.addRect(0, kBracketHeight - kBracketBarWidth, kBracketArmLength, kBracketBarWidth);
+    } else {
+        path.addRect(kBracketBarWidth, 0, kBracketArmLength, kBracketBarWidth);
+        path.addRect(kBracketBarWidth, kBracketHeight - kBracketBarWidth, kBracketArmLength, kBracketBarWidth);
+    }
+    return path.simplified();
+}
+
+void paintBracketShape(QPainter& painter, const QPainterPath& path)
+{
+    QPainterPathStroker stroker;
+    stroker.setWidth(kBracketOutlineWidth * 2);
+    stroker.setJoinStyle(Qt::MiterJoin);
+    stroker.setCapStyle(Qt::SquareCap);
+    stroker.setMiterLimit(2.0);
+    QPainterPath outline = stroker.createStroke(path);
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(Qt::black);
+    painter.drawPath(outline);
+
+    painter.setBrush(Qt::white);
+    painter.drawPath(path);
+}
+} // namespace
+
+static QCursor make_trim_cursor(bool is_left_handle)
+{
+    const bool faces_left = is_left_handle; // Left zone should render a ] bracket.
+    const int width = kBracketShapeWidth + (kBracketMargin * 2);
+    const int height = kBracketShapeHeight + (kBracketMargin * 2);
+
+    QPixmap pix(width, height);
     pix.fill(Qt::transparent);
     QPainter painter(&pix);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setBrush(Qt::white);
-    painter.setPen(Qt::NoPen);
+    painter.setRenderHint(QPainter::Antialiasing, false);
 
-    QPolygon arrow;
-    if (is_left) {
-        arrow << QPoint(6, 12) << QPoint(16, 6) << QPoint(16, 18);
-        painter.drawPolygon(arrow);
-        painter.setBrush(QColor(200, 200, 200));
-        painter.drawRect(16, 5, 3, 14);
-        painter.end();
-        return QCursor(pix, 6, 12);
-    } else {
-        arrow << QPoint(18, 12) << QPoint(8, 6) << QPoint(8, 18);
-        painter.drawPolygon(arrow);
-        painter.setBrush(QColor(200, 200, 200));
-        painter.drawRect(5, 5, 3, 14);
-        painter.end();
-        return QCursor(pix, 18, 12);
-    }
+    QPainterPath path = buildBracketPath(faces_left);
+    path.translate(kBracketMargin, kBracketMargin);
+    paintBracketShape(painter, path);
+
+    painter.end();
+    const qreal verticalX = faces_left ? kBracketArmLength : 0;
+    const int seam_x = faces_left
+        ? kBracketMargin + verticalX + kBracketBarWidth
+        : kBracketMargin + verticalX;
+    const int seam_y = kBracketMargin + (kBracketShapeHeight / 2);
+    return QCursor(pix, seam_x, seam_y);
+}
+
+static QCursor make_roll_cursor()
+{
+    constexpr int gap_between = kBracketArmLength;
+    const int width = (kBracketShapeWidth * 2) + gap_between + (kBracketMargin * 2);
+    const int height = kBracketShapeHeight + (kBracketMargin * 2);
+
+    QPixmap pix(width, height);
+    pix.fill(Qt::transparent);
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+
+    QPainterPath left_path = buildBracketPath(true);
+    left_path.translate(kBracketMargin, kBracketMargin);
+    paintBracketShape(painter, left_path);
+
+    QPainterPath right_path = buildBracketPath(false);
+    right_path.translate(kBracketMargin + kBracketShapeWidth + gap_between, kBracketMargin);
+    paintBracketShape(painter, right_path);
+
+    painter.end();
+    const int center_x = width / 2;
+    const int center_y = kBracketMargin + (kBracketShapeHeight / 2);
+    return QCursor(pix, center_x, center_y);
 }
 
 static const QCursor& getCustomCursor(const QString& name)
 {
     static const QCursor trim_left_cursor = make_trim_cursor(true);
     static const QCursor trim_right_cursor = make_trim_cursor(false);
+    static const QCursor roll_cursor = make_roll_cursor();
     if (name == "trim_left") {
         return trim_left_cursor;
     }
     if (name == "trim_right") {
         return trim_right_cursor;
+    }
+    if (name == "split_h") {
+        return roll_cursor;
     }
     static const QCursor default_cursor(Qt::ArrowCursor);
     return default_cursor;
@@ -242,7 +314,7 @@ int lua_set_widget_cursor(lua_State* L) {
     if (!widget) return luaL_error(L, "qt_set_widget_cursor: widget required");
 
     QString cursor_name = QString::fromUtf8(cursor_type);
-    if (cursor_name == "trim_left" || cursor_name == "trim_right") {
+    if (cursor_name == "trim_left" || cursor_name == "trim_right" || cursor_name == "split_h") {
         widget->setCursor(getCustomCursor(cursor_name));
         return 0;
     }

@@ -3,8 +3,7 @@
 
 local M = {}
 local ui_constants = require("core.ui_constants")
-local roll_detector = require("ui.timeline.roll_detector")
-local edge_utils = require("ui.timeline.edge_utils")
+local edge_picker = require("ui.timeline.edge_picker")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local focus_manager = require("ui.focus_manager")
 local magnetic_snapping = require("core.magnetic_snapping")
@@ -13,6 +12,28 @@ local time_utils = require("core.time_utils")
 
 local RIGHT_MOUSE_BUTTON = 2
 local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
+
+local function edges_match(a, b)
+    return a and b
+        and a.clip_id == b.clip_id
+        and a.edge_type == b.edge_type
+        and (a.trim_type or "ripple") == (b.trim_type or "ripple")
+end
+
+local function selection_contains_all(existing, target_edges)
+    if not existing or not target_edges then return false end
+    for _, target in ipairs(target_edges) do
+        local found = false
+        for _, current in ipairs(existing) do
+            if edges_match(current, target) then
+                found = true
+                break
+            end
+        end
+        if not found then return false end
+    end
+    return true
+end
 
 local function find_clip_under_cursor(view, x, y, width, height)
     local state = view.state
@@ -85,6 +106,24 @@ function M.handle_wheel(view, delta_x, delta_y, modifiers)
     end
 end
 
+local function pick_edges_for_track(state, track_id, cursor_x, viewport_width)
+    if not track_id then return nil end
+    local track_clips = {}
+    for _, clip in ipairs(state.get_clips() or {}) do
+        if clip.track_id == track_id then
+            track_clips[#track_clips + 1] = clip
+        end
+    end
+    if #track_clips == 0 then return nil end
+    return edge_picker.pick_edges(track_clips, cursor_x, viewport_width, {
+        edge_zone = ui_constants.TIMELINE.EDGE_ZONE_PX,
+        roll_zone = ui_constants.TIMELINE.ROLL_ZONE_PX,
+        time_to_pixel = function(time_value)
+            return state.time_to_pixel(time_value, viewport_width)
+        end
+    })
+end
+
 function M.handle_mouse(view, event_type, x, y, button, modifiers)
     local state = view.state
     local width, height = timeline.get_dimensions(view.widget)
@@ -103,63 +142,34 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             return
         end
 
-        -- Edge Detection
-        local EDGE_ZONE = ui_constants.TIMELINE.EDGE_ZONE_PX
-        local clips_at_position = {}
-        for _, clip in ipairs(state.get_clips()) do
-            local clip_y = view.get_track_y_by_id(clip.track_id, height)
-            if clip_y >= 0 then
-                local track_height = view.get_track_visual_height(clip.track_id)
-                if y >= clip_y and y <= clip_y + track_height then
-                    local clip_x = state.time_to_pixel(clip.timeline_start, width)
-                    local clip_width = math.max(0, math.floor((clip.duration / state.get_viewport_duration()) * width) - 1)
-                    local clip_end_x = clip_x + clip_width
-
-                    local dist_left = math.abs(x - clip_x)
-                    if dist_left <= EDGE_ZONE then
-                        table.insert(clips_at_position, {
-                            clip = clip,
-                            edge = (x >= clip_x) and "in" or "gap_before",
-                            distance = dist_left,
-                            px = clip_x
-                        })
-                    end
-                    local dist_right = math.abs(x - clip_end_x)
-                    if dist_right <= EDGE_ZONE then
-                        table.insert(clips_at_position, {
-                            clip = clip,
-                            edge = (x <= clip_end_x) and "out" or "gap_after",
-                            distance = dist_right,
-                            px = clip_end_x
-                        })
-                    end
-                end
-            end
-        end
-
-        if #clips_at_position > 0 then
-            local best_sel, best_pair = roll_detector.find_best_roll_pair(
-                clips_at_position, x, width, state.detect_roll_between_clips)
+        local track_id = view.get_track_id_at_y(y, height)
+        local picked_edges = pick_edges_for_track(state, track_id, x, width)
+        if picked_edges and picked_edges.selection and #picked_edges.selection > 0 then
             local target_edges = {}
-            if best_sel and best_pair then
-                target_edges = best_sel
-            else
-                local closest = clips_at_position[1]
-                for _, info in ipairs(clips_at_position) do
-                    if info.distance < closest.distance then closest = info end
-                end
+            for _, edge in ipairs(picked_edges.selection) do
                 table.insert(target_edges, {
-                    clip_id = closest.clip.id,
-                    edge_type = edge_utils.normalize_edge_type(closest.edge),
-                    trim_type = "ripple"
+                    clip_id = edge.clip_id,
+                    edge_type = edge.edge_type,
+                    trim_type = edge.trim_type,
+                    track_id = edge.track_id
                 })
             end
+            local lead_edge = target_edges[1] and {
+                clip_id = target_edges[1].clip_id,
+                edge_type = target_edges[1].edge_type,
+                trim_type = target_edges[1].trim_type,
+                track_id = target_edges[1].track_id
+            } or nil
 
             if modifiers and modifiers.command then
                 for _, edge in ipairs(target_edges) do
                     state.toggle_edge_selection(edge.clip_id, edge.edge_type, edge.trim_type)
                 end
-            else
+            elseif modifiers and modifiers.shift then
+                for _, edge in ipairs(target_edges) do
+                    state.toggle_edge_selection(edge.clip_id, edge.edge_type, edge.trim_type)
+                end
+            elseif not selection_contains_all(state.get_selected_edges(), target_edges) then
                 state.set_edge_selection(target_edges)
             end
 
@@ -169,6 +179,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 start_y = y,
                 start_value = state.pixel_to_time(x, width),
                 edges = state.get_selected_edges(),
+                lead_edge = lead_edge,
                 modifiers = modifiers
             }
             view.render()
@@ -230,7 +241,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         end
 
         -- Gap Selection
-        local track_id = view.get_track_id_at_y(y, height)
+        track_id = track_id or view.get_track_id_at_y(y, height)
         if track_id then
             local time = state.pixel_to_time(x, width)
             local gap = find_gap_at_time(view, track_id, time)
@@ -266,6 +277,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     clips = view.potential_drag.clips,
                     edges = view.potential_drag.edges,
                     anchor_clip_id = view.potential_drag.anchor_clip_id,
+                    lead_edge = view.potential_drag.lead_edge,
                     current_x = x,
                     current_y = y,
                     current_time = state.pixel_to_time(x, width)
@@ -356,50 +368,24 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.panel_drag_move(view.widget, x, y)
         else
             -- Hover cursor update
-            local EDGE_ZONE = ui_constants.TIMELINE.EDGE_ZONE_PX
             local cursor = "arrow"
 
             local track_id = view.get_track_id_at_y and view.get_track_id_at_y(y, height)
             if track_id then
-                local hits = {}
-                for _, clip in ipairs(state.get_clips()) do
-                    if clip.track_id == track_id then
-                        local clip_y = view.get_track_y_by_id(clip.track_id, height)
-                        if clip_y >= 0 then
-                            local track_height = view.get_track_visual_height(clip.track_id)
-                            if y >= clip_y and y <= clip_y + track_height then
-                                local clip_x = state.time_to_pixel(clip.timeline_start, width)
-                                local clip_width = math.max(0, math.floor((clip.duration / state.get_viewport_duration()) * width) - 1)
-                                local clip_end_x = clip_x + clip_width
-
-                                local dist_left = math.abs(x - clip_x)
-                                if dist_left <= EDGE_ZONE then
-                                    table.insert(hits, {clip = clip, edge = (x >= clip_x) and "in" or "gap_before", distance = dist_left, px = clip_x})
-                                end
-                                local dist_right = math.abs(x - clip_end_x)
-                                if dist_right <= EDGE_ZONE then
-                                    table.insert(hits, {clip = clip, edge = (x <= clip_end_x) and "out" or "gap_after", distance = dist_right, px = clip_end_x})
-                                end
-                            end
-                        end
-                    end
-                end
-
-                if #hits > 0 then
-                    local selection, pair = roll_detector.find_best_roll_pair(hits, x, width, state.detect_roll_between_clips)
-                    if selection and pair then
+                local hover_pick = pick_edges_for_track(state, track_id, x, width)
+                if hover_pick and hover_pick.selection and #hover_pick.selection > 0 then
+                    if hover_pick.roll_used and #hover_pick.selection >= 2 then
                         cursor = "split_h"
                     else
-                        local closest = hits[1]
-                        for _, info in ipairs(hits) do
-                            if info.distance < closest.distance then closest = info end
-                        end
-                        if closest then
-                            if closest.px and x >= closest.px then
-                                cursor = "size_horz"
-                            else
-                                cursor = "size_horz"
-                            end
+                        local sel = hover_pick.selection[1]
+                        if hover_pick.zone == "left" then
+                            cursor = "trim_left"
+                        elseif hover_pick.zone == "right" then
+                            cursor = "trim_right"
+                        elseif sel and (sel.edge_type == "in" or sel.edge_type == "gap_after") then
+                            cursor = "trim_left"
+                        else
+                            cursor = "trim_right"
                         end
                     end
                 end
