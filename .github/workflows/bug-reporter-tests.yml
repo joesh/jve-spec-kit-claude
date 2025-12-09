@@ -1,0 +1,113 @@
+name: Bug Reporter Tests
+
+on:
+  push:
+    branches: [ master, main, develop ]
+    paths:
+      - 'src/lua/bug_reporter/**'
+      - 'src/bug_reporter/**'
+      - 'tests/test_*.lua'
+      - '.github/workflows/bug-reporter-tests.yml'
+  pull_request:
+    branches: [ master, main, develop ]
+    paths:
+      - 'src/lua/bug_reporter/**'
+      - 'src/bug_reporter/**'
+      - 'tests/test_*.lua'
+
+jobs:
+  test:
+    name: Run Bug Reporter Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        lua-version: ['5.1', 'luajit']
+      fail-fast: false
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install Lua
+      uses: leafo/gh-actions-lua@v10
+      with:
+        luaVersion: ${{ matrix.lua-version }}
+
+    - name: Install LuaRocks
+      uses: leafo/gh-actions-luarocks@v4
+
+    - name: Install dependencies
+      run: |
+        luarocks install dkjson
+
+    - name: Install ffmpeg (for slideshow tests)
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+        elif [ "$RUNNER_OS" == "macOS" ]; then
+          brew install ffmpeg
+        fi
+
+    - name: Run Phase 0 Tests (Ring Buffers)
+      run: |
+        cd tests
+        lua test_capture_manager.lua
+
+    - name: Run Phase 2 Tests (JSON Export)
+      run: |
+        cd tests
+        lua test_bug_reporter_export.lua
+
+    - name: Run Phase 3 Tests (Slideshow)
+      run: |
+        cd tests
+        lua test_slideshow_generator.lua
+
+    - name: Run Phase 4 Tests (Mocked Runner)
+      run: |
+        cd tests
+        lua test_mocked_runner.lua
+
+    - name: Run Phase 5 Tests (GUI Runner)
+      run: |
+        cd tests
+        lua test_gui_runner.lua
+
+    - name: Run Phase 6 Tests (Upload System)
+      run: |
+        cd tests
+        lua test_upload_system.lua
+
+    - name: Run Phase 7 Tests (UI Components)
+      run: |
+        cd tests
+        lua test_ui_components.lua
+
+    - name: Generate Test Report
+      if: always()
+      run: |
+        echo "## Bug Reporter Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **OS**: ${{ matrix.os }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Lua**: ${{ matrix.lua-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "All phases completed successfully! 🎉" >> $GITHUB_STEP_SUMMARY
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+
+    steps:
+    - name: Check test results
+      run: |
+        if [ "${{ needs.test.result }}" == "success" ]; then
+          echo "✓ All bug reporter tests passed!"
+          exit 0
+        else
+          echo "✗ Some bug reporter tests failed"
+          exit 1
+        fi

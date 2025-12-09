@@ -1,0 +1,115 @@
+# CMakeLists_BugReporter.txt
+# Add this to main CMakeLists.txt to integrate bug reporter tests
+
+# Bug Reporter Tests
+# These tests are Lua-based and run without Qt dependencies
+
+# Find Lua
+find_program(LUA_EXECUTABLE NAMES lua luajit lua5.1)
+
+if(LUA_EXECUTABLE)
+    message(STATUS "Found Lua: ${LUA_EXECUTABLE}")
+
+    # Enable testing
+    enable_testing()
+
+    # Define test directory
+    set(BUG_REPORTER_TEST_DIR "${CMAKE_SOURCE_DIR}/tests")
+
+    # Add individual test targets
+    add_test(
+        NAME bug_reporter_phase_0_ring_buffers
+        COMMAND ${LUA_EXECUTABLE} test_capture_manager.lua
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    add_test(
+        NAME bug_reporter_phase_2_json_export
+        COMMAND ${LUA_EXECUTABLE} test_bug_reporter_export.lua
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    add_test(
+        NAME bug_reporter_phase_3_slideshow
+        COMMAND ${LUA_EXECUTABLE} test_slideshow_generator.lua
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    add_test(
+        NAME bug_reporter_phase_4_mocked_runner
+        COMMAND ${LUA_EXECUTABLE} test_mocked_runner.lua
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    add_test(
+        NAME bug_reporter_phase_5_gui_runner
+        COMMAND ${LUA_EXECUTABLE} test_gui_runner.lua
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    add_test(
+        NAME bug_reporter_phase_6_upload_system
+        COMMAND ${LUA_EXECUTABLE} test_upload_system.lua
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    add_test(
+        NAME bug_reporter_phase_7_ui_components
+        COMMAND ${LUA_EXECUTABLE} test_ui_components.lua
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    # Add unified test runner target
+    add_test(
+        NAME bug_reporter_all_tests
+        COMMAND ${BUG_REPORTER_TEST_DIR}/run_all_bug_reporter_tests.sh
+        WORKING_DIRECTORY ${BUG_REPORTER_TEST_DIR}
+    )
+
+    # Set test properties
+    set_tests_properties(
+        bug_reporter_phase_0_ring_buffers
+        bug_reporter_phase_2_json_export
+        bug_reporter_phase_3_slideshow
+        bug_reporter_phase_4_mocked_runner
+        bug_reporter_phase_5_gui_runner
+        bug_reporter_phase_6_upload_system
+        bug_reporter_phase_7_ui_components
+        PROPERTIES
+            LABELS "bug_reporter"
+            TIMEOUT 60
+    )
+
+    set_tests_properties(
+        bug_reporter_all_tests
+        PROPERTIES
+            LABELS "bug_reporter;comprehensive"
+            TIMEOUT 300
+    )
+
+    # Custom target to run all bug reporter tests
+    add_custom_target(test_bug_reporter
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L bug_reporter
+        DEPENDS ${BUG_REPORTER_TEST_DIR}/run_all_bug_reporter_tests.sh
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Running all bug reporter tests"
+    )
+
+    message(STATUS "Bug reporter tests configured (185 tests across 7 phases)")
+else()
+    message(WARNING "Lua not found - bug reporter tests will not be available")
+    message(WARNING "Install Lua 5.1 or LuaJIT to enable bug reporter tests")
+endif()
+
+# Installation rules for bug reporter Lua modules
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/src/lua/bug_reporter
+    DESTINATION share/jve/lua
+    FILES_MATCHING PATTERN "*.lua"
+)
+
+# Installation rules for bug reporter C++ bindings
+install(FILES
+    ${CMAKE_SOURCE_DIR}/src/bug_reporter/qt_bindings_bug_reporter.h
+    ${CMAKE_SOURCE_DIR}/src/bug_reporter/gesture_logger.h
+    DESTINATION include/jve/bug_reporter
+)
