@@ -283,6 +283,12 @@ function Rational:to_seconds()
     return self.frames / rate
 end
 
+--- Convert to milliseconds (eliminates duplicate conversion formula across codebase).
+-- @return number
+function Rational:to_milliseconds()
+    return (self.frames * 1000) / (self.fps_numerator / self.fps_denominator)
+end
+
 --- String representation.
 function Rational_mt.__tostring(self)
     if self.fps_denominator == 1 then

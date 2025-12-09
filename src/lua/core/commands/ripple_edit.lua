@@ -301,17 +301,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     shift_rat = -clip.duration
                 else
                     new_start = Rational.new(0, seq_fps_num, seq_fps_den)
-                    shift_rat = new_start - clip.timeline_start
+                    shift_rat = new_start - original_start_rat
                     clip.timeline_start = new_start
                 end
             else
-                shift_rat = new_start - clip.timeline_start
+                shift_rat = new_start - original_start_rat
                 clip.timeline_start = new_start
             end
             ripple_time = original_start_rat -- shift co-timed clips on other tracks as well
         elseif edge_info.edge_type == "gap_after" then
             -- Shift downstream clips relative to the trailing gap after this clip
-            shift_rat = -delta_rat
+            shift_rat = delta_rat * -1
             ripple_time = original_end_rat
         else
             local _, apply_ok, apply_deleted = apply_edge_ripple(clip, edge_info.edge_type, delta_rat)
@@ -344,6 +344,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local excluded_ids = {[clip.id] = true}
         local clips_to_shift = collect_downstream_clips(all_clips, excluded_ids, ripple_time)
+
+        if shift_rat.frames < 0 and clips_to_shift and #clips_to_shift > 0 and edge_info.edge_type == "gap_before" then
+            local max_allowed = shift_rat.frames
+            local trimmed_end = clip.timeline_start + clip.duration
+            for _, target in ipairs(clips_to_shift) do
+                local prev_end = nil
+                for _, other in ipairs(all_clips) do
+                    if other.track_id == target.track_id and other.id ~= target.id then
+                        local other_end = other.timeline_start + other.duration
+                        if other_end <= target.timeline_start and (not prev_end or other_end > prev_end) then
+                            prev_end = other_end
+                        end
+                    end
+                end
+                local baseline = prev_end or Rational.new(0, seq_fps_num, seq_fps_den)
+                local available = target.timeline_start - baseline
+                local allowed = -(available.frames or 0)
+                if allowed > max_allowed then
+                    max_allowed = allowed
+                end
+            end
+            if max_allowed > shift_rat.frames then
+                shift_rat = Rational.new(max_allowed, seq_fps_num, seq_fps_den)
+            end
+        end
 
         if dry_run then
             local preview_shifts = {}

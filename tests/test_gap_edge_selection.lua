@@ -10,10 +10,11 @@ local function expect_equal(actual, expected, message)
     end
 end
 
-expect_equal(edge_utils.normalize_edge_type("in"), "in", "clip in-edge should remain 'in'")
-expect_equal(edge_utils.normalize_edge_type("out"), "out", "clip out-edge should remain 'out'")
-expect_equal(edge_utils.normalize_edge_type("gap_before"), "gap_before", "gap_before edge must stay gap_before")
-expect_equal(edge_utils.normalize_edge_type("gap_after"), "gap_after", "gap_after edge must stay gap_after")
-expect_equal(edge_utils.normalize_edge_type(nil), nil, "nil edge should remain nil")
+-- Test to_bracket() conversion for rendering gap edges as clip boundaries
+expect_equal(edge_utils.to_bracket("in"), "in", "clip in-edge maps to 'in'")
+expect_equal(edge_utils.to_bracket("out"), "out", "clip out-edge maps to 'out'")
+expect_equal(edge_utils.to_bracket("gap_before"), "out", "gap_before renders as right-edge bracket")
+expect_equal(edge_utils.to_bracket("gap_after"), "in", "gap_after renders as left-edge bracket")
+expect_equal(edge_utils.to_bracket(nil), nil, "nil edge returns nil")
 
-print("✅ Gap edge normalization preserves gap identifiers")
+print("✅ Gap edge bracket conversion tests passed")

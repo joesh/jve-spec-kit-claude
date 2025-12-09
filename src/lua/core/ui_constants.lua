@@ -285,6 +285,9 @@ ui_constants.TIMELINE = {
     ROLL_ZONE_PX = 7,            -- Pixels centered on edit point that trigger roll selection/preview
     EDIT_POINT_ZONE = 4,         -- Pixels - must be close to center for edit point detection
     SPLITTER_HANDLE_HEIGHT = 7,  -- Qt default vertical splitter handle height in pixels
+    DEFAULT_FPS_NUMERATOR = 30,  -- Default sequence frame rate numerator when not specified
+    DEFAULT_FPS_DENOMINATOR = 1, -- Default sequence frame rate denominator when not specified
+    MAX_RIPPLE_CONSTRAINT_RETRIES = 5, -- Maximum retry attempts for ripple constraint resolution
 }
 
 -- Input constants (mirror Qt::MouseButton bitfield values)

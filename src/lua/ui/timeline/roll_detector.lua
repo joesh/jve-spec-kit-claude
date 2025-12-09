@@ -42,22 +42,22 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
     for i = 1, #entries do
         local first = entries[i]
         local clip_a = first.clip
-        local norm_a = edge_utils.normalize_edge_type(first.edge)
-        if clip_a and (norm_a == "in" or norm_a == "out") then
+        local edge_a = first.edge
+        if clip_a and (edge_a == "in" or edge_a == "out") then
             for j = i + 1, #entries do
                 local second = entries[j]
                 local clip_b = second.clip
-                local norm_b = edge_utils.normalize_edge_type(second.edge)
-                if clip_b and (norm_b == "in" or norm_b == "out") and clip_a.track_id == clip_b.track_id and clip_a.id ~= clip_b.id then
+                local edge_b = second.edge
+                if clip_b and (edge_b == "in" or edge_b == "out") and clip_a.track_id == clip_b.track_id and clip_a.id ~= clip_b.id then
                     local left_clip, right_clip = nil, nil
                     local left_distance, right_distance = nil, nil
 
-                    if norm_a == "out" and norm_b == "in" then
+                    if edge_a == "out" and edge_b == "in" then
                         left_clip = clip_a
                         right_clip = clip_b
                         left_distance = first.distance
                         right_distance = second.distance
-                    elseif norm_a == "in" and norm_b == "out" then
+                    elseif edge_a == "in" and edge_b == "out" then
                         left_clip = clip_b
                         right_clip = clip_a
                         left_distance = second.distance

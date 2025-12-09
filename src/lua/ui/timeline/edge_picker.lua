@@ -70,8 +70,14 @@ end
 -- { selection = {edges...}, roll_used = bool, candidates = { ... }, boundary = hit_boundary }
 function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
     opts = opts or {}
-    local edge_zone = opts.edge_zone or ui_constants.TIMELINE.EDGE_ZONE_PX or 7
-    local roll_zone = opts.roll_zone or ui_constants.TIMELINE.ROLL_ZONE_PX or edge_zone
+    local edge_zone = opts.edge_zone or ui_constants.TIMELINE.EDGE_ZONE_PX
+    if not edge_zone then
+        error("edge_picker: EDGE_ZONE_PX constant missing from ui_constants.TIMELINE")
+    end
+    local roll_zone = opts.roll_zone or ui_constants.TIMELINE.ROLL_ZONE_PX
+    if not roll_zone then
+        error("edge_picker: ROLL_ZONE_PX constant missing from ui_constants.TIMELINE")
+    end
     local time_to_pixel = opts.time_to_pixel
     if not time_to_pixel or not viewport_width or not track_clips then
         return {selection = {}, roll_used = false, candidates = {}}
@@ -84,7 +90,7 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
     end
 
     local b = hit.boundary
-    local roll_radius = roll_zone / 2
+    local center_half = math.max(1, math.floor(roll_zone / 2))
     local left = b.left
     local right = b.right
     local candidates = {}
@@ -93,21 +99,42 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
 
     local selection = {}
     local roll_used = false
-    if left and right and hit.dist <= roll_radius then
+    local zone = "none"
+    local offset_px = cursor_x - (b.px or cursor_x)
+    local in_center_zone = math.abs(offset_px) <= center_half
+    -- Explicit nil checks prevent Lua truthiness issues (false vs nil)
+    local can_roll = (left ~= nil) and (right ~= nil)
+        and (left.clip_id ~= nil) and (right.clip_id ~= nil)
+        and (left.clip_id ~= right.clip_id)
+
+    if can_roll and in_center_zone then
         roll_used = true
-        table.insert(selection, {clip_id = left.clip_id, edge_type = edge_utils.normalize_edge_type(left.edge_type), trim_type = "roll"})
-        table.insert(selection, {clip_id = right.clip_id, edge_type = edge_utils.normalize_edge_type(right.edge_type), trim_type = "roll"})
+        zone = "center"
+        table.insert(selection, {clip_id = left.clip_id, edge_type = left.edge_type, trim_type = "roll"})
+        table.insert(selection, {clip_id = right.clip_id, edge_type = right.edge_type, trim_type = "roll"})
     else
         local pick = nil
-        if cursor_x < b.px then
+        if in_center_zone then
+            zone = "center"
+            pick = right or left
+        elseif cursor_x < b.px then
+            zone = "left"
             pick = left or right
         elseif cursor_x > b.px then
+            zone = "right"
             pick = right or left
         else
-            pick = right or left
+            zone = "center"
+            if left and not right then
+                pick = left
+            elseif right and not left then
+                pick = right
+            else
+                pick = right or left
+            end
         end
         if pick then
-            table.insert(selection, {clip_id = pick.clip_id, edge_type = edge_utils.normalize_edge_type(pick.edge_type), trim_type = "ripple"})
+            table.insert(selection, {clip_id = pick.clip_id, edge_type = pick.edge_type, trim_type = "ripple"})
         end
     end
 
@@ -117,7 +144,8 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
         candidates = candidates,
         boundary = b,
         boundaries = boundaries,
-        distance = hit.dist
+        distance = hit.dist,
+        zone = zone
     }
 end
 
