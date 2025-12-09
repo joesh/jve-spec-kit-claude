@@ -56,7 +56,7 @@ do
     assert(right_zone.selection[1].edge_type == "in" and right_zone.selection[1].clip_id == "b", "right zone should pick right clip in edge")
 end
 
--- Gap/clip boundary: side zones pick single gap/clip edges, center rolls both.
+-- Gap/clip boundary: no roll because only one real clip is available.
 do
     local clip = make_clip("solo", 200, 50)
     local boundary = 200
@@ -66,8 +66,9 @@ do
     assert(left_side.selection[1].edge_type == "gap_before", "gap left zone should select gap_before edge")
 
     local center = pick({clip}, boundary)
-    assert(center.roll_used == true, "gap/clip center should roll")
-    assert(#center.selection == 2, "gap/clip center should pick both sides")
+    assert(center.roll_used == false, "gap/clip center should not roll without a neighboring clip")
+    assert(#center.selection == 1, "gap/clip center should pick a single edge")
+    assert(center.selection[1].edge_type == "in", "gap center should prefer the clip edge when grabbing the handle")
 
     local right_side = pick({clip}, boundary + (ROLL_RADIUS + 2))
     assert(right_side.roll_used == false, "gap right zone should not roll")

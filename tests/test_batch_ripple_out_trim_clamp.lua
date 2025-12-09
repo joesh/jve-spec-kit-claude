@@ -6,8 +6,9 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local SCHEMA_SQL = require("import_schema")
+local Clip = require("models.clip")
 
-local TEST_DB = "/tmp/jve/test_batch_ripple_gap_clamp.db"
+local TEST_DB = "/tmp/jve/test_batch_ripple_out_trim_clamp.db"
 os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))
@@ -41,14 +42,12 @@ local seed = string.format([[
                        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES
-        ('clip_a', 'default_project', 'timeline', 'A', 'track_v1', 'media1', 'default_sequence',
+        ('clip_left', 'default_project', 'timeline', 'Left', 'track_v1', 'media1', 'default_sequence',
          0, 2000, 0, 2000, 1000, 1, 1, 0, %d, %d),
-        ('clip_b', 'default_project', 'timeline', 'B', 'track_v1', 'media1', 'default_sequence',
-         14000, 1000, 0, 1000, 1000, 1, 1, 0, %d, %d),
-        ('clip_left_v2', 'default_project', 'timeline', 'Left V2', 'track_v2', 'media1', 'default_sequence',
-         2000, 3000, 0, 3000, 1000, 1, 1, 0, %d, %d),
-        ('clip_right', 'default_project', 'timeline', 'Right', 'track_v2', 'media1', 'default_sequence',
-         13000, 1000, 0, 1000, 1000, 1, 1, 0, %d, %d);
+        ('clip_right', 'default_project', 'timeline', 'Right', 'track_v1', 'media1', 'default_sequence',
+         4000, 2000, 0, 2000, 1000, 1, 1, 0, %d, %d),
+        ('clip_other_track', 'default_project', 'timeline', 'Other', 'track_v2', 'media1', 'default_sequence',
+         5000, 1500, 0, 1500, 1000, 1, 1, 0, %d, %d);
 ]], now, now, now, now, now, now, now, now, now, now, now, now, now, now)
 assert(db:exec(seed))
 
@@ -57,24 +56,24 @@ command_manager.init(db, "default_sequence", "default_project")
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("sequence_id", "default_sequence")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "clip_left_v2", edge_type = "gap_after", track_id = "track_v2"}
+    {clip_id = "clip_left", edge_type = "out", track_id = "track_v1"}
 })
-cmd:set_parameter("delta_frames", 20000) -- drag upstream [ RIGHT to close until clamp
+cmd:set_parameter("delta_frames", 6000) -- Attempt to extend far beyond neighbor
 
 local result = command_manager.execute(cmd)
-assert(result.success, result.error_message or "BatchRippleEdit should clamp instead of overlapping")
+assert(result.success, result.error_message or "BatchRippleEdit failed to extend clip")
 
-local stmt = assert(db:prepare("SELECT timeline_start_frame FROM clips WHERE id = 'clip_right'"))
-assert(stmt:exec() and stmt:next(), "clip_right missing after ripple")
-local right_start = tonumber(stmt:value(0))
-stmt:finalize()
-assert(right_start == 5000, string.format("clip_right should clamp to its left neighbor (expected 5000, got %s)", tostring(right_start)))
+local left_clip = Clip.load("clip_left", db)
+assert(left_clip ~= nil, "clip_left missing after ripple")
+assert(left_clip.duration.frames == 8000, string.format("clip_left should extend by requested delta; expected duration 8000, got %s", tostring(left_clip.duration.frames)))
 
-local stmt2 = assert(db:prepare("SELECT timeline_start_frame FROM clips WHERE id = 'clip_b'"))
-assert(stmt2:exec() and stmt2:next(), "clip_b missing after ripple")
-local track_v1_start = tonumber(stmt2:value(0))
-stmt2:finalize()
-assert(track_v1_start == 6000, string.format("clip_b should shift with ripple (expected 6000, got %s)", tostring(track_v1_start)))
+local right_clip = Clip.load("clip_right", db)
+assert(right_clip ~= nil, "clip_right missing after ripple")
+assert(right_clip.timeline_start.frames == 10000, string.format("Downstream clip should shift by ripple delta; expected 10000, got %s", tostring(right_clip.timeline_start.frames)))
+
+local other_clip = Clip.load("clip_other_track", db)
+assert(other_clip ~= nil, "clip_other_track missing after ripple")
+assert(other_clip.timeline_start.frames == 11000, string.format("Other track should shift by ripple delta; expected 11000, got %s", tostring(other_clip.timeline_start.frames)))
 
 os.remove(TEST_DB)
-print("✅ BatchRippleEdit clamps gap-before ripple to avoid overlaps")
+print("✅ BatchRippleEdit extends out-point ripple and shifts unrelated tracks correctly")

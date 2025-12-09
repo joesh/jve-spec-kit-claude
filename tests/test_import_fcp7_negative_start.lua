@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local importer = require('importers.fcp7_xml_importer')
@@ -22,7 +22,7 @@ assert(db:exec([[
 -- Ensure the default bin namespace exists for importer bin assignment.
 assert(db:exec([[INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');]]))
 
-local FIXTURE_PATH = "fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
+local FIXTURE_PATH = test_env.resolve_repo_path("tests/fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml")
 
 local parsed = importer.import_xml(FIXTURE_PATH, 'default_project')
 assert(parsed and parsed.success, "import_xml should succeed for complex Resolve export")

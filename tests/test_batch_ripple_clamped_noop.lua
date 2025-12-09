@@ -92,8 +92,8 @@ end
 -- Right: Start 30 -> 45 frames (1500ms). Duration 30 -> 15 frames (500ms).
 
 local edges = {
-    {clip_id = "clip_left", edge_type = "out", track_id = "track_v1"},
-    {clip_id = "clip_right", edge_type = "in", track_id = "track_v1"},
+    {clip_id = "clip_left", edge_type = "out", track_id = "track_v1", trim_type = "roll"},
+    {clip_id = "clip_right", edge_type = "in", track_id = "track_v1", trim_type = "roll"},
 }
 
 local cmd = Command.create("BatchRippleEdit", "default_project")

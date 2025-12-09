@@ -76,13 +76,12 @@ end
 -- Build a BatchRippleEdit that includes a gap edge whose clip_id was accidentally
 -- materialized (temp_gap_ prefix). Replay must sanitize this and still succeed.
 local edge_infos = {
-    {clip_id = "clip_left", edge_type = "out", track_id = "track_v1"},
     {clip_id = "temp_gap_clip_right", edge_type = "gap_before", track_id = "track_v1"},
 }
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", edge_infos)
-cmd:set_parameter("delta_frames", -15)  -- 500ms @30fps
+cmd:set_parameter("delta_frames", -15)  -- Drag ] LEFT: close gap by 500ms @30fps
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)

@@ -40,6 +40,7 @@ _G.qt_constants = {
 }
 
 print("Testing centralized constants integration (Rule 2.14 compliance)...\n")
+local any_fail = false
 
 -- Test 1: timeline_state.lua uses ui_constants
 print("Test 1: timeline_state.lua")
@@ -52,6 +53,7 @@ if success then
           timeline_state.dimensions.track_header_width)
 else
     print("  ❌ FAIL:", timeline_state)
+    any_fail = true
 end
 
 -- Reset for next test
@@ -66,6 +68,7 @@ if success then
     print("  ✅ PASS: Module loads successfully with ui_constants")
 else
     print("  ❌ FAIL:", timeline_panel)
+    any_fail = true
 end
 
 -- Test 3: Verify constants are centralized
@@ -90,7 +93,7 @@ if ui_constants.TIMELINE.NOTIFY_DEBOUNCE_MS ~= 16 then
     constants_ok = false
     table.insert(errors, "NOTIFY_DEBOUNCE_MS incorrect")
 end
-if ui_constants.TIMELINE.EDGE_ZONE_PX ~= 7 then
+if ui_constants.TIMELINE.EDGE_ZONE_PX ~= 10 then
     constants_ok = false
     table.insert(errors, "EDGE_ZONE_PX incorrect")
 end
@@ -118,8 +121,13 @@ else
     for _, err in ipairs(errors) do
         print("    -", err)
     end
+    any_fail = true
 end
 
 print("\n" .. string.rep("=", 60))
 print("Constants integration test completed!")
 print("All hardcoded constants moved to ui_constants.lua (Rule 2.14)")
+
+if any_fail then
+    os.exit(1)
+end

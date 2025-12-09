@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -209,10 +209,9 @@ local initial_counts = {
     media = count_rows("media")
 }
 
-local xml_path_relative = "fixtures/resolve/sample_timeline_fcp7xml.xml"
-local pwd = os.getenv("PWD") or "."
+local xml_path_relative = "tests/fixtures/resolve/sample_timeline_fcp7xml.xml"
 local function resolve_fixture(path)
-    local absolute = pwd .. "/" .. path
+    local absolute = test_env.resolve_repo_path(path)
     local handle = io.open(absolute, "r")
     if handle then
         handle:close()
@@ -279,7 +278,7 @@ assert(assigned_count == master_clip_count,
         master_clip_count, expected_master_bin_name, assigned_count))
 
 -- Regression: importing the anamnesis fixture must assign AUDIO/VIDEO track types.
-local anamnesis_fixture = "fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
+local anamnesis_fixture = "tests/fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
 local anamnesis_path = resolve_fixture(anamnesis_fixture)
 local scratch_db_path = "/tmp/jve/test_import_fcp7_xml_anamnesis.db"
 os.remove(scratch_db_path)

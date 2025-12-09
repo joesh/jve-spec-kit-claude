@@ -80,7 +80,7 @@ local db = setup()
 -- but ripple shift must not drag V2 Right into V2 Left.
 local cmd = Command.create("RippleEdit", "default_project")
 cmd:set_parameter("edge_info", {clip_id = "clip_v1_right", edge_type = "gap_before", track_id = "track_v1"})
-cmd:set_parameter("delta_frames", -3000) -- fps=1000, so 3000ms -> 3000 frames
+cmd:set_parameter("delta_frames", -3000) -- drag ] LEFT to close by 3000ms (fps=1000)
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)

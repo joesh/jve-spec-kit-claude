@@ -10,7 +10,7 @@ package.path = package.path
     .. ";../src/lua/models/?.lua"
     .. ";../tests/?.lua"
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -181,7 +181,7 @@ command_manager.activate_timeline_stack('default_sequence')
 
 local import_cmd = Command.create("ImportFCP7XML", "default_project")
 import_cmd:set_parameter("project_id", "default_project")
-import_cmd:set_parameter("xml_path", "fixtures/resolve/sample_timeline_fcp7xml.xml")
+import_cmd:set_parameter("xml_path", test_env.resolve_repo_path("tests/fixtures/resolve/sample_timeline_fcp7xml.xml"))
 
 local exec_result = command_manager.execute(import_cmd)
 assert(exec_result.success, exec_result.error_message or "ImportFCP7XML execution failed")

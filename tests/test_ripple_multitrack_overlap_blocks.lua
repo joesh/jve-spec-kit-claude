@@ -85,7 +85,7 @@ cmd:set_parameter("edge_infos", {
     {clip_id = "v1_right", edge_type = "gap_before", track_id = "track_v1"},
     {clip_id = "v2_right", edge_type = "gap_before", track_id = "track_v2"},
 })
-cmd:set_parameter("delta_frames", -6000) -- fps=1000, so 6000ms -> 6000 frames; larger than the smallest gap (V2’s 4s)
+cmd:set_parameter("delta_frames", -6000) -- Drag ] LEFT to close both gaps (clamp to 3s)
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)

@@ -37,6 +37,7 @@
 - **1.11**: Never Change Architecture Without Permission - NEVER modify function calling patterns without explicit user approval; NEVER reorganize modules or interfaces without user consultation; NEVER replace one system with another without user decision; ALWAYS ask first before changing how components interact
 - **1.12**: External inputs must NEVER crash the system - all imported data (XML, DB, files) must be validated; degrade gracefully when metadata is missing; record warnings, extract whatever can be trusted, and keep the app running
 - **1.13**: Tags Are Canonical Organization - Bins are just the default `bin` tag namespace; every UI tree, importer, and command must talk to `tag_service`/`tag_assignments` (never `project_settings.bin_hierarchy` or `media_bin_map`); if tag tables are missing the build must fail loudly—absolutely no fallbacks or legacy shims unless Joe says otherwise.
+- **1.14**: Gap Materialization Invariant - Ripple/roll logic MUST treat gaps as first-class timeline items using the temporary gap clip pipeline documented in `docs/GAP_RESTORATION_PLAN.md`. Never bypass, delete, or “simplify” that materialization layer; any change that removes temp gaps or rewrites `gap_*` edges back into clip trims is an automatic regression.
 
 ### **2.x Development Standards**
 - **2.1**: Clear technical tone, no excessive enthusiasm/emojis

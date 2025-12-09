@@ -3,6 +3,7 @@
 package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
+local Rational = require("core.rational")
 
 local colors = {
     edge_selected_available = 0x00FF00,
@@ -32,5 +33,17 @@ local zero_previews = edge_drag_renderer.build_preview_edges(edges, 0, trim_cons
 for _, p in ipairs(zero_previews) do
     assert(p.at_limit == false, "zero delta should not be marked at_limit")
 end
+
+-- Regression: gap edges should behave like anchored clip handles, not translations.
+local clip = {
+    timeline_start = Rational.new(100, 24, 1),
+    duration = Rational.new(200, 24, 1)
+}
+local delta = Rational.new(24, 24, 1) -- 1 second
+local gap_start, gap_dur = edge_drag_renderer.compute_preview_geometry(clip, "gap_after", delta)
+local expected_gap_anchor = (clip.timeline_start + clip.duration).frames
+assert(gap_start.frames == expected_gap_anchor,
+    string.format("gap_after preview should anchor at clip out-point; expected %d got %d", expected_gap_anchor, gap_start and gap_start.frames or -1))
+assert(gap_dur.frames == 0, "gap preview geometry should have zero width (handle only)")
 
 print("✅ edge drag preview clamp test passed")

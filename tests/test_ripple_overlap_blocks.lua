@@ -98,7 +98,7 @@ local function run_case(db_path, use_batch)
         cmd = Command.create("RippleEdit", "default_project")
         cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})
     end
-    cmd:set_parameter("delta_frames", -1500) -- 1ms per frame at 1000fps
+    cmd:set_parameter("delta_frames", -1500) -- drag ] LEFT to close the gap
     cmd:set_parameter("sequence_id", "default_sequence")
 
     local result = command_manager.execute(cmd)
