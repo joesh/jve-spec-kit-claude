@@ -54,3 +54,17 @@
 - Dropped unused C++ test `tests/unit/test_project_browser_rename.cpp` and the old eventlog golden test wiring.
 - Makefile now drives `cmake --build` with an explicit `-j$(JOBS)` (default 4) so `make -j4` actually fans out the underlying build instead of collapsing to `-j1` with jobserver warnings.
 - Current build configuration runs the Lua test suite via `lua_tests` during `make`; C++ tests are built but not executed automatically. All Lua tests currently pass on this branch; undo bugs remain to be investigated separately.
+
+## Ripple Handle Restoration (2025-12-05)
+- Ripple and roll logic must treat every draggable edge as a bracket: `[` for leading edges and `]` for trailing edges. Names like `gap_before`/`gap_after` are UI hints but must be normalized before commands apply deltas.
+- Gaps are first-class timeline items. BatchRippleEdit materializes temporary gap clips only for the edges participating in the current command so that the same `apply_edge_ripple` helper trims clips and gaps without bespoke branches.
+- Dragging `[` to the right shrinks the owning item (clip or gap) and shifts downstream clips left by exactly the drag distance. Dragging `]` to the right grows the item and shifts downstream clips right by the drag distance unless the edit is a roll.
+- Rolls (`][` selections) stay local: both brackets reuse the requested delta while `apply_edge_ripple` handles the opposing trim math, so one item lengthens, the other shrinks, and no downstream propagation occurs. This matches `docs/RIPPLE-ALGORITHM-RULES.md` and the pre-rational behavior baseline.
+- The UI now records which edge the user actually drags (`lead_edge`) so BatchRippleEdit can determine the master delta sign. RippleEdit shares the same clamp/sign logic (gap handles behave like brackets), and the Lua tests enforce that single-edge and batch commands both close gaps when positive deltas move the `[`. 
+- Timeline view renderer synthesizes pseudo clips for `temp_gap_*` edge ids (track/start/end embedded in the id) so selected gap handles render even when no real clip owns that boundary. Regression `tests/test_timeline_view_gap_edge_render.lua` covers both clip-referenced and temp-gap-referenced selections.
+- Timeline hover cursors now use bracket glyphs that match Resolve’s edit handles: `trim_left` renders `]`, `trim_right` renders `[`, and `split_h` renders `][`. Each glyph is drawn procedurally inside `src/lua/qt_bindings/misc_bindings.cpp` as a ~20 px tall white bracket (2 px stem, arms extend 3 px horizontally but remain 2 px thick) surrounded by an outward 1 px black contour generated with `QPainterPathStroker`, so the white fill keeps its intended thickness.
+
+## Timeline Edge Selection Regression (2025-12-06)
+- Clicking a bracket that is already part of the edge selection must not clear or mutate `state.selected_edges` unless modifiers request it; the selection remains untouched and the click simply arms a drag.
+- Shift clicks now share the Command toggle semantics so users can add/remove specific edges without touching other edges already in the selection set.
+- Regression `tests/test_timeline_edge_clicks.lua` loads `timeline_view_input.handle_mouse` with a mocked state/edge picker and proves both behaviors (existing selections remain, Shift toggles) so future UI tweaks cannot regress this contract.

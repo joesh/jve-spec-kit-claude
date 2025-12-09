@@ -42,3 +42,11 @@
 - [x] Refactored Monolithic `timeline_state.lua` into `ui/timeline/state/*`.
 - [x] Refactored Monolithic `timeline_view.lua` into `ui/timeline/view/*`.
 - [x] Created Full-Stack Integration Test `tests/integration/test_full_timebase_pipeline.lua`.
+
+## Current Focus
+- [x] Restore ripple handle semantics so `[`/`]` drags obey `docs/RIPPLE-ALGORITHM-RULES.md` across BatchRippleEdit and RippleEdit, covering gap clips and downstream propagation limits.
+
+## Session Tasks (2025-???)
+- [x] (done) Timeline gap edge selections should render handles just like clip edges; regression surfaced while restoring ripple handle semantics.
+- [ ] (needs review) Update timeline edit-zone cursors so the three zones show ], ]|[, and [ glyphs instead of generic trim arrows.
+- [ ] (in progress) Timeline edge clicks must keep existing selections when re-clicked without modifiers, and Shift clicks should toggle edges like Cmd; add regression test coverage.
