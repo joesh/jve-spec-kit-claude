@@ -479,6 +479,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, edge_info in ipairs(edge_infos or {}) do
             if edge_info.clip_id then
                 edited_clip_lookup[edge_info.clip_id] = true
+                if is_gap_edge(edge_info.edge_type) then
+                    local gap_clip = preloaded_clips[edge_info.clip_id]
+                    if gap_clip then
+                        if gap_clip.gap_left_id then
+                            edited_clip_lookup[gap_clip.gap_left_id] = true
+                        end
+                        if gap_clip.gap_right_id then
+                            edited_clip_lookup[gap_clip.gap_right_id] = true
+                        end
+                    end
+                end
             end
         end
 
@@ -500,6 +511,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local max_close = Rational.new(-min_gap.frames, min_gap.fps_numerator, min_gap.fps_denominator)
                 if delta_rat < max_close then
                     clamped_delta_rat = max_close
+                end
+            end
+        elseif delta_rat > Rational.new(0, seq_fps_num, seq_fps_den) then
+            local min_gap = nil
+            for _, edge_info in ipairs(edge_infos) do
+                if edge_info.edge_type == "gap_after" then
+                    local clip = get_cached_clip(edge_info.clip_id)
+                    if clip then
+                        local gap = clip.duration
+                        if gap and (not min_gap or gap < min_gap) then
+                            min_gap = gap
+                        end
+                    end
+                end
+            end
+
+            if min_gap then
+                local max_extend = Rational.new(min_gap.frames, min_gap.fps_numerator, min_gap.fps_denominator)
+                if delta_rat > max_extend then
+                    clamped_delta_rat = max_extend
                 end
             end
         end
