@@ -162,8 +162,7 @@ local function build_temp_gap_preview_clip(preview, seq_rate)
         source_in = Rational.new(0, fps_num, fps_den),
         source_out = duration,
         enabled = 1,
-        is_gap = true,
-        is_temp_gap = true
+        is_gap = true
     }
 end
 

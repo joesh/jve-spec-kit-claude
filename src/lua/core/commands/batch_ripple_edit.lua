@@ -136,8 +136,8 @@ local function create_temp_gap_clip(edge_info, clip_lookup, all_clips, track_cli
         track_id = track_id,
         timeline_start = gap_start,
         duration = duration,
-        source_in = Rational.new(0, seq_fps_num, seq_fps_den),
-        source_out = duration,
+        source_in = Rational.new(-1000000000000000, seq_fps_num, seq_fps_den),
+        source_out = Rational.new(1000000000000000, seq_fps_num, seq_fps_den),
         fps_numerator = seq_fps_num,
         fps_denominator = seq_fps_den,
         enabled = 1,
@@ -206,23 +206,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return clip
     end
 
+    local function is_gap_edge(edge_type)
+        return edge_type == "gap_after" or edge_type == "gap_before"
+    end
+
     -- Helper: Calculate roll constraint (min/max delta) for an edge based on neighbor positions
     local function compute_roll_constraint(edge_info, clip, original, neighbors, edited_lookup)
         local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
         local delta_min = nil
         local delta_max = nil
+        local gap_frames = (clip.duration and clip.duration.frames) or 0
 
         if normalized_edge == "in" then
             -- In-point: can't drag left past previous clip
-            if edge_info.__temp_gap and clip and clip.is_temp_gap then
-                delta_min = -((clip.duration and clip.duration.frames) or 0)
+            if edge_info.edge_type == "gap_after" then
+                delta_min = -gap_frames
             elseif neighbors.prev and not edited_lookup[neighbors.prev_id] then
                 delta_min = (neighbors.prev - original.timeline_start).frames
             end
         elseif normalized_edge == "out" then
             -- Out-point: can't drag right past next clip
-            if edge_info.__temp_gap and clip and clip.is_temp_gap then
-                delta_max = (clip.duration and clip.duration.frames) or 0
+            if edge_info.edge_type == "gap_before" then
+                delta_max = gap_frames
             elseif neighbors.next and not edited_lookup[neighbors.next_id] then
                 delta_max = (neighbors.next - (original.timeline_start + original.duration)).frames
             end
@@ -238,7 +243,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local close_limit = nil
-        if edge_info.__temp_gap and clip and clip.is_temp_gap then
+        if edge_info.edge_type == "gap_before" then
             close_limit = (clip.duration and clip.duration.frames) or 0
         elseif neighbors.prev and not edited_lookup[neighbors.prev_id] then
             close_limit = (original.timeline_start - neighbors.prev).frames
@@ -249,7 +254,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return nil
     end
 
-    local function apply_edge_ripple(clip, edge_type, delta_rat, trim_type)
+    local function apply_edge_ripple(clip, edge_type, delta_rat, trim_type, raw_edge_type)
         -- Strict V5: Expect Rational
         if type(clip.duration) ~= "table" or not clip.duration.frames then
             error("apply_edge_ripple: Clip missing Rational duration.")
@@ -278,14 +283,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             error(string.format("apply_edge_ripple: Unsupported edge_type '%s'", edge_type))
         end
 
-        if clip.is_temp_gap then
+        local is_gap = is_gap_edge(raw_edge_type)
+
+        if is_gap then
             if new_duration_timeline.frames and new_duration_timeline.frames < 0 then
                 local fps_num = (clip.duration and clip.duration.fps_numerator) or (clip.source_in and clip.source_in.fps_numerator) or 30
                 local fps_den = (clip.duration and clip.duration.fps_denominator) or (clip.source_in and clip.source_in.fps_denominator) or 1
                 new_duration_timeline = Rational.new(0, fps_num, fps_den)
             end
         else
-            if new_duration_timeline.frames < 1 then 
+            if new_duration_timeline.frames < 1 then
                 return nil, false, true -- Too short/deleted
             end
         end
@@ -420,19 +427,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, edge_info in ipairs(edge_infos or {}) do
             if edge_info.edge_type == "gap_after" or edge_info.edge_type == "gap_before" then
                 local gap_clip = create_temp_gap_clip(edge_info, clip_lookup, all_clips, track_clip_map, seq_fps_num, seq_fps_den)
-                if gap_clip then
-                    register_temp_gap(gap_clip)
-                    edge_info.clip_id = gap_clip.id
-                    edge_info.track_id = gap_clip.track_id
-                    edge_info.__temp_gap = true
-                else
-                    -- Fall back to normal clip edge to avoid crashing
-                    local fallback_clip = clip_lookup[edge_info.clip_id]
-                    if fallback_clip then
-                        edge_info.edge_type = (edge_info.edge_type == "gap_after") and "out" or "in"
-                        edge_info.track_id = fallback_clip.track_id
-                    end
+                if not gap_clip then
+                    error(string.format("Failed to materialize gap edge %s on clip %s", tostring(edge_info.edge_type), tostring(edge_info.clip_id)))
                 end
+                register_temp_gap(gap_clip)
+                edge_info.clip_id = gap_clip.id
+                edge_info.track_id = gap_clip.track_id
             end
         end
         local clip_track_lookup = {}
@@ -479,17 +479,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, edge_info in ipairs(edge_infos or {}) do
             if edge_info.clip_id then
                 edited_clip_lookup[edge_info.clip_id] = true
-                if edge_info.__temp_gap then
-                    local gap_clip = preloaded_clips[edge_info.clip_id]
-                    if gap_clip then
-                        if gap_clip.gap_left_id then
-                            edited_clip_lookup[gap_clip.gap_left_id] = true
-                        end
-                        if gap_clip.gap_right_id then
-                            edited_clip_lookup[gap_clip.gap_right_id] = true
-                        end
-                    end
-                end
             end
         end
 
@@ -499,28 +488,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if edge_info.edge_type == "gap_before" then
                     local clip = get_cached_clip(edge_info.clip_id)
                     if clip then
-                        if clip.is_temp_gap then
-                            local gap = clip.duration
-                            if gap and (not min_gap or gap < min_gap) then
-                                min_gap = gap
-                            end
-                        else
-                            local closest_end = nil
-                            for _, other in ipairs(all_clips) do
-                                if other.track_id == clip.track_id and other.id ~= clip.id then
-                                    local other_end = other.timeline_start + other.duration
-                                    if other_end <= clip.timeline_start and (not closest_end or other_end > closest_end) then
-                                        closest_end = other_end
-                                    end
-                                end
-                            end
-                            local gap = clip.timeline_start
-                            if closest_end then
-                                gap = clip.timeline_start - closest_end
-                            end
-                            if not min_gap or gap < min_gap then
-                                min_gap = gap
-                            end
+                        local gap = clip.duration
+                        if gap and (not min_gap or gap < min_gap) then
+                            min_gap = gap
                         end
                     end
                 end
@@ -577,7 +547,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                 -- Media boundary constraint (in-point can't extend beyond source_in = 0)
                 if normalized_edge == "in"
-                    and not edge_info.__temp_gap
+                    and not is_gap_edge(edge_info.edge_type)
                     and original.source_in
                     and original.source_in.frames then
                     local extend_limit = -original.source_in.frames
@@ -700,7 +670,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 applied_delta = -clamped_delta_rat
             end
 
-            local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type)
+            local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
             if not success then
                 print(string.format("ERROR: Ripple failed for clip %s", clip.id:sub(1,8)))
                 return false
@@ -715,9 +685,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             if dry_run then
                 local preview_clip_id = clip.id
-                if type(preview_clip_id) == "string" and preview_clip_id:find("^temp_gap_") then
-                    preview_clip_id = edge_info.clip_id
-                end
                 table.insert(preview_affected_clips, {
                     clip_id = preview_clip_id,
                     new_start_value = clip.timeline_start,
@@ -882,7 +849,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Generate Planned Mutations
         for id, clip in pairs(modified_clips) do
             local original = original_states_map[id]
-            if clip and clip.is_temp_gap then
+            local is_temp_gap_clip = type(id) == "string" and id:find("^temp_gap_")
+            if clip and is_temp_gap_clip then
                 if dry_run then
                     table.insert(planned_mutations, {
                         type = "temp_gap",
