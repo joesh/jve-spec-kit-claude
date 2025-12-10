@@ -1,0 +1,272 @@
+local M = {}
+
+local database = require("core.database")
+local command_manager = require("core.command_manager")
+local SCHEMA_SQL = require("import_schema")
+local timeline_state = require("ui.timeline.timeline_state")
+
+local function deep_copy(value)
+    if type(value) ~= "table" then
+        return value
+    end
+    local out = {}
+    for k, v in pairs(value) do
+        out[k] = deep_copy(v)
+    end
+    return out
+end
+
+local function merge_table(dest, src)
+    if not src then return end
+    for k, v in pairs(src) do
+        if type(v) == "table" and type(dest[k]) == "table" then
+            merge_table(dest[k], v)
+        else
+            dest[k] = v
+        end
+    end
+end
+
+local DEFAULT_CONFIG = {
+    project_id = "default_project",
+    project_name = "Default",
+    sequence_id = "default_sequence",
+    sequence_name = "Timeline",
+    fps_numerator = 1000,
+    fps_denominator = 1,
+    audio_rate = 48000,
+    width = 1920,
+    height = 1080,
+    view_start_frame = 0,
+    view_duration_frames = 6000,
+    playhead_frame = 0,
+    selected_edge_infos = nil,
+    tracks = {
+        order = {"v1", "v2"},
+        v1 = {id = "track_v1", name = "Video 1", track_type = "VIDEO", track_index = 1, enabled = 1},
+        v2 = {id = "track_v2", name = "Video 2", track_type = "VIDEO", track_index = 2, enabled = 1}
+    },
+    media = {
+        order = {"main"},
+        main = {
+            id = "media_primary",
+            name = "Media",
+            file_path = "synthetic://primary",
+            duration_frames = 24000,
+            fps_numerator = 1000,
+            fps_denominator = 1,
+            width = 1920,
+            height = 1080,
+            audio_channels = 0,
+            codec = "raw",
+            metadata = "{}"
+        }
+    },
+    clips = {
+        order = {"v1_left", "v2", "v1_right"},
+        v1_left = {
+            id = "clip_v1_left",
+            name = "V1 Left",
+            track_key = "v1",
+            media_key = "main",
+            timeline_start = 0,
+            duration = 1500,
+            source_in = 0,
+            fps_numerator = 1000,
+            fps_denominator = 1
+        },
+        v1_right = {
+            id = "clip_v1_right",
+            name = "V1 Right",
+            track_key = "v1",
+            media_key = "main",
+            timeline_start = 3500,
+            duration = 1200,
+            source_in = 0,
+            fps_numerator = 1000,
+            fps_denominator = 1
+        },
+        v2 = {
+            id = "clip_v2_overlap",
+            name = "V2 Clip",
+            track_key = "v2",
+            media_key = "main",
+            timeline_start = 2000,
+            duration = 1000,
+            source_in = 0,
+            fps_numerator = 1000,
+            fps_denominator = 1
+        }
+    }
+}
+
+local function build_config(opts)
+    local cfg = deep_copy(DEFAULT_CONFIG)
+    merge_table(cfg, opts)
+
+    if opts and opts.tracks then
+        for key, override in pairs(opts.tracks) do
+            assert(cfg.tracks[key], string.format("Unknown track override '%s'", key))
+            merge_table(cfg.tracks[key], override)
+        end
+    end
+
+    if opts and opts.media then
+        for key, override in pairs(opts.media) do
+            if type(key) == "string" then
+                assert(cfg.media[key], string.format("Unknown media override '%s'", key))
+                merge_table(cfg.media[key], override)
+            end
+        end
+    end
+
+    if opts and opts.clips then
+        for key, override in pairs(opts.clips) do
+            assert(cfg.clips[key], string.format("Unknown clip override '%s'", key))
+            merge_table(cfg.clips[key], override)
+        end
+    end
+
+    return cfg
+end
+
+local function build_clip_sql(cfg, clip)
+    local track = cfg.tracks[clip.track_key]
+    local media = cfg.media[clip.media_key]
+    assert(track, string.format("missing track for clip %s", clip.id))
+    assert(media, string.format("missing media for clip %s", clip.id))
+
+    local source_out = clip.source_in + clip.duration
+    local created_at = os.time()
+    local modified_at = created_at
+
+    return string.format([[INSERT INTO clips (
+        id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+        VALUES ('%s', '%s', 'timeline', '%s', '%s', '%s', '%s', %d, %d, %d, %d,
+                %d, %d, 1, 0, %d, %d);
+    ]],
+        clip.id,
+        cfg.project_id,
+        clip.name,
+        track.id,
+        media.id,
+        cfg.sequence_id,
+        clip.timeline_start,
+        clip.duration,
+        clip.source_in,
+        source_out,
+        clip.fps_numerator or cfg.fps_numerator,
+        clip.fps_denominator or cfg.fps_denominator,
+        created_at,
+        modified_at
+    )
+end
+
+local function build_media_sql(cfg, media)
+    local created_at = os.time()
+    local modified_at = created_at
+    return string.format([[INSERT INTO media (
+        id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+        VALUES ('%s', '%s', '%s', '%s', %d, %d, %d, %d, %d, %d, '%s', '%s', %d, %d);
+    ]],
+        media.id,
+        cfg.project_id,
+        media.name,
+        media.file_path,
+        media.duration_frames,
+        media.fps_numerator,
+        media.fps_denominator,
+        media.width,
+        media.height,
+        media.audio_channels,
+        media.codec,
+        media.metadata,
+        created_at,
+        modified_at
+    )
+end
+
+local function build_track_sql(cfg, track)
+    return string.format([[INSERT INTO tracks (
+        id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('%s', '%s', '%s', '%s', %d, %d);
+    ]], track.id, cfg.sequence_id, track.name, track.track_type, track.track_index, track.enabled)
+end
+
+function M.create(opts)
+    opts = opts or {}
+    local cfg = build_config(opts)
+    local db_path = opts.db_path or string.format("/tmp/jve/ripple_layout_%d_%d.db", os.time(), math.random(100000))
+    os.remove(db_path)
+    assert(database.init(db_path), "Failed to init database")
+    local db = database.get_connection()
+    assert(db:exec(SCHEMA_SQL))
+
+    local now = os.time()
+    assert(db:exec(string.format([[INSERT INTO projects (id, name, created_at, modified_at)
+        VALUES ('%s', '%s', %d, %d);]], cfg.project_id, cfg.project_name, now, now)))
+
+    local sequence_sql = [[INSERT INTO sequences (
+        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        created_at, modified_at, selected_edge_infos)
+        VALUES ('%s', '%s', '%s', 'timeline', %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %s);]]
+    local selected_edge_json = cfg.selected_edge_infos and string.format("'%s'", cfg.selected_edge_infos) or "NULL"
+    assert(db:exec(string.format(sequence_sql,
+        cfg.sequence_id,
+        cfg.project_id,
+        cfg.sequence_name,
+        cfg.fps_numerator,
+        cfg.fps_denominator,
+        cfg.audio_rate,
+        cfg.width,
+        cfg.height,
+        cfg.view_start_frame,
+        cfg.view_duration_frames,
+        cfg.playhead_frame,
+        now,
+        now,
+        selected_edge_json
+    )))
+
+    for _, key in ipairs(cfg.tracks.order or {}) do
+        assert(db:exec(build_track_sql(cfg, cfg.tracks[key])))
+    end
+
+    for _, key in ipairs(cfg.media.order or {}) do
+        assert(db:exec(build_media_sql(cfg, cfg.media[key])))
+    end
+
+    for _, key in ipairs(cfg.clips.order or {}) do
+        assert(db:exec(build_clip_sql(cfg, cfg.clips[key])))
+    end
+
+    command_manager.init(db, cfg.sequence_id, cfg.project_id)
+
+    local layout = {
+        db = db,
+        db_path = db_path,
+        project_id = cfg.project_id,
+        sequence_id = cfg.sequence_id,
+        tracks = cfg.tracks,
+        media = cfg.media,
+        clips = cfg.clips,
+        config = cfg
+    }
+
+    function layout:cleanup()
+        os.remove(self.db_path)
+    end
+
+    function layout:init_timeline_state()
+        timeline_state.init(self.sequence_id)
+        return timeline_state
+    end
+
+    return layout
+end
+
+return M

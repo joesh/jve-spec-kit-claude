@@ -69,6 +69,52 @@ local function normalize_batch_preview(planned_mutations, fps_num, fps_den)
     return preview
 end
 
+local function coerce_clip_entries(entries)
+    if not entries then
+        return nil
+    end
+    if entries.clip_id then
+        return {entries}
+    end
+    return entries
+end
+
+local function normalize_preview_entries(entries, fps_num, fps_den)
+    local normalized = {}
+    for _, entry in ipairs(coerce_clip_entries(entries) or {}) do
+        local start_value = entry.new_start_value or entry.timeline_start or entry.start_value
+        local duration_value = entry.new_duration or entry.duration
+        if type(start_value) == "number" then
+            start_value = frames_to_rational(start_value, fps_num, fps_den)
+        end
+        if type(duration_value) == "number" then
+            duration_value = frames_to_rational(duration_value, fps_num, fps_den)
+        end
+        table.insert(normalized, {
+            clip_id = entry.clip_id,
+            new_start_value = start_value,
+            new_duration = duration_value,
+            edge_type = entry.edge_type,
+            raw_edge_type = entry.raw_edge_type
+        })
+    end
+    return normalized
+end
+
+local function build_preview_from_payload(payload, fps_num, fps_den)
+    if type(payload) ~= "table" then
+        return nil
+    end
+    local preview = {
+        affected_clips = normalize_preview_entries(payload.affected_clips or payload.affected_clip, fps_num, fps_den) or {},
+        shifted_clips = normalize_preview_entries(payload.shifted_clips, fps_num, fps_den) or {}
+    }
+    if (#preview.affected_clips == 0 and #preview.shifted_clips == 0) and payload.planned_mutations then
+        return normalize_batch_preview(payload.planned_mutations, fps_num, fps_den)
+    end
+    return preview
+end
+
 local TEMP_GAP_PREFIX = "temp_gap_"
 
 local function parse_temp_gap_identifier(clip_id)
@@ -260,31 +306,27 @@ local function ensure_edge_preview(view, state_module)
         return
     end
 
-    if #edges == 1 then
-        if debug_enabled and type(payload) == "table" then
-            local keys = {}
-            for k, _ in pairs(payload) do table.insert(keys, tostring(k)) end
-            debug("single-edge payload keys: " .. table.concat(keys, ","))
-        end
-        drag_state.preview_data = payload or {}
-    elseif type(result) == "table" and result.planned_mutations then
-        local planned = result.planned_mutations
-        debug("dry run returned " .. tostring(#(planned or {})) .. " planned mutations")
-        drag_state.preview_data = normalize_batch_preview(planned, fps_num, fps_den)
-    else
+    local preview_payload = nil
+    if type(payload) == "table" then
+        preview_payload = payload
+    elseif type(result) == "table" then
+        preview_payload = result
+    end
+
+    local preview_data = build_preview_from_payload(preview_payload, fps_num, fps_den)
+    if not preview_data then
         local mutations = {}
-        if type(payload) == "table" and payload.planned_mutations then
-            mutations = payload.planned_mutations
-            debug("dry run payload contains planned_mutations=" .. tostring(#(mutations or {})))
+        if preview_payload and preview_payload.planned_mutations then
+            mutations = preview_payload.planned_mutations
         elseif type(payload) == "table" and payload.executed_mutations then
             mutations = payload.executed_mutations
-            debug("dry run payload missing planned_mutations; using executed_mutations count=" .. tostring(#mutations))
         elseif type(payload) == "table" then
             mutations = payload
-            debug("dry run payload treated as mutation list count=" .. tostring(#mutations))
         end
-        drag_state.preview_data = normalize_batch_preview(mutations, fps_num, fps_den)
+        preview_data = normalize_batch_preview(mutations, fps_num, fps_den)
     end
+
+    drag_state.preview_data = preview_data or {}
 
     drag_state.preview_request_token = token
     debug("preview ready; affected=" .. tostring(#(drag_state.preview_data.affected_clips or {})))
