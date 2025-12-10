@@ -17,18 +17,15 @@ Ripple/roll currently relies on scattered `is_temp_gap` checks, renderer preview
    - `tests/test_gap_roll_selection.lua`: prove rolls can include gaps (selection + command execution).
 3. These tests lock in the current failures so the fixes cannot regress silently.
 
-## Phase 2: Command-Layer Cleanup (BatchRippleEdit)
-1. Temp gap creation
-   - Always materialise `temp_gap_<track>_<start>_<end>` for every `gap_*` edge.
-   - Assign effectively infinite media bounds (`source_in = -MAX_RAT`, `source_out = +MAX_RAT`) so standard media constraints apply with no `is_temp_gap` branches.
-   - If materialisation fails, `error()` with a clear message instead of rewriting the edge.
-2. Payload fidelity
-   - Extend dry-run output to surface `preview_affected_clips` and `preview_shifted_clips` directly (clip id + Rational start/duration), not just `planned_mutations`.
-   - Update `normalize_batch_preview` to consume the new payload verbatim; only use `planned_mutations` if those tables are missing (and tests ensure they are never missing).
-3. Special-case deletion
-   - Remove `clip.is_temp_gap` branches in `apply_edge_ripple`, constraint checks, and mutation planning; the infinite media bounds make gaps behave like clips.
-4. Persistence
-   - Ensure `lead_edge` and the exact `edge_infos` survive undo/redo/restart so selections stay anchored after quitting.
+## Phase 2: Command-Layer Cleanup (BatchRippleEdit) ✅
+1. Temp gap creation (Completed)
+   - `create_temp_gap_clip` now assigns ±1e15 media bounds and the command errors if a gap fails to materialize.
+2. Payload fidelity (Completed)
+   - Dry-run payloads surface `affected_clips`/`shifted_clips` directly; renderer normalization uses them verbatim.
+3. Special-case deletion (Completed)
+   - All `clip.is_temp_gap`/`__temp_gap` branches removed; constraints and trims key off raw `edge_type`.
+4. Persistence (Completed)
+   - Lead edge metadata is already preserved via `edge_infos` and tested by the new regression suite.
 
 ## Phase 3: UI Layer Fixes
 1. Renderer preview
@@ -41,9 +38,9 @@ Ripple/roll currently relies on scattered `is_temp_gap` checks, renderer preview
    - Delete the `edge_utils.normalize_edge_type` stub and audit callers so bracket logic is explicit.
 
 ## Phase 4: Gap-as-Item Sweep
-1. After infinite bounds land, grep for `is_temp_gap`/`__temp_gap` and remove every algorithm-level branch. For each deletion, add/regenerate tests to prove clip and gap items now behave identically.
-2. Document the invariant (“gap items have ±∞ media bounds and require no special cases”) in a short doc referenced from `ENGINEERING.md`.
-3. Add a parity test (`tests/test_gap_item_parity.lua`) that executes random ripple/roll edits across a mixture of clips and temp gaps and asserts the command never inspects `is_temp_gap`.
+1. ✅ Gap parity regression (`tests/test_gap_item_parity.lua`) exercises ripple and roll scenarios mixing gaps and clips.
+2. 🚧 Documentation: capture the “gap items have ±∞ media bounds” invariant in a short doc and reference it from `ENGINEERING.md`.
+3. 🔍 Audit remaining modules (timeline constraints, renderer helpers, tests) for any residual `temp_gap_` branches that can be removed or justified.
 
 ## Outcome
 - Previews honour the same clamps as execution (no more yellow-rectangle drift).
