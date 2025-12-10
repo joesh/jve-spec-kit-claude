@@ -714,7 +714,13 @@ function M.render(view)
     end
 
     if edges_to_render and #edges_to_render > 0 then
-        local previews = edge_drag_renderer.build_preview_edges(edges_to_render, edge_delta, {}, state_module.colors)
+        local previews = edge_drag_renderer.build_preview_edges(
+            edges_to_render,
+            edge_delta,
+            {},
+            state_module.colors,
+            (view.drag_state and view.drag_state.lead_edge) or nil
+        )
 
         for _, p in ipairs(previews) do
             local c = clip_lookup[p.clip_id]
@@ -747,7 +753,7 @@ function M.render(view)
                         ex = sx
                     end
                     local is_in = (normalized_edge == "in") or (p.raw_edge_type == "gap_after")
-                    local col = dragging_edges and 0xFFFFFFFF or p.color
+                    local col = p.color or state_module.colors.edge_selected_available
                     local bw = 8
                     local bt = 2
                     if is_in then

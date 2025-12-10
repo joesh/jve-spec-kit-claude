@@ -3,6 +3,45 @@ local Rational = require('core.rational')
 
 local Renderer = {}
 
+local function negate_delta(delta)
+    if delta == nil then
+        return nil
+    end
+    if getmetatable(delta) == Rational.metatable then
+        return Rational.new(-delta.frames, delta.fps_numerator, delta.fps_denominator)
+    end
+    if type(delta) == "table" and delta.frames then
+        local fps_num = delta.fps_numerator or (delta.rate and delta.rate.fps_numerator) or 30
+        local fps_den = delta.fps_denominator or (delta.rate and delta.rate.fps_denominator) or 1
+        return Rational.new(-delta.frames, fps_num, fps_den)
+    end
+    if delta == math.huge then
+        return -math.huge
+    end
+    if delta == -math.huge then
+        return math.huge
+    end
+    if type(delta) == "number" then
+        return -delta
+    end
+    return delta
+end
+
+local function should_negate_edge(edge, lead_edge)
+    if not lead_edge or not edge then
+        return false
+    end
+    if edge.trim_type == "roll" then
+        return false
+    end
+    local lead_bracket = edge_utils.to_bracket(lead_edge.edge_type or lead_edge.normalized_edge)
+    local edge_bracket = edge_utils.to_bracket(edge.edge_type or edge.normalized_edge)
+    if lead_bracket and edge_bracket and lead_bracket ~= edge_bracket then
+        return true
+    end
+    return false
+end
+
 local function to_rational_if_needed(val, ref_rational)
     if type(val) == "number" then
         -- Preserve infinity
@@ -100,10 +139,10 @@ local function clamp_edge_delta(edge, delta, trim_constraints)
 end
 
 -- Prepare preview metadata for a single edge: clamped delta, at-limit flag, color.
-local function build_preview_edge(edge, shared_delta, requested_delta, trim_constraints, colors)
+local function build_preview_edge(edge, applied_delta, requested_delta, trim_constraints, colors)
     local normalized_edge = edge_utils.to_bracket(edge.edge_type)
     local constraints = constraint_for_edge(trim_constraints, edge)
-    local clamped_delta, _ = clamp_edge_delta(edge, shared_delta, trim_constraints)
+    local clamped_delta, _ = clamp_edge_delta(edge, applied_delta, trim_constraints)
 
     -- Flag limit only if this edge's own constraint was the limiter
     local at_limit = false
@@ -132,7 +171,7 @@ local function build_preview_edge(edge, shared_delta, requested_delta, trim_cons
 end
 
 -- Public API: normalize a list of drag edges into preview-ready edges
-function Renderer.build_preview_edges(drag_edges, drag_delta, trim_constraints, colors)
+function Renderer.build_preview_edges(drag_edges, drag_delta, trim_constraints, colors, lead_edge)
     local previews = {}
     if not drag_edges or #drag_edges == 0 then
         return previews
@@ -141,7 +180,13 @@ function Renderer.build_preview_edges(drag_edges, drag_delta, trim_constraints, 
     local shared_delta = compute_shared_delta(drag_edges, drag_delta, trim_constraints)
 
     for _, edge in ipairs(drag_edges) do
-        local preview = build_preview_edge(edge, shared_delta, drag_delta, trim_constraints, colors)
+        local applied = shared_delta
+        local requested = drag_delta
+        if should_negate_edge(edge, lead_edge) then
+            applied = negate_delta(shared_delta)
+            requested = negate_delta(drag_delta)
+        end
+        local preview = build_preview_edge(edge, applied, requested, trim_constraints, colors)
         table.insert(previews, preview)
     end
     return previews

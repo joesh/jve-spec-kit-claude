@@ -12,6 +12,127 @@ do
     if status then timeline_state = mod end
 end
 local clip_mutator = require('core.clip_mutator') -- New dependency
+local json = require("dkjson")
+
+local function get_edge_track_id(edge_info, clip_lookup, original_states_map)
+    if edge_info.track_id and edge_info.track_id ~= "" then
+        return edge_info.track_id
+    end
+    if clip_lookup and clip_lookup[edge_info.clip_id] then
+        return clip_lookup[edge_info.clip_id].track_id
+    end
+    local original = original_states_map and original_states_map[edge_info.clip_id]
+    if original then
+        return original.track_id
+    end
+    return nil
+end
+
+local function compute_edge_boundary_time(edge_info, original_states_map)
+    if not edge_info or not original_states_map then
+        return nil
+    end
+    local clip_state = original_states_map[edge_info.clip_id]
+    if not clip_state then
+        return nil
+    end
+    local raw_edge = edge_info.edge_type
+    local normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge)
+    if raw_edge == "gap_before" then
+        return clip_state.timeline_start
+    elseif raw_edge == "gap_after" then
+        return clip_state.timeline_start + clip_state.duration
+    elseif normalized_edge == "in" then
+        return clip_state.timeline_start
+    elseif normalized_edge == "out" then
+        return clip_state.timeline_start + clip_state.duration
+    end
+    return nil
+end
+
+local function hydrate_executed_mutations_if_missing(command)
+    if not command or not command.get_parameter then
+        error("BatchRippleEdit undo: invalid command handle")
+    end
+    local executed = command:get_parameter("executed_mutations")
+    if type(executed) == "table" and next(executed) ~= nil then
+        return executed
+    end
+
+    local originals = command:get_parameter("original_states")
+    if type(originals) ~= "table" or next(originals) == nil then
+        error("BatchRippleEdit undo: command missing executed_mutations and original_states")
+    end
+
+    local conn = database.get_connection()
+    if not conn then
+        error("BatchRippleEdit undo: no database connection available to hydrate mutations")
+    end
+
+    local sequence_id = command:get_parameter("sequence_id")
+    local project_id = command.project_id or command:get_parameter("project_id") or "default_project"
+
+    local function normalized_state(state)
+        local copy = {}
+        for k, v in pairs(state) do
+            copy[k] = v
+        end
+        copy.project_id = copy.project_id or project_id
+        copy.clip_kind = copy.clip_kind or "timeline"
+        copy.owner_sequence_id = copy.owner_sequence_id or copy.track_sequence_id or sequence_id
+        copy.track_sequence_id = copy.track_sequence_id or copy.owner_sequence_id
+        return copy
+    end
+
+    local function clip_exists(clip_id)
+        if not clip_id or clip_id == "" then
+            return false
+        end
+        local stmt = conn:prepare("SELECT 1 FROM clips WHERE id = ? LIMIT 1")
+        if not stmt then
+            error("BatchRippleEdit undo: failed to inspect clip existence")
+        end
+        stmt:bind_value(1, clip_id)
+        local exists = stmt:exec() and stmt:next()
+        stmt:finalize()
+        return exists
+    end
+
+    local rebuilt = {}
+    for _, state in pairs(originals) do
+        if type(state) == "table" and state.id then
+            local prev = normalized_state(state)
+            local tag = clip_exists(state.id) and "update" or "delete"
+            table.insert(rebuilt, {
+                type = tag,
+                clip_id = state.id,
+                previous = prev
+            })
+        end
+    end
+
+    if #rebuilt == 0 then
+        error("BatchRippleEdit undo: unable to hydrate executed_mutations (no original states)")
+    end
+
+    command:set_parameter("executed_mutations", rebuilt)
+
+    if command.sequence_number then
+        local params = command.parameters or {}
+        local encoded = json.encode(params)
+        local stmt = conn:prepare("UPDATE commands SET command_args = ? WHERE sequence_number = ?")
+        if stmt then
+            stmt:bind_value(1, encoded)
+            stmt:bind_value(2, command.sequence_number)
+            if not stmt:exec() then
+                print(string.format("WARNING: Failed to persist hydrated executed_mutations for sequence %s", tostring(command.sequence_number)))
+            end
+            stmt:finalize()
+        end
+    end
+
+    return rebuilt
+end
 
 local function bracket_for_normalized_edge(edge_type)
     if edge_type == "in" then
@@ -589,6 +710,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
+        local lead_boundary_time = nil
+        local lead_track_id = nil
+        if lead_edge_entry then
+            lead_boundary_time = compute_edge_boundary_time(lead_edge_entry, original_states_map)
+            lead_track_id = get_edge_track_id(lead_edge_entry, clip_lookup, original_states_map)
+        end
+
         -- Determine earliest ripple point from original states
         local earliest_ripple_hint = nil
         for _, edge_info in ipairs(edge_infos) do
@@ -652,6 +780,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local downstream_shift_rat = Rational.new(0, seq_fps_num, seq_fps_den)
         local ripple_anchor_edge_type = nil
         local lead_bracket = nil
+        local track_ripple_orientation = {}
+        local track_shift_amounts = {}
         if lead_edge_entry and lead_edge_entry.trim_type ~= "roll" then
             ripple_anchor_edge_type = lead_edge_entry.normalized_edge
             lead_bracket = bracket_for_normalized_edge(ripple_anchor_edge_type)
@@ -694,11 +824,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
             local edge_bracket = bracket_for_normalized_edge(normalized_edge)
             local applied_delta = clamped_delta_rat
+            local current_track_id = get_edge_track_id(edge_info, clip_track_lookup, original_states_map)
+            local share_edit_point = false
+            if lead_boundary_time and lead_track_id and current_track_id and current_track_id == lead_track_id then
+                local boundary = compute_edge_boundary_time(edge_info, original_states_map)
+                if boundary and boundary == lead_boundary_time then
+                    share_edit_point = true
+                end
+            end
             if edge_info.trim_type ~= "roll"
                 and lead_bracket
                 and edge_bracket
-                and edge_bracket ~= lead_bracket then
+                and edge_bracket ~= lead_bracket
+                and share_edit_point then
                 applied_delta = -clamped_delta_rat
+            end
+
+            if edge_info.trim_type ~= "roll" and current_track_id and not track_ripple_orientation[current_track_id] then
+                track_ripple_orientation[current_track_id] = normalized_edge
             end
 
             local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
@@ -754,6 +897,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if has_ripple_edge then
             downstream_shift_rat = Rational.new(clamped_delta_rat.frames * shift_factor, seq_fps_num, seq_fps_den)
+            for track_id, orientation in pairs(track_ripple_orientation) do
+                if track_id and orientation then
+                    local factor = (orientation == "in") and -1 or 1
+                    track_shift_amounts[track_id] = Rational.new(clamped_delta_rat.frames * factor, seq_fps_num, seq_fps_den)
+                end
+            end
         else
             downstream_shift_rat = Rational.new(0, seq_fps_num, seq_fps_den)
         end
@@ -800,7 +949,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 original_states_map[shift_clip.id] = command_helper.capture_clip_state(shift_clip)
             end
             
-            shift_clip.timeline_start = shift_clip.timeline_start + downstream_shift_rat
+            local track_shift = track_shift_amounts[shift_clip.track_id] or downstream_shift_rat
+            shift_clip.timeline_start = shift_clip.timeline_start + track_shift
             modified_clips[shift_clip.id] = shift_clip
 
             ::continue_shift_plan::
@@ -925,7 +1075,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if dry_run then
             preview_shifted_clips = {}
             for _, shift_clip in ipairs(clips_to_shift or {}) do
-                local new_start = shift_clip.timeline_start + downstream_shift_rat
+                local track_shift = track_shift_amounts[shift_clip.track_id] or downstream_shift_rat
+                local new_start = shift_clip.timeline_start + track_shift
                 table.insert(preview_shifted_clips, {
                     clip_id = shift_clip.id,
                     new_start_value = new_start
@@ -961,13 +1112,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_undoers["BatchRippleEdit"] = function(command)
         print("Undoing BatchRippleEdit command")
 
-        local executed_mutations = command:get_parameter("executed_mutations") or {}
+        local executed_mutations = hydrate_executed_mutations_if_missing(command)
         local sequence_id = command:get_parameter("sequence_id")
-        
-        if not executed_mutations or #executed_mutations == 0 then
-            print("WARNING: UndoBatchRippleEdit: No executed mutations to undo.")
-            return false
-        end
 
         local started, begin_err = db:begin_transaction()
         if not started then
