@@ -576,7 +576,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
 
                 -- Media boundary constraint (in-point can't extend beyond source_in = 0)
-                if normalized_edge == "in" and original.source_in and original.source_in.frames then
+                if normalized_edge == "in"
+                    and not edge_info.__temp_gap
+                    and original.source_in
+                    and original.source_in.frames then
                     local extend_limit = -original.source_in.frames
                     if extend_limit > global_min_frames then
                         global_min_frames = extend_limit

@@ -132,6 +132,7 @@ M.get_selected_clips = selection.get_selected_clips
 M.set_selection = selection.set_selection
 M.get_selected_edges = selection.get_selected_edges
 M.set_edge_selection = selection.set_edge_selection
+M.set_edge_selection_raw = selection.set_edge_selection_raw
 M.toggle_edge_selection = selection.toggle_edge_selection
 M.clear_edge_selection = selection.clear_edge_selection
 M.get_selected_gaps = selection.get_selected_gaps

@@ -8,49 +8,6 @@ local Rational = require("core.rational")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 
-local function parse_temp_gap_id(clip_id)
-    if type(clip_id) ~= "string" then return nil end
-    local track, start_str, end_str = clip_id:match("^temp_gap_(.+)_(%-?%d+)_(%-?%d+)$")
-    if not track or not start_str or not end_str then
-        return nil
-    end
-    local start_frames = tonumber(start_str)
-    local end_frames = tonumber(end_str)
-    if not start_frames or not end_frames then
-        return nil
-    end
-    return track, start_frames, end_frames
-end
-
-local function synthesize_gap_clip(clip_id, track_id_hint, fps_num, fps_den)
-    local track, start_frames, end_frames = parse_temp_gap_id(clip_id)
-    if not track then return nil end
-    local start_value = start_frames or 0
-    local end_value = end_frames or start_value
-    local duration_frames = end_value - start_value
-    if duration_frames < 0 then duration_frames = 0 end
-    local track_id = track_id_hint or track
-    return {
-        id = clip_id,
-        track_id = track_id,
-        timeline_start = Rational.new(start_value, fps_num, fps_den),
-        duration = Rational.new(duration_frames, fps_num, fps_den),
-        source_in = Rational.new(0, fps_num, fps_den),
-        source_out = Rational.new(duration_frames, fps_num, fps_den),
-        is_temp_gap = true
-    }
-end
-
-local function locate_clip_or_gap(all_clips, clip_id, track_id_hint, fps_num, fps_den)
-    if not clip_id then return nil end
-    for _, clip in ipairs(all_clips or {}) do
-        if clip.id == clip_id then
-            return clip
-        end
-    end
-    return synthesize_gap_clip(clip_id, track_id_hint, fps_num, fps_den)
-end
-
 local function timeline_scroll_debug_enabled()
     local flag = os.getenv("JVE_TIMELINE_SCROLL_DEBUG")
     if not flag or flag == "" then return false end
@@ -110,6 +67,68 @@ local function normalize_batch_preview(planned_mutations, fps_num, fps_den)
     end
 
     return preview
+end
+
+local TEMP_GAP_PREFIX = "temp_gap_"
+
+local function parse_temp_gap_identifier(clip_id)
+    if type(clip_id) ~= "string" then
+        return nil
+    end
+    if not clip_id:find("^" .. TEMP_GAP_PREFIX) then
+        return nil
+    end
+    local payload = clip_id:sub(#TEMP_GAP_PREFIX + 1)
+    local start_str, end_str = payload:match("_(%-?%d+)_(-?%d+)$")
+    if not start_str or not end_str then
+        return nil
+    end
+    local track_len = #payload - (#start_str + #end_str + 2)
+    if track_len <= 0 then
+        return nil
+    end
+    local track_id = payload:sub(1, track_len)
+    return track_id, tonumber(start_str), tonumber(end_str)
+end
+
+local function build_temp_gap_preview_clip(preview, seq_rate)
+    if not preview or not preview.clip_id then
+        return nil
+    end
+    local base_track_id, start_frames, end_frames = parse_temp_gap_identifier(preview.clip_id)
+    local track_id = preview.target_track_id or base_track_id
+    if not track_id or not start_frames or not end_frames then
+        return nil
+    end
+    local fps_num = (seq_rate and seq_rate.fps_numerator) or 30
+    local fps_den = (seq_rate and seq_rate.fps_denominator) or 1
+    local duration_frames = end_frames - start_frames
+    if duration_frames < 0 then
+        duration_frames = 0
+    end
+    local start_value = Rational.new(start_frames, fps_num, fps_den)
+    local duration = Rational.new(duration_frames, fps_num, fps_den)
+    return {
+        id = preview.clip_id,
+        track_id = track_id,
+        timeline_start = start_value,
+        duration = duration,
+        source_in = Rational.new(0, fps_num, fps_den),
+        source_out = duration,
+        enabled = 1,
+        is_gap = true,
+        is_temp_gap = true
+    }
+end
+
+local function normalize_lead_edge(lead_edge, clip_lookup)
+    assert(lead_edge and lead_edge.clip_id, "lead_edge is required for edge preview")
+    return {
+        clip_id = lead_edge.clip_id,
+        edge_type = lead_edge.edge_type,
+        track_id = lead_edge.track_id or clip_lookup[lead_edge.clip_id],
+        trim_type = lead_edge.trim_type
+    }
 end
 
 local function ensure_edge_preview(view, state_module)
@@ -173,36 +192,48 @@ local function ensure_edge_preview(view, state_module)
     for _, clip in ipairs(state_module.get_clips() or {}) do
         clip_lookup[clip.id] = clip.track_id
     end
+    assert(drag_state.lead_edge, "edge drag should always provide a lead_edge")
 
-    local function normalize_edge_entry(edge)
-        if not edge then return nil end
-        return {
+    local cmd = nil
+    local executor = nil
+    local normalized_lead = normalize_lead_edge(drag_state.lead_edge, clip_lookup)
+
+    if #edges == 1 then
+        local edge = edges[1]
+        cmd = Command.create("RippleEdit", project_id)
+        cmd:set_parameter("edge_info", {
             clip_id = edge.clip_id,
             edge_type = edge.edge_type,
             track_id = edge.track_id or clip_lookup[edge.clip_id],
             trim_type = edge.trim_type
-        }
-    end
-
-    local edge_infos = {}
-    for _, edge in ipairs(edges) do
-        local normalized = normalize_edge_entry(edge)
-        if normalized then
-            table.insert(edge_infos, normalized)
+        })
+        cmd:set_parameter("sequence_id", sequence_id)
+        cmd:set_parameter("delta_frames", delta_rat.frames)
+        cmd:set_parameter("dry_run", true)
+        if normalized_lead then
+            cmd:set_parameter("lead_edge", normalized_lead)
         end
+        executor = command_manager.get_executor("RippleEdit")
+    else
+        local edge_infos = {}
+        for _, edge in ipairs(edges) do
+            table.insert(edge_infos, {
+                clip_id = edge.clip_id,
+                edge_type = edge.edge_type,
+                track_id = edge.track_id or clip_lookup[edge.clip_id],
+                trim_type = edge.trim_type
+            })
+        end
+        cmd = Command.create("BatchRippleEdit", project_id)
+        cmd:set_parameter("edge_infos", edge_infos)
+        cmd:set_parameter("sequence_id", sequence_id)
+        cmd:set_parameter("delta_frames", delta_rat.frames)
+        cmd:set_parameter("dry_run", true)
+        if normalized_lead then
+            cmd:set_parameter("lead_edge", normalized_lead)
+        end
+        executor = command_manager.get_executor("BatchRippleEdit")
     end
-
-    local lead_edge_info = normalize_edge_entry(drag_state.lead_edge)
-
-    local cmd = Command.create("BatchRippleEdit", project_id)
-    cmd:set_parameter("edge_infos", edge_infos)
-    cmd:set_parameter("sequence_id", sequence_id)
-    cmd:set_parameter("delta_frames", delta_rat.frames)
-    cmd:set_parameter("dry_run", true)
-    if lead_edge_info then
-        cmd:set_parameter("lead_edge", lead_edge_info)
-    end
-    local executor = command_manager.get_executor("BatchRippleEdit")
 
     if not executor then
         drag_state.preview_data = nil
@@ -229,32 +260,30 @@ local function ensure_edge_preview(view, state_module)
         return
     end
 
-    if type(result) == "table" and result.planned_mutations then
+    if #edges == 1 then
+        if debug_enabled and type(payload) == "table" then
+            local keys = {}
+            for k, _ in pairs(payload) do table.insert(keys, tostring(k)) end
+            debug("single-edge payload keys: " .. table.concat(keys, ","))
+        end
+        drag_state.preview_data = payload or {}
+    elseif type(result) == "table" and result.planned_mutations then
         local planned = result.planned_mutations
         debug("dry run returned " .. tostring(#(planned or {})) .. " planned mutations")
         drag_state.preview_data = normalize_batch_preview(planned, fps_num, fps_den)
     else
-        if type(payload) == "table" and (payload.affected_clips or payload.shifted_clips) then
-            drag_state.preview_data = payload
-            if debug_enabled then
-                local keys = {}
-                for k, _ in pairs(payload) do table.insert(keys, tostring(k)) end
-                debug("single-edge payload keys: " .. table.concat(keys, ","))
-            end
-        else
-            local mutations = {}
-            if type(payload) == "table" and payload.planned_mutations then
-                mutations = payload.planned_mutations
-                debug("dry run payload contains planned_mutations=" .. tostring(#(mutations or {})))
-            elseif type(payload) == "table" and payload.executed_mutations then
-                mutations = payload.executed_mutations
-                debug("dry run payload missing planned_mutations; using executed_mutations count=" .. tostring(#mutations))
-            elseif type(payload) == "table" then
-                mutations = payload
-                debug("dry run payload treated as mutation list count=" .. tostring(#mutations))
-            end
-            drag_state.preview_data = normalize_batch_preview(mutations, fps_num, fps_den)
+        local mutations = {}
+        if type(payload) == "table" and payload.planned_mutations then
+            mutations = payload.planned_mutations
+            debug("dry run payload contains planned_mutations=" .. tostring(#(mutations or {})))
+        elseif type(payload) == "table" and payload.executed_mutations then
+            mutations = payload.executed_mutations
+            debug("dry run payload missing planned_mutations; using executed_mutations count=" .. tostring(#mutations))
+        elseif type(payload) == "table" then
+            mutations = payload
+            debug("dry run payload treated as mutation list count=" .. tostring(#mutations))
         end
+        drag_state.preview_data = normalize_batch_preview(mutations, fps_num, fps_den)
     end
 
     drag_state.preview_request_token = token
@@ -431,13 +460,6 @@ function M.render(view)
                     end
                     if not body_color then body_color = state_module.colors.clip end
 
-                    if not outline_only and is_zero_offset and not preview_target_id then
-                        state_module.debug_record_clip_layout(view.debug_id, clip.id, clip.track_id, x, y, clip_width, clip_height)
-                    end
-
-                    local is_selected = selected_lookup[clip.id] == true
-                    local outline_thickness = 2
-
                     if not outline_only then
                         timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
                         local label_padding = 10
@@ -450,6 +472,9 @@ function M.render(view)
                             end
                         end
                     end
+
+                    local is_selected = selected_lookup[clip.id] == true
+                    local outline_thickness = 2
 
                     if is_selected or outline_only then
                         local outline_col = state_module.colors.clip_selected
@@ -562,7 +587,13 @@ function M.render(view)
     end
 
     local dragging_edges = view.drag_state and view.drag_state.type == "edges"
-    local all_clips = state_module.get_clips()
+    local all_clips = state_module.get_clips() or {}
+    local clip_lookup = {}
+    for _, clip in ipairs(all_clips) do
+        if clip.id then
+            clip_lookup[clip.id] = clip
+        end
+    end
     local seq_rate = state_module.get_sequence_frame_rate()
     local fps_num = (seq_rate and seq_rate.fps_numerator) or 30
     local fps_den = (seq_rate and seq_rate.fps_denominator) or 1
@@ -589,7 +620,8 @@ function M.render(view)
             end
 
             for _, aff in ipairs(affected or {}) do
-                local c = locate_clip_or_gap(all_clips, aff.clip_id, aff.track_id, fps_num, fps_den)
+                local c
+                for _, clip in ipairs(all_clips) do if clip.id == aff.clip_id then c = clip break end end
                 if c then
                     local cy = view.get_track_y_by_id(c.track_id, height)
                     if cy >= 0 then
@@ -614,7 +646,8 @@ function M.render(view)
             end
 
             for _, shift in ipairs(preview_data.shifted_clips or {}) do
-                local c = locate_clip_or_gap(all_clips, shift.clip_id, shift.track_id, fps_num, fps_den)
+                local c
+                for _, clip in ipairs(all_clips) do if clip.id == shift.clip_id then c = clip break end end
                 if c then
                     local cy = view.get_track_y_by_id(c.track_id, height)
                     if cy >= 0 then
@@ -643,26 +676,37 @@ function M.render(view)
         local previews = edge_drag_renderer.build_preview_edges(edges_to_render, edge_delta, {}, state_module.colors)
 
         for _, p in ipairs(previews) do
-            local c = locate_clip_or_gap(all_clips, p.clip_id, p.target_track_id, fps_num, fps_den)
+            local c = clip_lookup[p.clip_id]
+            if not c then
+                c = build_temp_gap_preview_clip(p, seq_rate)
+                if c then
+                    clip_lookup[p.clip_id] = c
+                end
+            end
             if c then
                 local cy = view.get_track_y_by_id(c.track_id, height)
                 if cy >= 0 then
                     local th = view.get_track_visual_height(c.track_id)
-                    local delta = p.delta
-                    local edge_type = p.edge_type
-                    local raw_edge_type = p.raw_edge_type or edge_type
-                    local start, dur, normalized_edge = edge_drag_renderer.compute_preview_geometry(c, edge_type, delta, raw_edge_type)
-                    if not start or not dur then
-                        goto continue_preview_clip
-                    end
-
+                    local start, dur, normalized_edge = edge_drag_renderer.compute_preview_geometry(
+                        c,
+                        p.edge_type,
+                        p.delta,
+                        p.raw_edge_type
+                    )
+                    if not start or not dur then goto continue_preview end
                     local sx = state_module.time_to_pixel(start, width)
                     local cw = math.floor((dur / viewport_duration_rational) * width) - 1
+                    if cw < 0 then cw = 0 end
                     local ch = th - 10
                     local cy = cy + 5
-                    local ex = (normalized_edge == "in" or normalized_edge == "gap_before") and sx or (sx + cw)
-                    local is_in = (normalized_edge == "in" or normalized_edge == "gap_after")
-                    local col = p.color or (dragging_edges and 0xFFFFFFFF or 0xFFFFFFFF)
+                    local ex = (normalized_edge == "in") and sx or (sx + cw)
+                    if p.raw_edge_type == "gap_before" then
+                        ex = sx
+                    elseif p.raw_edge_type == "gap_after" then
+                        ex = sx
+                    end
+                    local is_in = (normalized_edge == "in") or (p.raw_edge_type == "gap_after")
+                    local col = dragging_edges and 0xFFFFFFFF or p.color
                     local bw = 8
                     local bt = 2
                     if is_in then
@@ -675,7 +719,7 @@ function M.render(view)
                         timeline.add_rect(view.widget, ex - bw, cy + ch - bt, bw, bt, col)
                     end
                 end
-                ::continue_preview_clip::
+                ::continue_preview::
             end
         end
     end

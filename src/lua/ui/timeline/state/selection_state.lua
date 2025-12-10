@@ -8,39 +8,6 @@ local Rational = require("core.rational")
 
 local on_selection_changed_callback = nil
 
-local function compute_gap_after(clip)
-    if not clip then return nil end
-    local next_clip = clip_state.locate_neighbor(clip, 1)
-    if not next_clip then return nil end
-    local clip_end = clip.timeline_start + clip.duration
-    local gap = next_clip.timeline_start - clip_end
-    if gap.frames <= 1 then
-        return Rational.new(0, gap.fps_numerator, gap.fps_denominator)
-    end
-    return gap
-end
-
-local function compute_gap_before(clip)
-    if not clip then return nil end
-    local prev_clip = clip_state.locate_neighbor(clip, -1)
-    if not prev_clip then return nil end
-    local clip_start = clip.timeline_start
-    local prev_end = prev_clip.timeline_start + prev_clip.duration
-    local gap = clip_start - prev_end
-    if gap.frames <= 1 then
-        return Rational.new(0, gap.fps_numerator, gap.fps_denominator)
-    end
-    return gap
-end
-
-local function find_next_clip(clip)
-    return clip_state.locate_neighbor(clip, 1)
-end
-
-local function find_previous_clip(clip)
-    return clip_state.locate_neighbor(clip, -1)
-end
-
 local function normalize_edge_selection()
     local state = data.state
     if not state.selected_edges or #state.selected_edges == 0 then
@@ -59,29 +26,6 @@ local function normalize_edge_selection()
         if clip then
             local new_edge_type = edge.edge_type
             local new_clip_id = clip.id
-            if edge.edge_type == "gap_after" then
-                local gap = compute_gap_after(clip)
-                if gap and gap.frames <= 0 then
-                    local neighbour = find_next_clip(clip)
-                    if neighbour then
-                        new_clip_id = neighbour.id
-                        new_edge_type = "in"
-                    else
-                        new_edge_type = "in"
-                    end
-                end
-            elseif edge.edge_type == "gap_before" then
-                local gap = compute_gap_before(clip)
-                if gap and gap.frames <= 0 then
-                    local neighbour = find_previous_clip(clip)
-                    if neighbour then
-                        new_clip_id = neighbour.id
-                        new_edge_type = "out"
-                    else
-                        new_edge_type = "out"
-                    end
-                end
-            end
 
             local key = new_clip_id .. ":" .. new_edge_type
             if not seen[key] then
@@ -144,6 +88,12 @@ function M.set_edge_selection(edges, opts, persist_callback)
     if opts.normalize ~= false then normalize_edge_selection() end
     if opts.notify ~= false then data.notify_listeners() end
     if persist_callback then persist_callback() end
+end
+
+function M.set_edge_selection_raw(edges, opts, persist_callback)
+    opts = opts or {}
+    opts.normalize = false
+    return M.set_edge_selection(edges, opts, persist_callback)
 end
 
 function M.toggle_edge_selection(clip_id, edge_type, trim_type, persist_callback)

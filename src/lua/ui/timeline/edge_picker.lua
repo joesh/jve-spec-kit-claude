@@ -106,10 +106,18 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
     local can_roll = (left ~= nil) and (right ~= nil)
         and (left.clip_id ~= nil) and (right.clip_id ~= nil)
         and (left.clip_id ~= right.clip_id)
+    local dragged_candidate = nil
 
     if can_roll and in_center_zone then
         roll_used = true
         zone = "center"
+        if offset_px < 0 and left then
+            dragged_candidate = left
+        elseif offset_px > 0 and right then
+            dragged_candidate = right
+        else
+            dragged_candidate = right or left
+        end
         table.insert(selection, {clip_id = left.clip_id, edge_type = left.edge_type, trim_type = "roll"})
         table.insert(selection, {clip_id = right.clip_id, edge_type = right.edge_type, trim_type = "roll"})
     else
@@ -134,8 +142,19 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
             end
         end
         if pick then
+            dragged_candidate = pick
             table.insert(selection, {clip_id = pick.clip_id, edge_type = pick.edge_type, trim_type = "ripple"})
         end
+    end
+
+    local dragged_edge = nil
+    if dragged_candidate then
+        dragged_edge = {
+            clip_id = dragged_candidate.clip_id,
+            edge_type = dragged_candidate.edge_type or dragged_candidate.edge,
+            trim_type = roll_used and "roll" or "ripple",
+            track_id = dragged_candidate.clip and dragged_candidate.clip.track_id or nil
+        }
     end
 
     return {
@@ -145,7 +164,8 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
         boundary = b,
         boundaries = boundaries,
         distance = hit.dist,
-        zone = zone
+        zone = zone,
+        dragged_edge = dragged_edge
     }
 end
 

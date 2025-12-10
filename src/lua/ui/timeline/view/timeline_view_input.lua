@@ -124,6 +124,16 @@ local function pick_edges_for_track(state, track_id, cursor_x, viewport_width)
     })
 end
 
+local function clone_edge(edge)
+    if not edge then return nil end
+    return {
+        clip_id = edge.clip_id,
+        edge_type = edge.edge_type,
+        trim_type = edge.trim_type,
+        track_id = edge.track_id
+    }
+end
+
 function M.handle_mouse(view, event_type, x, y, button, modifiers)
     local state = view.state
     local width, height = timeline.get_dimensions(view.widget)
@@ -154,12 +164,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     track_id = edge.track_id
                 })
             end
-            local lead_edge = target_edges[1] and {
-                clip_id = target_edges[1].clip_id,
-                edge_type = target_edges[1].edge_type,
-                trim_type = target_edges[1].trim_type,
-                track_id = target_edges[1].track_id
-            } or nil
+            local dragged_edge = clone_edge(picked_edges.dragged_edge)
+            if not dragged_edge then
+                error("edge_picker did not return dragged_edge for selected edges")
+            end
+            local lead_edge = dragged_edge
 
             if modifiers and modifiers.command then
                 for _, edge in ipairs(target_edges) do
@@ -398,12 +407,6 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         if view.potential_drag then view.potential_drag = nil end
         if view.drag_state then
             local drag = view.drag_state
-            -- Dispatch command logic handled by Drag Handler (or keep here?)
-            -- To keep files small, we could move release logic to `timeline_view_drag.lua`?
-            -- For now, let's assume we keep it in input handler or move it.
-            -- The original code had massive release logic.
-            -- I will skip implementing the full command dispatch here to keep the example concise,
-            -- but in reality it should be `drag_handler.handle_release(view, drag, modifiers)`
             local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
             drag_handler.handle_release(view, drag, modifiers)
             

@@ -60,13 +60,13 @@ function M.calculate_state_hash(project_id)
         stmt:finalize()
     end
 
-    append_query([[
+    append_query([[ 
         SELECT id, name, settings
         FROM projects
         WHERE id = ?
     ]], {project_id}, 3, "project")
 
-    append_query([[
+    append_query([[ 
         SELECT id, name, fps_numerator, fps_denominator, audio_rate, width, height,
                playhead_frame, view_start_frame, view_duration_frames
         FROM sequences
@@ -74,7 +74,7 @@ function M.calculate_state_hash(project_id)
         ORDER BY id
     ]], {project_id}, 10, "sequences")
 
-    append_query([[
+    append_query([[ 
         SELECT t.sequence_id, t.id, t.track_type, t.track_index, t.enabled
         FROM tracks t
         JOIN sequences s ON t.sequence_id = s.id
@@ -82,7 +82,7 @@ function M.calculate_state_hash(project_id)
         ORDER BY t.sequence_id, t.track_index, t.id
     ]], {project_id}, 5, "tracks")
 
-    append_query([[
+    append_query([[ 
         SELECT t.sequence_id, c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
                c.enabled, c.source_in_frame, c.source_out_frame, c.media_id, c.fps_numerator, c.fps_denominator
         FROM clips c
@@ -92,7 +92,7 @@ function M.calculate_state_hash(project_id)
         ORDER BY t.sequence_id, t.track_index, c.timeline_start_frame, c.id
     ]], {project_id}, 11, "clips")
 
-    append_query([[
+    append_query([[ 
         SELECT id, file_path, duration_frames, fps_numerator, fps_denominator, name
         FROM media
         WHERE project_id = ?
