@@ -5,7 +5,26 @@ local repo_root
 do
     local here = debug.getinfo(1, "S").source:sub(2)
     local prefix = here:match("^(.*)/tests/test_env.lua$")
-    repo_root = prefix or "."
+    if (not prefix or prefix == "") then
+        local search_path = package.searchpath("test_env", package.path)
+        if search_path then
+            prefix = search_path:match("^(.*)/tests/test_env.lua$")
+        end
+    end
+    if not prefix or prefix == "" then
+        prefix = "."
+    end
+    repo_root = prefix
+    local function ensure_absolute(path)
+        if path:sub(1, 1) == "/" then
+            return path
+        end
+        local handle = assert(io.popen("pwd", "r"))
+        local cwd = handle:read("*l")
+        handle:close()
+        return cwd .. "/" .. path
+    end
+    repo_root = ensure_absolute(repo_root)
     local paths = {
         repo_root .. "/?.lua",
         repo_root .. "/?/init.lua",
