@@ -25,6 +25,26 @@ do
         return cwd .. "/" .. path
     end
     repo_root = ensure_absolute(repo_root)
+    local function normalize(path)
+        local parts = {}
+        for part in path:gmatch("[^/]+") do parts[#parts + 1] = part end
+        local absolute = path:sub(1, 1) == "/"
+        local out = {}
+        for _, part in ipairs(parts) do
+            if part == ".." then
+                if #out > 0 then out[#out] = nil end
+            elseif part ~= "." and part ~= "" then
+                out[#out + 1] = part
+            end
+        end
+        if absolute then
+            return "/" .. table.concat(out, "/")
+        else
+            return table.concat(out, "/")
+        end
+    end
+    repo_root = normalize(repo_root)
+    repo_root = repo_root:gsub("/tests$", "")
     local paths = {
         repo_root .. "/?.lua",
         repo_root .. "/?/init.lua",
