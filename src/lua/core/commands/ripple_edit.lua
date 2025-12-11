@@ -326,7 +326,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             ripple_time = original_end_rat
         end
         
-        if shift_rat.frames == 0 and not deleted_clip
+        if not dry_run
+            and shift_rat.frames == 0 and not deleted_clip
             and clip.timeline_start == original_start_rat
             and clip.duration == original_duration_rat then
             command:set_parameter("__suppress_if_unchanged", true)
@@ -396,7 +397,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     new_duration = clip.duration,
                     edge_type = edge_info.edge_type,
                     raw_edge_type = edge_info.edge_type,
-                    is_gap = (edge_info.edge_type == "gap_before" or edge_info.edge_type == "gap_after")
+                    is_gap = false
                 },
                 shifted_clips = preview_shifts,
                 clamped_edges = clamped_edges

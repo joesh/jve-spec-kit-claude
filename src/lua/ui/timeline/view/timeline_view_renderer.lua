@@ -86,10 +86,11 @@ local function is_gap_preview(entry)
     if entry.is_gap or entry.is_temp_gap then
         return true
     end
-    if entry.raw_edge_type == "gap_before" or entry.raw_edge_type == "gap_after" then
+    if type(entry.clip_id) == "string" and entry.clip_id:find("^" .. TEMP_GAP_PREFIX) then
         return true
     end
-    if type(entry.clip_id) == "string" and entry.clip_id:find("^" .. TEMP_GAP_PREFIX) then
+    if (entry.raw_edge_type == "gap_before" or entry.raw_edge_type == "gap_after")
+        and type(entry.clip_id) == "string" and entry.clip_id:find("^" .. TEMP_GAP_PREFIX) then
         return true
     end
     return false
@@ -131,6 +132,18 @@ local function build_preview_from_payload(payload, fps_num, fps_den)
     for _, entry in ipairs(affected_entries) do
         if not entry.is_gap then
             table.insert(preview.affected_clips, entry)
+        end
+    end
+    if (#preview.affected_clips == 0) and (#preview.shifted_clips > 0) then
+        for _, entry in ipairs(preview.shifted_clips) do
+            table.insert(preview.affected_clips, {
+                clip_id = entry.clip_id,
+                new_start_value = entry.new_start_value,
+                new_duration = entry.new_duration,
+                edge_type = entry.edge_type,
+                raw_edge_type = entry.raw_edge_type,
+                is_gap = false
+            })
         end
     end
     return preview

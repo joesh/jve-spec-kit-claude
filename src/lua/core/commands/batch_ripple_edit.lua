@@ -611,10 +611,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local clamped_delta_rat = delta_rat
+        local selection_has_clip_edge = false
         local edited_clip_lookup = {}
         for _, edge_info in ipairs(edge_infos or {}) do
             if edge_info.clip_id then
                 edited_clip_lookup[edge_info.clip_id] = true
+                if not is_gap_edge(edge_info.edge_type) then
+                    selection_has_clip_edge = true
+                end
                 if is_gap_edge(edge_info.edge_type) then
                     local gap_clip = preloaded_clips[edge_info.clip_id]
                     if gap_clip then
@@ -632,12 +636,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Gap clamp only when gap edge is leading OR delta would close the gap
         local lead_is_gap = lead_edge_entry and (lead_edge_entry.edge_type == "gap_before" or lead_edge_entry.edge_type == "gap_after")
 
-        if delta_rat < Rational.new(0, seq_fps_num, seq_fps_den) then
-            -- Closing direction: check gap_before edges
+        local function apply_gap_clamp(target_type, is_positive)
             local min_gap_frames = nil
             local limiting_edges = {}
             for _, edge_info in ipairs(edge_infos) do
-                if edge_info.edge_type == "gap_before" then
+                if edge_info.edge_type == target_type then
                     local clip = get_cached_clip(edge_info.clip_id)
                     if clip and clip.duration and clip.duration.frames then
                         local gap_frames = clip.duration.frames
@@ -651,36 +654,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
             if min_gap_frames then
-                local max_close = Rational.new(-min_gap_frames, seq_fps_num, seq_fps_den)
-                if delta_rat < max_close then
-                    clamped_delta_rat = max_close
-                    for _, key in ipairs(limiting_edges) do
-                        forced_clamped_edges[key] = true
-                    end
-                end
-            end
-        elseif delta_rat > Rational.new(0, seq_fps_num, seq_fps_den) and lead_is_gap then
-            -- Expanding direction: only clamp if gap edge is leading
-            local min_gap_frames = nil
-            local limiting_edges = {}
-            for _, edge_info in ipairs(edge_infos) do
-                if edge_info.edge_type == "gap_after" then
-                    local clip = get_cached_clip(edge_info.clip_id)
-                    if clip and clip.duration and clip.duration.frames then
-                        local gap_frames = clip.duration.frames
-                        if not min_gap_frames or gap_frames < min_gap_frames then
-                            min_gap_frames = gap_frames
-                            limiting_edges = {build_edge_key(edge_info)}
-                        elseif gap_frames == min_gap_frames then
-                            limiting_edges[#limiting_edges + 1] = build_edge_key(edge_info)
-                        end
-                    end
-                end
-            end
-            if min_gap_frames then
-                local max_extend = Rational.new(min_gap_frames, seq_fps_num, seq_fps_den)
-                if delta_rat > max_extend then
-                    clamped_delta_rat = max_extend
+                local target = Rational.new(is_positive and min_gap_frames or -min_gap_frames, seq_fps_num, seq_fps_den)
+                if (is_positive and clamped_delta_rat > target) or (not is_positive and clamped_delta_rat < target) then
+                    clamped_delta_rat = target
                     for _, key in ipairs(limiting_edges) do
                         forced_clamped_edges[key] = true
                     end
@@ -729,13 +705,35 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 edge_shares_lead_point[key] = share_edit_point
                 if share_edit_point and edge_bracket ~= lead_bracket then
                     should_negate = true
-                elseif lead_edge_for_constraints and is_gap_edge(lead_edge_for_constraints.edge_type) and edge_bracket ~= lead_bracket then
+                elseif lead_edge_for_constraints
+                    and is_gap_edge(lead_edge_for_constraints.edge_type)
+                    and edge_bracket ~= lead_bracket
+                    and delta_rat.frames < 0 then
                     should_negate = true
                 end
                 if should_negate then
                     edge_will_negate[key] = true
                 end
             end
+        end
+
+        local has_partner_clip = false
+        if lead_is_gap then
+            for _, edge_info in ipairs(edge_infos) do
+                if not is_gap_edge(edge_info.edge_type) then
+                    local key = build_edge_key(edge_info)
+                    if edge_shares_lead_point[key] then
+                        has_partner_clip = true
+                        break
+                    end
+                end
+            end
+        end
+
+        if delta_rat < Rational.new(0, seq_fps_num, seq_fps_den) then
+            apply_gap_clamp("gap_before", false)
+        elseif delta_rat > Rational.new(0, seq_fps_num, seq_fps_den) and lead_is_gap and not has_partner_clip then
+            apply_gap_clamp("gap_after", true)
         end
 
         -- Prepopulate original states and neighbor bounds to constrain delta frames
@@ -899,11 +897,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local has_ripple_edge = false
         local downstream_shift_rat = Rational.new(0, seq_fps_num, seq_fps_den)
         local ripple_anchor_edge_type = nil
+        local ripple_anchor_is_gap = false
         local lead_bracket = nil
         local track_ripple_orientation = {}
         local track_shift_amounts = {}
         if lead_edge_entry and lead_edge_entry.trim_type ~= "roll" then
             ripple_anchor_edge_type = lead_edge_entry.normalized_edge
+            ripple_anchor_is_gap = is_gap_edge(lead_edge_entry.edge_type)
             lead_bracket = bracket_for_normalized_edge(ripple_anchor_edge_type)
         end
         
@@ -964,6 +964,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 has_ripple_edge = true
                 if not ripple_anchor_edge_type then
                     ripple_anchor_edge_type = normalized_edge
+                    ripple_anchor_is_gap = is_gap_edge(edge_info.edge_type)
+                elseif ripple_anchor_is_gap and not is_gap_edge(edge_info.edge_type) then
+                    ripple_anchor_edge_type = normalized_edge
+                    ripple_anchor_is_gap = false
                 end
             end
 
@@ -1192,7 +1196,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local new_start = shift_clip.timeline_start + track_shift
                 table.insert(preview_shifted_clips, {
                     clip_id = shift_clip.id,
-                    new_start_value = new_start
+                    new_start_value = new_start,
+                    new_duration = shift_clip.duration
                 })
             end
         end
