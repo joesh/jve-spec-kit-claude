@@ -692,27 +692,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(edge_info.edge_type)
             local edge_bracket = bracket_for_normalized_edge(normalized_edge)
             local key = build_edge_key(edge_info)
+            local current_track_id = get_edge_track_id(edge_info, clip_track_lookup, original_states_map)
             if edge_info ~= lead_edge_for_constraints and edge_info.trim_type ~= "roll" and lead_bracket and edge_bracket then
-                local should_negate = false
-                local current_track_id = get_edge_track_id(edge_info, clip_track_lookup, original_states_map)
-                local share_edit_point = false
+                if edge_bracket ~= lead_bracket then
+                    edge_will_negate[key] = true
+                end
                 if lead_boundary_time and lead_track_id and current_track_id and current_track_id == lead_track_id then
                     local boundary = compute_edge_boundary_time(edge_info, original_states_map)
                     if boundary and boundary == lead_boundary_time then
-                        share_edit_point = true
+                        edge_shares_lead_point[key] = true
                     end
-                end
-                edge_shares_lead_point[key] = share_edit_point
-                if share_edit_point and edge_bracket ~= lead_bracket then
-                    should_negate = true
-                elseif lead_edge_for_constraints
-                    and is_gap_edge(lead_edge_for_constraints.edge_type)
-                    and edge_bracket ~= lead_bracket
-                    and delta_rat.frames < 0 then
-                    should_negate = true
-                end
-                if should_negate then
-                    edge_will_negate[key] = true
                 end
             end
         end
@@ -730,7 +719,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        if delta_rat < Rational.new(0, seq_fps_num, seq_fps_den) then
+        if delta_rat < Rational.new(0, seq_fps_num, seq_fps_den) and not (lead_is_gap and selection_has_clip_edge) then
             apply_gap_clamp("gap_before", false)
         elseif delta_rat > Rational.new(0, seq_fps_num, seq_fps_den) and lead_is_gap and not has_partner_clip then
             apply_gap_clamp("gap_after", true)
@@ -899,8 +888,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local ripple_anchor_edge_type = nil
         local ripple_anchor_is_gap = false
         local lead_bracket = nil
-        local track_ripple_orientation = {}
         local track_shift_amounts = {}
+        local track_shift_seeds = {}
         if lead_edge_entry and lead_edge_entry.trim_type ~= "roll" then
             ripple_anchor_edge_type = lead_edge_entry.normalized_edge
             ripple_anchor_is_gap = is_gap_edge(lead_edge_entry.edge_type)
@@ -949,11 +938,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 applied_delta = -clamped_delta_rat
             end
 
-            local shares_lead_point = edge_shares_lead_point[key]
-            if edge_info.trim_type ~= "roll" and current_track_id and not track_ripple_orientation[current_track_id] and shares_lead_point then
-                track_ripple_orientation[current_track_id] = normalized_edge
-            end
-
             local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
             if not success then
                 print(string.format("ERROR: Ripple failed for clip %s", clip.id:sub(1,8)))
@@ -968,6 +952,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 elseif ripple_anchor_is_gap and not is_gap_edge(edge_info.edge_type) then
                     ripple_anchor_edge_type = normalized_edge
                     ripple_anchor_is_gap = false
+                end
+                if current_track_id and not track_shift_seeds[current_track_id] then
+                    track_shift_seeds[current_track_id] = {
+                        orientation = normalized_edge,
+                        applied_delta = applied_delta
+                    }
                 end
             end
 
@@ -1014,10 +1004,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if has_ripple_edge then
             downstream_shift_rat = Rational.new(clamped_delta_rat.frames * shift_factor, seq_fps_num, seq_fps_den)
-            for track_id, orientation in pairs(track_ripple_orientation) do
-                if track_id and orientation then
-                    local factor = (orientation == "in") and -1 or 1
-                    track_shift_amounts[track_id] = Rational.new(clamped_delta_rat.frames * factor, seq_fps_num, seq_fps_den)
+            for track_id, seed in pairs(track_shift_seeds) do
+                if track_id and seed.orientation and seed.applied_delta then
+                    local factor = (seed.orientation == "in") and -1 or 1
+                    track_shift_amounts[track_id] = Rational.new(seed.applied_delta.frames * factor, seq_fps_num, seq_fps_den)
                 end
             end
         else

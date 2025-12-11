@@ -25,6 +25,18 @@ local function build_command(layout, clips, tracks, delta, lead_clip)
     return cmd
 end
 
+local function find_shifted_clip(payload, clip_id)
+    if not payload.shifted_clips then
+        return nil
+    end
+    for _, info in ipairs(payload.shifted_clips) do
+        if info.clip_id == clip_id then
+            return info
+        end
+    end
+    return nil
+end
+
 -- Scenario 1: Dragging the V2 ] right should expand the V1 gap, not clamp to the current gap.
 do
     local TEST_DB = "/tmp/jve/test_batch_ripple_gap_drag_behavior_expand.db"
@@ -47,6 +59,11 @@ do
     assert(ok and type(payload) == "table", "Dry run should succeed")
     assert(not payload.clamped_edges or next(payload.clamped_edges) == nil,
         "Dragging V2 ] right should not clamp to the gap")
+    local shift_entry = find_shifted_clip(payload, clips.v1_right.id)
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames == clips.v1_right.timeline_start + 1800,
+        string.format("Preview shift for V1 right should move right by 1800 (expected %d, got %s)",
+            clips.v1_right.timeline_start + 1800,
+            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames)))
 
     -- Execute: V1 right clip should move by the full delta.
     local before = Clip.load(clips.v1_right.id, layout.db).timeline_start.frames
@@ -90,6 +107,51 @@ do
     local clip_key = string.format("%s:%s", clips.v2.id, "out")
     assert(payload.clamped_edges and payload.clamped_edges[clip_key],
         "V2 ] should be reported as the clamped edge when media runs out")
+
+    layout:cleanup()
+end
+
+-- Scenario 3: Dragging the V2 ] left should shrink the V1 gap and shift the downstream clip by the same amount.
+do
+    local TEST_DB = "/tmp/jve/test_batch_ripple_gap_drag_behavior_shrink.db"
+    local layout = ripple_layout.create({
+        db_path = TEST_DB,
+        clips = {
+            v1_left = {timeline_start = 0, duration = 1000},
+            v1_right = {timeline_start = 2600, duration = 1000},
+            v2 = {timeline_start = 1500, duration = 1200}
+        }
+    })
+    local clips = layout.clips
+    local tracks = layout.tracks
+
+    local dry_cmd = build_command(layout, clips, tracks, -500, "v2")
+    dry_cmd:set_parameter("dry_run", true)
+    local executor = command_manager.get_executor("BatchRippleEdit")
+    local ok, payload = executor(dry_cmd)
+    assert(ok and type(payload) == "table", "Dry run should succeed for shrink scenario")
+    local shift_entry = find_shifted_clip(payload, clips.v1_right.id)
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames == clips.v1_right.timeline_start - 500,
+        string.format("Preview shift for V1 right should move left by 500 (expected %d, got %s)",
+            clips.v1_right.timeline_start - 500,
+            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames)))
+
+    local left_before = Clip.load(clips.v1_left.id, layout.db)
+    local right_before = Clip.load(clips.v1_right.id, layout.db)
+    local gap_before = right_before.timeline_start.frames - (left_before.timeline_start.frames + left_before.duration.frames)
+
+    local cmd = build_command(layout, clips, tracks, -500, "v2")
+    local result = command_manager.execute(cmd)
+    assert(result.success, "BatchRippleEdit execute failed for shrink scenario")
+
+    local left_after = Clip.load(clips.v1_left.id, layout.db)
+    local right_after = Clip.load(clips.v1_right.id, layout.db)
+    local gap_after = right_after.timeline_start.frames - (left_after.timeline_start.frames + left_after.duration.frames)
+
+    assert(right_after.timeline_start.frames == right_before.timeline_start.frames - 500,
+        string.format("V1 right should shift left by 500 (expected %d, got %d)", right_before.timeline_start.frames - 500, right_after.timeline_start.frames))
+    assert(gap_after == gap_before - 500,
+        string.format("Gap should shrink by 500 frames (expected %d, got %d)", gap_before - 500, gap_after))
 
     layout:cleanup()
 end
