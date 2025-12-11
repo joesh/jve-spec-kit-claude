@@ -47,10 +47,13 @@
 - [x] Restore ripple handle semantics so `[`/`]` drags obey `docs/RIPPLE-ALGORITHM-RULES.md` across BatchRippleEdit and RippleEdit, covering gap clips and downstream propagation limits.
 
 ## Session Tasks (2025-???)
+- [x] (done) Fix BatchRipple gap lead clamp/negation bugs and extend regression tests.
 - [x] (done) Timeline gap edge selections should render handles just like clip edges; regression surfaced while restoring ripple handle semantics.
+- [x] (done) Re-align per-track ripple shift signs so opposing bracket clip selections move in the correct directions while gap edges retain their bracket mapping (multi-track regression restored).
 - [ ] (needs review) Update timeline edit-zone cursors so the three zones show ], ]|[, and [ glyphs instead of generic trim arrows.
-- [ ] (in progress) Timeline edge clicks must keep existing selections when re-clicked without modifiers, and Shift clicks should toggle edges like Cmd; add regression test coverage.
+- [ ] (pending) Timeline edge clicks must keep existing selections when re-clicked without modifiers, and Shift clicks should toggle edges like Cmd; add regression test coverage.
 - [ ] Remove the stub `edge_utils.normalize_edge_type` and update any call sites so edge normalization only happens through the real helpers; Rule 2.17 forbids no-op stubs.
+- [x] (done) BatchRippleEdit refactor/test coverage follow-up per latest review (helper split, constant extraction, new regression tests).
 - [ ] Split `timeline_view_renderer.render` edge-preview block into small helpers so bracket geometry, preview clip lookup, and rectangle drawing each live in their own functions (Rule 2.26).
 - [ ] Consolidate the duplicated gap-closure constraint logic in `batch_ripple_edit.lua` by routing every caller through `compute_gap_close_constraint` so changes stay in one place.
 - [ ] Standardize command error returns (BatchRippleEdit/RippleEdit/etc.) so they all return `{success=false,error_message=...}` instead of sometimes `false`.
