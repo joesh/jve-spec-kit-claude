@@ -129,15 +129,48 @@ M.get_state_version = clips.get_version
 
 -- Selection
 M.get_selected_clips = selection.get_selected_clips
-M.set_selection = selection.set_selection
+local function persist_selection_state()
+    if core and core.persist_state_to_db then
+        core.persist_state_to_db()
+    end
+end
+
+M.set_selection = function(clips)
+    selection.set_selection(clips, persist_selection_state)
+end
+
 M.get_selected_edges = selection.get_selected_edges
-M.set_edge_selection = selection.set_edge_selection
-M.set_edge_selection_raw = selection.set_edge_selection_raw
-M.toggle_edge_selection = selection.toggle_edge_selection
-M.clear_edge_selection = selection.clear_edge_selection
+
+M.set_edge_selection = function(edges, opts)
+    selection.set_edge_selection(edges, opts, persist_selection_state)
+end
+
+M.set_edge_selection_raw = function(edges, opts)
+    selection.set_edge_selection_raw(edges, opts, persist_selection_state)
+end
+
+M.toggle_edge_selection = function(clip_id, edge_type, trim_type)
+    return selection.toggle_edge_selection(clip_id, edge_type, trim_type, persist_selection_state)
+end
+
+M.clear_edge_selection = function()
+    selection.clear_edge_selection(persist_selection_state)
+end
+
 M.get_selected_gaps = selection.get_selected_gaps
-M.set_gap_selection = selection.set_gap_selection
-M.toggle_gap_selection = selection.toggle_gap_selection
+
+M.set_gap_selection = function(gaps)
+    selection.set_gap_selection(gaps)
+    persist_selection_state()
+end
+
+M.toggle_gap_selection = function(gap)
+    local changed = selection.toggle_gap_selection(gap)
+    if changed ~= nil then
+        persist_selection_state()
+    end
+    return changed
+end
 M.clear_gap_selection = function() selection.set_gap_selection({}) end
 M.set_on_selection_changed = selection.set_on_selection_changed
 M.normalize_edge_selection = selection.normalize_edge_selection

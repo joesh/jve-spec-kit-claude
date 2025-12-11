@@ -1,123 +1,55 @@
 #!/usr/bin/env luajit
 
-package.path = "./?.lua;./src/lua/?.lua;" .. package.path
+require("test_env")
 
 local Rational = require("core.rational")
 local renderer = require("ui.timeline.view.timeline_view_renderer")
 local command_manager = require("core.command_manager")
+local timeline_state = require("ui.timeline.timeline_state")
+local ripple_layout = require("tests.helpers.ripple_layout")
 
-local original_get_executor = command_manager.get_executor
-local captured_lead = nil
+local TEST_DB = "/tmp/jve/test_timeline_edge_preview_lead.db"
+local layout = ripple_layout.create({db_path = TEST_DB})
+local tracks = layout.tracks
+local clips = layout.clips
 
-command_manager.get_executor = function()
-    return function(cmd)
-        captured_lead = cmd:get_parameter("lead_edge")
-        return {planned_mutations = {}}
-    end
-end
+layout:init_timeline_state()
 
-local function rational(frames)
-    return Rational.new(frames, 24, 1)
-end
-
-local clips = {
-    {id = "clip_left", track_id = "track_v1", timeline_start = rational(0), duration = rational(240)},
-    {id = "clip_right", track_id = "track_v2", timeline_start = rational(480), duration = rational(240)}
-}
-
-local state = {
-    colors = {
-        track_even = "#111111",
-        track_odd = "#222222",
-        grid_line = "#333333",
-        clip_video = "#555555",
-        text = "#ffffff",
-        clip_selected = "#00ff00",
-        clip = "#222222",
-        playhead = "#ff00ff",
-        edge_selected_available = "#00ff00",
-        edge_selected_limit = "#ff0000",
-        gap_selected_outline = "#ffff00"
-    },
-    dimensions = {
-        clip_outline_thickness = 4
-    }
-}
-
-state.debug_begin_layout_capture = function() end
-state.debug_record_track_layout = function() end
-state.debug_record_clip_layout = function() end
-state.get_viewport_start_time = function() return rational(0) end
-state.get_viewport_duration = function() return rational(960) end
-state.get_playhead_position = function() return rational(0) end
-state.get_mark_in = function() return nil end
-state.get_mark_out = function() return nil end
-state.get_sequence_id = function() return "seq_lead_test" end
-state.get_project_id = function() return "proj_lead_test" end
-state.get_sequence_frame_rate = function() return {fps_numerator = 24, fps_denominator = 1} end
-state.get_clips = function() return clips end
-state.get_selected_clips = function() return {} end
-state.get_selected_edges = function() return {} end
-state.get_all_tracks = function()
-    return {
-        {id = "track_v1"},
-        {id = "track_v2"}
-    }
-end
-state.get_track_heights = function() return {} end
-state.time_to_pixel = function(time_value, width)
-    local frames = time_value.frames or 0
-    local duration_frames = state.get_viewport_duration().frames
-    return math.floor((frames / duration_frames) * width)
-end
+local width, height = 1000, 300
 
 local view = {
     widget = {},
-    state = state,
-    filtered_tracks = {
-        {id = "track_v1"},
-        {id = "track_v2"}
-    },
+    state = timeline_state,
+    filtered_tracks = {{id = tracks.v1.id}, {id = tracks.v2.id}},
     track_layout_cache = {
         by_index = {
-            [1] = {y = 0, height = 80},
-            [2] = {y = 90, height = 80},
+            [1] = {y = 0, height = 120},
+            [2] = {y = 140, height = 120}
         },
         by_id = {
-            track_v1 = {y = 0, height = 80},
-            track_v2 = {y = 90, height = 80}
+            [tracks.v1.id] = {y = 0, height = 120},
+            [tracks.v2.id] = {y = 140, height = 120}
         }
     },
     debug_id = "lead-edge-preview-test"
 }
 
 function view.update_layout_cache() end
-function view.get_track_visual_height(_, track_id)
-    return (track_id == "track_v1" or track_id == "track_v2") and 80 or 80
+function view.get_track_visual_height(track_id)
+    local entry = view.track_layout_cache.by_id[track_id]
+    return entry and entry.height or 0
 end
-function view.get_track_id_at_y(_, y)
-    if y < 80 then return "track_v1" end
-    return "track_v2"
+function view.get_track_id_at_y(y)
+    return (y < 120) and tracks.v1.id or tracks.v2.id
 end
-function view.get_track_y_by_id(_, track_id)
-    if track_id == "track_v1" then return 0 end
-    if track_id == "track_v2" then return 90 end
-    return -1
+function view.get_track_y_by_id(track_id)
+    local entry = view.track_layout_cache.by_id[track_id]
+    return entry and entry.y or -1
 end
 
-view.drag_state = {
-    type = "edges",
-    edges = {
-        {clip_id = "clip_left", edge_type = "out", track_id = "track_v1", trim_type = "ripple"},
-        {clip_id = "clip_right", edge_type = "in", track_id = "track_v2", trim_type = "ripple"}
-    },
-    lead_edge = {clip_id = "clip_right", edge_type = "in", track_id = "track_v2", trim_type = "ripple"},
-    delta_rational = rational(24),
-    preview_data = nil
-}
-
-_G.timeline = {
-    get_dimensions = function() return 800, 200 end,
+local original_timeline = timeline
+timeline = {
+    get_dimensions = function() return width, height end,
     clear_commands = function() end,
     add_rect = function() end,
     add_line = function() end,
@@ -125,15 +57,49 @@ _G.timeline = {
     update = function() end
 }
 
+local function rational(frames)
+    return Rational.new(frames, 1000, 1)
+end
+
+local edges = {
+    {clip_id = clips.v1_left.id, edge_type = "out", track_id = tracks.v1.id, trim_type = "ripple"},
+    {clip_id = clips.v2.id, edge_type = "in", track_id = tracks.v2.id, trim_type = "ripple"}
+}
+local lead_edge = edges[2]
+
+view.drag_state = {
+    type = "edges",
+    edges = edges,
+    lead_edge = lead_edge,
+    delta_rational = rational(240)
+}
+
+timeline_state.set_edge_selection(edges)
+
+local original_get_executor = command_manager.get_executor
+local captured_lead = nil
+command_manager.get_executor = function(name)
+    local executor = original_get_executor(name)
+    if not executor then
+        return nil
+    end
+    return function(cmd, ...)
+        captured_lead = cmd:get_parameter("lead_edge")
+        return executor(cmd, ...)
+    end
+end
+
 local ok, err = pcall(function()
     renderer.render(view)
 end)
 
 command_manager.get_executor = original_get_executor
+timeline = original_timeline
+layout:cleanup()
 
 assert(ok, "renderer.render should not error: " .. tostring(err))
 assert(captured_lead, "renderer should pass lead_edge to preview command")
-assert(captured_lead.clip_id == "clip_right", "lead edge clip_id should match drag state")
-assert(captured_lead.edge_type == "in", "lead edge type should match drag state")
+assert(captured_lead.clip_id == lead_edge.clip_id, "lead edge clip_id should match dragged edge")
+assert(captured_lead.edge_type == lead_edge.edge_type, "lead edge type should match dragged edge")
 
 print("✅ Edge preview dry runs respect the dragged lead edge")

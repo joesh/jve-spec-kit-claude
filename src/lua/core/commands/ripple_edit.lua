@@ -194,6 +194,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local original_duration_rat = clip.duration
         local original_end_rat = original_start_rat + original_duration_rat
 
+        local requested_delta_frames = delta_rat.frames
         local clamped_delta = delta_rat
         local is_gap_clip = false -- Simplified
         
@@ -371,6 +372,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if dry_run then
+            local clamped_edges = {}
+            if clamped_delta and clamped_delta.frames and requested_delta_frames and clamped_delta.frames ~= requested_delta_frames then
+                local key = string.format("%s:%s", tostring(edge_info.clip_id or ""), tostring(edge_info.edge_type or ""))
+                clamped_edges[key] = true
+            end
             local preview_shifts = {}
             for _, downstream_clip in ipairs(clips_to_shift or {}) do
                 local start_val = downstream_clip.timeline_start or downstream_clip.start_time
@@ -388,9 +394,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     new_start_value = clip.timeline_start,
                     new_start_time = clip.timeline_start,
                     new_duration = clip.duration,
-                    edge_type = edge_info.edge_type
+                    edge_type = edge_info.edge_type,
+                    raw_edge_type = edge_info.edge_type,
+                    is_gap = (edge_info.edge_type == "gap_before" or edge_info.edge_type == "gap_after")
                 },
-                shifted_clips = preview_shifts
+                shifted_clips = preview_shifts,
+                clamped_edges = clamped_edges
             }
         end
 

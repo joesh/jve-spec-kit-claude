@@ -69,6 +69,8 @@ local function normalize_batch_preview(planned_mutations, fps_num, fps_den)
     return preview
 end
 
+local TEMP_GAP_PREFIX = "temp_gap_"
+
 local function coerce_clip_entries(entries)
     if not entries then
         return nil
@@ -77,6 +79,20 @@ local function coerce_clip_entries(entries)
         return {entries}
     end
     return entries
+end
+
+local function is_gap_preview(entry)
+    if not entry then return false end
+    if entry.is_gap or entry.is_temp_gap then
+        return true
+    end
+    if entry.raw_edge_type == "gap_before" or entry.raw_edge_type == "gap_after" then
+        return true
+    end
+    if type(entry.clip_id) == "string" and entry.clip_id:find("^" .. TEMP_GAP_PREFIX) then
+        return true
+    end
+    return false
 end
 
 local function normalize_preview_entries(entries, fps_num, fps_den)
@@ -95,7 +111,8 @@ local function normalize_preview_entries(entries, fps_num, fps_den)
             new_start_value = start_value,
             new_duration = duration_value,
             edge_type = entry.edge_type,
-            raw_edge_type = entry.raw_edge_type
+            raw_edge_type = entry.raw_edge_type,
+            is_gap = is_gap_preview(entry)
         })
     end
     return normalized
@@ -105,17 +122,42 @@ local function build_preview_from_payload(payload, fps_num, fps_den)
     if type(payload) ~= "table" then
         return nil
     end
+    local affected_entries = normalize_preview_entries(payload.affected_clips or payload.affected_clip, fps_num, fps_den) or {}
     local preview = {
-        affected_clips = normalize_preview_entries(payload.affected_clips or payload.affected_clip, fps_num, fps_den) or {},
-        shifted_clips = normalize_preview_entries(payload.shifted_clips, fps_num, fps_den) or {}
+        affected_clips = {},
+        shifted_clips = normalize_preview_entries(payload.shifted_clips, fps_num, fps_den) or {},
+        clamped_edges = payload.clamped_edges or {}
     }
-    if (#preview.affected_clips == 0 and #preview.shifted_clips == 0) and payload.planned_mutations then
-        return normalize_batch_preview(payload.planned_mutations, fps_num, fps_den)
+    for _, entry in ipairs(affected_entries) do
+        if not entry.is_gap then
+            table.insert(preview.affected_clips, entry)
+        end
     end
     return preview
 end
 
-local TEMP_GAP_PREFIX = "temp_gap_"
+local function coerce_to_rational(value, fps_num, fps_den)
+    if not value then return nil end
+    if getmetatable(value) == Rational.metatable then
+        return value
+    end
+    if type(value) == "number" then
+        return Rational.new(value, fps_num, fps_den)
+    end
+    return nil
+end
+
+local function rational_equals(a, b)
+    if not a or not b then
+        return false
+    end
+    if getmetatable(a) ~= Rational.metatable or getmetatable(b) ~= Rational.metatable then
+        return false
+    end
+    return a.frames == b.frames
+        and a.fps_numerator == b.fps_numerator
+        and a.fps_denominator == b.fps_denominator
+end
 
 local function parse_temp_gap_identifier(clip_id)
     if type(clip_id) ~= "string" then
@@ -183,30 +225,31 @@ local function ensure_edge_preview(view, state_module)
     end
 
     local drag_state = view.drag_state
-    if not drag_state or drag_state.type ~= "edges" then
+    local function clear_preview_state()
         if drag_state then
             drag_state.preview_data = nil
             drag_state.preview_request_token = nil
             drag_state.preview_clamped_delta = nil
+            drag_state.clamped_edges = nil
         end
+    end
+
+    if not drag_state or drag_state.type ~= "edges" then
+        clear_preview_state()
         debug("no drag_state or not edges; skipping preview")
         return
     end
 
     local edges = drag_state.edges or {}
     if #edges == 0 then
-        drag_state.preview_data = nil
-        drag_state.preview_request_token = nil
-        drag_state.preview_clamped_delta = nil
+        clear_preview_state()
         debug("no edges available")
         return
     end
 
     local delta_rat = drag_state.delta_rational
     if not delta_rat then
-        drag_state.preview_data = nil
-        drag_state.preview_request_token = nil
-        drag_state.preview_clamped_delta = nil
+        clear_preview_state()
         debug("missing delta_rational")
         return
     end
@@ -214,8 +257,7 @@ local function ensure_edge_preview(view, state_module)
     local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id()
     local project_id = state_module.get_project_id and state_module.get_project_id()
     if not sequence_id or sequence_id == "" or not project_id or project_id == "" then
-        drag_state.preview_request_token = nil
-        drag_state.preview_data = nil
+        clear_preview_state()
         debug("missing sequence/project id")
         return
     end
@@ -281,26 +323,20 @@ local function ensure_edge_preview(view, state_module)
     end
 
     if not executor then
-        drag_state.preview_data = nil
-        drag_state.preview_request_token = nil
-        drag_state.preview_clamped_delta = nil
+        clear_preview_state()
         debug("executor not available for dry run")
         return
     end
 
     local ok, result, payload = pcall(executor, cmd)
     if not ok then
-        drag_state.preview_data = nil
-        drag_state.preview_request_token = nil
-        drag_state.preview_clamped_delta = nil
+        clear_preview_state()
         debug("dry run threw error: " .. tostring(result))
         return
     end
 
     if result == false then
-        drag_state.preview_data = nil
-        drag_state.preview_request_token = nil
-        drag_state.preview_clamped_delta = nil
+        clear_preview_state()
         debug("dry run returned false")
         return
     end
@@ -313,19 +349,9 @@ local function ensure_edge_preview(view, state_module)
     end
 
     local preview_data = build_preview_from_payload(preview_payload, fps_num, fps_den)
-    if not preview_data then
-        local mutations = {}
-        if preview_payload and preview_payload.planned_mutations then
-            mutations = preview_payload.planned_mutations
-        elseif type(payload) == "table" and payload.executed_mutations then
-            mutations = payload.executed_mutations
-        elseif type(payload) == "table" then
-            mutations = payload
-        end
-        preview_data = normalize_batch_preview(mutations, fps_num, fps_den)
-    end
-
-    drag_state.preview_data = preview_data or {}
+    assert(preview_data, "Edge preview dry run must return preview payload")
+    drag_state.preview_data = preview_data
+    drag_state.clamped_edges = (drag_state.preview_data and drag_state.preview_data.clamped_edges) or {}
 
     drag_state.preview_request_token = token
     debug("preview ready; affected=" .. tostring(#(drag_state.preview_data.affected_clips or {})))
@@ -640,20 +666,30 @@ function M.render(view)
     local fps_den = (seq_rate and seq_rate.fps_denominator) or 1
     local zero_delta = Rational.new(0, fps_num, fps_den)
     local edge_delta = zero_delta
+    local requested_delta = nil
     local edges_to_render = state_module.get_selected_edges() or {}
+    local clamped_edge_lookup = {}
 
     if dragging_edges then
         ensure_edge_preview(view, state_module)
-        if view.drag_state.preview_clamped_delta ~= nil then
-            edge_delta = view.drag_state.preview_clamped_delta
-        elseif view.drag_state.delta_rational then
-            edge_delta = view.drag_state.delta_rational
-        elseif view.drag_state.delta_ms then
-            edge_delta = view.drag_state.delta_ms
+        requested_delta = coerce_to_rational(
+            view.drag_state.delta_rational or view.drag_state.delta_ms,
+            fps_num,
+            fps_den
+        )
+        local clamped_delta = coerce_to_rational(view.drag_state.preview_clamped_delta, fps_num, fps_den)
+        if clamped_delta then
+            edge_delta = clamped_delta
+        elseif requested_delta then
+            edge_delta = requested_delta
+        end
+        if not edge_delta then
+            edge_delta = zero_delta
         end
         edges_to_render = view.drag_state.edges or edges_to_render
 
         local preview_data = view.drag_state.preview_data
+        clamped_edge_lookup = (view.drag_state and view.drag_state.clamped_edges) or {}
         if preview_data then
             local affected = preview_data.affected_clips
             if not affected and preview_data.affected_clip then
@@ -661,8 +697,14 @@ function M.render(view)
             end
 
             for _, aff in ipairs(affected or {}) do
-                local c
-                for _, clip in ipairs(all_clips) do if clip.id == aff.clip_id then c = clip break end end
+                if aff.is_gap then goto continue_affected end
+                local c = clip_lookup[aff.clip_id]
+                if not c then
+                    c = build_temp_gap_preview_clip(aff, seq_rate)
+                    if c then
+                        clip_lookup[aff.clip_id] = c
+                    end
+                end
                 if c then
                     local cy = view.get_track_y_by_id(c.track_id, height)
                     if cy >= 0 then
@@ -684,11 +726,11 @@ function M.render(view)
                         timeline.add_rect(view.widget, sx + cw - 2, cy, 2, ch, col)
                     end
                 end
+                ::continue_affected::
             end
 
             for _, shift in ipairs(preview_data.shifted_clips or {}) do
-                local c
-                for _, clip in ipairs(all_clips) do if clip.id == shift.clip_id then c = clip break end end
+                local c = clip_lookup[shift.clip_id]
                 if c then
                     local cy = view.get_track_y_by_id(c.track_id, height)
                     if cy >= 0 then
@@ -714,6 +756,18 @@ function M.render(view)
     end
 
     if edges_to_render and #edges_to_render > 0 then
+        local clamp_hint = false
+        local has_explicit_clamps = next(clamped_edge_lookup) ~= nil
+        if view.drag_state
+            and view.drag_state.preview_clamped_delta
+            and requested_delta
+            and not rational_equals(
+                coerce_to_rational(view.drag_state.preview_clamped_delta, fps_num, fps_den),
+                requested_delta
+            ) then
+            clamp_hint = true
+        end
+
         local previews = edge_drag_renderer.build_preview_edges(
             edges_to_render,
             edge_delta,
@@ -753,7 +807,12 @@ function M.render(view)
                         ex = sx
                     end
                     local is_in = (normalized_edge == "in") or (p.raw_edge_type == "gap_after")
-                    local col = p.color or state_module.colors.edge_selected_available
+                    local key = string.format("%s:%s", tostring(p.clip_id or ""), tostring(p.raw_edge_type or p.edge_type or ""))
+                    local explicit_limit = clamped_edge_lookup[key] and true or false
+                    local col = state_module.colors.edge_selected_available
+                    if explicit_limit or (clamp_hint and not has_explicit_clamps) then
+                        col = state_module.colors.edge_selected_limit or col
+                    end
                     local bw = 8
                     local bt = 2
                     if is_in then

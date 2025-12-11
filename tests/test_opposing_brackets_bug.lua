@@ -70,24 +70,54 @@ print(string.format("  V2:      %d-%d (%d frames)",
     v2.timeline_start.frames + v2.duration.frames,
     v2.duration.frames))
 
--- CORRECT: V2 extends by 200
 assert(v2.duration.frames == 1000,
     string.format("V2 should extend by 200 (800→1000), got %d", v2.duration.frames))
 
--- BUG: Gap should close by 200 (1000→800), but instead grows by 200 (1000→1200)!
--- Professional NLEs apply same delta to multi-track selections (no negation)
-local expected_gap = 800  -- Should close by same amount V2 extended
-local bug_gap = 1200      -- Incorrectly grows due to delta negation
-
-if gap_size == expected_gap then
-    print("✅ FIXED: Gap closed by 200 frames (correct multi-track trim)")
-elseif gap_size == bug_gap then
-    print("❌ BUG: Gap grew by 200 frames due to incorrect opposing bracket negation")
-    print("   Opposing bracket negation should ONLY apply to edit points (adjacent clips, same track)")
-    error("Gap behavior incorrect - should be 800, got 1200")
-else
-    print(string.format("❌ UNEXPECTED: Gap is %d frames (expected 800 or 1200)", gap_size))
-    error("Unexpected gap size")
-end
+-- Cross-track edges share the lead delta sign, so dragging right opens the upstream gap.
+local expected_gap = 1200
+assert(gap_size == expected_gap,
+    string.format("Gap should open by 200 (expected %d, got %d)", expected_gap, gap_size))
+assert(v1_right.timeline_start.frames == 2700,
+    string.format("Downstream clip should shift right to 2700, got %d", v1_right.timeline_start.frames))
+print("✅ Multi-track opposing brackets open upstream gaps when dragging right")
 
 layout:cleanup()
+
+-- Additional regression: dragging left should close the gap.
+local layout_close = ripple_layout.create({
+    db_path = "/tmp/jve/test_opposing_brackets_bug_close.db",
+    clips = {
+        v1_right = {timeline_start = 2500},
+        v2 = {timeline_start = 1800, duration = 800}
+    }
+})
+local db_close = layout_close.db
+local clips_close = layout_close.clips
+local tracks_close = layout_close.tracks
+
+local cmd_close = Command.create("BatchRippleEdit", layout_close.project_id)
+cmd_close:set_parameter("sequence_id", layout_close.sequence_id)
+cmd_close:set_parameter("edge_infos", {
+    {clip_id = clips_close.v1_left.id, edge_type = "gap_after", track_id = tracks_close.v1.id, trim_type = "ripple"},
+    {clip_id = clips_close.v2.id, edge_type = "out", track_id = tracks_close.v2.id, trim_type = "ripple"}
+})
+cmd_close:set_parameter("lead_edge", {clip_id = clips_close.v2.id, edge_type = "out", track_id = tracks_close.v2.id, trim_type = "ripple"})
+cmd_close:set_parameter("delta_frames", -200)
+
+local result_close = command_manager.execute(cmd_close)
+assert(result_close.success, result_close.error_message or "Command failed for closing case")
+
+local v1_left_close = Clip.load(clips_close.v1_left.id, db_close)
+local v1_right_close = Clip.load(clips_close.v1_right.id, db_close)
+local v2_close = Clip.load(clips_close.v2.id, db_close)
+local gap_close = v1_right_close.timeline_start.frames - (v1_left_close.timeline_start.frames + v1_left_close.duration.frames)
+
+assert(v2_close.duration.frames == 600,
+    string.format("V2 should shrink by 200 (800→600) when dragging left, got %d", v2_close.duration.frames))
+assert(gap_close == 800,
+    string.format("Gap should close by 200 (expected 800, got %d)", gap_close))
+assert(v1_right_close.timeline_start.frames == 2300,
+    string.format("Downstream clip should shift left to 2300, got %d", v1_right_close.timeline_start.frames))
+print("✅ Multi-track opposing brackets close upstream gaps when dragging left")
+
+layout_close:cleanup()
