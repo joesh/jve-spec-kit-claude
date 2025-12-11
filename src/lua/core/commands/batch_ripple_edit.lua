@@ -50,6 +50,14 @@ local function compute_edge_boundary_time(edge_info, original_states_map)
     return nil
 end
 
+local function build_edge_key(edge_info)
+    if not edge_info then
+        return "::"
+    end
+    local source_id = edge_info.original_clip_id or edge_info.clip_id
+    return string.format("%s:%s", tostring(source_id or ""), tostring(edge_info.edge_type or ""))
+end
+
 local function hydrate_executed_mutations_if_missing(command)
     if not command or not command.get_parameter then
         error("BatchRippleEdit undo: invalid command handle")
@@ -357,20 +365,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return delta_min, delta_max
     end
 
-    -- Helper: Calculate gap closure constraint (how much can gap_before edge move left)
+    -- Helper: Calculate gap closure constraint
     local function compute_gap_close_constraint(edge_info, clip, original, neighbors, edited_lookup)
-        if edge_info.edge_type ~= "gap_before" then
+        if edge_info.edge_type ~= "gap_before" and edge_info.edge_type ~= "gap_after" then
             return nil
         end
 
         local close_limit = nil
         if edge_info.edge_type == "gap_before" then
+            -- gap_before moving left closes the gap
             close_limit = (clip.duration and clip.duration.frames) or 0
-        elseif neighbors.prev and not edited_lookup[neighbors.prev_id] then
-            close_limit = (original.timeline_start - neighbors.prev).frames
-        end
-        if close_limit then
-            return -close_limit
+            if close_limit then
+                return -close_limit  -- Negative because moving left
+            end
+        elseif edge_info.edge_type == "gap_after" then
+            -- gap_after moving left closes the gap
+            close_limit = (clip.duration and clip.duration.frames) or 0
+            if close_limit then
+                return -close_limit  -- Negative because moving left
+            end
         end
         return nil
     end
@@ -518,6 +531,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local modified_clips = {} -- Map id -> clip object (modified)
         local global_min_frames = -math.huge
         local global_max_frames = math.huge
+        local per_edge_constraints = {} -- Track individual edge constraints for limit coloring
+        local forced_clamped_edges = {}
         
         local function get_cached_clip(clip_id)
             return preloaded_clips[clip_id] or Clip.load_optional(clip_id, db)
@@ -614,47 +629,115 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
+        -- Gap clamp only when gap edge is leading OR delta would close the gap
+        local lead_is_gap = lead_edge_entry and (lead_edge_entry.edge_type == "gap_before" or lead_edge_entry.edge_type == "gap_after")
+
         if delta_rat < Rational.new(0, seq_fps_num, seq_fps_den) then
-            local min_gap = nil
+            -- Closing direction: check gap_before edges
+            local min_gap_frames = nil
+            local limiting_edges = {}
             for _, edge_info in ipairs(edge_infos) do
                 if edge_info.edge_type == "gap_before" then
                     local clip = get_cached_clip(edge_info.clip_id)
-                    if clip then
-                        local gap = clip.duration
-                        if gap and (not min_gap or gap < min_gap) then
-                            min_gap = gap
+                    if clip and clip.duration and clip.duration.frames then
+                        local gap_frames = clip.duration.frames
+                        if not min_gap_frames or gap_frames < min_gap_frames then
+                            min_gap_frames = gap_frames
+                            limiting_edges = {build_edge_key(edge_info)}
+                        elseif gap_frames == min_gap_frames then
+                            limiting_edges[#limiting_edges + 1] = build_edge_key(edge_info)
                         end
                     end
                 end
             end
-
-            if min_gap then
-                local max_close = Rational.new(-min_gap.frames, min_gap.fps_numerator, min_gap.fps_denominator)
+            if min_gap_frames then
+                local max_close = Rational.new(-min_gap_frames, seq_fps_num, seq_fps_den)
                 if delta_rat < max_close then
                     clamped_delta_rat = max_close
+                    for _, key in ipairs(limiting_edges) do
+                        forced_clamped_edges[key] = true
+                    end
                 end
             end
-        elseif delta_rat > Rational.new(0, seq_fps_num, seq_fps_den) then
-            local min_gap = nil
+        elseif delta_rat > Rational.new(0, seq_fps_num, seq_fps_den) and lead_is_gap then
+            -- Expanding direction: only clamp if gap edge is leading
+            local min_gap_frames = nil
+            local limiting_edges = {}
             for _, edge_info in ipairs(edge_infos) do
                 if edge_info.edge_type == "gap_after" then
                     local clip = get_cached_clip(edge_info.clip_id)
-                    if clip then
-                        local gap = clip.duration
-                        if gap and (not min_gap or gap < min_gap) then
-                            min_gap = gap
+                    if clip and clip.duration and clip.duration.frames then
+                        local gap_frames = clip.duration.frames
+                        if not min_gap_frames or gap_frames < min_gap_frames then
+                            min_gap_frames = gap_frames
+                            limiting_edges = {build_edge_key(edge_info)}
+                        elseif gap_frames == min_gap_frames then
+                            limiting_edges[#limiting_edges + 1] = build_edge_key(edge_info)
                         end
                     end
                 end
             end
-
-            if min_gap then
-                local max_extend = Rational.new(min_gap.frames, min_gap.fps_numerator, min_gap.fps_denominator)
+            if min_gap_frames then
+                local max_extend = Rational.new(min_gap_frames, seq_fps_num, seq_fps_den)
                 if delta_rat > max_extend then
                     clamped_delta_rat = max_extend
+                    for _, key in ipairs(limiting_edges) do
+                        forced_clamped_edges[key] = true
+                    end
                 end
             end
         end
+
+        -- Pre-load all edge clips and capture original states BEFORE constraint calculation
+        for _, edge_info in ipairs(edge_infos) do
+            local clip = get_cached_clip(edge_info.clip_id)
+            if clip and not original_states_map[edge_info.clip_id] then
+                original_states_map[edge_info.clip_id] = command_helper.capture_clip_state(clip)
+                preloaded_clips[edge_info.clip_id] = clip
+            end
+        end
+
+        -- Pre-calculate lead edge info and opposing bracket negation BEFORE constraint calculation
+        local lead_edge_for_constraints = lead_edge_entry or edge_infos[1]
+        local lead_boundary_time = nil
+        local lead_track_id = nil
+        local lead_bracket = nil
+        if lead_edge_for_constraints then
+            lead_boundary_time = compute_edge_boundary_time(lead_edge_for_constraints, original_states_map)
+            lead_track_id = get_edge_track_id(lead_edge_for_constraints, clip_lookup, original_states_map)
+            local lead_norm = lead_edge_for_constraints.normalized_edge or edge_utils.to_bracket(lead_edge_for_constraints.edge_type)
+            lead_bracket = bracket_for_normalized_edge(lead_norm)
+        end
+
+        -- Pre-calculate which edges will get negated delta (for correct constraint calculation)
+        local edge_will_negate = {}
+        local edge_shares_lead_point = {}
+        for _, edge_info in ipairs(edge_infos) do
+            local normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(edge_info.edge_type)
+            local edge_bracket = bracket_for_normalized_edge(normalized_edge)
+            local key = build_edge_key(edge_info)
+            if edge_info ~= lead_edge_for_constraints and edge_info.trim_type ~= "roll" and lead_bracket and edge_bracket then
+                local should_negate = false
+                local current_track_id = get_edge_track_id(edge_info, clip_track_lookup, original_states_map)
+                local share_edit_point = false
+                if lead_boundary_time and lead_track_id and current_track_id and current_track_id == lead_track_id then
+                    local boundary = compute_edge_boundary_time(edge_info, original_states_map)
+                    if boundary and boundary == lead_boundary_time then
+                        share_edit_point = true
+                    end
+                end
+                edge_shares_lead_point[key] = share_edit_point
+                if share_edit_point and edge_bracket ~= lead_bracket then
+                    should_negate = true
+                elseif lead_edge_for_constraints and is_gap_edge(lead_edge_for_constraints.edge_type) and edge_bracket ~= lead_bracket then
+                    should_negate = true
+                end
+                if should_negate then
+                    edge_will_negate[key] = true
+                end
+            end
+        end
+
         -- Prepopulate original states and neighbor bounds to constrain delta frames
         for _, edge_info in ipairs(edge_infos) do
             local clip_id = edge_info.clip_id
@@ -670,18 +753,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local original = original_states_map[clip_id]
                 local neighbors = neighbor_bounds_cache[clip_id]
                 local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
+                local edge_key = build_edge_key(edge_info)
+
+                -- Initialize per-edge constraint tracking
+                per_edge_constraints[edge_key] = {min = -math.huge, max = math.huge}
 
                 -- Roll constraint calculation
                 if edge_info.trim_type == "roll" then
                     local delta_min, delta_max = compute_roll_constraint(edge_info, clip, original, neighbors, edited_clip_lookup)
                     if delta_min then
                         log_debug(string.format("BatchRippleEdit: edge %s delta_min=%s", tostring(normalized_edge), tostring(delta_min)))
+                        per_edge_constraints[edge_key].min = math.max(per_edge_constraints[edge_key].min, delta_min)
                         if delta_min > global_min_frames then
                             global_min_frames = delta_min
                         end
                     end
                     if delta_max then
                         log_debug(string.format("BatchRippleEdit: edge %s delta_max=%s", tostring(normalized_edge), tostring(delta_max)))
+                        per_edge_constraints[edge_key].max = math.min(per_edge_constraints[edge_key].max, delta_max)
                         if delta_max < global_max_frames then
                             global_max_frames = delta_max
                         end
@@ -692,30 +781,61 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local close_limit = compute_gap_close_constraint(edge_info, clip, original, neighbors, edited_clip_lookup)
                 if close_limit then
                     log_debug(string.format("BatchRippleEdit: edge %s delta_min_close=%s", tostring(normalized_edge), tostring(close_limit)))
+                    per_edge_constraints[edge_key].min = math.max(per_edge_constraints[edge_key].min, close_limit)
                     if close_limit > global_min_frames then
                         global_min_frames = close_limit
                     end
                 end
 
-                -- Media boundary constraint (in-point can't extend beyond source_in = 0)
-                if normalized_edge == "in"
-                    and not is_gap_edge(edge_info.edge_type)
-                    and original.source_in
-                    and original.source_in.frames then
-                    local extend_limit = -original.source_in.frames
-                    if extend_limit > global_min_frames then
-                        global_min_frames = extend_limit
+                -- Media boundary constraints (skip for gap edges)
+                if is_gap_edge(edge_info.edge_type) then
+                    goto skip_media_constraints
+                end
+
+                -- Determine actual direction this edge will move (accounting for negation)
+                local will_negate = edge_will_negate[edge_key]
+                local effective_delta_positive = (delta_rat.frames > 0 and not will_negate) or (delta_rat.frames < 0 and will_negate)
+
+                if normalized_edge == "in" then
+                    if not effective_delta_positive and original.source_in then
+                        -- Moving left (extending in-point): can't go below source_in = 0
+                        local extend_limit = -original.source_in.frames
+                        per_edge_constraints[edge_key].min = math.max(per_edge_constraints[edge_key].min, extend_limit)
+                        if extend_limit > global_min_frames then
+                            global_min_frames = extend_limit
+                        end
+                    end
+                elseif normalized_edge == "out" then
+                    if effective_delta_positive and clip.media_id then
+                        -- Moving right (extending out-point): can't exceed media duration
+                        local media = preloaded_clips[clip.media_id] or require("models.media").load(clip.media_id, db)
+                        if media and media.duration and original.source_in and original.duration then
+                            local available_frames = media.duration.frames - original.source_in.frames - original.duration.frames
+
+                            -- If edge will be negated, flip constraint direction
+                            if will_negate then
+                                -- Edge gets negated: global min = -(available_frames)
+                                local global_constraint = -available_frames
+                                per_edge_constraints[edge_key].min = math.max(per_edge_constraints[edge_key].min, global_constraint)
+                                if global_constraint > global_min_frames then
+                                    global_min_frames = global_constraint
+                                end
+                            else
+                                -- No negation: straightforward max constraint
+                                per_edge_constraints[edge_key].max = math.min(per_edge_constraints[edge_key].max, available_frames)
+                                if available_frames < global_max_frames then
+                                    global_max_frames = available_frames
+                                end
+                            end
+                        end
                     end
                 end
+
+                ::skip_media_constraints::
             end
         end
 
-        local lead_boundary_time = nil
-        local lead_track_id = nil
-        if lead_edge_entry then
-            lead_boundary_time = compute_edge_boundary_time(lead_edge_entry, original_states_map)
-            lead_track_id = get_edge_track_id(lead_edge_entry, clip_lookup, original_states_map)
-        end
+        -- (lead_boundary_time, lead_track_id, lead_bracket, edge_will_negate already calculated above)
 
         -- Determine earliest ripple point from original states
         local earliest_ripple_hint = nil
@@ -822,25 +942,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local original_end = original.timeline_start + original.duration
 
             local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
-            local edge_bracket = bracket_for_normalized_edge(normalized_edge)
-            local applied_delta = clamped_delta_rat
             local current_track_id = get_edge_track_id(edge_info, clip_track_lookup, original_states_map)
-            local share_edit_point = false
-            if lead_boundary_time and lead_track_id and current_track_id and current_track_id == lead_track_id then
-                local boundary = compute_edge_boundary_time(edge_info, original_states_map)
-                if boundary and boundary == lead_boundary_time then
-                    share_edit_point = true
-                end
-            end
-            if edge_info.trim_type ~= "roll"
-                and lead_bracket
-                and edge_bracket
-                and edge_bracket ~= lead_bracket
-                and share_edit_point then
+            local key = build_edge_key(edge_info)
+            local applied_delta = clamped_delta_rat
+            if edge_will_negate[key] then
                 applied_delta = -clamped_delta_rat
             end
 
-            if edge_info.trim_type ~= "roll" and current_track_id and not track_ripple_orientation[current_track_id] then
+            local shares_lead_point = edge_shares_lead_point[key]
+            if edge_info.trim_type ~= "roll" and current_track_id and not track_ripple_orientation[current_track_id] and shares_lead_point then
                 track_ripple_orientation[current_track_id] = normalized_edge
             end
 
@@ -859,11 +969,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             if dry_run then
                 local preview_clip_id = clip.id
+                local is_gap = is_gap_edge(edge_info.edge_type)
                 table.insert(preview_affected_clips, {
                     clip_id = preview_clip_id,
                     new_start_value = clip.timeline_start,
                     new_duration = clip.duration,
-                    edge_type = normalized_edge
+                    edge_type = normalized_edge,
+                    raw_edge_type = edge_info.edge_type,  -- Tag for renderer filtering
+                    is_gap = is_gap  -- Explicit gap flag
                 })
             end
 
@@ -1088,12 +1201,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("executed_mutations", planned_mutations)
 
         if dry_run then
+            -- Determine which edges actually hit their constraints
+            local clamped_edges = {}
+            local final_delta = clamped_delta_rat.frames
+            for edge_key, limits in pairs(per_edge_constraints) do
+                -- Edge is clamped if the final delta matches its min or max constraint
+                if (limits.min ~= -math.huge and final_delta == limits.min) or
+                   (limits.max ~= math.huge and final_delta == limits.max) then
+                    clamped_edges[edge_key] = true
+                end
+            end
+            for key in pairs(forced_clamped_edges) do
+                clamped_edges[key] = true
+            end
+
             return true, {
                 planned_mutations = planned_mutations,
                 affected_clips = preview_affected_clips,
                 shifted_clips = preview_shifted_clips,
                 clamped_delta_ms = clamped_delta_rat:to_milliseconds(),
-                materialized_gaps = materialized_gap_ids
+                materialized_gaps = materialized_gap_ids,
+                clamped_edges = clamped_edges
             }
         end
 
