@@ -50,13 +50,13 @@
 - [x] (done) Fix BatchRipple gap lead clamp/negation bugs and extend regression tests.
 - [x] (done) Timeline gap edge selections should render handles just like clip edges; regression surfaced while restoring ripple handle semantics.
 - [x] (done) Re-align per-track ripple shift signs so opposing bracket clip selections move in the correct directions while gap edges retain their bracket mapping (multi-track regression restored).
-- [ ] (needs review) Update timeline edit-zone cursors so the three zones show ], ]|[, and [ glyphs instead of generic trim arrows.
-- [ ] (pending) Timeline edge clicks must keep existing selections when re-clicked without modifiers, and Shift clicks should toggle edges like Cmd; add regression test coverage.
-- [ ] Remove the stub `edge_utils.normalize_edge_type` and update any call sites so edge normalization only happens through the real helpers; Rule 2.17 forbids no-op stubs.
+- [x] (done) Update timeline edit-zone cursors so the three zones show ], ]|[, and [ glyphs instead of generic trim arrows (custom cursors in `src/lua/qt_bindings/misc_bindings.cpp`).
+- [x] (done) Timeline edge clicks must keep existing selections when re-clicked without modifiers, and Shift clicks should toggle edges like Cmd; regression in `tests/test_timeline_edge_clicks.lua`.
+- [x] (done) Remove the stub `edge_utils.normalize_edge_type` and update any call sites so edge normalization only happens through the real helpers; Rule 2.17 forbids no-op stubs.
 - [x] (done) BatchRippleEdit refactor/test coverage follow-up per latest review (helper split, constant extraction, new regression tests).
 - [ ] Split `timeline_view_renderer.render` edge-preview block into small helpers so bracket geometry, preview clip lookup, and rectangle drawing each live in their own functions (Rule 2.26).
 - [ ] Consolidate the duplicated gap-closure constraint logic in `batch_ripple_edit.lua` by routing every caller through `compute_gap_close_constraint` so changes stay in one place.
 - [ ] Standardize command error returns (BatchRippleEdit/RippleEdit/etc.) so they all return `{success=false,error_message=...}` instead of sometimes `false`.
 - [ ] Add docstrings for the public helpers touched in the ripple stack (`create_temp_gap_clip`, `apply_edge_ripple`, `pick_edges_for_track`, etc.) describing parameters/edge cases.
-- [ ] Add regression coverage for rolling edits when one side of the edit is a gap (Rule 10) so gap rolls don't regress silently.
+- [x] (done) Add regression coverage for rolling edits when one side of the edit is a gap (Rule 10) so gap rolls don't regress silently (`tests/test_edge_picker_gap_roll.lua`, `tests/test_edge_picker_gap_ripple.lua`, `tests/test_edge_picker_gap_zones.lua`).
 - [ ] Document and/or consolidate the `timeline_state.set_edge_selection` vs `set_edge_selection_raw` APIs so callers know when raw mode is required.

@@ -221,6 +221,22 @@ local function build_temp_gap_preview_clip(preview, seq_rate)
     }
 end
 
+local function get_preview_clip(clip_lookup, preview_entry, seq_rate)
+    if not preview_entry or not preview_entry.clip_id then
+        return nil
+    end
+    local clip = clip_lookup[preview_entry.clip_id]
+    if clip then
+        return clip
+    end
+    local gap_clip = build_temp_gap_preview_clip(preview_entry, seq_rate)
+    if gap_clip then
+        clip_lookup[preview_entry.clip_id] = gap_clip
+        return gap_clip
+    end
+    return nil
+end
+
 local function normalize_lead_edge(lead_edge, clip_lookup)
     assert(lead_edge and lead_edge.clip_id, "lead_edge is required for edge preview")
     return {
@@ -735,6 +751,9 @@ function M.render(view)
                             local fps = state_module.get_sequence_frame_rate()
                             new_start = Rational.new(new_start, fps.fps_numerator, fps.fps_denominator)
                         end
+                        if rational_equals(new_start, c.timeline_start) then
+                            goto continue_shift_highlight
+                        end
                         local sx = state_module.time_to_pixel(new_start, width)
                         local cw = math.floor((c.duration / viewport_duration_rational) * width) - 1
                         local ch = th - 10
@@ -746,6 +765,7 @@ function M.render(view)
                         timeline.add_rect(view.widget, sx + cw - 2, cy, 2, ch, col)
                     end
                 end
+                ::continue_shift_highlight::
             end
         end
     end

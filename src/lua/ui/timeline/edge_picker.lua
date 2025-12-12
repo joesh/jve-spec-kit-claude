@@ -93,6 +93,11 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
     local center_half = math.max(1, math.floor(roll_zone / 2))
     local left = b.left
     local right = b.right
+    local function edge_is_gap(entry)
+        if not entry then return false end
+        return entry.edge_type == "gap_before" or entry.edge_type == "gap_after"
+    end
+
     local candidates = {}
     if left then table.insert(candidates, {clip = left.clip, clip_id = left.clip_id, edge = left.edge_type, distance = hit.dist}) end
     if right then table.insert(candidates, {clip = right.clip, clip_id = right.clip_id, edge = right.edge_type, distance = hit.dist}) end
@@ -105,7 +110,11 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
     -- Explicit nil checks prevent Lua truthiness issues (false vs nil)
     local can_roll = (left ~= nil) and (right ~= nil)
         and (left.clip_id ~= nil) and (right.clip_id ~= nil)
-        and (left.clip_id ~= right.clip_id)
+    if can_roll then
+        if left.clip_id == right.clip_id and not (edge_is_gap(left) or edge_is_gap(right)) then
+            can_roll = false
+        end
+    end
     local dragged_candidate = nil
 
     if can_roll and in_center_zone then

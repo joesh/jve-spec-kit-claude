@@ -39,15 +39,25 @@ assert(gap_pick.roll_used == false, "Gap hover should not trigger roll")
 assert(#gap_pick.selection == 1, "Gap hover should pick single edge")
 assert(gap_pick.selection[1].edge_type == "gap_before", "Gap hover should select gap_before edge")
 
--- Hover exactly on the clip boundary -> prefer the clip edge (user grabbing the handle).
+-- Hover exactly on the clip boundary -> treat as roll between gap and clip.
 local clip_pick = edge_picker.pick_edges({clip}, boundary_px, 1000, {
     time_to_pixel = time_to_pixel,
     edge_zone = 10,
     roll_zone = roll_zone
 })
-assert(clip_pick.roll_used == false, "Clip-only boundary should not force roll")
-assert(#clip_pick.selection == 1, "Clip boundary hover should select single edge")
-assert(clip_pick.selection[1].edge_type == "in", "Clip boundary hover should select clip in edge")
-assert(clip_pick.selection[1].trim_type == "ripple", "Clip boundary hover must be treated as ripple")
+assert(clip_pick.roll_used == true, "Clip + gap boundary should allow roll selection")
+assert(#clip_pick.selection == 2, "Roll boundary hover should select both edges")
+local seen_gap = false
+local seen_clip = false
+for _, entry in ipairs(clip_pick.selection) do
+    if entry.edge_type == "gap_before" then
+        seen_gap = true
+    elseif entry.edge_type == "in" then
+        seen_clip = true
+    end
+    assert(entry.trim_type == "roll", "Roll boundary hover must mark entries as roll")
+end
+assert(seen_gap, "Roll boundary hover should include the gap edge")
+assert(seen_clip, "Roll boundary hover should include the clip edge")
 
-print("✅ Edge picker treats gap boundaries as ripple selections")
+print("✅ Edge picker prefers ripple when off-center and roll in the center zone")

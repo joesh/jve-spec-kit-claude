@@ -66,9 +66,14 @@ do
     assert(left_side.selection[1].edge_type == "gap_before", "gap left zone should select gap_before edge")
 
     local center = pick({clip}, boundary)
-    assert(center.roll_used == false, "gap/clip center should not roll without a neighboring clip")
-    assert(#center.selection == 1, "gap/clip center should pick a single edge")
-    assert(center.selection[1].edge_type == "in", "gap center should prefer the clip edge when grabbing the handle")
+    assert(center.roll_used == true, "gap/clip center should roll with the neighboring gap")
+    assert(#center.selection == 2, "gap/clip center should select both edges for roll")
+    local gap_seen, clip_seen = false, false
+    for _, entry in ipairs(center.selection) do
+        if entry.edge_type == "gap_before" then gap_seen = true end
+        if entry.edge_type == "in" then clip_seen = true end
+    end
+    assert(gap_seen and clip_seen, "gap/clip center roll should include both edges")
 
     local right_side = pick({clip}, boundary + (ROLL_RADIUS + 2))
     assert(right_side.roll_used == false, "gap right zone should not roll")
