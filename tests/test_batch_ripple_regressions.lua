@@ -133,7 +133,7 @@ do
 
     local right_after = Clip.load(clips.v1_right.id, layout.db)
     assert(right_after.timeline_start.frames == clips.v1_right.timeline_start + 200,
-        "Gap roll should push the trailing clip right by the delta")
+        string.format("Gap roll should push the trailing clip right by 200, got %d", right_after.timeline_start.frames))
 
     layout:cleanup()
 end

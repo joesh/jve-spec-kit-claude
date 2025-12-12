@@ -819,6 +819,53 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             ::continue_edge_process::
         end
 
+        -- Phase 2.5: Translate gap clip modifications to real clip movements
+        -- Gap edges create temp gap clips, but changes must propagate to adjacent real clips
+        -- ONLY if the adjacent clip doesn't have its own edge selected (to avoid double-counting)
+        for gap_id, gap_clip in pairs(ctx.modified_clips) do
+            if gap_clip and gap_clip.is_temp_gap then
+                local original_gap = ctx.original_states_map[gap_id]
+                if original_gap then
+                    -- If gap's timeline_start moved, move the right clip (unless it has its own in-point selected)
+                    if gap_clip.gap_right_id and gap_clip.timeline_start ~= original_gap.timeline_start then
+                        -- Check if right clip has its own in-point edge selected
+                        local right_has_in_edge = false
+                        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+                            if edge_info.clip_id == gap_clip.gap_right_id and edge_info.edge_type == "in" then
+                                right_has_in_edge = true
+                                break
+                            end
+                        end
+
+                        if not right_has_in_edge then
+                            local gap_shift = gap_clip.timeline_start - original_gap.timeline_start
+                            local right_clip = ctx.modified_clips[gap_clip.gap_right_id] or ctx.clip_lookup[gap_clip.gap_right_id]
+                            if right_clip then
+                                if not ctx.modified_clips[gap_clip.gap_right_id] then
+                                    -- Clone before modifying
+                                    right_clip = {
+                                        id = right_clip.id,
+                                        track_id = right_clip.track_id,
+                                        timeline_start = right_clip.timeline_start,
+                                        duration = right_clip.duration,
+                                        source_in = right_clip.source_in,
+                                        source_out = right_clip.source_out,
+                                        fps_numerator = right_clip.fps_numerator,
+                                        fps_denominator = right_clip.fps_denominator
+                                    }
+                                    ctx.modified_clips[gap_clip.gap_right_id] = right_clip
+                                    if not ctx.original_states_map[gap_clip.gap_right_id] then
+                                        ctx.original_states_map[gap_clip.gap_right_id] = ctx.clip_lookup[gap_clip.gap_right_id]
+                                    end
+                                end
+                                right_clip.timeline_start = right_clip.timeline_start + gap_shift
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
         local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
         if ctx.has_ripple_edge then
             ctx.downstream_shift_rat = Rational.new(ctx.clamped_delta_rat.frames * shift_factor, ctx.seq_fps_num, ctx.seq_fps_den)

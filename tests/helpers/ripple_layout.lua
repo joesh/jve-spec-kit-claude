@@ -102,7 +102,15 @@ local DEFAULT_CONFIG = {
 
 local function build_config(opts)
     local cfg = deep_copy(DEFAULT_CONFIG)
-    merge_table(cfg, opts)
+    -- Don't merge opts directly - it would create incomplete clip entries
+    -- Instead, merge only non-clip sections first
+    if opts then
+        for k, v in pairs(opts) do
+            if k ~= "clips" and k ~= "tracks" and k ~= "media" then
+                merge_table(cfg, {[k] = v})
+            end
+        end
+    end
 
     if opts and opts.tracks then
         for key, override in pairs(opts.tracks) do
@@ -121,9 +129,40 @@ local function build_config(opts)
     end
 
     if opts and opts.clips then
+        -- Handle order override first
+        if opts.clips.order then
+            cfg.clips.order = opts.clips.order
+        end
+
         for key, override in pairs(opts.clips) do
-            assert(cfg.clips[key], string.format("Unknown clip override '%s'", key))
-            merge_table(cfg.clips[key], override)
+            if key == "order" then
+                -- Already handled above
+            elseif cfg.clips[key] then
+                -- Merge with existing default clip
+                merge_table(cfg.clips[key], override)
+            else
+                -- Add new clip with inferred defaults
+                local inferred_track_key = key:match("^([av]%d+)") or "v1"
+                assert(cfg.tracks[inferred_track_key], string.format("Track %s does not exist for new clip %s", inferred_track_key, key))
+                cfg.clips[key] = {
+                    id = "clip_" .. key,
+                    name = key:gsub("_", " "):gsub("(%a)(%a*)", function(first, rest)
+                        return first:upper() .. rest
+                    end),
+                    track_key = inferred_track_key,
+                    media_key = "main",
+                    timeline_start = override.timeline_start or 0,
+                    duration = override.duration or 1000,
+                    source_in = override.source_in or 0,
+                    fps_numerator = override.fps_numerator or cfg.fps_numerator,
+                    fps_denominator = override.fps_denominator or cfg.fps_denominator
+                }
+                merge_table(cfg.clips[key], override)
+                -- Add to order list only if not already present
+                if not opts.clips.order then
+                    table.insert(cfg.clips.order, key)
+                end
+            end
         end
     end
 

@@ -124,18 +124,12 @@ local roll_edges = {
 
 exec_batch(roll_edges, 200)
 
-local function approx_eq(a, b)
-    return math.abs(a - b) < 20 -- within 20ms (half frame)
-end
-
 -- Verify roll pair only adjusts boundary without rippling downstream clips
-print("DEBUG: clip_c start = " .. tostring(fetch_clip_start("clip_c")))
-print("DEBUG: clip_a dur = " .. tostring(fetch_clip_duration("clip_a")))
-print("DEBUG: clip_b start = " .. tostring(fetch_clip_start("clip_b")))
-
-assert(approx_eq(fetch_clip_start("clip_c"), 2000), "Roll edit should not ripple clip C")
-assert(approx_eq(fetch_clip_duration("clip_a"), 1200), "Clip A should extend by roll amount")
-assert(approx_eq(fetch_clip_start("clip_b"), 1200), "Clip B should shift with roll boundary")
+-- Frame-to-ms conversion is exact: integer frames * (1000ms / 30fps) rounds deterministically
+-- 60 frames @ 30fps = 2000ms, 36 frames = 1200ms (exact integer results)
+assert(fetch_clip_start("clip_c") == 2000, "Roll edit should not ripple clip C")
+assert(fetch_clip_duration("clip_a") == 1200, "Clip A should extend by roll amount")
+assert(fetch_clip_start("clip_b") == 1200, "Clip B should shift with roll boundary")
 
 local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed after roll test")
@@ -149,61 +143,25 @@ local mixed_edges = {
 
 exec_batch(mixed_edges, 150)
 
--- 150ms = 4.5 frames -> rounds to 5 frames.
--- Roll +5 frames.
--- A end extends to 35. B start moves to 35.
--- B out ripple +5 frames. B duration becomes 30 (original) - 5 (roll in) + 5 (ripple out) = 30.
--- C shifts +5 frames. 60 -> 65.
-
--- 35 frames = 1166.6ms (approx 1167)
--- 30 frames = 1000ms.
--- 65 frames = 2166.6ms (approx 2167).
-
--- Wait, test assertions use hardcoded 1150/2150.
--- 150ms is NOT exact frames at 30fps.
--- 150 / 33.333 = 4.5 frames.
--- Rounds to 5 frames? Or 4?
--- Rational.from_seconds(0.15, 30, 1) -> 0.15 * 30 = 4.5. math.floor(4.5 + 0.5) = 5.
+-- Frame snapping: 150ms @ 30fps = 4.5 frames → rounds to 5 frames
+-- Roll +5 frames: A extends to 35 frames, B start moves to 35 frames
+-- B out ripple +5 frames: B duration = 30 (original) - 5 (roll in) + 5 (ripple out) = 30 frames
+-- C shifts +5 frames: 60 → 65 frames
+--
+-- Frame-to-ms conversion (fetch_clip_* functions):
+--   35 frames: floor(35 / 30.0 * 1000.0 + 0.5) = floor(1166.67 + 0.5) = 1167ms
+--   30 frames: floor(30 / 30.0 * 1000.0 + 0.5) = 1000ms
+--   65 frames: floor(65 / 30.0 * 1000.0 + 0.5) = floor(2166.67 + 0.5) = 2167ms
 
 local mixed_c_start = fetch_clip_start("clip_c")
 local mixed_a_duration = fetch_clip_duration("clip_a")
 local mixed_b_start = fetch_clip_start("clip_b")
 local mixed_b_duration = fetch_clip_duration("clip_b")
 
--- 5 frames is 166.66ms.
--- Let's update assertions to match frame snapping.
--- 35 frames = 1167ms.
--- 65 frames = 2167ms.
-
--- Actually, let's verify what the test expects vs reality.
--- If the previous system didn't snap, 150ms was exact.
--- Now we snap.
--- 150ms -> 5 frames (167ms).
-
--- assert(mixed_c_start == 2150, "Ripple edge should shift clip C forward by delta")
--- assert(mixed_a_duration == 1150, "Roll pair should adjust clip A duration")
--- assert(mixed_b_start == 1150, "Roll pair should update clip B start")
--- assert(mixed_b_duration == 1000, "B out ripple should extend to fill the rolled boundary")
-
--- I will update the assertions to be frame-aligned (nearest frame).
--- 5 frames * 33.33ms = 167ms.
--- Base 1000ms = 30 frames.
--- A dur = 30 + 5 = 35 frames = 1167.
--- B start = 35 frames = 1167.
--- B dur = 30 frames = 1000.
--- C start = 60 + 5 = 65 frames = 2167.
-
--- To make the test robust, I will use tolerant assertions or update exact values.
--- Updating to exact frame values (approx ms).
-
-local function approx_eq(a, b)
-    return math.abs(a - b) < 20 -- within 20ms (half frame)
-end
-
-assert(approx_eq(mixed_c_start, 2167), "Ripple edge should shift clip C forward by delta (snapped)")
-assert(approx_eq(mixed_a_duration, 1167), "Roll pair should adjust clip A duration (snapped)")
-assert(approx_eq(mixed_b_start, 1167), "Roll pair should update clip B start (snapped)")
-assert(approx_eq(mixed_b_duration, 1000), "B out ripple should extend to fill the rolled boundary")
+assert(mixed_c_start == 2167, "Ripple edge should shift clip C forward by 5 frames (2167ms)")
+assert(mixed_a_duration == 1167, "Roll pair should adjust clip A duration to 35 frames (1167ms)")
+assert(mixed_b_start == 1167, "Roll pair should update clip B start to 35 frames (1167ms)")
+assert(mixed_b_duration == 1000, "B out ripple should maintain 30 frame duration (1000ms)")
 
 local undo_result2 = command_manager.undo()
 assert(undo_result2.success, undo_result2.error_message or "Undo failed after mixed test")
