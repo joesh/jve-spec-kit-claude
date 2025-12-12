@@ -339,6 +339,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return edge_type == "gap_after" or edge_type == "gap_before"
     end
 
+    local function compute_gap_partner_key(edge_info, neighbors)
+        if not neighbors then
+            return nil
+        end
+        if edge_info.edge_type == "gap_after" and neighbors.next_id then
+            return build_edge_key({clip_id = neighbors.next_id, edge_type = "gap_before"})
+        elseif edge_info.edge_type == "gap_before" and neighbors.prev_id then
+            return build_edge_key({clip_id = neighbors.prev_id, edge_type = "gap_after"})
+        end
+        return nil
+    end
+
     -- Helper: Calculate roll constraint (min/max delta) for an edge based on neighbor positions
     local function compute_roll_constraint(edge_info, clip, original, neighbors, edited_lookup)
         local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
@@ -568,6 +580,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local normalized = edge_info.normalized_edge or edge_utils.to_bracket(edge_info.edge_type)
             local edge_bracket = bracket_for_normalized_edge(normalized)
             local key = build_edge_key(edge_info)
+            ctx.edge_info_for_key[key] = edge_info
             if ctx.lead_edge_entry and edge_info ~= ctx.lead_edge_entry and edge_info.trim_type ~= "roll" then
                 if lead_bracket and edge_bracket and edge_bracket ~= lead_bracket then
                     ctx.edge_will_negate[key] = true
@@ -597,12 +610,47 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
+    local function update_global_min(ctx, edge_key, value)
+        if not value or value == -math.huge then
+            return
+        end
+        ctx.global_min_edge_keys = ctx.global_min_edge_keys or {}
+        if value > ctx.global_min_frames then
+            ctx.global_min_frames = value
+            ctx.global_min_edge_keys = {}
+        end
+        if edge_key and value == ctx.global_min_frames then
+            ctx.global_min_edge_keys[edge_key] = true
+        end
+    end
+
+    local function update_global_max(ctx, edge_key, value)
+        if not value or value == math.huge then
+            return
+        end
+        ctx.global_max_edge_keys = ctx.global_max_edge_keys or {}
+        if value < ctx.global_max_frames then
+            ctx.global_max_frames = value
+            ctx.global_max_edge_keys = {}
+        end
+        if edge_key and value == ctx.global_max_frames then
+            ctx.global_max_edge_keys[edge_key] = true
+        end
+    end
+
     local function clamp_downstream_overlaps(ctx)
         local earliest = ctx.earliest_ripple_hint
         if not earliest then
             return
         end
 
+        local ripple_sign = 1
+        if ctx.lead_edge_entry then
+            local normalized = ctx.lead_edge_entry.normalized_edge or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type)
+            if normalized == "in" then
+                ripple_sign = -1
+            end
+        end
         for _, clip in ipairs(ctx.all_clips or {}) do
             if clip.id
                 and not ctx.edited_clip_lookup[clip.id]
@@ -612,15 +660,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local original = command_helper.capture_clip_state(clip)
                 local prev_bound, next_bound, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, original, clip.id)
                 if prev_bound and not ctx.edited_clip_lookup[prev_id] then
-                    local delta_min = (prev_bound - clip.timeline_start).frames
-                    if delta_min and delta_min > ctx.global_min_frames then
-                        ctx.global_min_frames = delta_min
+                    local prev_gap = (clip.timeline_start - prev_bound).frames
+                    if prev_gap and prev_gap > 0 then
+                        local implied_key = build_edge_key({clip_id = clip.id, edge_type = "gap_before"})
+                        if ripple_sign >= 0 then
+                            update_global_min(ctx, implied_key, -prev_gap)
+                        else
+                            update_global_max(ctx, implied_key, prev_gap)
+                        end
                     end
                 end
                 if next_bound and not ctx.edited_clip_lookup[next_id] then
-                    local delta_max = (next_bound - (clip.timeline_start + clip.duration)).frames
-                    if delta_max and delta_max < ctx.global_max_frames then
-                        ctx.global_max_frames = delta_max
+                    local next_gap = (next_bound - (clip.timeline_start + clip.duration)).frames
+                    if next_gap and next_gap > 0 then
+                        local implied_key = build_edge_key({clip_id = clip.id, edge_type = "gap_after"})
+                        if ripple_sign >= 0 then
+                            update_global_max(ctx, implied_key, next_gap)
+                        else
+                            update_global_min(ctx, implied_key, -next_gap)
+                        end
                     end
                 end
             end
@@ -640,6 +698,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
         ctx.clamped_delta_rat = Rational.new(delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
+        ctx.clamp_direction = 0
+        if ctx.delta_rat and ctx.delta_rat.frames and ctx.clamped_delta_rat.frames then
+            local diff = ctx.delta_rat.frames - ctx.clamped_delta_rat.frames
+            if diff > 0 then
+                ctx.clamp_direction = 1
+            elseif diff < 0 then
+                ctx.clamp_direction = -1
+            end
+        end
         ctx.command:set_parameter("clamped_delta_ms", ctx.clamped_delta_rat:to_milliseconds())
         return delta_frames
     end
@@ -647,6 +714,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function compute_constraints(ctx, db)
         ctx.global_min_frames = -math.huge
         ctx.global_max_frames = math.huge
+        ctx.global_min_edge_keys = {}
+        ctx.global_max_edge_keys = {}
 
         for _, edge_info in ipairs(ctx.edge_infos or {}) do
             local clip = ensure_clip_loaded(ctx, edge_info.clip_id, db)
@@ -661,20 +730,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local edge_key = build_edge_key(edge_info)
 
                 ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
+                if is_gap_edge(edge_info.edge_type) then
+                    local partner_key = compute_gap_partner_key(edge_info, neighbors)
+                    if partner_key then
+                        ctx.gap_partner_edges[edge_key] = partner_key
+                    end
+                end
 
                 if edge_info.trim_type == "roll" then
                     local delta_min, delta_max = compute_roll_constraint(edge_info, clip, ctx.original_states_map[edge_info.clip_id], neighbors, ctx.edited_clip_lookup)
                     if delta_min then
                         ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, delta_min)
-                        if ctx.per_edge_constraints[edge_key].min > ctx.global_min_frames then
-                            ctx.global_min_frames = ctx.per_edge_constraints[edge_key].min
-                        end
+                        update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
                     end
                     if delta_max then
                         ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, delta_max)
-                        if ctx.per_edge_constraints[edge_key].max < ctx.global_max_frames then
-                            ctx.global_max_frames = ctx.per_edge_constraints[edge_key].max
-                        end
+                        update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
                     end
                 end
 
@@ -682,15 +753,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local gap_min, gap_max = compute_gap_close_constraint(edge_info, clip, will_negate)
                 if gap_min then
                     ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, gap_min)
-                    if ctx.per_edge_constraints[edge_key].min > ctx.global_min_frames then
-                        ctx.global_min_frames = ctx.per_edge_constraints[edge_key].min
-                    end
+                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
                 end
                 if gap_max then
                     ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, gap_max)
-                    if ctx.per_edge_constraints[edge_key].max < ctx.global_max_frames then
-                        ctx.global_max_frames = ctx.per_edge_constraints[edge_key].max
-                    end
+                    update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
                 end
 
                 if not is_gap_edge(edge_info.edge_type) then
@@ -700,9 +767,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         if not effective_delta_positive and ctx.original_states_map[edge_info.clip_id].source_in then
                             local extend_limit = -ctx.original_states_map[edge_info.clip_id].source_in.frames
                             ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, extend_limit)
-                            if ctx.per_edge_constraints[edge_key].min > ctx.global_min_frames then
-                                ctx.global_min_frames = ctx.per_edge_constraints[edge_key].min
-                            end
+                            update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
                         end
                     elseif normalized_edge == "out" then
                         if effective_delta_positive and clip.media_id then
@@ -712,14 +777,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                                 if will_negate then
                                     local global_constraint = -available_frames
                                     ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_constraint)
-                                    if ctx.per_edge_constraints[edge_key].min > ctx.global_min_frames then
-                                        ctx.global_min_frames = ctx.per_edge_constraints[edge_key].min
-                                    end
+                                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
                                 else
                                     ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, available_frames)
-                                    if ctx.per_edge_constraints[edge_key].max < ctx.global_max_frames then
-                                        ctx.global_max_frames = ctx.per_edge_constraints[edge_key].max
-                                    end
+                                    update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
                                 end
                             end
                         end
@@ -733,8 +794,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if ctx.command:get_parameter("__force_conflict_delta") then
             ctx.global_min_frames = 1
             ctx.global_max_frames = 0
+            ctx.global_min_edge_keys = {}
+            ctx.global_max_edge_keys = {}
         end
         clamp_delta(ctx)
+        if ctx.clamp_direction ~= 0 then
+            local function promote_implied_edges(source_map)
+                if not source_map then
+                    return
+                end
+                for key in pairs(source_map) do
+                    if key and not ctx.edge_info_for_key[key] then
+                        ctx.forced_clamped_edges[key] = true
+                    end
+                end
+            end
+            if ctx.clamp_direction == -1 then
+                promote_implied_edges(ctx.global_min_edge_keys)
+            elseif ctx.clamp_direction == 1 then
+                promote_implied_edges(ctx.global_max_edge_keys)
+            end
+        end
     end
 
     local function process_edge_trims(ctx, db)
@@ -1086,6 +1166,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
+    local function key_matches_clamp_sources(ctx, original_key, target_key)
+        local relevant_map = nil
+        if ctx.clamp_direction == -1 then
+            relevant_map = ctx.global_min_edge_keys
+        elseif ctx.clamp_direction == 1 then
+            relevant_map = ctx.global_max_edge_keys
+        end
+        if not relevant_map or not next(relevant_map) then
+            return true
+        end
+        if relevant_map[target_key] then
+            return true
+        end
+        if original_key and relevant_map[original_key] then
+            relevant_map[target_key] = true
+            relevant_map[original_key] = nil
+            return true
+        end
+        return false
+    end
+
     local function finalize_execution(ctx, db)
         ctx.command:set_parameter("original_states", ctx.original_states_map)
         ctx.command:set_parameter("executed_mutations", ctx.planned_mutations)
@@ -1094,9 +1195,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local clamped_edges = {}
             local final_delta = ctx.clamped_delta_rat.frames
             for edge_key, limits in pairs(ctx.per_edge_constraints) do
-                if (limits.min ~= -math.huge and final_delta == limits.min) or
-                   (limits.max ~= math.huge and final_delta == limits.max) then
-                    clamped_edges[edge_key] = true
+                local min_hit = (limits.min ~= -math.huge and final_delta == limits.min)
+                local max_hit = (limits.max ~= math.huge and final_delta == limits.max)
+                if min_hit or max_hit then
+                    local target_key = edge_key
+                    if key_matches_clamp_sources(ctx, edge_key, target_key) then
+                        clamped_edges[target_key] = true
+                    end
                 end
             end
             for key in pairs(ctx.forced_clamped_edges or {}) do
@@ -1142,9 +1247,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             modified_clips = {},
             per_edge_constraints = {},
             forced_clamped_edges = {},
+            gap_partner_edges = {},
+            edge_info_for_key = {},
             materialized_gap_ids = {},
             global_min_frames = -math.huge,
             global_max_frames = math.huge,
+            global_min_edge_keys = {},
+            global_max_edge_keys = {},
+            clamp_direction = 0,
             clips_marked_delete = {},
             track_shift_amounts = {},
             track_shift_seeds = {},

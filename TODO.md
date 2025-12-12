@@ -60,3 +60,4 @@
 - [ ] Add docstrings for the public helpers touched in the ripple stack (`create_temp_gap_clip`, `apply_edge_ripple`, `pick_edges_for_track`, etc.) describing parameters/edge cases.
 - [x] (done) Add regression coverage for rolling edits when one side of the edit is a gap (Rule 10) so gap rolls don't regress silently (`tests/test_edge_picker_gap_roll.lua`, `tests/test_edge_picker_gap_ripple.lua`, `tests/test_edge_picker_gap_zones.lua`).
 - [ ] Document and/or consolidate the `timeline_state.set_edge_selection` vs `set_edge_selection_raw` APIs so callers know when raw mode is required.
+- [x] Fix ripple clamp attribution so implied gap closures report the blocking gap edge and renderer color logic only highlights the actual limiter (Rule 8.5).

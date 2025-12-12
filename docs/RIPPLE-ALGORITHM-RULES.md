@@ -7,6 +7,7 @@ Ripple alg rules
 6. Opposing edges are [ and ].
 7. If an item has an edge selected and the other edge of the edit ISN’T selected then the action is a RIPPLE. The length of the timeline WILL CHANGE. Dragging the edge changes the size of the item by drag-size. Only the length of the item changes, not its start position.
 8. All items that start at or after the edge are shifted in the timeline by drag-size.
+8.5 In any track where items are shifted but don't have edges selected, there will be an implied selected edge. That's the non-opposing edge that, if selected, would make the ripple behave the same. Note that this implied edge will always be a gap edge. Sometimes there's no gap - ie two clips are adjacent and no edge is selected, the ripple will immediately block. In that case the zero-length gap between the two clips is the one with the implied edge.
 9. If both sides of an edit are selected then the action is a ROLL. The length of the timeline WILL NOT CHANGE so this change is local to these edges and bounded by the sizes of the clips. One item will lengthen and the other shrink. No other clips will have to move.
 10. Multiple tracks can be involved and each edit may have either a ripple or roll selection.
 11. If the edges selected have opposing directions - ie [ and ] - then the delta is negated for the opposing selections.

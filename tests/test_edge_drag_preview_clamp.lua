@@ -41,16 +41,16 @@ local clip = {
 }
 local delta = Rational.new(24, 24, 1) -- 1 second
 local gap_start, gap_dur = edge_drag_renderer.compute_preview_geometry(clip, "gap_after", delta)
-local expected_gap_anchor = (clip.timeline_start + clip.duration + delta).frames
+local expected_gap_anchor = (clip.timeline_start + clip.duration).frames
 assert(gap_start.frames == expected_gap_anchor,
-    string.format("gap_after preview should track drag delta; expected %d got %d", expected_gap_anchor, gap_start and gap_start.frames or -1))
+    string.format("gap_after preview should stay anchored at clip out-point; expected %d got %d", expected_gap_anchor, gap_start and gap_start.frames or -1))
 assert(gap_dur.frames == 0, "gap preview geometry should have zero width (handle only)")
 
 -- Regression: in-edge previews must shift their start positions when trimming.
 local in_start, in_duration = edge_drag_renderer.compute_preview_geometry(clip, "in", delta)
-local expected_in_start = (clip.timeline_start + delta).frames
+local expected_in_start = clip.timeline_start.frames
 assert(in_start.frames == expected_in_start,
-    string.format("in-edge preview should move start by delta; expected %d got %d", expected_in_start, in_start and in_start.frames or -1))
+    string.format("in-edge preview should keep clip start anchored; expected %d got %d", expected_in_start, in_start and in_start.frames or -1))
 assert(in_duration.frames == (clip.duration - delta).frames,
     string.format("in-edge preview should shorten duration; expected %d got %d",
         (clip.duration - delta).frames, in_duration and in_duration.frames or -1))

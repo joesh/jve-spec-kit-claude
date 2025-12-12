@@ -305,7 +305,88 @@ do
     os.remove(TEST_DB)
 end
 
--- Scenario 7: Dry run previews must reflect retry clamping for downstream clips.
+-- Scenario 7: Expanding a gap on one track should not be blocked by a neighboring track's previous clip.
+do
+    local TEST_DB = "/tmp/jve/test_batch_ripple_gap_growth_unrelated.db"
+    local layout = ripple_layout.create({
+        db_path = TEST_DB,
+        clips = {
+            order = {"v1_left", "v1_right", "v2_left", "v2_right"},
+            v1_left = {track_key = "v1", timeline_start = 0, duration = 1000},
+            v1_right = {track_key = "v1", timeline_start = 4000, duration = 800},
+            -- Track V2 has two clips that touch; dragging V1's gap handle should still be able to add space.
+            v2_left = {track_key = "v2", timeline_start = 0, duration = 1000},
+            v2_right = {track_key = "v2", timeline_start = 1000, duration = 800}
+        }
+    })
+
+    local executor = command_manager.get_executor("BatchRippleEdit")
+    local left_gap = {
+        clip_id = layout.clips.v1_left.id,
+        edge_type = "gap_after",
+        track_id = layout.tracks.v1.id,
+        trim_type = "ripple"
+    }
+
+    local cmd = Command.create("BatchRippleEdit", layout.project_id)
+    cmd:set_parameter("sequence_id", layout.sequence_id)
+    cmd:set_parameter("edge_infos", {left_gap})
+    cmd:set_parameter("lead_edge", left_gap)
+    cmd:set_parameter("delta_frames", -500)
+    cmd:set_parameter("dry_run", true)
+
+    local ok, payload = executor(cmd)
+    assert(ok and payload, payload or "Gap growth dry run failed")
+    assert(math.floor(payload.clamped_delta_ms) == -500,
+        "Expanding a gap should not be clamped by cross-track previous clips")
+    local clamped_edges = payload.clamped_edges or {}
+    assert(not next(clamped_edges), "No unrelated cross-track gap edge should report a clamp when growing space")
+
+    layout:cleanup()
+end
+
+-- Scenario 8: Cross-track blockers must report which implied edge halts the ripple.
+do
+    local TEST_DB = "/tmp/jve/test_batch_ripple_cross_block_implied.db"
+    local layout = ripple_layout.create({
+        db_path = TEST_DB,
+        clips = {
+            order = {"v1_left", "v1_right", "v2_mid", "v2_blocker"},
+            v1_left = {track_key = "v1", timeline_start = 0, duration = 1000},
+            v1_right = {track_key = "v1", timeline_start = 2600, duration = 800},
+            v2_mid = {track_key = "v2", timeline_start = 2600, duration = 800},
+            v2_blocker = {track_key = "v2", timeline_start = 3600, duration = 600}
+        }
+    })
+
+    local executor = command_manager.get_executor("BatchRippleEdit")
+    local left_gap = {
+        clip_id = layout.clips.v1_left.id,
+        edge_type = "gap_after",
+        track_id = layout.tracks.v1.id,
+        trim_type = "ripple"
+    }
+
+    local cmd = Command.create("BatchRippleEdit", layout.project_id)
+    cmd:set_parameter("sequence_id", layout.sequence_id)
+    cmd:set_parameter("edge_infos", {left_gap})
+    cmd:set_parameter("lead_edge", left_gap)
+    cmd:set_parameter("delta_frames", -500)
+    cmd:set_parameter("dry_run", true)
+
+    local ok, payload = executor(cmd)
+    assert(ok and payload, payload or "Cross-block clamp dry run failed")
+
+    assert(math.floor(payload.clamped_delta_ms) == -200,
+        "Ripple should clamp after exhausting the downstream gap on V2")
+    local implied_key = string.format("%s:%s", layout.clips.v2_mid.id, "gap_after")
+    assert(payload.clamped_edges and payload.clamped_edges[implied_key],
+        "Blocking cross-track gap edge must be reported in clamped_edges")
+
+    layout:cleanup()
+end
+
+-- Scenario 9: Dry run previews must reflect retry clamping for downstream clips.
 do
     local TEST_DB = "/tmp/jve/test_batch_ripple_preview_clamp.db"
     local layout = build_manual_timeline({

@@ -4,6 +4,7 @@
 local M = {}
 local ui_constants = require("core.ui_constants")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
+local edge_utils = require("ui.timeline.edge_utils")
 local Rational = require("core.rational")
 local Command = require("command")
 local command_manager = require("core.command_manager")
@@ -170,6 +171,126 @@ local function rational_equals(a, b)
     return a.frames == b.frames
         and a.fps_numerator == b.fps_numerator
         and a.fps_denominator == b.fps_denominator
+end
+
+local function rational_sign(value)
+    if not value then
+        return 0
+    end
+    if getmetatable(value) == Rational.metatable then
+        if value.frames > 0 then
+            return 1
+        elseif value.frames < 0 then
+            return -1
+        end
+        return 0
+    elseif type(value) == "table" and value.frames then
+        if value.frames > 0 then
+            return 1
+        elseif value.frames < 0 then
+            return -1
+        end
+        return 0
+    elseif type(value) == "number" then
+        if value > 0 then
+            return 1
+        elseif value < 0 then
+            return -1
+        end
+    end
+    return 0
+end
+
+local function build_track_selection_lookup(edges, clip_lookup)
+    local lookup = {}
+    for _, edge in ipairs(edges or {}) do
+        local track_id = edge.track_id
+        if not track_id and edge.clip_id then
+            local clip = clip_lookup[edge.clip_id]
+            track_id = clip and clip.track_id
+        end
+        if track_id then
+            lookup[track_id] = true
+        end
+    end
+    return lookup
+end
+
+-- Determine which bracket orientation should be used for a shifted track.
+-- Handles Rule 8.5 semantics: implied edges mirror the dragged orientation unless
+-- the shift direction contradicts the global delta (e.g. opposing track negation),
+-- in which case we flip the bracket to keep the implied ripple equivalent.
+local function infer_bracket_for_shift(lead_bracket, shift_sign, global_sign)
+    if shift_sign == 0 then
+        return lead_bracket
+    end
+    if not lead_bracket then
+        return (shift_sign > 0) and "out" or "in"
+    end
+    if global_sign ~= 0 and shift_sign ~= global_sign then
+        return (lead_bracket == "in") and "out" or "in"
+    end
+    return lead_bracket
+end
+
+-- Compute implied edge metadata for tracks that shift even though their edges are
+-- not explicitly selected. This keeps ripple previews honest by showing the gap
+-- handles that would need to be selected to reproduce the same movement.
+local function compute_implied_edges(preview_data, clip_lookup, selected_track_lookup, zero_delta, lead_edge, global_delta)
+    if not preview_data or not preview_data.shifted_clips then
+        if preview_data then
+            preview_data.implied_edges = {}
+        end
+        return {}
+    end
+    local per_track = {}
+    for _, entry in ipairs(preview_data.shifted_clips) do
+        local clip = clip_lookup[entry.clip_id]
+        if clip and clip.track_id and not selected_track_lookup[clip.track_id] then
+            local new_start = entry.new_start_value
+            local original_start = clip.timeline_start
+            if new_start and original_start then
+                local delta = new_start - original_start
+                if getmetatable(delta) == Rational.metatable and delta.frames ~= 0 then
+                    local existing = per_track[clip.track_id]
+                    if not existing or clip.timeline_start < existing.clip.timeline_start then
+                        per_track[clip.track_id] = {
+                            clip = clip,
+                            delta = delta
+                        }
+                    end
+                end
+            end
+        end
+    end
+    local implied = {}
+    local lead_bracket = nil
+    if lead_edge then
+        lead_bracket = edge_utils.to_bracket(lead_edge.edge_type or lead_edge.normalized_edge)
+    end
+    local global_sign = rational_sign(global_delta)
+    -- Guard against very large track counts by reusing table entries instead of
+    -- allocating per-clip structures when possible; keeps this O(n) in tracks.
+    for track_id, info in pairs(per_track) do
+        local shift_sign = rational_sign(info.delta)
+        if shift_sign ~= 0 then
+            local desired_bracket = infer_bracket_for_shift(lead_bracket, shift_sign, global_sign)
+            local raw_edge_type = (desired_bracket == "in") and "gap_after" or "gap_before"
+            table.insert(implied, {
+                clip_id = info.clip.id,
+                track_id = track_id,
+                edge_type = desired_bracket or "out",
+                raw_edge_type = raw_edge_type,
+                delta = info.delta,
+                delta_ms = 0,
+                at_limit = false,
+                color = nil,
+                is_implied = true
+            })
+        end
+    end
+    preview_data.implied_edges = implied
+    return implied
 end
 
 local function parse_temp_gap_identifier(clip_id)
@@ -827,6 +948,21 @@ function M.render(view)
             state_module.colors,
             (view.drag_state and view.drag_state.lead_edge) or nil
         )
+        local track_selection_lookup = build_track_selection_lookup(edges_to_render, clip_lookup)
+        local implied_edges = {}
+        if dragging_edges then
+            implied_edges = compute_implied_edges(
+                view.drag_state.preview_data,
+                clip_lookup,
+                track_selection_lookup,
+                zero_delta,
+                (view.drag_state and view.drag_state.lead_edge) or nil,
+                edge_delta
+            )
+            for _, implied in ipairs(implied_edges) do
+                table.insert(previews, implied)
+            end
+        end
         local drawn_edge_keys = {}
         for _, p in ipairs(previews) do
             local clip = get_preview_clip(clip_lookup, p, seq_rate)

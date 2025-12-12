@@ -77,6 +77,7 @@ local clip_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v
 local limit_color = timeline_state.colors.edge_selected_limit or "#ff0000"
 local avail_color = timeline_state.colors.edge_selected_available or "#00ff00"
 local gap_key = string.format("%s:%s", clips.v1_left.id, "gap_after")
+local partner_key = string.format("%s:%s", clips.v1_right.id, "gap_before")
 local clip_key = string.format("%s:%s", clips.v2.id, "out")
 
 local function count_track_colors(track_id)
@@ -113,7 +114,8 @@ local gap_limited_delta, gap_map, gap_counts2, clip_counts2 = render_with_edges(
 assert(gap_limited_delta and gap_limited_delta.frames ~= 2000, "Gap-limited scenario should clamp delta")
 assert(gap_counts2.limit > 0, "Gap edge should render with limit color when gap space is exhausted")
 assert(clip_counts2.limit == 0, "Clip edge should remain available when the gap is the limiter")
-assert(gap_map[gap_key], "Gap edge should be marked clamped when it blocks movement")
+assert(gap_map[gap_key], "Dragged gap edge should report the clamp to highlight the user's handle")
+assert(not gap_map[partner_key], "Non-selected brackets should remain green in single-track gap clamps")
 assert(not gap_map[clip_key], "Clip edge should not be marked clamped when the gap stops movement")
 
 timeline = original_timeline
