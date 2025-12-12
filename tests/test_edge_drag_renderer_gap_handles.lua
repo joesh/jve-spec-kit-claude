@@ -40,7 +40,11 @@ local start, duration = edge_drag_renderer.compute_preview_geometry(
     preview.delta,
     preview.raw_edge_type
 )
-assert(duration.frames == 0 and start == clip.timeline_start,
-    "gap preview should render as zero-width at the clip's start boundary")
+local expected_start = clip.timeline_start + delta
+assert(duration.frames == 0,
+    "gap preview should remain zero-width")
+assert(start.frames == expected_start.frames,
+    string.format("gap preview should move with drag delta; expected %d got %d",
+        expected_start.frames, start and start.frames or -1))
 
 print("✅ edge_drag_renderer preserves gap handle geometry for previews")

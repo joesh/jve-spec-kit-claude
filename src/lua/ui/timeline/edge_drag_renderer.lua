@@ -211,12 +211,13 @@ function Renderer.compute_preview_geometry(clip, edge_type, delta, raw_edge_type
     -- gap_before: Positioned at start of clip (right boundary of gap space)
     -- Both have duration=0 since they're just boundary markers, not spans
     if raw_edge == "gap_after" then
-        start = clip.timeline_start + clip.duration  -- End of clip
+        start = clip.timeline_start + clip.duration + delta_rat  -- End of clip plus drag delta
         duration = Rational.new(0, fps_num, fps_den)
     elseif raw_edge == "gap_before" then
-        start = clip.timeline_start  -- Start of clip
+        start = clip.timeline_start + delta_rat  -- Start of clip adjusted by drag
         duration = Rational.new(0, fps_num, fps_den)
     elseif normalized_edge == "in" then
+        start = start + delta_rat
         duration = duration - delta_rat
     elseif normalized_edge == "out" then
         duration = duration + delta_rat

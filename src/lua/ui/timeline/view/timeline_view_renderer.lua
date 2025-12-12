@@ -237,6 +237,107 @@ local function get_preview_clip(clip_lookup, preview_entry, seq_rate)
     return nil
 end
 
+local PREVIEW_RECT_COLOR = "#ffff00"
+
+local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration_rational)
+    if not clip or not clip.track_id or not start_value or not duration_value then
+        return
+    end
+    local track_y = view.get_track_y_by_id(clip.track_id, height)
+    if track_y < 0 then return end
+    local track_height = view.get_track_visual_height(clip.track_id)
+    if not track_height or track_height <= 0 then return end
+
+    local start_px = state_module.time_to_pixel(start_value, width)
+    local width_px = math.floor((duration_value / viewport_duration_rational) * width) - 1
+    if width_px < 1 then width_px = 1 end
+    local clip_y = track_y + 5
+    local clip_height = track_height - 10
+    timeline.add_rect(view.widget, start_px, clip_y, width_px, 2, PREVIEW_RECT_COLOR)
+    timeline.add_rect(view.widget, start_px, clip_y + clip_height - 2, width_px, 2, PREVIEW_RECT_COLOR)
+    timeline.add_rect(view.widget, start_px, clip_y, 2, clip_height, PREVIEW_RECT_COLOR)
+    timeline.add_rect(view.widget, start_px + width_px - 2, clip_y, 2, clip_height, PREVIEW_RECT_COLOR)
+end
+
+local function render_preview_rectangles(view, preview_data, clip_lookup, seq_rate, state_module, width, height, viewport_duration_rational)
+    if not preview_data then return end
+    local affected = preview_data.affected_clips
+    if not affected and preview_data.affected_clip then
+        affected = {preview_data.affected_clip}
+    end
+
+    for _, entry in ipairs(affected or {}) do
+        if not entry.is_gap then
+            local clip = get_preview_clip(clip_lookup, entry, seq_rate)
+            if clip then
+                local start_value = entry.new_start_value or clip.timeline_start
+                local duration_value = entry.new_duration or clip.duration
+                draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration_rational)
+            end
+        end
+    end
+
+    for _, shift in ipairs(preview_data.shifted_clips or {}) do
+        local clip = clip_lookup[shift.clip_id]
+        if clip and shift.new_start_value then
+            local existing_start = clip.timeline_start
+            local new_start = shift.new_start_value
+            if type(new_start) == "number" then
+                local fps = state_module.get_sequence_frame_rate()
+                new_start = Rational.new(new_start, fps.fps_numerator, fps.fps_denominator)
+            end
+            if not rational_equals(new_start, existing_start) then
+                draw_preview_outline(view, clip, new_start, clip.duration, state_module, width, height, viewport_duration_rational)
+            end
+        end
+    end
+end
+
+local function render_edge_handle(view, clip, normalized_edge, raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration_rational)
+    if not clip or not clip.track_id or not start_value or not duration_value then
+        return
+    end
+    local cy = view.get_track_y_by_id(clip.track_id, height)
+    if cy < 0 then return end
+    local th = view.get_track_visual_height(clip.track_id)
+    if not th or th <= 0 then return end
+
+    local sx = state_module.time_to_pixel(start_value, width)
+    local cw = math.floor((duration_value / viewport_duration_rational) * width) - 1
+    if cw < 0 then cw = 0 end
+    local ch = th - 10
+    local handle_y = cy + 5
+    local ex = (normalized_edge == "in") and sx or (sx + cw)
+    if raw_edge_type == "gap_before" or raw_edge_type == "gap_after" then
+        ex = sx
+    end
+    local is_in = (normalized_edge == "in") or (raw_edge_type == "gap_after")
+    local bw = 8
+    local bt = 2
+    if is_in then
+        timeline.add_rect(view.widget, ex, handle_y, bt, ch, color)
+        timeline.add_rect(view.widget, ex, handle_y, bw, bt, color)
+        timeline.add_rect(view.widget, ex, handle_y + ch - bt, bw, bt, color)
+    else
+        timeline.add_rect(view.widget, ex - bt, handle_y, bt, ch, color)
+        timeline.add_rect(view.widget, ex - bw, handle_y, bw, bt, color)
+        timeline.add_rect(view.widget, ex - bw, handle_y + ch - bt, bw, bt, color)
+    end
+end
+
+local function build_edge_key(clip_id, edge_type)
+    return string.format("%s:%s", tostring(clip_id or ""), tostring(edge_type or ""))
+end
+
+local function parse_edge_key(key)
+    if type(key) ~= "string" then return nil end
+    local clip_id, edge_type = key:match("^(.*):([^:]+)$")
+    if not clip_id or clip_id == "" or not edge_type or edge_type == "" then
+        return nil
+    end
+    return clip_id, edge_type
+end
+
 local function normalize_lead_edge(lead_edge, clip_lookup)
     assert(lead_edge and lead_edge.clip_id, "lead_edge is required for edge preview")
     return {
@@ -702,71 +803,7 @@ function M.render(view)
         local preview_data = view.drag_state.preview_data
         clamped_edge_lookup = (view.drag_state and view.drag_state.clamped_edges) or {}
         if preview_data then
-            local affected = preview_data.affected_clips
-            if not affected and preview_data.affected_clip then
-                affected = {preview_data.affected_clip}
-            end
-
-            for _, aff in ipairs(affected or {}) do
-                if aff.is_gap then goto continue_affected end
-                local c = clip_lookup[aff.clip_id]
-                if not c then
-                    c = build_temp_gap_preview_clip(aff, seq_rate)
-                    if c then
-                        clip_lookup[aff.clip_id] = c
-                    end
-                end
-                if c then
-                    local cy = view.get_track_y_by_id(c.track_id, height)
-                    if cy >= 0 then
-                        local th = view.get_track_visual_height(c.track_id)
-                        local new_start = aff.new_start_value or c.timeline_start
-                        local new_dur = aff.new_duration
-                        if type(new_dur) == "number" then
-                            local fps = state_module.get_sequence_frame_rate()
-                            new_dur = Rational.new(new_dur, fps.fps_numerator, fps.fps_denominator)
-                        end
-                        local sx = state_module.time_to_pixel(new_start, width)
-                        local cw = math.floor((new_dur / viewport_duration_rational) * width) - 1
-                        local ch = th - 10
-                        local cy = cy + 5
-                        local col = "#ffff00"
-                        timeline.add_rect(view.widget, sx, cy, cw, 2, col)
-                        timeline.add_rect(view.widget, sx, cy + ch - 2, cw, 2, col)
-                        timeline.add_rect(view.widget, sx, cy, 2, ch, col)
-                        timeline.add_rect(view.widget, sx + cw - 2, cy, 2, ch, col)
-                    end
-                end
-                ::continue_affected::
-            end
-
-            for _, shift in ipairs(preview_data.shifted_clips or {}) do
-                local c = clip_lookup[shift.clip_id]
-                if c then
-                    local cy = view.get_track_y_by_id(c.track_id, height)
-                    if cy >= 0 then
-                        local th = view.get_track_visual_height(c.track_id)
-                        local new_start = shift.new_start_value
-                        if type(new_start) == "number" then
-                            local fps = state_module.get_sequence_frame_rate()
-                            new_start = Rational.new(new_start, fps.fps_numerator, fps.fps_denominator)
-                        end
-                        if rational_equals(new_start, c.timeline_start) then
-                            goto continue_shift_highlight
-                        end
-                        local sx = state_module.time_to_pixel(new_start, width)
-                        local cw = math.floor((c.duration / viewport_duration_rational) * width) - 1
-                        local ch = th - 10
-                        local cy = cy + 5
-                        local col = "#ffff00"
-                        timeline.add_rect(view.widget, sx, cy, cw, 2, col)
-                        timeline.add_rect(view.widget, sx, cy + ch - 2, cw, 2, col)
-                        timeline.add_rect(view.widget, sx, cy, 2, ch, col)
-                        timeline.add_rect(view.widget, sx + cw - 2, cy, 2, ch, col)
-                    end
-                end
-                ::continue_shift_highlight::
-            end
+            render_preview_rectangles(view, preview_data, clip_lookup, seq_rate, state_module, width, height, viewport_duration_rational)
         end
     end
 
@@ -790,57 +827,58 @@ function M.render(view)
             state_module.colors,
             (view.drag_state and view.drag_state.lead_edge) or nil
         )
-
+        local drawn_edge_keys = {}
         for _, p in ipairs(previews) do
-            local c = clip_lookup[p.clip_id]
-            if not c then
-                c = build_temp_gap_preview_clip(p, seq_rate)
-                if c then
-                    clip_lookup[p.clip_id] = c
+            local clip = get_preview_clip(clip_lookup, p, seq_rate)
+            if clip then
+                local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
+                    clip,
+                    p.edge_type,
+                    p.delta,
+                    p.raw_edge_type
+                )
+                if start_value and duration_value then
+                    local edge_key = build_edge_key(p.clip_id, p.raw_edge_type or p.edge_type)
+                    drawn_edge_keys[edge_key] = true
+                    local explicit_limit = clamped_edge_lookup[edge_key] and true or false
+                    local color = p.color or state_module.colors.edge_selected_available
+                    if explicit_limit or (clamp_hint and not has_explicit_clamps) then
+                        color = state_module.colors.edge_selected_limit or color
+                    end
+                    render_edge_handle(view, clip, normalized_edge, p.raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration_rational)
                 end
             end
-            if c then
-                local cy = view.get_track_y_by_id(c.track_id, height)
-                if cy >= 0 then
-                    local th = view.get_track_visual_height(c.track_id)
-                    local start, dur, normalized_edge = edge_drag_renderer.compute_preview_geometry(
-                        c,
-                        p.edge_type,
-                        p.delta,
-                        p.raw_edge_type
-                    )
-                    if not start or not dur then goto continue_preview end
-                    local sx = state_module.time_to_pixel(start, width)
-                    local cw = math.floor((dur / viewport_duration_rational) * width) - 1
-                    if cw < 0 then cw = 0 end
-                    local ch = th - 10
-                    local cy = cy + 5
-                    local ex = (normalized_edge == "in") and sx or (sx + cw)
-                    if p.raw_edge_type == "gap_before" then
-                        ex = sx
-                    elseif p.raw_edge_type == "gap_after" then
-                        ex = sx
-                    end
-                    local is_in = (normalized_edge == "in") or (p.raw_edge_type == "gap_after")
-                    local key = string.format("%s:%s", tostring(p.clip_id or ""), tostring(p.raw_edge_type or p.edge_type or ""))
-                    local explicit_limit = clamped_edge_lookup[key] and true or false
-                    local col = state_module.colors.edge_selected_available
-                    if explicit_limit or (clamp_hint and not has_explicit_clamps) then
-                        col = state_module.colors.edge_selected_limit or col
-                    end
-                    local bw = 8
-                    local bt = 2
-                    if is_in then
-                        timeline.add_rect(view.widget, ex, cy, bt, ch, col)
-                        timeline.add_rect(view.widget, ex, cy, bw, bt, col)
-                        timeline.add_rect(view.widget, ex, cy + ch - bt, bw, bt, col)
-                    else
-                        timeline.add_rect(view.widget, ex - bt, cy, bt, ch, col)
-                        timeline.add_rect(view.widget, ex - bw, cy, bw, bt, col)
-                        timeline.add_rect(view.widget, ex - bw, cy + ch - bt, bw, bt, col)
+        end
+
+        for key in pairs(clamped_edge_lookup) do
+            if not drawn_edge_keys[key] then
+                local clip_id, edge_type = parse_edge_key(key)
+                if clip_id and edge_type then
+                    local clip = get_preview_clip(clip_lookup, {clip_id = clip_id}, seq_rate)
+                    if clip then
+                        local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
+                            clip,
+                            edge_type,
+                            zero_delta,
+                            edge_type
+                        )
+                        if start_value and duration_value then
+                            render_edge_handle(
+                                view,
+                                clip,
+                                normalized_edge,
+                                edge_type,
+                                start_value,
+                                duration_value,
+                                state_module.colors.edge_selected_limit or state_module.colors.edge_selected_available,
+                                state_module,
+                                width,
+                                height,
+                                viewport_duration_rational
+                            )
+                        end
                     end
                 end
-                ::continue_preview::
             end
         end
     end
