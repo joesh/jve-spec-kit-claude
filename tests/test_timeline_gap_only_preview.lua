@@ -86,7 +86,17 @@ assert(ok, "Renderer threw error: " .. tostring(err))
 local preview = view.drag_state.preview_data or {}
 assert(#(preview.affected_clips or {}) == 1,
     "Clip should appear in affected_clips when dragging its edge")
-assert(#(preview.shifted_clips or {}) == 0,
-    "Single-clip ripple should not shift downstream clips")
+local shift_entry = nil
+for _, entry in ipairs(preview.shifted_clips or {}) do
+    if entry.clip_id == clips.v1_right.id then
+        shift_entry = entry
+        break
+    end
+end
+assert(shift_entry, "Single-clip ripple should preview the clip's new position")
+local expected_start = clips.v1_right.timeline_start + view.drag_state.delta_rational.frames
+assert(shift_entry.new_start_value.frames == expected_start,
+    string.format("Expected preview shift to %d, got %s",
+        expected_start, tostring(shift_entry.new_start_value.frames)))
 assert(#rects > 0, "Expected preview rectangles to be drawn")
 print("✅ Single clip with leading gap receives a preview outline when trimmed")

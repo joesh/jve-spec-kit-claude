@@ -298,42 +298,24 @@ local function ensure_edge_preview(view, state_module)
     local executor = nil
     local normalized_lead = normalize_lead_edge(drag_state.lead_edge, clip_lookup)
 
-    if #edges == 1 then
-        local edge = edges[1]
-        cmd = Command.create("RippleEdit", project_id)
-        cmd:set_parameter("edge_info", {
+    local edge_infos = {}
+    for _, edge in ipairs(edges) do
+        table.insert(edge_infos, {
             clip_id = edge.clip_id,
             edge_type = edge.edge_type,
             track_id = edge.track_id or clip_lookup[edge.clip_id],
             trim_type = edge.trim_type
         })
-        cmd:set_parameter("sequence_id", sequence_id)
-        cmd:set_parameter("delta_frames", delta_rat.frames)
-        cmd:set_parameter("dry_run", true)
-        if normalized_lead then
-            cmd:set_parameter("lead_edge", normalized_lead)
-        end
-        executor = command_manager.get_executor("RippleEdit")
-    else
-        local edge_infos = {}
-        for _, edge in ipairs(edges) do
-            table.insert(edge_infos, {
-                clip_id = edge.clip_id,
-                edge_type = edge.edge_type,
-                track_id = edge.track_id or clip_lookup[edge.clip_id],
-                trim_type = edge.trim_type
-            })
-        end
-        cmd = Command.create("BatchRippleEdit", project_id)
-        cmd:set_parameter("edge_infos", edge_infos)
-        cmd:set_parameter("sequence_id", sequence_id)
-        cmd:set_parameter("delta_frames", delta_rat.frames)
-        cmd:set_parameter("dry_run", true)
-        if normalized_lead then
-            cmd:set_parameter("lead_edge", normalized_lead)
-        end
-        executor = command_manager.get_executor("BatchRippleEdit")
     end
+    cmd = Command.create("BatchRippleEdit", project_id)
+    cmd:set_parameter("edge_infos", edge_infos)
+    cmd:set_parameter("sequence_id", sequence_id)
+    cmd:set_parameter("delta_frames", delta_rat.frames)
+    cmd:set_parameter("dry_run", true)
+    if normalized_lead then
+        cmd:set_parameter("lead_edge", normalized_lead)
+    end
+    executor = command_manager.get_executor("BatchRippleEdit")
 
     if not executor then
         clear_preview_state()

@@ -13,6 +13,18 @@ local function compute_gap_frames(left_clip, right_clip)
     return right_clip.timeline_start.frames - (left_clip.timeline_start.frames + left_clip.duration.frames)
 end
 
+local function find_shifted_clip(payload, clip_id)
+    if type(payload) ~= "table" then
+        return nil
+    end
+    for _, entry in ipairs(payload.shifted_clips or {}) do
+        if entry.clip_id == clip_id then
+            return entry
+        end
+    end
+    return nil
+end
+
 local function build_manual_timeline(config)
     local db_path = config.db_path
     os.remove(db_path)
@@ -289,6 +301,53 @@ do
         "Track V1 downstream clip should move right by the delta")
     assert(v2_shift and v2_shift.new_start_value.frames == 2300,
         "Track V2 downstream clip should move left because its lead edge is an in-bracket")
+
+    os.remove(TEST_DB)
+end
+
+-- Scenario 7: Dry run previews must reflect retry clamping for downstream clips.
+do
+    local TEST_DB = "/tmp/jve/test_batch_ripple_preview_clamp.db"
+    local layout = build_manual_timeline({
+        db_path = TEST_DB,
+        tracks = {
+            {id = "track_v1", name = "Video 1", index = 1}
+        },
+        clips = {
+            {id = "clip_left", name = "Left", track_id = "track_v1", timeline_start = 0, duration = 1000},
+            {id = "clip_mid", name = "Mid", track_id = "track_v1", timeline_start = 2600, duration = 800},
+            {id = "clip_downstream", name = "Downstream", track_id = "track_v1", timeline_start = 4200, duration = 600}
+        }
+    })
+
+    local downstream_before = Clip.load("clip_downstream", layout.db)
+    local downstream_start = downstream_before.timeline_start.frames
+
+    local cmd = Command.create("BatchRippleEdit", layout.project_id)
+    cmd:set_parameter("sequence_id", layout.sequence_id)
+    cmd:set_parameter("edge_infos", {
+        {clip_id = "clip_mid", edge_type = "gap_before", track_id = "track_v1", trim_type = "ripple"}
+    })
+    cmd:set_parameter("delta_frames", -1200)
+    cmd:set_parameter("__force_retry_delta", -300)
+
+    local executor = command_manager.get_executor("BatchRippleEdit")
+    cmd:set_parameter("dry_run", true)
+    local ok, payload = executor(cmd)
+    assert(ok and type(payload) == "table", payload or "Preview clamp dry run failed")
+    assert(payload.clamped_delta_ms == -300, "Dry run should report the clamped delta in milliseconds")
+    local shift_entry = find_shifted_clip(payload, "clip_downstream")
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames == downstream_start - 300,
+        string.format("Preview should clamp downstream clip to %d (got %s)", downstream_start - 300,
+            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames)))
+
+    cmd:set_parameter("dry_run", nil)
+    local result = command_manager.execute(cmd)
+    assert(result.success, result.error_message or "Preview clamp execute failed")
+
+    local downstream_after = Clip.load("clip_downstream", layout.db)
+    assert(downstream_after.timeline_start.frames == downstream_start - 300,
+        "Execute path should match preview clamp position")
 
     os.remove(TEST_DB)
 end
