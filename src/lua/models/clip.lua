@@ -107,12 +107,12 @@ local function load_internal(clip_id, db, raise_errors)
         source_sequence_id = query:value(6),
         parent_clip_id = query:value(7),
         owner_sequence_id = query:value(8),
-        
+
         -- NEW: Rational Properties (loaded from frames)
-        timeline_start = Rational.new(query:value(9) or 0, rate_num, rate_den),
-        duration = Rational.new(query:value(10) or 0, rate_num, rate_den),
-        source_in = Rational.new(query:value(11) or 0, rate_num, rate_den),
-        source_out = Rational.new(query:value(12) or 0, rate_num, rate_den),
+        timeline_start = Rational.new(assert(query:value(9), "Clip.load: timeline_start_frame is NULL"), rate_num, rate_den),
+        duration = Rational.new(assert(query:value(10), "Clip.load: duration_frames is NULL"), rate_num, rate_den),
+        source_in = Rational.new(assert(query:value(11), "Clip.load: source_in_frame is NULL"), rate_num, rate_den),
+        source_out = Rational.new(assert(query:value(12), "Clip.load: source_out_frame is NULL"), rate_num, rate_den),
         
         -- Store rate explicitly
         rate = {

@@ -153,9 +153,10 @@ end
 
 local function find_next_clip_on_track(all_clips, clip)
     if not clip or not clip.track_id then return nil end
+    assert(all_clips, "find_next_clip_on_track: all_clips is nil")
     local clip_end = clip.timeline_start + clip.duration
     local best = nil
-    for _, other in ipairs(all_clips or {}) do
+    for _, other in ipairs(all_clips) do
         if other.id ~= clip.id and other.track_id == clip.track_id then
             local other_start = other.timeline_start
             if other_start >= clip_end then
@@ -170,9 +171,10 @@ end
 
 local function find_prev_clip_on_track(all_clips, clip)
     if not clip or not clip.track_id then return nil end
+    assert(all_clips, "find_prev_clip_on_track: all_clips is nil")
     local start_value = clip.timeline_start
     local best = nil
-    for _, other in ipairs(all_clips or {}) do
+    for _, other in ipairs(all_clips) do
         if other.id ~= clip.id and other.track_id == clip.track_id then
             local other_end = other.timeline_start + other.duration
             if other_end <= start_value then
@@ -186,8 +188,9 @@ local function find_prev_clip_on_track(all_clips, clip)
 end
 
 local function build_track_clip_map(all_clips)
+    assert(all_clips, "build_track_clip_map: all_clips is nil")
     local map = {}
-    for _, clip in ipairs(all_clips or {}) do
+    for _, clip in ipairs(all_clips) do
         local track_id = clip.track_id
         if track_id then
             map[track_id] = map[track_id] or {}
@@ -292,7 +295,8 @@ local function compute_neighbor_bounds(all_clips, original_state, clip_id)
     local next_start = nil
     local prev_clip_id = nil
     local next_clip_id = nil
-    for _, other in ipairs(all_clips or {}) do
+    assert(all_clips, "compute_neighbor_bounds: all_clips is nil")
+    for _, other in ipairs(all_clips) do
         if other.id ~= clip_id and other.track_id == track_id then
             local other_start = other.timeline_start
             local other_end = other.timeline_start + other.duration
@@ -408,7 +412,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function build_clip_cache(ctx)
-        ctx.all_clips = database.load_clips(ctx.sequence_id) or {}
+        ctx.all_clips = database.load_clips(ctx.sequence_id)
+        assert(ctx.all_clips, string.format("build_clip_cache: Failed to load clips for sequence %s", ctx.sequence_id))
         ctx.clip_lookup = {}
         for _, clip in ipairs(ctx.all_clips) do
             ctx.clip_lookup[clip.id] = clip
@@ -432,7 +437,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function materialize_gap_edges(ctx)
-        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+        assert(ctx.edge_infos and #ctx.edge_infos > 0, "materialize_gap_edges: No edge_infos provided")
+        for _, edge_info in ipairs(ctx.edge_infos) do
             if is_gap_edge(edge_info.edge_type) then
                 local gap_clip = create_temp_gap_clip(edge_info, ctx.clip_lookup, ctx.all_clips, ctx.track_clip_map, ctx.seq_fps_num, ctx.seq_fps_den)
                 if not gap_clip then
@@ -446,15 +452,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function assign_edge_tracks(ctx)
+        assert(ctx.all_clips, "assign_edge_tracks: all_clips is nil")
         ctx.clip_track_lookup = {}
         ctx.affected_tracks = {}
-        for _, clip in ipairs(ctx.all_clips or {}) do
+        for _, clip in ipairs(ctx.all_clips) do
             ctx.clip_track_lookup[clip.id] = clip.track_id
             if clip.track_id then
                 ctx.affected_tracks[clip.track_id] = true
             end
         end
-        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+        assert(ctx.edge_infos, "assign_edge_tracks: edge_infos is nil")
+        for _, edge_info in ipairs(ctx.edge_infos) do
             if not edge_info.track_id then
                 edge_info.track_id = ctx.clip_track_lookup[edge_info.clip_id]
             end
@@ -463,9 +471,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function determine_lead_edge(ctx)
+        assert(ctx.edge_infos, "determine_lead_edge: edge_infos is nil")
         local provided_lead_clip = ctx.provided_lead_edge and ctx.provided_lead_edge.clip_id or nil
         local provided_lead_norm = ctx.provided_lead_edge and edge_utils.to_bracket(ctx.provided_lead_edge.edge_type or ctx.provided_lead_edge.normalized_edge) or nil
-        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+        for _, edge_info in ipairs(ctx.edge_infos) do
             local matches_clip = provided_lead_clip
                 and (edge_info.clip_id == provided_lead_clip or edge_info.original_clip_id == provided_lead_clip)
             local matches_edge = not provided_lead_norm or edge_info.normalized_edge == provided_lead_norm
@@ -560,7 +569,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local lead_bracket = ctx.lead_edge_entry and bracket_for_normalized_edge(ctx.lead_edge_entry.normalized_edge or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type))
 
-        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+        assert(ctx.edge_infos, "setup_edge_context: edge_infos is nil")
+        for _, edge_info in ipairs(ctx.edge_infos) do
             if edge_info.clip_id then
                 ctx.edited_clip_lookup[edge_info.clip_id] = true
                 if not is_gap_edge(edge_info.edge_type) then
@@ -592,8 +602,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function compute_earliest_ripple_hint(ctx)
+        assert(ctx.edge_infos, "compute_earliest_ripple_hint: edge_infos is nil")
         ctx.earliest_ripple_hint = nil
-        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+        for _, edge_info in ipairs(ctx.edge_infos) do
             if edge_info.trim_type ~= "roll" then
                 local original = ctx.original_states_map[edge_info.clip_id]
                 if original then
@@ -651,7 +662,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ripple_sign = -1
             end
         end
-        for _, clip in ipairs(ctx.all_clips or {}) do
+        assert(ctx.all_clips, "clamp_downstream_overlaps: all_clips is nil")
+        for _, clip in ipairs(ctx.all_clips) do
             if clip.id
                 and not ctx.edited_clip_lookup[clip.id]
                 and ctx.affected_tracks[clip.track_id]
@@ -717,7 +729,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.global_min_edge_keys = {}
         ctx.global_max_edge_keys = {}
 
-        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+        assert(ctx.edge_infos, "compute_constraints: edge_infos is nil")
+        for _, edge_info in ipairs(ctx.edge_infos) do
             local clip = ensure_clip_loaded(ctx, edge_info.clip_id, db)
             if clip then
                 if not ctx.neighbor_bounds_cache[edge_info.clip_id] then
@@ -826,7 +839,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.earliest_ripple_time = nil
         ctx.clips_marked_delete = ctx.clips_marked_delete or {}
 
-        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+        assert(ctx.edge_infos, "process_edge_trims: edge_infos is nil")
+        for _, edge_info in ipairs(ctx.edge_infos) do
             local clip_id = edge_info.clip_id
             local clip = load_clip_for_edit(ctx, clip_id, db)
             if not clip then
@@ -910,7 +924,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     if gap_clip.gap_right_id and gap_clip.timeline_start ~= original_gap.timeline_start then
                         -- Check if right clip has its own in-point edge selected
                         local right_has_in_edge = false
-                        for _, edge_info in ipairs(ctx.edge_infos or {}) do
+                        assert(ctx.edge_infos, "gap clip modification: edge_infos is nil")
+                        for _, edge_info in ipairs(ctx.edge_infos) do
                             if edge_info.clip_id == gap_clip.gap_right_id and edge_info.edge_type == "in" then
                                 right_has_in_edge = true
                                 break
@@ -982,7 +997,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             ctx.edited_lookup_for_shifts[id] = true
         end
 
-        for _, other_clip in ipairs(ctx.all_clips or {}) do
+        assert(ctx.all_clips, "collect_downstream_clips: all_clips is nil")
+        for _, other_clip in ipairs(ctx.all_clips) do
             if other_clip.id
                 and not ctx.edited_lookup_for_shifts[other_clip.id]
                 and ctx.affected_tracks[other_clip.track_id]
@@ -1000,10 +1016,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function compute_shift_bounds(ctx)
+        assert(ctx.clips_to_shift, "compute_shift_bounds: clips_to_shift is nil")
         local min_frames = -math.huge
         local max_frames = math.huge
 
-        for _, shift_clip_data in ipairs(ctx.clips_to_shift or {}) do
+        for _, shift_clip_data in ipairs(ctx.clips_to_shift) do
             local original = {
                 timeline_start = shift_clip_data.timeline_start,
                 duration = shift_clip_data.duration,
@@ -1049,7 +1066,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function compute_downstream_shifts(ctx, db)
         collect_downstream_clips(ctx)
 
-        for _, shift_clip_data in ipairs(ctx.clips_to_shift or {}) do
+        assert(ctx.clips_to_shift, "compute_downstream_shifts: clips_to_shift is nil")
+        for _, shift_clip_data in ipairs(ctx.clips_to_shift) do
             local shift_clip = load_clip_for_edit(ctx, shift_clip_data.id, db)
             if not shift_clip then
                 print(string.format("WARNING: BatchRippleEdit: Downstream clip %s not found. Skipping shift.", tostring(shift_clip_data.id):sub(1, 8)))
@@ -1154,7 +1172,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if ctx.dry_run then
             ctx.preview_shifted_clips = {}
-            for _, shift_clip in ipairs(ctx.clips_to_shift or {}) do
+            assert(ctx.clips_to_shift, "build_planned_mutations: clips_to_shift is nil")
+            for _, shift_clip in ipairs(ctx.clips_to_shift) do
                 local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_rat
                 local new_start = shift_clip.timeline_start + track_shift
                 table.insert(ctx.preview_shifted_clips, {

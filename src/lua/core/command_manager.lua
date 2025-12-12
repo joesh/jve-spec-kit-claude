@@ -514,7 +514,8 @@ function M.execute(command_or_name, params)
             local snapshot_mgr = require('core.snapshot_manager')
             local force_snapshot = command_flag(command, "force_snapshot", "__force_snapshot")
             if force_snapshot or snapshot_mgr.should_snapshot(sequence_number) then
-                 local targets = command:get_parameter("__snapshot_sequence_ids") or {}
+                 local targets = command:get_parameter("__snapshot_sequence_ids")
+                 assert(targets, "Snapshot restore: Missing __snapshot_sequence_ids parameter")
                  if #targets == 0 then
                      local def_seq = history.get_current_stack_sequence_id(true)
                      if def_seq then table.insert(targets, def_seq) end

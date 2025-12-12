@@ -513,7 +513,8 @@ local function ensure_edge_preview(view, state_module)
         return
     end
 
-    local seq_rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or {}
+    local seq_rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate()
+    assert(seq_rate, "ensure_edge_preview: Failed to retrieve sequence frame rate")
     local fps_num = seq_rate.fps_numerator or 30
     local fps_den = seq_rate.fps_denominator or 1
 
@@ -526,8 +527,10 @@ local function ensure_edge_preview(view, state_module)
 
     debug("requesting preview for token " .. token)
 
+    local clips = state_module.get_clips()
+    assert(clips, "ensure_edge_preview: get_clips() returned nil")
     local clip_lookup = {}
-    for _, clip in ipairs(state_module.get_clips() or {}) do
+    for _, clip in ipairs(clips) do
         clip_lookup[clip.id] = clip.track_id
     end
     assert(drag_state.lead_edge, "edge drag should always provide a lead_edge")
