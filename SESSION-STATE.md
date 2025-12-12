@@ -1,3 +1,10 @@
+# Session State - 2025-?? Insert Snapshot Assertion
+
+## Critical Note
+- Insert command crashed whenever the command sequence hit a snapshot boundary (`sequence_number % 50 == 0`) because it never populated `__snapshot_sequence_ids`; command_manager asserts and the menu printed "INSERT failed: unknown error" after logging a successful insert.
+- Fix applied: `core.commands.insert` now seeds `__snapshot_sequence_ids` with the resolved sequence id so snapshot creation can succeed.
+- Regression added: `tests/test_insert_snapshot_boundary.lua` fast-forwards to the snapshot boundary and verifies Insert succeeds and writes a snapshot entry.
+
 # Session State - 2025-10-10 Dry-Run Command Preview & Ripple Trim Fixes
 
 ## CRITICAL SESSION CONTEXT

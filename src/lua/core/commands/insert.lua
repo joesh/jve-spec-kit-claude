@@ -25,6 +25,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if sequence_id and sequence_id ~= "" then
             command:set_parameter("sequence_id", sequence_id)
         end
+        if not command:get_parameter("__snapshot_sequence_ids") then
+            command:set_parameter("__snapshot_sequence_ids", {sequence_id})
+        end
 
         local seq_fps_num = 30
         local seq_fps_den = 1
