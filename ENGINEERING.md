@@ -1,4 +1,14 @@
-# Claude Code Instructions - JVE (Joe's Video Editor)
+# Codex Instructions - JVE (Joe's Video Editor)
+
+- Be collaborative, thoughtful, creative, warm and friendly, act like a peer
+
+- When presenting feedback such as plans and code reviews: consider readability, such as larger fonts for section headings, leading emojis, bold text, using bullet points, numbered lists, code blocks, whitespace. Use the fidelity of markdown formatting. Have a sense of style and presentation
+
+## **🔧 USEFUL DEBUGGING TIPS**
+We've got lots of context available when anything goes wrong:
+	The persistent database is at ~/Documents/JVE\ Projects/Untitled\ Project.jvp
+	A full log of what's happened is in ./tests/captures
+
 
 ## **🔧 DEVELOPMENT RULES**
 
@@ -6,7 +16,6 @@
 - **ALWAYS write to TODO.md for real-time task tracking
 - **UPDATE immediately** when starting/completing/discovering tasks
 - **CHECK todo list FIRST** before asking what's next
-- **ONE task in_progress** at a time
 - **Mark in_progress BEFORE starting, completed IMMEDIATELY after finishing**
 
 ### **0.1 MANDATORY Documentation Honesty**
@@ -17,7 +26,7 @@
 - **ACCOUNTABILITY**: Every claim must be verifiable
 
 ### **0.2 Context Preservation for Auto-Compact**
-- **ALWAYS update CLAUDE_CONTEXT.md** as you learn critical architectural details
+- **ALWAYS update SESSION_STATE.md** as you learn critical architectural details
 - **DOCUMENT decisions and discoveries** immediately - don't rely on chat memory
 - **INCLUDE current bug status** and fix progress in context file
 - **ADD breakthrough insights** about codebase design and user preferences
@@ -30,45 +39,33 @@
 - **1.4**: Modular architecture - single responsibility, clean separation
 - **1.5**: MANDATORY data-driven config - NO hardcoded UI styles/schemas/lists
 - **1.6**: MANDATORY universal state persistence - all widgets inherit PersistentWidget
-- **1.7**: Real-time session logging - update CURRENT_SESSION_STATUS.md after every task
 - **1.8**: Always analyze existing patterns before implementing - Study existing code patterns before writing any new code; find similar implementations; use established conventions; document pattern decisions
 - **1.9**: Respect the Architecture - NEVER bypass existing abstractions (error system, widget registry, Lua API); ALWAYS use existing patterns - don't invent new approaches; If unsure, ask - don't guess and implement
 - **1.10**: Stay in Your Layer - Lua scripts call Qt bindings - never direct Qt; Use widget registry RAII handles - never manual memory management; Go through command dispatcher - never direct function calls
-- **1.11**: Never Change Architecture Without Permission - NEVER modify function calling patterns without explicit user approval; NEVER reorganize modules or interfaces without user consultation; NEVER replace one system with another without user decision; ALWAYS ask first before changing how components interact
 - **1.12**: External inputs must NEVER crash the system - all imported data (XML, DB, files) must be validated; degrade gracefully when metadata is missing; record warnings, extract whatever can be trusted, and keep the app running
 - **1.13**: Tags Are Canonical Organization - Bins are just the default `bin` tag namespace; every UI tree, importer, and command must talk to `tag_service`/`tag_assignments` (never `project_settings.bin_hierarchy` or `media_bin_map`); if tag tables are missing the build must fail loudly—absolutely no fallbacks or legacy shims unless Joe says otherwise.
-- **1.14**: Gap Materialization Invariant - Ripple/roll logic MUST treat gaps as first-class timeline items using the temporary gap clip pipeline documented in `docs/GAP_RESTORATION_PLAN.md`. Never bypass, delete, or “simplify” that materialization layer; any change that removes temp gaps or rewrites `gap_*` edges back into clip trims is an automatic regression.
 
 ### **2.x Development Standards**
 - **2.1**: Clear technical tone, no excessive enthusiasm/emojis
 - **2.1.1**: BRUTAL HONESTY - "this is broken" not "could use improvement"
-- **2.2**: Zero-tolerance testing - ALL tests must pass before proceeding
 - **2.3**: Verify code architecture before modifying failing tests
 - **2.4**: MANDATORY clean builds - no errors or warnings before moving on
-- **2.5**: MANDATORY milestone commits - never leave progress uncommitted
-- **2.7**: Auto-approved dev commands (make/cmake/git status) - execute immediately
-- **2.7.1**: ALWAYS use make -j4 for parallel builds - never use plain make
+- **2.5**: Functions Read Like Algorithms - Functions should read like high-level algorithms that call subfunctions to do the dirty work; NEVER mix high-level logic with low-level implementation details in the same function; Break complex operations into well-named helper functions that handle specific concerns; Main functions should tell the story of WHAT happens, helper functions handle HOW it happens
+- **2.6**: Short Functions and Logical File Splitting - Functions should be short and focused on a single responsibility; Files should be relatively short and split into logical units when they grow large; NEVER create monolithic functions that handle multiple concerns; Split large files into cohesive modules based on functionality; Aim for functions that fit on one screen and files that are easy to navigate
+
+- **2.7**: ALWAYS use make -j4 for parallel builds - never use plain make
 - **2.8**: Proper attribution: "Authored-By: Joe Shapiro <joe@shapiro.net> With-Help-From: Codex"
 - **2.9**: ASSUME FAILURE UNTIL PROVEN OTHERWISE - Default assumption: Nothing is working until specifically verified
-- **2.10**: VERIFY THAT YOU DIDN'T BREAK ANYTHING - Always test existing functionality after making changes
-- **2.11**: Use decimal notation for rule numbering with logical categories - Rules numbered within categories (0.x Todo/Documentation, 1.x Core Development, 2.x Development Standards, 3.x Design Principles); count existing rules in category first; never renumber existing rules as they're referenced in commit messages
-- **2.12**: Follow the Error System - ALWAYS propagate errors through ErrorContext system; NEVER write ad-hoc error handling; EVERY operation must return success/error state
-- **2.13**: No Fallbacks or Default Values - NEVER use fallback values - they hide errors and mask problems; ALWAYS fail explicitly when required data is missing; NEVER assume defaults - get actual values or error; Surface all errors immediately - no silent failures
-- **2.14**: No Hardcoded Constants - NEVER hardcode magic numbers - create symbolic constants instead; CENTRALIZE all constants in dedicated header/module files; USE meaningful names that explain what the constant represents; DOCUMENT the purpose and units of each constant
+- **2.13**: MANDATORY No Fallbacks or Default Values - NEVER use fallback values - they hide errors and mask problems; ALWAYS fail explicitly when required data is missing; NEVER assume defaults - get actual values or error; Surface all errors immediately - no silent failures
 - **2.15**: No Backward Compatibility - Default assumption: we DO NOT maintain backward compatibility for schemas, APIs, data stores, or workflows; delete legacy paths as soon as replacements exist; never add shims, migrations, or old-code preservation unless Joe explicitly reverses this rule
 - **2.16**: No Shortcuts - NEVER take shortcuts to avoid thorough implementation; Do the complete work required even if it takes longer; Shortcuts lead to broken implementations that take more time to fix than doing it right initially; Always implement the full solution properly
 - **2.17**: No Stub Functions - NEVER create stub functions that return dummy values or print messages instead of implementing real functionality; Stub functions mask architectural problems and prevent proper solutions; ALWAYS implement the complete functionality or fix the underlying architecture issue; Stub functions are forbidden - they hide real problems
 - **2.18**: FFI vs Business Logic Separation - FFI functions are one-to-one mappings with C++ Qt functions; FFI functions contain parameter validation (not business logic) and no application logic; Business logic functions contain application logic and call FFI functions when they need Qt functionality; NEVER have business logic functions call C++ directly - they must go through FFI functions; NEVER have FFI functions contain business logic - they are pure interfaces to C++
 - **2.19**: Complete Tasks Before Building/Testing - NEVER build and test partial work - finish systematic tasks completely first; Building/testing mid-task is a major sidetracking risk that prevents completion; ALWAYS complete entire systematic jobs (like adding validation to ALL functions) before testing; Only build/test when explicitly requested or when systematic work is 100% complete
 - **2.20**: Regression Tests First - ALWAYS add a failing regression test before fixing a bug; PROVE the test fails by temporarily reverting or disabling the fix; ONLY then land the fix and ensure the new test passes; The test suite is more valuable than the implementation
-- **2.20**: GUI Application Debugging Technique - When testing GUI apps that hang due to debug messages: (1) Run without timeout, (2) Monitor log file size with `watch -n 1 'wc -l build/jve.log'`, (3) When log stops growing, take screenshot of desktop, (4) Kill the application, (5) Analyze log and screenshot to determine actual success/failure; This avoids timeout issues while providing complete verification of GUI state
-- **2.21**: Compiler-Verifiable Approaches - When deciding implementation approaches, strongly prefer designs that allow the compiler to catch errors rather than runtime detection; Change function signatures, add required parameters, use type systems, and leverage static analysis to make impossible states unrepresentable; Avoid approaches that rely on runtime checks to catch implementation mistakes that could be prevented at compile time
-- **2.22**: Careful Code Modifications - When modifying code, be extremely careful with batch operations like sed; Only use sed if you're absolutely certain it will target exactly the right places and won't cause unintended changes; For all other cases, make changes one by one using precise Edit operations; Batch text replacements on code are dangerous and can break functionality in subtle ways
-- **2.23**: JVE Testing Methodology - When testing jve, always use this complete workflow: 1) Run jve in background with log file: `./jve --test-fcp7-layout > build/test_name.log 2>&1 &`, 2) Monitor log file size until stable: use while loop to detect when file stops growing for 3+ consecutive checks, 3) Take screenshot for visual verification of actual GUI state, 4) Kill jve immediately after screenshot: `pkill -f jve` to free system resources, 5) Analyze both log content AND screenshot to determine what's actually working vs just claimed in logs
+- **2.21**: Statically-Verifiable Approaches - When deciding implementation approaches, strongly prefer designs that allow the compiler to catch errors rather than runtime detection; Change function signatures, add required parameters, use type systems, and leverage static analysis to make impossible states unrepresentable; Avoid approaches that rely on runtime checks to catch implementation mistakes that could be prevented at compile time
 - **2.24**: Evidence-Based Claims - ONLY claim success/failure based on observable evidence (screenshots, logs, measurements); Code changes alone are not evidence of fixes; If you cannot observe a difference, state: "I see no change"; Evidence trumps expectations every time
 - **2.25**: Document All Debugging Attempts - Failed attempts are valuable progress - document explicitly what didn't work and why; Progress includes: approaches tried, what failed, what was learned; "I tried X but it didn't fix Y" is legitimate progress that guides next steps; Never hide unsuccessful approaches - they prevent repeating failed methods
-- **2.26**: Functions Read Like Algorithms - Functions should read like high-level algorithms that call subfunctions to do the dirty work; NEVER mix high-level logic with low-level implementation details in the same function; Break complex operations into well-named helper functions that handle specific concerns; Main functions should tell the story of WHAT happens, helper functions handle HOW it happens
-- **2.27**: Short Functions and Logical File Splitting - Functions should be short and focused on a single responsibility; Files should be relatively short and split into logical units when they grow large; NEVER create monolithic functions that handle multiple concerns; Split large files into cohesive modules based on functionality; Aim for functions that fit on one screen and files that are easy to navigate
 - **2.28**: No Artificial Progress Inflation - One user request = one todo item, regardless of how many attempts it takes; Do not break single tasks into multiple sub-tasks to mark things "completed"; Progress is measured by user satisfaction, not number of completed attempts; Multiple debugging attempts are iterations within one task, not separate accomplishments; Only mark tasks complete when the user confirms the actual problem is solved
 - **2.29**: Snapshot Every BatchCommand - Whenever you queue multiple timeline operations inside a `BatchCommand`, you MUST set `sequence_id` to the active sequence and populate `__snapshot_sequence_ids` with that id. Without this, undo/redo/replay will appear to “do nothing” until a restart because the command manager doesn’t know which sequence to reload. Applies to delete, split, drag/duplicate, ripple, and any future batch operations.
 - **2.30**: Persist Track Heights Per Sequence - Every timeline sequence must write its track heights to SQLite (`sequence_track_layouts.track_heights_json`) whenever a header is resized, and that same height map must be reloaded verbatim on init. The most recently modified sequence becomes the project-wide template (`project_settings.track_height_template`), and any brand-new sequence must immediately adopt that template before saving its own layout. No fallbacks: if persistence fails, surface the error rather than silently using defaults.
@@ -78,53 +75,13 @@
 - **3.1**: Protocol versioning - support only the current protocol/schema; when formats change, bump the version and migrate forward without keeping the old behavior
 - **3.2**: Principle of least amazement - predictable behavior
 - **3.3**: Orthogonality - composable commands
-- **3.4**: Progressive disclosure - core workflow ≤3 clicks
+- **3.4**: Progressive disclosure - core workflow ≤ 3 clicks
 - **3.5**: Fail fast with clear, actionable error messages
 - **3.9-3.10**: Complete error propagation with actionable messages
 - **3.11**: Discoverable UI - tooltips on all non-obvious controls
 - **3.13**: No mysterious disabled controls without explanatory tooltips
 - **3.14**: No Marketing Speak - NEVER use marketing terms - no "professional", "enterprise", "robust", "powerful"; USE technical language - clear, direct, factual descriptions only; NO superlatives - describe what IS, not what's "amazing" or "best"; AVOID aspirational language - document verified reality, not goals
 - **3.15**: Tag-Driven Organization - Tags are the authoritative organization system; bins are simply the default tag namespace; the tree view is just one visualization of tags, so all organization features must operate on tag namespaces first and render them however the UI requires
-
----
-
-## **⚡ SESSION MODE: One Focus At A Time**
-
-**Before starting ANY work, Claude must:**
-
-1. **State the ONE architectural pattern** you'll be working within
-2. **Confirm you understand the existing implementation** 
-3. **Commit to extending, not replacing** existing code
-
-**Example**:
-> "I will work within the ErrorContext system, extending the existing widget parenting validation. I will NOT create new error handling approaches."
-
----
-
-## **📋 IMPLEMENTATION PROTOCOL**
-
-### **Step 1: Integration Check**
-- [ ] Does this work WITH existing code or AGAINST it?
-- [ ] Am I using the established patterns or inventing new ones?
-- [ ] Will this create competing implementations?
-
-### **Step 2: Error-First Implementation** 
-- [ ] Started with error context setup (Rule 1.1)
-- [ ] All operations return ErrorContext results (Rule #2)
-- [ ] No silent failures or exceptions (Rule #5)
-- [ ] No fallback values or defaults (Rule #5)
-- [ ] Update TodoWrite with task progress (Rule 0)
-- [ ] Document honestly - no aspirational claims (Rule 0.1)
-
-### **Step 3: Verification**
-- [ ] Clean build with no errors or warnings (Rule 2.4)
-- [ ] Tests pass (Rule 2.2 - zero tolerance testing)
-- [ ] No new competing patterns introduced
-- [ ] Follows existing code style exactly
-- [ ] MANDATORY milestone commit if significant work completed (Rule 2.5)
-- [ ] Use proper attribution format in commits (Rule 2.8)
-
----
 
 ## **🎯 ARCHITECTURE REMINDERS (Context for Decisions)**
 
@@ -134,92 +91,20 @@
 - **Users extend** functionality through Lua, not C++ modification
 - **Everything goes through** thin API layer with protection systems
 
-**Key Systems Already Built:**
-- `ErrorContext` - Rich error propagation with auto-fix suggestions
-- `WidgetRegistry` - RAII resource management for all Qt widgets
-- `CommandDispatcher` - Universal command system with undo/redo
-- `QtLuaBindings` - Thin API for Qt widget creation from Lua with REGISTRY_REF metatable system
-- `ScriptableMainWindow` - Object-oriented window management for FCP7 layout system
-- `EventJournal` - Event-sourced timeline with complete history
-
-**Your Job**: Extend these systems, never replace them.
-
-## **🔄 RESTORATION HISTORY (September 2025)**
-
-**Critical Incident**: Commit `7d6582e` "Implement Phase 2 RAII Resource Management" accidentally deleted the working ScriptableMainWindow integration during RAII refactoring, breaking `create_main_window` functionality.
-
-**Resolution**: Successfully restored from stash@{1} which contained:
-- Complete REGISTRY_REF metatable preservation system
-- All 11 ScriptableMainWindow function implementations  
-- Object-oriented Lua API with userdata preservation
-- Full FCP7 4-window layout functionality
-
-**Build System Fixes (September 2025)**:
-- Fixed hardcoded path references in cmake files (`/Users/joe/Local/final-cut-pro-7-clone` → `/Users/joe/Local/jve`)
-- Resolved ScriptableWidget/ScriptableTimeline linker errors by adding missing `src/ui/scriptable_window.cpp` to all executables using `qt_lua_bindings.cpp`
-- Build now completes cleanly at 100% without undefined symbol errors
-- **Fixed jve Output Directory**: Added `RUNTIME_OUTPUT_DIRECTORY` property so `jve` executable automatically builds to project root instead of build directory
-
-**Lesson**: Always preserve working functionality during architectural changes. The REGISTRY_REF system and ScriptableMainWindow integration were critical to the FCP7 layout and should not be modified without extensive testing.
-
----
-
 ## **🏗️ ARCHITECTURAL REFERENCE - September 2025**
 
 **Critical Understanding**: I am the version of Claude that architected this system. This documentation preserves context continuity for auto-context reload scenarios.
 
 ### **Project Structure - Video Editor Architecture**
 
-This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, with core C++ foundation and Lua-driven UI/features:
-
-**Core Foundation (C++):**
-- `src/project/` - Project management system with JSON serialization
-- `src/timeline/` - Event-sourced timeline with frame-accurate editing
-- `src/scripting/` - Lua integration with modular Qt bindings  
-- `src/core/` - Foundation services (errors, resource paths, widgets)
+This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Resolve, and Premiere, written in Lua with C++ for speed where absolutely necessary.
 
 **Scripting Layer (Lua):**
 - `scripts/core/` - Core Lua modules for project/timeline/UI management
 - `scripts/ui/` - UI components and FCP7 layout system
 - All interface elements generated by Lua scripts, not hardcoded C++
 
-### **Phase Restoration History (September 2025)**
-
-**Phase 2 Completed**: TODO Stub Elimination (Rule 2.17)
-- Implemented complete business logic for 39 TODO violations
-- All systems now have functional implementation across video editor
-- Project management, GUI framework, playback engine, metadata integration complete
-
-**Phase 3 Completed**: Qt Interface vs Business Logic Separation (Rule 2.18)
-- Systematic function renaming to qt_verb_noun pattern (e.g., `qt_set_widget_text`)
-- Separated Qt interface functions (parameter validation only) from business logic
-- Applied user corrections: "Qt" not "FFI", proper qt_verb_noun naming
-
 ### **Key Architectural Systems**
-
-**1. Project Management System** (project_types.h/cpp):
-```cpp
-namespace project {
-  class ProjectManager {
-    static ProjectManager& instance();
-    std::shared_ptr<Project> createProject(const QString& name);
-    std::shared_ptr<Project> getActiveProject();
-    void setActiveProject(std::shared_ptr<Project> project);
-  };
-  
-  class Project {
-    ProjectId getId() const;
-    QString getName() const;
-    const ProjectSettings& getSettings() const;
-    MediaPool& getMediaPool();
-  };
-  
-  class MediaPool {
-    BinId createBin(const QString& name, BinId parent_id = 0);
-    Bin* getBin(BinId bin_id);
-  };
-}
-```
 
 **2. Qt Interface Architecture** (qt_widgets.cpp and modular bindings):
 - **Qt Interface Functions**: `qt_create_widget()`, `qt_set_widget_text()`, `qt_resize_widget()`
@@ -232,60 +117,21 @@ namespace project {
   - Contain application logic, error handling, state management
   - Never call C++ Qt directly - must go through Qt interface functions
 
-**3. Command Dispatcher System** (command_dispatcher.h):
+**3. Command Dispatcher System**
 - Universal command system with undo/redo support
 - Keyboard/MIDI controller mapping
-- Identical registration for C++ and Lua commands
-- Parameters support: STRING, INTEGER, DOUBLE, BOOLEAN, OBJECT, REGISTRY_REF
 
-**4. Timeline Architecture** (core_types.h):
+**4. Timeline Architecture**
 - Event-sourced with complete history tracking
-- Frame-accurate editing with FrameTime/FrameDuration types
+- Frame-accurate editing
 - TimelineDatabase holds all objects by stable IDs
 - Sequences contain Tracks containing TimelineInstances of MediaItems
 
-**5. Lua Integration** (lua_engine.h):
+**5. Lua Integration**
 - Hot reloading support for script development
 - ResourcePaths system for cross-directory execution
 - Error propagation through ErrorContext system
 - Command registration bridge between C++ and Lua
-
-**6. Resource Management**:
-- WidgetRegistry with RAII handles for Qt widgets
-- REGISTRY_REF metatable system for userdata preservation
-- ResourcePaths for cross-directory script loading
-
-### **Metadata Schema System** (metadata_schemas.h/cpp):
-- JSON-driven metadata field definitions matching Premiere Pro standards
-- Support for XMP, EXIF, IPTC, Dublin Core metadata standards
-- MetadataField structure with validation, defaults, tooltips
-- Schema loading from JSON files for data-driven configuration
-- Integration with clip_system.h for comprehensive media metadata
-
-### **Qt Interface Architecture Details** (qt_core.h and modular bindings):
-
-**FFI Parameter Validation System**:
-```cpp
-enum class FFIArgType { WIDGET, STRING, INTEGER, POSITIVE_INTEGER, BOOLEAN, LAYOUT };
-struct FFIArgSpec { FFIArgType type; FFIParamName name; int min_value; };
-class FFIParameterValidator {
-  static ValidationResult validate(lua_State* L, const char* function_name,
-                                 std::initializer_list<FFIArgSpec> arg_specs);
-};
-```
-
-**Modular Qt Bindings Architecture**:
-- `qt_widgets.h/cpp` - Widget creation/manipulation (qt_create_widget, qt_set_widget_text)
-- `qt_layouts.h/cpp` - Layout management (qt_create_layout, qt_add_layout_child)
-- `qt_graphics.h/cpp` - Graphics scene/view system for timeline rendering
-- `qt_controls.h/cpp` - Form controls (buttons, inputs, combos)
-- `qt_windows.h/cpp` - Window management and docking
-- `qt_core.h` - Common infrastructure and parameter validation
-
-**Lua Metatable System**:
-- Direct userdata pointers (no wrapper objects)
-- Type-safe metatables: JVE.QWidget, JVE.QMainWindow, JVE.QLayout
-- REGISTRY_REF system for widget preservation across Lua calls
 
 ### **Scripting and Lua Integration Details**:
 
@@ -306,19 +152,6 @@ class FFIParameterValidator {
 - Automatic scripts directory detection relative to executable
 - Lua package.path configuration for require() module loading
 
-### **Critical Naming Conventions**
-
-**C++ Functions**: camelCase (`createSequence`, `getWidget`, `registerWidget`)
-**Qt Interface Functions**: qt_verb_noun (`qt_create_widget`, `qt_set_widget_text`)
-**Lua Modules**: snake_case filenames, proper module returns (no global exports)
-**FFI Parameters**: Type-safe constants (PARAM_WIDGET, PARAM_TEXT, PARAM_WIDTH)
-
-### **Build System Status**
-- CMakeLists.txt: Fixed hardcoded paths, added missing source files
-- jve executable: Auto-builds to project root via RUNTIME_OUTPUT_DIRECTORY
-- All bindings: Modular Qt bindings architecture (qt_widgets, qt_layouts, qt_graphics, etc.)
-- Clean builds: No undefined symbols, all tests compile
-
 ### **Integration Patterns**
 
 **Lua to C++ Call Pattern**:
@@ -329,25 +162,8 @@ class FFIParameterValidator {
 5. Business logic in Lua handles application-specific operations
 
 **Error Propagation Pattern**:
-1. C++ operations use ErrorContext system for structured errors
-2. Lua functions use error_system.safe_call() for error handling
-3. LuaErrorHelper bridges FFI errors to ErrorContext
-4. All errors include context, suggestions, and technical details
+1. All errors include context, suggestions, and technical details
 
----
-
-## **📝 CODE CONVENTIONS**
-
-### **Naming Convention: camelCase**
-- **C++ Functions**: `createSequence()`, `importMedia()`, `getWidget()`
-- **Timeline API**: `beginTx()`, `commitTx()`, `replayToHead()`
-- **Database API**: `getInstance()`, `getSequence()`, `createTrack()`
-- **Event System**: `appendEvent()`, `getTimestampUs()`, `applyEvent()`
-- **Qt Bindings**: `getWidget()`, `registerWidget()`, `clearRegistry()`
-
-**Migration Note**: All snake_case functions converted to camelCase (2025-09-02)
-
----
 
 ## **🚫 ABSOLUTE PROHIBITIONS**
 
