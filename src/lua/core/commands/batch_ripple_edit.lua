@@ -208,16 +208,29 @@ local function build_track_clip_map(all_clips)
     return map
 end
 
+-- Materialize a synthetic clip representing the requested gap edge so downstream
+-- logic (trim/apply) can treat it like a normal clip. Returns nil when the edge
+-- no longer corresponds to a real gap because the neighbors are missing.
 local function create_temp_gap_clip(edge_info, clip_lookup, all_clips, track_clip_map, seq_fps_num, seq_fps_den)
-    if not edge_info or (edge_info.edge_type ~= "gap_after" and edge_info.edge_type ~= "gap_before") then
-        return nil
-    end
+        if not edge_info or (edge_info.edge_type ~= "gap_after" and edge_info.edge_type ~= "gap_before") then
+            return nil
+        end
 
-    local track_id = edge_info.track_id
-    local reference_clip = clip_lookup[edge_info.clip_id]
-    if reference_clip and not track_id then
-        track_id = reference_clip.track_id
-    end
+        local function ensure_rational(value)
+            if getmetatable(value) == Rational.metatable then
+                return value:rescale(seq_fps_num, seq_fps_den)
+            end
+            if type(value) == "table" and value.frames then
+                return Rational.new(value.frames, value.fps_numerator or seq_fps_num, value.fps_denominator or seq_fps_den)
+            end
+            return Rational.new(value or 0, seq_fps_num, seq_fps_den)
+        end
+
+        local track_id = edge_info.track_id
+        local reference_clip = clip_lookup[edge_info.clip_id]
+        if reference_clip and not track_id then
+            track_id = reference_clip.track_id
+        end
     if not track_id then
         return nil
     end
@@ -251,14 +264,17 @@ local function create_temp_gap_clip(edge_info, clip_lookup, all_clips, track_cli
         else
             gap_start = Rational.new(0, seq_fps_num, seq_fps_den)
         end
-    end
+        end
 
-    local duration = gap_end - gap_start
-    if not duration or not duration.frames then
-        duration = Rational.new(0, seq_fps_num, seq_fps_den)
-    end
-    if duration.frames < 0 then
-        duration = Rational.new(0, seq_fps_num, seq_fps_den)
+        gap_start = ensure_rational(gap_start)
+        gap_end = ensure_rational(gap_end)
+
+        local duration = gap_end - gap_start
+        if not duration or not duration.frames then
+            duration = Rational.new(0, seq_fps_num, seq_fps_den)
+        end
+        if duration.frames < 0 then
+            duration = Rational.new(0, seq_fps_num, seq_fps_den)
     end
 
     local temp_id = string.format("temp_gap_%s_%s_%s", tostring(track_id), tostring(gap_start.frames or 0), tostring(gap_end.frames or 0))
@@ -272,7 +288,10 @@ local function create_temp_gap_clip(edge_info, clip_lookup, all_clips, track_cli
         source_out = Rational.new(ui_constants.TIMELINE.GAP_SOURCE_MAX_FRAMES, seq_fps_num, seq_fps_den),
         fps_numerator = seq_fps_num,
         fps_denominator = seq_fps_den,
+        rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
         enabled = 1,
+        created_at = 0,
+        modified_at = 0,
         is_temp_gap = true,
         gap_left_id = left_clip and left_clip.id or nil,
         gap_right_id = right_clip and right_clip.id or nil
@@ -317,6 +336,46 @@ local function compute_neighbor_bounds(all_clips, original_state, clip_id)
     return prev_end, next_start, prev_clip_id, next_clip_id
 end
 
+local function ensure_neighbor_bounds(ctx, clip_id)
+    ctx.neighbor_bounds_cache = ctx.neighbor_bounds_cache or {}
+    if not ctx.neighbor_bounds_cache[clip_id] then
+        local original = ctx.original_states_map[clip_id]
+        local prev_bound, next_bound, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, original, clip_id)
+        ctx.neighbor_bounds_cache[clip_id] = {
+            prev = prev_bound,
+            next = next_bound,
+            prev_id = prev_id,
+            next_id = next_id
+        }
+    end
+    return ctx.neighbor_bounds_cache[clip_id]
+end
+
+local function should_negate_edge(ctx, edge_key)
+    return ctx.edge_will_negate and ctx.edge_will_negate[edge_key]
+end
+
+local function resolve_gap_timeline_start_frames(ctx, clip, edge_info)
+    local start_value = clip.timeline_start and clip.timeline_start.frames
+    if edge_info.edge_type ~= "gap_before" then
+        return start_value
+    end
+    if start_value and start_value ~= 0 then
+        return start_value
+    end
+    local right_id = clip.gap_right_id or edge_info.original_clip_id
+    if not right_id then
+        return start_value
+    end
+    local right_original = ctx.original_states_map[right_id]
+        or ctx.preloaded_clips[right_id]
+        or ctx.clip_lookup[right_id]
+    if right_original and right_original.timeline_start and right_original.timeline_start.frames then
+        return right_original.timeline_start.frames
+    end
+    return start_value
+end
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     -- Conditional logging based on environment variable (off by default to reduce noise)
     local log_level = os.getenv("JVE_LOG_LEVEL") or "INFO"
@@ -333,7 +392,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             clip = Clip.load_optional(clip_id, db)
             ctx.preloaded_clips[clip_id] = clip
         end
-        if clip and not ctx.original_states_map[clip_id] then
+        -- Skip capturing state for temp gap clips (synthetic, not persisted)
+        local is_temp_gap = type(clip_id) == "string" and clip_id:find("^temp_gap_")
+        if clip and not is_temp_gap and not ctx.original_states_map[clip_id] then
             ctx.original_states_map[clip_id] = command_helper.capture_clip_state(clip)
         end
         return clip
@@ -353,6 +414,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return build_edge_key({clip_id = neighbors.prev_id, edge_type = "gap_after"})
         end
         return nil
+    end
+
+    local function register_gap_partner(ctx, edge_info, neighbors)
+        if not neighbors then
+            return
+        end
+        local partner_key = compute_gap_partner_key(edge_info, neighbors)
+        if partner_key then
+            local edge_key = build_edge_key(edge_info)
+            ctx.gap_partner_edges[edge_key] = partner_key
+        end
     end
 
     -- Helper: Calculate roll constraint (min/max delta) for an edge based on neighbor positions
@@ -411,6 +483,121 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return min_limit, max_limit
     end
 
+    local function update_global_min(ctx, edge_key, value)
+        if not value or value == -math.huge then
+            return
+        end
+        ctx.global_min_edge_keys = ctx.global_min_edge_keys or {}
+        if value > ctx.global_min_frames then
+            ctx.global_min_frames = value
+            ctx.global_min_edge_keys = {}
+        end
+        if edge_key and value == ctx.global_min_frames then
+            ctx.global_min_edge_keys[edge_key] = true
+        end
+    end
+
+    local function update_global_max(ctx, edge_key, value)
+        if not value or value == math.huge then
+            return
+        end
+        ctx.global_max_edge_keys = ctx.global_max_edge_keys or {}
+        if value < ctx.global_max_frames then
+            ctx.global_max_frames = value
+            ctx.global_max_edge_keys = {}
+        end
+        if edge_key and value == ctx.global_max_frames then
+            ctx.global_max_edge_keys[edge_key] = true
+        end
+    end
+
+    local function apply_roll_constraints(ctx, edge_info, clip, neighbors)
+        if edge_info.trim_type ~= "roll" then
+            return
+        end
+        local edge_key = build_edge_key(edge_info)
+        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
+        local delta_min, delta_max = compute_roll_constraint(edge_info, clip, ctx.original_states_map[edge_info.clip_id], neighbors, ctx.edited_clip_lookup)
+        if delta_min then
+            ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, delta_min)
+            update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+        end
+        if delta_max then
+            ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, delta_max)
+            update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+        end
+    end
+
+    local function apply_gap_limits(ctx, edge_info, clip, will_negate)
+        if not is_gap_edge(edge_info.edge_type) then
+            return
+        end
+        local edge_key = build_edge_key(edge_info)
+        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
+        local gap_min, gap_max = compute_gap_close_constraint(edge_info, clip, will_negate)
+        if gap_min then
+            ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, gap_min)
+            update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+        end
+        if gap_max then
+            ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, gap_max)
+            update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+        end
+    end
+
+    local function clamp_gap_to_origin(ctx, edge_info, clip)
+        if edge_info.edge_type ~= "gap_before" then
+            return
+        end
+        local edge_key = build_edge_key(edge_info)
+        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
+        local timeline_start_frames = resolve_gap_timeline_start_frames(ctx, clip, edge_info)
+        if not timeline_start_frames then
+            return
+        end
+        local start_limit = -timeline_start_frames
+        ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, start_limit)
+        update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+        if ctx.clamped_delta_rat and ctx.clamped_delta_rat.frames < start_limit then
+            ctx.clamped_delta_rat = Rational.new(start_limit, ctx.seq_fps_num, ctx.seq_fps_den)
+        end
+    end
+
+    local function apply_media_limits(ctx, edge_info, clip, will_negate)
+        if is_gap_edge(edge_info.edge_type) then
+            return
+        end
+        local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
+        local effective_delta_positive = (ctx.clamped_delta_rat.frames > 0 and not will_negate)
+            or (ctx.clamped_delta_rat.frames < 0 and will_negate)
+        local clip_state = ctx.original_states_map[edge_info.clip_id]
+        if not clip_state then
+            return
+        end
+        local edge_key = build_edge_key(edge_info)
+        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
+        if normalized_edge == "in" then
+            if not effective_delta_positive and clip_state.source_in then
+                local extend_limit = -clip_state.source_in.frames
+                ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, extend_limit)
+                update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+            end
+        elseif normalized_edge == "out" and effective_delta_positive and clip.media_id then
+            local media = ctx.preloaded_clips[clip.media_id] or require("models.media").load(clip.media_id, db)
+            if media and media.duration and clip_state.source_in and clip_state.duration then
+                local available_frames = media.duration.frames - clip_state.source_in.frames - clip_state.duration.frames
+                if will_negate then
+                    local global_constraint = -available_frames
+                    ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_constraint)
+                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+                else
+                    ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, available_frames)
+                    update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+                end
+            end
+        end
+    end
+
     local function build_clip_cache(ctx)
         ctx.all_clips = database.load_clips(ctx.sequence_id)
         assert(ctx.all_clips, string.format("build_clip_cache: Failed to load clips for sequence %s", ctx.sequence_id))
@@ -445,8 +632,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     error(string.format("Failed to materialize gap edge %s on clip %s", tostring(edge_info.edge_type), tostring(edge_info.clip_id)))
                 end
                 register_temp_gap(ctx, gap_clip)
+                edge_info.original_clip_id = edge_info.clip_id
                 edge_info.clip_id = gap_clip.id
                 edge_info.track_id = gap_clip.track_id
+                ctx.original_states_map[gap_clip.id] = command_helper.capture_clip_state(gap_clip)
             end
         end
     end
@@ -455,6 +644,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(ctx.all_clips, "assign_edge_tracks: all_clips is nil")
         ctx.clip_track_lookup = {}
         ctx.affected_tracks = {}
+        ctx.selected_tracks = {}
         for _, clip in ipairs(ctx.all_clips) do
             ctx.clip_track_lookup[clip.id] = clip.track_id
             if clip.track_id then
@@ -465,6 +655,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, edge_info in ipairs(ctx.edge_infos) do
             if not edge_info.track_id then
                 edge_info.track_id = ctx.clip_track_lookup[edge_info.clip_id]
+            end
+            if edge_info.track_id then
+                ctx.selected_tracks[edge_info.track_id] = true
             end
             edge_info.normalized_edge = edge_utils.to_bracket(edge_info.edge_type)
         end
@@ -509,7 +702,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ctx.preloaded_clips[clip_id] = clip
             end
         end
-        if clip and not ctx.original_states_map[clip_id] then
+        -- Skip capturing state for temp gap clips (synthetic, not persisted)
+        local is_temp_gap = type(clip_id) == "string" and clip_id:find("^temp_gap_")
+        if clip and not is_temp_gap and not ctx.original_states_map[clip_id] then
             ctx.original_states_map[clip_id] = command_helper.capture_clip_state(clip)
         end
         if clip then
@@ -522,15 +717,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return ctx.preloaded_clips[clip_id] or Clip.load_optional(clip_id, db)
     end
 
-    local function apply_edge_ripple(clip, edge_type, delta_rat, trim_type, raw_edge_type)
+-- Apply the requested trim delta to clip/gap edges and return the ripple start.
+-- Returns nil when the clip collapses (e.g., trim removes media entirely).
+local function apply_edge_ripple(clip, edge_type, delta_rat, trim_type, raw_edge_type)
         if type(clip.duration) ~= "table" or not clip.duration.frames then
             error("apply_edge_ripple: Clip missing Rational duration.")
         end
 
         local new_duration_timeline = clip.duration
         local new_source_in = clip.source_in
+        local is_gap = is_gap_edge(raw_edge_type)
 
-        if edge_type == "in" then
+        if is_gap and trim_type == "roll" then
+            new_duration_timeline = clip.duration
+            if edge_type == "in" then
+                clip.timeline_start = clip.timeline_start + delta_rat
+            end
+        elseif edge_type == "in" then
             new_duration_timeline = clip.duration - delta_rat
             new_source_in = clip.source_in + delta_rat
             if trim_type == "roll" then
@@ -542,7 +745,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             error(string.format("apply_edge_ripple: Unsupported edge_type '%s'", edge_type))
         end
 
-        local is_gap = is_gap_edge(raw_edge_type)
         if is_gap then
             if new_duration_timeline.frames and new_duration_timeline.frames < 0 then
                 local fps_num = (clip.duration and clip.duration.fps_numerator) or (clip.source_in and clip.source_in.fps_numerator) or 30
@@ -573,10 +775,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, edge_info in ipairs(ctx.edge_infos) do
             if edge_info.clip_id then
                 ctx.edited_clip_lookup[edge_info.clip_id] = true
-                if not is_gap_edge(edge_info.edge_type) then
-                    ctx.selection_has_clip_edge = true
-                else
-                    local gap_clip = ctx.preloaded_clips[edge_info.clip_id]
+                if edge_info.original_clip_id then
+                    ctx.edited_clip_lookup[edge_info.original_clip_id] = true
+                end
+                if is_gap_edge(edge_info.edge_type) then
+                    local gap_clip = ctx.preloaded_clips and ctx.preloaded_clips[edge_info.clip_id]
                     if gap_clip then
                         if gap_clip.gap_left_id then
                             ctx.edited_clip_lookup[gap_clip.gap_left_id] = true
@@ -585,6 +788,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             ctx.edited_clip_lookup[gap_clip.gap_right_id] = true
                         end
                     end
+                end
+                if not is_gap_edge(edge_info.edge_type) then
+                    ctx.selection_has_clip_edge = true
                 end
             end
             local normalized = edge_info.normalized_edge or edge_utils.to_bracket(edge_info.edge_type)
@@ -621,34 +827,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
-    local function update_global_min(ctx, edge_key, value)
-        if not value or value == -math.huge then
-            return
-        end
-        ctx.global_min_edge_keys = ctx.global_min_edge_keys or {}
-        if value > ctx.global_min_frames then
-            ctx.global_min_frames = value
-            ctx.global_min_edge_keys = {}
-        end
-        if edge_key and value == ctx.global_min_frames then
-            ctx.global_min_edge_keys[edge_key] = true
-        end
-    end
-
-    local function update_global_max(ctx, edge_key, value)
-        if not value or value == math.huge then
-            return
-        end
-        ctx.global_max_edge_keys = ctx.global_max_edge_keys or {}
-        if value < ctx.global_max_frames then
-            ctx.global_max_frames = value
-            ctx.global_max_edge_keys = {}
-        end
-        if edge_key and value == ctx.global_max_frames then
-            ctx.global_max_edge_keys[edge_key] = true
-        end
-    end
-
     local function clamp_downstream_overlaps(ctx)
         local earliest = ctx.earliest_ripple_hint
         if not earliest then
@@ -666,9 +844,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, clip in ipairs(ctx.all_clips) do
             if clip.id
                 and not ctx.edited_clip_lookup[clip.id]
-                and ctx.affected_tracks[clip.track_id]
-                and clip.timeline_start
-                and clip.timeline_start >= earliest then
+                and clip.timeline_start then
+                if ctx.selected_tracks[clip.track_id] and earliest and clip.timeline_start >= earliest then
+                    goto continue_clip_scan
+                end
+                if earliest and clip.timeline_start < earliest then
+                    goto continue_clip_scan
+                end
                 local original = command_helper.capture_clip_state(clip)
                 local prev_bound, next_bound, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, original, clip.id)
                 if prev_bound and not ctx.edited_clip_lookup[prev_id] then
@@ -693,6 +875,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         end
                     end
                 end
+                ::continue_clip_scan::
             end
         end
     end
@@ -733,78 +916,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, edge_info in ipairs(ctx.edge_infos) do
             local clip = ensure_clip_loaded(ctx, edge_info.clip_id, db)
             if clip then
-                if not ctx.neighbor_bounds_cache[edge_info.clip_id] then
-                    local prev_bound, next_bound, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, ctx.original_states_map[edge_info.clip_id], edge_info.clip_id)
-                    ctx.neighbor_bounds_cache[edge_info.clip_id] = {prev = prev_bound, next = next_bound, prev_id = prev_id, next_id = next_id}
-                end
-
-                local neighbors = ctx.neighbor_bounds_cache[edge_info.clip_id]
-                local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
+                local neighbors = ensure_neighbor_bounds(ctx, edge_info.clip_id)
                 local edge_key = build_edge_key(edge_info)
-
                 ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
+
                 if is_gap_edge(edge_info.edge_type) then
-                    local partner_key = compute_gap_partner_key(edge_info, neighbors)
-                    if partner_key then
-                        ctx.gap_partner_edges[edge_key] = partner_key
-                    end
+                    register_gap_partner(ctx, edge_info, neighbors)
                 end
 
-                if edge_info.trim_type == "roll" then
-                    local delta_min, delta_max = compute_roll_constraint(edge_info, clip, ctx.original_states_map[edge_info.clip_id], neighbors, ctx.edited_clip_lookup)
-                    if delta_min then
-                        ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, delta_min)
-                        update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-                    end
-                    if delta_max then
-                        ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, delta_max)
-                        update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
-                    end
-                end
-
-                local will_negate = ctx.edge_will_negate[edge_key]
-                local gap_min, gap_max = compute_gap_close_constraint(edge_info, clip, will_negate)
-                if gap_min then
-                    ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, gap_min)
-                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-                end
-                if gap_max then
-                    ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, gap_max)
-                    update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
-                end
-
-                if not is_gap_edge(edge_info.edge_type) then
-                    local effective_delta_positive = (ctx.clamped_delta_rat.frames > 0 and not will_negate) or (ctx.clamped_delta_rat.frames < 0 and will_negate)
-
-                    if normalized_edge == "in" then
-                        if not effective_delta_positive and ctx.original_states_map[edge_info.clip_id].source_in then
-                            local extend_limit = -ctx.original_states_map[edge_info.clip_id].source_in.frames
-                            ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, extend_limit)
-                            update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-                        end
-                    elseif normalized_edge == "out" then
-                        if effective_delta_positive and clip.media_id then
-                            local media = ctx.preloaded_clips[clip.media_id] or require("models.media").load(clip.media_id, db)
-                            if media and media.duration and ctx.original_states_map[edge_info.clip_id].source_in and ctx.original_states_map[edge_info.clip_id].duration then
-                                local available_frames = media.duration.frames - ctx.original_states_map[edge_info.clip_id].source_in.frames - ctx.original_states_map[edge_info.clip_id].duration.frames
-                                if will_negate then
-                                    local global_constraint = -available_frames
-                                    ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_constraint)
-                                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-                                else
-                                    ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, available_frames)
-                                    update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
-                                end
-                            end
-                        end
-                    end
-                end
+                apply_roll_constraints(ctx, edge_info, clip, neighbors)
+                local will_negate = should_negate_edge(ctx, edge_key)
+                apply_gap_limits(ctx, edge_info, clip, will_negate)
+                clamp_gap_to_origin(ctx, edge_info, clip)
+                apply_media_limits(ctx, edge_info, clip, will_negate)
             end
         end
 
         compute_earliest_ripple_hint(ctx)
         clamp_downstream_overlaps(ctx)
-        if ctx.command:get_parameter("__force_conflict_delta") then
+        if ctx.command:get_parameter('__force_conflict_delta') then
             ctx.global_min_frames = 1
             ctx.global_max_frames = 0
             ctx.global_min_edge_keys = {}
@@ -830,137 +960,187 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
-    local function process_edge_trims(ctx, db)
+    local function add_preview_shift(ctx, clip_id, new_start, new_duration)
+        if not ctx.dry_run or not clip_id or not new_start then
+            return
+        end
+        ctx.preview_shifted_lookup = ctx.preview_shifted_lookup or {}
+        if ctx.preview_shifted_lookup[clip_id] then
+            return
+        end
+        ctx.preview_shifted_clips = ctx.preview_shifted_clips or {}
+        table.insert(ctx.preview_shifted_clips, {
+            clip_id = clip_id,
+            new_start_value = new_start,
+            new_duration = new_duration
+        })
+        ctx.preview_shifted_lookup[clip_id] = true
+    end
+
+    local function reset_ripple_processing_state(ctx)
         ctx.has_ripple_edge = false
         ctx.ripple_anchor_edge_type = nil
         ctx.ripple_anchor_is_gap = false
         ctx.track_shift_seeds = {}
         ctx.track_shift_amounts = {}
         ctx.earliest_ripple_time = nil
-        ctx.clips_marked_delete = ctx.clips_marked_delete or {}
+        ctx.clips_marked_delete = {}
+        ctx.gap_applied_delta = {}
+        ctx.gap_right_moved = {}
+    end
 
-        assert(ctx.edge_infos, "process_edge_trims: edge_infos is nil")
+    local function compute_applied_delta(ctx, edge_key)
+        local applied_delta = ctx.clamped_delta_rat
+        if should_negate_edge(ctx, edge_key) then
+            applied_delta = -ctx.clamped_delta_rat
+        end
+        return applied_delta
+    end
+
+    local function register_ripple_anchor(ctx, normalized_edge, is_gap_edge_type)
+        ctx.has_ripple_edge = true
+        if not ctx.ripple_anchor_edge_type then
+            ctx.ripple_anchor_edge_type = normalized_edge
+            ctx.ripple_anchor_is_gap = is_gap_edge_type
+            return
+        end
+        if ctx.ripple_anchor_is_gap and not is_gap_edge_type then
+            ctx.ripple_anchor_edge_type = normalized_edge
+            ctx.ripple_anchor_is_gap = false
+        end
+    end
+
+    local function register_track_shift_seed(ctx, clip, normalized_edge, applied_delta, is_gap_edge_type)
+        if not clip.track_id or ctx.track_shift_seeds[clip.track_id] then
+            return
+        end
+        ctx.track_shift_seeds[clip.track_id] = {
+            orientation = normalized_edge,
+            applied_delta = applied_delta,
+            is_gap = is_gap_edge_type
+        }
+    end
+
+    local function record_preview_for_edge(ctx, clip, edge_info, normalized_edge)
+        if not ctx.dry_run then
+            return
+        end
+        ctx.preview_affected_clips = ctx.preview_affected_clips or {}
+        table.insert(ctx.preview_affected_clips, {
+            clip_id = clip.id,
+            new_start_value = clip.timeline_start,
+            new_duration = clip.duration,
+            edge_type = normalized_edge,
+            raw_edge_type = edge_info.edge_type,
+            is_gap = is_gap_edge(edge_info.edge_type)
+        })
+    end
+
+    local function compute_ripple_point(original, clip, normalized_edge)
+        local source = original or clip
+        if not source or not source.timeline_start then
+            return clip.timeline_start
+        end
+        if normalized_edge == "out" then
+            return source.timeline_start + source.duration
+        end
+        return source.timeline_start
+    end
+
+    local function update_earliest_ripple_time(ctx, point)
+        if not point then
+            return
+        end
+        if not ctx.earliest_ripple_time or point < ctx.earliest_ripple_time then
+            ctx.earliest_ripple_time = point
+        end
+    end
+
+    local function record_gap_delta(ctx, clip_id, applied_delta)
+        ctx.gap_applied_delta[clip_id] = applied_delta
+    end
+
+    local function gap_right_has_independent_in_edge(ctx, clip_id)
+        assert(ctx.edge_infos, "gap_right_has_independent_in_edge: edge_infos is nil")
         for _, edge_info in ipairs(ctx.edge_infos) do
-            local clip_id = edge_info.clip_id
-            local clip = load_clip_for_edit(ctx, clip_id, db)
-            if not clip then
-                print(string.format("WARNING: BatchRippleEdit: Clip %s not found. Skipping.", tostring(clip_id):sub(1, 8)))
-                goto continue_edge_process
+            if edge_info.clip_id == clip_id and edge_info.edge_type == "in" then
+                return true
             end
-
-            if ctx.clips_marked_delete[clip_id] then
-                goto continue_edge_process
-            end
-
-            local original = ctx.original_states_map[clip_id]
-            local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
-            local key = build_edge_key(edge_info)
-            local applied_delta = ctx.clamped_delta_rat
-            if ctx.edge_will_negate[key] then
-                applied_delta = -ctx.clamped_delta_rat
-            end
-
-            local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
-            if not success then
-                print(string.format("ERROR: Ripple failed for clip %s", tostring(clip.id):sub(1, 8)))
-                return false
-            end
-
-            if edge_info.trim_type ~= "roll" then
-                ctx.has_ripple_edge = true
-                if not ctx.ripple_anchor_edge_type then
-                    ctx.ripple_anchor_edge_type = normalized_edge
-                    ctx.ripple_anchor_is_gap = is_gap_edge(edge_info.edge_type)
-                elseif ctx.ripple_anchor_is_gap and not is_gap_edge(edge_info.edge_type) then
-                    ctx.ripple_anchor_edge_type = normalized_edge
-                    ctx.ripple_anchor_is_gap = false
-                end
-                if clip.track_id and not ctx.track_shift_seeds[clip.track_id] then
-                    ctx.track_shift_seeds[clip.track_id] = {
-                        orientation = normalized_edge,
-                        applied_delta = applied_delta,
-                        is_gap = is_gap_edge(edge_info.edge_type)
-                    }
-                end
-            end
-
-            if ctx.dry_run then
-                table.insert(ctx.preview_affected_clips, {
-                    clip_id = clip.id,
-                    new_start_value = clip.timeline_start,
-                    new_duration = clip.duration,
-                    edge_type = normalized_edge,
-                    raw_edge_type = edge_info.edge_type,
-                    is_gap = is_gap_edge(edge_info.edge_type)
-                })
-            end
-
-            if deleted_clip then
-                ctx.clips_marked_delete[clip_id] = true
-            end
-
-            local ripple_point = clip.timeline_start
-            if normalized_edge == "out" then
-                ripple_point = original.timeline_start + original.duration
-            elseif normalized_edge == "in" then
-                ripple_point = original.timeline_start
-            end
-
-            if not ctx.earliest_ripple_time or ripple_point < ctx.earliest_ripple_time then
-                ctx.earliest_ripple_time = ripple_point
-            end
-
-            ::continue_edge_process::
         end
+        return false
+    end
 
-        -- Phase 2.5: Translate gap clip modifications to real clip movements
-        -- Gap edges create temp gap clips, but changes must propagate to adjacent real clips
-        -- ONLY if the adjacent clip doesn't have its own edge selected (to avoid double-counting)
-        for gap_id, gap_clip in pairs(ctx.modified_clips) do
+    local function snapshot_clip_for_gap(ctx, clip)
+        return {
+            id = clip.id,
+            track_id = clip.track_id,
+            timeline_start = clip.timeline_start,
+            duration = clip.duration,
+            source_in = clip.source_in,
+            source_out = clip.source_out,
+            fps_numerator = clip.fps_numerator,
+            fps_denominator = clip.fps_denominator,
+            enabled = clip.enabled
+        }
+    end
+
+    local function compute_gap_shift_value(ctx, gap_id, gap_clip, original_gap)
+        local original_end = original_gap.timeline_start + original_gap.duration
+        local new_end = gap_clip.timeline_start + gap_clip.duration
+        local shift = new_end - original_end
+        if shift.frames == 0 then
+            shift = gap_clip.timeline_start - original_gap.timeline_start
+        end
+        if (not shift.frames or shift.frames == 0) and ctx.gap_applied_delta[gap_id] then
+            shift = ctx.gap_applied_delta[gap_id]
+        end
+        return shift
+    end
+
+    local function move_gap_right_clip(ctx, gap_id, gap_clip)
+        if not gap_clip or not gap_clip.is_temp_gap then
+            return
+        end
+        local right_id = gap_clip.gap_right_id
+        if not right_id or not ctx.edited_clip_lookup[right_id] or ctx.gap_right_moved[right_id] then
+            return
+        end
+        if gap_right_has_independent_in_edge(ctx, right_id) then
+            return
+        end
+        local original_gap = ctx.original_states_map[gap_id]
+        if not original_gap then
+            return
+        end
+        local gap_shift = compute_gap_shift_value(ctx, gap_id, gap_clip, original_gap)
+        if not gap_shift or not gap_shift.frames or gap_shift.frames == 0 then
+            return
+        end
+        local right_clip = ctx.modified_clips[right_id] or ctx.clip_lookup[right_id]
+        if not right_clip then
+            return
+        end
+        if not ctx.modified_clips[right_id] then
+            right_clip = snapshot_clip_for_gap(ctx, right_clip)
+            ctx.modified_clips[right_id] = right_clip
+            if not ctx.original_states_map[right_id] then
+                ctx.original_states_map[right_id] = ctx.clip_lookup[right_id]
+            end
+        end
+        right_clip.timeline_start = right_clip.timeline_start + gap_shift
+        add_preview_shift(ctx, right_id, right_clip.timeline_start, right_clip.duration)
+        ctx.gap_right_moved[right_id] = true
+    end
+
+    local function propagate_gap_offsets(ctx)
+        for gap_id, gap_clip in pairs(ctx.modified_clips or {}) do
             if gap_clip and gap_clip.is_temp_gap then
-                local original_gap = ctx.original_states_map[gap_id]
-                if original_gap then
-                    -- If gap's timeline_start moved, move the right clip (unless it has its own in-point selected)
-                    if gap_clip.gap_right_id and gap_clip.timeline_start ~= original_gap.timeline_start then
-                        -- Check if right clip has its own in-point edge selected
-                        local right_has_in_edge = false
-                        assert(ctx.edge_infos, "gap clip modification: edge_infos is nil")
-                        for _, edge_info in ipairs(ctx.edge_infos) do
-                            if edge_info.clip_id == gap_clip.gap_right_id and edge_info.edge_type == "in" then
-                                right_has_in_edge = true
-                                break
-                            end
-                        end
-
-                        if not right_has_in_edge then
-                            local gap_shift = gap_clip.timeline_start - original_gap.timeline_start
-                            local right_clip = ctx.modified_clips[gap_clip.gap_right_id] or ctx.clip_lookup[gap_clip.gap_right_id]
-                            if right_clip then
-                                if not ctx.modified_clips[gap_clip.gap_right_id] then
-                                    -- Clone before modifying
-                                    right_clip = {
-                                        id = right_clip.id,
-                                        track_id = right_clip.track_id,
-                                        timeline_start = right_clip.timeline_start,
-                                        duration = right_clip.duration,
-                                        source_in = right_clip.source_in,
-                                        source_out = right_clip.source_out,
-                                        fps_numerator = right_clip.fps_numerator,
-                                        fps_denominator = right_clip.fps_denominator
-                                    }
-                                    ctx.modified_clips[gap_clip.gap_right_id] = right_clip
-                                    if not ctx.original_states_map[gap_clip.gap_right_id] then
-                                        ctx.original_states_map[gap_clip.gap_right_id] = ctx.clip_lookup[gap_clip.gap_right_id]
-                                    end
-                                end
-                                right_clip.timeline_start = right_clip.timeline_start + gap_shift
-                            end
-                        end
-                    end
-                end
+                move_gap_right_clip(ctx, gap_id, gap_clip)
             end
         end
+    end
 
+    local function compute_track_shift_amounts(ctx)
         local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
         if ctx.has_ripple_edge then
             ctx.downstream_shift_rat = Rational.new(ctx.clamped_delta_rat.frames * shift_factor, ctx.seq_fps_num, ctx.seq_fps_den)
@@ -980,11 +1160,65 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         else
             ctx.downstream_shift_rat = Rational.new(0, ctx.seq_fps_num, ctx.seq_fps_den)
         end
+    end
 
+    local function ensure_earliest_ripple_time(ctx)
         if not ctx.earliest_ripple_time then
             ctx.earliest_ripple_time = Rational.new(0, ctx.seq_fps_num, ctx.seq_fps_den)
         end
+    end
 
+    local function process_edge_trims(ctx, db)
+        reset_ripple_processing_state(ctx)
+
+        assert(ctx.edge_infos, "process_edge_trims: edge_infos is nil")
+        for _, edge_info in ipairs(ctx.edge_infos) do
+            local clip_id = edge_info.clip_id
+            local clip = load_clip_for_edit(ctx, clip_id, db)
+            if not clip then
+                print(string.format("WARNING: BatchRippleEdit: Clip %s not found. Skipping.", tostring(clip_id):sub(1, 8)))
+                goto continue_edge_process
+            end
+
+            if ctx.clips_marked_delete[clip_id] then
+                goto continue_edge_process
+            end
+
+            local original = ctx.original_states_map[clip_id]
+            local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
+            local key = build_edge_key(edge_info)
+            local applied_delta = compute_applied_delta(ctx, key)
+
+            local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
+            if not success then
+                print(string.format("ERROR: Ripple failed for clip %s", tostring(clip.id):sub(1, 8)))
+                return false
+            end
+
+            if is_gap_edge(edge_info.edge_type) then
+                record_gap_delta(ctx, clip_id, applied_delta)
+            end
+
+            if edge_info.trim_type ~= "roll" then
+                register_ripple_anchor(ctx, normalized_edge, is_gap_edge(edge_info.edge_type))
+                register_track_shift_seed(ctx, clip, normalized_edge, applied_delta, is_gap_edge(edge_info.edge_type))
+            end
+
+            record_preview_for_edge(ctx, clip, edge_info, normalized_edge)
+
+            if deleted_clip then
+                ctx.clips_marked_delete[clip_id] = true
+            end
+
+            local ripple_point = compute_ripple_point(original, clip, normalized_edge)
+            update_earliest_ripple_time(ctx, ripple_point)
+
+            ::continue_edge_process::
+        end
+
+        propagate_gap_offsets(ctx)
+        compute_track_shift_amounts(ctx)
+        ensure_earliest_ripple_time(ctx)
         return true
     end
 
@@ -994,6 +1228,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.edited_lookup_for_shifts = {}
 
         for id in pairs(ctx.modified_clips or {}) do
+            ctx.edited_lookup_for_shifts[id] = true
+        end
+        for id in pairs(ctx.edited_clip_lookup or {}) do
             ctx.edited_lookup_for_shifts[id] = true
         end
 
@@ -1028,31 +1265,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             }
             local prev_bound, next_bound, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, original, shift_clip_data.id)
 
-            if prev_bound and ctx.edited_lookup_for_shifts[prev_id] then
-                local neighbour = ctx.modified_clips[prev_id]
-                if neighbour then
-                    prev_bound = neighbour.timeline_start + neighbour.duration
-                else
-                    prev_bound = nil
-                end
-            elseif prev_bound and ctx.shift_lookup[prev_id] then
+            if prev_bound and prev_id and ctx.edited_lookup_for_shifts[prev_id] then
                 prev_bound = nil
             end
-
-            if next_bound and ctx.edited_lookup_for_shifts[next_id] then
-                local neighbour = ctx.modified_clips[next_id]
-                if neighbour then
-                    next_bound = neighbour.timeline_start
-                else
-                    next_bound = nil
-                end
-            elseif next_bound and ctx.shift_lookup[next_id] then
-                next_bound = nil
-            end
-
             if prev_bound then
                 local bound = (prev_bound - original.timeline_start).frames
                 if bound > min_frames then min_frames = bound end
+            end
+
+            if next_bound and next_id and ctx.edited_lookup_for_shifts[next_id] then
+                next_bound = nil
             end
             if next_bound then
                 local bound = (next_bound - (original.timeline_start + original.duration)).frames
@@ -1171,16 +1393,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end)
 
         if ctx.dry_run then
-            ctx.preview_shifted_clips = {}
+            ctx.preview_shifted_clips = ctx.preview_shifted_clips or {}
+            ctx.preview_shifted_lookup = ctx.preview_shifted_lookup or {}
             assert(ctx.clips_to_shift, "build_planned_mutations: clips_to_shift is nil")
             for _, shift_clip in ipairs(ctx.clips_to_shift) do
                 local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_rat
                 local new_start = shift_clip.timeline_start + track_shift
-                table.insert(ctx.preview_shifted_clips, {
-                    clip_id = shift_clip.id,
-                    new_start_value = new_start,
-                    new_duration = shift_clip.duration
-                })
+                if new_start.frames < 0 then
+                    new_start = Rational.new(0, new_start.fps_numerator, new_start.fps_denominator)
+                end
+                if not ctx.preview_shifted_lookup[shift_clip.id] then
+                    add_preview_shift(ctx, shift_clip.id, new_start, shift_clip.duration)
+                else
+                    -- If an entry already exists (e.g., from temp gap propagation), update to the downstream value if it differs.
+                    for _, entry in ipairs(ctx.preview_shifted_clips) do
+                        if entry.clip_id == shift_clip.id then
+                            entry.new_start_value = new_start
+                            entry.new_duration = shift_clip.duration
+                            break
+                        end
+                    end
+                end
             end
         end
     end

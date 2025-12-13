@@ -106,6 +106,8 @@ function M.handle_wheel(view, delta_x, delta_y, modifiers)
     end
 end
 
+-- Scan the requested track for clips near the cursor and return whichever edges
+-- fall inside the configured trim zone. Returns nil when no handles are within range.
 local function pick_edges_for_track(state, track_id, cursor_x, viewport_width)
     if not track_id then return nil end
     local track_clips = {}
