@@ -5,6 +5,7 @@ local keyboard_shortcuts = {}
 local frame_utils = require("core.frame_utils")
 local shortcut_registry = require("core.keyboard_shortcut_registry")
 local panel_manager = require("ui.panel_manager")
+local Rational = require("core.rational")
 
 -- Qt key constants (from Qt::Key enum)
 local KEY = {
@@ -968,18 +969,25 @@ function keyboard_shortcuts.handle_key(event)
             local specs = {}
 
             for _, clip in ipairs(target_clips) do
-                local start_value = clip.timeline_start or clip.start_value
-                local duration = clip.duration
-                local end_time = start_value + duration
-                
-                if playhead_value > start_value and playhead_value < end_time then
-                    table.insert(specs, {
-                        command_type = "SplitClip",
-                        parameters = {
-                            clip_id = clip.id,
-                            split_time = playhead_value
-                        }
-                    })
+                local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
+                if not rate or not rate.fps_numerator or not rate.fps_denominator then
+                    error("Blade: Active sequence frame rate unavailable", 2)
+                end
+                local start_value = Rational.hydrate(clip.timeline_start or clip.start_value, rate.fps_numerator, rate.fps_denominator)
+                local duration_value = Rational.hydrate(clip.duration or clip.duration_value, rate.fps_numerator, rate.fps_denominator)
+                local playhead_rt = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator)
+
+                if start_value and duration_value and duration_value.frames > 0 and playhead_rt then
+                    local end_time = start_value + duration_value
+                    if playhead_rt > start_value and playhead_rt < end_time then
+                        table.insert(specs, {
+                            command_type = "SplitClip",
+                            parameters = {
+                                clip_id = clip.id,
+                                split_time = playhead_rt
+                            }
+                        })
+                    end
                 end
             end
 

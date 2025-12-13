@@ -91,6 +91,7 @@ M.get_default_audio_track_id = function() return tracks.get_primary_id("AUDIO") 
 M.get_clips = clips.get_all
 M.get_clip_by_id = clips.get_by_id
 M.get_clips_for_track = clips.get_for_track
+M.get_clips_at_time = clips.get_at_time
 local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_callback)
     local mutations = sequence_or_mutations
     local callback = maybe_mutations

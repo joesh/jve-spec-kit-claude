@@ -6,8 +6,14 @@ local Rational = require("core.rational")
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function to_rational(val, context_clip)
         if type(val) == "table" and val.frames then return val end
-        local rate = (context_clip and context_clip.rate) or {fps_numerator=30, fps_denominator=1}
-        return Rational.new(val or 0, rate.fps_numerator, rate.fps_denominator)
+        local rate = context_clip and context_clip.rate
+        if not rate or not rate.fps_numerator or not rate.fps_denominator then
+            error("SplitClip: missing frame rate for Rational conversion", 2)
+        end
+        if val == nil then
+            error("SplitClip: missing Rational value for conversion", 2)
+        end
+        return Rational.new(val, rate.fps_numerator, rate.fps_denominator)
     end
 
     command_executors["SplitClip"] = function(command)
@@ -36,7 +42,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Strict Rational Input: do not accept bare numbers
-        local split_rat = Rational.hydrate(split_val_param)
+        local clip_rate = original_clip.rate
+        if not clip_rate or not clip_rate.fps_numerator or not clip_rate.fps_denominator then
+            error("SplitClip: Clip missing rate metadata", 2)
+        end
+        local split_rat = Rational.hydrate(split_val_param, clip_rate.fps_numerator, clip_rate.fps_denominator)
         
         if not split_rat or not split_rat.frames then
             error("SplitClip: Invalid split_value (missing frames)")
@@ -63,6 +73,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         if mutation_sequence and (not command:get_parameter("sequence_id") or command:get_parameter("sequence_id") == "") then
             command:set_parameter("sequence_id", mutation_sequence)
+        end
+        if mutation_sequence and not command:get_parameter("__snapshot_sequence_ids") then
+            command:set_parameter("__snapshot_sequence_ids", {mutation_sequence})
         end
 
         command:set_parameter("track_id", original_clip.track_id)

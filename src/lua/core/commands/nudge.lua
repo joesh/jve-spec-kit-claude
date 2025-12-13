@@ -42,24 +42,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local selected_clip_ids = command:get_parameter("selected_clip_ids")
         local selected_edges = command:get_parameter("selected_edges")
+
+        local function require_sequence_rate()
+            local rate = timeline_state and timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
+            if not rate or not rate.fps_numerator or not rate.fps_denominator then
+                error("Nudge: missing sequence frame rate", 2)
+            end
+            return rate
+        end
         
         -- Strict Rational validation: callers must provide Rational (or Rational-shaped table) at the leaf
         if type(nudge_amount_rat) == "number" then
             error("Nudge: nudge_amount_rat must be a Rational object, not a number.")
         end
         if type(nudge_amount_rat) == "table" and nudge_amount_rat.frames and not getmetatable(nudge_amount_rat) then
-            -- Accept plain table payloads (e.g. JSON) as Rational
-            local fps_num = nudge_amount_rat.fps_numerator or 30
-            local fps_den = nudge_amount_rat.fps_denominator or 1
+            local rate = require_sequence_rate()
+            local fps_num = nudge_amount_rat.fps_numerator or rate.fps_numerator
+            local fps_den = nudge_amount_rat.fps_denominator or rate.fps_denominator
             nudge_amount_rat = Rational.new(nudge_amount_rat.frames, fps_num, fps_den)
         end
 
         -- Optional legacy frame integer fallback if provided alongside sequence rate
         if (not nudge_amount_rat) and nudge_amount_frames then
-            local rate = timeline_state and timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate() or {fps_numerator = 30, fps_denominator = 1}
-            if type(rate) == "number" then rate = {fps_numerator = rate, fps_denominator = 1} end
-            local fps_num = rate.fps_numerator or 30
-            local fps_den = rate.fps_denominator or 1
+            local rate = require_sequence_rate()
+            local fps_num = rate.fps_numerator
+            local fps_den = rate.fps_denominator
             nudge_amount_rat = Rational.new(nudge_amount_frames, fps_num, fps_den)
         end
 
@@ -472,6 +479,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local executed_mutations = command:get_parameter("executed_mutations")
         local sequence_id = command:get_parameter("sequence_id")
+        -- Best-effort state resync before applying undo to avoid stale in-memory clips causing overlap side-effects.
+        local ts_ok, ts_mod = pcall(require, 'ui.timeline.timeline_state')
+        if ts_ok and ts_mod and ts_mod.reload_clips and sequence_id and sequence_id ~= "" then
+            ts_mod.reload_clips(sequence_id)
+        end
         
         if not executed_mutations then
              print("WARNING: UndoNudge: No executed mutations found (legacy command?)")
@@ -487,6 +499,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not ok then
             if started then db:rollback_transaction(started) end
             print("ERROR: UndoNudge: Failed to revert mutations: " .. tostring(err))
+            -- Ensure UI state is consistent with DB after failure
+            if ts_ok and ts_mod and ts_mod.reload_clips and sequence_id and sequence_id ~= "" then
+                ts_mod.reload_clips(sequence_id)
+            end
             return false
         end
         

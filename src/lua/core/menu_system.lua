@@ -526,19 +526,29 @@ local function create_action_callback(command_name, params)
             local Command = require("command")
             local specs = {}
 
+            local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
+            if not rate or not rate.fps_numerator or not rate.fps_denominator then
+                error("Split: Active sequence frame rate unavailable", 2)
+            end
+
             for _, clip in ipairs(target_clips) do
-                local start_value = clip.start_value
-                local end_time = clip.start_value + clip.duration
-                if playhead_value <= start_value or playhead_value >= end_time then
-                    -- Skip invalid targets to avoid SplitClip errors
+                local start_value = Rational.hydrate(clip.timeline_start or clip.start_value, rate.fps_numerator, rate.fps_denominator)
+                local duration_value = Rational.hydrate(clip.duration or clip.duration_value, rate.fps_numerator, rate.fps_denominator)
+                local playhead_rt = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator)
+
+                if start_value and duration_value and duration_value.frames > 0 and playhead_rt then
+                    local end_time = start_value + duration_value
+                    if playhead_rt > start_value and playhead_rt < end_time then
+                        table.insert(specs, {
+                            command_type = "SplitClip",
+                            parameters = {
+                                clip_id = clip.id,
+                                split_time = playhead_rt
+                            }
+                        })
+                    end
                 else
-                    table.insert(specs, {
-                        command_type = "SplitClip",
-                        parameters = {
-                            clip_id = clip.id,
-                            split_time = playhead_value
-                        }
-                    })
+                    -- Skip invalid targets to avoid SplitClip errors
                 end
             end
 
@@ -821,6 +831,11 @@ local function create_action_callback(command_name, params)
             end
         end
     end
+end
+
+-- Test helper: expose action callback creation without Qt wiring.
+function M._test_get_action_callback(command_name, params)
+    return create_action_callback(command_name, params)
 end
 
 --- Build QMenu from XML element (recursive)

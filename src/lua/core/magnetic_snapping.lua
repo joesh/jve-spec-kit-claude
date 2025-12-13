@@ -13,6 +13,17 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
     excluded_clip_ids = excluded_clip_ids or {}
     excluded_edge_specs = excluded_edge_specs or {}
 
+    local rate = nil
+    if state and state.get_sequence_frame_rate then
+        rate = state.get_sequence_frame_rate()
+    end
+    local function hydrate_time(val)
+        if rate then
+            return Rational.hydrate(val, rate.fps_numerator, rate.fps_denominator)
+        end
+        return Rational.hydrate(val)
+    end
+
     -- Create exclusion lookup tables for O(1) checking
     local excluded_clips_lookup = {}
     for _, clip_id in ipairs(excluded_clip_ids) do
@@ -28,7 +39,6 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
 
     -- Add playhead position as snap point
     local playhead_time = state.get_playhead_position()
-    
     if getmetatable(playhead_time) ~= Rational.metatable then
         error("magnetic_snapping: Playhead value must be a Rational object", 2)
     end
@@ -41,15 +51,19 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
     -- Add all clip edges as snap points (excluding dragged clips/edges)
     for _, clip in ipairs(state.get_clips()) do
         if not excluded_clips_lookup[clip.id] then
+            local ts = hydrate_time(clip.timeline_start)
+            local dur = hydrate_time(clip.duration)
+            if not ts or not dur or dur.frames <= 0 then
+                -- Skip invalid clips to avoid crashing snapping; log once per call.
+                print(string.format("WARNING: magnetic_snapping: Skipping clip %s with invalid time bounds", tostring(clip.id)))
+                goto continue_clip
+            end
+
             -- In-point (left edge)
             local in_key = clip.id .. "_in"
             if not excluded_edges_lookup[in_key] then
-                if getmetatable(clip.timeline_start) ~= Rational.metatable then
-                    error("magnetic_snapping: Clip timeline_start must be a Rational object", 2)
-                end
-
                 table.insert(snap_points, {
-                    time = clip.timeline_start,
+                    time = ts,
                     type = "clip_edge",
                     edge = "in",
                     clip_id = clip.id,
@@ -60,10 +74,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
             -- Out-point (right edge)
             local out_key = clip.id .. "_out"
             if not excluded_edges_lookup[out_key] then
-                if getmetatable(clip.timeline_start) ~= Rational.metatable or getmetatable(clip.duration) ~= Rational.metatable then
-                    error("magnetic_snapping: Clip time values must be Rational objects", 2)
-                end
-                local clip_out_time = clip.timeline_start + clip.duration
+                local clip_out_time = ts + dur
 
                 table.insert(snap_points, {
                     time = clip_out_time,
@@ -74,6 +85,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
                 })
             end
         end
+        ::continue_clip::
     end
 
     return snap_points

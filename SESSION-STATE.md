@@ -1,9 +1,31 @@
+# Session State - 2025-?? Capture Clip State JSON Serialization Fix
+
+## Critical Note
+- UndoNudge crash: `command_helper.capture_clip_state` wasn't saving fps_numerator/fps_denominator, so after JSON round-trip (command parameters → database → retrieval), mutations lost frame rate metadata and undo sorting crashed with "missing previous timeline_start frames".
+- Root cause: Rational objects serialize to JSON as plain tables `{frames:N, fps_numerator:X, fps_denominator:Y}` but lose metatable. Without explicit fps fields in captured state, undo couldn't extract frame counts.
+- Fix: `capture_clip_state` now explicitly saves `fps_numerator`, `fps_denominator` (and optional `created_at`/`modified_at` for delete restoration). Added regression `tests/test_capture_clip_state_serialization.lua` that validates JSON round-trip preserves frame data.
+- Improved error message: When undo hits old incompatible mutations (pre-fix), now suggests deleting `~/Documents/JVE\ Projects/Untitled\ Project.jvp` to reset command history rather than cryptic "missing frames" error.
+
+# Session State - 2025-?? Nudge Undo Overlap Fix
+
+## Critical Note
+- Reproduced UndoNudge VIDEO_OVERLAP: `command_helper.revert_mutations` restored deleted/occluded clips before moving nudged clips back, so the reinsert hit the overlap trigger while the moved clip was still in the way. Added regression `tests/test_revert_mutations_nudge_overlap.lua` that fails on the old ordering and now passes.
+- Fix: `revert_mutations` now deletes inserts, applies updates (sorted by nudge direction), then restores deletes; requires fps/created_at fields on restore, and keeps strict frame validation (no fallbacks).
+- Cleanup: `split_clip` now requires clip rate when hydrating split values (no 30fps fallback); `nudge` requires the active sequence rate for Rational inputs/legacy frames; `clip_state.get_at_time` fails fast if sequence_frame_rate is missing instead of defaulting to 30fps.
+- Tests run: `tests/test_revert_mutations_nudge_overlap.lua`, `tests/test_nudge_command_manager_undo.lua`, `tests/test_nudge_block_resolves_overlaps.lua`.
+
 # Session State - 2025-?? Insert Snapshot Assertion
 
 ## Critical Note
 - Insert command crashed whenever the command sequence hit a snapshot boundary (`sequence_number % 50 == 0`) because it never populated `__snapshot_sequence_ids`; command_manager asserts and the menu printed "INSERT failed: unknown error" after logging a successful insert.
 - Fix applied: `core.commands.insert` now seeds `__snapshot_sequence_ids` with the resolved sequence id so snapshot creation can succeed.
 - Regression added: `tests/test_insert_snapshot_boundary.lua` fast-forwards to the snapshot boundary and verifies Insert succeeds and writes a snapshot entry.
+- Timeline keyboard shortcut regression: Cmd/Ctrl+B Split failed with "attempt to call nil value" because the timeline state facade no longer exposed `get_clips_at_time`. Added regression `tests/test_keyboard_split_shortcut.lua` and restored the API via `timeline_state`/`clip_state` (new overlap helper). Awaiting user confirmation from UI.
+- Split menu regression: menu Split path used `clip.start_value` (nil for Rational timeline clips) causing `Rational:add` crash. Added regression `tests/test_menu_split_rational.lua`, exposed test helper in `menu_system`, and hydrated clip bounds in the Split branch to handle Rational fields safely.
+- Timeline renderer crash: `timeline_view_renderer` assumed `clip.timeline_start`/`clip.duration` were always Rational; undo/redo leaves table/nil and `Rational:add` crashed. Added Rational hydration/guard in clip drawing and regression `tests/test_timeline_view_renderer_missing_clip_fields.lua`.
+- Edge picker crash after undo/redo: `edge_picker` assumed clip bounds were Rational and crashed when selection contained table-based times. Added hydration/guards in `edge_picker.build_boundaries` and regression `tests/test_edge_picker_hydration.lua`.
+- Clip state normalization: centralized Rational hydration in `ui.timeline.state.clip_state` so clip indexes and mutation application coerce timeline_start/duration/source in/out to Rational using the active sequence rate; invalid clips are skipped. Objective is to stop magnetic_snapping/renderer/edge picker from seeing raw tables after undo/redo. Awaiting UI verification.
+- Magnetic snapping guard: `magnetic_snapping.find_snap_points` now hydrates clip times and skips invalid clips instead of crashing the entire interaction loop. This reduces blast radius if a command leaves bad clip times.
 
 # Session State - 2025-10-10 Dry-Run Command Preview & Ripple Trim Fixes
 

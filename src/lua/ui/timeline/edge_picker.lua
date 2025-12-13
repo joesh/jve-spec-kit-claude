@@ -1,27 +1,50 @@
 local edge_utils = require("ui.timeline.edge_utils")
 local ui_constants = require("core.ui_constants")
+local Rational = require("core.rational")
 
 local M = {}
+
+local function hydrate_bounds(clip)
+    if not clip then return nil end
+    local start_rt = Rational.hydrate(clip.timeline_start or clip.start_value)
+    local dur_rt = Rational.hydrate(clip.duration or clip.duration_value)
+    if not start_rt or not dur_rt or dur_rt.frames <= 0 then
+        return nil
+    end
+    return start_rt, dur_rt
+end
 
 -- Build boundary map for a single track. Each boundary holds the left/right edge
 -- that meet at that time (clip edge or gap edge).
 function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
     if not time_to_pixel or not viewport_width then return {} end
 
-    table.sort(track_clips, function(a, b)
-        local af = (a.timeline_start and a.timeline_start.frames) or 0
-        local bf = (b.timeline_start and b.timeline_start.frames) or 0
+    local valid_clips = {}
+    for _, clip in ipairs(track_clips) do
+        local start_rt, dur_rt = hydrate_bounds(clip)
+        if start_rt and dur_rt then
+            clip.timeline_start = start_rt
+            clip.duration = dur_rt
+            table.insert(valid_clips, clip)
+        end
+    end
+
+    table.sort(valid_clips, function(a, b)
+        local af = a.timeline_start.frames
+        local bf = b.timeline_start.frames
         if af == bf then return (a.id or "") < (b.id or "") end
         return af < bf
     end)
 
     local boundaries = {}
-    for idx, clip in ipairs(track_clips) do
-        local prev = track_clips[idx - 1]
-        local next_clip = track_clips[idx + 1]
-
+    for idx, clip in ipairs(valid_clips) do
         local start_time = clip.timeline_start
-        local end_time = clip.timeline_start + clip.duration
+        local duration = clip.duration
+
+        local prev = valid_clips[idx - 1]
+        local next_clip = valid_clips[idx + 1]
+
+        local end_time = start_time + duration
         local start_frames = start_time.frames
         local end_frames = end_time.frames
 
@@ -45,6 +68,7 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
             end_boundary.right = end_boundary.right or {clip = clip, clip_id = clip.id, edge_type = "gap_after"}
         end
         boundaries[end_frames] = end_boundary
+        ::continue_clip::
     end
 
     local list = {}

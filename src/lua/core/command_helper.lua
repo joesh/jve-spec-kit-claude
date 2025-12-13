@@ -339,7 +339,11 @@ end
 
 function M.capture_clip_state(clip)
     if not clip then return nil end
-    return {
+    local rate = clip.rate
+    if not rate or not rate.fps_numerator or not rate.fps_denominator then
+        error(string.format("capture_clip_state: Clip %s missing rate metadata", tostring(clip.id)), 2)
+    end
+    local state = {
         id = clip.id,
         project_id = clip.project_id,
         clip_kind = clip.clip_kind,
@@ -354,8 +358,15 @@ function M.capture_clip_state(clip)
         source_in = clip.source_in,
         source_out = clip.source_out,
         name = clip.name,
-        enabled = clip.enabled
+        enabled = clip.enabled,
+        -- Frame rate needed for Rational reconstruction after JSON round-trip
+        fps_numerator = rate.fps_numerator,
+        fps_denominator = rate.fps_denominator
     }
+    -- Timestamps needed for restore operations (may be nil if not set)
+    if clip.created_at then state.created_at = clip.created_at end
+    if clip.modified_at then state.modified_at = clip.modified_at end
+    return state
 end
 
 function M.snapshot_properties_for_clip(clip_id)
@@ -640,101 +651,168 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     if not db then return false, "No database connection" end
     if not mutations or #mutations == 0 then return true end
 
-    -- Revert in reverse order
+    local updates = {}
+    local restore_deletes = {}
+
+    local function val_frames(v, label)
+        if type(v) == "table" and v.frames then return v.frames end
+        if type(v) == "number" then return v end
+        error(string.format("undo %s: missing required %s frames", command and command.type or "update", label or "value"), 2)
+    end
+
+    local function require_rate(prev, context)
+        local fps_num = prev and (prev.fps_numerator or (prev.rate and prev.rate.fps_numerator))
+        local fps_den = prev and (prev.fps_denominator or (prev.rate and prev.rate.fps_denominator))
+        if not fps_num or not fps_den then
+            error(string.format("%s: missing fps for clip %s", context or "undo", tostring(prev and prev.id)), 2)
+        end
+        return fps_num, fps_den
+    end
+
     for i = #mutations, 1, -1 do
         local mut = mutations[i]
         if mut.type == "insert" then
-            -- Undo Insert = Delete
             local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
             if not stmt then return false, "Failed to prepare undo insert: " .. tostring(db:last_error()) end
             stmt:bind_value(1, mut.clip_id)
             local ok = stmt:exec()
             stmt:finalize()
             if not ok then return false, "Failed to execute undo insert: " .. tostring(db:last_error()) end
-            
+
             if command then
                 M.add_delete_mutation(command, sequence_id, mut.clip_id)
             end
-            
         elseif mut.type == "delete" then
-            -- Undo Delete = Insert (restore previous)
-            local prev = mut.previous
-            if not prev then return false, "Cannot undo delete: missing previous state" end
-            
-            local stmt = db:prepare([[
-                INSERT INTO clips (
-                    id, project_id, clip_kind, name, track_id, media_id,
-                    timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                    fps_numerator, fps_denominator, enabled,
-                    created_at, modified_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ]])
-            if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
-            
-            -- Helper to extract frame count
-            local function val_frames(v)
-                if type(v) == "table" and v.frames then return v.frames end
-                return v or 0
-            end
-
-            stmt:bind_value(1, prev.id)
-            stmt:bind_value(2, prev.project_id)
-            stmt:bind_value(3, prev.clip_kind)
-            stmt:bind_value(4, prev.name)
-            stmt:bind_value(5, prev.track_id)
-            stmt:bind_value(6, prev.media_id)
-            stmt:bind_value(7, val_frames(prev.timeline_start or prev.start_value))
-            stmt:bind_value(8, val_frames(prev.duration))
-            stmt:bind_value(9, val_frames(prev.source_in))
-            stmt:bind_value(10, val_frames(prev.source_out))
-            stmt:bind_value(11, prev.fps_numerator or prev.rate and prev.rate.fps_numerator or 30)
-            stmt:bind_value(12, prev.fps_denominator or prev.rate and prev.rate.fps_denominator or 1)
-            stmt:bind_value(13, prev.enabled and 1 or 0)
-            stmt:bind_value(14, prev.created_at or os.time())
-            stmt:bind_value(15, prev.modified_at or os.time())
-            
-            local ok = stmt:exec()
-            stmt:finalize()
-            if not ok then return false, "Failed to execute undo delete: " .. (db:last_error() or "") end
-            
-            if command then
-                 M.add_insert_mutation(command, sequence_id, {id = prev.id})
-            end
-
+            table.insert(restore_deletes, mut)
         elseif mut.type == "update" then
-            -- Undo Update = Update to previous
-            local prev = mut.previous
-            if not prev then return false, "Cannot undo update: missing previous state" end
-
-            local stmt = db:prepare([[
-                UPDATE clips
-                SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
-                WHERE id = ?
-            ]])
-            if not stmt then return false, "Failed to prepare undo update: " .. tostring(db:last_error()) end
-
-            local function val_frames(v)
-                if type(v) == "table" and v.frames then return v.frames end
-                return v or 0
-            end
-
-            stmt:bind_value(1, prev.track_id)
-            stmt:bind_value(2, val_frames(prev.timeline_start or prev.start_value))
-            stmt:bind_value(3, val_frames(prev.duration))
-            stmt:bind_value(4, val_frames(prev.source_in))
-            stmt:bind_value(5, val_frames(prev.source_out))
-            stmt:bind_value(6, prev.enabled and 1 or 0)
-            stmt:bind_value(7, prev.id)
-            
-            local ok = stmt:exec()
-            stmt:finalize()
-            if not ok then return false, "Failed to execute undo update: " .. (db:last_error() or "") end
-            
-            if command then
-                M.add_update_mutation(command, sequence_id, {clip_id = prev.id})
-            end
+            table.insert(updates, mut)
+        else
+            return false, "Unknown mutation type: " .. tostring(mut.type)
         end
+    end
+
+    local function apply_update(mut)
+        local prev = mut.previous
+        if not prev then return false, "Cannot undo update: missing previous state" end
+
+        local stmt = db:prepare([[
+            UPDATE clips
+            SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
+            WHERE id = ?
+        ]])
+        if not stmt then return false, "Failed to prepare undo update: " .. tostring(db:last_error()) end
+
+        stmt:bind_value(1, prev.track_id)
+        stmt:bind_value(2, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
+        stmt:bind_value(3, val_frames(prev.duration, "duration"))
+        stmt:bind_value(4, val_frames(prev.source_in, "source_in"))
+        stmt:bind_value(5, val_frames(prev.source_out, "source_out"))
+        stmt:bind_value(6, prev.enabled and 1 or 0)
+        stmt:bind_value(7, prev.id)
+
+        local ok = stmt:exec()
+        local err = db:last_error()
+        stmt:finalize()
+        if not ok then
+            return false, "Failed to execute undo update: " .. tostring(err)
+        end
+
+        if command then
+            M.add_update_mutation(command, sequence_id, {clip_id = prev.id})
+        end
+        return true
+    end
+
+    if #updates > 0 then
+        if command and command.type == "Nudge" then
+            local nudge = command.get_parameter and (command:get_parameter("nudge_amount_rat") or command:get_parameter("nudge_amount"))
+            local sign = 0
+            if type(nudge) == "table" and nudge.frames then
+                sign = (nudge.frames > 0) and 1 or ((nudge.frames < 0) and -1 or 0)
+            elseif type(nudge) == "number" then
+                sign = (nudge > 0) and 1 or ((nudge < 0) and -1 or 0)
+            end
+            local function start_frames(mut)
+                local prev = mut.previous
+                if not prev then
+                    error("undo update: mutation missing 'previous' state - incompatible command version", 2)
+                end
+                local ts = prev.timeline_start or prev.start_value
+                if type(ts) == "table" and ts.frames then return ts.frames end
+                if type(ts) == "number" then return ts end
+                -- Likely an old mutation from before fps capture was added
+                error(string.format(
+                    "undo update: clip %s missing timeline_start frames - try deleting ~/Documents/JVE\\ Projects/Untitled\\ Project.jvp to reset command history",
+                    tostring(prev.id or "unknown")
+                ), 2)
+            end
+            table.sort(updates, function(a, b)
+                local sa = start_frames(a)
+                local sb = start_frames(b)
+                if sign < 0 then
+                    return sa > sb
+                else
+                    return sa < sb
+                end
+            end)
+        end
+
+        for _, mut in ipairs(updates) do
+            local ok, err = apply_update(mut)
+            if not ok then return false, err end
+        end
+    end
+
+    local function restore_deleted_clip(mut)
+        local prev = mut.previous
+        if not prev then return false, "Cannot undo delete: missing previous state" end
+        local fps_num, fps_den = require_rate(prev, "undo delete")
+        if prev.created_at == nil or prev.modified_at == nil then
+            return false, "undo delete: missing created_at/modified_at for clip " .. tostring(prev.id)
+        end
+
+        local stmt = db:prepare([[
+            INSERT INTO clips (
+                id, project_id, clip_kind, name, track_id, media_id,
+                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                fps_numerator, fps_denominator, enabled,
+                created_at, modified_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ]])
+        if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
+
+        stmt:bind_value(1, prev.id)
+        stmt:bind_value(2, prev.project_id)
+        stmt:bind_value(3, prev.clip_kind)
+        stmt:bind_value(4, prev.name)
+        stmt:bind_value(5, prev.track_id)
+        stmt:bind_value(6, prev.media_id)
+        stmt:bind_value(7, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
+        stmt:bind_value(8, val_frames(prev.duration, "duration"))
+        stmt:bind_value(9, val_frames(prev.source_in, "source_in"))
+        stmt:bind_value(10, val_frames(prev.source_out, "source_out"))
+        stmt:bind_value(11, fps_num)
+        stmt:bind_value(12, fps_den)
+        stmt:bind_value(13, prev.enabled and 1 or 0)
+        stmt:bind_value(14, prev.created_at)
+        stmt:bind_value(15, prev.modified_at)
+
+        local ok = stmt:exec()
+        stmt:finalize()
+        if not ok then
+            return false, "Failed to execute undo delete: " .. (db:last_error() or "")
+        end
+
+        if command then
+            M.add_insert_mutation(command, sequence_id, {id = prev.id})
+        end
+        return true
+    end
+
+    for _, mut in ipairs(restore_deletes) do
+        local ok, err = restore_deleted_clip(mut)
+        if not ok then return false, err end
     end
     return true
 end

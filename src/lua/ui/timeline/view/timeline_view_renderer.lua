@@ -710,6 +710,16 @@ function M.render(view)
         for _, clip in ipairs(clips) do
             if clip_filter and not clip_filter(clip) then goto continue_clip end
 
+            local seq_rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate()
+            if not seq_rate or not seq_rate.fps_numerator or not seq_rate.fps_denominator then
+                error("timeline_view_renderer: missing sequence frame rate", 2)
+            end
+            local clip_start_rational = Rational.hydrate(clip.timeline_start or clip.start_value, seq_rate.fps_numerator, seq_rate.fps_denominator)
+            local clip_duration_rational = Rational.hydrate(clip.duration or clip.duration_value, seq_rate.fps_numerator, seq_rate.fps_denominator)
+            if not clip_start_rational or not clip_duration_rational or clip_duration_rational.frames <= 0 then
+                goto continue_clip
+            end
+
             local render_track_id = clip.track_id
             if preview_track_offset then
                 render_track_id = get_track_with_offset(state_module, render_track_id, preview_track_offset)
@@ -723,14 +733,13 @@ function M.render(view)
 
             if y >= 0 then
                 local track_height = track_layout.height
-                local clip_start_rational = clip.timeline_start
                 if offset_rational then
                     if getmetatable(offset_rational) == Rational.metatable then
                         clip_start_rational = clip_start_rational + offset_rational
                     end
                 end
                 
-                local clip_end_rational = clip_start_rational + clip.duration
+                local clip_end_rational = clip_start_rational + clip_duration_rational
                 local x = state_module.time_to_pixel(clip_start_rational, width)
                 local clip_end_px = state_module.time_to_pixel(clip_end_rational, width)
                 y = y + 5
