@@ -48,6 +48,21 @@ M.reload_clips = core.reload_clips
 M.add_listener = data.add_listener
 M.remove_listener = data.remove_listener
 
+-- Active Edge Drag State (shared across panes; not persisted)
+M.get_active_edge_drag_state = function()
+    return data.state.active_edge_drag_state
+end
+
+M.set_active_edge_drag_state = function(edge_drag_state)
+    data.state.active_edge_drag_state = edge_drag_state
+    data.notify_listeners()
+end
+
+M.clear_active_edge_drag_state = function()
+    data.state.active_edge_drag_state = nil
+    data.notify_listeners()
+end
+
 -- Viewport & Playhead
 M.get_viewport_start_time = viewport.get_viewport_start_time
 M.set_viewport_start_time = function(time_obj)
@@ -88,9 +103,13 @@ M.get_default_video_track_id = function() return tracks.get_primary_id("VIDEO") 
 M.get_default_audio_track_id = function() return tracks.get_primary_id("AUDIO") end
 
 -- Clips
-M.get_clips = clips.get_all
+M.get_clips = function()
+    assert(not M.__forbid_get_clips, "timeline_state.get_clips is forbidden in this context (renderer should use clip indices)")
+    return clips.get_all()
+end
 M.get_clip_by_id = clips.get_by_id
 M.get_clips_for_track = clips.get_for_track
+M.get_track_clip_index = clips.get_track_clip_index
 M.get_clips_at_time = clips.get_at_time
 local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_callback)
     local mutations = sequence_or_mutations
@@ -136,8 +155,8 @@ local function persist_selection_state()
     end
 end
 
-M.set_selection = function(clips)
-    selection.set_selection(clips, persist_selection_state)
+M.set_selection = function(clip_list)
+    selection.set_selection(clip_list, persist_selection_state)
 end
 
 M.get_selected_edges = selection.get_selected_edges

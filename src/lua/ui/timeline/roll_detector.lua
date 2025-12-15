@@ -1,4 +1,3 @@
-local edge_utils = require('ui.timeline.edge_utils')
 local ui_constants = require("core.ui_constants")
 
 local RollDetector = {}

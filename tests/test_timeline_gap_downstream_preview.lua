@@ -7,6 +7,7 @@ local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
 local Clip = require("models.clip")
+local TimelineActiveRegion = require("core.timeline_active_region")
 
 local TEST_DB = "/tmp/jve/test_timeline_gap_downstream_preview.db"
 local layout = ripple_layout.create({
@@ -25,6 +26,8 @@ local downstream = Clip.create("V2 Downstream", clips.v2.media_id, {
     project_id = layout.project_id,
     owner_sequence_id = layout.sequence_id,
     track_id = tracks.v2.id,
+    rate_num = 1000,
+    rate_den = 1,
     timeline_start = Rational.new(2600, 1000, 1),
     duration = Rational.new(600, 1000, 1),
     source_in = Rational.new(0, 1000, 1),
@@ -81,6 +84,8 @@ view.drag_state = {
     lead_edge = gap_edge,
     delta_rational = rat(-200)
 }
+view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
+view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
 
 timeline_state.set_edge_selection({gap_edge, clip_edge})
 
@@ -106,15 +111,39 @@ layout:cleanup()
 
 assert(ok, "Timeline renderer errored: " .. tostring(err))
 local preview = view.drag_state.preview_data or {}
-local shifted = preview.shifted_clips or {}
-local found_downstream = false
-for _, entry in ipairs(shifted) do
-    if entry.clip_id == downstream.id then
-        found_downstream = true
-        break
+local blocks = preview.shift_blocks or {}
+assert(type(blocks) == "table" and #blocks > 0, "Expected shift_blocks for downstream ripple preview")
+
+local global = nil
+local track_block = nil
+for _, block in ipairs(blocks) do
+    if block.track_id == tracks.v2.id then
+        track_block = block
+    elseif not block.track_id and not global then
+        global = block
     end
 end
-assert(found_downstream,
-    string.format("Downstream clip %s should be highlighted in preview", tostring(downstream.id)))
+local active_block = track_block or global
+assert(active_block and active_block.delta_frames and active_block.start_frames, "Expected a usable shift block for V2")
+
+local shifted_start_frames = downstream.timeline_start.frames
+if shifted_start_frames >= active_block.start_frames then
+    shifted_start_frames = shifted_start_frames + active_block.delta_frames
+end
+local shifted_px = timeline_state.time_to_pixel(Rational.new(shifted_start_frames, 1000, 1), width)
+
+local preview_color = "#ffff00"
+local v2_entry = view.track_layout_cache.by_id[tracks.v2.id]
+local found_preview_rect = false
+for _, rect in ipairs(drawn_rects) do
+    if rect.color == preview_color and rect.y >= v2_entry.y and rect.y <= (v2_entry.y + v2_entry.height) then
+        if math.abs(rect.x - shifted_px) <= 3 then
+            found_preview_rect = true
+            break
+        end
+    end
+end
+assert(found_preview_rect,
+    string.format("Expected downstream preview outline near x=%d (shifted_start=%d)", shifted_px, shifted_start_frames))
 
 print("✅ Downstream clips shift preview when gaps ripple across tracks")

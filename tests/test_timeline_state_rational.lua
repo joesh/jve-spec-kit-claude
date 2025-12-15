@@ -22,6 +22,9 @@ end
 -- Mock database functions for testing
 local original_load_tracks = db.load_tracks
 local original_load_clips = db.load_clips
+local original_load_sequence_track_heights = db.load_sequence_track_heights
+local original_set_sequence_track_heights = db.set_sequence_track_heights
+local original_set_project_setting = db.set_project_setting
 local original_get_connection = db.get_connection
 
 db.load_tracks = function(sequence_id)
@@ -36,6 +39,18 @@ db.load_clips = function(sequence_id)
         {id = "clip_test_1", track_id = "v1", timeline_start = time_utils.from_frames(10, 24, 1), duration = time_utils.from_frames(20, 24, 1), source_in = time_utils.from_frames(0, 24, 1), source_out = time_utils.from_frames(20, 24, 1)},
         {id = "clip_test_2", track_id = "a1", timeline_start = time_utils.from_frames(30, 24, 1), duration = time_utils.from_frames(10, 24, 1), source_in = time_utils.from_frames(0, 24, 1), source_out = time_utils.from_frames(10, 24, 1)},
     }
+end
+
+db.load_sequence_track_heights = function(_sequence_id)
+    return {}
+end
+
+db.set_sequence_track_heights = function(_sequence_id, _track_heights)
+    return true
+end
+
+db.set_project_setting = function(_project_id, _key, _value)
+    return true
 end
 
 -- Mock a minimal statement object for the playhead/selection query
@@ -161,6 +176,10 @@ local function cleanup_db_mocks()
     db.load_tracks = original_load_tracks
 
     db.load_clips = original_load_clips
+
+    db.load_sequence_track_heights = original_load_sequence_track_heights
+    db.set_sequence_track_heights = original_set_sequence_track_heights
+    db.set_project_setting = original_set_project_setting
 
     db.get_connection = original_get_connection
 

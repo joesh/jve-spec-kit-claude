@@ -53,6 +53,15 @@ local function new_state(clips)
     end
 
     state.get_clips = function() return state._clips end
+    state.get_track_clip_index = function(track_id)
+        local list = {}
+        for _, clip in ipairs(state._clips) do
+            if clip.track_id == track_id then
+                list[#list + 1] = clip
+            end
+        end
+        return list
+    end
     state.get_sequence_frame_rate = function() return {fps_numerator = 24, fps_denominator = 1} end
     state.get_viewport_duration = function() return 100 end
     state.pixel_to_time = function() return {frames = 0, fps_numerator = 24, fps_denominator = 1} end

@@ -6,7 +6,6 @@ local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")
 local track_state = require("ui.timeline.state.track_state")
 local selection_state = require("ui.timeline.state.selection_state")
-local viewport_state = require("ui.timeline.state.viewport_state")
 local db = require("core.database")
 local json = require("dkjson")
 local Rational = require("core.rational")
@@ -195,19 +194,6 @@ function M.persist_state_to_db(force)
     else
         schedule_state_persist(false)
     end
-end
-
-local function compute_content_end()
-    local max_end = Rational.new(0, data.state.sequence_frame_rate.fps_numerator, data.state.sequence_frame_rate.fps_denominator)
-    for _, clip in ipairs(data.state.clips) do
-        if clip.timeline_start and clip.duration then
-            local end_time = clip.timeline_start + clip.duration
-            if end_time > max_end then
-                max_end = end_time
-            end
-        end
-    end
-    return max_end
 end
 
 function M.init(sequence_id)

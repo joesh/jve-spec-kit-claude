@@ -287,6 +287,7 @@ ui_constants.TIMELINE = {
     SPLITTER_HANDLE_HEIGHT = 7,  -- Qt default vertical splitter handle height in pixels
     DEFAULT_FPS_NUMERATOR = 30,  -- Default sequence frame rate numerator when not specified
     DEFAULT_FPS_DENOMINATOR = 1, -- Default sequence frame rate denominator when not specified
+    ACTIVE_REGION_PAD_FRAMES_MULTIPLIER = 2, -- Multiplies sequence FPS to pad TimelineActiveRegion window
     MAX_RIPPLE_CONSTRAINT_RETRIES = 5, -- Maximum retry attempts for ripple constraint resolution
     GAP_SOURCE_MIN_FRAMES = -1000000000000000, -- Virtual source window for temp gaps (must match clip source ranges)
     GAP_SOURCE_MAX_FRAMES = 1000000000000000,

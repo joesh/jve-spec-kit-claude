@@ -7,6 +7,7 @@ local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
 local Clip = require("models.clip")
+local TimelineActiveRegion = require("core.timeline_active_region")
 
 local TEST_DB = "/tmp/jve/test_timeline_gap_only_preview.db"
 local layout = ripple_layout.create({db_path = TEST_DB})
@@ -59,6 +60,8 @@ view.drag_state = {
     lead_edge = gap_edge,
     delta_rational = rat(-200)
 }
+view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
+view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
 
 timeline_state.set_edge_selection({gap_edge})
 

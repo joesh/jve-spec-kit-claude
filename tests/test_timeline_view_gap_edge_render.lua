@@ -56,6 +56,20 @@ function state.get_sequence_id() return "default_sequence" end
 function state.get_project_id() return "default_project" end
 function state.get_sequence_frame_rate() return {fps_numerator = 1000, fps_denominator = 1} end
 function state.get_clips() return {prev_clip, clip} end
+function state.get_track_clip_index(track_id)
+    if track_id ~= "track_v1" then
+        return nil
+    end
+    return {prev_clip, clip}
+end
+function state.get_clip_by_id(clip_id)
+    for _, c in ipairs(state.get_clips() or {}) do
+        if c.id == clip_id then
+            return c
+        end
+    end
+    return nil
+end
 function state.get_selected_clips() return {} end
 state._selected_edges = {}
 function state.get_selected_edges()

@@ -1,4 +1,3 @@
-local edge_utils = require("ui.timeline.edge_utils")
 local ui_constants = require("core.ui_constants")
 local Rational = require("core.rational")
 
@@ -68,7 +67,6 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
             end_boundary.right = end_boundary.right or {clip = clip, clip_id = clip.id, edge_type = "gap_after"}
         end
         boundaries[end_frames] = end_boundary
-        ::continue_clip::
     end
 
     local list = {}
@@ -128,7 +126,7 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
 
     local selection = {}
     local roll_used = false
-    local zone = "none"
+    local zone
     local offset_px = cursor_x - (b.px or cursor_x)
     local in_center_zone = math.abs(offset_px) <= center_half
     -- Explicit nil checks prevent Lua truthiness issues (false vs nil)
@@ -154,7 +152,7 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
         table.insert(selection, {clip_id = left.clip_id, edge_type = left.edge_type, trim_type = "roll"})
         table.insert(selection, {clip_id = right.clip_id, edge_type = right.edge_type, trim_type = "roll"})
     else
-        local pick = nil
+        local pick
         if in_center_zone then
             zone = "center"
             pick = right or left

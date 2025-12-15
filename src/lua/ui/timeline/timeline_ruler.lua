@@ -62,7 +62,7 @@ function M.create(widget, state_module)
         end
 
         -- Get widget dimensions
-        local width, height = timeline.get_dimensions(ruler.widget)
+        local width = select(1, timeline.get_dimensions(ruler.widget))
 
         -- Clear previous drawing commands
         timeline.clear_commands(ruler.widget)
@@ -83,7 +83,7 @@ function M.create(widget, state_module)
         local explicit_mark_out = state_module.has_explicit_mark_out and state_module.has_explicit_mark_out()
 
         local function draw_mark_region()
-            if (not mark_in) and (not mark_out) then
+            if (not mark_in_rt) and (not mark_out_rt) then
                 return
             end
 
@@ -130,10 +130,10 @@ function M.create(widget, state_module)
             end
 
             if explicit_mark_in then
-                draw_handle(mark_in)
+                draw_handle(mark_in_rt)
             end
             if explicit_mark_out then
-                draw_handle(mark_out)
+                draw_handle(mark_out_rt)
             end
         end
 
@@ -141,9 +141,8 @@ function M.create(widget, state_module)
 
         -- Get sequence frame rate
         local frame_rate = get_frame_rate()
-        local fps = frame_rate.fps_numerator / frame_rate.fps_denominator
-        if fps <= 0 then
-            fps = 24
+        if (frame_rate.fps_numerator / frame_rate.fps_denominator) <= 0 then
+            frame_rate = frame_utils.default_frame_rate
         end
 
         -- Calculate appropriate frame-based interval
@@ -208,9 +207,9 @@ function M.create(widget, state_module)
             return x
         end
 
-        local function draw_tick_at(x, height, color)
+        local function draw_tick_at(x, tick_height, color)
             local baseline = M.RULER_HEIGHT - BASELINE_HEIGHT
-            timeline.add_line(ruler.widget, x, baseline - height, x, baseline, color, 1)
+            timeline.add_line(ruler.widget, x, baseline - tick_height, x, baseline, color, 1)
         end
 
         local idx = 0
@@ -282,7 +281,7 @@ function M.create(widget, state_module)
 
     -- Mouse event handler for playhead dragging
     local function on_mouse_event(event_type, x, y, button, modifiers)
-        local width, height = timeline.get_dimensions(ruler.widget)
+        local width = select(1, timeline.get_dimensions(ruler.widget))
         local frame_rate = get_frame_rate()
 
         if event_type == "press" then

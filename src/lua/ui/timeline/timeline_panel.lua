@@ -11,6 +11,7 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local inspectable_factory = require("inspectable")
 local profile_scope = require("core.profile_scope")
+local logger = require("core.logger")
 
 local M = {}
 
@@ -84,6 +85,7 @@ end
 local open_tabs = {}
 local tab_handler_seq = 0
 local tab_command_listener = nil
+local ensure_tab_for_sequence
 
 local function normalize_timeline_selection(clips)
     local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -225,7 +227,7 @@ local function close_tab(sequence_id)
     end
 end
 
-local function ensure_tab_for_sequence(sequence_id)
+ensure_tab_for_sequence = function(sequence_id)
     if not tab_bar_tabs_layout or not sequence_id or sequence_id == "" then
         return
     end
@@ -385,16 +387,16 @@ local function create_video_headers()
     --   qt_handle 3: below V1 → Handle 1 → resizes V1 (track 1)
     --
     -- We renumber from bottom to top: handle_num = (#video_tracks + 1) - qt_handle_index
-    print(string.format("Installing video handles for %d tracks", #video_tracks))
-    print(string.format("Checking which Qt handles exist..."))
+    logger.debug("timeline_panel", string.format("Installing video handles for %d tracks", #video_tracks))
+    logger.debug("timeline_panel", "Checking which Qt handles exist...")
     for test_index = 0, #video_tracks + 1 do
         local test_handle = qt_get_splitter_handle(video_splitter, test_index)
-        print(string.format("  qt_handle %d: %s", test_index, test_handle and "EXISTS" or "nil"))
+        logger.debug("timeline_panel", string.format("  qt_handle %d: %s", test_index, test_handle and "EXISTS" or "nil"))
     end
 
     for qt_handle_index = 1, #video_tracks do
         local handle = qt_get_splitter_handle(video_splitter, qt_handle_index)
-        print(string.format("  qt_handle %d: got handle = %s", qt_handle_index, tostring(handle)))
+        logger.debug("timeline_panel", string.format("  qt_handle %d: got handle = %s", qt_handle_index, tostring(handle)))
         if handle then
             -- Renumber from bottom to top: qt_handle 1→Handle 3, qt_handle 2→Handle 2, qt_handle 3→Handle 1
             local handle_num = (#video_tracks + 1) - qt_handle_index
@@ -409,11 +411,11 @@ local function create_video_headers()
             local qt_pos_above = qt_handle_index - 1  -- Widget above the handle
             local qt_pos_below = qt_handle_index      -- Widget below the handle (what we want to resize)
 
-            print(string.format("    Installing: qt_handle %d → Handle %d → resizes %s (qt_pos %d)",
+            logger.debug("timeline_panel", string.format("    Installing: qt_handle %d → Handle %d → resizes %s (qt_pos %d)",
                 qt_handle_index, handle_num, track_name, qt_pos_below))
 
             local this_handler_name = handler_name .. "_handle_" .. qt_handle_index
-            print(string.format("    Handler name: %s", this_handler_name))
+            logger.debug("timeline_panel", string.format("    Handler name: %s", this_handler_name))
 
             -- Create local copies for the closure to capture
             local captured_handle_num = handle_num
@@ -424,16 +426,14 @@ local function create_video_headers()
             local captured_qt_pos_below = qt_pos_below
 
             _G[this_handler_name] = function(event_type, y)
-                print(string.format("Handler %s called: event_type=%s", this_handler_name, event_type))
                 if event_type == "press" then
-                    print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
                     qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_headers[captured_track_num], MIN_HEADER_HEIGHT)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(video_headers[captured_track_num], 16777215)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(video_splitter)
                     local new_height = sizes[captured_qt_pos_below + 1]  -- Lua arrays are 1-indexed
 
-                    print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
+                    logger.debug("timeline_panel", string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
                     -- Lock at exact height to prevent unwanted resizing during main boundary drag
                     local clamped_header = math.max(MIN_HEADER_HEIGHT, new_height)
@@ -452,12 +452,12 @@ local function create_video_headers()
                         total_height = total_height + content_to_header(state.get_track_height(track.id))
                     end
                     qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_splitter, total_height)
-                    print(string.format("  Updated video_splitter min height to %dpx", total_height))
+                    logger.debug("timeline_panel", string.format("  Updated video_splitter min height to %dpx", total_height))
                 end
             end
-            print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
+            logger.debug("timeline_panel", string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
             qt_set_widget_click_handler(handle, this_handler_name)
-            print(string.format("    Handler installed successfully"))
+            logger.debug("timeline_panel", "    Handler installed successfully")
         end
     end
 
@@ -478,19 +478,19 @@ local function create_video_headers()
 
     -- Register splitterMoved handler to update minimum height dynamically
     _G["video_splitter_moved"] = function(pos, index)
-        print(string.format("video_splitter_moved fired: pos=%d, index=%d", pos, index))
+        logger.debug("timeline_panel", string.format("video_splitter_moved fired: pos=%d, index=%d", pos, index))
         -- Calculate total height needed for all video tracks
         local total_height = 0
         for _, track in ipairs(state.get_video_tracks()) do
             total_height = total_height + content_to_header(state.get_track_height(track.id))
         end
-        print(string.format("  Setting video_splitter min height to %dpx", total_height))
+        logger.debug("timeline_panel", string.format("  Setting video_splitter min height to %dpx", total_height))
         -- Set splitter minimum height to accommodate all tracks
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(video_splitter, total_height)
     end
-    print("Registering video_splitter_moved handler...")
+    logger.debug("timeline_panel", "Registering video_splitter_moved handler...")
     qt_set_splitter_moved_handler(video_splitter, "video_splitter_moved")
-    print("  Handler registered")
+    logger.debug("timeline_panel", "  Handler registered")
 
     -- Hide the handle above V3 (between stretch widget and V3) - handle index 0
     qt_hide_splitter_handle(video_splitter, 0)
@@ -541,16 +541,16 @@ local function create_audio_headers()
     --   qt_handle 1: between A1 and A2 → Handle 1 → resizes A1 (track 1)
     --   qt_handle 2: between A2 and A3 → Handle 2 → resizes A2 (track 2)
     --   qt_handle 3: between A3 and Stretch → Handle 3 → resizes A3 (track 3)
-    print(string.format("Installing audio handles for %d tracks", #audio_tracks))
-    print(string.format("Checking which Qt handles exist..."))
+    logger.debug("timeline_panel", string.format("Installing audio handles for %d tracks", #audio_tracks))
+    logger.debug("timeline_panel", "Checking which Qt handles exist...")
     for test_index = 0, #audio_tracks + 1 do
         local test_handle = qt_get_splitter_handle(audio_splitter, test_index)
-        print(string.format("  qt_handle %d: %s", test_index, test_handle and "EXISTS" or "nil"))
+        logger.debug("timeline_panel", string.format("  qt_handle %d: %s", test_index, test_handle and "EXISTS" or "nil"))
     end
 
     for qt_handle_index = 1, #audio_tracks do
         local handle = qt_get_splitter_handle(audio_splitter, qt_handle_index)
-        print(string.format("  qt_handle %d: got handle = %s", qt_handle_index, tostring(handle)))
+        logger.debug("timeline_panel", string.format("  qt_handle %d: got handle = %s", qt_handle_index, tostring(handle)))
         if handle then
             -- Direct mapping: qt_handle N → Handle N → resizes Track N (no renumbering!)
             local handle_num = qt_handle_index
@@ -562,7 +562,7 @@ local function create_audio_headers()
             -- Each handle resizes the widget ABOVE it
             local qt_pos_to_resize = qt_handle_index - 1
 
-            print(string.format("    Installing: qt_handle %d → Handle %d → resizes %s (qt_pos %d)",
+            logger.debug("timeline_panel", string.format("    Installing: qt_handle %d → Handle %d → resizes %s (qt_pos %d)",
                 qt_handle_index, handle_num, track_name, qt_pos_to_resize))
 
             local this_handler_name = handler_name .. "_handle_" .. qt_handle_index
@@ -576,14 +576,11 @@ local function create_audio_headers()
 
             _G[this_handler_name] = function(event_type, y)
                 if event_type == "press" then
-                    print(string.format("Handle %d pressed → resizing %s", captured_handle_num, captured_track_name))
                     qt_constants.PROPERTIES.SET_MIN_HEIGHT(audio_headers[captured_track_num], MIN_HEADER_HEIGHT)
                     qt_constants.PROPERTIES.SET_MAX_HEIGHT(audio_headers[captured_track_num], 16777215)
                 elseif event_type == "release" then
                     local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(audio_splitter)
                     local new_height = sizes[captured_qt_pos_to_resize + 1]  -- Lua arrays are 1-indexed
-
-                    print(string.format("Handle %d → %s = %dpx", captured_handle_num, captured_track_name, new_height))
 
                     -- Lock at exact height to prevent unwanted resizing during main boundary drag
                     local clamped_header = math.max(MIN_HEADER_HEIGHT, new_height)
@@ -599,9 +596,9 @@ local function create_audio_headers()
                     state.set_track_height(captured_track_id, new_track_height)
                 end
             end
-            print(string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
+            logger.debug("timeline_panel", string.format("    Calling qt_set_widget_click_handler for %s", this_handler_name))
             qt_set_widget_click_handler(handle, this_handler_name)
-            print(string.format("    Handler installed successfully"))
+            logger.debug("timeline_panel", "    Handler installed successfully")
         end
     end
 
@@ -700,7 +697,7 @@ local function create_headers_column()
 end
 
 function M.create()
-    print("Creating multi-view timeline panel...")
+    logger.debug("timeline_panel", "Creating multi-view timeline panel...")
 
     -- Initialize state
     state = timeline_state
@@ -1100,33 +1097,33 @@ function M.create()
     -- When headers video/audio boundary moves, update timeline
     local syncing = false  -- Prevent infinite loop
     _G["headers_splitter_moved"] = function(pos, index)
-        print(string.format("headers_splitter_moved fired: pos=%d, index=%d", pos, index))
+        logger.debug("timeline_panel", string.format("headers_splitter_moved fired: pos=%d, index=%d", pos, index))
         if not syncing then
             syncing = true
             local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(headers_main_splitter)
-            print(string.format("  Syncing to timeline: sizes = {%d, %d}", sizes[1], sizes[2]))
+            logger.debug("timeline_panel", string.format("  Syncing to timeline: sizes = {%d, %d}", sizes[1], sizes[2]))
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, sizes)
             syncing = false
         end
     end
-    print("Registering headers_splitter_moved handler...")
+    logger.debug("timeline_panel", "Registering headers_splitter_moved handler...")
     qt_set_splitter_moved_handler(headers_main_splitter, "headers_splitter_moved")
-    print("  Handler registered")
+    logger.debug("timeline_panel", "  Handler registered")
 
     -- When timeline video/audio boundary moves, update headers
     _G["timeline_splitter_moved"] = function(pos, index)
-        print(string.format("timeline_splitter_moved fired: pos=%d, index=%d", pos, index))
+        logger.debug("timeline_panel", string.format("timeline_splitter_moved fired: pos=%d, index=%d", pos, index))
         if not syncing then
             syncing = true
             local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(vertical_splitter)
-            print(string.format("  Syncing to headers: sizes = {%d, %d}", sizes[1], sizes[2]))
+            logger.debug("timeline_panel", string.format("  Syncing to headers: sizes = {%d, %d}", sizes[1], sizes[2]))
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, sizes)
             syncing = false
         end
     end
-    print("Registering timeline_splitter_moved handler...")
+    logger.debug("timeline_panel", "Registering timeline_splitter_moved handler...")
     qt_set_splitter_moved_handler(vertical_splitter, "timeline_splitter_moved")
-    print("  Handler registered")
+    logger.debug("timeline_panel", "  Handler registered")
 
     -- Synchronize vertical scrolling in pairs (video ↔ video, audio ↔ audio)
     local video_scroll_syncing = false  -- Prevent infinite loop
@@ -1175,7 +1172,7 @@ function M.create()
     M.timeline_audio_scroll = timeline_audio_scroll
     M.timeline_area = timeline_area
 
-    print("Multi-view timeline panel created successfully")
+    logger.debug("timeline_panel", "Multi-view timeline panel created successfully")
 
     local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or "default_sequence"
     ensure_tab_for_sequence(initial_sequence_id)
@@ -1200,11 +1197,11 @@ function M.load_sequence(sequence_id)
 
     local current = state.get_sequence_id and state.get_sequence_id()
     if current == sequence_id then
-        print(string.format("Timeline already displaying sequence %s", sequence_id))
+        logger.debug("timeline_panel", string.format("Timeline already displaying sequence %s", sequence_id))
         return
     end
 
-    print(string.format("Loading sequence %s into timeline panel", sequence_id))
+    logger.debug("timeline_panel", string.format("Loading sequence %s into timeline panel", sequence_id))
     state.init(sequence_id)
 
     local project_id = state.get_project_id and state.get_project_id() or database.get_current_project_id()

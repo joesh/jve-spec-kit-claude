@@ -48,7 +48,7 @@ end
 
 function TimelineRenderer:draw_ruler(width)
     -- Draw ruler background
-    timeline_add_rect(self.timeline, 0, 0, width, RULER_HEIGHT, RULER_COLOR)
+    timeline.add_rect(self.timeline, 0, 0, width, RULER_HEIGHT, RULER_COLOR)
     
     -- Draw time markers
     local seconds_per_marker = 1
@@ -59,9 +59,9 @@ function TimelineRenderer:draw_ruler(width)
         local x = self:time_to_pixel(time)
         if x < width then
             -- Draw marker line
-            timeline_add_line(self.timeline, x, 20, x, RULER_HEIGHT, TEXT_COLOR, 1)
+            timeline.add_line(self.timeline, x, 20, x, RULER_HEIGHT, TEXT_COLOR, 1)
             -- Draw time label
-            timeline_add_text(self.timeline, x + 2, 15, string.format("%.1fs", time), TEXT_COLOR)
+            timeline.add_text(self.timeline, x + 2, 15, string.format("%.1fs", time), TEXT_COLOR)
         end
     end
 end
@@ -71,13 +71,13 @@ function TimelineRenderer:draw_track_headers(height)
         local y = RULER_HEIGHT + (i - 1) * TRACK_HEIGHT
         
         -- Draw track header background
-        timeline_add_rect(self.timeline, 0, y, TRACK_HEADER_WIDTH, TRACK_HEIGHT, TRACK_COLOR)
+        timeline.add_rect(self.timeline, 0, y, TRACK_HEADER_WIDTH, TRACK_HEIGHT, TRACK_COLOR)
         
         -- Draw track border
-        timeline_add_line(self.timeline, 0, y, TRACK_HEADER_WIDTH, y, TEXT_COLOR, 1)
+        timeline.add_line(self.timeline, 0, y, TRACK_HEADER_WIDTH, y, TEXT_COLOR, 1)
         
         -- Draw track label
-        timeline_add_text(self.timeline, 10, y + 25, track_name, TEXT_COLOR)
+        timeline.add_text(self.timeline, 10, y + 25, track_name, TEXT_COLOR)
     end
 end
 
@@ -87,10 +87,10 @@ function TimelineRenderer:draw_tracks(width, height)
         
         -- Draw track background
         local track_bg_color = (i % 2 == 0) and "#2a2a2a" or "#252525"
-        timeline_add_rect(self.timeline, TRACK_HEADER_WIDTH, y, width - TRACK_HEADER_WIDTH, TRACK_HEIGHT, track_bg_color)
+        timeline.add_rect(self.timeline, TRACK_HEADER_WIDTH, y, width - TRACK_HEADER_WIDTH, TRACK_HEIGHT, track_bg_color)
         
         -- Draw track border
-        timeline_add_line(self.timeline, TRACK_HEADER_WIDTH, y, width, y, "#444444", 1)
+        timeline.add_line(self.timeline, TRACK_HEADER_WIDTH, y, width, y, "#444444", 1)
     end
 end
 
@@ -130,18 +130,18 @@ function TimelineRenderer:draw_clips(instances, selection)
                 end
                 
                 -- Draw clip rectangle
-                timeline_add_rect(self.timeline, x1, y, clip_width, clip_height, clip_color)
+                timeline.add_rect(self.timeline, x1, y, clip_width, clip_height, clip_color)
                 
                 -- Draw clip border
-                timeline_add_line(self.timeline, x1, y, x1 + clip_width, y, CLIP_BORDER_COLOR, 1) -- top
-                timeline_add_line(self.timeline, x1, y + clip_height, x1 + clip_width, y + clip_height, CLIP_BORDER_COLOR, 1) -- bottom
-                timeline_add_line(self.timeline, x1, y, x1, y + clip_height, CLIP_BORDER_COLOR, 1) -- left
-                timeline_add_line(self.timeline, x1 + clip_width, y, x1 + clip_width, y + clip_height, CLIP_BORDER_COLOR, 1) -- right
+                timeline.add_line(self.timeline, x1, y, x1 + clip_width, y, CLIP_BORDER_COLOR, 1) -- top
+                timeline.add_line(self.timeline, x1, y + clip_height, x1 + clip_width, y + clip_height, CLIP_BORDER_COLOR, 1) -- bottom
+                timeline.add_line(self.timeline, x1, y, x1, y + clip_height, CLIP_BORDER_COLOR, 1) -- left
+                timeline.add_line(self.timeline, x1 + clip_width, y, x1 + clip_width, y + clip_height, CLIP_BORDER_COLOR, 1) -- right
                 
                 -- Draw clip label
                 if clip_width > 50 then -- Only show label if clip is wide enough
                     local label = instance.clip_id or "Clip"
-                    timeline_add_text(self.timeline, x1 + 5, y + 15, label, TEXT_COLOR)
+                    timeline.add_text(self.timeline, x1 + 5, y + 15, label, TEXT_COLOR)
                 end
             end
         end
@@ -152,16 +152,16 @@ function TimelineRenderer:draw_playhead(height)
     local x = self:time_to_pixel(self.playhead_value)
     
     -- Draw playhead line
-    timeline_add_line(self.timeline, x, 0, x, height, PLAYHEAD_COLOR, 2)
+    timeline.add_line(self.timeline, x, 0, x, height, PLAYHEAD_COLOR, 2)
     
     -- Draw playhead handle (triangle)
     -- For now, just draw a small rect at the top
-    timeline_add_rect(self.timeline, x - 5, 0, 10, 10, PLAYHEAD_COLOR)
+    timeline.add_rect(self.timeline, x - 5, 0, 10, 10, PLAYHEAD_COLOR)
 end
 
 function TimelineRenderer:render(width, height)
     -- Clear previous drawing commands
-    timeline_clear_commands(self.timeline)
+    timeline.clear_commands(self.timeline)
     
     -- Draw timeline components in order
     self:draw_ruler(width)
@@ -170,7 +170,7 @@ function TimelineRenderer:render(width, height)
     self:draw_playhead(height)
     
     -- Trigger repaint
-    timeline_update(self.timeline)
+    timeline.update(self.timeline)
 end
 
 return TimelineRenderer

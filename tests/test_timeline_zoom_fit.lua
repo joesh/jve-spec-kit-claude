@@ -1,3 +1,5 @@
+require("test_env")
+
 local import_schema = require("import_schema")
 local database = require("core.database")
 local timeline_state = require("ui.timeline.timeline_state")

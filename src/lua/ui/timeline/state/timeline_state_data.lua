@@ -51,6 +51,9 @@ local function fresh_state()
         dragging_clip = nil,
         drag_selecting = false,
         drag_select_start_value = 0,
+
+        -- Active edge drag (shared across timeline panes; not persisted)
+        active_edge_drag_state = nil,
     }
 end
 

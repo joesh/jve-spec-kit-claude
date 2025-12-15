@@ -49,7 +49,7 @@ function M.create(widget, state_module)
         end
 
         -- Get widget dimensions
-        local width, height = timeline.get_dimensions(scrollbar.widget)
+        local width = select(1, timeline.get_dimensions(scrollbar.widget))
 
         -- Clear previous drawing commands
         timeline.clear_commands(scrollbar.widget)
@@ -82,7 +82,7 @@ function M.create(widget, state_module)
 
     -- Mouse event handler
     local function on_mouse_event(event_type, x, y, button, modifiers)
-        local width, height = timeline.get_dimensions(scrollbar.widget)
+        local width = select(1, timeline.get_dimensions(scrollbar.widget))
         local total_duration = get_total_duration()
 
         local viewport_start = state_module.get_viewport_start_time()

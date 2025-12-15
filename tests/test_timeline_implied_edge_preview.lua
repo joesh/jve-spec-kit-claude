@@ -9,6 +9,7 @@ local ripple_layout = require("tests.helpers.ripple_layout")
 local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
 local edge_utils = require("ui.timeline.edge_utils")
+local TimelineActiveRegion = require("core.timeline_active_region")
 
 local function sign(value)
     if value > 0 then
@@ -93,6 +94,8 @@ local function render_with_payload(payload, clamped_ms)
         lead_edge = gap_edge,
         delta_rational = Rational.new(-200, 1000, 1)
     }
+    view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 200})
+    view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
     timeline_state.set_edge_selection({gap_edge})
 
     local drawn_rects = {}
