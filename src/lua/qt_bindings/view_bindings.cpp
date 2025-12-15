@@ -451,6 +451,7 @@ int lua_set_tree_item_changed_handler(lua_State* L) {
 }
 
 int lua_set_tree_close_editor_handler(lua_State* L) {
+    (void)L;
     // This usually requires a delegate. For now, we skip complex delegate logic unless critical.
     // We'll return 0 to indicate not implemented or just stub it if needed.
     return 0;
@@ -514,6 +515,7 @@ int lua_set_tree_key_handler(lua_State* L) {
 }
 
 int lua_set_tree_item_icon(lua_State* L) {
+    (void)L;
     // Placeholder
     return 0;
 }

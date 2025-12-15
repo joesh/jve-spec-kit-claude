@@ -6,10 +6,13 @@
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
+#include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(jveLuaEngine, "jve.lua_engine")
 
 SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
 {
-    qDebug() << "SimpleLuaEngine: Initializing LuaJIT engine";
+    qCDebug(jveLuaEngine, "%s", "Initializing LuaJIT engine");
 
     // Create new Lua state
     L = luaL_newstate();
@@ -61,7 +64,7 @@ SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
 
 SimpleLuaEngine::~SimpleLuaEngine()
 {
-    qDebug() << "SimpleLuaEngine: Shutting down";
+    qCDebug(jveLuaEngine, "%s", "Shutting down");
     if (L) {
         lua_close(L);
         L = nullptr;
@@ -70,7 +73,7 @@ SimpleLuaEngine::~SimpleLuaEngine()
 
 bool SimpleLuaEngine::executeFile(const QString& scriptPath)
 {
-    qDebug() << "SimpleLuaEngine: Executing script:" << scriptPath;
+    qCDebug(jveLuaEngine, "Executing script: %s", qPrintable(scriptPath));
     
     if (!L) {
         m_lastError = "Lua state not initialized";
@@ -106,13 +109,13 @@ bool SimpleLuaEngine::executeFile(const QString& scriptPath)
 
     lua_pop(L, 1);  // Pop error handler
     
-    qDebug() << "SimpleLuaEngine: Successfully executed script:" << scriptPath;
+    qCDebug(jveLuaEngine, "Successfully executed script: %s", qPrintable(scriptPath));
     return true;
 }
 
 bool SimpleLuaEngine::executeString(const QString& luaCode)
 {
-    qDebug() << "SimpleLuaEngine: Executing Lua code:" << luaCode.left(100) << "...";
+    qCDebug(jveLuaEngine, "Executing Lua code: %s...", qPrintable(luaCode.left(100)));
     
     if (!L) {
         m_lastError = "Lua state not initialized";
@@ -147,7 +150,7 @@ bool SimpleLuaEngine::executeString(const QString& luaCode)
 void SimpleLuaEngine::setMainWidget(QWidget* widget)
 {
     m_mainWidget = widget;
-    qDebug() << "SimpleLuaEngine: Main widget set:" << widget;
+    qCDebug(jveLuaEngine, "Main widget set: %p", static_cast<void*>(widget));
 }
 
 QString SimpleLuaEngine::getLastError() const
@@ -164,7 +167,7 @@ QWidget* SimpleLuaEngine::getCreatedMainWindow() const
 
 void SimpleLuaEngine::setupBindings()
 {
-    qDebug() << "SimpleLuaEngine: Setting up Qt bindings with LuaJIT";
+    qCDebug(jveLuaEngine, "%s", "Setting up Qt bindings with LuaJIT");
 
     if (!L) {
         qCritical() << "Cannot setup bindings: Lua state not initialized";
@@ -179,5 +182,5 @@ void SimpleLuaEngine::setupBindings()
 
     // Register bug reporter bindings
     bug_reporter::registerBugReporterBindings(L);
-    qDebug() << "SimpleLuaEngine: Bug reporter bindings registered";
+    qCDebug(jveLuaEngine, "%s", "Bug reporter bindings registered");
 }

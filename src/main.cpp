@@ -16,6 +16,33 @@
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
 
+static void configureLogging()
+{
+    if (qEnvironmentVariableIsSet("QT_LOGGING_RULES")) {
+        return;
+    }
+
+    const bool debugStartup = qEnvironmentVariableIsSet("JVE_DEBUG_STARTUP")
+        && qgetenv("JVE_DEBUG_STARTUP") == QByteArrayLiteral("1");
+
+    if (debugStartup) {
+        QLoggingCategory::setFilterRules(
+            "jve.*.debug=true\n"
+            "jve.*.info=true\n"
+            "jve.*.warning=true\n"
+            "jve.*.critical=true\n"
+        );
+        return;
+    }
+
+    QLoggingCategory::setFilterRules(
+        "jve.*.debug=false\n"
+        "jve.*.info=false\n"
+        "jve.*.warning=true\n"
+        "jve.*.critical=true\n"
+    );
+}
+
 int main(int argc, char *argv[])
 {
     // Note: High DPI scaling is enabled by default in Qt 6
@@ -30,8 +57,8 @@ int main(int argc, char *argv[])
     app.setOrganizationName("JVE Project");
     app.setOrganizationDomain("jve-editor.org");
     
-    // Initialize logging
-    QLoggingCategory::setFilterRules("jve.*=true");
+    // Initialize logging (quiet by default; opt-in via JVE_DEBUG_STARTUP=1).
+    configureLogging();
     
     // Apply professional dark theme
     app.setStyle(QStyleFactory::create("Fusion"));

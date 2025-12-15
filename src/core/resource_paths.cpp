@@ -2,11 +2,14 @@
 #include <QApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QLoggingCategory>
 #include <filesystem>
 #include <iostream>
 #include <lua.hpp>
 
 namespace JVE {
+
+Q_LOGGING_CATEGORY(jveResources, "jve.resources")
 
 std::string ResourcePaths::cached_app_directory_;
 bool ResourcePaths::app_directory_cached_ = false;
@@ -88,7 +91,7 @@ void ResourcePaths::setupLuaPackagePaths(lua_State* lua_state) {
     lua_setfield(lua_state, -2, "path");
     lua_pop(lua_state, 1); // Remove package table
     
-    std::cout << "📁 Lua package path configured: " << scripts_dir << std::endl;
+    qCDebug(jveResources, "Lua package path configured: %s", scripts_dir.c_str());
 }
 
 bool ResourcePaths::pathExists(const std::string& path) {
