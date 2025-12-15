@@ -7,6 +7,7 @@ package.path = package.path .. ";./src/lua/?.lua"
 local event_log = require("core.event_log")
 local Rational = require("core.rational")
 local database = require("core.database") -- To init main DB if needed, or just for event_log init context
+local Command = require("command")
 
 print("=== Testing Event Log Schema Consistency ===\n")
 
@@ -24,26 +25,19 @@ if not ok then
 end
 print("✅ Event log initialized at " .. project_path)
 
--- Mock Command object for Insert
-local insert_command = {
-    id = "cmd_123",
-    type = "Insert",
-    sequence_number = 1,
-    parameters = {
-        clip_id = "clip_abc",
-        media_id = "media_xyz",
-        track_id = "track_v1",
-        insert_time = Rational.new(0, 24, 1),
-        duration = Rational.new(24, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(24, 24, 1),
-        sequence_id = "seq_main"
-    },
-    get_parameter = function(self, key)
-        return self.parameters[key]
-    end,
-    playhead_value = 0
-}
+-- Use a real Command instance to match production expectations.
+local insert_command = Command.create("Insert", "proj_1")
+insert_command.id = "cmd_123"
+insert_command.sequence_number = 1
+insert_command.playhead_value = 0
+insert_command:set_parameter("clip_id", "clip_abc")
+insert_command:set_parameter("media_id", "media_xyz")
+insert_command:set_parameter("track_id", "track_v1")
+insert_command:set_parameter("insert_time", Rational.new(0, 24, 1))
+insert_command:set_parameter("duration", Rational.new(24, 24, 1))
+insert_command:set_parameter("source_in", Rational.new(0, 24, 1))
+insert_command:set_parameter("source_out", Rational.new(24, 24, 1))
+insert_command:set_parameter("sequence_id", "seq_main")
 
 -- Context
 local context = {

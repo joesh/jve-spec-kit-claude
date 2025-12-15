@@ -3,8 +3,13 @@
 
 local uuid = require("uuid")
 local json = require("dkjson") -- Added
+local logger = require("core.logger")
 
 local M = {}
+
+local function is_ephemeral_parameter_key(key)
+    return type(key) == "string" and key:sub(1, 2) == "__"
+end
 
 -- Create a new Command
 function M.create(command_type, project_id)
@@ -167,13 +172,28 @@ function M:get_all_parameters()
     return self.parameters
 end
 
+-- Parameters intended for persistence/logging.
+-- Convention: keys beginning with "__" are ephemeral execution context only.
+function M:get_persistable_parameters()
+    local persistable = {}
+    for key, value in pairs(self.parameters or {}) do
+        if not is_ephemeral_parameter_key(key) then
+            persistable[key] = value
+        end
+    end
+    return persistable
+end
+
 -- Serialize command to JSON string
 function M:serialize()
     local playhead_rate_val = 0
     if type(self.playhead_rate) == "number" then
         playhead_rate_val = self.playhead_rate
     elseif type(self.playhead_rate) == "table" and self.playhead_rate.fps_numerator then
-        playhead_rate_val = self.playhead_rate.fps_numerator / (self.playhead_rate.fps_denominator or 1)
+        if not self.playhead_rate.fps_denominator or self.playhead_rate.fps_denominator == 0 then
+            error("Command:serialize: playhead_rate missing fps_denominator", 2)
+        end
+        playhead_rate_val = self.playhead_rate.fps_numerator / self.playhead_rate.fps_denominator
     end
 
     local db_playhead_value = nil
@@ -189,7 +209,7 @@ function M:serialize()
         project_id = self.project_id,
         sequence_number = self.sequence_number,
         status = self.status,
-        parameters = self.parameters,
+        parameters = self:get_persistable_parameters(),
         pre_hash = self.pre_hash,
         post_hash = self.post_hash,
         created_at = self.created_at,
@@ -206,8 +226,7 @@ function M:serialize()
 
     local success, json_str = pcall(json.encode, command_data_for_json)
     if not success then
-        print(string.format("WARNING: Command:serialize: Failed to encode command to JSON: %s", tostring(json_str)))
-        return "{}"
+        error(string.format("Command:serialize: Failed to encode command to JSON: %s", tostring(json_str)), 2)
     end
     return json_str
 end
@@ -218,7 +237,9 @@ function M:create_undo()
 
     -- Copy relevant parameters for undo
     for k, v in pairs(self.parameters) do
-        undo_command:set_parameter(k, v)
+        if not is_ephemeral_parameter_key(k) then
+            undo_command:set_parameter(k, v)
+        end
     end
 
     return undo_command
@@ -227,17 +248,18 @@ end
 -- Save command to database
 function M:save(db)
     if not db then
-        print("WARNING: Command.save: No database provided")
+        logger.warn("command", "Command.save: No database provided")
         return false
     end
     -- Serialize parameters to JSON
     local params_json = "{}"
-    if self.parameters and next(self.parameters) ~= nil then
-        local success, json_str = pcall(json.encode, self.parameters) -- Changed to json.encode
+    local persistable_parameters = self:get_persistable_parameters()
+    if next(persistable_parameters) ~= nil then
+        local success, json_str = pcall(json.encode, persistable_parameters) -- Changed to json.encode
         if success then
             params_json = json_str
         else
-            print("WARNING: Command.save: Failed to encode parameters: " .. tostring(json_str))
+            error("Command.save: Failed to encode parameters: " .. tostring(json_str), 2)
         end
     end
 
@@ -248,7 +270,7 @@ function M:save(db)
         if db.last_error then
             err = db:last_error()
         end
-        print("WARNING: Command.save: Failed to prepare exists query: " .. err)
+        logger.warn("command", "Command.save: Failed to prepare exists query: " .. err)
         return false
     end
 
@@ -284,6 +306,9 @@ function M:save(db)
     if db_playhead_value == nil or playhead_rate_val <= 0 then
         error("FATAL: Command.save requires playhead_value and valid playhead_rate")
     end
+    if not self.executed_at then
+        error("FATAL: Command.save requires executed_at")
+    end
 
     local query
     if exists then
@@ -301,7 +326,7 @@ function M:save(db)
             if db.last_error then
                 err = db:last_error()
             end
-            print("WARNING: Command.save: Failed to prepare UPDATE query: " .. err)
+            logger.warn("command", "Command.save: Failed to prepare UPDATE query: " .. err)
             return false
         end
 
@@ -310,7 +335,7 @@ function M:save(db)
         query:bind_value(3, params_json)
         query:bind_value(4, self.pre_hash)
         query:bind_value(5, self.post_hash)
-        query:bind_value(6, self.executed_at or os.time())
+        query:bind_value(6, self.executed_at)
         query:bind_value(7, db_playhead_value)
         query:bind_value(8, playhead_rate_val)
         query:bind_value(9, selected_clip_ids_json)
@@ -331,7 +356,7 @@ function M:save(db)
             if db.last_error then
                 err = db:last_error()
             end
-            print("WARNING: Command.save: Failed to prepare INSERT query: " .. err)
+            logger.warn("command", "Command.save: Failed to prepare INSERT query: " .. err)
             return false
         end
 
@@ -343,7 +368,7 @@ function M:save(db)
         query:bind_value(5, params_json)
         query:bind_value(6, self.pre_hash)
         query:bind_value(7, self.post_hash)
-        query:bind_value(8, self.executed_at or os.time())
+        query:bind_value(8, self.executed_at)
         query:bind_value(9, db_playhead_value)
         query:bind_value(10, playhead_rate_val)
         query:bind_value(11, selected_clip_ids_json)
@@ -355,7 +380,7 @@ function M:save(db)
     end
 
     if not query:exec() then
-        print(string.format("WARNING: Command.save: Failed to save command: %s", query:last_error()))
+        logger.warn("command", string.format("Command.save: Failed to save command: %s", query:last_error()))
         query:finalize()
         return false
     end
