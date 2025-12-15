@@ -3,6 +3,7 @@
 
 local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
+local logger = require("core.logger")
 
 local M = {}
 
@@ -120,7 +121,7 @@ local function open_readmodel(path)
     load_schema()
     
     if not validate_readmodel_schema() then
-        print("event_log: Read model schema mismatch detected. Rebuilding database...")
+        logger.warn("event_log", "Read model schema mismatch detected. Rebuilding database...")
         close_readmodel()
         os.remove(path)
         os.remove(path .. "-wal")
@@ -459,8 +460,10 @@ local function deep_copy_parameters(parameters)
 end
 
 local function attach_generic_payload(envelope, command)
+    assert(type(command.get_persistable_parameters) == "function", "event_log: command missing get_persistable_parameters()")
+    local parameters = command:get_persistable_parameters()
     envelope.generic_payload = {
-        parameters = deep_copy_parameters(command.parameters),
+        parameters = deep_copy_parameters(parameters),
         playhead_value = command.playhead_value,
         sequence_number = command.sequence_number,
     }
@@ -480,6 +483,31 @@ function M.init(project_path)
     readmodel_path = event_root_dir .. "/readmodels.sqlite"
 
     open_readmodel(readmodel_path)
+end
+
+local function checkpoint_and_disable_wal(db_handle, label)
+    if not db_handle then
+        return
+    end
+    local ok, err = db_handle:exec("PRAGMA wal_checkpoint(TRUNCATE);")
+    if ok == false then
+        logger.warn("event_log", string.format("wal_checkpoint failed (%s): %s", tostring(label or "db"), tostring(err)))
+    end
+    ok, err = db_handle:exec("PRAGMA journal_mode = DELETE;")
+    if ok == false then
+        logger.warn("event_log", string.format("journal_mode=DELETE failed (%s): %s", tostring(label or "db"), tostring(err)))
+    end
+end
+
+function M.shutdown()
+    if readmodel_db then
+        checkpoint_and_disable_wal(readmodel_db, "readmodel")
+    end
+    close_readmodel()
+    if readmodel_path and readmodel_path ~= "" then
+        os.remove(readmodel_path .. "-wal")
+        os.remove(readmodel_path .. "-shm")
+    end
 end
 
 function M.record_command(command, context)

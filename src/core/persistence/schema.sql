@@ -222,6 +222,14 @@ CREATE TABLE IF NOT EXISTS tag_assignments (
 );
 
 -- ============================================================================
+-- INDEXES (performance-critical)
+-- ============================================================================
+
+-- Used by overlap-prevention triggers and timeline queries.
+CREATE INDEX IF NOT EXISTS idx_clips_track_id ON clips(track_id);
+CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, timeline_start_frame);
+
+-- ============================================================================
 -- TRIGGERS
 -- ============================================================================
 

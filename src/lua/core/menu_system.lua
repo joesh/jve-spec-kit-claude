@@ -29,6 +29,7 @@ local timeline_panel = nil
 local clipboard_actions = require("core.clipboard_actions")
 local profile_scope = require("core.profile_scope")
 local Rational = require("core.rational")
+local logger = require("core.logger")
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
@@ -316,32 +317,43 @@ end
 local function create_action_callback(command_name, params)
     return function()
         if not command_manager then
-            print("ERROR: Menu system not initialized with command manager")
+            logger.error("menu", "Menu system not initialized with command manager")
             return
         end
 
-        print(string.format("🔘 Menu clicked: '%s'", command_name))
+        logger.debug("menu", string.format("Menu clicked: %s", tostring(command_name)))
 
         -- Handle special commands that aren't normal execute() calls
         if command_name == "Undo" then
             if command_manager.can_undo and not command_manager.can_undo() then
                 return
             end
-            print("⏪ Calling command_manager.undo()")
+            logger.debug("menu", "Calling command_manager.undo()")
             command_manager.undo()
             update_undo_redo_actions()
         elseif command_name == "Redo" then
             if command_manager.can_redo and not command_manager.can_redo() then
                 return
             end
-            print("⏩ Calling command_manager.redo()")
+            logger.debug("menu", "Calling command_manager.redo()")
             command_manager.redo()
             update_undo_redo_actions()
         elseif command_name == "Quit" then
-            print("👋 Quitting application")
+            logger.info("menu", "Quitting application")
+            local ok, err = pcall(function()
+                local database = require("core.database")
+                if database and database.shutdown then
+                    local success, message = database.shutdown()
+                    if not success then
+                        error(message or "database.shutdown failed")
+                    end
+                end
+            end)
+            if not ok then
+                logger.error("menu", "Quit shutdown failed: " .. tostring(err))
+            end
             os.exit(0)
         elseif command_name == "ImportMedia" then
-            print("📂 Opening file picker for ImportMedia...")
             local file_paths = qt_constants.FILE_DIALOG.OPEN_FILES(
                 main_window,
                 "Import Media Files",
@@ -349,11 +361,9 @@ local function create_action_callback(command_name, params)
             )
 
             if file_paths then
-                print(string.format("📥 Dialog returned: %s (type: %s)", tostring(file_paths), type(file_paths)))
                 if type(file_paths) == "table" then
-                    print(string.format("📥 Importing %d media file(s)...", #file_paths))
                     for i, file_path in ipairs(file_paths) do
-                        print(string.format("  [%d] Path: '%s' (length: %d)", i, file_path, #file_path))
+                        logger.debug("menu", string.format("ImportMedia[%d]: %s", i, tostring(file_path)))
                         local Command = require("command")
                         local cmd = Command.create("ImportMedia", "default_project")
                         cmd:set_parameter("file_path", file_path)
@@ -364,38 +374,31 @@ local function create_action_callback(command_name, params)
                         end)
                         if success then
                             if result and result.success then
-                                print(string.format("✅ Imported: %s", file_path))
+                                logger.info("menu", "Imported media: " .. tostring(file_path))
                             else
-                                print(string.format("❌ Command returned error: %s", result and result.error_message or "unknown"))
-                                print(string.format("   Result: %s", require("dkjson").encode(result or {})))
+                                logger.error("menu", "ImportMedia returned error: " .. tostring(result and result.error_message or "unknown"))
                             end
                         else
-                            print(string.format("❌ Exception during import: %s", tostring(result)))
+                            logger.error("menu", "ImportMedia threw: " .. tostring(result))
                         end
                     end
 
                     -- Refresh project browser to show newly imported media
-                    print(string.format("DEBUG: project_browser = %s", tostring(project_browser)))
                     if project_browser then
-                        print(string.format("DEBUG: project_browser.refresh = %s", tostring(project_browser.refresh)))
                         if project_browser.refresh then
-                            print("🔄 Refreshing project browser...")
                             project_browser.refresh()
                         else
-                            print("⚠️  project_browser.refresh is nil")
+                            logger.warn("menu", "project_browser.refresh is nil")
                         end
                     else
-                        print("⚠️  project_browser is nil - menu system not initialized with project browser")
+                        logger.warn("menu", "project_browser is nil (menu system not initialized with project browser)")
                     end
                 else
-                    print("⚠️  File dialog returned non-table value")
+                    logger.warn("menu", "ImportMedia file dialog returned non-table value")
                 end
-            else
-                print("⏹️  Import cancelled")
             end
 
         elseif command_name == "ImportFCP7XML" then
-            print("📂 Opening file picker for ImportFCP7XML...")
             local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
                 main_window,
                 "Import Final Cut Pro 7 XML",
@@ -403,7 +406,7 @@ local function create_action_callback(command_name, params)
             )
 
             if file_path then
-                print(string.format("📥 Importing FCP7 XML: %s", file_path))
+                logger.info("menu", "Importing FCP7 XML: " .. tostring(file_path))
                 local Command = require("command")
                 local cmd = Command.create("ImportFCP7XML", "default_project")
                 cmd:set_parameter("xml_path", file_path)
@@ -414,21 +417,18 @@ local function create_action_callback(command_name, params)
                 end)
 
                 if not success then
-                    print(string.format("❌ Import failed: %s", tostring(result)))
+                    logger.error("menu", "ImportFCP7XML threw: " .. tostring(result))
                 elseif result and not result.success then
-                    print(string.format("⚠️  Import error: %s", result.error_message or "unknown"))
+                    logger.error("menu", "ImportFCP7XML returned error: " .. tostring(result.error_message or "unknown"))
                 else
-                    print("✅ FCP7 XML imported successfully!")
+                    logger.info("menu", "FCP7 XML imported successfully")
                     if project_browser and project_browser.refresh then
                         project_browser.refresh()
                     end
                 end
-            else
-                print("⏹️  Import cancelled")
             end
 
         elseif command_name == "ImportResolveProject" then
-            print("📂 Opening file picker for ImportResolveProject...")
             local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
                 main_window,
                 "Import Resolve Project (.drp)",
@@ -436,7 +436,7 @@ local function create_action_callback(command_name, params)
             )
 
             if file_path then
-                print(string.format("📥 Importing Resolve project: %s", file_path))
+                logger.info("menu", "Importing Resolve project: " .. tostring(file_path))
                 local Command = require("command")
                 local cmd = Command.create("ImportResolveProject", "default_project")
                 cmd:set_parameter("drp_path", file_path)
@@ -445,18 +445,15 @@ local function create_action_callback(command_name, params)
                     return command_manager.execute(cmd)
                 end)
                 if not success then
-                    print(string.format("❌ Import failed: %s", tostring(result)))
+                    logger.error("menu", "ImportResolveProject threw: " .. tostring(result))
                 elseif result and not result.success then
-                    print(string.format("⚠️  Import error: %s", result.error_message or "unknown"))
+                    logger.error("menu", "ImportResolveProject returned error: " .. tostring(result.error_message or "unknown"))
                 else
-                    print("✅ Resolve project imported successfully!")
+                    logger.info("menu", "Resolve project imported successfully")
                 end
-            else
-                print("⏹️  Import cancelled")
             end
 
         elseif command_name == "ImportResolveDatabase" then
-            print("📂 Opening file picker for ImportResolveDatabase...")
             local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
                 main_window,
                 "Import Resolve Database",
@@ -465,7 +462,7 @@ local function create_action_callback(command_name, params)
             )
 
             if file_path then
-                print(string.format("📥 Importing Resolve database: %s", file_path))
+                logger.info("menu", "Importing Resolve database: " .. tostring(file_path))
                 local Command = require("command")
                 local cmd = Command.create("ImportResolveDatabase", "default_project")
                 cmd:set_parameter("db_path", file_path)
@@ -474,31 +471,27 @@ local function create_action_callback(command_name, params)
                     return command_manager.execute(cmd)
                 end)
                 if not success then
-                    print(string.format("❌ Import failed: %s", tostring(result)))
+                    logger.error("menu", "ImportResolveDatabase threw: " .. tostring(result))
                 elseif result and not result.success then
-                    print(string.format("⚠️  Import error: %s", result.error_message or "unknown"))
+                    logger.error("menu", "ImportResolveDatabase returned error: " .. tostring(result.error_message or "unknown"))
                 else
-                    print("✅ Resolve database imported successfully!")
+                    logger.info("menu", "Resolve database imported successfully")
                 end
-            else
-                print("⏹️  Import cancelled")
             end
 
         elseif command_name == "ShowKeyboardCustomization" then
-            print("🎹 Opening keyboard customization dialog")
+            logger.info("menu", "Opening keyboard customization dialog")
             local ok, err = pcall(function()
                 require("ui.keyboard_customization_dialog").show()
             end)
             if not ok then
-                print(string.format("❌ Failed to open keyboard dialog: %s", tostring(err)))
+                logger.error("menu", "Failed to open keyboard dialog: " .. tostring(err))
             end
 
         elseif command_name == "Split" then
             -- Map Split menu item to BatchCommand of SplitClip operations
-            print("✂️  Calling SplitClip command (mapped from Split)")
-
             if not timeline_panel then
-                print("❌ Split: Timeline panel not available")
+                logger.warn("menu", "Split: timeline panel not available")
                 return
             end
 
@@ -515,9 +508,9 @@ local function create_action_callback(command_name, params)
 
             if #target_clips == 0 then
                 if selected_clips and #selected_clips > 0 then
-                    print("⚠️  Split: Playhead does not intersect selected clips")
+                    logger.warn("menu", "Split: playhead does not intersect selected clips")
                 else
-                    print("⚠️  Split: No clips under playhead")
+                    logger.warn("menu", "Split: no clips under playhead")
                 end
                 return
             end
@@ -553,7 +546,7 @@ local function create_action_callback(command_name, params)
             end
 
             if #specs == 0 then
-                print("⚠️  Split: No valid clips to split at current playhead position")
+                logger.warn("menu", "Split: no valid clips to split at current playhead position")
                 return
             end
 
@@ -569,36 +562,34 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(batch_cmd)
             end)
             if not success then
-                print(string.format("❌ Split failed: %s", tostring(result)))
+                logger.error("menu", "Split failed: " .. tostring(result))
             elseif result and not result.success then
-                print(string.format("⚠️  Split returned error: %s", result.error_message or "unknown"))
+                logger.error("menu", "Split returned error: " .. tostring(result.error_message or "unknown"))
             else
-                print(string.format("✅ Split executed on %d clip(s)", #specs))
+                logger.info("menu", string.format("Split executed on %d clip(s)", #specs))
             end
         elseif command_name == "Insert" then
             -- Timeline > Insert menu item (same logic as F9)
-            print("📥 Insert command from menu")
-
             if not timeline_panel then
-                print("❌ INSERT: Timeline panel not available")
+                logger.warn("menu", "Insert: timeline panel not available")
                 return
             end
 
             -- Get selected media from project browser
             if not project_browser or not project_browser.get_selected_media then
-                print("❌ INSERT: Project browser not available")
+                logger.warn("menu", "Insert: project browser not available")
                 return
             end
 
             local selected_clip = project_browser.get_selected_media()
             if not selected_clip then
-                print("❌ INSERT: No media selected in project browser")
+                logger.warn("menu", "Insert: no media selected in project browser")
                 return
             end
 
             local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
             if not media_id then
-                print("❌ INSERT: Selected clip missing media reference")
+                logger.warn("menu", "Insert: selected clip missing media reference")
                 return
             end
 
@@ -612,7 +603,7 @@ local function create_action_callback(command_name, params)
             local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
             if not track_id or track_id == "" then
-                print("❌ INSERT: Active sequence has no video tracks")
+                logger.warn("menu", "Insert: active sequence has no video tracks")
                 return
             end
 
@@ -632,35 +623,33 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ INSERT: Added %s at %s, rippled subsequent clips", selected_clip.name or media_id, tostring(playhead_value)))
+                logger.info("menu", string.format("Insert: added %s at %s", selected_clip.name or media_id, tostring(playhead_value)))
             else
-                print(string.format("❌ INSERT failed: %s", result and result.error_message or "unknown error"))
+                logger.error("menu", "Insert failed: " .. tostring(result and result.error_message or "unknown error"))
             end
 
         elseif command_name == "Overwrite" then
             -- Timeline > Overwrite menu item (same logic as F10)
-            print("📥 Overwrite command from menu")
-
             if not timeline_panel then
-                print("❌ OVERWRITE: Timeline panel not available")
+                logger.warn("menu", "Overwrite: timeline panel not available")
                 return
             end
 
             -- Get selected media from project browser
             if not project_browser or not project_browser.get_selected_media then
-                print("❌ OVERWRITE: Project browser not available")
+                logger.warn("menu", "Overwrite: project browser not available")
                 return
             end
 
             local selected_clip = project_browser.get_selected_media()
             if not selected_clip then
-                print("❌ OVERWRITE: No media selected in project browser")
+                logger.warn("menu", "Overwrite: no media selected in project browser")
                 return
             end
 
             local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
             if not media_id then
-                print("❌ OVERWRITE: Selected clip missing media reference")
+                logger.warn("menu", "Overwrite: selected clip missing media reference")
                 return
             end
 
@@ -674,7 +663,7 @@ local function create_action_callback(command_name, params)
             local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
             if not track_id or track_id == "" then
-                print("❌ OVERWRITE: Active sequence has no video tracks")
+                logger.warn("menu", "Overwrite: active sequence has no video tracks")
                 return
             end
 
@@ -694,15 +683,15 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(cmd)
             end)
             if success and result and result.success then
-                print(string.format("✅ OVERWRITE: Added %s at %s, trimmed overlapping clips", selected_clip.name or media_id, tostring(playhead_value)))
+                logger.info("menu", string.format("Overwrite: added %s at %s", selected_clip.name or media_id, tostring(playhead_value)))
             else
-                print(string.format("❌ OVERWRITE failed: %s", result and result.error_message or "unknown error"))
+                logger.error("menu", "Overwrite failed: " .. tostring(result and result.error_message or "unknown error"))
             end
 
         elseif command_name == "TimelineZoomIn" then
             -- Zoom in: decrease viewport duration (show less time)
             if not timeline_panel then
-                print("❌ ZOOM: Timeline panel not available")
+                logger.warn("menu", "ZoomIn: timeline panel not available")
                 return
             end
 
@@ -718,12 +707,12 @@ local function create_action_callback(command_name, params)
                 keyboard_shortcuts.clear_zoom_toggle()
             end
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("🔍 Zoomed in: %s visible", tostring(new_duration)))
+            logger.info("menu", string.format("Zoomed in: %s visible", tostring(new_duration)))
 
         elseif command_name == "TimelineZoomOut" then
             -- Zoom out: increase viewport duration (show more time)
             if not timeline_panel then
-                print("❌ ZOOM: Timeline panel not available")
+                logger.warn("menu", "ZoomOut: timeline panel not available")
                 return
             end
 
@@ -735,12 +724,12 @@ local function create_action_callback(command_name, params)
                 keyboard_shortcuts.clear_zoom_toggle()
             end
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("🔍 Zoomed out: %s visible", tostring(new_duration)))
+            logger.info("menu", string.format("Zoomed out: %s visible", tostring(new_duration)))
 
         elseif command_name == "TimelineZoomFit" then
             -- Zoom to fit: show entire timeline
             if not timeline_panel then
-                print("❌ ZOOM: Timeline panel not available")
+                logger.warn("menu", "ZoomFit: timeline panel not available")
                 return
             end
 
@@ -757,23 +746,23 @@ local function create_action_callback(command_name, params)
                 -- Ensure project browser has matching selection when timeline clip is focused
                 if focus_manager and focus_manager.get_focused_panel then
                     local focused_panel = focus_manager.get_focused_panel()
-                    print(string.format("Rename: focused panel=%s", tostring(focused_panel)))
+                    logger.debug("menu", string.format("Rename: focused panel=%s", tostring(focused_panel)))
                     if focused_panel == "timeline" and timeline_panel and timeline_panel.get_state then
                         local state = timeline_panel.get_state()
                         if not state then
-                            print("Rename: timeline_panel.get_state() returned nil")
+                            logger.warn("menu", "Rename: timeline_panel.get_state() returned nil")
                         end
                         if state and state.get_selected_clips then
                             local selected_clips = state.get_selected_clips()
-                            print(string.format("Rename: timeline selected clips=%d", selected_clips and #selected_clips or 0))
+                            logger.debug("menu", string.format("Rename: timeline selected clips=%d", selected_clips and #selected_clips or 0))
                             local target_clip = selected_clips and selected_clips[1] or nil
                             if target_clip then
                                 local master_id = target_clip.parent_clip_id or target_clip.id
-                                print(string.format("Rename: targeting master clip %s", tostring(master_id)))
+                                logger.debug("menu", string.format("Rename: targeting master clip %s", tostring(master_id)))
                                 if master_id and project_browser.focus_master_clip then
                                     local ok, focus_err = project_browser.focus_master_clip(master_id, {skip_activate = true})
                                     if not ok then
-                                        print(string.format("Rename: focus_master_clip failed - %s", tostring(focus_err)))
+                                        logger.warn("menu", "Rename: focus_master_clip failed - " .. tostring(focus_err))
                                     end
                                     if not ok then
                                         -- keep going; inline rename will still attempt current selection
@@ -784,35 +773,35 @@ local function create_action_callback(command_name, params)
                     end
                 end
                 rename_started = project_browser.start_inline_rename()
-                print(string.format("Rename: start_inline_rename returned %s", tostring(rename_started)))
+                logger.debug("menu", string.format("Rename: start_inline_rename returned %s", tostring(rename_started)))
             end
             if not rename_started then
-                print("⚠️  Rename: No available item to rename")
+                logger.warn("menu", "Rename: no available item to rename")
             end
             return
 
         elseif command_name == "Cut" then
             local result = command_manager.execute("Cut")
             if result.success then
-                print("✂️  Cut executed successfully")
+                logger.info("menu", "Cut executed successfully")
             else
-                print(string.format("⚠️  Cut returned error: %s", result.error_message or "unknown"))
+                logger.error("menu", "Cut returned error: " .. tostring(result.error_message or "unknown"))
             end
         elseif command_name == "Copy" then
             local ok, err = clipboard_actions.copy()
             if not ok then
-                print(string.format("⚠️  Copy failed: %s", err or "unknown error"))
+                logger.error("menu", "Copy failed: " .. tostring(err or "unknown error"))
             end
         elseif command_name == "Paste" then
             local ok, err = clipboard_actions.paste()
             if not ok then
-                print(string.format("⚠️  Paste failed: %s", err or "unknown error"))
+                logger.error("menu", "Paste failed: " .. tostring(err or "unknown error"))
             end
         elseif command_name == "Delete" then
             if keyboard_shortcuts.perform_delete_action({shift = false}) then
                 return
             end
-            print("⚠️  Delete command: nothing to delete in current context")
+            logger.debug("menu", "Delete: nothing to delete in current context")
         else
             -- Regular command execution
             local command_params = params
@@ -823,11 +812,11 @@ local function create_action_callback(command_name, params)
                 return command_manager.execute(command_name, command_params)
             end)
             if not success_flag then
-                print(string.format("❌ Command '%s' failed: %s", command_name, tostring(result_value)))
+                logger.error("menu", string.format("Command '%s' failed: %s", tostring(command_name), tostring(result_value)))
             elseif result_value and not result_value.success then
-                print(string.format("⚠️  Command '%s' returned error: %s", command_name, result_value.error_message or "unknown"))
+                logger.error("menu", string.format("Command '%s' returned error: %s", tostring(command_name), tostring(result_value.error_message or "unknown")))
             else
-                print(string.format("✅ Command '%s' executed successfully", command_name))
+                logger.debug("menu", string.format("Command '%s' executed successfully", tostring(command_name)))
             end
         end
     end
@@ -919,7 +908,7 @@ function M.load_from_file(xml_path)
         defaults_initialized = true
     end
 
-    print(string.format("Menu system: Loaded %d menus from %s", #menus_elem.children, xml_path))
+    logger.info("menu", string.format("Loaded %d menus from %s", #menus_elem.children, tostring(xml_path)))
     update_undo_redo_actions()
     return true
 end

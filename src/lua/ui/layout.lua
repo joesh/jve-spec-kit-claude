@@ -6,8 +6,8 @@ package.path = package.path .. ';' .. os.getenv('HOME') .. '/.luarocks/share/lua
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local Project = require("models.project")
-
-local WINDOW_TITLE_PREFIX = "JVE Editor"
+local logger = require("core.logger")
+local time_utils = require("core.time_utils")
 
 -- Enable strict nil error handling - calling nil will raise an error with proper stack trace
 debug.setmetatable(nil, {
@@ -19,16 +19,16 @@ debug.setmetatable(nil, {
 -- Global error handler for automatic bug capture
 local function global_error_handler(err)
     local stack_trace = debug.traceback(tostring(err), 2)
-    print("❌ FATAL ERROR: " .. tostring(err))
-    print(stack_trace)
+    logger.fatal("layout", "FATAL ERROR: " .. tostring(err))
+    logger.fatal("layout", stack_trace)
 
     -- Capture bug report automatically on errors
     local ok, bug_reporter = pcall(require, "bug_reporter.init")
     if ok and bug_reporter then
         local test_path = bug_reporter.capture_on_error(tostring(err), stack_trace)
         if test_path then
-            print("📸 Bug report auto-captured: " .. test_path)
-            print("💡 Press F12 to review and submit")
+            logger.info("layout", "Bug report auto-captured: " .. tostring(test_path))
+            logger.info("layout", "Press F12 to review and submit")
         end
     end
 
@@ -42,41 +42,107 @@ _G.error_handler = global_error_handler
 io.stdout:setvbuf("no")
 io.stderr:setvbuf("no")
 
-print("🎬 Creating layout...")
+local function open_project_database_or_prompt_cleanup(db_module, project_path)
+    local ok = db_module.set_path(project_path)
+    if ok then
+        return true
+    end
+
+    local list_ok, list_result = pcall(db_module.list_wal_sidecars, project_path)
+    if not list_ok then
+        logger.error("layout", "Failed to check for WAL/SHM sidecars: " .. tostring(list_result))
+        return false
+    end
+    if type(list_result) ~= "table" then
+        logger.error("layout", "database.list_wal_sidecars returned unexpected type: " .. type(list_result))
+        return false
+    end
+    local sidecars = list_result
+
+    local has_sidecars = sidecars and (sidecars.wal or sidecars.shm)
+    if not has_sidecars then
+        return false
+    end
+
+    if not qt_constants or not qt_constants.DIALOG or not qt_constants.DIALOG.SHOW_CONFIRM then
+        logger.error("layout", "Project open failed and WAL/SHM sidecars exist, but confirm dialog bindings are unavailable")
+        return false
+    end
+
+    local existing = {}
+    if sidecars.wal then table.insert(existing, sidecars.wal) end
+    if sidecars.shm then table.insert(existing, sidecars.shm) end
+
+    local suffix = "stale-" .. time_utils.human_datestamp_for_filename(os.time())
+    local accepted = qt_constants.DIALOG.SHOW_CONFIRM({
+        title = "Project Open Failed",
+        message = "This project database failed to open, but SQLite sidecar files were found.",
+        informative_text = "If you replaced the project file with another version, these sidecar files may belong to the previous database. You can move them aside and retry opening.\n\nMoving aside is safer than deleting: it preserves the old files in case they contain recent edits.",
+        detail_text = "Project file:\n" .. tostring(project_path) .. "\n\nSidecar files:\n" .. table.concat(existing, "\n") .. "\n\nMove aside suffix:\n" .. suffix,
+        confirm_text = "Move Aside and Retry",
+        cancel_text = "Cancel",
+        icon = "warning",
+        default_button = "confirm",
+    })
+
+    if not accepted then
+        return false
+    end
+
+    local moved_ok, moved_or_err = pcall(function()
+        return db_module.move_aside_wal_sidecars(project_path, suffix)
+    end)
+    if not moved_ok then
+        logger.error("layout", "Failed to move aside sidecars: " .. tostring(moved_or_err))
+        return false
+    end
+
+    local retry_ok = db_module.set_path(project_path)
+    if not retry_ok then
+        logger.error("layout", "Retry failed after moving aside WAL/SHM sidecars")
+        return false
+    end
+
+    logger.info("layout", "Opened project database after moving aside WAL/SHM sidecars")
+    return true
+end
+
+logger.info("layout", "Creating layout...")
 local layout_path = debug.getinfo(1, "S").source:sub(2)
 local layout_dir = layout_path:match("(.*/)")
 
 -- Initialize database connection
-print("💾 Initializing database...")
+logger.info("layout", "Initializing database...")
 local db_module = require("core.database")
 
 -- Determine database path - check for test environment variable first
 local db_path = os.getenv("JVE_PROJECT_PATH")
 if db_path then
-    print("💾 Using test database: " .. db_path)
+    logger.info("layout", "Using test database: " .. tostring(db_path))
 else
     -- Normal production path - single .jvp file is the project file
     local home = os.getenv("HOME")
     local projects_dir = home .. "/Documents/JVE Projects"
     db_path = projects_dir .. "/Untitled Project.jvp"
-    print("💾 Project file: " .. db_path)
+    logger.info("layout", "Project file: " .. tostring(db_path))
 
     -- Create projects directory if it doesn't exist
     os.execute('mkdir -p "' .. projects_dir .. '"')
 end
 
 local project_display_name = nil
-local active_project_id = nil
+local active_project_id
 
 -- Initialize command_manager module reference (will be initialized later)
 local command_manager = require("core.command_manager")
 
 -- Open database connection
-local db_success = db_module.set_path(db_path)
+local db_success = open_project_database_or_prompt_cleanup(db_module, db_path)
 if not db_success then
-    print("❌ Failed to open database connection")
+    logger.error("layout", "Failed to open database connection; exiting")
+    os.exit(1)
 else
-    print("✅ Database connection established")
+    logger.debug("layout", "Database connection established")
     local db_conn = db_module.get_connection()
     if not db_conn then
         error("FATAL: Database connection reported as established but is nil")
@@ -95,7 +161,7 @@ else
     schema_check:finalize()
 
     if not has_schema then
-        print("💾 Creating database schema...")
+        logger.info("layout", "Creating database schema...")
         local schema_path = layout_dir .. "../../core/persistence/schema.sql"
         local schema_file, ferr = io.open(schema_path, "r")
         if not schema_file then
@@ -108,7 +174,7 @@ else
         if not ok then
             error("FATAL: Failed to apply schema: " .. tostring(exec_err))
         end
-        print("✅ Database schema created")
+        logger.info("layout", "Database schema created")
     end
 
     local function ensure_default_data()
@@ -135,7 +201,7 @@ else
             end
             insert_project:exec()
             insert_project:finalize()
-            print("✅ Inserted default project")
+            logger.info("layout", "Inserted default project")
         end
 
         local sequence_id = nil
@@ -224,7 +290,7 @@ else
                 insert_media:finalize()
             end
 
-            print("✅ Inserted default sequence and tracks")
+            logger.info("layout", "Inserted default sequence and tracks")
         end
     end
 
@@ -238,12 +304,12 @@ else
 
     -- Initialize CommandManager with database
     command_manager.init(db_module.get_connection())
-    print("✅ CommandManager initialized with database")
+    logger.debug("layout", "CommandManager initialized with database")
 
     -- Initialize bug reporter (continuous background capture)
     local bug_reporter = require("bug_reporter.init")
     bug_reporter.init()
-    print("✅ Bug reporter initialized (background capture active)")
+    logger.debug("layout", "Bug reporter initialized (background capture active)")
 end
 
 
@@ -252,23 +318,23 @@ if not project_display_name then
 end
 
 -- Create main window
-print("🔨 About to create main window...")
+logger.debug("layout", "About to create main window...")
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
-print("✅ Main window created successfully")
-print("🎨 Applying main window stylesheet...")
+logger.debug("layout", "Main window created successfully")
+logger.debug("layout", "Applying main window stylesheet...")
 assert(ui_constants and ui_constants.STYLES and type(ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR) == "string" and ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR ~= "",
     "MAIN_WINDOW_TITLE_BAR style is required for main window styling")
 qt_set_widget_stylesheet(main_window, ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR)
-print("✅ Stylesheet applied")
+logger.debug("layout", "Stylesheet applied")
 local window_title = project_display_name
 qt_constants.PROPERTIES.SET_TITLE(main_window, window_title)
 if qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE then
     local ok, appearance_set = pcall(qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE, main_window, "NSAppearanceNameDarkAqua")
     if not ok or appearance_set ~= true then
-        print("WARNING: Failed to set window appearance to dark mode")
+        logger.warn("layout", "Failed to set window appearance to dark mode")
     end
 else
-    print("WARNING: Window appearance binding unavailable; title bar color may remain default")
+    logger.warn("layout", "Window appearance binding unavailable; title bar color may remain default")
 end
 qt_constants.PROPERTIES.SET_SIZE(main_window, 1600, 900)
 
@@ -288,7 +354,7 @@ if project_browser_mod.set_project_title then
 end
 
 -- Initialize menu system AFTER project browser exists
-print("📋 Initializing menu system...")
+logger.debug("layout", "Initializing menu system...")
 local menu_system = require("core.menu_system")
 menu_system.init(main_window, command_manager, project_browser_mod)
 
@@ -296,9 +362,9 @@ menu_system.init(main_window, command_manager, project_browser_mod)
 local menu_path = layout_dir .. "../../../menus.xml"
 local menu_success, menu_error = menu_system.load_from_file(menu_path)
 if menu_success then
-    print("✅ Menu system loaded successfully")
+    logger.debug("layout", "Menu system loaded successfully")
 else
-    print("❌ Failed to load menu system: " .. tostring(menu_error))
+    logger.error("layout", "Failed to load menu system: " .. tostring(menu_error))
 end
 
 -- 2. Src/Timeline Viewer (center)
@@ -316,7 +382,7 @@ local timeline_panel = timeline_panel_mod.create()
 -- Note: Use F9 and F10 to add test clips via commands
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state_from_panel = timeline_panel_mod.get_state()
-print(string.format("DEBUG: timeline_state from panel = %s", tostring(timeline_state_from_panel)))
+logger.debug("layout", string.format("timeline_state from panel = %s", tostring(timeline_state_from_panel)))
 keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod, timeline_panel_mod)
 
 -- 6. Initialize focus manager for visual panel indicators
@@ -332,7 +398,7 @@ if mount_result and mount_result.success then
     local inspector_success, inspector_result = pcall(view.create_schema_driven_inspector)
 
     if not inspector_success then
-        print("ERROR: Inspector creation failed: " .. tostring(inspector_result))
+        logger.error("layout", "Inspector creation failed: " .. tostring(inspector_result))
     end
 
     -- Wire up timeline to inspector
@@ -354,7 +420,7 @@ if mount_result and mount_result.success then
     end)
     selection_hub.set_active_panel("timeline")
 else
-    print("ERROR: Inspector mount failed: " .. tostring(mount_result))
+    logger.error("layout", "Inspector mount failed: " .. tostring(mount_result))
 end
 
 -- Register all panels with focus manager for visual indicators
@@ -439,21 +505,21 @@ if not is_test_mode then
         return keyboard_shortcuts.handle_key(event)
     end
     qt_set_global_key_handler(main_window, "global_key_handler")
-    print("✅ Keyboard shortcuts installed")
+    logger.debug("layout", "Keyboard shortcuts installed")
 else
-    print("⚠️  Keyboard shortcuts disabled (JVE_TEST_MODE set)")
+    logger.warn("layout", "Keyboard shortcuts disabled (JVE_TEST_MODE set)")
 end
 
 -- Show window
 qt_constants.DISPLAY.SHOW(main_window)
-print("✅ Correct layout created: 3 panels top, timeline bottom")
+logger.info("layout", "Correct layout created: 3 panels top, timeline bottom")
 
 -- Debug: Check actual widget sizes after window is shown
 local window_w, window_h = qt_constants.PROPERTIES.GET_SIZE(main_window)
 local timeline_w, timeline_h = qt_constants.PROPERTIES.GET_SIZE(timeline_panel)
 local inspector_w, inspector_h = qt_constants.PROPERTIES.GET_SIZE(inspector_panel)
-print(string.format("DEBUG: Main window size: %dx%d", window_w, window_h))
-print(string.format("DEBUG: Timeline panel size: %dx%d (panel HAS correct width!)", timeline_w, timeline_h))
-print(string.format("DEBUG: Inspector panel size: %dx%d", inspector_w, inspector_h))
+logger.debug("layout", string.format("Main window size: %dx%d", window_w, window_h))
+logger.debug("layout", string.format("Timeline panel size: %dx%d", timeline_w, timeline_h))
+logger.debug("layout", string.format("Inspector panel size: %dx%d", inspector_w, inspector_h))
 
 return main_window

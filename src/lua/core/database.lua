@@ -6,6 +6,7 @@ local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
 local event_log = require("core.event_log")
 local Rational = require("core.rational")
+local logger = require("core.logger")
 
 local BIN_NAMESPACE = "bin"
 
@@ -30,8 +31,7 @@ local function load_main_schema(db_conn)
     end
 
     if not project_root then
-        -- Fallback: Assume current working directory is project root
-        project_root = "./"
+        error("FATAL: Unable to resolve project root for schema load (package.searchpath(\"core.database\") failed)")
     end
     
     local absolute_schema_path = project_root .. schema_path
@@ -60,7 +60,7 @@ local function safe_remove(path)
     end
     local ok, err = os.remove(path)
     if ok == nil and err and not err:match("No such file") then
-        print(string.format("WARNING: Failed to remove %s: %s", path, tostring(err)))
+        logger.warn("database", string.format("Failed to remove %s: %s", tostring(path), tostring(err)))
     end
 end
 
@@ -70,6 +70,77 @@ local function cleanup_wal_sidecars(base_path)
     end
     safe_remove(base_path .. "-wal")
     safe_remove(base_path .. "-shm")
+end
+
+local function file_exists(path)
+    if not path or path == "" then
+        return false
+    end
+    local file = io.open(path, "rb")
+    if file then
+        file:close()
+        return true
+    end
+    return false
+end
+
+function M.list_wal_sidecars(project_path)
+    if not project_path or project_path == "" then
+        error("FATAL: database.list_wal_sidecars requires a project path")
+    end
+    return {
+        wal = file_exists(project_path .. "-wal") and (project_path .. "-wal") or nil,
+        shm = file_exists(project_path .. "-shm") and (project_path .. "-shm") or nil,
+    }
+end
+
+function M.move_aside_wal_sidecars(project_path, suffix)
+    if not project_path or project_path == "" then
+        error("FATAL: database.move_aside_wal_sidecars requires a project path")
+    end
+    if not suffix or suffix == "" then
+        error("FATAL: database.move_aside_wal_sidecars requires a suffix")
+    end
+
+    local sidecars = M.list_wal_sidecars(project_path)
+    local moves = {}
+
+    local function move_one(source_path)
+        if not source_path then
+            return
+        end
+        local target_path = source_path .. "." .. suffix
+        if file_exists(target_path) then
+            error("FATAL: Refusing to overwrite existing file: " .. tostring(target_path))
+        end
+        local ok, err = os.rename(source_path, target_path)
+        if not ok then
+            error(string.format("FATAL: Failed to move %s → %s (%s)", tostring(source_path), tostring(target_path), tostring(err)))
+        end
+        table.insert(moves, { from = source_path, to = target_path })
+    end
+
+    move_one(sidecars.wal)
+    move_one(sidecars.shm)
+
+    return moves
+end
+
+local function checkpoint_and_disable_wal()
+    if not db_connection then
+        return true
+    end
+
+    local ok, err = db_connection:exec("PRAGMA wal_checkpoint(TRUNCATE);")
+    if ok == false then
+        return false, "wal_checkpoint failed: " .. tostring(err)
+    end
+
+    ok, err = db_connection:exec("PRAGMA journal_mode = DELETE;")
+    if ok == false then
+        return false, "journal_mode=DELETE failed: " .. tostring(err)
+    end
+    return true
 end
 
 local function has_com_apple_macl_label(path)
@@ -143,7 +214,7 @@ local function ensure_sequence_track_layouts_table()
     ]])
 
     if ok == false then
-        print("WARNING: Failed to ensure sequence_track_layouts table: " .. tostring(err or "unknown error"))
+        logger.warn("database", "Failed to ensure sequence_track_layouts table: " .. tostring(err or "unknown error"))
     end
 end
 
@@ -221,39 +292,61 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         end
     end
     
-    local fps_num = query:value(16) or 30
-    local fps_den = query:value(17) or 1
+    local clip_fps_num = query:value(16)
+    local clip_fps_den = query:value(17)
 
-    local clip = {
-        id = clip_id,
-        project_id = clip_project_id,
-        clip_kind = query:value(3),
-        name = query:value(4),
-        track_id = query:value(5),
-        media_id = media_id,
-        source_sequence_id = query:value(7),
-        parent_clip_id = query:value(8),
-        owner_sequence_id = owner_sequence_id,
-        track_sequence_id = track_sequence_id,
+    -- load_clips/load_clip_entry SELECT appends sequence fps metadata.
+    local sequence_fps_num = query:value(23)
+    local sequence_fps_den = query:value(24)
+    if not sequence_fps_num or not sequence_fps_den then
+        error(string.format(
+            "FATAL: load_clips: missing sequence fps for clip %s (sequence %s)",
+            tostring(clip_id),
+            tostring(requested_sequence_id)
+        ))
+    end
+
+    if not clip_fps_num or not clip_fps_den then
+        -- Clip fps is currently persisted on the clip row; treat missing as fatal
+        -- because source_in/source_out require a timebase.
+        error(string.format(
+            "FATAL: load_clips: missing clip fps for clip %s (sequence %s)",
+            tostring(clip_id),
+            tostring(requested_sequence_id)
+        ))
+    end
+
+	    local clip = {
+	        id = clip_id,
+	        project_id = clip_project_id,
+	        clip_kind = query:value(3),
+	        name = query:value(4),
+	        track_id = query:value(5),
+	        media_id = media_id,
+	        created_at = query:value(21),
+	        modified_at = query:value(22),
+	        source_sequence_id = query:value(7),
+	        parent_clip_id = query:value(8),
+	        owner_sequence_id = owner_sequence_id,
+	        track_sequence_id = track_sequence_id,
         
                         -- Rational Properties
         
-                        timeline_start = Rational.new(query:value(10) or 0, fps_num, fps_den),
-        
-                        duration = Rational.new(query:value(11) or 0, fps_num, fps_den),
-        
-                        source_in = Rational.new(query:value(12) or 0, fps_num, fps_den),
-        
-                        source_out = Rational.new(query:value(13) or 0, fps_num, fps_den),
+                        -- Timeline positions are in the owning sequence timebase.
+                        timeline_start = Rational.new(query:value(10) or 0, sequence_fps_num, sequence_fps_den),
+
+                        duration = Rational.new(query:value(11) or 0, sequence_fps_num, sequence_fps_den),
+
+                        -- Source bounds are in the clip timebase (media/source rate).
+                        source_in = Rational.new(query:value(12) or 0, clip_fps_num, clip_fps_den),
+
+                        source_out = Rational.new(query:value(13) or 0, clip_fps_num, clip_fps_den),
         
                         
         
                         rate = {
-        
-                            fps_numerator = fps_num,
-        
-                            fps_denominator = fps_den
-        
+                            fps_numerator = clip_fps_num,
+                            fps_denominator = clip_fps_den
                         },
         
                         
@@ -333,7 +426,7 @@ local function commit_transaction(started, context)
     end
     local ok, err = db_connection:exec("COMMIT;")
     if ok == false then
-        print(string.format("WARNING: %s: failed to commit: %s", tostring(context or "database"), tostring(err)))
+        logger.warn("database", string.format("%s: failed to commit: %s", tostring(context or "database"), tostring(err)))
         db_connection:exec("ROLLBACK;")
         return false
     end
@@ -357,18 +450,10 @@ function M.set_path(path)
     tag_tables_supported = nil
 
     db_path = path
-    print("Database path set to: " .. path)
+    logger.debug("database", "Database path set to: " .. tostring(path))
 
     -- Open database connection
     local db, err = sqlite3.open(path)
-    if not db and err and err:match("disk I/O error") then
-        print(string.format("WARNING: SQLite reported 'disk I/O error' for %s; removing stale WAL/SHM files and retrying...", path))
-        cleanup_wal_sidecars(path)
-        db, err = sqlite3.open(path)
-        if db then
-            print("✅ Removed stale WAL/SHM files and reopened database")
-        end
-    end
     if not db then
         local extra = ""
         if err and err:match("disk I/O error") then
@@ -378,7 +463,7 @@ function M.set_path(path)
                 extra = " Ensure the path is writable and not locked by another application."
             end
         end
-        print("ERROR: Failed to open database: " .. (err or "unknown error") .. extra)
+        logger.error("database", "Failed to open database: " .. tostring(err or "unknown error") .. extra)
         return false
     end
 
@@ -406,7 +491,7 @@ function M.set_path(path)
     ensure_sequence_track_layouts_table()
     tag_tables_available()
 
-    print("Database connection opened successfully")
+    logger.debug("database", "Database connection opened successfully")
     return db_connection
 end
 
@@ -418,6 +503,36 @@ end
 -- Get database connection (for use by command_manager, models, etc.)
 function M.get_connection()
     return db_connection
+end
+
+function M.shutdown()
+    if not db_connection then
+        return true
+    end
+
+    local ok, err = checkpoint_and_disable_wal()
+    if not ok then
+        return false, err
+    end
+
+    local close_ok, close_err = pcall(function()
+        if db_connection and db_connection.close then
+            db_connection:close()
+        end
+    end)
+    db_connection = nil
+    tag_tables_supported = nil
+
+    if not close_ok then
+        return false, "failed to close database: " .. tostring(close_err)
+    end
+
+    cleanup_wal_sidecars(db_path)
+    local ok_ev, ev_err = pcall(event_log.shutdown)
+    if not ok_ev then
+        return false, "failed to shutdown event_log: " .. tostring(ev_err)
+    end
+    return true
 end
 
 -- Ensure a media row exists for the given media_id.
@@ -458,7 +573,7 @@ function M.ensure_media_record(media_id)
                         break
                     else
                         if import_err then
-                            print("WARNING: ensure_media_record: failed to reimport media: " .. tostring(import_err))
+                            logger.warn("database", "ensure_media_record: failed to reimport media: " .. tostring(import_err))
                         end
                     end
                 end
@@ -505,7 +620,7 @@ function M.get_current_project_id()
         if not project:save(db_connection) then
             error("FATAL: Failed to save default project to database")
         end
-        print("INFO: Created default project")
+        logger.info("database", "Created default project")
     end
 
     return default_id
@@ -517,7 +632,7 @@ function M.load_tracks(sequence_id)
         error("FATAL: load_tracks() requires sequence_id parameter")
     end
 
-    print("Loading tracks for sequence: " .. sequence_id)
+    logger.debug("database", "Loading tracks for sequence: " .. tostring(sequence_id))
 
     if not db_connection then
         error("FATAL: No database connection - cannot load tracks")
@@ -550,7 +665,7 @@ function M.load_tracks(sequence_id)
         end
     end
 
-    print(string.format("Loaded %d tracks from database", #tracks))
+    logger.debug("database", string.format("Loaded %d tracks from database", #tracks))
     return tracks
 end
 
@@ -564,18 +679,20 @@ function M.load_clips(sequence_id)
         error("FATAL: No database connection - cannot load clips")
     end
 
-    local query = db_connection:prepare([[
-        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
-               c.source_in_frame, c.source_out_frame,
-               c.enabled, c.offline, c.fps_numerator, c.fps_denominator, t.sequence_id,
-               m.name, m.file_path
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        JOIN sequences s ON t.sequence_id = s.id
-        LEFT JOIN media m ON c.media_id = m.id
-        WHERE t.sequence_id = ?
+	    local query = db_connection:prepare([[
+	        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+	               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+	               c.timeline_start_frame, c.duration_frames,
+	               c.source_in_frame, c.source_out_frame,
+	               c.enabled, c.offline, c.fps_numerator, c.fps_denominator, t.sequence_id,
+	               m.name, m.file_path,
+	               c.created_at, c.modified_at,
+	               s.fps_numerator, s.fps_denominator
+	        FROM clips c
+	        JOIN tracks t ON c.track_id = t.id
+	        JOIN sequences s ON t.sequence_id = s.id
+	        LEFT JOIN media m ON c.media_id = m.id
+	        WHERE t.sequence_id = ?
         ORDER BY c.timeline_start_frame ASC
     ]])
 
@@ -612,17 +729,19 @@ function M.load_clip_entry(clip_id)
         error("FATAL: No database connection - cannot load clip entry")
     end
 
-    local query = db_connection:prepare([[
-        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
-               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
-               c.enabled, c.offline, c.fps_numerator, c.fps_denominator,
-               t.sequence_id, m.name, m.file_path
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        JOIN sequences s ON t.sequence_id = s.id
-        LEFT JOIN media m ON c.media_id = m.id
-        WHERE c.id = ?
+	    local query = db_connection:prepare([[
+	        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+	               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+	               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
+	               c.enabled, c.offline, c.fps_numerator, c.fps_denominator,
+	               t.sequence_id, m.name, m.file_path,
+	               c.created_at, c.modified_at,
+	               s.fps_numerator, s.fps_denominator
+	        FROM clips c
+	        JOIN tracks t ON c.track_id = t.id
+	        JOIN sequences s ON t.sequence_id = s.id
+	        LEFT JOIN media m ON c.media_id = m.id
+	        WHERE c.id = ?
         LIMIT 1
     ]])
 
@@ -647,8 +766,7 @@ function M.load_clip_properties(clip_id)
     end
 
     if not db_connection then
-        print("WARNING: load_clip_properties: No database connection")
-        return {}
+        error("FATAL: load_clip_properties: No database connection")
     end
 
     local properties = {}
@@ -740,8 +858,6 @@ end
 
 -- Load all media with tag associations
 function M.load_media()
-    print("Loading media library from database")
-
     if not db_connection then
         error("FATAL: No database connection - cannot load media")
     end
@@ -760,8 +876,11 @@ function M.load_media()
     local media_items = {}
     if query:exec() then
         while query:next() do
-            local num = query:value(5) or 30
-            local den = query:value(6) or 1
+            local num = query:value(5)
+            local den = query:value(6)
+            if not num or not den then
+                error("FATAL: media row missing fps_numerator/fps_denominator (corrupt database)", 2)
+            end
             
             table.insert(media_items, {
                 id = query:value(0),
@@ -769,7 +888,7 @@ function M.load_media()
                 name = query:value(2),
                 file_name = query:value(2),
                 file_path = query:value(3),
-                duration = Rational.new(query:value(4) or 0, num, den),
+                duration = Rational.new(query:value(4), num, den),
                 frame_rate = { fps_numerator = num, fps_denominator = den },
                 width = query:value(7),
                 height = query:value(8),
@@ -783,7 +902,7 @@ function M.load_media()
         end
     end
 
-    print(string.format("Loaded %d media items from database", #media_items))
+    logger.debug("database", string.format("Loaded %d media items from database", #media_items))
     return media_items
 end
 
@@ -848,74 +967,105 @@ function M.load_master_clips(project_id)
     query:bind_value(1, project_id)
     query:bind_value(2, project_id)
 
-    local clips = {}
-    if query:exec() then
-        while query:next() do
-            local clip_id = query:value(0)
-            local clip_name = query:value(1)
-            local clip_project_id = query:value(2)
-            local media_id = query:value(3)
-            local source_sequence_id = query:value(4)
-            
-            local start_frame = query:value(5)
-            local duration_frames = query:value(6)
-            local source_in_frame = query:value(7) or 0
-            local source_out_frame = query:value(8) or duration_frames
-            
-            local clip_fps_num = query:value(9) or 30
-            local clip_fps_den = query:value(10) or 1
-            
-            local enabled = query:value(11) == 1
-            local offline = query:value(12) == 1
-            local created_at = query:value(13)
-            local modified_at = query:value(14)
+	    local clips = {}
+	    if query:exec() then
+	        while query:next() do
+	            local clip_id = query:value(0)
+	            local clip_name = query:value(1)
+	            local clip_project_id = query:value(2)
+	            local media_id = query:value(3)
+	            local source_sequence_id = query:value(4)
+	            
+	            local start_frame = query:value(5)
+	            local duration_frames = query:value(6)
+	            local source_in_frame = query:value(7)
+	            local source_out_frame = query:value(8)
+	            if start_frame == nil or duration_frames == nil or source_in_frame == nil or source_out_frame == nil then
+	                error(string.format(
+	                    "FATAL: load_master_clips: master clip %s missing timeline/source frame data",
+	                    tostring(clip_id)
+	                ))
+	            end
+	            
+	            local clip_fps_num = query:value(9)
+	            local clip_fps_den = query:value(10)
+	            if not clip_fps_num or not clip_fps_den then
+	                error(string.format(
+	                    "FATAL: load_master_clips: master clip %s missing fps",
+	                    tostring(clip_id)
+	                ))
+	            end
+	            
+	            local enabled = query:value(11) == 1
+	            local offline = query:value(12) == 1
+	            local created_at = query:value(13)
+	            local modified_at = query:value(14)
 
-            local media_project_id = query:value(15)
-            local media_name = query:value(16)
-            local media_path = query:value(17)
-            local media_duration_frames = query:value(18)
-            local media_fps_num = query:value(19) or 30
-            local media_fps_den = query:value(20) or 1
-            local media_width = query:value(21)
-            local media_height = query:value(22)
-            local media_channels = query:value(23)
-            local media_codec = query:value(24)
+	            local media_project_id = query:value(15)
+	            local media_name = query:value(16)
+	            local media_path = query:value(17)
+	            local media_duration_frames = query:value(18)
+	            local media_fps_num = query:value(19)
+	            local media_fps_den = query:value(20)
+	            if media_id and media_id ~= "" then
+	                if not media_duration_frames or not media_fps_num or not media_fps_den then
+	                    error(string.format(
+	                        "FATAL: load_master_clips: master clip %s missing media fps/duration (media_id=%s)",
+	                        tostring(clip_id),
+	                        tostring(media_id)
+	                    ))
+	                end
+	            end
+	            local media_width = query:value(21)
+	            local media_height = query:value(22)
+	            local media_channels = query:value(23)
+	            local media_codec = query:value(24)
             local media_metadata = query:value(25)
-            local media_created_at = query:value(26)
-            local media_modified_at = query:value(27)
+	            local media_created_at = query:value(26)
+	            local media_modified_at = query:value(27)
 
-            local sequence_project_id = query:value(28)
-            local sequence_fps_num = query:value(29) or 30
-            local sequence_fps_den = query:value(30) or 1
-            local sequence_width = query:value(31)
-            local sequence_height = query:value(32)
-            local sequence_audio_rate = query:value(33)
+	            local sequence_project_id = query:value(28)
+	            local sequence_fps_num = query:value(29)
+	            local sequence_fps_den = query:value(30)
+	            if source_sequence_id and (not sequence_fps_num or not sequence_fps_den) then
+	                error(string.format(
+	                    "FATAL: load_master_clips: master clip %s missing source sequence fps (source_sequence_id=%s)",
+	                    tostring(clip_id),
+	                    tostring(source_sequence_id)
+	                ))
+	            end
+	            local sequence_width = query:value(31)
+	            local sequence_height = query:value(32)
+	            local sequence_audio_rate = query:value(33)
 
-            local media_info = {
-                id = media_id,
-                project_id = media_project_id,
-                name = media_name,
-                file_name = media_name,
-                file_path = media_path,
-                duration = Rational.new(media_duration_frames or 0, media_fps_num, media_fps_den),
-                frame_rate = { fps_numerator = media_fps_num, fps_denominator = media_fps_den },
-                width = media_width,
-                height = media_height,
-                audio_channels = media_channels,
-                codec = media_codec,
+	            local media_info = {
+	                id = media_id,
+	                project_id = media_project_id,
+	                name = media_name,
+	                file_name = media_name,
+	                file_path = media_path,
+	                duration = Rational.new(media_duration_frames, media_fps_num, media_fps_den),
+	                frame_rate = { fps_numerator = media_fps_num, fps_denominator = media_fps_den },
+	                width = media_width,
+	                height = media_height,
+	                audio_channels = media_channels,
+	                codec = media_codec,
                 metadata = media_metadata,
                 created_at = media_created_at,
                 modified_at = media_modified_at,
             }
 
-            local sequence_info = {
-                id = source_sequence_id,
-                project_id = sequence_project_id,
-                frame_rate = { fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den },
-                width = sequence_width,
-                height = sequence_height,
-                audio_sample_rate = sequence_audio_rate
-            }
+	            local sequence_info = nil
+	            if source_sequence_id then
+	                sequence_info = {
+	                    id = source_sequence_id,
+	                    project_id = sequence_project_id,
+	                    frame_rate = { fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den },
+	                    width = sequence_width,
+	                    height = sequence_height,
+	                    audio_sample_rate = sequence_audio_rate
+	                }
+	            end
 
             local clip_entry = {
                 clip_id = clip_id,
@@ -924,8 +1074,8 @@ function M.load_master_clips(project_id)
                 media_id = media_id,
                 source_sequence_id = source_sequence_id,
                 
-                timeline_start = Rational.new(start_frame or 0, clip_fps_num, clip_fps_den),
-                duration = Rational.new(duration_frames or 0, clip_fps_num, clip_fps_den),
+	                timeline_start = Rational.new(start_frame, clip_fps_num, clip_fps_den),
+	                duration = Rational.new(duration_frames, clip_fps_num, clip_fps_den),
                 source_in = Rational.new(source_in_frame, clip_fps_num, clip_fps_den),
                 source_out = Rational.new(source_out_frame, clip_fps_num, clip_fps_den),
                 
@@ -951,15 +1101,14 @@ function M.load_master_clips(project_id)
 
     query:finalize()
 
-    print(string.format("Loaded %d master clips from database", #clips))
+    logger.debug("database", string.format("Loaded %d master clips from database", #clips))
     return clips
 end
 
 function M.load_sequences(project_id)
     project_id = project_id or M.get_current_project_id()
     if not db_connection then
-        print("WARNING: load_sequences: No database connection")
-        return {}
+        error("FATAL: load_sequences: No database connection")
     end
 
     local sequences = {}
@@ -971,8 +1120,7 @@ function M.load_sequences(project_id)
         ORDER BY name
     ]])
     if not query then
-        print("WARNING: load_sequences: Failed to prepare query: " .. (db_connection:last_error() or "unknown"))
-        return sequences
+        error("FATAL: load_sequences: Failed to prepare query: " .. tostring(db_connection:last_error() or "unknown"))
     end
 
     query:bind_value(1, project_id)
@@ -1021,8 +1169,7 @@ function M.load_sequence_record(sequence_id)
     end
 
     if not db_connection then
-        print("WARNING: load_sequence_record: No database connection")
-        return nil
+        error("FATAL: load_sequence_record: No database connection")
     end
 
     local query = db_connection:prepare([[
@@ -1036,16 +1183,19 @@ function M.load_sequence_record(sequence_id)
     ]])
 
     if not query then
-        print("WARNING: load_sequence_record: Failed to prepare query: " .. (db_connection:last_error() or "unknown"))
-        return nil
+        error("FATAL: load_sequence_record: Failed to prepare query: " .. tostring(db_connection:last_error() or "unknown"))
     end
 
     query:bind_value(1, sequence_id)
 
     local sequence = nil
     if query:exec() and query:next() then
-        local fps_num = tonumber(query:value(4)) or 30
-        local fps_den = tonumber(query:value(5)) or 1
+        local fps_num = tonumber(query:value(4))
+        local fps_den = tonumber(query:value(5))
+        if not fps_num or fps_num <= 0 or not fps_den or fps_den <= 0 then
+            query:finalize()
+            error(string.format("FATAL: sequence %s missing valid fps_numerator/fps_denominator", tostring(sequence_id)))
+        end
         
         sequence = {
             id = query:value(0),
@@ -1053,17 +1203,27 @@ function M.load_sequence_record(sequence_id)
             name = query:value(2),
             kind = query:value(3),
             frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den },
-            width = tonumber(query:value(6)) or 0,
-            height = tonumber(query:value(7)) or 0,
-            playhead_value = tonumber(query:value(8)) or 0,
-            viewport_start_value = tonumber(query:value(9)) or 0,
-            viewport_duration_frames_value = tonumber(query:value(10)) or 0,
+            width = tonumber(query:value(6)),
+            height = tonumber(query:value(7)),
+            playhead_value = tonumber(query:value(8)),
+            viewport_start_value = tonumber(query:value(9)),
+            viewport_duration_frames_value = tonumber(query:value(10)),
             mark_in_value = tonumber(query:value(11)),
             mark_out_value = tonumber(query:value(12)),
             selected_clip_ids = query:value(13),
             selected_edge_infos = query:value(14),
             audio_sample_rate = tonumber(query:value(15))
         }
+
+        if not sequence.width or not sequence.height then
+            query:finalize()
+            error(string.format("FATAL: sequence %s missing width/height", tostring(sequence_id)))
+        end
+
+        if not sequence.playhead_value or not sequence.viewport_start_value or not sequence.viewport_duration_frames_value then
+            query:finalize()
+            error(string.format("FATAL: sequence %s missing view/playhead fields", tostring(sequence_id)))
+        end
 
         if not sequence.audio_sample_rate or sequence.audio_sample_rate <= 0 then
             query:finalize()
@@ -1083,8 +1243,7 @@ function M.load_sequence_track_heights(sequence_id)
     end
 
     if not db_connection then
-        print("WARNING: load_sequence_track_heights: No database connection")
-        return {}
+        error("FATAL: load_sequence_track_heights: No database connection")
     end
 
     ensure_sequence_track_layouts_table()
@@ -1096,8 +1255,7 @@ function M.load_sequence_track_heights(sequence_id)
     ]])
 
     if not stmt then
-        print("WARNING: load_sequence_track_heights: Failed to prepare query")
-        return {}
+        error("FATAL: load_sequence_track_heights: Failed to prepare query")
     end
 
     stmt:bind_value(1, sequence_id)
@@ -1107,9 +1265,15 @@ function M.load_sequence_track_heights(sequence_id)
         local raw = stmt:value(0)
         if raw and raw ~= "" then
             local ok, decoded = pcall(json.decode, raw)
-            if ok and type(decoded) == "table" then
-                payload = decoded
+            if not ok then
+                stmt:finalize()
+                error("FATAL: load_sequence_track_heights: invalid JSON in database")
             end
+            if type(decoded) ~= "table" then
+                stmt:finalize()
+                error("FATAL: load_sequence_track_heights: expected JSON object in database")
+            end
+            payload = decoded
         end
     end
 
@@ -1123,21 +1287,18 @@ function M.set_sequence_track_heights(sequence_id, track_heights)
     end
 
     if not db_connection then
-        print("WARNING: set_sequence_track_heights: No database connection")
-        return false
+        error("FATAL: set_sequence_track_heights: No database connection")
     end
 
     ensure_sequence_track_layouts_table()
 
-    local normalized = track_heights
-    if type(normalized) ~= "table" then
-        normalized = {}
+    if type(track_heights) ~= "table" then
+        error("FATAL: set_sequence_track_heights: track_heights must be a table")
     end
 
-    local encoded, encode_err = json.encode(normalized)
+    local encoded, encode_err = json.encode(track_heights)
     if not encoded then
-        print("WARNING: set_sequence_track_heights: Failed to encode JSON: " .. tostring(encode_err))
-        return false
+        error("FATAL: set_sequence_track_heights: Failed to encode JSON: " .. tostring(encode_err))
     end
 
     local stmt = db_connection:prepare([[
@@ -1149,8 +1310,7 @@ function M.set_sequence_track_heights(sequence_id, track_heights)
     ]])
 
     if not stmt then
-        print("WARNING: set_sequence_track_heights: Failed to prepare upsert statement")
-        return false
+        error("FATAL: set_sequence_track_heights: Failed to prepare upsert statement")
     end
 
     stmt:bind_value(1, sequence_id)
@@ -1167,11 +1327,13 @@ local function decode_settings_json(raw)
     end
 
     local ok, decoded = pcall(json.decode, raw)
-    if ok and type(decoded) == "table" then
-        return decoded
+    if not ok then
+        error("FATAL: Invalid project settings JSON in database")
     end
-
-    return {}
+    if type(decoded) ~= "table" then
+        error("FATAL: Project settings JSON must be an object")
+    end
+    return decoded
 end
 
 local function ensure_project_record(project_id)
@@ -1192,12 +1354,10 @@ local function ensure_project_record(project_id)
     local Project = require("models.project")
     local project = Project.create_with_id(project_id, "Untitled Project")
     if not project then
-        print("WARNING: ensure_project_record: Failed to create project object")
-        return false
+        error("FATAL: ensure_project_record: Failed to create project object")
     end
     if not project:save(db_connection) then
-        print("WARNING: ensure_project_record: Failed to save project " .. tostring(project_id))
-        return false
+        error("FATAL: ensure_project_record: Failed to save project " .. tostring(project_id))
     end
     return true
 end
@@ -1205,23 +1365,24 @@ end
 function M.get_project_settings(project_id)
     project_id = project_id or M.get_current_project_id()
     if not db_connection then
-        print("WARNING: get_project_settings: No database connection")
-        return {}
+        error("FATAL: get_project_settings: No database connection")
     end
 
     local stmt = db_connection:prepare("SELECT settings FROM projects WHERE id = ?")
     if not stmt then
-        print("WARNING: get_project_settings: Failed to prepare query")
-        return {}
+        error("FATAL: get_project_settings: Failed to prepare query")
     end
 
     stmt:bind_value(1, project_id)
-    local settings_json = "{}"
+    local settings_json = nil
     if stmt:exec() and stmt:next() then
-        settings_json = stmt:value(0) or "{}"
+        settings_json = stmt:value(0)
     end
     stmt:finalize()
 
+    if not settings_json then
+        error("FATAL: get_project_settings: missing settings row for project " .. tostring(project_id))
+    end
     return decode_settings_json(settings_json)
 end
 
@@ -1240,8 +1401,7 @@ function M.set_project_setting(project_id, key, value)
 
     project_id = project_id or M.get_current_project_id()
     if not db_connection then
-        print("WARNING: set_project_setting: No database connection")
-        return false
+        error("FATAL: set_project_setting: No database connection")
     end
 
     ensure_project_record(project_id)
@@ -1254,8 +1414,7 @@ function M.set_project_setting(project_id, key, value)
 
     local encoded, encode_err = json.encode(settings)
     if not encoded then
-        print("WARNING: set_project_setting: Failed to encode settings JSON: " .. tostring(encode_err))
-        return false
+        error("FATAL: set_project_setting: Failed to encode settings JSON: " .. tostring(encode_err))
     end
 
     local stmt = db_connection:prepare([[
@@ -1265,15 +1424,14 @@ function M.set_project_setting(project_id, key, value)
     ]])
 
     if not stmt then
-        print("WARNING: set_project_setting: Failed to prepare update statement")
-        return false
+        error("FATAL: set_project_setting: Failed to prepare update statement")
     end
 
     stmt:bind_value(1, encoded)
     stmt:bind_value(2, project_id)
     local ok = stmt:exec()
     if not ok then
-        print("WARNING: set_project_setting: Update failed for project " .. tostring(project_id))
+        error("FATAL: set_project_setting: Update failed for project " .. tostring(project_id))
     end
     stmt:finalize()
     return ok
@@ -1461,12 +1619,12 @@ function M.save_bins(project_id, bins, opts)
     project_id = project_id or M.get_current_project_id()
     if not project_id or project_id == "" then
         local reason = "save_bins: Missing project_id"
-        print("WARNING: " .. reason)
+        logger.warn("database", reason)
         return false, reason
     end
     if not db_connection then
         local reason = "save_bins: No database connection"
-        print("WARNING: " .. reason)
+        logger.warn("database", reason)
         return false, reason
     end
 
@@ -1481,7 +1639,7 @@ function M.save_bins(project_id, bins, opts)
         local path = resolve_bin_path(bin.id, lookup, path_cache, {})
         if not path or path == "" then
             local reason = string.format("save_bins: invalid hierarchy for bin %s", tostring(bin.id))
-            print("WARNING: " .. reason)
+            logger.warn("database", reason)
             return false, reason
         end
     end
@@ -1489,7 +1647,7 @@ function M.save_bins(project_id, bins, opts)
     local started, begin_err = begin_write_transaction()
     if started == nil then
         local reason = "save_bins: failed to begin transaction: " .. tostring(begin_err)
-        print("WARNING: " .. reason)
+        logger.warn("database", reason)
         return false, reason
     end
 
@@ -1655,7 +1813,7 @@ function M.save_master_clip_bin_map(project_id, bin_map)
 
     local started, begin_err = begin_write_transaction()
     if started == nil then
-        print("WARNING: save_master_clip_bin_map: failed to begin transaction: " .. tostring(begin_err))
+        logger.warn("database", "save_master_clip_bin_map: failed to begin transaction: " .. tostring(begin_err))
         return false
     end
 
@@ -1688,7 +1846,7 @@ function M.save_master_clip_bin_map(project_id, bin_map)
     for clip_id, bin_id in pairs(bin_map or {}) do
         if type(clip_id) == "string" and clip_id ~= "" and type(bin_id) == "string" and bin_id ~= "" then
             if not validate_bin_id(project_id, bin_id) then
-                print(string.format("WARNING: save_master_clip_bin_map: bin %s does not exist", tostring(bin_id)))
+                logger.warn("database", string.format("save_master_clip_bin_map: bin %s does not exist", tostring(bin_id)))
                 insert_stmt:finalize()
                 rollback_transaction(started)
                 return false
@@ -1728,14 +1886,14 @@ function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
 
     if bin_id and (type(bin_id) ~= "string" or bin_id == "" or not validate_bin_id(project_id, bin_id)) then
         local message = string.format("assign_master_clips_to_bin: invalid bin %s", tostring(bin_id))
-        print("WARNING: " .. message)
+        logger.warn("database", message)
         return false, message
     end
 
     local started, begin_err = begin_write_transaction()
     if started == nil then
         local message = "assign_master_clips_to_bin: failed to begin transaction: " .. tostring(begin_err)
-        print("WARNING: " .. message)
+        logger.warn("database", message)
         return false, message
     end
 

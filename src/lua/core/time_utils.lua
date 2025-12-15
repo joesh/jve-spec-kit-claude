@@ -1,128 +1,109 @@
--- Time Utilities: Rational time for frame-locked video and sample-accurate audio.
--- Represents time as (value, rate). Video uses frames at timeline fps; audio uses samples at audio sample rate.
+-- time_utils.lua
+-- Time conversions for Rational (frames @ rate), plus a small set of filename-safe date helpers.
 
 local Rational = require("core.rational")
 
 local M = {}
 
--- Defaults
 M.default_audio_rate = 48000
 
--- Create a Rational object.
-function M.rational(value, fps_numerator, fps_denominator)
-    -- If value is already a Rational object, return it.
-    if getmetatable(value) == Rational.metatable then
-        return value
+local function require_number(value, name)
+    if value == nil then
+        error("FATAL: time_utils: missing " .. tostring(name), 3)
     end
-    -- If fps_numerator is missing but it's a number, assume it's frame count for default fps.
-    if type(fps_numerator) == "number" and not fps_denominator then
-        return Rational.new(value, fps_numerator)
+    if type(value) ~= "number" then
+        error("FATAL: time_utils: " .. tostring(name) .. " must be a number", 3)
     end
-    return Rational.new(value, fps_numerator, fps_denominator)
 end
 
--- Convert a Rational object to a target rate, applying rounding mode.
-function M.convert(rt, target_fps_numerator, target_fps_denominator)
-    if getmetatable(rt) ~= Rational.metatable then
-        error("M.convert: rt must be a Rational object", 2)
+local function normalize_rate(fps_numerator, fps_denominator)
+    require_number(fps_numerator, "fps_numerator")
+    if fps_denominator == nil then
+        fps_denominator = 1
     end
-    return rt:rescale(target_fps_numerator, target_fps_denominator)
+    require_number(fps_denominator, "fps_denominator")
+    return fps_numerator, fps_denominator
 end
 
--- Add two Rational objects.
+function M.rational(frames, fps_numerator, fps_denominator)
+    local num, den = normalize_rate(fps_numerator, fps_denominator)
+    require_number(frames, "frames")
+    return Rational.new(frames, num, den)
+end
+
+function M.from_frames(frames, fps_numerator, fps_denominator)
+    return M.rational(frames, fps_numerator, fps_denominator)
+end
+
+function M.to_frames(time_obj, fps_numerator, fps_denominator)
+    local num, den = normalize_rate(fps_numerator, fps_denominator)
+    if getmetatable(time_obj) ~= Rational.metatable then
+        error("FATAL: time_utils.to_frames requires a Rational time_obj", 2)
+    end
+    return time_obj:rescale(num, den).frames
+end
+
 function M.add(lhs, rhs)
     if getmetatable(lhs) ~= Rational.metatable then
-        error("M.add: lhs must be a Rational object", 2)
+        error("FATAL: time_utils.add requires Rational lhs", 2)
     end
     if getmetatable(rhs) ~= Rational.metatable then
-        error("M.add: rhs must be a Rational object", 2)
+        error("FATAL: time_utils.add requires Rational rhs", 2)
     end
     return lhs + rhs
 end
 
--- Subtract two Rational objects.
-function M.sub(lhs, rhs)
-    if getmetatable(lhs) ~= Rational.metatable then
-        error("M.sub: lhs must be a Rational object", 2)
+function M.compare(a, b)
+    if getmetatable(a) ~= Rational.metatable then
+        error("FATAL: time_utils.compare requires Rational a", 2)
     end
-    if getmetatable(rhs) ~= Rational.metatable then
-        error("M.sub: rhs must be a Rational object", 2)
+    if getmetatable(b) ~= Rational.metatable then
+        error("FATAL: time_utils.compare requires Rational b", 2)
     end
-    return lhs - rhs
+
+    local left = a.frames * a.fps_denominator * b.fps_numerator
+    local right = b.frames * b.fps_denominator * a.fps_numerator
+    if left == right then
+        return 0
+    end
+    return left < right and -1 or 1
 end
 
--- Compare two Rational objects (returns -1, 0, 1).
-function M.compare(lhs, rhs)
-    if getmetatable(lhs) ~= Rational.metatable then
-        error("M.compare: lhs must be a Rational object", 2)
+function M.to_milliseconds(time_obj)
+    if getmetatable(time_obj) ~= Rational.metatable then
+        error("FATAL: time_utils.to_milliseconds requires a Rational time_obj", 2)
     end
-    if getmetatable(rhs) ~= Rational.metatable then
-        error("M.compare: rhs must be a Rational object", 2)
-    end
-    if lhs < rhs then return -1 end
-    if lhs == rhs then return 0 end
-    return 1
+    return (time_obj.frames * time_obj.fps_denominator * 1000.0) / time_obj.fps_numerator
 end
 
--- Quantize a Rational object to integer frames at given fps.
-function M.to_frames(rt, fps_numerator, fps_denominator)
-    if getmetatable(rt) ~= Rational.metatable then
-        error("M.to_frames: rt must be a Rational object", 2)
-    end
-    local rescaled_rt = rt:rescale(fps_numerator, fps_denominator)
-    return rescaled_rt.frames
+function M.from_milliseconds(milliseconds, fps_numerator, fps_denominator)
+    local num, den = normalize_rate(fps_numerator, fps_denominator)
+    require_number(milliseconds, "milliseconds")
+    local numerator = milliseconds * num
+    local divisor = 1000 * den
+    local frames = math.floor((numerator + (divisor / 2)) / divisor)
+    return Rational.new(frames, num, den)
 end
 
--- Quantize a Rational object to integer samples at given sample rate.
-function M.to_samples(rt, sample_rate)
-    if getmetatable(rt) ~= Rational.metatable then
-        error("M.to_samples: rt must be a Rational object", 2)
-    end
-    -- Sample rate is equivalent to fps_numerator, with denominator 1
-    local rescaled_rt = rt:rescale(sample_rate, 1)
-    return rescaled_rt.frames
-end
-
--- Create Rational object from frames at fps.
-function M.from_frames(frames, fps_numerator, fps_denominator)
-    return Rational.new(frames, fps_numerator, fps_denominator)
-end
-
--- Create Rational object from samples at sample rate.
 function M.from_samples(samples, sample_rate)
+    require_number(samples, "samples")
+    require_number(sample_rate, "sample_rate")
     return Rational.new(samples, sample_rate, 1)
 end
 
--- Convert milliseconds to Rational at a target rate.
-function M.from_milliseconds(ms, fps_numerator, fps_denominator)
-    if type(ms) ~= "number" then
-        error("M.from_milliseconds: ms must be a number", 2)
+function M.to_samples(time_obj, sample_rate)
+    if getmetatable(time_obj) ~= Rational.metatable then
+        error("FATAL: time_utils.to_samples requires a Rational time_obj", 2)
     end
-    local seconds = ms / 1000.0
-    return Rational.from_seconds(seconds, fps_numerator, fps_denominator)
+    require_number(sample_rate, "sample_rate")
+    return time_obj:rescale(sample_rate, 1).frames
 end
 
--- Convert a Rational object to milliseconds (double precision).
-function M.to_milliseconds(rt)
-    if type(rt) == "number" then
-        -- Treat bare numbers as milliseconds
-        return rt
-    end
-    if rt and type(rt) == "table" then
-        -- Try common Rational shape or method
-        if getmetatable(rt) == Rational.metatable or rt.to_seconds then
-            local ok, seconds = pcall(function() return rt:to_seconds() end)
-            if ok then
-                return seconds * 1000.0
-            end
-        end
-        -- As a fallback, try hydrating
-        local hydrated = Rational.hydrate and Rational.hydrate(rt)
-        if hydrated then
-            return hydrated:to_seconds() * 1000.0
-        end
-    end
-    error("M.to_milliseconds: rt must be a Rational object or millisecond number", 2)
+-- Human-readable datestamp suitable for filenames.
+-- Example: 2025-12-15_14-03-27
+function M.human_datestamp_for_filename(timestamp_seconds)
+    require_number(timestamp_seconds, "timestamp_seconds")
+    return os.date("%Y-%m-%d_%H-%M-%S", timestamp_seconds)
 end
 
 return M
