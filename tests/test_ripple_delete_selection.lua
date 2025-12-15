@@ -132,8 +132,15 @@ end
 
 local function reset_timeline_state()
     while command_manager.can_undo and command_manager.can_undo() do
+        local last = command_manager.get_last_command and command_manager.get_last_command("default_project") or nil
+        if last and last.type == "TestCreateClip" then
+            break
+        end
+
         local result = command_manager.undo()
         if not result.success then
+            local msg = result.error_message or ""
+            assert(not msg:match("RippleDeleteSelection"), msg)
             break
         end
     end

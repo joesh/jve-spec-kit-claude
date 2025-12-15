@@ -2,8 +2,49 @@ local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local timeline_state = require('ui.timeline.timeline_state')
+local Rational = require("core.rational")
+local logger = require("core.logger")
 
 function M.register(command_executors, command_undoers, db, set_last_error)
+    local debug_enabled = os.getenv("JVE_DEBUG_RIPPLE_DELETE_SELECTION") == "1"
+    local function debug_log(message)
+        if debug_enabled then
+            logger.debug("ripple_delete_selection", message)
+        end
+    end
+
+    local function require_number(value, name)
+        if value == nil then
+            error("FATAL: RippleDeleteSelection missing " .. tostring(name))
+        end
+        if type(value) ~= "number" then
+            error("FATAL: RippleDeleteSelection " .. tostring(name) .. " must be a number")
+        end
+        return value
+    end
+
+    local function load_sequence_rate(sequence_id)
+        if not sequence_id or sequence_id == "" then
+            error("FATAL: RippleDeleteSelection requires a sequence_id to load fps")
+        end
+        local query = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
+        if not query then
+            error("FATAL: RippleDeleteSelection: failed to prepare sequence fps query")
+        end
+        query:bind_value(1, sequence_id)
+        local fps_num = nil
+        local fps_den = nil
+        if query:exec() and query:next() then
+            fps_num = tonumber(query:value(0))
+            fps_den = tonumber(query:value(1))
+        end
+        query:finalize()
+        if not fps_num or fps_num <= 0 or not fps_den or fps_den <= 0 then
+            error(string.format("FATAL: RippleDeleteSelection: sequence %s missing valid fps_numerator/fps_denominator", tostring(sequence_id)))
+        end
+        return fps_num, fps_den
+    end
+
     local function normalize_segments(segments)
         if not segments or #segments == 0 then
             return {}
@@ -11,32 +52,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         table.sort(segments, function(a, b)
             if a.start_value == b.start_value then
-                return (a.duration or 0) < (b.duration or 0)
+                return require_number(a.duration, "segment.duration") < require_number(b.duration, "segment.duration")
             end
-            return (a.start_value or 0) < (b.start_value or 0)
+            return require_number(a.start_value, "segment.start_value") < require_number(b.start_value, "segment.start_value")
         end)
 
         local merged = {}
         for _, seg in ipairs(segments) do
-            local start_value = seg.start_value
-            local duration = seg.duration
-
-            if start_value == nil then start_value = 0 end
-            if duration == nil then duration = 0 end
-
-            local is_rat_start = type(start_value) == "table"
-            local is_rat_dur = type(duration) == "table"
-
-            if is_rat_start and not is_rat_dur then
-                duration = require("core.rational").new(duration, start_value.fps_numerator, start_value.fps_denominator)
-            elseif is_rat_dur and not is_rat_start then
-                start_value = require("core.rational").new(start_value, duration.fps_numerator, duration.fps_denominator)
-            end
-
-            if type(duration) == "number" then
-                duration = math.max(0, duration)
-            elseif type(duration) == "table" and duration.frames and duration.frames < 0 then
-                 duration = require("core.rational").new(0, duration.fps_numerator, duration.fps_denominator)
+            local start_value = require_number(seg.start_value, "segment.start_value")
+            local duration = require_number(seg.duration, "segment.duration")
+            if duration < 0 then
+                error("FATAL: RippleDeleteSelection: segment.duration must be >= 0")
             end
 
             local end_time = start_value + duration
@@ -82,7 +108,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["RippleDeleteSelection"] = function(command)
         local dry_run = command:get_parameter("dry_run")
         if not dry_run then
-            print("Executing RippleDeleteSelection command")
+            debug_log("Executing RippleDeleteSelection command")
         end
 
         local clip_ids = command:get_parameter("clip_ids")
@@ -104,7 +130,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if not clip_ids or #clip_ids == 0 then
-            print("RippleDeleteSelection: No clips selected")
+            logger.warn("ripple_delete_selection", "No clips selected")
             return false
         end
 
@@ -113,16 +139,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local window_start = nil
         local window_end = nil
         local function clip_start_frames(clip)
-            if clip.timeline_start and clip.timeline_start.frames then
-                return clip.timeline_start.frames
+            if clip.timeline_start and clip.timeline_start.frames ~= nil then
+                return tonumber(clip.timeline_start.frames)
             end
-            return clip.start_value or 0
+            if clip.start_value ~= nil then
+                return tonumber(clip.start_value)
+            end
+            error("FATAL: RippleDeleteSelection: clip missing timeline_start")
         end
         local function clip_duration_frames(clip)
-            if clip.duration and clip.duration.frames then
-                return clip.duration.frames
+            if clip.duration and clip.duration.frames ~= nil then
+                return tonumber(clip.duration.frames)
             end
-            return clip.duration or 0
+            if clip.duration ~= nil then
+                return tonumber(clip.duration)
+            end
+            error("FATAL: RippleDeleteSelection: clip missing duration")
         end
 
         for _, clip_id in ipairs(clip_ids) do
@@ -135,32 +167,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 window_end = window_end and math.max(window_end, clip_end) or clip_end
                 table.insert(clip_ids_for_delete, clip.id)
             else
-                print(string.format("WARNING: RippleDeleteSelection: Clip %s not found", tostring(clip_id)))
+                logger.warn("ripple_delete_selection", string.format("Clip %s not found", tostring(clip_id)))
             end
         end
 
         if #clips == 0 then
-            print("RippleDeleteSelection: No valid clips to delete")
+            logger.warn("ripple_delete_selection", "No valid clips to delete")
             return false
         end
 
-        window_start = window_start or 0
-        window_end = window_end or window_start
-        local shift_amount = window_end - window_start
-        -- Handle Rational < number comparison (Lua 5.1 compat)
-        local is_negative = false
-        if type(shift_amount) == "number" then
-            is_negative = shift_amount < 0
-        elseif type(shift_amount) == "table" and shift_amount.frames then
-            is_negative = shift_amount.frames < 0
+        if window_start == nil or window_end == nil then
+            error("FATAL: RippleDeleteSelection: unable to compute window bounds")
         end
-
-        if is_negative then
-            if type(shift_amount) == "number" then
-                shift_amount = 0
-            else
-                shift_amount = require("core.rational").new(0, shift_amount.fps_numerator, shift_amount.fps_denominator)
-            end
+        local shift_amount = window_end - window_start
+        if shift_amount < 0 then
+            error("FATAL: RippleDeleteSelection: computed negative shift_amount")
         end
 
         local sequence_id = command:get_parameter("sequence_id")
@@ -176,9 +197,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if not sequence_id or sequence_id == "" then
-            print("RippleDeleteSelection: Unable to determine sequence_id")
+            logger.error("ripple_delete_selection", "Unable to determine sequence_id")
             return false
         end
+
+        local sequence_fps_num, sequence_fps_den = load_sequence_rate(sequence_id)
 
         if dry_run then
             return true, {
@@ -212,7 +235,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         for _, clip in ipairs(clips) do
             if not clip:delete(db) then
-                print(string.format("ERROR: RippleDeleteSelection: Failed to delete clip %s", tostring(clip.id)))
+                logger.error("ripple_delete_selection", string.format("Failed to delete clip %s", tostring(clip.id)))
                 return false
             end
         end
@@ -282,10 +305,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     if cumulative_removed > 0 then
                         local shift_clip = Clip.load_optional(shifted_id, db)
                         if shift_clip then
-                            local fps_num = (shift_clip.rate and shift_clip.rate.fps_numerator) or shift_clip.fps_numerator or 30
-                            local fps_den = (shift_clip.rate and shift_clip.rate.fps_denominator) or shift_clip.fps_denominator or 1
-                            local new_start_frames = math.max(0, original_start - cumulative_removed)
-                            shift_clip.timeline_start = require("core.rational").new(new_start_frames, fps_num, fps_den)
+                            local new_start_frames = original_start - cumulative_removed
+                            if new_start_frames < 0 then
+                                return false, string.format("ERROR: RippleDeleteSelection: computed negative new_start for %s", tostring(shifted_id))
+                            end
+
+                            shift_clip.timeline_start = Rational.new(new_start_frames, sequence_fps_num, sequence_fps_den)
                             if shift_clip:save(db, {skip_occlusion = true}) then
                                 table.insert(shifted_clips, {
                                     clip_id = shifted_id,
@@ -313,7 +338,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             if not deleted_lookup[entry.id] then
                                 local status, err = process_shift_candidate(entry.id, entry.start_value or 0)
                                 if status == false then
-                                    print(err)
+                                    logger.error("ripple_delete_selection", tostring(err))
                                     return false
                                 end
                             end
@@ -324,7 +349,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if not processed then
                     local shift_query = db:prepare([[SELECT id, timeline_start_frame FROM clips WHERE track_id = ? ORDER BY timeline_start_frame ASC]])
                     if not shift_query then
-                        print("ERROR: RippleDeleteSelection: Failed to prepare per-track shift query")
+                        logger.error("ripple_delete_selection", "Failed to prepare per-track shift query")
                         return false
                     end
                     shift_query:bind_value(1, track_id)
@@ -332,17 +357,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     if shift_query:exec() then
                         while shift_query:next() do
                             local shifted_id = shift_query:value(0)
-                            local original_start = shift_query:value(1) or 0
+                            local original_start = tonumber(shift_query:value(1))
+                            if original_start == nil then
+                                shift_query:finalize()
+                                error("FATAL: RippleDeleteSelection: shift query returned nil timeline_start_frame")
+                            end
                             local status, err = process_shift_candidate(shifted_id, original_start)
                             if status == false then
                                 shift_query:finalize()
-                                print(err)
+                                logger.error("ripple_delete_selection", tostring(err))
                                 return false
                             end
                         end
                     else
                         shift_query:finalize()
-                        print("ERROR: RippleDeleteSelection: Failed to execute per-track shift query")
+                        logger.error("ripple_delete_selection", "Failed to execute per-track shift query")
                         return false
                     end
 
@@ -374,7 +403,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        print(string.format("✅ Ripple delete selection: removed %d clip(s), shifted %d clip(s) by %s",
+        debug_log(string.format("Ripple delete selection: removed %d clip(s), shifted %d clip(s) by %s",
             #clips, #shifted_clips, tostring(shift_amount)))
         return true
     end
@@ -382,19 +411,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_undoers["RippleDeleteSelection"] = function(command)
         local deleted_states = command:get_parameter("ripple_selection_deleted_clips") or {}
         local shifted_clips = command:get_parameter("ripple_selection_shifted") or {}
-        local shift_amount = command:get_parameter("ripple_selection_shift_amount") or command:get_parameter("ripple_selection_total_removed") or 0
         local sequence_id = command:get_parameter("ripple_selection_sequence_id")
 
         local failed = false
 
+        if not sequence_id or sequence_id == "" then
+            error("FATAL: RippleDeleteSelection undo requires ripple_selection_sequence_id")
+        end
+
+        local sequence_fps_num, sequence_fps_den = load_sequence_rate(sequence_id)
+
+        table.sort(shifted_clips, function(a, b)
+            return require_number(a.original_start, "shifted_clip.original_start") > require_number(b.original_start, "shifted_clip.original_start")
+        end)
+
         for _, info in ipairs(shifted_clips) do
             local clip = Clip.load_optional(info.clip_id, db)
             if clip and info.original_start then
-                local fps_num = (clip.rate and clip.rate.fps_numerator) or clip.fps_numerator or 30
-                local fps_den = (clip.rate and clip.rate.fps_denominator) or clip.fps_denominator or 1
-                clip.timeline_start = require("core.rational").new(info.original_start, fps_num, fps_den)
+                clip.timeline_start = Rational.new(info.original_start, sequence_fps_num, sequence_fps_den)
                 if not clip:save(db, {skip_occlusion = true}) then
-                    print(string.format("WARNING: RippleDeleteSelection undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
+                    logger.warn("ripple_delete_selection", string.format("Undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
                     failed = true
                 else
                     local update_payload = command_helper.clip_update_payload(clip, sequence_id)
@@ -408,9 +444,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, state in ipairs(deleted_states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
+                if restored.timeline_start and restored.timeline_start.frames ~= nil then
+                    restored.timeline_start = Rational.new(tonumber(restored.timeline_start.frames), sequence_fps_num, sequence_fps_den)
+                end
+                if restored.duration and restored.duration.frames ~= nil then
+                    restored.duration = Rational.new(tonumber(restored.duration.frames), sequence_fps_num, sequence_fps_den)
+                end
+
                 local ok = restored:save(db, {skip_occlusion = true})
                 if not ok then
-                    print(string.format("WARNING: RippleDeleteSelection undo: Failed to reinsert deleted clip %s", tostring(restored.id)))
+                    logger.warn("ripple_delete_selection", string.format("Undo: Failed to reinsert deleted clip %s", tostring(restored.id)))
                     failed = true
                 else
                     local insert_payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id)
@@ -423,7 +466,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- flush_timeline_mutations assumed handled by manager
 
-        print(string.format("✅ Undo RippleDeleteSelection: restored %d clip(s)", #deleted_states))
+        debug_log(string.format("Undo RippleDeleteSelection: restored %d clip(s)", #deleted_states))
         if failed then
             return false, "RippleDeleteSelection undo: one or more clips failed to restore (overlap/DB error)"
         end
