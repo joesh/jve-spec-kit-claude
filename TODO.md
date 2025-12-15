@@ -46,6 +46,9 @@
 ## Current Focus
 - [x] Restore ripple handle semantics so `[`/`]` drags obey `docs/RIPPLE-ALGORITHM-RULES.md` across BatchRippleEdit and RippleEdit, covering gap clips and downstream propagation limits.
 
+## TimelineActiveRegion (Perf)
+- [ ] (in_progress) Reduce edge-release latency on large timelines by ensuring `TimelineActiveRegion`/preloaded snapshots are execution-only (not persisted or event-logged); awaiting in-app confirmation with `JVE_DEBUG_COMMAND_PERF=1`.
+
 ## Session Tasks (2025-???)
 - [x] (done) Fix BatchRipple gap lead clamp/negation bugs and extend regression tests.
 - [x] (done) Timeline gap edge selections should render handles just like clip edges; regression surfaced while restoring ripple handle semantics.

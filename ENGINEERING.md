@@ -26,7 +26,7 @@ We've got lots of context available when anything goes wrong:
 - **ACCOUNTABILITY**: Every claim must be verifiable
 
 ### **0.2 Context Preservation for Auto-Compact**
-- **ALWAYS update SESSION_STATE.md** as you learn critical architectural details
+- **ALWAYS update SESSION-STATE.md** as you learn critical architectural details
 - **DOCUMENT decisions and discoveries** immediately - don't rely on chat memory
 - **INCLUDE current bug status** and fix progress in context file
 - **ADD breakthrough insights** about codebase design and user preferences

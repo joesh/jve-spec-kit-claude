@@ -1,3 +1,19 @@
+# Session State - TimelineActiveRegion (2025-12-15)
+
+## Context
+- Focus: timeline performance with thousands of clips (edge drag vs release/commit).
+- Architectural goal: scope rendering and edit computation to a `TimelineActiveRegion` (active time window), without track-scoping complexity.
+
+## Current Status (verified)
+- `make -j4 test` passes locally.
+- Timeline rendering is viewport-culled (base pass) and asserts if `timeline_state.get_clips()` is used during render; rendering uses per-track indices instead.
+- Clip drawing bug fixed: timeline `timeline_start`/`duration` are now derived from **sequence FPS** (not clip FPS), preventing viewport math from pushing clips offscreen.
+
+## Notes / Follow-ups
+- Run: `JVE_DEBUG_COMMAND_PERF=1 ./build/bin/JVEEditor` to see `[command_perf]` breakdowns.
+
+---
+
 # Session State - 2025-10-25 Luacheck Restore
 
 ## Critical Note
