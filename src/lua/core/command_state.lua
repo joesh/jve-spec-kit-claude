@@ -6,6 +6,7 @@ local M = {}
 local db = nil
 local profile_scope = require("core.profile_scope")
 local json = require("dkjson")
+local logger = require("core.logger")
 
 -- State tracking
 local current_state_hash = ""
@@ -69,8 +70,7 @@ end
 -- Calculate state hash for a project
 function M.calculate_state_hash(project_id)
     if not db then
-        print("WARNING: No database connection for state hash calculation")
-        return "00000000"
+        error("CommandState.calculate_state_hash: No database connection", 2)
     end
 
     local scope = profile_scope.begin("command_manager.state_hash_query")
@@ -79,8 +79,7 @@ function M.calculate_state_hash(project_id)
     local function append_query(sql, bind_values, column_count, label)
         local stmt = db:prepare(sql)
         if not stmt then
-            print(string.format("WARNING: Failed to prepare %s query for state hash", label or sql:sub(1, 32)))
-            return
+            error(string.format("CommandState.calculate_state_hash: Failed to prepare %s query", label or sql:sub(1, 32)), 2)
         end
         if bind_values then
             for index, value in ipairs(bind_values) do
@@ -89,15 +88,17 @@ function M.calculate_state_hash(project_id)
         end
 
         local ok = stmt:exec()
-        if ok then
-            while stmt:next() do
-                for column = 0, column_count - 1 do
-                    local value = stmt:value(column)
-                    parts[#parts + 1] = tostring(value)
-                    parts[#parts + 1] = "|"
-                end
-                parts[#parts + 1] = "\n"
+        if not ok then
+            stmt:finalize()
+            error(string.format("CommandState.calculate_state_hash: Failed to execute %s query", label or sql:sub(1, 32)), 2)
+        end
+        while stmt:next() do
+            for column = 0, column_count - 1 do
+                local value = stmt:value(column)
+                parts[#parts + 1] = tostring(value)
+                parts[#parts + 1] = "|"
             end
+            parts[#parts + 1] = "\n"
         end
         stmt:finalize()
     end
@@ -214,16 +215,16 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
     local timeline_state = require('ui.timeline.timeline_state')
     local Clip = require('models.clip')
 
-local function safe_load_clip(clip_id)
+    local function safe_load_clip(clip_id)
     if not clip_id then
         return nil
     end
     local clip = Clip.load_optional(clip_id, db)
     if not clip then
-        print(string.format("WARNING: Failed to restore selection for clip %s (clip not found)", tostring(clip_id)))
+        logger.warn("command_state", string.format("Failed to restore selection for clip %s (clip not found)", tostring(clip_id)))
     end
     return clip
-end
+    end
 
     local function decode(json_text)
         if not json_text or json_text == "" then

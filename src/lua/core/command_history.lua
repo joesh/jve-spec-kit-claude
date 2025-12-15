@@ -2,6 +2,7 @@
 -- Extracted from command_manager.lua
 
 local M = {}
+local logger = require("core.logger")
 
 -- Database connection
 local db = nil
@@ -121,7 +122,7 @@ end
 
 function M.increment_sequence_number()
     last_sequence_number = last_sequence_number + 1
-    print(string.format("DEBUG: Assigned sequence number %d (current=%s)",
+    logger.debug("command_history", string.format("Assigned sequence number %d (current=%s)",
         last_sequence_number, tostring(current_sequence_number)))
     return last_sequence_number
 end
@@ -178,8 +179,8 @@ function M.resolve_stack_for_command(command)
                 return stack_info.stack_id or GLOBAL_STACK_ID, stack_info
             end
         elseif not ok then
-            print(string.format("WARNING: stack resolver for %s threw error: %s",
-                command.type, tostring(stack_info)))
+            logger.warn("command_history", string.format("Stack resolver for %s threw error: %s",
+                tostring(command.type), tostring(stack_info)))
         end
     end
 
@@ -262,7 +263,7 @@ function M.save_undo_position()
     ]])
 
     if not update then
-        print("WARNING: Failed to prepare undo position update")
+        logger.warn("command_history", "Failed to prepare undo position update")
         return false
     end
 
@@ -276,7 +277,7 @@ function M.save_undo_position()
     update:finalize()
 
     if not success then
-        print("WARNING: Failed to save undo position to database")
+        logger.warn("command_history", "Failed to save undo position to database")
         return false
     end
 
@@ -317,7 +318,7 @@ function M.find_latest_child_command(parent_sequence)
             if decode_ok then
                 args = decoded
             else
-                print(string.format("WARNING: Failed to decode command args JSON: %s", tostring(decoded)))
+                logger.warn("command_history", string.format("Failed to decode command args JSON: %s", tostring(decoded)))
             end
         end
 
