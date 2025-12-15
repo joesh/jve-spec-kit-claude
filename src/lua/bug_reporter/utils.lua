@@ -2,6 +2,7 @@
 -- Shared utility functions for bug reporter system
 
 local Utils = {}
+local time_utils = require("core.time_utils")
 
 -- Escape a string for safe use in shell commands
 -- Handles single quotes by closing quote, escaping, reopening
@@ -52,6 +53,12 @@ function Utils.file_exists(path)
         return true
     end
     return false
+end
+
+-- Human-readable datestamp suitable for filenames
+-- Example: 2025-12-15_14-03-27
+function Utils.human_datestamp_for_filename(timestamp_seconds)
+    return time_utils.human_datestamp_for_filename(timestamp_seconds)
 end
 
 -- Validate that a string is non-empty

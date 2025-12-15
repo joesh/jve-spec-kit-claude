@@ -4,6 +4,7 @@
 local dkjson = require("dkjson")
 local youtube_oauth = require("bug_reporter.youtube_oauth")
 local utils = require("bug_reporter.utils")
+local uuid = require("uuid")
 
 local YouTubeUploader = {}
 
@@ -272,7 +273,8 @@ function YouTubeUploader.simple_upload(video_path, metadata)
     )
 
     -- Write multipart to temp file (curl can't easily do binary + text inline)
-    local temp_file = utils.get_temp_dir() .. "/jve_youtube_upload_" .. os.time() .. ".txt"
+    local suffix = utils.human_datestamp_for_filename(os.time()) .. "-" .. uuid.generate():sub(1, 8)
+    local temp_file = utils.get_temp_dir() .. "/jve_youtube_upload_" .. suffix .. ".txt"
     local file = io.open(temp_file, "w")
     file:write(multipart_body)
     file:close()

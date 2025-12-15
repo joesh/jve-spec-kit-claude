@@ -4,6 +4,7 @@
 local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
 local logger = require("core.logger")
+local uuid = require("uuid")
 
 local JsonExporter = {}
 
@@ -51,7 +52,7 @@ function JsonExporter.export(capture_data, metadata, output_dir)
 
     -- Create output directory
     local timestamp = os.time()
-    local capture_id = "capture-" .. timestamp
+    local capture_id = "capture-" .. utils.human_datestamp_for_filename(timestamp) .. "-" .. uuid.generate():sub(1, 8)
     local capture_dir = output_dir .. "/" .. capture_id
 
     local success, err = utils.mkdir_p(capture_dir)

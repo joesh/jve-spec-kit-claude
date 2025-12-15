@@ -284,7 +284,8 @@ function CaptureManager:export_capture(metadata)
     -- Take database snapshot (if database module available)
     local db_snapshot_path = nil
     if database and database.backup_to_file then
-        db_snapshot_path = "tests/captures/bug-" .. os.time() .. ".db"
+        local suffix = utils.human_datestamp_for_filename(os.time())
+        db_snapshot_path = "tests/captures/bug-" .. suffix .. ".db"
         local success, err = database.backup_to_file(db_snapshot_path)
         if not success then
             logger.warn("bug_reporter", "Database backup failed: " .. (err or "unknown"))
