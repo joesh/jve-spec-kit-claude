@@ -2,7 +2,6 @@
 -- Matches C++ CollapsibleSection functionality for Inspector panels
 
 local error_system = require("core.error_system")
-local error_builder = require("core.error_builder")
 local qt_signals = require("core.qt_signals")
 local signals = require("core.signals")
 local logger = require("core.logger")

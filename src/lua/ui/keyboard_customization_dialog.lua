@@ -82,6 +82,9 @@ end
 
 local function set_unsaved(value)
     has_unsaved_changes = value and true or false
+    if apply_button then
+        PROP.SET_ENABLED(apply_button, has_unsaved_changes)
+    end
 end
 
 local function build_shortcut_string(key, modifiers)

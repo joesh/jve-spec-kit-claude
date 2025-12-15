@@ -185,13 +185,12 @@ function M.create()
     ]], COLORS.KEYBOARD_BG))
 
     -- Main layout
-    local main_layout = qt.CREATE_VBOX()
+	    local main_layout = qt.CREATE_VBOX()
 
-    -- Create each row
-    local y_offset = padding
-    for row_idx, row in ipairs(KEYBOARD_LAYOUT) do
-        local row_layout = qt.CREATE_HBOX()
-        qt.SET_LAYOUT_SPACING(row_layout, KEY_SIZE.SPACING)
+	    -- Create each row
+	    for row_idx, row in ipairs(KEYBOARD_LAYOUT) do
+	        local row_layout = qt.CREATE_HBOX()
+	        qt.SET_LAYOUT_SPACING(row_layout, KEY_SIZE.SPACING)
 
         -- Add left padding for centered alignment
         qt.ADD_STRETCH(row_layout)

@@ -41,21 +41,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        -- Strict Rational Input: do not accept bare numbers
-        local clip_rate = original_clip.rate
-        if not clip_rate or not clip_rate.fps_numerator or not clip_rate.fps_denominator then
-            error("SplitClip: Clip missing rate metadata", 2)
+        local start_rat = original_clip.timeline_start
+        if not start_rat then
+            error("SplitClip: Clip missing timeline_start (Rational)", 2)
         end
-        local split_rat = Rational.hydrate(split_val_param, clip_rate.fps_numerator, clip_rate.fps_denominator)
+
+        -- Split values are in timeline (owning sequence) frames.
+        local split_rat = Rational.hydrate(split_val_param, start_rat.fps_numerator, start_rat.fps_denominator)
         
         if not split_rat or not split_rat.frames then
             error("SplitClip: Invalid split_value (missing frames)")
         end
 
         -- Strict Model Access
-        local start_rat = original_clip.timeline_start
-        if not start_rat then error("SplitClip: Clip missing timeline_start (Rational)") end
-        
         local dur_rat = original_clip.duration
         if not dur_rat then error("SplitClip: Clip missing duration (Rational)") end
         

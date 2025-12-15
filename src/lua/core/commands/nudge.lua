@@ -43,13 +43,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local selected_clip_ids = command:get_parameter("selected_clip_ids")
         local selected_edges = command:get_parameter("selected_edges")
 
-        local function require_sequence_rate()
-            local rate = timeline_state and timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
-            if not rate or not rate.fps_numerator or not rate.fps_denominator then
-                error("Nudge: missing sequence frame rate", 2)
-            end
-            return rate
-        end
+	        local function require_sequence_rate()
+	            local rate = timeline_state and timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
+	            if type(rate) == "number" and rate > 0 then
+	                return {fps_numerator = rate, fps_denominator = 1}
+	            end
+	            if type(rate) ~= "table" or not rate.fps_numerator or not rate.fps_denominator then
+	                error("Nudge: missing sequence frame rate", 2)
+	            end
+	            return rate
+	        end
         
         -- Strict Rational validation: callers must provide Rational (or Rational-shaped table) at the leaf
         if type(nudge_amount_rat) == "number" then

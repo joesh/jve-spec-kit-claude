@@ -5,6 +5,7 @@
 local M = {}
 local uuid = require("uuid")
 local Rational = require("core.rational")
+local logger = require("core.logger")
 
 -- Parse FCP7 time value (rational number like "900/30")
 -- Returns milliseconds
@@ -855,7 +856,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 height = clip_info.height,
                 audio_channels = 0
             }
-            print(string.format("WARNING: create_entities: missing media info for key %s; generating synthetic placeholder", tostring(key)))
+            logger.warn("import_fcp7", string.format("create_entities: missing media info for key %s; generating synthetic placeholder", tostring(key)))
         end
         if not key or key == "" then
             key = media_info.key
@@ -894,7 +895,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         local file_path = media_info.path
         if not file_path or file_path == "" then
             file_path = string.format("synthetic://%s", tostring(key or media_info.id or uuid.generate()))
-            print(string.format("WARNING: create_entities: missing file path for media %s; using placeholder %s", tostring(key), file_path))
+            logger.warn("import_fcp7", string.format("create_entities: missing file path for media %s; using placeholder %s", tostring(key), tostring(file_path)))
         end
 
         local media = Media.create({
@@ -1192,7 +1193,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         local ok, err = tag_service.save_hierarchy(project_id, bins)
         if not ok then
             bins_saved = false
-            print("WARNING: Failed to persist bin hierarchy: " .. tostring(err))
+            logger.warn("import_fcp7", "Failed to persist bin hierarchy: " .. tostring(err))
         end
     end
     if bin_assignment_dirty and bins_saved then
@@ -1205,15 +1206,15 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 if #clip_ids > 0 then
                     local ok, assign_err = tag_service.assign_master_clips(project_id, clip_ids, bin_id)
                     if not ok then
-                        print(string.format(
-                            "WARNING: Failed to persist %d master clip assignments for bin %s: %s",
+                        logger.warn("import_fcp7", string.format(
+                            "Failed to persist %d master clip assignments for bin %s: %s",
                             #clip_ids, tostring(bin_id), tostring(assign_err or "unknown error")))
                     end
                 end
             end
         end
     elseif bin_assignment_dirty and not bins_saved then
-        print("WARNING: Skipping master clip bin assignment because bin hierarchy could not be saved")
+        logger.warn("import_fcp7", "Skipping master clip bin assignment because bin hierarchy could not be saved")
     end
 
     return result

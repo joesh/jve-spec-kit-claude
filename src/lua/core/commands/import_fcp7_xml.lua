@@ -1,12 +1,13 @@
 -- ImportFCP7XML command
 local M = {}
+local logger = require("core.logger")
 
 function M.register(executors, undoers, db)
     
     executors["ImportFCP7XML"] = function(command)
         local dry_run = command:get_parameter("dry_run")
         if not dry_run then
-            print("Executing ImportFCP7XML command")
+            logger.info("import_fcp7_xml", "Executing ImportFCP7XML command")
         end
 
         local xml_path = command:get_parameter("xml_path")
@@ -14,7 +15,7 @@ function M.register(executors, undoers, db)
         local project_id = command:get_parameter("project_id") or "default_project"
 
         if not xml_path then
-            print("ERROR: ImportFCP7XML missing xml_path")
+            logger.error("import_fcp7_xml", "ImportFCP7XML missing xml_path")
             return false
         end
 
@@ -26,9 +27,9 @@ function M.register(executors, undoers, db)
 
         -- Parse XML
         if xml_path and xml_path ~= "" then
-            print(string.format("Parsing FCP7 XML: %s", xml_path))
+            logger.info("import_fcp7_xml", string.format("Parsing FCP7 XML: %s", xml_path))
         else
-            print("Parsing FCP7 XML from stored content")
+            logger.info("import_fcp7_xml", "Parsing FCP7 XML from stored content")
         end
         local parse_result = fcp7_importer.import_xml(xml_path, project_id, {
             xml_content = xml_contents
@@ -36,12 +37,12 @@ function M.register(executors, undoers, db)
 
         if not parse_result.success then
             for _, error_msg in ipairs(parse_result.errors) do
-                print(string.format("ERROR: %s", error_msg))
+                logger.error("import_fcp7_xml", tostring(error_msg))
             end
             return false
         end
 
-        print(string.format("Found %d sequence(s)", #parse_result.sequences))
+        logger.info("import_fcp7_xml", string.format("Found %d sequence(s)", #parse_result.sequences))
 
         -- Prepare replay context so importer can reuse deterministic IDs
         local replay_context = {
@@ -59,7 +60,7 @@ function M.register(executors, undoers, db)
         local create_result = fcp7_importer.create_entities(parse_result, db, project_id, replay_context)
 
         if not create_result.success then
-            print(string.format("ERROR: %s", create_result.error or "Failed to create entities"))
+            logger.error("import_fcp7_xml", tostring(create_result.error or "Failed to create entities"))
             return false
         end
 
@@ -77,7 +78,7 @@ function M.register(executors, undoers, db)
         end
         command:set_parameter("__skip_sequence_replay_on_undo", true)
 
-        print(string.format("✅ Imported %d sequence(s), %d track(s), %d clip(s)",
+        logger.info("import_fcp7_xml", string.format("Imported %d sequence(s), %d track(s), %d clip(s)",
             #create_result.sequence_ids,
             #create_result.track_ids,
             #create_result.clip_ids))

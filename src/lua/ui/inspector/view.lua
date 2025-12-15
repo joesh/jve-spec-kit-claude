@@ -6,7 +6,6 @@ local error_system = require("core.error_system")
 local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
-local widget_parenting = require("core.widget_parenting")
 local frame_utils = require("core.frame_utils")
 local timeline_state = require("ui.timeline.timeline_state")
 local inspectable_factory = require("inspectable")
@@ -15,6 +14,12 @@ local collapsible_section = require("ui.collapsible_section")
 local profile_scope = require("core.profile_scope")
 
 local FIELD_TYPES = metadata_schemas.FIELD_TYPES
+
+local M
+local current_frame_rate
+local refresh_active_inspection
+local suppress_field_updates
+local resume_field_updates
 
 local PROPERTY_TYPE_MAP = {
   [FIELD_TYPES.STRING] = "STRING",
@@ -97,7 +102,7 @@ local function ensure_timeline_listener()
   end
 end
 
-local M = {
+M = {
   _panel = nil,
   _filter = "",
   root = nil,
@@ -156,7 +161,7 @@ local function format_timecode(time_input, override_rate)
   return "00:00:00:00"
 end
 
-local function current_frame_rate()
+current_frame_rate = function()
   if timeline_state and timeline_state.get_sequence_frame_rate then
     local ok, rate = pcall(timeline_state.get_sequence_frame_rate)
     if ok then
@@ -236,7 +241,7 @@ local function get_field_key(field)
   return label:lower():gsub("%s+", "_")
 end
 
-local function refresh_active_inspection()
+refresh_active_inspection = function()
   local targets = nil
   if M._multi_edit_mode and M._multi_inspectables and #M._multi_inspectables > 0 then
     targets = M._multi_inspectables
@@ -275,11 +280,11 @@ local function refresh_active_inspection()
   refresh_selection_label()
 end
 
-local function suppress_field_updates()
+suppress_field_updates = function()
   M._suppress_field_updates_depth = (M._suppress_field_updates_depth or 0) + 1
 end
 
-local function resume_field_updates()
+resume_field_updates = function()
   if M._suppress_field_updates_depth and M._suppress_field_updates_depth > 0 then
     M._suppress_field_updates_depth = M._suppress_field_updates_depth - 1
   end
@@ -666,11 +671,6 @@ function M.mount(root)
   logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] mount() called")
   M.root = root
   M._panel = root
-
-  -- Initialize view state (Qt widget method calls - no error wrapping needed)
-  if M._panel and type(M._panel) == "userdata" then
-    -- Skip method calls on direct userdata - methods may not be available
-  end
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector] view mounted")
   return error_system.create_success({
