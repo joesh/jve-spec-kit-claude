@@ -7,9 +7,18 @@ local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 
 local M = {}
+local logger = require("core.logger")
 
 -- Panel registry: maps panel_id -> {widget, header_widget, panel_name}
 local registered_panels = {}
+
+local focus_debug_enabled = os.getenv("JVE_DEBUG_FOCUS") == "1"
+
+local function focus_debug(message)
+    if focus_debug_enabled then
+        logger.debug("focus", message)
+    end
+end
 
 -- Currently focused panel ID
 local focused_panel_id = nil
@@ -38,7 +47,7 @@ local function safe_set_stylesheet(widget, stylesheet, context)
     local ok, err = pcall(qt_set_widget_stylesheet, widget, stylesheet)
     if not ok then
         local suffix = context and (" (" .. context .. ")") or ""
-        print(string.format("WARNING: focus_manager: failed to set stylesheet%s: %s", suffix, tostring(err)))
+        logger.warn("focus", string.format("Failed to set stylesheet%s: %s", suffix, tostring(err)))
     end
 end
 
@@ -52,7 +61,7 @@ end
 --       focus_widgets: array of widgets that should trigger focus highlights (defaults to {widget})
 function M.register_panel(panel_id, widget, header_widget, panel_name, options)
     if not panel_id or not widget then
-        print("WARNING: focus_manager.register_panel: missing panel_id or widget")
+        logger.warn("focus", "register_panel called with missing panel_id or widget")
         return false
     end
     options = options or {}
@@ -110,7 +119,7 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
     -- Apply initial unfocused style
     M.update_panel_visual(panel_id, false)
 
-    print(string.format("✅ Focus tracking registered for panel: %s", panel_name or panel_id))
+    focus_debug(string.format("Focus tracking registered for panel: %s", panel_name or panel_id))
     return true
 end
 
@@ -140,7 +149,7 @@ function M.set_focused_panel(panel_id)
         M.update_panel_visual(focused_panel_id, true)
         local panel = registered_panels[focused_panel_id]
         if panel then
-            print(string.format("🎯 Focus: %s", panel.panel_name))
+            focus_debug(string.format("Focus: %s", panel.panel_name))
         end
     end
 
@@ -229,7 +238,7 @@ end
 function M.focus_panel(panel_id)
     local panel = registered_panels[panel_id]
     if not panel then
-        print(string.format("WARNING: focus_manager.focus_panel: unknown panel %s", panel_id))
+        logger.warn("focus", string.format("focus_panel called with unknown panel %s", tostring(panel_id)))
         return false
     end
 

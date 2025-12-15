@@ -15,6 +15,7 @@ local frame_utils = require("core.frame_utils")
 local keymap = require("ui.project_browser.keymap")
 local qt_constants = require("core.qt_constants")
 local profile_scope = require("core.profile_scope")
+local logger = require("core.logger")
 
 local handler_seq = 0
 
@@ -44,6 +45,7 @@ local command_listener_registered = false
 local is_restoring_selection = false
 local show_browser_context_menu  -- forward declaration for tree context menu handler
 local handle_tree_key_event      -- forward declaration for key handler
+local handle_tree_drop           -- forward declaration for drop handler
 
 local function should_refresh_command(command_type)
     return command_type and REFRESH_COMMANDS[command_type] == true
@@ -244,9 +246,9 @@ local function finalize_pending_rename(new_name)
 
     local result = command_manager.execute(cmd)
     if result and result.success then
-        print(string.format("RenameItem executed for %s → %s", tostring(pending.target_id), trimmed_name))
+        logger.debug("project_browser", string.format("RenameItem executed for %s → %s", tostring(pending.target_id), trimmed_name))
     else
-        print(string.format("RenameItem failed for %s → %s (%s)", tostring(pending.target_id), trimmed_name, result and result.error_message or "unknown error"))
+        logger.warn("project_browser", string.format("RenameItem failed for %s → %s (%s)", tostring(pending.target_id), trimmed_name, result and result.error_message or "unknown error"))
         if qt_constants.CONTROL.SET_TREE_ITEM_TEXT then
             qt_constants.CONTROL.SET_TREE_ITEM_TEXT(M.tree, pending.tree_id, pending.original_name or "", 0)
         end
@@ -326,7 +328,7 @@ local function handle_tree_editor_closed(event)
         return
     end
 
-    print(string.format("Rename close event: item=%s accepted=%s text=%s",
+    logger.debug("project_browser", string.format("Rename close event: item=%s accepted=%s text=%s",
         tostring(event and event.item_id), tostring(event and event.accepted), tostring(event and event.text)))
 
     local pending = M.pending_rename
@@ -358,7 +360,7 @@ local function handle_tree_item_changed(event)
         return
     end
 
-    print(string.format("Rename change event: item=%s column=%s text=%s pending_tree=%s",
+    logger.debug("project_browser", string.format("Rename change event: item=%s column=%s text=%s pending_tree=%s",
         tostring(event.item_id), tostring(event.column), tostring(event.text), tostring(pending.tree_id)))
     if event.item_id ~= pending.tree_id then
         return
@@ -416,7 +418,7 @@ local function activate_item(item_info)
         if M.timeline_panel and M.timeline_panel.load_sequence then
             M.timeline_panel.load_sequence(item_info.id)
         else
-            print("⚠️  Timeline panel not available")
+            logger.warn("project_browser", "Timeline panel not available")
         end
 
         if focus_manager and focus_manager.focus_panel then
@@ -537,6 +539,18 @@ end
 
 local function resolve_tree_item(entry)
     if not entry then
+        return nil
+    end
+
+    if type(entry) == "number" or type(entry) == "string" then
+        if M.item_lookup then
+            return M.item_lookup[tostring(entry)]
+        end
+        return nil
+    end
+
+    if type(entry) ~= "table" then
+        logger.warn("project_browser", "resolve_tree_item received non-table entry: " .. tostring(type(entry)))
         return nil
     end
 
@@ -1113,7 +1127,7 @@ function M.create()
     local selection_handler = register_handler(function(event)
         local collected = {}
 
-        if event and type(event.items) == "table" then
+        if type(event) == "table" and type(event.items) == "table" then
             for _, entry in ipairs(event.items) do
                 local info = resolve_tree_item(entry)
                 if info then
@@ -1190,7 +1204,7 @@ function M.create()
         end
 
         local item_info = resolve_tree_item(event)
-        if not item_info and event and type(event.items) == "table" then
+        if not item_info and type(event) == "table" and type(event.items) == "table" then
             item_info = resolve_tree_item(event.items[1])
         end
 
@@ -1201,7 +1215,7 @@ function M.create()
         M.selected_item = item_info
         local result = command_manager.execute(ACTIVATE_COMMAND)
         if not result.success then
-            print(string.format("⚠️  ActivateBrowserSelection failed: %s", result.error_message or "unknown error"))
+            logger.warn("project_browser", "ActivateBrowserSelection failed: " .. tostring(result.error_message or "unknown error"))
         end
     end)
     if qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER then
@@ -1224,7 +1238,7 @@ function M.create()
                 return handle_tree_drop and handle_tree_drop(evt)
             end, debug.traceback)
             if not ok then
-                print(string.format("ERROR: Project browser drop handler failed: %s", tostring(result)))
+                logger.error("project_browser", "Drop handler failed: " .. tostring(result))
                 return false
             end
             return result and true or false
@@ -1237,7 +1251,7 @@ function M.create()
                 return handle_tree_key_event(evt)
             end, debug.traceback)
             if not ok then
-                print(string.format("ERROR: Project browser key handler failed: %s", tostring(handled)))
+                logger.error("project_browser", "Key handler failed: " .. tostring(handled))
                 return false
             end
             return handled and true or false
@@ -1263,7 +1277,7 @@ function M.create()
             end
         end
     end
-    print(string.format("✅ Project browser created with %d media item(s) and %d timeline(s)", media_count, sequence_count))
+    logger.info("project_browser", string.format("Project browser created (media=%d timelines=%d)", media_count, sequence_count))
 
     return container
 end
@@ -1336,7 +1350,7 @@ function M.refresh()
     populate_tree()
 end
 
-local function handle_tree_drop(event)
+handle_tree_drop = function(event)
     if not event or type(event.sources) ~= "table" or #event.sources == 0 then
         return false
     end
@@ -1351,13 +1365,13 @@ local function handle_tree_drop(event)
         elseif info and info.type == "master_clip" then
             table.insert(dragged_clips, info)
         else
-            print("⚠️  Unsupported drag item")
+            logger.warn("project_browser", "Unsupported drag item")
             return true
         end
     end
 
     if #dragged_bins > 0 and #dragged_clips > 0 then
-        print("⚠️  Mixed drag selections are not supported")
+        logger.warn("project_browser", "Mixed drag selections are not supported")
         return true
     end
 
@@ -1386,7 +1400,7 @@ local function handle_tree_drop(event)
         for _, bin_info in ipairs(dragged_bins) do
             if bin_info.id ~= new_parent_id then
                 if is_descendant(new_parent_id, bin_info.id) then
-                    print("⚠️  Cannot move a bin inside one of its descendants")
+                    logger.warn("project_browser", "Cannot move a bin inside one of its descendants")
                 elseif set_bin_parent(bin_info.id, new_parent_id) then
                     changed = true
                 end
@@ -1400,7 +1414,7 @@ local function handle_tree_drop(event)
         local project_id = M.project_id or db.get_current_project_id()
         local ok, err = tag_service.save_hierarchy(project_id, M.bins)
         if not ok then
-            print(string.format("⚠️  Failed to save bin hierarchy after drag/drop: %s", tostring(err or "unknown error")))
+            logger.warn("project_browser", string.format("Failed to save bin hierarchy after drag/drop: %s", tostring(err or "unknown error")))
             return true
         end
 
@@ -1436,7 +1450,7 @@ local function handle_tree_drop(event)
         local project_id = M.project_id or db.get_current_project_id()
         local ok, assign_err = tag_service.assign_master_clips(project_id, changed_ids, target_bin_id)
         if not ok then
-            print(string.format("⚠️  Failed to persist media-bin assignments: %s", tostring(assign_err or "unknown error")))
+            logger.warn("project_browser", string.format("Failed to persist media-bin assignments: %s", tostring(assign_err or "unknown error")))
             M.media_bin_map = tag_service.list_master_clip_assignments(project_id)
         end
 
@@ -1474,7 +1488,7 @@ handle_tree_key_event = function(event)
         activate_sequence = function()
             local result = command_manager.execute(ACTIVATE_COMMAND)
             if not result or not result.success then
-                print(string.format("⚠️  ActivateBrowserSelection failed: %s", result and result.error_message or "unknown error"))
+                logger.warn("project_browser", string.format("ActivateBrowserSelection failed: %s", result and result.error_message or "unknown error"))
                 return false
             end
             return true
@@ -1539,7 +1553,7 @@ local function create_bin_in_root()
 
     local result = command_manager.execute(cmd)
     if not result or not result.success then
-        print(string.format("⚠️  New Bin failed: %s", result and result.error_message or "unknown error"))
+        logger.warn("project_browser", string.format("New Bin failed: %s", result and result.error_message or "unknown error"))
         return
     end
 
@@ -1572,7 +1586,7 @@ local function create_sequence_in_project()
 
     local result = command_manager.execute(cmd)
     if not result or not result.success then
-        print(string.format("⚠️  New Sequence failed: %s", result and result.error_message or "unknown error"))
+        logger.warn("project_browser", string.format("New Sequence failed: %s", result and result.error_message or "unknown error"))
         return
     end
 
@@ -1594,7 +1608,7 @@ local function show_browser_background_menu(global_x, global_y)
         return
     end
     if not qt_constants.MENU or not qt_constants.MENU.CREATE_MENU or not qt_constants.MENU.SHOW_POPUP then
-        print("⚠️  Context menu unavailable: Qt menu bindings missing")
+        logger.warn("project_browser", "Context menu unavailable: Qt menu bindings missing")
         return
     end
 
@@ -1619,7 +1633,7 @@ show_browser_context_menu = function(event)
     end
 
     if not qt_constants.MENU or not qt_constants.MENU.CREATE_MENU or not qt_constants.MENU.SHOW_POPUP then
-        print("⚠️  Context menu unavailable: Qt menu bindings missing")
+        logger.warn("project_browser", "Context menu unavailable: Qt menu bindings missing")
         return
     end
 
@@ -1683,7 +1697,7 @@ show_browser_context_menu = function(event)
             handler = function()
                 local result = command_manager.execute("RevealInFilesystem")
                 if result and not result.success then
-                    print(string.format("⚠️  Reveal in Filesystem failed: %s", result.error_message or "unknown error"))
+                    logger.warn("project_browser", string.format("Reveal in Filesystem failed: %s", result.error_message or "unknown error"))
                 end
             end
         })
@@ -1705,7 +1719,7 @@ show_browser_context_menu = function(event)
         label = "Delete",
         handler = function()
             if not M.delete_selected_items() then
-                print("⚠️  Delete failed: nothing selected")
+                logger.warn("project_browser", "Delete failed: nothing selected")
             end
         end
     })
@@ -1731,13 +1745,13 @@ end
 
 function M.insert_selected_to_timeline()
     if not M.timeline_panel then
-        print("⚠️  Timeline panel not available")
+        logger.warn("project_browser", "Timeline panel not available")
         return
     end
 
     local clip = M.get_selected_master_clip()
     if not clip then
-        print("⚠️  No media item selected")
+        logger.warn("project_browser", "No media item selected")
         return
     end
     local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
@@ -1747,7 +1761,7 @@ function M.insert_selected_to_timeline()
     local project_id = timeline_state_module.get_project_id and timeline_state_module.get_project_id() or "default_project"
     local track_id = timeline_state_module.get_default_video_track_id and timeline_state_module.get_default_video_track_id() or nil
     if not track_id or track_id == "" then
-        print("❌ No video track found in active sequence")
+        logger.error("project_browser", "No video track found in active sequence")
         return
     end
 
@@ -1758,7 +1772,7 @@ function M.insert_selected_to_timeline()
     local source_out = clip.source_out or clip.duration or media.duration or 0
     local duration = source_out - source_in
     if duration <= 0 then
-        print("⚠️  Media duration is invalid")
+        logger.warn("project_browser", "Media duration is invalid")
         return
     end
 
@@ -1778,14 +1792,14 @@ function M.insert_selected_to_timeline()
     end)
 
     if success and result and result.success then
-        print(string.format("✅ Media inserted to timeline: %s", media.name or media.file_name))
+        logger.info("project_browser", string.format("Media inserted to timeline: %s", media.name or media.file_name))
         if focus_manager and focus_manager.focus_panel then
             focus_manager.focus_panel("timeline")
         else
             focus_manager.set_focused_panel("timeline")
         end
     else
-        print(string.format("❌ Failed to insert: %s", result and result.error_message or "unknown"))
+        logger.error("project_browser", string.format("Failed to insert: %s", result and result.error_message or "unknown"))
     end
 end
 
@@ -1860,7 +1874,7 @@ function M.delete_selected_items()
                 if result and result.success then
                     deleted = deleted + 1
                 else
-                    print(string.format("⚠️  Delete master clip failed: %s", result and result.error_message or "unknown error"))
+                    logger.warn("project_browser", string.format("Delete master clip failed: %s", result and result.error_message or "unknown error"))
                     clip_failures = clip_failures + 1
                 end
             end
@@ -1870,7 +1884,7 @@ function M.delete_selected_items()
                 handled_sequences[sequence_id] = true
                 if sequence_id == "default_sequence" then
                     sequence_failures = sequence_failures + 1
-                    print("⚠️  Delete sequence default_sequence skipped: primary timeline cannot be removed")
+                    logger.warn("project_browser", "Delete sequence default_sequence skipped: primary timeline cannot be removed")
                     goto continue_delete_loop
                 end
 
@@ -1882,7 +1896,7 @@ function M.delete_selected_items()
                     deleted = deleted + 1
                 else
                     sequence_failures = sequence_failures + 1
-                    print(string.format("⚠️  Delete sequence %s failed: %s", tostring(sequence_id), result and result.error_message or "unknown error"))
+                    logger.warn("project_browser", string.format("Delete sequence %s failed: %s", tostring(sequence_id), result and result.error_message or "unknown error"))
                 end
                 ::continue_delete_loop::
             end
@@ -1896,7 +1910,7 @@ function M.delete_selected_items()
                 deleted = deleted + 1
             else
                 bin_failures = bin_failures + 1
-                print(string.format("⚠️  Delete bin %s failed: %s", tostring(item.name or item.id), result and result.error_message or "unknown error"))
+                logger.warn("project_browser", string.format("Delete bin %s failed: %s", tostring(item.name or item.id), result and result.error_message or "unknown error"))
             end
         end
     end
@@ -2063,7 +2077,7 @@ end
 
 function M.start_inline_rename()
     if not M.tree or not M.selected_item then
-        print("⚠️  Rename: No selection to rename")
+        logger.warn("project_browser", "Rename: No selection to rename")
         return false
     end
 
@@ -2102,12 +2116,12 @@ function M.start_inline_rename()
             current_name = bin.name or current_name
         end
     else
-        print(string.format("⚠️  Rename: Unsupported selection type '%s'", tostring(item.type)))
+        logger.warn("project_browser", string.format("Rename: Unsupported selection type '%s'", tostring(item.type)))
         return false
     end
 
     if not tree_id or not target_id then
-        print("⚠️  Rename: Unable to locate selected item in tree")
+        logger.warn("project_browser", "Rename: Unable to locate selected item in tree")
         return false
     end
 
@@ -2121,17 +2135,17 @@ function M.start_inline_rename()
     local editable_ok = false
     if qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE and tree_id then
         editable_ok = qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE(M.tree, tree_id, true)
-        print(string.format("Rename: SET_TREE_ITEM_EDITABLE result=%s", tostring(editable_ok)))
+        logger.debug("project_browser", string.format("Rename: SET_TREE_ITEM_EDITABLE result=%s", tostring(editable_ok)))
     else
-        print("Rename: SET_TREE_ITEM_EDITABLE missing")
+        logger.debug("project_browser", "Rename: SET_TREE_ITEM_EDITABLE missing")
     end
 
     local edit_started = false
     if qt_constants.CONTROL.EDIT_TREE_ITEM and tree_id then
         edit_started = qt_constants.CONTROL.EDIT_TREE_ITEM(M.tree, tree_id, 0)
-        print(string.format("Rename: EDIT_TREE_ITEM result=%s", tostring(edit_started)))
+        logger.debug("project_browser", string.format("Rename: EDIT_TREE_ITEM result=%s", tostring(edit_started)))
     else
-        print("Rename: EDIT_TREE_ITEM missing")
+        logger.debug("project_browser", "Rename: EDIT_TREE_ITEM missing")
     end
     return edit_started
 end
@@ -2176,7 +2190,7 @@ end
 command_manager.register_executor(ACTIVATE_COMMAND, function()
     local ok, err = M.activate_selection()
     if not ok and err then
-        print(string.format("⚠️  %s", err))
+        logger.warn("project_browser", tostring(err))
     end
     return ok and true or false
 end)
