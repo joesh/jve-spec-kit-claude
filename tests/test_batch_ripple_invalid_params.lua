@@ -56,7 +56,7 @@ do
     layout:cleanup()
 end
 
--- Test 3: Missing clip_id currently crashes (BUG - should skip gracefully)
+-- Test 3: Missing clip_id should skip with warning
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_missing_clip_id.db",
@@ -75,9 +75,7 @@ do
     cmd:set_parameter("delta_frames", 100)
 
     local result = command_manager.execute(cmd)
-    -- BUG: Currently crashes with "table index is nil" instead of gracefully skipping
-    -- TODO: Add nil clip_id validation to skip invalid edges
-    assert(not result.success, "nil clip_id currently fails (should skip with warning)")
+    assert(result.success, "nil clip_id should be skipped with warning (not fail the command)")
 
     layout:cleanup()
 end

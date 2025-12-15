@@ -8,11 +8,12 @@ local uuid = require("uuid")
 local db = require("core.database")
 local Clip = require("models.clip")
 local timeline_state = require("ui.timeline.timeline_state")
+local logger = require("core.logger")
 
 local function get_conn()
     local conn = db.get_connection()
     if not conn then
-        print("WARNING: command_helper: No database connection")
+        logger.warn("command_helper", "No database connection")
     end
     return conn
 end
@@ -105,6 +106,10 @@ function M.clip_update_payload(source, fallback_sequence_id)
     if not track_sequence_id then
         return nil
     end
+    local rate = source.rate
+    if not rate and source.fps_numerator and source.fps_denominator then
+        rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
+    end
     return {
         clip_id = source.id,
         track_id = source.track_id,
@@ -113,6 +118,9 @@ function M.clip_update_payload(source, fallback_sequence_id)
         duration = source.duration,
         source_in = source.source_in,
         source_out = source.source_out,
+        rate = rate,
+        fps_numerator = rate and rate.fps_numerator or nil,
+        fps_denominator = rate and rate.fps_denominator or nil,
         enabled = source.enabled ~= false
     }
 end
@@ -124,6 +132,13 @@ function M.clip_insert_payload(source, fallback_sequence_id)
     local track_sequence_id = source.owner_sequence_id or source.track_sequence_id or fallback_sequence_id
     if not track_sequence_id then
         return nil
+    end
+    local rate = source.rate
+    if not rate and source.fps_numerator and source.fps_denominator then
+        rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
+    end
+    if (source.source_in ~= nil or source.source_out ~= nil) and (not rate or not rate.fps_numerator or not rate.fps_denominator) then
+        error("command_helper.clip_insert_payload: clip missing rate metadata for source bounds (clip_id=" .. tostring(source.id) .. ")", 2)
     end
     local label = source.label or source.name
     if (not label or label == "") and source.id then
@@ -147,6 +162,9 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         duration = source.duration,
         source_in = source.source_in,
         source_out = source.source_out,
+        rate = rate,
+        fps_numerator = rate and rate.fps_numerator or nil,
+        fps_denominator = rate and rate.fps_denominator or nil,
         
         enabled = source.enabled ~= false,
         offline = source.offline == true
@@ -264,27 +282,42 @@ function M.resolve_sequence_id_for_edges(command, primary_edge, edge_list)
 end
 
 function M.resolve_sequence_for_track(sequence_id_param, track_id)
-    local resolved = sequence_id_param
-    if resolved and resolved ~= "" then
-        return resolved
-    end
+    local provided = sequence_id_param
     if not track_id or track_id == "" then
-        return resolved
+        return provided
     end
-    
+
     local conn = get_conn()
-    if not conn then return resolved end
+    if not conn then
+        return provided
+    end
 
     local stmt = conn:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
     if not stmt then
-        return resolved
+        return provided
     end
+
     stmt:bind_value(1, track_id)
+    local track_sequence_id = nil
     if stmt:exec() and stmt:next() then
-        resolved = stmt:value(0) or resolved
+        track_sequence_id = stmt:value(0)
     end
     stmt:finalize()
-    return resolved
+
+    if not track_sequence_id or track_sequence_id == "" then
+        return provided
+    end
+
+    if provided and provided ~= "" and provided ~= track_sequence_id then
+        logger.warn("command_helper", string.format(
+            "resolve_sequence_for_track: sequence_id %s does not match track %s (sequence_id=%s); using track sequence",
+            tostring(provided),
+            tostring(track_id),
+            tostring(track_sequence_id)
+        ))
+    end
+
+    return track_sequence_id
 end
 
 function M.restore_clip_state(state)
@@ -459,7 +492,7 @@ function M.insert_properties_for_clip(clip_id, properties)
     ]])
 
     if not stmt then
-        print(string.format("WARNING: Failed to prepare property insert for clip %s", tostring(clip_id)))
+        logger.warn("command_helper", string.format("Failed to prepare property insert for clip %s", tostring(clip_id)))
         return false
     end
 
@@ -479,7 +512,7 @@ function M.insert_properties_for_clip(clip_id, properties)
                     err = msg
                 end
             end
-            print(string.format("WARNING: Failed to insert property %s for clip %s: %s",
+            logger.warn("command_helper", string.format("Failed to insert property %s for clip %s: %s",
                 tostring(prop.property_name), tostring(clip_id), tostring(err)))
             stmt:finalize()
             return false
@@ -551,6 +584,19 @@ function M.delete_clips_by_id(command, sequence_id, clip_ids)
     end
 end
 
+function M.add_bulk_shift_mutation(command, sequence_id, payload)
+    if not command or not payload then
+        return
+    end
+    local bucket = M.ensure_timeline_mutation_bucket(command, sequence_id)
+    if not bucket then
+        return
+    end
+    bucket.bulk_shifts = bucket.bulk_shifts or {}
+    table.insert(bucket.bulk_shifts, payload)
+    command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
+end
+
 -- Applies a list of mutations (from clip_mutator) to the database.
 -- Caller must handle transaction.
 function M.apply_mutations(db, mutations)
@@ -561,27 +607,153 @@ function M.apply_mutations(db, mutations)
         return true
     end
 
+    local now = os.time()
+    local update_stmt = nil
+    local delete_stmt = nil
+    local insert_stmt = nil
+    local bulk_shift_by_id_stmt = nil
+    local bulk_shift_select_desc_stmt = nil
+    local bulk_shift_select_asc_stmt = nil
+    local bulk_shift_anchor_stmt = nil
+
+    local function finalize_stmt(stmt)
+        if stmt and stmt.finalize then
+            stmt:finalize()
+        end
+    end
+
+    local function reset_stmt(stmt)
+        if not stmt then return end
+        if stmt.reset then stmt:reset() end
+        if stmt.clear_bindings then stmt:clear_bindings() end
+    end
+
+    local function ensure_update_stmt()
+        if update_stmt then
+            return update_stmt
+        end
+        update_stmt = db:prepare([[
+            UPDATE clips
+            SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
+            WHERE id = ?
+        ]])
+        if not update_stmt then
+            return nil, "Failed to prepare UPDATE statement: " .. tostring(db:last_error() or "unknown")
+        end
+        return update_stmt
+    end
+
+    local function ensure_delete_stmt()
+        if delete_stmt then
+            return delete_stmt
+        end
+        delete_stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+        if not delete_stmt then
+            return nil, "Failed to prepare DELETE statement: " .. tostring(db:last_error() or "unknown")
+        end
+        return delete_stmt
+    end
+
+    local function ensure_insert_stmt()
+        if insert_stmt then
+            return insert_stmt
+        end
+        insert_stmt = db:prepare([[
+            INSERT INTO clips (
+                id, project_id, clip_kind, name, track_id, media_id,
+                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                fps_numerator, fps_denominator, enabled,
+                created_at, modified_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ]])
+        if not insert_stmt then
+            return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
+        end
+        return insert_stmt
+    end
+
+    local function ensure_bulk_shift_by_id_stmt()
+        if bulk_shift_by_id_stmt then
+            return bulk_shift_by_id_stmt
+        end
+        bulk_shift_by_id_stmt = db:prepare("UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
+        if not bulk_shift_by_id_stmt then
+            return nil, "Failed to prepare bulk shift per-clip UPDATE statement: " .. tostring(db:last_error() or "unknown")
+        end
+        return bulk_shift_by_id_stmt
+    end
+
+	    local function ensure_bulk_shift_select_stmt(order_desc)
+	        if order_desc then
+	            if bulk_shift_select_desc_stmt then
+	                return bulk_shift_select_desc_stmt
+	            end
+	            bulk_shift_select_desc_stmt = db:prepare([[
+	                SELECT id FROM clips
+	                WHERE track_id = ? AND timeline_start_frame >= ?
+	                ORDER BY timeline_start_frame DESC
+	            ]])
+	            if not bulk_shift_select_desc_stmt then
+	                return nil, "Failed to prepare bulk shift SELECT statement: " .. tostring(db:last_error() or "unknown")
+	            end
+	            return bulk_shift_select_desc_stmt
+	        end
+
+	        if bulk_shift_select_asc_stmt then
+	            return bulk_shift_select_asc_stmt
+	        end
+	        bulk_shift_select_asc_stmt = db:prepare([[
+	            SELECT id FROM clips
+	            WHERE track_id = ? AND timeline_start_frame >= ?
+	            ORDER BY timeline_start_frame ASC
+	        ]])
+	        if not bulk_shift_select_asc_stmt then
+	            return nil, "Failed to prepare bulk shift SELECT statement: " .. tostring(db:last_error() or "unknown")
+	        end
+	        return bulk_shift_select_asc_stmt
+	    end
+
+    local function ensure_bulk_shift_anchor_stmt()
+        if bulk_shift_anchor_stmt then
+            return bulk_shift_anchor_stmt
+        end
+        bulk_shift_anchor_stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+        if not bulk_shift_anchor_stmt then
+            return nil, "Failed to prepare bulk shift anchor query: " .. tostring(db:last_error() or "unknown")
+        end
+        return bulk_shift_anchor_stmt
+    end
+
     for _, mut in ipairs(mutations) do
         if mut.type == "update" then
             -- Validate required fields before attempting UPDATE
             if not mut.clip_id or mut.clip_id == "" then
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
                 return false, "Mutation missing clip_id for UPDATE operation"
             end
             if not mut.timeline_start_frame then
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
                 return false, string.format("Mutation for clip %s missing timeline_start_frame", mut.clip_id)
             end
             if not mut.duration_frames or mut.duration_frames <= 0 then
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
                 return false, string.format("Mutation for clip %s has invalid duration: %s",
                                              mut.clip_id, tostring(mut.duration_frames))
             end
 
-            local stmt = db:prepare([[
-                UPDATE clips
-                SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
-                WHERE id = ?
-            ]])
+            local stmt, stmt_err = ensure_update_stmt()
             if not stmt then
-                return false, "Failed to prepare UPDATE statement for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
+                return false, stmt_err
             end
             stmt:bind_value(1, mut.track_id)
             stmt:bind_value(2, mut.timeline_start_frame)
@@ -589,35 +761,42 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(4, mut.source_in_frame)
             stmt:bind_value(5, mut.source_out_frame)
             stmt:bind_value(6, mut.enabled)
-            stmt:bind_value(7, mut.clip_id)
+            stmt:bind_value(7, now)
+            stmt:bind_value(8, mut.clip_id)
             local ok = stmt:exec()
-            stmt:finalize()
+            local err = db:last_error()
+            reset_stmt(stmt)
             if not ok then
-                return false, "Failed to execute UPDATE for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
+                return false, "Failed to execute UPDATE for clip " .. tostring(mut.clip_id) .. ": " .. tostring(err or "unknown")
             end
         elseif mut.type == "delete" then
-            local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+            local stmt, stmt_err = ensure_delete_stmt()
             if not stmt then
-                return false, "Failed to prepare DELETE statement for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
+                return false, stmt_err
             end
             stmt:bind_value(1, mut.clip_id)
             local ok = stmt:exec()
-            stmt:finalize()
+            local err = db:last_error()
+            reset_stmt(stmt)
             if not ok then
-                return false, "Failed to execute DELETE for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
+                return false, "Failed to execute DELETE for clip " .. tostring(mut.clip_id) .. ": " .. tostring(err or "unknown")
             end
         elseif mut.type == "insert" then
-            local stmt = db:prepare([[
-                INSERT INTO clips (
-                    id, project_id, clip_kind, name, track_id, media_id,
-                    timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                    fps_numerator, fps_denominator, enabled,
-                    created_at, modified_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ]])
+            local stmt, stmt_err = ensure_insert_stmt()
             if not stmt then
-                return false, "Failed to prepare INSERT statement for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
+                return false, stmt_err
             end
             stmt:bind_value(1, mut.clip_id)
             stmt:bind_value(2, mut.project_id)
@@ -632,20 +811,174 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(11, mut.fps_numerator)
             stmt:bind_value(12, mut.fps_denominator)
             stmt:bind_value(13, mut.enabled)
-            stmt:bind_value(14, mut.created_at or os.time())
-            stmt:bind_value(15, mut.modified_at or os.time())
-            local ok = stmt:exec()
-            stmt:finalize()
-            if not ok then
-                return false, "Failed to execute INSERT for clip " .. tostring(mut.clip_id) .. ": " .. (db:last_error() or "unknown")
+            if mut.created_at == nil or mut.modified_at == nil then
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
+                return false, "INSERT mutation missing created_at/modified_at for clip " .. tostring(mut.clip_id)
             end
-        else
-            return false, "Unknown mutation type: " .. tostring(mut.type)
-        end
-    end
+            stmt:bind_value(14, mut.created_at)
+            stmt:bind_value(15, mut.modified_at)
+            local ok = stmt:exec()
+            local err = db:last_error()
+            reset_stmt(stmt)
+            if not ok then
+                finalize_stmt(update_stmt)
+                finalize_stmt(delete_stmt)
+                finalize_stmt(insert_stmt)
+                return false, "Failed to execute INSERT for clip " .. tostring(mut.clip_id) .. ": " .. tostring(err or "unknown")
+            end
+        elseif mut.type == "bulk_shift" then
+	            if not mut.track_id or mut.track_id == "" then
+	                finalize_stmt(update_stmt)
+	                finalize_stmt(delete_stmt)
+	                finalize_stmt(insert_stmt)
+	                finalize_stmt(bulk_shift_by_id_stmt)
+	                finalize_stmt(bulk_shift_select_desc_stmt)
+	                finalize_stmt(bulk_shift_select_asc_stmt)
+	                finalize_stmt(bulk_shift_anchor_stmt)
+	                return false, "bulk_shift mutation missing track_id"
+	            end
+	            if type(mut.shift_frames) ~= "number" then
+	                finalize_stmt(update_stmt)
+	                finalize_stmt(delete_stmt)
+	                finalize_stmt(insert_stmt)
+	                finalize_stmt(bulk_shift_by_id_stmt)
+	                finalize_stmt(bulk_shift_select_desc_stmt)
+	                finalize_stmt(bulk_shift_select_asc_stmt)
+	                finalize_stmt(bulk_shift_anchor_stmt)
+	                return false, "bulk_shift mutation missing numeric shift_frames"
+	            end
+                if not mut.anchor_start_frame and (not mut.first_clip_id or mut.first_clip_id == "") then
+                    finalize_stmt(update_stmt)
+                    finalize_stmt(delete_stmt)
+                    finalize_stmt(insert_stmt)
+                    finalize_stmt(bulk_shift_by_id_stmt)
+                    finalize_stmt(bulk_shift_select_desc_stmt)
+                    finalize_stmt(bulk_shift_select_asc_stmt)
+                    finalize_stmt(bulk_shift_anchor_stmt)
+                    return false, "bulk_shift mutation missing anchor_start_frame and first_clip_id"
+                end
 
-    return true
-end
+                local start_frames = mut.anchor_start_frame
+                if type(start_frames) ~= "number" then
+                    local anchor_stmt, anchor_err = ensure_bulk_shift_anchor_stmt()
+                    if not anchor_stmt then
+                        finalize_stmt(update_stmt)
+                        finalize_stmt(delete_stmt)
+                        finalize_stmt(insert_stmt)
+                        finalize_stmt(bulk_shift_by_id_stmt)
+                        finalize_stmt(bulk_shift_select_desc_stmt)
+                        finalize_stmt(bulk_shift_select_asc_stmt)
+                        finalize_stmt(bulk_shift_anchor_stmt)
+                        return false, anchor_err
+                    end
+                    anchor_stmt:bind_value(1, mut.first_clip_id)
+                    local ok_anchor = anchor_stmt:exec()
+                    local err_anchor = db:last_error()
+                    local has_row = ok_anchor and anchor_stmt:next()
+                    start_frames = has_row and anchor_stmt:value(0) or nil
+                    reset_stmt(anchor_stmt)
+                    if not ok_anchor or start_frames == nil then
+                        finalize_stmt(update_stmt)
+                        finalize_stmt(delete_stmt)
+                        finalize_stmt(insert_stmt)
+                        finalize_stmt(bulk_shift_by_id_stmt)
+                        finalize_stmt(bulk_shift_select_desc_stmt)
+                        finalize_stmt(bulk_shift_select_asc_stmt)
+                        finalize_stmt(bulk_shift_anchor_stmt)
+                        return false, "bulk_shift: failed to resolve anchor clip start frame: " .. tostring(err_anchor or "unknown")
+                    end
+                end
+
+	            local order_desc = mut.shift_frames > 0
+	            local select_stmt, select_err = ensure_bulk_shift_select_stmt(order_desc)
+	            if not select_stmt then
+	                finalize_stmt(update_stmt)
+	                finalize_stmt(delete_stmt)
+	                finalize_stmt(insert_stmt)
+	                finalize_stmt(bulk_shift_by_id_stmt)
+	                finalize_stmt(bulk_shift_select_desc_stmt)
+	                finalize_stmt(bulk_shift_select_asc_stmt)
+	                finalize_stmt(bulk_shift_anchor_stmt)
+	                return false, select_err
+	            end
+	            select_stmt:bind_value(1, mut.track_id)
+	            select_stmt:bind_value(2, start_frames)
+	            local ok_select = select_stmt:exec()
+	            local select_db_err = db:last_error()
+
+	            if not ok_select then
+	                reset_stmt(select_stmt)
+	                finalize_stmt(update_stmt)
+	                finalize_stmt(delete_stmt)
+	                finalize_stmt(insert_stmt)
+	                finalize_stmt(bulk_shift_by_id_stmt)
+	                finalize_stmt(bulk_shift_select_desc_stmt)
+	                finalize_stmt(bulk_shift_select_asc_stmt)
+	                finalize_stmt(bulk_shift_anchor_stmt)
+	                return false, "bulk_shift: failed to enumerate clips for track " .. tostring(mut.track_id) .. ": " .. tostring(select_db_err or "unknown")
+	            end
+
+                mut.clip_ids = mut.clip_ids or {}
+                while select_stmt:next() do
+                    local clip_id = select_stmt:value(0)
+                    if clip_id then
+                        table.insert(mut.clip_ids, clip_id)
+                    end
+                end
+                reset_stmt(select_stmt)
+
+                local update_shift_stmt, update_shift_err = ensure_bulk_shift_by_id_stmt()
+                if not update_shift_stmt then
+                    finalize_stmt(update_stmt)
+                    finalize_stmt(delete_stmt)
+                    finalize_stmt(insert_stmt)
+                    finalize_stmt(bulk_shift_by_id_stmt)
+                    finalize_stmt(bulk_shift_select_desc_stmt)
+                    finalize_stmt(bulk_shift_select_asc_stmt)
+                    finalize_stmt(bulk_shift_anchor_stmt)
+                    return false, update_shift_err
+                end
+                for _, clip_id in ipairs(mut.clip_ids) do
+                    update_shift_stmt:bind_value(1, mut.shift_frames)
+                    update_shift_stmt:bind_value(2, now)
+                    update_shift_stmt:bind_value(3, clip_id)
+                    local ok_update = update_shift_stmt:exec()
+                    local update_err = db:last_error()
+                    reset_stmt(update_shift_stmt)
+                    if not ok_update then
+                        finalize_stmt(update_stmt)
+                        finalize_stmt(delete_stmt)
+                        finalize_stmt(insert_stmt)
+                        finalize_stmt(bulk_shift_by_id_stmt)
+                        finalize_stmt(bulk_shift_select_desc_stmt)
+                        finalize_stmt(bulk_shift_select_asc_stmt)
+                        finalize_stmt(bulk_shift_anchor_stmt)
+                        return false, "Failed to execute bulk shift for clip " .. tostring(clip_id) .. ": " .. tostring(update_err or "unknown")
+                    end
+                end
+	        else
+	            finalize_stmt(update_stmt)
+	            finalize_stmt(delete_stmt)
+	            finalize_stmt(insert_stmt)
+	            finalize_stmt(bulk_shift_by_id_stmt)
+	            finalize_stmt(bulk_shift_select_desc_stmt)
+	            finalize_stmt(bulk_shift_select_asc_stmt)
+	            finalize_stmt(bulk_shift_anchor_stmt)
+	            return false, "Unknown mutation type: " .. tostring(mut.type)
+	        end
+	    end
+
+	    finalize_stmt(update_stmt)
+	    finalize_stmt(delete_stmt)
+	    finalize_stmt(insert_stmt)
+	    finalize_stmt(bulk_shift_by_id_stmt)
+	    finalize_stmt(bulk_shift_select_desc_stmt)
+	    finalize_stmt(bulk_shift_select_asc_stmt)
+	    finalize_stmt(bulk_shift_anchor_stmt)
+	    return true
+	end
 
 function M.revert_mutations(db, mutations, command, sequence_id)
     if not db then return false, "No database connection" end
@@ -653,6 +986,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
 
     local updates = {}
     local restore_deletes = {}
+    local preserve_strict_order = command and command.type == "BatchRippleEdit"
 
     local function val_frames(v, label)
         if type(v) == "table" and v.frames then return v.frames end
@@ -669,35 +1003,14 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         return fps_num, fps_den
     end
 
-    for i = #mutations, 1, -1 do
-        local mut = mutations[i]
-        if mut.type == "insert" then
-            local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
-            if not stmt then return false, "Failed to prepare undo insert: " .. tostring(db:last_error()) end
-            stmt:bind_value(1, mut.clip_id)
-            local ok = stmt:exec()
-            stmt:finalize()
-            if not ok then return false, "Failed to execute undo insert: " .. tostring(db:last_error()) end
-
-            if command then
-                M.add_delete_mutation(command, sequence_id, mut.clip_id)
-            end
-        elseif mut.type == "delete" then
-            table.insert(restore_deletes, mut)
-        elseif mut.type == "update" then
-            table.insert(updates, mut)
-        else
-            return false, "Unknown mutation type: " .. tostring(mut.type)
-        end
-    end
-
     local function apply_update(mut)
         local prev = mut.previous
         if not prev then return false, "Cannot undo update: missing previous state" end
+        local now = os.time()
 
         local stmt = db:prepare([[
             UPDATE clips
-            SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?
+            SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
             WHERE id = ?
         ]])
         if not stmt then return false, "Failed to prepare undo update: " .. tostring(db:last_error()) end
@@ -708,7 +1021,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(4, val_frames(prev.source_in, "source_in"))
         stmt:bind_value(5, val_frames(prev.source_out, "source_out"))
         stmt:bind_value(6, prev.enabled and 1 or 0)
-        stmt:bind_value(7, prev.id)
+        stmt:bind_value(7, now)
+        stmt:bind_value(8, prev.id)
 
         local ok = stmt:exec()
         local err = db:last_error()
@@ -721,46 +1035,6 @@ function M.revert_mutations(db, mutations, command, sequence_id)
             M.add_update_mutation(command, sequence_id, {clip_id = prev.id})
         end
         return true
-    end
-
-    if #updates > 0 then
-        if command and command.type == "Nudge" then
-            local nudge = command.get_parameter and (command:get_parameter("nudge_amount_rat") or command:get_parameter("nudge_amount"))
-            local sign = 0
-            if type(nudge) == "table" and nudge.frames then
-                sign = (nudge.frames > 0) and 1 or ((nudge.frames < 0) and -1 or 0)
-            elseif type(nudge) == "number" then
-                sign = (nudge > 0) and 1 or ((nudge < 0) and -1 or 0)
-            end
-            local function start_frames(mut)
-                local prev = mut.previous
-                if not prev then
-                    error("undo update: mutation missing 'previous' state - incompatible command version", 2)
-                end
-                local ts = prev.timeline_start or prev.start_value
-                if type(ts) == "table" and ts.frames then return ts.frames end
-                if type(ts) == "number" then return ts end
-                -- Likely an old mutation from before fps capture was added
-                error(string.format(
-                    "undo update: clip %s missing timeline_start frames - try deleting ~/Documents/JVE\\ Projects/Untitled\\ Project.jvp to reset command history",
-                    tostring(prev.id or "unknown")
-                ), 2)
-            end
-            table.sort(updates, function(a, b)
-                local sa = start_frames(a)
-                local sb = start_frames(b)
-                if sign < 0 then
-                    return sa > sb
-                else
-                    return sa < sb
-                end
-            end)
-        end
-
-        for _, mut in ipairs(updates) do
-            local ok, err = apply_update(mut)
-            if not ok then return false, err end
-        end
     end
 
     local function restore_deleted_clip(mut)
@@ -808,6 +1082,209 @@ function M.revert_mutations(db, mutations, command, sequence_id)
             M.add_insert_mutation(command, sequence_id, {id = prev.id})
         end
         return true
+    end
+
+    for i = #mutations, 1, -1 do
+        local mut = mutations[i]
+        if mut.type == "insert" then
+            local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+            if not stmt then return false, "Failed to prepare undo insert: " .. tostring(db:last_error()) end
+            stmt:bind_value(1, mut.clip_id)
+            local ok = stmt:exec()
+            stmt:finalize()
+            if not ok then return false, "Failed to execute undo insert: " .. tostring(db:last_error()) end
+
+            if command then
+                M.add_delete_mutation(command, sequence_id, mut.clip_id)
+            end
+        elseif mut.type == "delete" then
+            if preserve_strict_order then
+                local ok, err = restore_deleted_clip(mut)
+                if not ok then return false, err end
+            else
+                table.insert(restore_deletes, mut)
+            end
+        elseif mut.type == "update" then
+            if preserve_strict_order then
+                local ok, err = apply_update(mut)
+                if not ok then return false, err end
+            else
+                table.insert(updates, mut)
+            end
+	        elseif mut.type == "bulk_shift" then
+	            local shift_frames = mut.shift_frames
+	            if type(shift_frames) ~= "number" then
+	                return false, "bulk_shift undo: missing numeric shift_frames"
+	            end
+            if type(mut.clip_ids) == "table" then
+                local delta_frames = -shift_frames
+                if delta_frames ~= 0 then
+                    local select_stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+                    if not select_stmt then
+                        return false, "bulk_shift undo: failed to prepare start query: " .. tostring(db:last_error())
+                    end
+
+                    local entries = {}
+                    local seen = {}
+                    for _, clip_id in ipairs(mut.clip_ids) do
+                        if clip_id and not seen[clip_id] then
+                            seen[clip_id] = true
+                            select_stmt:bind_value(1, clip_id)
+                            local ok_sel = select_stmt:exec()
+                            local sel_err = db:last_error()
+                            local has_row = ok_sel and select_stmt:next()
+                            local start_frame = has_row and select_stmt:value(0) or nil
+                            select_stmt:reset()
+                            select_stmt:clear_bindings()
+                            if not ok_sel or start_frame == nil then
+                                select_stmt:finalize()
+                                return false, "bulk_shift undo: failed to resolve start for clip " .. tostring(clip_id) .. ": " .. tostring(sel_err)
+                            end
+                            table.insert(entries, {id = clip_id, start_frame = start_frame})
+                        end
+                    end
+                    select_stmt:finalize()
+
+                    local order_desc = delta_frames > 0
+                    table.sort(entries, function(a, b)
+                        if a.start_frame == b.start_frame then
+                            return order_desc and (a.id > b.id) or (a.id < b.id)
+                        end
+                        return order_desc and (a.start_frame > b.start_frame) or (a.start_frame < b.start_frame)
+                    end)
+
+                    local stmt = db:prepare("UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
+                    if not stmt then return false, "bulk_shift undo: failed to prepare clip update: " .. tostring(db:last_error()) end
+                    local now = os.time()
+                    for _, entry in ipairs(entries) do
+                        stmt:bind_value(1, delta_frames)
+                        stmt:bind_value(2, now)
+                        stmt:bind_value(3, entry.id)
+                        local ok = stmt:exec()
+                        local err = db:last_error()
+                        stmt:reset()
+                        stmt:clear_bindings()
+                        if not ok then
+                            stmt:finalize()
+                            return false, "bulk_shift undo: failed to shift clip " .. tostring(entry.id) .. ": " .. tostring(err)
+                        end
+                    end
+                    stmt:finalize()
+                end
+	            else
+	                if not mut.track_id or mut.track_id == "" then
+	                    return false, "bulk_shift undo: missing track_id"
+	                end
+	                if not mut.first_clip_id or mut.first_clip_id == "" then
+	                    return false, "bulk_shift undo: missing first_clip_id"
+	                end
+
+                local anchor_stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+                if not anchor_stmt then return false, "bulk_shift undo: failed to prepare anchor query: " .. tostring(db:last_error()) end
+                anchor_stmt:bind_value(1, mut.first_clip_id)
+                local ok_anchor = anchor_stmt:exec() and anchor_stmt:next()
+                local anchor_start = ok_anchor and anchor_stmt:value(0) or nil
+                anchor_stmt:finalize()
+                if anchor_start == nil then
+                    return false, "bulk_shift undo: failed to resolve anchor start for clip " .. tostring(mut.first_clip_id)
+                end
+
+	                local order_desc = (-shift_frames) > 0
+	                local select_sql = order_desc
+	                    and "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame DESC"
+	                    or "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame ASC"
+	                local select_stmt = db:prepare(select_sql)
+	                if not select_stmt then
+	                    return false, "bulk_shift undo: failed to prepare clip enumeration: " .. tostring(db:last_error())
+	                end
+	                select_stmt:bind_value(1, mut.track_id)
+	                select_stmt:bind_value(2, anchor_start)
+	                local ok_select = select_stmt:exec()
+	                local select_err = db:last_error()
+	                if not ok_select then
+	                    select_stmt:finalize()
+	                    return false, "bulk_shift undo: failed to enumerate clips: " .. tostring(select_err)
+	                end
+
+	                local update_stmt = db:prepare("UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
+	                if not update_stmt then
+	                    select_stmt:finalize()
+	                    return false, "bulk_shift undo: failed to prepare clip update: " .. tostring(db:last_error())
+	                end
+	                local now = os.time()
+	                while select_stmt:next() do
+	                    local clip_id = select_stmt:value(0)
+	                    update_stmt:bind_value(1, -shift_frames)
+	                    update_stmt:bind_value(2, now)
+	                    update_stmt:bind_value(3, clip_id)
+	                    local ok = update_stmt:exec()
+	                    local err = db:last_error()
+	                    update_stmt:reset()
+	                    update_stmt:clear_bindings()
+	                    if not ok then
+	                        update_stmt:finalize()
+	                        select_stmt:finalize()
+	                        return false, "bulk_shift undo: failed to shift clip " .. tostring(clip_id) .. ": " .. tostring(err)
+	                    end
+	                end
+	                update_stmt:finalize()
+	                select_stmt:finalize()
+	            end
+
+            if command and sequence_id then
+                local payload = {
+                    track_id = mut.track_id,
+                    first_clip_id = mut.first_clip_id,
+                    anchor_start_frame = mut.anchor_start_frame,
+                    shift_frames = -shift_frames,
+                    start_frames = mut.start_frames,
+                    clip_ids = mut.clip_ids,
+                }
+                M.add_bulk_shift_mutation(command, sequence_id, payload)
+            end
+        else
+            return false, "Unknown mutation type: " .. tostring(mut.type)
+        end
+    end
+
+    if #updates > 0 then
+        if command and command.type == "Nudge" then
+            local nudge = command.get_parameter and (command:get_parameter("nudge_amount_rat") or command:get_parameter("nudge_amount"))
+            local sign = 0
+            if type(nudge) == "table" and nudge.frames then
+                sign = (nudge.frames > 0) and 1 or ((nudge.frames < 0) and -1 or 0)
+            elseif type(nudge) == "number" then
+                sign = (nudge > 0) and 1 or ((nudge < 0) and -1 or 0)
+            end
+            local function start_frames(mut)
+                local prev = mut.previous
+                if not prev then
+                    error("undo update: mutation missing 'previous' state - incompatible command version", 2)
+                end
+                local ts = prev.timeline_start or prev.start_value
+                if type(ts) == "table" and ts.frames then return ts.frames end
+                if type(ts) == "number" then return ts end
+                -- Likely an old mutation from before fps capture was added
+                error(string.format(
+                    "undo update: clip %s missing timeline_start frames - try deleting ~/Documents/JVE\\ Projects/Untitled\\ Project.jvp to reset command history",
+                    tostring(prev.id or "unknown")
+                ), 2)
+            end
+            table.sort(updates, function(a, b)
+                local sa = start_frames(a)
+                local sb = start_frames(b)
+                if sign < 0 then
+                    return sa > sb
+                else
+                    return sa < sb
+                end
+            end)
+        end
+
+        for _, mut in ipairs(updates) do
+            local ok, err = apply_update(mut)
+            if not ok then return false, err end
+        end
     end
 
     for _, mut in ipairs(restore_deletes) do

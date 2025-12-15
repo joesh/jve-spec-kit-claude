@@ -27,17 +27,21 @@ do
     cmd:set_parameter("edge_infos", {
         {clip_id = layout.clips.v1_middle.id, edge_type = "out", track_id = layout.tracks.v1.id}
     })
-    cmd:set_parameter("delta_frames", 500)  -- Try to extend by 500, but only 100 room
+    cmd:set_parameter("delta_frames", 500)  -- Extend by 500; all downstream clips should shift as a rigid block
 
     local result = command_manager.execute(cmd)
-    -- Should retry with adjusted delta (100 frames max)
-    assert(result.success, "Retry mechanism should adjust delta and succeed")
+    assert(result.success, "BatchRippleEdit should succeed")
 
     local after_middle = require("models.clip").load(layout.clips.v1_middle.id, layout.db)
+    local after_right = require("models.clip").load(layout.clips.v1_right.id, layout.db)
+    local after_blocker = require("models.clip").load(layout.clips.v1_blocker.id, layout.db)
 
-    -- With constraint clamping, should only extend by 100 frames (gap size)
-    assert(after_middle.duration.frames == 600,
-        string.format("Should clamp to available space (100 frame extension), got duration=%d", after_middle.duration.frames))
+    assert(after_middle.duration.frames == 1000,
+        string.format("Should extend by full delta (500 frames), got duration=%d", after_middle.duration.frames))
+    assert(after_right.timeline_start.frames == 2600,
+        string.format("Downstream clip should shift by ripple delta; expected start=2600, got %d", after_right.timeline_start.frames))
+    assert(after_blocker.timeline_start.frames == 3700,
+        string.format("Further downstream clip should shift by ripple delta; expected start=3700, got %d", after_blocker.timeline_start.frames))
 
     layout:cleanup()
 end

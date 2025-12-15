@@ -10,9 +10,7 @@ local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
--- Test 1: In-point trim that would make duration < 1 frame currently fails
--- NOTE: Current behavior is FAIL, not clamp. This documents actual behavior.
--- Future enhancement: Could clamp to 1 frame and succeed with warning.
+-- Test 1: In-point trim clamps to minimum duration (1 frame)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_min_duration_in.db",
@@ -20,6 +18,9 @@ do
             v1_left = {timeline_start = 0, duration = 10}  -- 10 frames = tiny clip
         }
     })
+
+    local before_left = Clip.load(layout.clips.v1_left.id, layout.db)
+    local before_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
@@ -29,18 +30,22 @@ do
     cmd:set_parameter("delta_frames", 15)  -- Try to trim 15 frames from 10-frame clip
 
     local result = command_manager.execute(cmd)
-    -- Current behavior: operation fails when trim would create duration < 1
-    assert(not result.success, "Trim beyond minimum currently fails (apply_edge_ripple returns false)")
+    assert(result.success, "Trim beyond minimum should clamp and succeed")
 
-    -- Clip should be unchanged
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 10,
-        string.format("Failed trim should leave clip unchanged, got %d frames", after.duration.frames))
+    assert(after.duration.frames == 1,
+        string.format("Clamped trim should stop at 1 frame, got %d frames", after.duration.frames))
+    assert(after.timeline_start.frames == before_left.timeline_start.frames,
+        "In-edge trim should not move timeline_start for ripple edits")
+
+    local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
+    assert(after_right.timeline_start.frames == before_right.timeline_start.frames - 9,
+        string.format("Downstream clip should ripple left by 9 frames, got %d", after_right.timeline_start.frames))
 
     layout:cleanup()
 end
 
--- Test 2: Out-point trim that would make duration < 1 frame currently fails
+-- Test 2: Out-point trim clamps to minimum duration (1 frame)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_min_duration_out.db",
@@ -48,6 +53,9 @@ do
             v1_left = {timeline_start = 0, duration = 10}
         }
     })
+
+    local before_left = Clip.load(layout.clips.v1_left.id, layout.db)
+    local before_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
@@ -57,16 +65,22 @@ do
     cmd:set_parameter("delta_frames", -15)  -- Try to shrink by 15 frames
 
     local result = command_manager.execute(cmd)
-    assert(not result.success, "Trim beyond minimum fails (same as test 1)")
+    assert(result.success, "Trim beyond minimum should clamp and succeed")
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 10,
-        string.format("Failed trim should leave clip unchanged, got %d", after.duration.frames))
+    assert(after.duration.frames == 1,
+        string.format("Clamped trim should stop at 1 frame, got %d", after.duration.frames))
+    assert(after.timeline_start.frames == before_left.timeline_start.frames,
+        "Out-edge trim should not move timeline_start")
+
+    local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
+    assert(after_right.timeline_start.frames == before_right.timeline_start.frames - 9,
+        string.format("Downstream clip should ripple left by 9 frames, got %d", after_right.timeline_start.frames))
 
     layout:cleanup()
 end
 
--- Test 3: Single-frame clip trim by 1 frame currently fails
+-- Test 3: Single-frame clip trim clamps to no-op (cannot go below 1 frame)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_single_frame.db",
@@ -86,11 +100,11 @@ do
     cmd:set_parameter("delta_frames", -1)  -- Try to shrink by 1 frame
 
     local result = command_manager.execute(cmd)
-    assert(not result.success, "Trim of single-frame clip fails (would create 0 frames)")
+    assert(result.success, "Trim of single-frame clip should clamp to no-op")
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
     assert(after.duration.frames == 1,
-        string.format("Failed operation leaves single-frame clip unchanged, got %d", after.duration.frames))
+        string.format("Clamped operation leaves single-frame clip unchanged, got %d", after.duration.frames))
 
     layout:cleanup()
 end
@@ -152,8 +166,7 @@ do
     layout:cleanup()
 end
 
--- Test 6: Roll edit that would violate minimum duration currently fails
--- NOTE: Constraint system doesn't clamp roll operations - they fail instead
+-- Test 6: Roll edit clamps to preserve minimum duration
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_roll_min_duration.db",
@@ -172,17 +185,17 @@ do
     cmd:set_parameter("delta_frames", 8)  -- Try to roll 8 frames right (would make right clip -3 frames)
 
     local result = command_manager.execute(cmd)
-    -- Current behavior: Roll operations fail if they would violate minimum duration
-    -- Constraint system calculates limits but apply_edge_ripple still returns failure
-    assert(not result.success, "Roll that would create negative duration fails")
+    assert(result.success, "Roll should clamp and succeed")
 
     local after_left = Clip.load(layout.clips.v1_left.id, layout.db)
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    assert(after_left.duration.frames == 5,
-        string.format("Failed roll leaves left clip unchanged, got %d", after_left.duration.frames))
-    assert(after_right.duration.frames == 5,
-        string.format("Failed roll leaves right clip unchanged, got %d", after_right.duration.frames))
+    assert(after_left.duration.frames == 9,
+        string.format("Left clip should extend by 4 frames (clamped), got %d", after_left.duration.frames))
+    assert(after_right.duration.frames == 1,
+        string.format("Right clip should shrink to 1 frame (clamped), got %d", after_right.duration.frames))
+    assert(after_right.timeline_start.frames == 9,
+        string.format("Right clip should roll to start at 9, got %d", after_right.timeline_start.frames))
 
     layout:cleanup()
 end

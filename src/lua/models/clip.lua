@@ -52,12 +52,15 @@ local function load_internal(clip_id, db, raise_errors)
     end
 
     local query = db:prepare([[
-        SELECT id, project_id, clip_kind, name, track_id, media_id,
-               source_sequence_id, parent_clip_id, owner_sequence_id,
-               timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-               fps_numerator, fps_denominator, enabled, offline
-        FROM clips
-        WHERE id = ?
+        SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
+               c.fps_numerator, c.fps_denominator, c.enabled, c.offline,
+               s.fps_numerator, s.fps_denominator
+        FROM clips c
+        LEFT JOIN tracks t ON c.track_id = t.id
+        LEFT JOIN sequences s ON t.sequence_id = s.id
+        WHERE c.id = ?
     ]])
     if not query then
         if raise_errors then
@@ -87,20 +90,41 @@ local function load_internal(clip_id, db, raise_errors)
         return nil
     end
 
+    local clip_kind = query:value(2)
     local rate_num = query:value(13)
     local rate_den = query:value(14)
+    local sequence_rate_num = query:value(17)
+    local sequence_rate_den = query:value(18)
     
     -- Enforce Rate existence (Strict V5)
     if not rate_num or rate_num <= 0 then 
         query:finalize()
         error(string.format("Clip.load_failed: Clip %s has invalid frame rate (%s)", clip_id, tostring(rate_num)))
     end
-    if not rate_den or rate_den <= 0 then rate_den = 1 end
+    if not rate_den or rate_den <= 0 then
+        query:finalize()
+        error(string.format("Clip.load_failed: Clip %s has invalid frame rate denominator (%s)", clip_id, tostring(rate_den)))
+    end
+
+    local timeline_rate_num = rate_num
+    local timeline_rate_den = rate_den
+    if clip_kind ~= "master" then
+        if not sequence_rate_num or not sequence_rate_den then
+            query:finalize()
+            error(string.format("Clip.load_failed: Clip %s missing owning sequence frame rate", clip_id))
+        end
+        if sequence_rate_num <= 0 or sequence_rate_den <= 0 then
+            query:finalize()
+            error(string.format("Clip.load_failed: Clip %s has invalid owning sequence frame rate (%s/%s)", clip_id, tostring(sequence_rate_num), tostring(sequence_rate_den)))
+        end
+        timeline_rate_num = sequence_rate_num
+        timeline_rate_den = sequence_rate_den
+    end
 
     local clip = {
         id = query:value(0),
         project_id = query:value(1),
-        clip_kind = query:value(2),
+        clip_kind = clip_kind,
         name = query:value(3),
         track_id = query:value(4),
         media_id = query:value(5),
@@ -109,8 +133,8 @@ local function load_internal(clip_id, db, raise_errors)
         owner_sequence_id = query:value(8),
 
         -- NEW: Rational Properties (loaded from frames)
-        timeline_start = Rational.new(assert(query:value(9), "Clip.load: timeline_start_frame is NULL"), rate_num, rate_den),
-        duration = Rational.new(assert(query:value(10), "Clip.load: duration_frames is NULL"), rate_num, rate_den),
+        timeline_start = Rational.new(assert(query:value(9), "Clip.load: timeline_start_frame is NULL"), timeline_rate_num, timeline_rate_den),
+        duration = Rational.new(assert(query:value(10), "Clip.load: duration_frames is NULL"), timeline_rate_num, timeline_rate_den),
         source_in = Rational.new(assert(query:value(11), "Clip.load: source_in_frame is NULL"), rate_num, rate_den),
         source_out = Rational.new(assert(query:value(12), "Clip.load: source_out_frame is NULL"), rate_num, rate_den),
         
@@ -135,6 +159,8 @@ end
 -- Create a new Clip instance
 function M.create(name, media_id, opts)
     opts = opts or {}
+
+    local now = os.time()
     
     -- Default Rate
     local rate_num = opts.rate_num or MIGRATION_FPS_NUM
@@ -156,6 +182,8 @@ function M.create(name, media_id, opts)
         source_sequence_id = opts.source_sequence_id,
         parent_clip_id = opts.parent_clip_id,
         owner_sequence_id = opts.owner_sequence_id,
+        created_at = opts.created_at or now,
+        modified_at = opts.modified_at or now,
         
         -- Strict Rational Validation
         timeline_start = validate_rational(opts.timeline_start, "timeline_start"),

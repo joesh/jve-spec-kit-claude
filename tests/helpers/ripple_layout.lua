@@ -5,6 +5,21 @@ local command_manager = require("core.command_manager")
 local SCHEMA_SQL = require("import_schema")
 local timeline_state = require("ui.timeline.timeline_state")
 
+local function remove_best_effort(path)
+    if not path or path == "" then
+        return
+    end
+    os.remove(path)
+end
+
+local function remove_project_artifacts(db_path)
+    remove_best_effort(db_path)
+    remove_best_effort(db_path .. "-wal")
+    remove_best_effort(db_path .. "-shm")
+    local events_dir = db_path .. ".events"
+    os.execute(string.format("rm -rf %q", events_dir))
+end
+
 local function deep_copy(value)
     if type(value) ~= "table" then
         return value
@@ -239,7 +254,7 @@ function M.create(opts)
     opts = opts or {}
     local cfg = build_config(opts)
     local db_path = opts.db_path or string.format("/tmp/jve/ripple_layout_%d_%d.db", os.time(), math.random(100000))
-    os.remove(db_path)
+    remove_project_artifacts(db_path)
     assert(database.init(db_path), "Failed to init database")
     local db = database.get_connection()
     assert(db:exec(SCHEMA_SQL))
@@ -297,7 +312,9 @@ function M.create(opts)
     }
 
     function layout:cleanup()
-        os.remove(self.db_path)
+        local ok, err = database.shutdown()
+        assert(ok, tostring(err or "database.shutdown failed"))
+        remove_project_artifacts(self.db_path)
     end
 
     function layout:init_timeline_state()

@@ -116,8 +116,9 @@ do
     })
 
     local before = Clip.load(layout.clips.v1_left.id, layout.db)
+    local before_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    -- Command that will fail (trim beyond minimum)
+    -- Command clamps when trim would go past minimum duration
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
@@ -126,15 +127,18 @@ do
     cmd:set_parameter("delta_frames", -20)  -- Would make duration negative
 
     local result = command_manager.execute(cmd)
-    assert(not result.success, "Command should fail")
+    assert(result.success, "Command should succeed (delta should clamp to min duration)")
 
-    -- Database should be unchanged
+    -- Database should reflect a clamped trim (min duration = 1 frame)
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == before.duration.frames,
-        string.format("Failed command should not modify database, duration changed from %d to %d",
-            before.duration.frames, after.duration.frames))
+    assert(after.duration.frames == 1,
+        string.format("Clamped trim should stop at 1 frame, got duration=%d", after.duration.frames))
     assert(after.timeline_start.frames == before.timeline_start.frames,
-        "Failed command should not modify database (start unchanged)")
+        "Out-edge trim should not move timeline_start")
+
+    local right_after = Clip.load(layout.clips.v1_right.id, layout.db)
+    assert(right_after.timeline_start.frames == before_right.timeline_start.frames - 9,
+        string.format("Downstream clip should ripple left by 9 frames, got %d", right_after.timeline_start.frames))
 
     layout:cleanup()
 end

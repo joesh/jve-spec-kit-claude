@@ -52,4 +52,30 @@ assert_equal(snapped_playhead.frames, 12, "RationalTime near playhead should sna
 assert_equal(snapped_playhead.fps_numerator, sequence_fps_num, "RationalTime near playhead should snap to playhead fps_numerator")
 assert_equal(info2.snapped, true, "Snap should trigger for playhead")
 
+-- Clip snapshot scoping: snapping must not require state.get_clips when an
+-- explicit clip universe is provided (used by TimelineActiveRegion edge drags).
+local state_without_get_clips = {
+    get_sequence_fps_numerator = function() return sequence_fps_num end,
+    get_sequence_fps_denominator = function() return sequence_fps_den end,
+    get_playhead_position = function() return time_utils.from_frames(12, sequence_fps_num, sequence_fps_den) end,
+    time_to_pixel = function(rt, _viewport_width_px)
+        return time_utils.to_frames(rt, sequence_fps_num, sequence_fps_den)
+    end,
+    get_clips = function()
+        error("get_clips should not be called when clip_snapshot is provided")
+    end
+}
+
+local snapshot = {
+    clips = {
+        {id = "clip_c", timeline_start = time_utils.from_frames(100, sequence_fps_num, sequence_fps_den), duration = time_utils.from_frames(10, sequence_fps_num, sequence_fps_den)}
+    }
+}
+
+local target_snapshot_rt = time_utils.from_frames(100, sequence_fps_num, sequence_fps_den)
+local snapped_snapshot, info3 = magnetic_snapping.apply_snap(state_without_get_clips, target_snapshot_rt, true, {}, {}, 100, {clip_snapshot = snapshot})
+assert_true(getmetatable(snapped_snapshot) == Rational.metatable, "Snapshot snap time should be a Rational object")
+assert_equal(snapped_snapshot.frames, 100, "Snapshot target should snap to snapshot clip in-point")
+assert_equal(info3.snapped, true, "Snap should trigger for snapshot clip")
+
 print("✅ magnetic_snapping RationalTime tests passed")

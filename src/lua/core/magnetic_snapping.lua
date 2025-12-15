@@ -3,12 +3,29 @@
 
 local time_utils = require("core.time_utils")
 local Rational = require("core.rational")
+local logger = require("core.logger")
 
 local M = {}
 
+local function debug_snapping_enabled()
+    return os.getenv("JVE_DEBUG_SNAPPING") == "1"
+end
+
+local function get_candidate_clips(state, opts)
+    if type(opts) == "table" then
+        if type(opts.clips) == "table" then
+            return opts.clips
+        end
+        if type(opts.clip_snapshot) == "table" and type(opts.clip_snapshot.clips) == "table" then
+            return opts.clip_snapshot.clips
+        end
+    end
+    return state.get_clips()
+end
+
 -- Find all potential snap points in the timeline
 -- Returns array of {time, type, description} where type is "clip_edge" or "playhead"
-function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
+function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs, opts)
     local snap_points = {}
     excluded_clip_ids = excluded_clip_ids or {}
     excluded_edge_specs = excluded_edge_specs or {}
@@ -49,15 +66,16 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
     })
 
     -- Add all clip edges as snap points (excluding dragged clips/edges)
-    for _, clip in ipairs(state.get_clips()) do
+    for _, clip in ipairs(get_candidate_clips(state, opts)) do
         if not excluded_clips_lookup[clip.id] then
             local ts = hydrate_time(clip.timeline_start)
             local dur = hydrate_time(clip.duration)
-            if not ts or not dur or dur.frames <= 0 then
-                -- Skip invalid clips to avoid crashing snapping; log once per call.
-                print(string.format("WARNING: magnetic_snapping: Skipping clip %s with invalid time bounds", tostring(clip.id)))
-                goto continue_clip
-            end
+                if not ts or not dur or dur.frames <= 0 then
+                    if debug_snapping_enabled() then
+                    logger.debug("snapping", string.format("Skipping clip %s with invalid time bounds", tostring(clip.id)))
+                    end
+                    goto continue_clip
+                end
 
             -- In-point (left edge)
             local in_key = clip.id .. "_in"
@@ -93,10 +111,10 @@ end
 
 -- Find the closest snap point to a given pixel position within pixel tolerance
 -- Returns {time, type, description} or nil if no snap point within tolerance
-function M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, viewport_width_px)
+function M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, viewport_width_px, opts)
     local SNAP_TOLERANCE_PX = 12  -- Pixels within which to snap
 
-    local snap_points = M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs)
+    local snap_points = M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs, opts)
 
     local target_px = state.time_to_pixel(target_time, viewport_width_px)
 
@@ -124,24 +142,26 @@ end
 
 -- Apply snapping to a time value if enabled
 -- Returns adjusted time and snap info {snapped: boolean, snap_point: {...} or nil}
-function M.apply_snap(state, target_time, is_snapping_enabled, excluded_clip_ids, excluded_edge_specs, viewport_width_px)
+function M.apply_snap(state, target_time, is_snapping_enabled, excluded_clip_ids, excluded_edge_specs, viewport_width_px, opts)
     if not is_snapping_enabled then
         return target_time, {snapped = false, snap_point = nil}
     end
 
-    local snap_point, distance_px = M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, viewport_width_px)
+    local snap_point, distance_px = M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, viewport_width_px, opts)
 
-    if snap_point then
-        -- Convert Rational times to milliseconds for printing only
-        local target_ms = time_utils.to_milliseconds(target_time)
-        local snap_ms = time_utils.to_milliseconds(snap_point.time)
+        if snap_point then
+            if debug_snapping_enabled() then
+                -- Convert Rational times to milliseconds for printing only
+                local target_ms = time_utils.to_milliseconds(target_time)
+                local snap_ms = time_utils.to_milliseconds(snap_point.time)
 
-        print(string.format("SNAP: target=%.2fms → snapped to %.2fms (%s) [distance=%.1fpx]",
-            target_ms, snap_ms, snap_point.description, distance_px))
-        return snap_point.time, {snapped = true, snap_point = snap_point, distance_px = distance_px}
-    else
-        return target_time, {snapped = false, snap_point = nil}
-    end
+            logger.debug("snapping", string.format("SNAP: target=%.2fms → snapped to %.2fms (%s) [distance=%.1fpx]",
+                target_ms, snap_ms, snap_point.description, distance_px))
+            end
+            return snap_point.time, {snapped = true, snap_point = snap_point, distance_px = distance_px}
+        else
+            return target_time, {snapped = false, snap_point = nil}
+        end
 end
 
 return M
