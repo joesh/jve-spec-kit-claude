@@ -531,13 +531,15 @@ function M.find_offline_media(db, project_id)
         return {}
     end
 
-    stmt:bind_values(project_id)
-
     local offline = {}
-    for row in stmt:nrows() do
-        local media = Media.load(row.id, db)
-        if media and not file_exists(media.file_path) then
-            table.insert(offline, media)
+    stmt:bind_value(1, project_id)
+    if stmt:exec() then
+        while stmt:next() do
+            local media_id = stmt:value(0)
+            local media = Media.load(media_id, db)
+            if media and not file_exists(media.file_path) then
+                table.insert(offline, media)
+            end
         end
     end
 

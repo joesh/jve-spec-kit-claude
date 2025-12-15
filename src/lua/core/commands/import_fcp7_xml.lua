@@ -156,7 +156,7 @@ function M.register(executors, undoers, db)
             timeline_state.reload_clips(reload_target)
         end
 
-        print("✅ Import undone - deleted all imported entities")
+        logger.info("import_fcp7_xml", "Import undone - deleted all imported entities")
         return true
     end
 

@@ -1,5 +1,6 @@
 local uuid = require("uuid")
 local Rational = require("core.rational")
+local logger = require("core.logger")
 
 local M = {}
 
@@ -79,12 +80,12 @@ end
 -- Load a media item from the database
 function M.load(media_id, db)
     if not media_id or media_id == "" then
-        print("WARNING: Media.load: Invalid media_id")
+        logger.warn("media", "Media.load: Invalid media_id")
         return nil
     end
 
     if not db then
-        print("WARNING: Media.load: No database provided")
+        logger.warn("media", "Media.load: No database provided")
         return nil
     end
 
@@ -94,14 +95,14 @@ function M.load(media_id, db)
         FROM media WHERE id = ?
     ]])
     if not query then
-        print("WARNING: Media.load: Failed to prepare query")
+        logger.warn("media", "Media.load: Failed to prepare query")
         return nil
     end
 
     query:bind_value(1, media_id)
 
     if not query:exec() then
-        print(string.format("WARNING: Media.load: Query execution failed: %s", query:last_error()))
+        logger.warn("media", string.format("Media.load: Query execution failed: %s", query:last_error()))
         query:finalize()
         return nil
     end
@@ -140,7 +141,7 @@ end
 -- Save a media item to the database
 function M:save(db)
     if not db then
-        print("WARNING: Media:save: No database provided")
+        logger.warn("media", "Media:save: No database provided")
         return false
     end
     
@@ -181,7 +182,7 @@ function M:save(db)
     ]])
 
     if not query then
-        print("WARNING: Media:save: Failed to prepare query")
+        logger.warn("media", "Media:save: Failed to prepare query")
         return false
     end
 
@@ -201,7 +202,7 @@ function M:save(db)
     query:bind_value(14, self.metadata)
 
     if not query:exec() then
-        print(string.format("WARNING: Media:save: Query execution failed: %s", query:last_error()))
+        logger.warn("media", string.format("Media:save: Query execution failed: %s", query:last_error()))
         query:finalize()
         return false
     end

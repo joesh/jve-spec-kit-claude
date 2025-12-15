@@ -652,17 +652,23 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return bin_id
     end
 
-    local function record_media_id(key, id)
+    local function record_media_id(key, id, opts)
+        opts = opts or {}
         if not key or key == "" or not id then
             return
         end
         key = tostring(key)
         media_lookup[key] = id
-        if not recorded_media_ids[id] then
-            recorded_media_ids[id] = true
-            table.insert(result.media_ids, id)
-        end
         result.media_id_map[key] = id
+
+        if opts.created ~= true then
+            return
+        end
+        if recorded_media_ids[id] then
+            return
+        end
+        recorded_media_ids[id] = true
+        table.insert(result.media_ids, id)
     end
 
     local function remember_master_mapping(key, id)
@@ -898,6 +904,18 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             logger.warn("import_fcp7", string.format("create_entities: missing file path for media %s; using placeholder %s", tostring(key), tostring(file_path)))
         end
 
+        local existing_id = find_existing_media_id(file_path)
+        if existing_id then
+            record_media_id(key, existing_id, {created = false})
+            return existing_id
+        end
+
+        local frame_rate = media_info.frame_rate or clip_info.frame_rate
+        local reuse_id = resolve_reuse_id('media', key)
+        if not reuse_id and media_info.id and media_info.id ~= "" then
+            reuse_id = media_info.id
+        end
+
         local media = Media.create({
             id = reuse_id,
             project_id = project_id,
@@ -915,16 +933,10 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         end
 
         if not media:save(conn) then
-            -- If save fails because media already exists, attempt to load it
-            local existing_id = find_existing_media_id(file_path)
-            if existing_id then
-                record_media_id(key, existing_id)
-                return existing_id
-            end
             return nil
         end
 
-        record_media_id(key, media.id)
+        record_media_id(key, media.id, {created = true})
         return media.id
     end
 

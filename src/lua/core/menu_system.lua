@@ -37,6 +37,28 @@ local actions_by_command = {}
 local undo_listener_token = nil
 local update_undo_redo_actions  -- forward declaration
 
+local function get_active_project_id()
+    if timeline_panel and timeline_panel.get_state then
+        local state = timeline_panel.get_state()
+        if state and state.get_project_id then
+            local project_id = state.get_project_id()
+            if project_id and project_id ~= "" then
+                return project_id
+            end
+        end
+    end
+
+    local database = require("core.database")
+    if database and database.get_current_project_id then
+        local project_id = database.get_current_project_id()
+        if project_id and project_id ~= "" then
+            return project_id
+        end
+    end
+
+    return nil
+end
+
 -- Qt bindings (loaded from qt_constants global)
 local qt = {
     GET_MENU_BAR = qt_constants.MENU.GET_MENU_BAR,
@@ -353,6 +375,128 @@ local function create_action_callback(command_name, params)
                 logger.error("menu", "Quit shutdown failed: " .. tostring(err))
             end
             os.exit(0)
+	        elseif command_name == "GoToTimecode" then
+	            assert(qt_constants.DIALOG and qt_constants.DIALOG.SHOW_CONFIRM, "GoToTimecode requires qt_constants.DIALOG.SHOW_CONFIRM")
+	            qt_constants.DIALOG.SHOW_CONFIRM({
+	                parent = main_window,
+	                title = "Go to Timecode",
+	                message = "Go to Timecode will move into the timeline header timecode field.",
+	                confirm_text = "OK",
+	                cancel_text = "Cancel",
+	                icon = "information",
+	                default_button = "confirm"
+	            })
+        elseif command_name == "ShowRelinkDialog" then
+            local database = require("core.database")
+            local db = database and database.get_connection and database.get_connection()
+            if not db then
+                logger.error("menu", "ShowRelinkDialog: database not available")
+                return
+            end
+
+            local project_id = get_active_project_id()
+            assert(project_id and project_id ~= "", "ShowRelinkDialog: active project_id unavailable")
+            local media_relinker = require("core.media_relinker")
+            local offline = media_relinker.find_offline_media(db, project_id)
+            if not offline or #offline == 0 then
+                qt_constants.DIALOG.SHOW_CONFIRM({
+                    parent = main_window,
+                    title = "Relink Media",
+                    message = "No offline media found.",
+                    confirm_text = "OK",
+                    cancel_text = "Cancel",
+                    icon = "information",
+                    default_button = "confirm"
+                })
+                return
+            end
+
+            local dir = qt_constants.FILE_DIALOG.OPEN_DIRECTORY(
+                main_window,
+                "Select Search Directory",
+                os.getenv("HOME") or ""
+            )
+            if not dir or dir == "" then
+                return
+            end
+
+            local results = media_relinker.batch_relink(offline, {
+                search_paths = {dir}
+            })
+
+            local relinked = (results and results.relinked) or {}
+            local failed = (results and results.failed) or {}
+            if #relinked == 0 then
+                qt_constants.DIALOG.SHOW_CONFIRM({
+                    parent = main_window,
+                    title = "Relink Media",
+                    message = "No matches found in the selected directory.",
+                    confirm_text = "OK",
+                    cancel_text = "Cancel",
+                    icon = "warning",
+                    default_button = "confirm"
+                })
+                return
+            end
+
+            local accepted = qt_constants.DIALOG.SHOW_CONFIRM({
+                parent = main_window,
+                title = "Relink Media",
+                message = string.format("Relink %d media file(s)? (%d could not be matched)", #relinked, #failed),
+                confirm_text = "Relink",
+                cancel_text = "Cancel",
+                icon = "question",
+                default_button = "confirm"
+            })
+
+            if not accepted then
+                return
+            end
+
+            local relink_map = {}
+            for _, entry in ipairs(relinked) do
+                if entry and entry.media and entry.media.id and entry.new_path then
+                    relink_map[entry.media.id] = entry.new_path
+                end
+            end
+
+            local Command = require("command")
+            local cmd = Command.create("BatchRelinkMedia", project_id)
+            cmd:set_parameter("relink_map", relink_map)
+            local ok, result = pcall(function()
+                return command_manager.execute(cmd)
+            end)
+            if not ok then
+                logger.error("menu", "ShowRelinkDialog: BatchRelinkMedia threw: " .. tostring(result))
+                return
+            end
+            if not result or not result.success then
+                logger.error("menu", "ShowRelinkDialog: BatchRelinkMedia failed: " .. tostring(result and result.error_message or "unknown"))
+                return
+            end
+        elseif command_name == "ManageTags" then
+            if project_browser and project_browser.focus_bin then
+                project_browser.focus_bin()
+            end
+            qt_constants.DIALOG.SHOW_CONFIRM({
+                parent = main_window,
+                title = "Manage Tags",
+                message = "Tags are currently managed as bins in the Project Browser.",
+                confirm_text = "OK",
+                cancel_text = "Cancel",
+                icon = "information",
+                default_button = "confirm"
+            })
+        elseif command_name == "ConsolidateMedia" then
+            qt_constants.DIALOG.SHOW_CONFIRM({
+                parent = main_window,
+                title = "Consolidate Media",
+                message = "Consolidate Media is not implemented yet.",
+                confirm_text = "OK",
+                cancel_text = "Cancel",
+                icon = "information",
+                default_button = "confirm"
+            })
         elseif command_name == "ImportMedia" then
             local file_paths = qt_constants.FILE_DIALOG.OPEN_FILES(
                 main_window,
