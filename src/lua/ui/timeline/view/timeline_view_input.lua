@@ -9,6 +9,7 @@ local focus_manager = require("ui.focus_manager")
 local magnetic_snapping = require("core.magnetic_snapping")
 local Rational = require("core.rational")
 local time_utils = require("core.time_utils")
+local TimelineActiveRegion = require("core.timeline_active_region")
 
 local RIGHT_MOUSE_BUTTON = 2
 local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
@@ -37,18 +38,63 @@ end
 
 local function find_clip_under_cursor(view, x, y, width, height)
     local state = view.state
-    for _, clip in ipairs(state.get_clips()) do
-        local clip_y = view.get_track_y_by_id(clip.track_id, height)
-        if clip_y >= 0 then
-            local track_height = view.get_track_visual_height(clip.track_id)
-            if y >= clip_y and y <= clip_y + track_height then
-                local clip_x = state.time_to_pixel(clip.timeline_start, width)
-                local clip_width = math.max(0, math.floor((clip.duration / state.get_viewport_duration()) * width) - 1)
-                if x >= clip_x and x <= clip_x + clip_width then
-                    return clip
-                end
-            end
+    if not state.get_track_clip_index then
+        error("timeline_view_input: state.get_track_clip_index is required", 2)
+    end
+
+    local track_id = view.get_track_id_at_y(y, height)
+    if not track_id then
+        return nil
+    end
+
+    local track_clips = state.get_track_clip_index(track_id)
+    if not track_clips or #track_clips == 0 then
+        return nil
+    end
+
+    local seq_rate = state.get_sequence_frame_rate()
+    assert(seq_rate and seq_rate.fps_numerator and seq_rate.fps_denominator, "timeline_view_input: missing sequence fps metadata")
+    local time_under_cursor = state.pixel_to_time(x, width)
+    time_under_cursor = Rational.hydrate(time_under_cursor, seq_rate.fps_numerator, seq_rate.fps_denominator)
+    if not time_under_cursor or not time_under_cursor.frames then
+        return nil
+    end
+
+    -- Binary search to find the first clip starting at or after the cursor time,
+    -- then check the previous clip for overlap.
+    local target_frames = time_under_cursor.frames
+    local lo = 1
+    local hi = #track_clips
+    local idx = #track_clips + 1
+    while lo <= hi do
+        local mid = math.floor((lo + hi) / 2)
+        local clip = track_clips[mid]
+        local start_frames = clip and clip.timeline_start and clip.timeline_start.frames or nil
+        if start_frames and start_frames >= target_frames then
+            idx = mid
+            hi = mid - 1
+        else
+            lo = mid + 1
         end
+    end
+    if idx > 1 then
+        idx = idx - 1
+    end
+
+    for i = idx, #track_clips do
+        local clip = track_clips[i]
+        if not clip or not clip.timeline_start or not clip.duration then
+            goto continue_clip
+        end
+        local start_frames = clip.timeline_start.frames
+        if start_frames and start_frames > target_frames then
+            break
+        end
+        local end_frames = start_frames + clip.duration.frames
+        if end_frames and target_frames >= start_frames and target_frames <= end_frames then
+            return clip
+        end
+        ::continue_clip::
     end
     return nil
 end
@@ -56,16 +102,16 @@ end
 local function find_gap_at_time(view, track_id, time_obj)
     if not track_id or not time_obj then return nil end
     local state = view.state
-    local clips_on_track = {}
-    for _, clip in ipairs(state.get_clips() or {}) do
-        if clip.track_id == track_id then table.insert(clips_on_track, clip) end
+    if not state.get_track_clip_index then
+        error("timeline_view_input: state.get_track_clip_index is required", 2)
     end
-    table.sort(clips_on_track, function(a, b)
-        if a.timeline_start == b.timeline_start then return a.id < b.id end
-        return a.timeline_start < b.timeline_start
-    end)
+    local clips_on_track = state.get_track_clip_index(track_id)
+    if not clips_on_track or #clips_on_track == 0 then
+        return nil
+    end
     
     local seq_fps = state.get_sequence_frame_rate()
+    assert(seq_fps and seq_fps.fps_numerator and seq_fps.fps_denominator, "timeline_view_input: missing sequence fps metadata")
     local previous_end = Rational.new(0, seq_fps.fps_numerator, seq_fps.fps_denominator)
     local previous_clip_id = nil
     
@@ -110,13 +156,11 @@ end
 -- fall inside the configured trim zone. Returns nil when no handles are within range.
 local function pick_edges_for_track(state, track_id, cursor_x, viewport_width)
     if not track_id then return nil end
-    local track_clips = {}
-    for _, clip in ipairs(state.get_clips() or {}) do
-        if clip.track_id == track_id then
-            track_clips[#track_clips + 1] = clip
-        end
+    if not state.get_track_clip_index then
+        error("timeline_view_input: state.get_track_clip_index is required", 2)
     end
-    if #track_clips == 0 then return nil end
+    local track_clips = state.get_track_clip_index(track_id)
+    if not track_clips or #track_clips == 0 then return nil end
     return edge_picker.pick_edges(track_clips, cursor_x, viewport_width, {
         edge_zone = ui_constants.TIMELINE.EDGE_ZONE_PX,
         roll_zone = ui_constants.TIMELINE.ROLL_ZONE_PX,
@@ -302,21 +346,33 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 
                 if view.drag_state.type == "edges" then
                     for _, edge in ipairs(view.drag_state.edges) do
-                        local clips = state.get_clips()
-                        for _, c in ipairs(clips) do
-                            if c.id == edge.clip_id then
-                                if edge.edge_type == "in" then edge.original_time = c.timeline_start
-                                elseif edge.edge_type == "out" then edge.original_time = c.timeline_start + c.duration
-                                elseif edge.edge_type == "gap_before" then edge.original_time = c.timeline_start
-                                elseif edge.edge_type == "gap_after" then edge.original_time = c.timeline_start + c.duration
-                                end
-                                break
+                        local c = state.get_clip_by_id and state.get_clip_by_id(edge.clip_id) or nil
+                        if c and c.timeline_start and c.duration then
+                            if edge.edge_type == "in" then edge.original_time = c.timeline_start
+                            elseif edge.edge_type == "out" then edge.original_time = c.timeline_start + c.duration
+                            elseif edge.edge_type == "gap_before" then edge.original_time = c.timeline_start
+                            elseif edge.edge_type == "gap_after" then edge.original_time = c.timeline_start + c.duration
                             end
                         end
                     end
+
+                    -- Compute and cache the active interaction region + snapshot once at drag start.
+                    local rate = state.get_sequence_frame_rate and state.get_sequence_frame_rate() or nil
+                    assert(rate and rate.fps_numerator and rate.fps_denominator, "timeline_view_input: missing sequence frame rate for TimelineActiveRegion")
+                    local multiplier = ui_constants.TIMELINE.ACTIVE_REGION_PAD_FRAMES_MULTIPLIER
+                    assert(type(multiplier) == "number" and multiplier > 0, "timeline_view_input: ui_constants.TIMELINE.ACTIVE_REGION_PAD_FRAMES_MULTIPLIER must be set")
+                    view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(state, view.drag_state.edges, {
+                        pad_frames = rate.fps_numerator * multiplier
+                    })
+                    view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(state, view.drag_state.timeline_active_region)
+
+                    -- Share edge drag state across timeline panes so only one preview computation runs.
+                    state.set_active_edge_drag_state(view.drag_state)
                 end
                 view.potential_drag = nil
-                view.render()
+                if view.drag_state.type ~= "edges" then
+                    view.render()
+                end
             end
         elseif view.drag_state then
             view.pending_gap_click = nil
@@ -342,10 +398,14 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     local delta = current_time - view.drag_state.start_value
                     local best_snap = nil
                     local best_dist = math.huge
+                    local snap_opts = nil
+                    if view.drag_state.preloaded_clip_snapshot then
+                        snap_opts = {clip_snapshot = view.drag_state.preloaded_clip_snapshot}
+                    end
                     for _, edge in ipairs(view.drag_state.edges) do
                         local new_edge = edge.original_time + delta
                         local ex = {{clip_id=edge.clip_id, edge_type=edge.edge_type}}
-                        local _, si = magnetic_snapping.apply_snap(state, new_edge, true, {}, ex, width)
+                        local _, si = magnetic_snapping.apply_snap(state, new_edge, true, {}, ex, width, snap_opts)
                         if si.snapped and si.distance_px < best_dist then best_snap = {time=si.snap_point.time, original=new_edge}; best_dist = si.distance_px end
                     end
                     if best_snap then current_time = current_time + (best_snap.time - best_snap.original) end
@@ -369,7 +429,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 view.drag_state.shift_constrained = false
             end
             view.drag_state.alt_copy = (modifiers and modifiers.alt)
-            view.render()
+            if view.drag_state.type == "edges" then
+                state.set_active_edge_drag_state(view.drag_state)
+            else
+                view.render()
+            end
 
         elseif state.is_dragging_playhead() then
             local time = state.pixel_to_time(x, width)
@@ -411,10 +475,15 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             local drag = view.drag_state
             local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
             drag_handler.handle_release(view, drag, modifiers)
-            
+
+            if drag.type == "edges" then
+                state.clear_active_edge_drag_state()
+            end
             view.drag_state = nil
             keyboard_shortcuts.reset_drag_snapping()
-            view.render()
+            if drag.type ~= "edges" then
+                view.render()
+            end
         elseif view.panel_drag_end then
             view.panel_drag_end(view.widget, x, y)
             view.panel_drag_move = nil; view.panel_drag_end = nil

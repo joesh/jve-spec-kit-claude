@@ -4,38 +4,50 @@
 local M = {}
 local Command = require("command")
 local command_manager = require("core.command_manager")
-local frame_utils = require("core.frame_utils")
 local Rational = require("core.rational")
 local json = require("dkjson")
+local logger = require("core.logger")
 
 function M.handle_release(view, drag_state, modifiers)
     local state_module = view.state
     local drag_type = drag_state.type
     local delta_ms = drag_state.delta_ms or 0
-    local delta_rational = drag_state.delta_rational
     local current_y = drag_state.current_y or drag_state.start_y
     local height = select(2, timeline.get_dimensions(view.widget))
     local target_track_id = view.get_track_id_at_y(current_y, height)
-    local alt_copy = (modifiers and modifiers.alt) or drag_state.alt_copy
+    -- alt-copy semantics are tracked on drag_state for potential future use.
 
     if drag_type == "clips" then
         local active_seq = state_module.get_sequence_id()
         local active_proj = state_module.get_project_id()
         local clips = drag_state.clips or {}
 
-        -- Reload clip snapshots to ensure we operate on current state.
-        local all_clips = state_module.get_clips()
+        -- Reload clip snapshots via stable lookup (avoid scanning thousands of clips).
         local current_clips = {}
-        for _, drag_clip in ipairs(clips) do
-            for _, clip in ipairs(all_clips) do
-                if clip.id == drag_clip.id then
+        if state_module.get_clip_by_id then
+            for _, drag_clip in ipairs(clips) do
+                local clip = drag_clip and drag_clip.id and state_module.get_clip_by_id(drag_clip.id) or nil
+                if clip then
                     table.insert(current_clips, clip)
-                    break
+                end
+            end
+        else
+            local all_clips = state_module.get_clips()
+            local clip_lookup = {}
+            for _, clip in ipairs(all_clips) do
+                if clip and clip.id then
+                    clip_lookup[clip.id] = clip
+                end
+            end
+            for _, drag_clip in ipairs(clips) do
+                local clip = drag_clip and drag_clip.id and clip_lookup[drag_clip.id] or nil
+                if clip then
+                    table.insert(current_clips, clip)
                 end
             end
         end
         if #current_clips == 0 then
-            print("WARNING: Drag release - no current clips found for drag state")
+            logger.warn("timeline_drag", "Drag release - no current clips found for drag state")
             return
         end
 
@@ -170,7 +182,7 @@ function M.handle_release(view, drag_state, modifiers)
             end
             local result = command_manager.execute(cmd)
             if not result.success then
-                print(string.format("ERROR: %s failed: %s", spec.command_type, result.error_message or "unknown"))
+                logger.error("timeline_drag", string.format("%s failed: %s", spec.command_type, result.error_message or "unknown"))
             end
         else
             local batch_cmd = Command.create("BatchCommand", active_proj)
@@ -181,7 +193,7 @@ function M.handle_release(view, drag_state, modifiers)
             end
             local result = command_manager.execute(batch_cmd)
             if not result.success then
-                print(string.format("ERROR: Batch drag failed: %s", result.error_message or "unknown"))
+                logger.error("timeline_drag", string.format("Batch drag failed: %s", result.error_message or "unknown"))
             end
         end
 
@@ -193,9 +205,10 @@ function M.handle_release(view, drag_state, modifiers)
 
         if #edges == 0 then return end
 
-        local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or {fps_numerator = 30, fps_denominator = 1}
-        local fps_num = rate.fps_numerator or 30
-        local fps_den = rate.fps_denominator or 1
+        local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or nil
+        assert(rate and rate.fps_numerator and rate.fps_denominator, "timeline_view_drag_handler: missing sequence fps metadata")
+        local fps_num = rate.fps_numerator
+        local fps_den = rate.fps_denominator
 
         local delta_rat = drag_state.delta_rational
         if not delta_rat and delta_ms ~= 0 then
@@ -209,9 +222,26 @@ function M.handle_release(view, drag_state, modifiers)
         end
 
         -- Lookup track_id for each edge
-        local track_by_clip = {}
-        for _, c in ipairs(state_module.get_clips() or {}) do
-            track_by_clip[c.id] = c.track_id
+        local track_by_clip = nil
+        if type(drag_state.preloaded_clip_snapshot) == "table" then
+            track_by_clip = drag_state.preloaded_clip_snapshot.clip_track_lookup
+        end
+        if type(track_by_clip) ~= "table" then
+            track_by_clip = {}
+            for _, edge in ipairs(edges) do
+                if edge and edge.clip_id and not track_by_clip[edge.clip_id] then
+                    local clip = state_module.get_clip_by_id and state_module.get_clip_by_id(edge.clip_id) or nil
+                    if clip and clip.track_id then
+                        track_by_clip[edge.clip_id] = clip.track_id
+                    end
+                end
+            end
+            if lead_edge and lead_edge.clip_id and not track_by_clip[lead_edge.clip_id] then
+                local clip = state_module.get_clip_by_id and state_module.get_clip_by_id(lead_edge.clip_id) or nil
+                if clip and clip.track_id then
+                    track_by_clip[lead_edge.clip_id] = clip.track_id
+                end
+            end
         end
 
         local function normalize_edge_entry(edge)
@@ -240,10 +270,27 @@ function M.handle_release(view, drag_state, modifiers)
         if lead_edge_info then
             cmd:set_parameter("lead_edge", lead_edge_info)
         end
-        if active_seq then cmd:set_parameter("sequence_id", active_seq) end
+        if active_seq then
+            cmd:set_parameter("sequence_id", active_seq)
+            -- Required by CommandManager snapshotting.
+            cmd:set_parameter("__snapshot_sequence_ids", {active_seq})
+        end
+
+        -- UI-only optimization: allow BatchRippleEdit to reuse the already-loaded
+        -- in-memory timeline clip indices during execution (avoid DB reload).
+        cmd:set_parameter("__use_timeline_state_cache", true)
+
+        -- Provide the interaction snapshot/region so BatchRippleEdit can avoid
+        -- loading the full sequence for roll-only edits.
+        if drag_state.preloaded_clip_snapshot then
+            cmd:set_parameter("__preloaded_clip_snapshot", drag_state.preloaded_clip_snapshot)
+        end
+        if drag_state.timeline_active_region then
+            cmd:set_parameter("__timeline_active_region", drag_state.timeline_active_region)
+        end
         local result = command_manager.execute(cmd)
         if not result.success then
-            print(string.format("ERROR: BatchRippleEdit failed: %s", result.error_message or "unknown"))
+            logger.error("timeline_drag", string.format("BatchRippleEdit failed: %s", result.error_message or "unknown"))
         end
     end
 end
