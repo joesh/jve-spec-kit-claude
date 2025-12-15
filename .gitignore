@@ -57,6 +57,8 @@ Thumbs.db
 test_*.jve
 *.sqlite
 *.sqlite-*
+*.jvp-wal
+*.jvp-shm
 eventlog/
 
 # Temporary files
