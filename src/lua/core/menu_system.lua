@@ -69,7 +69,8 @@ local qt = {
     CONNECT_MENU_ACTION = qt_constants.MENU.CONNECT_MENU_ACTION,
     ADD_MENU_SEPARATOR = qt_constants.MENU.ADD_MENU_SEPARATOR,
     SET_ACTION_ENABLED = qt_constants.MENU.SET_ACTION_ENABLED,
-    SET_ACTION_CHECKED = qt_constants.MENU.SET_ACTION_CHECKED
+    SET_ACTION_CHECKED = qt_constants.MENU.SET_ACTION_CHECKED,
+    SET_ACTION_TEXT = qt_constants.MENU.SET_ACTION_TEXT
 }
 
 --- Initialize menu system
@@ -322,14 +323,51 @@ local function set_actions_enabled_for_command(command_name, enabled)
     end
 end
 
+local function set_actions_text_for_command(command_name, text)
+    if not qt.SET_ACTION_TEXT then
+        return
+    end
+    local actions = actions_by_command[command_name]
+    if not actions then
+        return
+    end
+    for _, action in ipairs(actions) do
+        qt.SET_ACTION_TEXT(action, text)
+    end
+end
+
 update_undo_redo_actions = function()
     if not command_manager or not command_manager.can_undo or not command_manager.can_redo then
         set_actions_enabled_for_command("Undo", false)
         set_actions_enabled_for_command("Redo", false)
+        set_actions_text_for_command("Undo", "Undo")
+        set_actions_text_for_command("Redo", "Redo")
         return
     end
-    set_actions_enabled_for_command("Undo", command_manager.can_undo())
-    set_actions_enabled_for_command("Redo", command_manager.can_redo())
+    local can_undo = command_manager.can_undo()
+    local can_redo = command_manager.can_redo()
+
+    set_actions_enabled_for_command("Undo", can_undo)
+    set_actions_enabled_for_command("Redo", can_redo)
+
+    local undo_label = "Undo"
+    if can_undo and command_manager.get_last_command then
+        local cmd = command_manager.get_last_command(nil)
+        if cmd and cmd.get_display_label then
+            undo_label = "Undo " .. cmd:get_display_label()
+        end
+    end
+
+    local redo_label = "Redo"
+    if can_redo and command_manager.get_next_redo_command then
+        local cmd = command_manager.get_next_redo_command(nil)
+        if cmd and cmd.get_display_label then
+            redo_label = "Redo " .. cmd:get_display_label()
+        end
+    end
+
+    set_actions_text_for_command("Undo", undo_label)
+    set_actions_text_for_command("Redo", redo_label)
 end
 
 --- Create menu action callback
@@ -378,6 +416,9 @@ local function create_action_callback(command_name, params)
         elseif command_name == "GoToTimecode" then
             assert(timeline_panel and timeline_panel.focus_timecode_entry, "GoToTimecode requires timeline_panel.focus_timecode_entry")
             timeline_panel.focus_timecode_entry()
+        elseif command_name == "EditHistory" then
+            local edit_history_window = require("ui.edit_history_window")
+            edit_history_window.show(command_manager, main_window)
         elseif command_name == "ShowRelinkDialog" then
             local database = require("core.database")
             local db = database and database.get_connection and database.get_connection()

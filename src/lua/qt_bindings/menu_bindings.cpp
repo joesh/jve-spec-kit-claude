@@ -136,3 +136,11 @@ int lua_set_action_checked(lua_State* L) {
     action->setChecked(checked);
     return 0;
 }
+
+int lua_set_action_text(lua_State* L) {
+    QAction* action = get_widget<QAction>(L, 1);
+    const char* text = luaL_checkstring(L, 2);
+    if (!action) return luaL_error(L, "SET_ACTION_TEXT: argument must be QAction");
+    action->setText(QString::fromUtf8(text));
+    return 0;
+}

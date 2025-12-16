@@ -699,6 +699,95 @@ function M.get_last_command(project_id)
     return M.get_command_at_sequence(history.get_current_sequence_number(), project_id)
 end
 
+function M.get_next_redo_command(project_id)
+    if not M.can_redo() then
+        return nil
+    end
+    local parent = history.get_current_sequence_number() or 0
+    local next_cmd_info = history.find_latest_child_command(parent)
+    if not next_cmd_info then
+        return nil
+    end
+    return M.get_command_at_sequence(next_cmd_info.sequence_number, project_id)
+end
+
+function M.get_current_sequence_number()
+    return history.get_current_sequence_number()
+end
+
+function M:list_history_entries()
+    if not db then
+        return {}
+    end
+
+    local query = db:prepare([[
+        SELECT sequence_number, command_type, timestamp, status, parent_sequence_number
+        FROM commands
+        WHERE command_type NOT LIKE 'Undo%'
+        ORDER BY sequence_number ASC
+    ]])
+
+    if not query then
+        return {}
+    end
+
+    local out = {}
+    if query:exec() then
+        while query:next() do
+            table.insert(out, {
+                sequence_number = query:value(0) or 0,
+                command_type = query:value(1) or "",
+                timestamp = query:value(2),
+                status = query:value(3) or "Executed",
+                parent_sequence_number = query:value(4),
+            })
+        end
+    end
+    query:finalize()
+    return out
+end
+
+function M:jump_to_sequence_number(target_sequence_number)
+    if type(target_sequence_number) ~= "number" or target_sequence_number < 0 then
+        return false
+    end
+
+    local current = history.get_current_sequence_number()
+    local current_number = current or 0
+    if target_sequence_number == current_number then
+        return true
+    end
+
+    if target_sequence_number < current_number then
+        while true do
+            local seq = history.get_current_sequence_number()
+            local seq_number = seq or 0
+            if seq == nil then
+                return (target_sequence_number == 0)
+            end
+            if seq_number <= target_sequence_number then
+                return true
+            end
+            local result = M.undo()
+            if not result or not result.success then
+                return false
+            end
+        end
+    end
+
+    while true do
+        local seq = history.get_current_sequence_number()
+        local seq_number = seq or 0
+        if seq_number >= target_sequence_number then
+            return (seq_number == target_sequence_number)
+        end
+        local result = M.redo()
+        if not result or not result.success then
+            return false
+        end
+    end
+end
+
 -- Helper to fetch specific command (restored from DB)
 function M.get_command_at_sequence(seq_num, project_id)
     if not db or not seq_num then return nil end

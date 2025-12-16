@@ -30,6 +30,7 @@
   <menu name="Edit">
     <item name="Undo" command="Undo" shortcut="Cmd+Z"/>
     <item name="Redo" command="Redo" shortcut="Cmd+Shift+Z"/>
+    <item name="Edit History..." command="EditHistory"/>
     <separator/>
     <item name="Cut" command="Cut" shortcut="Cmd+X"/>
     <item name="Copy" command="Copy" shortcut="Cmd+C"/>

@@ -4,6 +4,7 @@
 local uuid = require("uuid")
 local json = require("dkjson") -- Added
 local logger = require("core.logger")
+local command_labels = require("core.command_labels")
 
 local M = {}
 
@@ -388,6 +389,10 @@ function M:save(db)
     query:finalize()
 
     return true
+end
+
+function M:get_display_label()
+    return command_labels.label_for_command(self)
 end
 
 return M

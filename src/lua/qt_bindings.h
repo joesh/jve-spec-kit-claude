@@ -58,6 +58,7 @@ int lua_connect_menu_action(lua_State* L);
 int lua_add_menu_separator(lua_State* L);
 int lua_set_action_enabled(lua_State* L);
 int lua_set_action_checked(lua_State* L);
+int lua_set_action_text(lua_State* L);
 int lua_show_menu_popup(lua_State* L);
 
 // Property functions

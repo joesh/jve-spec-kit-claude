@@ -237,6 +237,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_add_menu_separator); lua_setfield(L, -2, "ADD_MENU_SEPARATOR");
     lua_pushcfunction(L, lua_set_action_enabled); lua_setfield(L, -2, "SET_ACTION_ENABLED");
     lua_pushcfunction(L, lua_set_action_checked); lua_setfield(L, -2, "SET_ACTION_CHECKED");
+    lua_pushcfunction(L, lua_set_action_text); lua_setfield(L, -2, "SET_ACTION_TEXT");
     lua_pushcfunction(L, lua_show_menu_popup); lua_setfield(L, -2, "SHOW_POPUP");
     lua_setfield(L, -2, "MENU");
 

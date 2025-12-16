@@ -184,7 +184,7 @@ local function apply_timeline_event(payload)
 
     if payload.type == "InsertClip" then
         local stmt = readmodel_db:prepare([[
-            INSERT INTO tl_clips(seq_id,clip_id,media_id,track,t_in,t_out,src_in,src_out,enable,attrs_json)
+            INSERT OR REPLACE INTO tl_clips(seq_id,clip_id,media_id,track,t_in,t_out,src_in,src_out,enable,attrs_json)
             VALUES(?,?,?,?,?,?,?,?,?,json('{}'))
         ]])
         if not stmt then
@@ -202,7 +202,7 @@ local function apply_timeline_event(payload)
         local ok = stmt:exec()
         stmt:finalize()
         if not ok then
-            return false, "event_log: failed to apply InsertClip payload"
+            return false, "event_log: failed to apply InsertClip payload: " .. (readmodel_db:last_error() or "unknown")
         end
         return true
     elseif payload.type == "AddMarker" then
