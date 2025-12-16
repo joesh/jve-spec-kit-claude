@@ -31,6 +31,13 @@ int lua_create_line_edit(lua_State* L) {
     return 1;
 }
 
+int lua_line_edit_select_all(lua_State* L) {
+    QLineEdit* le = get_widget<QLineEdit>(L, 1);
+    if (!le) return luaL_error(L, "qt_line_edit_select_all: QLineEdit required");
+    le->selectAll();
+    return 0;
+}
+
 // Generic Setters
 LUA_BIND_SETTER_STRING(lua_set_text, QLabel, setText) // Only works for QLabel... need to handle others manually or specialize
 LUA_BIND_SETTER_STRING(lua_set_placeholder_text, QLineEdit, setPlaceholderText)

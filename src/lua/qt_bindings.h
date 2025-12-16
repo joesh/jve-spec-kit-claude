@@ -122,14 +122,14 @@ int lua_set_tree_key_handler(lua_State* L);
 
 // Signal handling functions
 int lua_set_button_click_handler(lua_State* L);
-int lua_set_widget_click_handler(lua_State* L);
-int lua_set_tree_item_click_handler(lua_State* L);
-int lua_set_line_edit_text_changed_handler(lua_State* L);
-int lua_set_line_edit_editing_finished_handler(lua_State* L);
-int lua_set_global_key_handler(lua_State* L);
-int lua_set_focus_handler(lua_State* L);
-int lua_set_focus_policy(lua_State* L);
-int lua_set_focus(lua_State* L);
+	int lua_set_widget_click_handler(lua_State* L);
+	int lua_set_tree_item_click_handler(lua_State* L);
+	int lua_set_line_edit_text_changed_handler(lua_State* L);
+	int lua_set_line_edit_editing_finished_handler(lua_State* L);
+	int lua_set_global_key_handler(lua_State* L);
+	int lua_set_focus_handler(lua_State* L);
+	int lua_set_focus_policy(lua_State* L);
+	int lua_set_focus(lua_State* L);
 
 // Layout styling functions
 int lua_set_layout_spacing(lua_State* L);

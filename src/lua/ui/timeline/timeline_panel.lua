@@ -12,6 +12,8 @@ local command_manager = require("core.command_manager")
 local inspectable_factory = require("inspectable")
 local profile_scope = require("core.profile_scope")
 local logger = require("core.logger")
+local timecode = require("core.timecode")
+local timecode_input = require("core.timecode_input")
 
 local M = {}
 
@@ -46,6 +48,16 @@ local recycle_bin = qt_constants.WIDGET.CREATE()
 if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
     qt_constants.DISPLAY.SET_VISIBLE(recycle_bin, false)
 end
+
+local timecode_entry = {
+    widget = nil,
+    line_edit = nil,
+    has_focus = false,
+    last_text = nil,
+    focus_handler_name = nil,
+    editing_finished_handler_name = nil,
+    listener_token = nil,
+}
 
 local colors = ui_constants.COLORS or {}
 local selection_color = colors.SELECTION_BORDER_COLOR or "#e64b3d"
@@ -86,6 +98,185 @@ local open_tabs = {}
 local tab_handler_seq = 0
 local tab_command_listener = nil
 local ensure_tab_for_sequence
+
+local function register_global_handler(name, callback)
+    _G[name] = function(...)
+        return callback(...)
+    end
+    return name
+end
+
+local function clear_global_handler(name)
+    if name and _G[name] ~= nil then
+        _G[name] = nil
+    end
+end
+
+local function get_sequence_frame_rate_for_timecode()
+    local rate = state and state.get_sequence_frame_rate and state.get_sequence_frame_rate() or nil
+    assert(rate and rate.fps_numerator and rate.fps_denominator, "timeline_panel: missing sequence fps metadata")
+    return rate
+end
+
+local function get_formatted_playhead_timecode()
+    local rate = get_sequence_frame_rate_for_timecode()
+    local playhead = state.get_playhead_position()
+    return timecode.to_string(playhead, rate)
+end
+
+local function set_timecode_text_if_changed(text)
+    if not timecode_entry.line_edit then
+        return
+    end
+    if timecode_entry.last_text == text then
+        return
+    end
+    timecode_entry.last_text = text
+    qt_constants.PROPERTIES.SET_TEXT(timecode_entry.line_edit, text)
+end
+
+local function refresh_timecode_display()
+    if timecode_entry.has_focus then
+        return
+    end
+    set_timecode_text_if_changed(get_formatted_playhead_timecode())
+end
+
+local function build_timecode_field_stylesheet()
+    local field_bg = colors.FIELD_BACKGROUND_COLOR or "#2a2a2a"
+    local field_border = colors.FIELD_BORDER_COLOR or "#444444"
+    local field_text = colors.FIELD_TEXT_COLOR or "#cccccc"
+    local focus_bg = colors.FIELD_FOCUS_BACKGROUND_COLOR or field_bg
+    local focus_border = colors.FOCUS_BORDER_COLOR or selection_color
+    local font_size = (ui_constants.FONTS and ui_constants.FONTS.HEADER_FONT_SIZE) or "14px"
+    local selection_bg = selection_color
+    local selection_text = colors.WHITE_TEXT_COLOR or "#ffffff"
+
+    return string.format([[
+        QLineEdit {
+            background: %s;
+            color: %s;
+            border: 1px solid %s;
+            padding: 2px 6px;
+            font-size: %s;
+            qproperty-alignment: AlignCenter;
+            selection-background-color: %s;
+            selection-color: %s;
+        }
+        QLineEdit:focus {
+            background: %s;
+            border: 1px solid %s;
+        }
+    ]], field_bg, field_text, field_border, font_size, selection_bg, selection_text, focus_bg, focus_border)
+end
+
+local function focus_timecode_entry()
+    if not timecode_entry.line_edit then
+        return false
+    end
+    qt_set_focus(timecode_entry.line_edit)
+    assert(qt_line_edit_select_all, "Missing Qt binding: qt_line_edit_select_all")
+    qt_line_edit_select_all(timecode_entry.line_edit)
+    return true
+end
+
+local function focus_timeline_view()
+    if M.video_widget then
+        qt_set_focus(M.video_widget)
+        return true
+    end
+    if M.audio_widget then
+        qt_set_focus(M.audio_widget)
+        return true
+    end
+    return false
+end
+
+local function apply_timecode_entry_text()
+    if not timecode_entry.line_edit then
+        return false
+    end
+    local rate = get_sequence_frame_rate_for_timecode()
+    local current = state.get_playhead_position()
+    local raw = qt_constants.PROPERTIES.GET_TEXT(timecode_entry.line_edit)
+    local parsed, err = timecode_input.parse(raw, rate, {base_time = current})
+    if not parsed then
+        logger.warn("timeline_panel", string.format("Invalid timecode input: %s (%s)", tostring(raw), tostring(err)))
+        set_timecode_text_if_changed(get_formatted_playhead_timecode())
+        return false
+    end
+    state.set_playhead_position(parsed)
+    set_timecode_text_if_changed(get_formatted_playhead_timecode())
+    return true
+end
+
+local function install_timecode_entry_handlers()
+    if not timecode_entry.line_edit then
+        return
+    end
+
+    clear_global_handler(timecode_entry.focus_handler_name)
+    clear_global_handler(timecode_entry.editing_finished_handler_name)
+
+    timecode_entry.focus_handler_name = register_global_handler("__timeline_timecode_focus_handler", function(event)
+        local focus_in = event and event.focus_in
+        timecode_entry.has_focus = focus_in and true or false
+        if not focus_in then
+            refresh_timecode_display()
+        end
+    end)
+    qt_set_focus_handler(timecode_entry.line_edit, timecode_entry.focus_handler_name)
+
+    timecode_entry.editing_finished_handler_name = register_global_handler("__timeline_timecode_editing_finished", function()
+        local ok = apply_timecode_entry_text()
+        if ok then
+            focus_timeline_view()
+        else
+            focus_timecode_entry()
+        end
+    end)
+    qt_set_line_edit_editing_finished_handler(timecode_entry.line_edit, timecode_entry.editing_finished_handler_name)
+end
+
+local function create_timecode_header()
+    local wrapper = qt_constants.WIDGET.CREATE()
+    qt_constants.PROPERTIES.SET_MIN_HEIGHT(wrapper, timeline_ruler.RULER_HEIGHT)
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(wrapper, timeline_ruler.RULER_HEIGHT)
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(wrapper, timeline_state.dimensions.track_header_width)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(wrapper, timeline_state.dimensions.track_header_width)
+
+    local layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(layout, 0)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 6, 4, 6, 4)
+
+    local line_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
+    qt_set_focus_policy(line_edit, "StrongFocus")
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(line_edit, "Expanding", "Fixed")
+    qt_constants.PROPERTIES.SET_STYLE(line_edit, build_timecode_field_stylesheet())
+
+    qt_constants.LAYOUT.ADD_WIDGET(layout, line_edit)
+    qt_constants.LAYOUT.SET_ON_WIDGET(wrapper, layout)
+
+    timecode_entry.widget = wrapper
+    timecode_entry.line_edit = line_edit
+    timecode_entry.last_text = nil
+    timecode_entry.has_focus = false
+
+    install_timecode_entry_handlers()
+    refresh_timecode_display()
+
+    if timecode_entry.listener_token and state and state.remove_listener then
+        state.remove_listener(timecode_entry.listener_token)
+        timecode_entry.listener_token = nil
+    end
+    if state and state.add_listener then
+        timecode_entry.listener_token = state.add_listener(function()
+            refresh_timecode_display()
+        end)
+    end
+
+    return wrapper
+end
 
 local function normalize_timeline_selection(clips)
     local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
@@ -152,6 +343,14 @@ end
 
 function M.get_state()
     return timeline_state  -- Return the module, not the local state variable
+end
+
+function M.focus_timecode_entry()
+    return focus_timecode_entry()
+end
+
+function M.focus_timeline_view()
+    return focus_timeline_view()
 end
 
 local function get_sequence_display_name(sequence_id)
@@ -643,11 +842,8 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(headers_wrapper_layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(headers_wrapper_layout, 0, 0, 0, 0)
 
-    -- Add 32px spacer at top to match ruler height on timeline side
-    local ruler_spacer = qt_constants.WIDGET.CREATE()
-    qt_constants.PROPERTIES.SET_MIN_HEIGHT(ruler_spacer, timeline_ruler.RULER_HEIGHT)
-    qt_constants.PROPERTIES.SET_MAX_HEIGHT(ruler_spacer, timeline_ruler.RULER_HEIGHT)
-    qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, ruler_spacer)
+    -- Top left header area aligned with the ruler; contains the timecode entry field.
+    qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, create_timecode_header())
 
     -- Main vertical splitter between video and audio header sections
     local headers_main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")

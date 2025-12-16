@@ -52,6 +52,7 @@ local KEY = {
     F12 = 16777275,  -- 0x0100003B
     Return = 16777220,
     Enter = 16777221,
+    Tab = 16777217,
 }
 
 -- Qt modifier constants (from Qt::KeyboardModifier enum)
@@ -536,6 +537,17 @@ function keyboard_shortcuts.handle_key(event)
     local panel_active_timeline = panel_is_active("timeline", focused_panel)
     local panel_active_browser = panel_is_active("project_browser", focused_panel)
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
+
+    if key == KEY.Tab and panel_active_timeline and not modifier_meta and not modifier_alt then
+        if timeline_panel and timeline_panel.focus_timecode_entry and timeline_panel.focus_timeline_view then
+            if focus_is_text_input then
+                timeline_panel.focus_timeline_view()
+            else
+                timeline_panel.focus_timecode_entry()
+            end
+            return true
+        end
+    end
 
     if focus_is_text_input and not modifier_meta then
         return false

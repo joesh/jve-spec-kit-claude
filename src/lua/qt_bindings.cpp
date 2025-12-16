@@ -178,6 +178,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_context_menu_handler); lua_setglobal(L, "qt_set_context_menu_handler");
     lua_pushcfunction(L, lua_set_line_edit_text_changed_handler); lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
     lua_pushcfunction(L, lua_set_line_edit_editing_finished_handler); lua_setglobal(L, "qt_set_line_edit_editing_finished_handler");
+    lua_pushcfunction(L, lua_line_edit_select_all); lua_setglobal(L, "qt_line_edit_select_all");
     lua_pushcfunction(L, lua_set_tree_selection_changed_handler); lua_setglobal(L, "qt_set_tree_selection_handler");
     lua_pushcfunction(L, lua_set_tree_selection_mode); lua_setglobal(L, "qt_set_tree_selection_mode");
     lua_pushcfunction(L, lua_set_tree_drag_drop_mode); lua_setglobal(L, "qt_set_tree_drag_drop_mode");

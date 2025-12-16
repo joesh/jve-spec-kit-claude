@@ -375,17 +375,9 @@ local function create_action_callback(command_name, params)
                 logger.error("menu", "Quit shutdown failed: " .. tostring(err))
             end
             os.exit(0)
-	        elseif command_name == "GoToTimecode" then
-	            assert(qt_constants.DIALOG and qt_constants.DIALOG.SHOW_CONFIRM, "GoToTimecode requires qt_constants.DIALOG.SHOW_CONFIRM")
-	            qt_constants.DIALOG.SHOW_CONFIRM({
-	                parent = main_window,
-	                title = "Go to Timecode",
-	                message = "Go to Timecode will move into the timeline header timecode field.",
-	                confirm_text = "OK",
-	                cancel_text = "Cancel",
-	                icon = "information",
-	                default_button = "confirm"
-	            })
+        elseif command_name == "GoToTimecode" then
+            assert(timeline_panel and timeline_panel.focus_timecode_entry, "GoToTimecode requires timeline_panel.focus_timecode_entry")
+            timeline_panel.focus_timecode_entry()
         elseif command_name == "ShowRelinkDialog" then
             local database = require("core.database")
             local db = database and database.get_connection and database.get_connection()
