@@ -6,6 +6,7 @@ local command_labels = require("core.command_labels")
 
 local window_state = {
     window = nil,
+    content = nil,
     tree = nil,
     item_ids_by_sequence = {},
     entry_by_item_id = {},
@@ -15,10 +16,11 @@ local window_state = {
 }
 
 local function create_window()
-    local window = qt_constants.WIDGET.CREATE()
+    local window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
     qt_constants.PROPERTIES.SET_TITLE(window, "Edit History")
     qt_constants.PROPERTIES.SET_SIZE(window, 520, 640)
 
+    local content = qt_constants.WIDGET.CREATE()
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(layout, 6)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 10, 10, 10, 10)
@@ -32,9 +34,10 @@ local function create_window()
     qt_constants.CONTROL.SET_TREE_EXPANDS_ON_DOUBLE_CLICK(tree, false)
 
     qt_constants.LAYOUT.ADD_WIDGET(layout, tree)
-    qt_constants.LAYOUT.SET_ON_WIDGET(window, layout)
+    qt_constants.LAYOUT.SET_ON_WIDGET(content, layout)
+    qt_constants.LAYOUT.SET_CENTRAL_WIDGET(window, content)
 
-    return window, tree
+    return window, content, tree
 end
 
 local function clear_tree()
@@ -149,18 +152,16 @@ local function install_handlers()
     qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER(window_state.tree, selection)
 
     if qt_constants.CONTROL.SET_TREE_KEY_HANDLER then
-        local key = register_global_handler("__edit_history_key", function(evt)
-            if not evt then
+        local qt_key_escape = 0x01000000
+        local key = register_global_handler("__edit_history_key", function(key_code, _text)
+            if key_code ~= qt_key_escape then
                 return false
             end
-            local key_name = evt.key or evt.key_name or evt.keyName or evt.text
-            if key_name == "Escape" or key_name == "Esc" then
-                if window_state.window and qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
-                    qt_constants.DISPLAY.SET_VISIBLE(window_state.window, false)
-                    return true
-                end
+            if window_state.window and qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+                qt_constants.DISPLAY.SET_VISIBLE(window_state.window, false)
+                return true
             end
-            return false
+            return true
         end)
         qt_constants.CONTROL.SET_TREE_KEY_HANDLER(window_state.tree, key)
     end
@@ -170,8 +171,9 @@ function M.show(command_manager, parent_window)
     assert(command_manager, "EditHistory requires a command manager")
 
     if not window_state.window then
-        local window, tree = create_window()
+        local window, content, tree = create_window()
         window_state.window = window
+        window_state.content = content
         window_state.tree = tree
         install_handlers()
     end
@@ -179,7 +181,7 @@ function M.show(command_manager, parent_window)
     window_state.command_manager = command_manager
 
     if qt_constants.WIDGET and qt_constants.WIDGET.SET_PARENT then
-        pcall(qt_constants.WIDGET.SET_PARENT, window_state.window, nil)
+        qt_constants.WIDGET.SET_PARENT(window_state.window, nil)
     end
 
     if window_state.listener_token and command_manager.remove_listener then

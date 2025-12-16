@@ -599,7 +599,10 @@ int qt_set_layout_alignment(lua_State* L) {
 
 int lua_set_parent(lua_State* L) {
     QWidget* child = static_cast<QWidget*>(lua_to_widget(L, 1));
-    QWidget* parent = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* parent = nullptr;
+    if (!lua_isnil(L, 2)) {
+        parent = static_cast<QWidget*>(lua_to_widget(L, 2));
+    }
 
     if (child) {
         child->setParent(parent);

@@ -73,6 +73,39 @@ private slots:
         delete label;
         lua_close(L);
     }
+
+    void test_set_parent_accepts_nil()
+    {
+        lua_State* L = luaL_newstate();
+        luaL_openlibs(L);
+        registerQtBindings(L);
+
+        QWidget* parent = new QWidget();
+        QWidget* child = new QWidget();
+
+        lua_getglobal(L, "qt_set_parent");
+        QVERIFY(lua_isfunction(L, -1));
+        lua_push_widget(L, child);
+        lua_push_widget(L, parent);
+        int rc = lua_pcall(L, 2, 1, 0);
+        QVERIFY2(rc == LUA_OK, lua_tostring(L, -1));
+        QVERIFY(lua_toboolean(L, -1));
+        QCOMPARE(child->parentWidget(), parent);
+        lua_pop(L, 1);
+
+        lua_getglobal(L, "qt_set_parent");
+        QVERIFY(lua_isfunction(L, -1));
+        lua_push_widget(L, child);
+        lua_pushnil(L);
+        rc = lua_pcall(L, 2, 1, 0);
+        QVERIFY2(rc == LUA_OK, lua_tostring(L, -1));
+        QVERIFY(lua_toboolean(L, -1));
+        QCOMPARE(child->parentWidget(), nullptr);
+
+        delete child;
+        delete parent;
+        lua_close(L);
+    }
 };
 
 QTEST_MAIN(TestQtBindings)

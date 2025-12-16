@@ -181,6 +181,31 @@ set_target_properties(test_timeline_renderer_widget PROPERTIES
 )
 add_test(NAME test_timeline_renderer_widget COMMAND test_timeline_renderer_widget)
 
+# Standalone Qt bindings test (no test_base dependency)
+add_executable(test_qt_bindings
+    tests/unit/test_qt_bindings.cpp
+)
+target_link_libraries(test_qt_bindings
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_qt_bindings PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_qt_bindings PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_qt_bindings PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_qt_bindings COMMAND test_qt_bindings)
+
 add_custom_target(lua_tests ALL
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
