@@ -295,3 +295,15 @@
 - Closed gaps on multiple tracks now resolve occlusions so ripple drags cannot leave overlapped media hidden under neighbouring clips (`BatchRippleEdit` + `RippleEdit` save paths call `clip:save` with batch `pending_clips`).
 - Downstream shift clamps ensure we never rewind clips past t=0 during replay.
 - Regression: `tests/test_clip_occlusion.lua` adds “Batch ripple closes gaps without leaving overlaps” ensuring both clips butt cleanly after a multi-track drag and replay maintains a valid state.
+
+---
+
+# Session State - 2025-12-15 Edit History + Bulk Shift Replay
+
+## Key Fixes
+- **SQLite reset semantics**: `src/lua/core/sqlite3.lua` no longer treats `sqlite3_reset()` return codes (which reflect the prior `sqlite3_step()` result) as “reset failures”, preventing misleading stack traces on constraint errors.
+- **bulk_shift replay correctness**: `src/lua/core/command_helper.lua` bulk-shift execution now replaces `mut.clip_ids` from the SELECT (instead of appending), preventing double-application on redo/replay; regression: `tests/test_command_helper_bulk_shift_does_not_double_apply.lua`.
+- **Edit history window usability**: `src/lua/ui/edit_history_window.lua` uses a top-level window (title bar/movable) and matches the Qt tree key handler signature; C++ binding `qt_set_parent` accepts `nil` to unparent (`src/lua/qt_bindings/misc_bindings.cpp`) with C++ test coverage (`tests/unit/test_qt_bindings.cpp` + `CMakeLists.txt`).
+
+## Current Status
+- `make -j4 test` passes after the above changes.

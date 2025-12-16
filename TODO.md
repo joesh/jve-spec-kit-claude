@@ -48,9 +48,12 @@
 
 ## TimelineActiveRegion (Perf)
 - [ ] (in_progress) Reduce edge-release latency on large timelines by ensuring `TimelineActiveRegion`/preloaded snapshots are execution-only (not persisted or event-logged); awaiting in-app confirmation with `JVE_DEBUG_COMMAND_PERF=1`.
+- [x] Fix bulk-shift redo correctness: `command_helper.apply_mutations` no longer double-applies when `clip_ids` is pre-populated; added regression `tests/test_command_helper_bulk_shift_does_not_double_apply.lua`.
+- [x] Fix misleading SQLite errors: `sqlite3.Statement:reset()` no longer treats prior `sqlite3_step` constraint codes as reset failures (unblocks actionable VIDEO_OVERLAP diagnostics).
 
 ## Session Tasks (2025-???)
 - [x] (done) Fix BatchRipple gap lead clamp/negation bugs and extend regression tests.
+- [ ] Edit history UI: verify entries render + jumping works on real app data; ensure Undo/Redo labels match the menu text and stay in sync with branching history.
 - [x] (done) Timeline gap edge selections should render handles just like clip edges; regression surfaced while restoring ripple handle semantics.
 - [x] (done) Re-align per-track ripple shift signs so opposing bracket clip selections move in the correct directions while gap edges retain their bracket mapping (multi-track regression restored).
 - [x] (done) Update timeline edit-zone cursors so the three zones show ], ]|[, and [ glyphs instead of generic trim arrows (custom cursors in `src/lua/qt_bindings/misc_bindings.cpp`).
