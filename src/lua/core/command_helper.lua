@@ -920,7 +920,7 @@ function M.apply_mutations(db, mutations)
 	                return false, "bulk_shift: failed to enumerate clips for track " .. tostring(mut.track_id) .. ": " .. tostring(select_db_err or "unknown")
 	            end
 
-                mut.clip_ids = mut.clip_ids or {}
+                mut.clip_ids = {}
                 while select_stmt:next() do
                     local clip_id = select_stmt:value(0)
                     if clip_id then
