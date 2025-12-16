@@ -489,12 +489,63 @@ ensure_tab_for_sequence = function(sequence_id)
 end
 
 local function handle_tab_command_event(event)
-    if not event or event.event ~= "execute" then
+    if not event or not event.event then
         return
     end
 
     local command = event.command
-    if not command or command.type ~= "RenameItem" then
+    if not command or not command.type then
+        return
+    end
+
+    if command.type == "ImportFCP7XML" then
+        local created_sequence_ids = nil
+        if command.get_parameter then
+            created_sequence_ids = command:get_parameter("created_sequence_ids")
+        elseif command.parameters then
+            created_sequence_ids = command.parameters.created_sequence_ids
+        end
+
+        if type(created_sequence_ids) ~= "table" then
+            return
+        end
+
+        if event.event == "undo" then
+            local active = state.get_sequence_id and state.get_sequence_id() or nil
+            local active_deleted = false
+            for _, sequence_id in ipairs(created_sequence_ids) do
+                if open_tabs[sequence_id] then
+                    close_tab(sequence_id)
+                end
+                if active and active == sequence_id then
+                    active_deleted = true
+                end
+            end
+
+            if active_deleted then
+                local fallback = nil
+                if #tab_order > 0 then
+                    fallback = tab_order[#tab_order]
+                end
+                if fallback then
+                    M.load_sequence(fallback)
+                end
+            end
+        elseif event.event == "execute" or event.event == "redo" then
+            local seq_id = created_sequence_ids[1]
+            if seq_id then
+                M.load_sequence(seq_id)
+            end
+        end
+
+        return
+    end
+
+    if event.event ~= "execute" then
+        return
+    end
+
+    if command.type ~= "RenameItem" then
         return
     end
 

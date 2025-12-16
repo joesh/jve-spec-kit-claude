@@ -5,55 +5,13 @@ local function split_camel_case(text)
         return ""
     end
 
-    local result = {}
-    local token = ""
-    local last_class = nil
-
-    local function class_of(ch)
-        if ch:match("%d") then
-            return "digit"
-        end
-        if ch:match("%u") then
-            return "upper"
-        end
-        if ch:match("%l") then
-            return "lower"
-        end
-        return "other"
-    end
-
-    for i = 1, #text do
-        local ch = text:sub(i, i)
-        local cls = class_of(ch)
-        local next_ch = (i < #text) and text:sub(i + 1, i + 1) or ""
-        local next_cls = next_ch ~= "" and class_of(next_ch) or nil
-
-        if token == "" then
-            token = ch
-            last_class = cls
-        else
-            local boundary = false
-            if (last_class ~= cls) then
-                boundary = true
-            end
-            if last_class == "upper" and cls == "upper" and next_cls == "lower" then
-                boundary = true
-            end
-            if boundary then
-                table.insert(result, token)
-                token = ch
-            else
-                token = token .. ch
-            end
-            last_class = cls
-        end
-    end
-
-    if token ~= "" then
-        table.insert(result, token)
-    end
-
-    return table.concat(result, " ")
+    local spaced = text
+    spaced = spaced:gsub("(%l)(%u)", "%1 %2")        -- "fooBar" -> "foo Bar"
+    spaced = spaced:gsub("(%u)(%u%l)", "%1 %2")      -- "FCP7XML" -> "FCP7 XML"
+    spaced = spaced:gsub("(%d)(%a)", "%1 %2")        -- "7XML" -> "7 XML"
+    spaced = spaced:gsub("(%a)(%d)", "%1 %2")        -- "XML7" -> "XML 7"
+    spaced = spaced:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    return spaced
 end
 
 local overrides = {
@@ -78,4 +36,3 @@ function M.label_for_command(command)
 end
 
 return M
-

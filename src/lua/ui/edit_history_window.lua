@@ -8,6 +8,7 @@ local window_state = {
     window = nil,
     tree = nil,
     item_ids_by_sequence = {},
+    entry_by_item_id = {},
     listener_token = nil,
     updating_selection = false,
     command_manager = nil,
@@ -42,6 +43,7 @@ local function clear_tree()
     end
     qt_constants.CONTROL.CLEAR_TREE(window_state.tree)
     window_state.item_ids_by_sequence = {}
+    window_state.entry_by_item_id = {}
 end
 
 local function format_seq(value)
@@ -77,6 +79,7 @@ local function refresh_tree()
         if item_id and item_id ~= -1 then
             qt_constants.CONTROL.SET_TREE_ITEM_DATA(window_state.tree, item_id, "sequence_number", tostring(seq))
             window_state.item_ids_by_sequence[seq] = item_id
+            window_state.entry_by_item_id[item_id] = entry
         end
     end
 
@@ -96,8 +99,8 @@ local function jump_to_item(item_id)
         return
     end
 
-    local seq_str = qt_constants.CONTROL.GET_TREE_ITEM_DATA(window_state.tree, item_id, "sequence_number")
-    local seq = tonumber(seq_str)
+    local entry = window_state.entry_by_item_id[item_id]
+    local seq = entry and entry.sequence_number or nil
     if not seq then
         return
     end
@@ -144,6 +147,23 @@ local function install_handlers()
         end
     end)
     qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER(window_state.tree, selection)
+
+    if qt_constants.CONTROL.SET_TREE_KEY_HANDLER then
+        local key = register_global_handler("__edit_history_key", function(evt)
+            if not evt then
+                return false
+            end
+            local key_name = evt.key or evt.key_name or evt.keyName or evt.text
+            if key_name == "Escape" or key_name == "Esc" then
+                if window_state.window and qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+                    qt_constants.DISPLAY.SET_VISIBLE(window_state.window, false)
+                    return true
+                end
+            end
+            return false
+        end)
+        qt_constants.CONTROL.SET_TREE_KEY_HANDLER(window_state.tree, key)
+    end
 end
 
 function M.show(command_manager, parent_window)
@@ -157,10 +177,6 @@ function M.show(command_manager, parent_window)
     end
 
     window_state.command_manager = command_manager
-
-    if parent_window and qt_constants.WIDGET.SET_PARENT then
-        pcall(qt_constants.WIDGET.SET_PARENT, window_state.window, parent_window)
-    end
 
     if window_state.listener_token and command_manager.remove_listener then
         command_manager.remove_listener(window_state.listener_token)

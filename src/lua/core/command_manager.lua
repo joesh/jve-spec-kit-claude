@@ -731,18 +731,93 @@ function M:list_history_entries()
         return {}
     end
 
-    local out = {}
+    local current_seq = history.get_current_sequence_number() or 0
+
+    local nodes = {}
+    local parent_of = {}
+    local children = {}
+
+    local function add_child(parent, child_seq)
+        local list = children[parent]
+        if not list then
+            list = {}
+            children[parent] = list
+        end
+        table.insert(list, child_seq)
+    end
+
     if query:exec() then
         while query:next() do
-            table.insert(out, {
-                sequence_number = query:value(0) or 0,
-                command_type = query:value(1) or "",
-                timestamp = query:value(2),
-                parent_sequence_number = query:value(3),
-            })
+            local seq = query:value(0) or 0
+            local command_type = query:value(1) or ""
+            local timestamp = query:value(2)
+            local parent = query:value(3)
+            local parent_seq = parent or 0
+
+            nodes[seq] = {
+                sequence_number = seq,
+                command_type = command_type,
+                timestamp = timestamp,
+                parent_sequence_number = parent,
+            }
+            parent_of[seq] = parent_seq
+            add_child(parent_seq, seq)
         end
     end
     query:finalize()
+
+    if current_seq == 0 then
+        return {}
+    end
+    if not nodes[current_seq] then
+        return {}
+    end
+
+    local path_rev = {}
+    local cursor = current_seq
+    while cursor and cursor ~= 0 do
+        table.insert(path_rev, cursor)
+        cursor = parent_of[cursor] or 0
+    end
+
+    local path = {}
+    for i = #path_rev, 1, -1 do
+        table.insert(path, path_rev[i])
+    end
+
+    local function latest_child_of(seq)
+        local list = children[seq]
+        if not list or #list == 0 then
+            return nil
+        end
+        local best = nil
+        for _, child_seq in ipairs(list) do
+            if not best or child_seq > best then
+                best = child_seq
+            end
+        end
+        return best
+    end
+
+    local redo_chain = {}
+    cursor = current_seq
+    while true do
+        local child = latest_child_of(cursor)
+        if not child then
+            break
+        end
+        table.insert(redo_chain, child)
+        cursor = child
+    end
+
+    local out = {}
+    for _, seq in ipairs(path) do
+        table.insert(out, nodes[seq])
+    end
+    for _, seq in ipairs(redo_chain) do
+        table.insert(out, nodes[seq])
+    end
+
     return out
 end
 
