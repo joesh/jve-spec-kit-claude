@@ -204,9 +204,9 @@ function Statement:reset()
     local rc = sqlite3_lib.sqlite3_reset(self._stmt)
     self._current_row = 0
     self._has_row = false
-    if rc ~= SQLITE_OK then
-        error("sqlite3_reset failed: " .. self:last_error())
-    end
+    -- sqlite3_reset returns the result code from the most recent sqlite3_step call.
+    -- That code may legitimately be a constraint error (e.g. VIDEO_OVERLAP) when the
+    -- caller is about to handle a failed exec; it is not a "reset failed" signal.
     return true
 end
 
