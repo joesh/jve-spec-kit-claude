@@ -767,7 +767,17 @@ function M:list_history_entries()
     query:finalize()
 
     if current_seq == 0 then
-        return {}
+        local out = {{sequence_number = 0, command_type = "Start", timestamp = nil, parent_sequence_number = nil}}
+        local cursor = 0
+        while true do
+            local child = latest_child_of(cursor)
+            if not child then
+                break
+            end
+            table.insert(out, nodes[child])
+            cursor = child
+        end
+        return out
     end
     if not nodes[current_seq] then
         return {}
@@ -811,6 +821,7 @@ function M:list_history_entries()
     end
 
     local out = {}
+    table.insert(out, {sequence_number = 0, command_type = "Start", timestamp = nil, parent_sequence_number = nil})
     for _, seq in ipairs(path) do
         table.insert(out, nodes[seq])
     end

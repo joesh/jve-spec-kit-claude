@@ -178,6 +178,10 @@ function M.show(command_manager, parent_window)
 
     window_state.command_manager = command_manager
 
+    if qt_constants.WIDGET and qt_constants.WIDGET.SET_PARENT then
+        pcall(qt_constants.WIDGET.SET_PARENT, window_state.window, nil)
+    end
+
     if window_state.listener_token and command_manager.remove_listener then
         command_manager.remove_listener(window_state.listener_token)
         window_state.listener_token = nil

@@ -527,9 +527,7 @@ local function handle_tab_command_event(event)
                 if #tab_order > 0 then
                     fallback = tab_order[#tab_order]
                 end
-                if fallback then
-                    M.load_sequence(fallback)
-                end
+                M.load_sequence(fallback or "default_sequence")
             end
         elseif event.event == "execute" or event.event == "redo" then
             local seq_id = created_sequence_ids[1]
