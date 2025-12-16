@@ -748,43 +748,95 @@ end
 
 function M:jump_to_sequence_number(target_sequence_number)
     if type(target_sequence_number) ~= "number" or target_sequence_number < 0 then
-        return false
+        return false, "Invalid target sequence number"
     end
 
-    local current = history.get_current_sequence_number()
-    local current_number = current or 0
-    if target_sequence_number == current_number then
+    local current = history.get_current_sequence_number() or 0
+    if target_sequence_number == current then
         return true
     end
 
-    if target_sequence_number < current_number then
+    if not db then
+        return false, "No database connection"
+    end
+
+    local parent_of = {}
+    local exists = {}
+    local query = db:prepare([[
+        SELECT sequence_number, parent_sequence_number
+        FROM commands
+        WHERE command_type NOT LIKE 'Undo%'
+    ]])
+    if not query then
+        return false, "Failed to prepare command parent query"
+    end
+    if query:exec() then
+        while query:next() do
+            local seq = query:value(0) or 0
+            local parent = query:value(1)
+            exists[seq] = true
+            parent_of[seq] = parent or 0
+        end
+    end
+    query:finalize()
+
+    if target_sequence_number ~= 0 and not exists[target_sequence_number] then
+        return false, "Unknown sequence number: " .. tostring(target_sequence_number)
+    end
+
+    local ancestor_set = {}
+    do
+        local seq = current
         while true do
-            local seq = history.get_current_sequence_number()
-            local seq_number = seq or 0
-            if seq == nil then
-                return (target_sequence_number == 0)
+            ancestor_set[seq] = true
+            if seq == 0 then
+                break
             end
-            if seq_number <= target_sequence_number then
-                return true
-            end
-            local result = M.undo()
-            if not result or not result.success then
-                return false
-            end
+            seq = parent_of[seq] or 0
         end
     end
 
-    while true do
-        local seq = history.get_current_sequence_number()
-        local seq_number = seq or 0
-        if seq_number >= target_sequence_number then
-            return (seq_number == target_sequence_number)
-        end
-        local result = M.redo()
-        if not result or not result.success then
-            return false
+    local target_chain = {}
+    do
+        local seq = target_sequence_number
+        while true do
+            table.insert(target_chain, seq)
+            if seq == 0 then
+                break
+            end
+            seq = parent_of[seq] or 0
         end
     end
+
+    local lca = nil
+    local lca_index = nil
+    for i, seq in ipairs(target_chain) do
+        if ancestor_set[seq] then
+            lca = seq
+            lca_index = i
+            break
+        end
+    end
+    if not lca_index then
+        return false, "Failed to compute history join point"
+    end
+
+    while (history.get_current_sequence_number() or 0) ~= lca do
+        local result = M.undo()
+        if not result or not result.success then
+            return false, "Undo failed: " .. tostring((result and result.error_message) or "unknown")
+        end
+    end
+
+    for i = lca_index - 1, 1, -1 do
+        local seq = target_chain[i]
+        local result = M.redo_to_sequence_number(seq)
+        if not result or not result.success then
+            return false, "Redo failed: " .. tostring((result and result.error_message) or "unknown")
+        end
+    end
+
+    return true
 end
 
 -- Helper to fetch specific command (restored from DB)
@@ -861,62 +913,96 @@ function M.undo()
     return { success = false, error_message = "Nothing to undo" }
 end
 
+local function execute_redo_command(cmd)
+    assert(cmd, "execute_redo_command requires cmd")
+
+    local executor = registry.get_executor(cmd.type)
+    if not executor then
+        return { success = false, error_message = "No executor for redo command: " .. tostring(cmd.type) }
+    end
+
+    local ok, exec_result = pcall(executor, cmd)
+    if not ok then
+        last_error_message = tostring(exec_result)
+        return { success = false, error_message = last_error_message }
+    end
+
+    local success, err_msg = normalize_executor_result(exec_result)
+    if not success then
+        last_error_message = err_msg or "Redo executor returned false"
+        return { success = false, error_message = last_error_message }
+    end
+
+    history.set_current_sequence_number(cmd.sequence_number)
+    history.save_undo_position()
+    state_mgr.restore_selection_from_serialized(cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
+
+    -- Re-apply timeline mutations if present (mirror undo behaviour)
+    local timeline_state = require('ui.timeline.timeline_state')
+    local reload_sequence_id = extract_sequence_id(cmd)
+    local mutations = cmd:get_parameter("__timeline_mutations")
+    local applied_mutations = false
+
+    if mutations and timeline_state.apply_mutations then
+        if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+            applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
+        else
+            for _, bucket in pairs(mutations) do
+                if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
+                    applied_mutations = true
+                end
+            end
+        end
+    end
+
+    if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
+        timeline_state.reload_clips(reload_sequence_id)
+    end
+
+    notify_command_event({
+        event = "redo",
+        command = cmd,
+        project_id = cmd.project_id,
+        sequence_number = cmd.sequence_number
+    })
+
+    return { success = true }
+end
+
+function M.redo_to_sequence_number(target_sequence_number)
+    if type(target_sequence_number) ~= "number" or target_sequence_number <= 0 then
+        return { success = false, error_message = "Invalid redo target sequence number" }
+    end
+
+    local cmd = M.get_command_at_sequence(target_sequence_number, active_project_id)
+    if not cmd then
+        return { success = false, error_message = "Redo target not found: " .. tostring(target_sequence_number) }
+    end
+
+    local expected_parent = history.get_current_sequence_number() or 0
+    local actual_parent = cmd.parent_sequence_number or 0
+    if expected_parent ~= actual_parent then
+        return {
+            success = false,
+            error_message = string.format(
+                "Redo target is not a child of current position (target=%s parent=%s current=%s)",
+                tostring(target_sequence_number),
+                tostring(actual_parent),
+                tostring(expected_parent)
+            )
+        }
+    end
+
+    return execute_redo_command(cmd)
+end
+
 function M.redo()
     -- Wrapper for UI calls
     if M.can_redo() then
         local parent = history.get_current_sequence_number() or 0
         local next_cmd_info = history.find_latest_child_command(parent)
         if next_cmd_info then
-             -- Load full command to execute
-             local cmd = M.get_command_at_sequence(next_cmd_info.sequence_number, active_project_id)
-             if cmd then
-                 local executor = registry.get_executor(cmd.type)
-                 if executor then
-                     local ok, exec_result = pcall(executor, cmd)
-                     if ok then
-                         local success, err_msg = normalize_executor_result(exec_result)
-                         if success then
-                             history.set_current_sequence_number(cmd.sequence_number)
-                             history.save_undo_position()
-                             state_mgr.restore_selection_from_serialized(cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
-                             
-                             -- Re-apply timeline mutations if present (mirror undo behaviour)
-                             local timeline_state = require('ui.timeline.timeline_state')
-                             local reload_sequence_id = extract_sequence_id(cmd)
-                             local mutations = cmd:get_parameter("__timeline_mutations")
-                             local applied_mutations = false
-
-                             if mutations and timeline_state.apply_mutations then
-                                 if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
-                                     applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
-                                 else
-                                     for _, bucket in pairs(mutations) do
-                                         if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
-                                             applied_mutations = true
-                                         end
-                                     end
-                                 end
-                             end
-
-                             if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-                                 timeline_state.reload_clips(reload_sequence_id)
-                             end
-                             
-                             notify_command_event({
-                                event = "redo",
-                                command = cmd,
-                                project_id = cmd.project_id,
-                                sequence_number = cmd.sequence_number
-                            })
-                            return { success = true }
-                         else
-                            last_error_message = err_msg or "Redo executor returned false"
-                         end
-                     else
-                        last_error_message = tostring(exec_result)
-                     end
-                 end
-             end
+            return M.redo_to_sequence_number(next_cmd_info.sequence_number)
         end
     end
     return { success = false, error_message = "Nothing to redo" }

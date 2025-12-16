@@ -102,14 +102,14 @@ local function jump_to_item(item_id)
         return
     end
 
-    local ok, result_or_err = pcall(window_state.command_manager.jump_to_sequence_number, window_state.command_manager, seq)
+    local ok, success, err = pcall(window_state.command_manager.jump_to_sequence_number, window_state.command_manager, seq)
     if not ok then
-        logger.error("edit_history", "Jump failed: " .. tostring(result_or_err))
+        logger.error("edit_history", "Jump failed: " .. tostring(success))
         refresh_tree()
         return
     end
-    if result_or_err ~= true then
-        logger.error("edit_history", "Jump failed: " .. tostring(result_or_err))
+    if not success then
+        logger.error("edit_history", "Jump failed: " .. tostring(err or "unknown"))
     end
     refresh_tree()
 end

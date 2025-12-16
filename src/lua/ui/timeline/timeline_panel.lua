@@ -15,6 +15,8 @@ local logger = require("core.logger")
 local timecode = require("core.timecode")
 local timecode_input = require("core.timecode_input")
 
+-- luacheck: globals qt_line_edit_select_all
+
 local M = {}
 
 -- Constants

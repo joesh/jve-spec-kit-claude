@@ -1143,15 +1143,21 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                             table.insert(entries, {id = clip_id, start_frame = start_frame})
                         end
                     end
-                    select_stmt:finalize()
+	                    select_stmt:finalize()
 
-                    local order_desc = delta_frames > 0
-                    table.sort(entries, function(a, b)
-                        if a.start_frame == b.start_frame then
-                            return order_desc and (a.id > b.id) or (a.id < b.id)
-                        end
-                        return order_desc and (a.start_frame > b.start_frame) or (a.start_frame < b.start_frame)
-                    end)
+	                    local order_desc = delta_frames > 0
+	                    table.sort(entries, function(a, b)
+	                        if a.start_frame == b.start_frame then
+	                            if order_desc then
+	                                return a.id > b.id
+	                            end
+	                            return a.id < b.id
+	                        end
+	                        if order_desc then
+	                            return a.start_frame > b.start_frame
+	                        end
+	                        return a.start_frame < b.start_frame
+	                    end)
 
                     local stmt = db:prepare("UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
                     if not stmt then return false, "bulk_shift undo: failed to prepare clip update: " .. tostring(db:last_error()) end

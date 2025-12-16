@@ -80,6 +80,14 @@ function logger.init(user_config)
             end
         end
     end
+
+    local env_level = os.getenv("JVE_LOG_LEVEL")
+    if env_level and env_level ~= "" then
+        local ok = logger.setLevel(env_level)
+        if not ok then
+            error("Invalid JVE_LOG_LEVEL: " .. tostring(env_level))
+        end
+    end
     
     -- Auto-enable file output with default name if not specified
     if config.output_destinations.file and not config.log_file_path then
