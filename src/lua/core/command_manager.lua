@@ -721,7 +721,7 @@ function M:list_history_entries()
     end
 
     local query = db:prepare([[
-        SELECT sequence_number, command_type, timestamp, status, parent_sequence_number
+        SELECT sequence_number, command_type, timestamp, parent_sequence_number
         FROM commands
         WHERE command_type NOT LIKE 'Undo%'
         ORDER BY sequence_number ASC
@@ -738,8 +738,7 @@ function M:list_history_entries()
                 sequence_number = query:value(0) or 0,
                 command_type = query:value(1) or "",
                 timestamp = query:value(2),
-                status = query:value(3) or "Executed",
-                parent_sequence_number = query:value(4),
+                parent_sequence_number = query:value(3),
             })
         end
     end
