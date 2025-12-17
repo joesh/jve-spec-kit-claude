@@ -1939,7 +1939,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                                         is_selected = false,
                                         is_implied = true,
                                         is_limiter = clamped_edges[edge_key] == true,
-                                        applied_delta_frames = 0
+                                        applied_delta_frames = shift_frames
                                     })
                                 end
                             end
@@ -1952,16 +1952,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             local clip_id, edge_type = key:match("^(.*):([^:]+)$")
                             if clip_id and edge_type and clip_id ~= "" then
                                 local clip = (ctx.clip_lookup and ctx.clip_lookup[clip_id]) or nil
+                                local track_id = (clip and clip.track_id) or (ctx.clip_track_lookup and ctx.clip_track_lookup[clip_id]) or nil
+                                local shift = track_id and ctx.track_shift_amounts and ctx.track_shift_amounts[track_id] or nil
+                                local shift_frames = shift and shift.frames or 0
                                 upsert({
                                     edge_key = key,
                                     clip_id = clip_id,
-                                    track_id = (clip and clip.track_id) or (ctx.clip_track_lookup and ctx.clip_track_lookup[clip_id]) or nil,
+                                    track_id = track_id,
                                     raw_edge_type = edge_type,
                                     normalized_edge = edge_utils.to_bracket(edge_type),
                                     is_selected = false,
                                     is_implied = true,
                                     is_limiter = true,
-                                    applied_delta_frames = 0
+                                    applied_delta_frames = shift_frames
                                 })
                             end
                         end

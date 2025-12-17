@@ -62,8 +62,21 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
+local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
+
 local function build_shift_payload(shift_frames, clamp_map)
     local new_start = v2_clip.timeline_start + Rational.new(shift_frames, v2_clip.timeline_start.fps_numerator, v2_clip.timeline_start.fps_denominator)
+    local lead_bracket = edge_utils.to_bracket(gap_edge.edge_type)
+    local global_sign = sign(-200)
+    local shift_sign = sign(shift_frames)
+    local expected_bracket = lead_bracket
+    if shift_sign ~= 0 and global_sign ~= 0 and shift_sign ~= global_sign then
+        expected_bracket = (expected_bracket == "in") and "out" or "in"
+    end
+    local expected_raw = (expected_bracket == "in") and "gap_after" or "gap_before"
+    local implied_key = string.format("%s:%s", clips.v2.id, expected_raw)
+    local selected_key = string.format("%s:%s", gap_edge.clip_id, gap_edge.edge_type)
+    local limiter = clamp_map and clamp_map[implied_key] == true
     return {
         affected_clips = {},
         shifted_clips = {{
@@ -71,11 +84,38 @@ local function build_shift_payload(shift_frames, clamp_map)
             new_start_value = new_start,
             new_duration = v2_clip.duration
         }},
-        clamped_edges = clamp_map or {}
+        clamped_edges = clamp_map or {},
+        edge_preview = {
+            requested_delta_frames = -200,
+            clamped_delta_frames = -200,
+            limiter_edge_keys = clamp_map or {},
+            edges = {
+                {
+                    edge_key = selected_key,
+                    clip_id = gap_edge.clip_id,
+                    track_id = gap_edge.track_id,
+                    raw_edge_type = gap_edge.edge_type,
+                    normalized_edge = lead_bracket,
+                    is_selected = true,
+                    is_implied = false,
+                    is_limiter = false,
+                    applied_delta_frames = -200
+                },
+                {
+                    edge_key = implied_key,
+                    clip_id = clips.v2.id,
+                    track_id = tracks.v2.id,
+                    raw_edge_type = expected_raw,
+                    normalized_edge = expected_bracket,
+                    is_selected = false,
+                    is_implied = true,
+                    is_limiter = limiter,
+                    applied_delta_frames = shift_frames
+                }
+            }
+        }
     }
 end
-
-local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
 
 local function count_track_rects(rects, track_id, color)
     local entry = view.track_layout_cache.by_id[track_id]
@@ -142,10 +182,9 @@ local implied_limit_color = color_utils.dim_hex(limit_color, implied_dim_factor)
 
 local shift_frames = 200
 local drawn, preview_payload = render_with_payload(build_shift_payload(shift_frames))
-assert(preview_payload and preview_payload.shifted_clips and #preview_payload.shifted_clips > 0,
-    "Stub payload should expose shifted clips for implied edge rendering")
-local implied_meta = preview_payload.implied_edges or {}
-assert(#implied_meta > 0, "Preview payload should expose implied edges metadata")
+assert(preview_payload and preview_payload.edge_preview and type(preview_payload.edge_preview.edges) == "table",
+    "Stub payload should expose edge_preview.edges for implied edge rendering")
+local implied_meta = preview_payload.edge_preview.edges
 local expected_bracket = edge_utils.to_bracket(gap_edge.edge_type)
 local global_sign = sign(view.drag_state.delta_rational.frames)
 local shift_sign = sign(shift_frames)
@@ -153,13 +192,15 @@ if shift_sign ~= 0 and global_sign ~= 0 and shift_sign ~= global_sign then
     expected_bracket = (expected_bracket == "in") and "out" or "in"
 end
 for _, edge in ipairs(implied_meta) do
-    local expected_raw = (expected_bracket == "in") and "gap_after" or "gap_before"
-    assert(edge.raw_edge_type == expected_raw,
-        string.format("Implied edge should use gap geometry; got %s", tostring(edge.raw_edge_type)))
-    assert(edge.edge_type == expected_bracket,
-        string.format("Implied edge should match lead bracket %s (got %s)", tostring(expected_bracket), tostring(edge.edge_type)))
-    assert(edge.delta and edge.delta.frames == shift_frames,
-        string.format("Implied edge delta should equal shift (%d), got %s", shift_frames, tostring(edge.delta and edge.delta.frames)))
+    if edge and edge.is_implied then
+        local expected_raw = (expected_bracket == "in") and "gap_after" or "gap_before"
+        assert(edge.raw_edge_type == expected_raw,
+            string.format("Implied edge should use gap geometry; got %s", tostring(edge.raw_edge_type)))
+        assert(edge.normalized_edge == expected_bracket,
+            string.format("Implied edge should match lead bracket %s (got %s)", tostring(expected_bracket), tostring(edge.normalized_edge)))
+        assert(edge.applied_delta_frames == shift_frames,
+            string.format("Implied edge delta should equal shift (%d), got %s", shift_frames, tostring(edge.applied_delta_frames)))
+    end
 end
 local implied_available = count_track_rects(drawn, tracks.v2.id, implied_available_color)
 assert(implied_available > 0,

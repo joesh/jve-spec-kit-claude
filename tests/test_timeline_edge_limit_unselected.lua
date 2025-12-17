@@ -8,6 +8,7 @@ local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local ripple_layout = require("tests.helpers.ripple_layout")
 local command_manager = require("core.command_manager")
 local TimelineActiveRegion = require("core.timeline_active_region")
+local color_utils = require("ui.color_utils")
 
 local TEST_DB = "/tmp/jve/test_timeline_edge_limit_unselected.db"
 local layout = ripple_layout.create({
@@ -76,11 +77,28 @@ command_manager.get_executor = function(name)
     if name == "BatchRippleEdit" then
         return function(cmd)
             cmd:set_parameter("clamped_delta_ms", 0)
+            local limiter_key = string.format("%s:%s", clips.v1_right.id, "in")
             return true, {
                 affected_clips = {},
                 shifted_clips = {},
                 clamped_edges = {
-                    [string.format("%s:%s", clips.v1_right.id, "in")] = true
+                    [limiter_key] = true
+                },
+                edge_preview = {
+                    requested_delta_frames = 200,
+                    clamped_delta_frames = 0,
+                    limiter_edge_keys = {[limiter_key] = true},
+                    edges = {{
+                        edge_key = limiter_key,
+                        clip_id = clips.v1_right.id,
+                        track_id = tracks.v1.id,
+                        raw_edge_type = "in",
+                        normalized_edge = "in",
+                        is_selected = false,
+                        is_implied = true,
+                        is_limiter = true,
+                        applied_delta_frames = 0
+                    }}
                 }
             }
         end
@@ -110,11 +128,13 @@ layout:cleanup()
 assert(ok, "timeline renderer errored: " .. tostring(err))
 
 local limit_color = timeline_state.colors.edge_selected_limit or "#ff0000"
+local implied_dim_factor = 0.55
+local implied_limit_color = color_utils.dim_hex(limit_color, implied_dim_factor)
 local function count_limit_rects_for_track(track_id)
     local entry = view.track_layout_cache.by_id[track_id]
     local count = 0
     for _, rect in ipairs(drawn_rects) do
-        if rect.y >= entry.y and rect.y <= entry.y + entry.height and rect.color == limit_color then
+        if rect.y >= entry.y and rect.y <= entry.y + entry.height and rect.color == implied_limit_color then
             count = count + 1
         end
     end
@@ -123,6 +143,6 @@ end
 
 local v1_limit_rects = count_limit_rects_for_track(tracks.v1.id)
 assert(v1_limit_rects > 0,
-    "Renderer should draw limit-colored bracket for clamped edge even when it is not selected")
+    "Renderer should draw dimmed limit-colored bracket for clamped edge even when it is not selected")
 
-print("✅ Edge preview renders unselected clamp edges using the limit color")
+print("✅ Edge preview renders unselected clamp edges using a dimmed limit color")
