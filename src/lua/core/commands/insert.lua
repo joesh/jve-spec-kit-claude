@@ -3,12 +3,13 @@ local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
 local uuid = require("uuid")
+local rational_helpers = require("core.command_rational_helpers")
 local timeline_state
 do
     local status, mod = pcall(require, 'ui.timeline.timeline_state')
     if status then timeline_state = mod end
 end
-local clip_mutator = require('core.clip_mutator') -- New dependency
+local clip_mutator = require('core.clip_mutator')
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["Insert"] = function(command)
@@ -20,26 +21,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local media_id = command:get_parameter("media_id")
         local track_id = command:get_parameter("track_id")
         
-        -- Early resolution of sequence FPS for hydration
+        -- Resolve owning sequence (timeline coordinate space).
         local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id) or "default_sequence"
-        if sequence_id and sequence_id ~= "" then
-            command:set_parameter("sequence_id", sequence_id)
-        end
+        assert(sequence_id and sequence_id ~= "", "Insert: missing sequence_id after resolution")
+        command:set_parameter("sequence_id", sequence_id)
         if not command:get_parameter("__snapshot_sequence_ids") then
             command:set_parameter("__snapshot_sequence_ids", {sequence_id})
         end
 
-        local seq_fps_num = 30
-        local seq_fps_den = 1
-        local seq_stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-        if seq_stmt then
-            seq_stmt:bind_value(1, sequence_id)
-            if seq_stmt:exec() and seq_stmt:next() then
-                seq_fps_num = seq_stmt:value(0)
-                seq_fps_den = seq_stmt:value(1)
-            end
-            seq_stmt:finalize()
-        end
+        local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
 
         local insert_time_raw = command:get_parameter("insert_time")
         local duration_raw = command:get_parameter("duration_value") or command:get_parameter("duration")
@@ -59,47 +49,57 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local copied_properties = {}
-        
-        -- Hydrate initial command parameters
-        local insert_time_rat = Rational.hydrate(insert_time_raw, seq_fps_num, seq_fps_den) or Rational.new(0, seq_fps_num, seq_fps_den)
-        local duration_rat = Rational.hydrate(duration_raw, seq_fps_num, seq_fps_den)
-        local source_in_rat = Rational.hydrate(source_in_raw, seq_fps_num, seq_fps_den) or Rational.new(0, seq_fps_num, seq_fps_den)
-        local source_out_rat = Rational.hydrate(source_out_raw, seq_fps_num, seq_fps_den)
-        -- Rescale any hydrated values to the sequence rate so math stays consistent with viewport/rendering
-        if duration_rat then duration_rat = duration_rat:rescale(seq_fps_num, seq_fps_den) end
-        if source_in_rat then source_in_rat = source_in_rat:rescale(seq_fps_num, seq_fps_den) end
-        if source_out_rat then source_out_rat = source_out_rat:rescale(seq_fps_num, seq_fps_den) end
+
+        -- Timeline coordinate (sequence rate).
+        local insert_time_rat = rational_helpers.require_rational_in_rate(insert_time_raw or 0, seq_fps_num, seq_fps_den, "insert_time")
+
+        -- Source coordinate + clip metadata (media/master rate).
+        local media_fps_num, media_fps_den
+        if master_clip then
+            media_fps_num, media_fps_den = rational_helpers.require_master_clip_rate(master_clip)
+        elseif media_id and media_id ~= "" then
+            media_fps_num, media_fps_den = rational_helpers.require_media_rate(db, media_id)
+        else
+            -- Fallback when no media context exists.
+            media_fps_num, media_fps_den = seq_fps_num, seq_fps_den
+        end
+
+        local source_in_rat = rational_helpers.optional_rational_in_rate(source_in_raw, media_fps_num, media_fps_den)
+        local source_out_rat = rational_helpers.optional_rational_in_rate(source_out_raw, media_fps_num, media_fps_den)
+        local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
 
         if master_clip then
             if (not media_id or media_id == "") and master_clip.media_id then
                 media_id = master_clip.media_id
             end
             
-            -- Apply master clip defaults if duration not provided
+            if not source_in_rat then
+                source_in_rat = master_clip.source_in or Rational.new(0, media_fps_num, media_fps_den)
+            end
+            if not source_out_rat then
+                local effective_source_duration = duration_rat or master_clip.duration or Rational.new(0, media_fps_num, media_fps_den)
+                source_out_rat = source_in_rat + effective_source_duration
+            end
+
+            -- Conform semantics: timeline duration uses the same frame count as the source range.
             if not duration_rat or duration_rat.frames <= 0 then
-                if master_clip.duration then
-                    duration_rat = master_clip.duration
-                else
-                    local start = master_clip.source_in or Rational.new(0, seq_fps_num, seq_fps_den)
-                    local end_t = master_clip.source_out or start
-                    duration_rat = end_t - start
-                end
+                local source_frame_count = source_out_rat.frames - source_in_rat.frames
+                duration_rat = Rational.new(source_frame_count, seq_fps_num, seq_fps_den)
             end
-            
-            -- Apply master clip defaults for source range if not provided or invalid
-            if not source_out_rat or (source_in_rat and source_out_rat <= source_in_rat) then
-                source_in_rat = master_clip.source_in or source_in_rat
-                source_out_rat = master_clip.source_out or (source_in_rat + duration_rat)
-            end
-            if duration_rat then duration_rat = duration_rat:rescale(seq_fps_num, seq_fps_den) end
-            if source_in_rat then source_in_rat = source_in_rat:rescale(seq_fps_num, seq_fps_den) end
-            if source_out_rat then source_out_rat = source_out_rat:rescale(seq_fps_num, seq_fps_den) end
+
             copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
         if not media_id or media_id == "" or not track_id or track_id == "" then
             print("WARNING: Insert: Missing media_id or track_id")
             return false
+        end
+
+        if not source_in_rat then
+            source_in_rat = Rational.new(0, media_fps_num, media_fps_den)
+        end
+        if not source_out_rat and duration_rat then
+            source_out_rat = source_in_rat + duration_rat
         end
 
         if not insert_time_rat or not duration_rat or duration_rat.frames <= 0 or not source_out_rat then
@@ -138,8 +138,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_out = source_out_rat,
             enabled = true,
             offline = master_clip and master_clip.offline,
-            rate_num = seq_fps_num,
-            rate_den = seq_fps_den,
+            rate_num = media_fps_num,
+            rate_den = media_fps_den,
         }
         local clip_to_insert = Clip.create(clip_name, media_id, clip_opts)
         -- Persist clip id on the command for replay/undo bookkeeping

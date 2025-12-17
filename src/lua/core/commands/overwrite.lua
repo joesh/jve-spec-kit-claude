@@ -2,6 +2,7 @@ local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
+local rational_helpers = require("core.command_rational_helpers")
 local clip_mutator = require("core.clip_mutator")
 local uuid = require("uuid")
 local timeline_state
@@ -27,9 +28,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local master_clip_id = command:get_parameter("master_clip_id")
         local project_id_param = command:get_parameter("project_id")
         
-        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id)
-        if sequence_id and sequence_id ~= "" then
-            command:set_parameter("sequence_id", sequence_id)
+        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id) or "default_sequence"
+        assert(sequence_id and sequence_id ~= "", "Overwrite: missing sequence_id after resolution")
+        command:set_parameter("sequence_id", sequence_id)
+        if not command:get_parameter("__snapshot_sequence_ids") then
+            command:set_parameter("__snapshot_sequence_ids", {sequence_id})
         end
 
         local master_clip = nil
@@ -42,22 +45,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        local seq_fps_num = 30
-        local seq_fps_den = 1
-        local seq_stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-        if seq_stmt then
-            seq_stmt:bind_value(1, sequence_id)
-            if seq_stmt:exec() and seq_stmt:next() then
-                seq_fps_num = seq_stmt:value(0)
-                seq_fps_den = seq_stmt:value(1)
-            end
-            seq_stmt:finalize()
-        end
+        local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
 
-        local overwrite_time_rat = Rational.hydrate(overwrite_time_raw, seq_fps_num, seq_fps_den)
-        local duration_rat = Rational.hydrate(duration_raw, seq_fps_num, seq_fps_den)
-        local source_in_rat = Rational.hydrate(source_in_raw, seq_fps_num, seq_fps_den)
-        local source_out_rat = Rational.hydrate(source_out_raw, seq_fps_num, seq_fps_den)
+        local overwrite_time_rat = rational_helpers.require_rational_in_rate(overwrite_time_raw or 0, seq_fps_num, seq_fps_den, "overwrite_time")
+        local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
 
         if master_clip and (not media_id or media_id == "") then
             media_id = master_clip.media_id
@@ -68,28 +59,36 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
+        local media_fps_num, media_fps_den
         if master_clip then
-            if not duration_rat or duration_rat.frames <= 0 then
-                if master_clip.duration then
-                    duration_rat = master_clip.duration
-                else
-                    local start = master_clip.source_in or Rational.new(0, seq_fps_num, seq_fps_den)
-                    local end_t = master_clip.source_out or start
-                    duration_rat = end_t - start
-                end
+            media_fps_num, media_fps_den = rational_helpers.require_master_clip_rate(master_clip)
+        else
+            media_fps_num, media_fps_den = rational_helpers.require_media_rate(db, media_id)
+        end
+
+        local source_in_rat = rational_helpers.optional_rational_in_rate(source_in_raw, media_fps_num, media_fps_den)
+        local source_out_rat = rational_helpers.optional_rational_in_rate(source_out_raw, media_fps_num, media_fps_den)
+
+        if master_clip then
+            if not source_in_rat then
+                source_in_rat = master_clip.source_in or Rational.new(0, media_fps_num, media_fps_den)
             end
-            if not source_out_rat or (source_in_rat and source_out_rat <= source_in_rat) then
-                source_in_rat = master_clip.source_in or (source_in_rat or Rational.new(0, seq_fps_num, seq_fps_den))
-                source_out_rat = master_clip.source_out or (source_in_rat + duration_rat)
+            if not source_out_rat then
+                local effective_source_duration = duration_rat or master_clip.duration or Rational.new(0, media_fps_num, media_fps_den)
+                source_out_rat = source_in_rat + effective_source_duration
+            end
+
+            if not duration_rat or duration_rat.frames <= 0 then
+                local source_frame_count = source_out_rat.frames - source_in_rat.frames
+                duration_rat = Rational.new(source_frame_count, seq_fps_num, seq_fps_den)
             end
             copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
-        -- Re-hydrate final values just in case they were nil
         overwrite_time_rat = Rational.hydrate(overwrite_time_rat, seq_fps_num, seq_fps_den)
         duration_rat = Rational.hydrate(duration_rat, seq_fps_num, seq_fps_den)
-        source_in_rat = Rational.hydrate(source_in_rat, seq_fps_num, seq_fps_den)
-        source_out_rat = Rational.hydrate(source_out_rat, seq_fps_num, seq_fps_den)
+        source_in_rat = Rational.hydrate(source_in_rat, media_fps_num, media_fps_den)
+        source_out_rat = Rational.hydrate(source_out_rat, media_fps_num, media_fps_den)
 
         if not overwrite_time_rat or not duration_rat or duration_rat.frames <= 0 or not source_out_rat then
             print("WARNING: Overwrite: Missing or invalid overwrite_time, duration, or source range")
@@ -123,8 +122,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_out = source_out_rat,
             enabled = true,
             offline = master_clip and master_clip.offline,
-            rate_num = seq_fps_num,
-            rate_den = seq_fps_den,
+            rate_num = media_fps_num,
+            rate_den = media_fps_den,
         }
         local clip_name = command:get_parameter("clip_name") or (master_clip and master_clip.name) or "Overwrite Clip"
         local clip_to_insert = Clip.create(clip_name, media_id, clip_opts)
