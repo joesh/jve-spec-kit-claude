@@ -328,12 +328,12 @@ do
         trim_type = "ripple"
     }
 
-    local cmd = Command.create("BatchRippleEdit", layout.project_id)
-    cmd:set_parameter("sequence_id", layout.sequence_id)
-    cmd:set_parameter("edge_infos", {left_gap})
-    cmd:set_parameter("lead_edge", left_gap)
-    cmd:set_parameter("delta_frames", -500)
-    cmd:set_parameter("dry_run", true)
+	    local cmd = Command.create("BatchRippleEdit", layout.project_id)
+	    cmd:set_parameter("sequence_id", layout.sequence_id)
+	    cmd:set_parameter("edge_infos", {left_gap})
+	    cmd:set_parameter("lead_edge", left_gap)
+	    cmd:set_parameter("delta_frames", -500)
+	    cmd:set_parameter("dry_run", true)
 
     local ok, payload = executor(cmd)
     assert(ok and payload, payload or "Gap growth dry run failed")
@@ -367,18 +367,19 @@ do
         trim_type = "ripple"
     }
 
-    local cmd = Command.create("BatchRippleEdit", layout.project_id)
-    cmd:set_parameter("sequence_id", layout.sequence_id)
-    cmd:set_parameter("edge_infos", {left_gap})
-    cmd:set_parameter("lead_edge", left_gap)
-    cmd:set_parameter("delta_frames", -500)
-    cmd:set_parameter("dry_run", true)
+	    local cmd = Command.create("BatchRippleEdit", layout.project_id)
+	    cmd:set_parameter("sequence_id", layout.sequence_id)
+	    cmd:set_parameter("edge_infos", {left_gap})
+	    cmd:set_parameter("lead_edge", left_gap)
+	    -- gap_after is normalized as an "in" bracket; positive delta closes the gap (shifts downstream left).
+	    cmd:set_parameter("delta_frames", 500)
+	    cmd:set_parameter("dry_run", true)
 
     local ok, payload = executor(cmd)
     assert(ok and payload, payload or "Cross-block clamp dry run failed")
 
-    assert(math.floor(payload.clamped_delta_ms) == -200,
-        "Ripple should clamp to the available upstream gap on V2")
+	    assert(math.floor(payload.clamped_delta_ms) == 200,
+	        "Ripple should clamp to the available upstream gap on V2")
     local implied_key = string.format("%s:%s", layout.clips.v2_mid.id, "gap_before")
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
         "Blocking cross-track gap edge must be reported in clamped_edges")
