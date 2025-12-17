@@ -48,8 +48,20 @@ do
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
         "Expected implied zero-gap edge to be reported as clamped: " .. implied_key)
 
+    assert(type(payload.edge_preview) == "table" and type(payload.edge_preview.edges) == "table",
+        "Expected dry-run payload to include edge_preview.edges")
+    local found = false
+    for _, entry in ipairs(payload.edge_preview.edges) do
+        if entry and entry.edge_key == implied_key then
+            assert(entry.is_implied == true, "Expected limiter edge_preview entry to be implied")
+            assert(entry.is_limiter == true, "Expected limiter edge_preview entry to be marked is_limiter")
+            found = true
+            break
+        end
+    end
+    assert(found, "Expected edge_preview to include limiter entry for " .. implied_key)
+
     layout:cleanup()
 end
 
 print("✅ BatchRippleEdit reports implied clamp edge for zero-length gaps")
-

@@ -351,11 +351,11 @@ do
     local layout = ripple_layout.create({
         db_path = TEST_DB,
         clips = {
-            order = {"v1_left", "v1_right", "v2_mid", "v2_blocker"},
+            order = {"v1_left", "v1_right", "v2_upstream", "v2_mid"},
             v1_left = {track_key = "v1", timeline_start = 0, duration = 1000},
             v1_right = {track_key = "v1", timeline_start = 2600, duration = 800},
+            v2_upstream = {track_key = "v2", timeline_start = 0, duration = 2400},
             v2_mid = {track_key = "v2", timeline_start = 2600, duration = 800},
-            v2_blocker = {track_key = "v2", timeline_start = 3600, duration = 600}
         }
     })
 
@@ -378,8 +378,8 @@ do
     assert(ok and payload, payload or "Cross-block clamp dry run failed")
 
     assert(math.floor(payload.clamped_delta_ms) == -200,
-        "Ripple should clamp after exhausting the downstream gap on V2")
-    local implied_key = string.format("%s:%s", layout.clips.v2_mid.id, "gap_after")
+        "Ripple should clamp to the available upstream gap on V2")
+    local implied_key = string.format("%s:%s", layout.clips.v2_mid.id, "gap_before")
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
         "Blocking cross-track gap edge must be reported in clamped_edges")
 

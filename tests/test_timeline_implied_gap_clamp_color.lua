@@ -7,6 +7,7 @@ local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
 local TimelineActiveRegion = require("core.timeline_active_region")
+local color_utils = require("ui.color_utils")
 
 local TEST_DB = "/tmp/jve/test_timeline_implied_gap_clamp_color.db"
 local layout = ripple_layout.create({
@@ -104,6 +105,8 @@ timeline_renderer.render(view)
 
 local limit_color = timeline_state.colors.edge_selected_limit or "#ff0000"
 local avail_color = timeline_state.colors.edge_selected_available or "#00ff00"
+local implied_dim_factor = 0.55
+local implied_limit_color = color_utils.dim_hex(limit_color, implied_dim_factor)
 
 assert((view.drag_state.clamped_edges or {})[string.format("%s:%s", clips.v2_shift.id, "gap_before")],
     "Dry run should attribute clamp to the implied downstream gap edge")
@@ -112,9 +115,9 @@ local dragged_limit = count_track_colors(tracks.v1.id, limit_color)
 assert(dragged_limit == 0,
     "Dragged edge should stay available; implied edge on another track must signal the clamp")
 
-local implied_limit = count_track_colors(tracks.v2.id, limit_color)
+local implied_limit = count_track_colors(tracks.v2.id, implied_limit_color)
 assert(implied_limit > 0,
-    "Implied downstream gap should render in the limit color when it halts the ripple")
+    "Implied downstream gap should render in a dimmed limit color when it halts the ripple")
 
 local implied_available = count_track_colors(tracks.v2.id, avail_color)
 assert(implied_available == 0,

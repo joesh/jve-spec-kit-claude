@@ -10,6 +10,7 @@ local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
 local edge_utils = require("ui.timeline.edge_utils")
 local TimelineActiveRegion = require("core.timeline_active_region")
+local color_utils = require("ui.color_utils")
 
 local function sign(value)
     if value > 0 then
@@ -135,6 +136,9 @@ end
 
 local available_color = timeline_state.colors.edge_selected_available or "#00ff00"
 local limit_color = timeline_state.colors.edge_selected_limit or "#ff0000"
+local implied_dim_factor = 0.55
+local implied_available_color = color_utils.dim_hex(available_color, implied_dim_factor)
+local implied_limit_color = color_utils.dim_hex(limit_color, implied_dim_factor)
 
 local shift_frames = 200
 local drawn, preview_payload = render_with_payload(build_shift_payload(shift_frames))
@@ -157,15 +161,15 @@ for _, edge in ipairs(implied_meta) do
     assert(edge.delta and edge.delta.frames == shift_frames,
         string.format("Implied edge delta should equal shift (%d), got %s", shift_frames, tostring(edge.delta and edge.delta.frames)))
 end
-local implied_available = count_track_rects(drawn, tracks.v2.id, available_color)
+local implied_available = count_track_rects(drawn, tracks.v2.id, implied_available_color)
 assert(implied_available > 0,
-    "Tracks shifted by ripple should render implied handles in the available color")
+    "Tracks shifted by ripple should render implied handles in a dimmed available color")
 
 local clamp_key = string.format("%s:%s", clips.v2.id, "gap_before")
 local drawn_clamped = select(1, render_with_payload(build_shift_payload(200, {[clamp_key] = true})))
-local implied_limit = count_track_rects(drawn_clamped, tracks.v2.id, limit_color)
+local implied_limit = count_track_rects(drawn_clamped, tracks.v2.id, implied_limit_color)
 assert(implied_limit > 0,
-    "Implied handles should switch to limit color when their edge clamps movement")
+    "Implied handles should switch to a dimmed limit color when their edge clamps movement")
 
 layout:cleanup()
 print("✅ Implied ripple edges render during drag previews")

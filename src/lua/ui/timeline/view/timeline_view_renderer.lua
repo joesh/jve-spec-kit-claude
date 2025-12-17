@@ -83,7 +83,8 @@ local function build_preview_from_payload(payload, fps_num, fps_den)
         affected_clips = {},
         shifted_clips = normalize_preview_entries(payload.shifted_clips, fps_num, fps_den) or {},
         shift_blocks = payload.shift_blocks or {},
-        clamped_edges = payload.clamped_edges or {}
+        clamped_edges = payload.clamped_edges or {},
+        edge_preview = payload.edge_preview
     }
     for _, entry in ipairs(affected_entries) do
         if not entry.is_gap then
@@ -1269,92 +1270,38 @@ function M.render(view)
     end
 
     if edges_to_render and #edges_to_render > 0 then
-        local clamp_hint = false
-        local has_explicit_clamps = next(clamped_edge_lookup) ~= nil
-        if edge_drag_state
-            and edge_drag_state.preview_clamped_delta
-            and requested_delta
-            and not rational_equals(
-                coerce_to_rational(edge_drag_state.preview_clamped_delta, fps_num, fps_den),
-                requested_delta
-            ) then
-            clamp_hint = true
-        end
-
-        local previews = edge_drag_renderer.build_preview_edges(
-            edges_to_render,
-            edge_delta,
-            {},
-            state_module.colors,
-            (edge_drag_state and edge_drag_state.lead_edge) or nil
-        )
-        local track_selection_lookup = build_track_selection_lookup(edges_to_render, state_module)
-        local edge_selection_lookup = build_edge_selection_lookup(edges_to_render)
-        if dragging_edges then
-            local implied_edges = compute_implied_edges(
-                edge_drag_state.preview_data,
-                state_module,
-                view.filtered_tracks,
-                get_clip_by_id,
-                track_selection_lookup,
-                edge_selection_lookup,
-                zero_delta,
-                (edge_drag_state and edge_drag_state.lead_edge) or nil,
-                edge_delta
-            )
-            for _, implied in ipairs(implied_edges) do
-                table.insert(previews, implied)
-            end
-        end
-        local drawn_edge_keys = {}
-        for _, p in ipairs(previews) do
-            local clip = get_preview_clip(state_module, preview_clip_cache, p, seq_rate)
-            if clip then
-                local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
-                    clip,
-                    p.edge_type,
-                    p.delta,
-                    p.raw_edge_type
-                )
-                if start_value and duration_value then
-                    local edge_key = build_edge_key(p.clip_id, p.raw_edge_type or p.edge_type)
-                    drawn_edge_keys[edge_key] = true
-                    local explicit_limit = clamped_edge_lookup[edge_key] and true or false
-                    local color = p.color or state_module.colors.edge_selected_available
-                    if explicit_limit or (clamp_hint and not has_explicit_clamps) then
-                        color = state_module.colors.edge_selected_limit or color
-                    end
-                    if p.is_implied then
-                        color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
-                    end
-                    render_edge_handle(view, clip, normalized_edge, p.raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration_rational)
-                end
-            end
-        end
-
-        for key in pairs(clamped_edge_lookup) do
-            if not drawn_edge_keys[key] then
-                local clip_id, edge_type = parse_edge_key(key)
-                if clip_id and edge_type then
-                    local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = clip_id}, seq_rate)
+        local used_edge_preview = false
+        if dragging_edges
+            and edge_drag_state
+            and edge_drag_state.preview_data
+            and type(edge_drag_state.preview_data.edge_preview) == "table"
+            and type(edge_drag_state.preview_data.edge_preview.edges) == "table"
+            and #edge_drag_state.preview_data.edge_preview.edges > 0 then
+            used_edge_preview = true
+            local edge_preview = edge_drag_state.preview_data.edge_preview
+            for _, entry in ipairs(edge_preview.edges) do
+                if type(entry) == "table" and entry.clip_id and entry.raw_edge_type and entry.normalized_edge then
+                    local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = entry.clip_id}, seq_rate)
                     if clip then
+                        local delta_frames = tonumber(entry.applied_delta_frames) or 0
+                        local delta = Rational.new(delta_frames, fps_num, fps_den)
                         local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
                             clip,
-                            edge_type,
-                            zero_delta,
-                            edge_type
+                            entry.normalized_edge,
+                            delta,
+                            entry.raw_edge_type
                         )
                         if start_value and duration_value then
-                            local is_selected = edge_selection_lookup and edge_selection_lookup[key]
-                            local color = state_module.colors.edge_selected_limit or state_module.colors.edge_selected_available
-                            if not is_selected then
+                            local color = (entry.is_limiter and state_module.colors.edge_selected_limit)
+                                or state_module.colors.edge_selected_available
+                            if entry.is_implied then
                                 color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
                             end
                             render_edge_handle(
                                 view,
                                 clip,
                                 normalized_edge,
-                                edge_type,
+                                entry.raw_edge_type,
                                 start_value,
                                 duration_value,
                                 color,
@@ -1363,6 +1310,108 @@ function M.render(view)
                                 height,
                                 viewport_duration_rational
                             )
+                        end
+                    end
+                end
+            end
+        end
+
+        if not used_edge_preview then
+            local clamp_hint = false
+            local has_explicit_clamps = next(clamped_edge_lookup) ~= nil
+            if edge_drag_state
+                and edge_drag_state.preview_clamped_delta
+                and requested_delta
+                and not rational_equals(
+                    coerce_to_rational(edge_drag_state.preview_clamped_delta, fps_num, fps_den),
+                    requested_delta
+                ) then
+                clamp_hint = true
+            end
+
+            local previews = edge_drag_renderer.build_preview_edges(
+                edges_to_render,
+                edge_delta,
+                {},
+                state_module.colors,
+                (edge_drag_state and edge_drag_state.lead_edge) or nil
+            )
+            local track_selection_lookup = build_track_selection_lookup(edges_to_render, state_module)
+            local edge_selection_lookup = build_edge_selection_lookup(edges_to_render)
+            if dragging_edges then
+                local implied_edges = compute_implied_edges(
+                    edge_drag_state.preview_data,
+                    state_module,
+                    view.filtered_tracks,
+                    get_clip_by_id,
+                    track_selection_lookup,
+                    edge_selection_lookup,
+                    zero_delta,
+                    (edge_drag_state and edge_drag_state.lead_edge) or nil,
+                    edge_delta
+                )
+                for _, implied in ipairs(implied_edges) do
+                    table.insert(previews, implied)
+                end
+            end
+            local drawn_edge_keys = {}
+            for _, p in ipairs(previews) do
+                local clip = get_preview_clip(state_module, preview_clip_cache, p, seq_rate)
+                if clip then
+                    local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
+                        clip,
+                        p.edge_type,
+                        p.delta,
+                        p.raw_edge_type
+                    )
+                    if start_value and duration_value then
+                        local edge_key = build_edge_key(p.clip_id, p.raw_edge_type or p.edge_type)
+                        drawn_edge_keys[edge_key] = true
+                        local explicit_limit = clamped_edge_lookup[edge_key] and true or false
+                        local color = p.color or state_module.colors.edge_selected_available
+                        if explicit_limit or (clamp_hint and not has_explicit_clamps) then
+                            color = state_module.colors.edge_selected_limit or color
+                        end
+                        if p.is_implied then
+                            color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
+                        end
+                        render_edge_handle(view, clip, normalized_edge, p.raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration_rational)
+                    end
+                end
+            end
+
+            for key in pairs(clamped_edge_lookup) do
+                if not drawn_edge_keys[key] then
+                    local clip_id, edge_type = parse_edge_key(key)
+                    if clip_id and edge_type then
+                        local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = clip_id}, seq_rate)
+                        if clip then
+                            local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
+                                clip,
+                                edge_type,
+                                zero_delta,
+                                edge_type
+                            )
+                            if start_value and duration_value then
+                                local is_selected = edge_selection_lookup and edge_selection_lookup[key]
+                                local color = state_module.colors.edge_selected_limit or state_module.colors.edge_selected_available
+                                if not is_selected then
+                                    color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
+                                end
+                                render_edge_handle(
+                                    view,
+                                    clip,
+                                    normalized_edge,
+                                    edge_type,
+                                    start_value,
+                                    duration_value,
+                                    color,
+                                    state_module,
+                                    width,
+                                    height,
+                                    viewport_duration_rational
+                                )
+                            end
                         end
                     end
                 end

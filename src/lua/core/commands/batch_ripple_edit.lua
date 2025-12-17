@@ -24,6 +24,66 @@ local find_prev_clip_on_track = ripple_track.find_prev_clip_on_track
 local build_track_clip_map = ripple_track.build_track_clip_map
 local hydrate_executed_mutations_if_missing = ripple_undo.hydrate_executed_mutations_if_missing
 
+local function signum(value)
+    if not value then
+        return 0
+    end
+    if value > 0 then
+        return 1
+    elseif value < 0 then
+        return -1
+    end
+    return 0
+end
+
+local function infer_implied_normalized_edge(lead_normalized, shift_sign, global_sign)
+    if shift_sign == 0 then
+        return lead_normalized
+    end
+    if not lead_normalized then
+        return (shift_sign > 0) and "out" or "in"
+    end
+    if global_sign ~= 0 and shift_sign ~= global_sign then
+        return (lead_normalized == "in") and "out" or "in"
+    end
+    return lead_normalized
+end
+
+local function lower_bound_start_frames(track_clips, boundary_frames)
+    if type(track_clips) ~= "table" or #track_clips == 0 then
+        return 1
+    end
+    local lo = 1
+    local hi = #track_clips + 1
+    while lo < hi do
+        local mid = math.floor((lo + hi) / 2)
+        local clip = track_clips[mid]
+        local start_frames = clip and clip.timeline_start and clip.timeline_start.frames
+        if start_frames == nil then
+            return 1
+        end
+        if start_frames < boundary_frames then
+            lo = mid + 1
+        else
+            hi = mid
+        end
+    end
+    return lo
+end
+
+local function pick_gap_anchor_clip_id(track_clips, boundary_frames, raw_edge_type)
+    if type(track_clips) ~= "table" or #track_clips == 0 then
+        return nil
+    end
+    local idx = lower_bound_start_frames(track_clips, boundary_frames or 0)
+    local right = track_clips[idx]
+    local left = (idx > 1) and track_clips[idx - 1] or nil
+    if raw_edge_type == "gap_before" then
+        return (right and right.id) or (left and left.id) or nil
+    end
+    return (left and left.id) or (right and right.id) or nil
+end
+
 -- Materialize a synthetic clip representing the requested gap edge so downstream
 -- logic (trim/apply) can treat it like a normal clip. Returns nil when the edge
 -- no longer corresponds to a real gap because the neighbors are missing.
@@ -1804,6 +1864,111 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            if ctx.global_max_frames ~= math.huge and final_delta == ctx.global_max_frames then
 	                merge_edge_keys(ctx.global_max_edge_keys)
 	            end
+
+                local function build_edge_preview_payload()
+                    local edge_preview = {
+                        requested_delta_frames = ctx.delta_rat and ctx.delta_rat.frames or 0,
+                        clamped_delta_frames = ctx.clamped_delta_rat and ctx.clamped_delta_rat.frames or 0,
+                        edges = {},
+                        limiter_edge_keys = clamped_edges
+                    }
+
+                    local edges_by_key = {}
+                    local function upsert(entry)
+                        if not entry or not entry.edge_key then
+                            return
+                        end
+                        local existing = edges_by_key[entry.edge_key]
+                        if existing then
+                            if entry.is_limiter then existing.is_limiter = true end
+                            return
+                        end
+                        edges_by_key[entry.edge_key] = entry
+                        table.insert(edge_preview.edges, entry)
+                    end
+
+                    local lead_normalized = nil
+                    if ctx.lead_edge_entry then
+                        lead_normalized = ctx.lead_edge_entry.normalized_edge
+                            or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type)
+                    end
+                    local global_sign = signum(ctx.clamped_delta_rat and ctx.clamped_delta_rat.frames or 0)
+
+                    -- Selected edges.
+                    for _, edge_info in ipairs(ctx.edge_infos or {}) do
+                        local raw_edge_type = edge_info.edge_type
+                        local anchor_clip_id = edge_info.original_clip_id or edge_info.clip_id
+                        if anchor_clip_id and raw_edge_type then
+                            local edge_key = string.format("%s:%s", tostring(anchor_clip_id), tostring(raw_edge_type))
+                            local source_key = build_edge_key(edge_info)
+                            local applied = compute_applied_delta(ctx, source_key)
+                            upsert({
+                                edge_key = edge_key,
+                                clip_id = anchor_clip_id,
+                                track_id = edge_info.track_id,
+                                raw_edge_type = raw_edge_type,
+                                normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge_type),
+                                is_selected = true,
+                                is_implied = false,
+                                is_limiter = clamped_edges[edge_key] == true,
+                                applied_delta_frames = applied and applied.frames or 0
+                            })
+                        end
+                    end
+
+                    -- Implied edges from track shifts (Rule 8.5).
+                    local boundary_default = (ctx.earliest_ripple_time and ctx.earliest_ripple_time.frames) or 0
+                    for track_id in pairs(ctx.affected_tracks or {}) do
+                        if track_id and not (ctx.selected_tracks and ctx.selected_tracks[track_id]) then
+                            local shift = (ctx.track_shift_amounts and ctx.track_shift_amounts[track_id]) or ctx.downstream_shift_rat
+                            local shift_frames = shift and shift.frames or 0
+                            if shift_frames ~= 0 then
+                                local desired = infer_implied_normalized_edge(lead_normalized, signum(shift_frames), global_sign)
+                                local raw_edge_type = (desired == "in") and "gap_after" or "gap_before"
+                                local boundary_frames = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id]) or boundary_default
+                                local track_clips = ctx.track_clip_map and ctx.track_clip_map[track_id] or {}
+                                local anchor_clip_id = pick_gap_anchor_clip_id(track_clips, boundary_frames, raw_edge_type)
+                                if anchor_clip_id then
+                                    local edge_key = string.format("%s:%s", tostring(anchor_clip_id), tostring(raw_edge_type))
+                                    upsert({
+                                        edge_key = edge_key,
+                                        clip_id = anchor_clip_id,
+                                        track_id = track_id,
+                                        raw_edge_type = raw_edge_type,
+                                        normalized_edge = desired or edge_utils.to_bracket(raw_edge_type),
+                                        is_selected = false,
+                                        is_implied = true,
+                                        is_limiter = clamped_edges[edge_key] == true,
+                                        applied_delta_frames = 0
+                                    })
+                                end
+                            end
+                        end
+                    end
+
+                    -- Ensure every limiter edge has a render entry.
+                    for key in pairs(clamped_edges or {}) do
+                        if not edges_by_key[key] and type(key) == "string" then
+                            local clip_id, edge_type = key:match("^(.*):([^:]+)$")
+                            if clip_id and edge_type and clip_id ~= "" then
+                                local clip = (ctx.clip_lookup and ctx.clip_lookup[clip_id]) or nil
+                                upsert({
+                                    edge_key = key,
+                                    clip_id = clip_id,
+                                    track_id = (clip and clip.track_id) or (ctx.clip_track_lookup and ctx.clip_track_lookup[clip_id]) or nil,
+                                    raw_edge_type = edge_type,
+                                    normalized_edge = edge_utils.to_bracket(edge_type),
+                                    is_selected = false,
+                                    is_implied = true,
+                                    is_limiter = true,
+                                    applied_delta_frames = 0
+                                })
+                            end
+                        end
+                    end
+
+                    return edge_preview
+                end
 	
 	            return true, {
 	                planned_mutations = ctx.planned_mutations,
@@ -1812,7 +1977,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 shift_blocks = ctx.shift_blocks,
                 clamped_delta_ms = ctx.clamped_delta_rat:to_milliseconds(),
                 materialized_gaps = ctx.materialized_gap_ids,
-                clamped_edges = clamped_edges
+                clamped_edges = clamped_edges,
+                edge_preview = build_edge_preview_payload()
             }
         end
 
