@@ -426,6 +426,7 @@ function M.capture_clip_state(clip)
         source_out = clip.source_out,
         name = clip.name,
         enabled = clip.enabled,
+        offline = clip.offline,
         -- Frame rate needed for Rational reconstruction after JSON round-trip
         fps_numerator = rate.fps_numerator,
         fps_denominator = rate.fps_denominator
@@ -695,11 +696,12 @@ function M.apply_mutations(db, mutations)
         insert_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
+                source_sequence_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled,
+                fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_stmt then
             return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
@@ -838,21 +840,25 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(4, mut.name)
             stmt:bind_value(5, mut.track_id)
             stmt:bind_value(6, mut.media_id)
-            stmt:bind_value(7, mut.timeline_start_frame)
-            stmt:bind_value(8, mut.duration_frames)
-            stmt:bind_value(9, mut.source_in_frame)
-            stmt:bind_value(10, mut.source_out_frame)
-            stmt:bind_value(11, mut.fps_numerator)
-            stmt:bind_value(12, mut.fps_denominator)
-            stmt:bind_value(13, mut.enabled)
+            stmt:bind_value(7, mut.source_sequence_id)
+            stmt:bind_value(8, mut.parent_clip_id)
+            stmt:bind_value(9, mut.owner_sequence_id)
+            stmt:bind_value(10, mut.timeline_start_frame)
+            stmt:bind_value(11, mut.duration_frames)
+            stmt:bind_value(12, mut.source_in_frame)
+            stmt:bind_value(13, mut.source_out_frame)
+            stmt:bind_value(14, mut.fps_numerator)
+            stmt:bind_value(15, mut.fps_denominator)
+            stmt:bind_value(16, mut.enabled)
+            stmt:bind_value(17, (mut.offline == 1 or mut.offline == true) and 1 or 0)
             if mut.created_at == nil or mut.modified_at == nil then
                 finalize_stmt(update_stmt)
                 finalize_stmt(delete_stmt)
                 finalize_stmt(insert_stmt)
                 return false, "INSERT mutation missing created_at/modified_at for clip " .. tostring(mut.clip_id)
             end
-            stmt:bind_value(14, mut.created_at)
-            stmt:bind_value(15, mut.modified_at)
+            stmt:bind_value(18, mut.created_at)
+            stmt:bind_value(19, mut.modified_at)
             local ok = stmt:exec()
             local err = db:last_error()
             reset_stmt(stmt)
@@ -1091,11 +1097,12 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         local stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
+                source_sequence_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled,
+                fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
 
@@ -1105,15 +1112,19 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(4, prev.name)
         stmt:bind_value(5, prev.track_id)
         stmt:bind_value(6, prev.media_id)
-        stmt:bind_value(7, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
-        stmt:bind_value(8, val_frames(prev.duration, "duration"))
-        stmt:bind_value(9, val_frames(prev.source_in, "source_in"))
-        stmt:bind_value(10, val_frames(prev.source_out, "source_out"))
-        stmt:bind_value(11, fps_num)
-        stmt:bind_value(12, fps_den)
-        stmt:bind_value(13, prev.enabled and 1 or 0)
-        stmt:bind_value(14, prev.created_at)
-        stmt:bind_value(15, prev.modified_at)
+        stmt:bind_value(7, prev.source_sequence_id)
+        stmt:bind_value(8, prev.parent_clip_id)
+        stmt:bind_value(9, prev.owner_sequence_id or prev.track_sequence_id)
+        stmt:bind_value(10, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
+        stmt:bind_value(11, val_frames(prev.duration, "duration"))
+        stmt:bind_value(12, val_frames(prev.source_in, "source_in"))
+        stmt:bind_value(13, val_frames(prev.source_out, "source_out"))
+        stmt:bind_value(14, fps_num)
+        stmt:bind_value(15, fps_den)
+        stmt:bind_value(16, prev.enabled and 1 or 0)
+        stmt:bind_value(17, (prev.offline == 1 or prev.offline == true) and 1 or 0)
+        stmt:bind_value(18, prev.created_at)
+        stmt:bind_value(19, prev.modified_at)
 
         local ok = stmt:exec()
         stmt:finalize()

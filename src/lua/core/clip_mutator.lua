@@ -12,6 +12,9 @@ local krono_ok, krono = pcall(require, "core.krono")
 	        name = row.name,
 	        track_id = row.track_id,
 	        media_id = row.media_id,
+            source_sequence_id = row.source_sequence_id,
+            parent_clip_id = row.parent_clip_id,
+            owner_sequence_id = row.owner_sequence_id,
 	        created_at = row.created_at,
 	        modified_at = row.modified_at,
 	        start_value = row.start_value,
@@ -20,7 +23,8 @@ local krono_ok, krono = pcall(require, "core.krono")
 	        source_out = row.source_out,
 	        fps_numerator = row.fps_numerator,
 	        fps_denominator = row.fps_denominator,
-	        enabled = row.enabled
+	        enabled = row.enabled,
+            offline = row.offline
 	    }
 	end
 
@@ -133,6 +137,9 @@ local function plan_insert(row)
         name = row.name or "",
         track_id = row.track_id,
         media_id = row.media_id,
+        source_sequence_id = row.source_sequence_id,
+        parent_clip_id = row.parent_clip_id,
+        owner_sequence_id = row.owner_sequence_id,
         timeline_start_frame = get_frames(row.timeline_start or row.start_value),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
@@ -140,6 +147,7 @@ local function plan_insert(row)
         fps_numerator = fps_num,
         fps_denominator = fps_den,
         enabled = row.enabled and 1 or 0,
+        offline = row.offline and 1 or 0,
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
         modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id))
     }
@@ -152,10 +160,11 @@ end
 local function load_track_clips(db, track_id)
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                s.fps_numerator, s.fps_denominator,
-               c.enabled, c.created_at, c.modified_at
+               c.enabled, c.offline, c.created_at, c.modified_at
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
@@ -175,10 +184,10 @@ local function load_track_clips(db, track_id)
     end
 
     while stmt:next() do
-        local clip_num = stmt:value(10)
-        local clip_den = stmt:value(11)
-        local seq_num = stmt:value(12)
-        local seq_den = stmt:value(13)
+        local clip_num = stmt:value(13)
+        local clip_den = stmt:value(14)
+        local seq_num = stmt:value(15)
+        local seq_den = stmt:value(16)
         assert_rate(clip_num, clip_den, "clip fps")
         assert_rate(seq_num, seq_den, "sequence fps")
         table.insert(results, {
@@ -188,17 +197,21 @@ local function load_track_clips(db, track_id)
 		            name = stmt:value(3),
 		            track_id = stmt:value(4),
 		            media_id = stmt:value(5),
-		            created_at = stmt:value(15),
-		            modified_at = stmt:value(16),
-		            timeline_start = Rational.new(stmt:value(6), seq_num, seq_den),
-		            start_value = Rational.new(stmt:value(6), seq_num, seq_den), -- Legacy compat
-		            duration = Rational.new(stmt:value(7), seq_num, seq_den),
-		            source_in = Rational.new(stmt:value(8), clip_num, clip_den),
-		            source_out = Rational.new(stmt:value(9), clip_num, clip_den),
+                    source_sequence_id = stmt:value(6),
+                    parent_clip_id = stmt:value(7),
+                    owner_sequence_id = stmt:value(8),
+		            created_at = stmt:value(19),
+		            modified_at = stmt:value(20),
+		            timeline_start = Rational.new(stmt:value(9), seq_num, seq_den),
+		            start_value = Rational.new(stmt:value(9), seq_num, seq_den), -- Legacy compat
+		            duration = Rational.new(stmt:value(10), seq_num, seq_den),
+		            source_in = Rational.new(stmt:value(11), clip_num, clip_den),
+		            source_out = Rational.new(stmt:value(12), clip_num, clip_den),
 		            rate = { fps_numerator = clip_num, fps_denominator = clip_den },
 		            fps_numerator = clip_num,
 		            fps_denominator = clip_den,
-		            enabled = stmt:value(14) == 1 or stmt:value(14) == true
+		            enabled = stmt:value(17) == 1 or stmt:value(17) == true,
+                    offline = stmt:value(18) == 1 or stmt:value(18) == true
 		        })
 		    end
     stmt:finalize()
