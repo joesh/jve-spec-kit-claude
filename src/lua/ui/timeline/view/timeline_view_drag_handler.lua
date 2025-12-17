@@ -74,6 +74,48 @@ function M.handle_release(view, drag_state, modifiers)
             track_offset = target_track_index - reference_track_index
         end
 
+        if drag_state.alt_copy then
+            local ids = {}
+            for _, c in ipairs(current_clips) do
+                if c and c.id then
+                    table.insert(ids, c.id)
+                end
+            end
+
+            local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or nil
+            assert(rate and rate.fps_numerator and rate.fps_denominator,
+                "timeline_view_drag_handler: missing sequence fps metadata for alt-copy")
+            local fps_num = rate.fps_numerator
+            local fps_den = rate.fps_denominator
+
+            local delta_rat = drag_state.delta_rational
+            if not delta_rat and delta_ms ~= 0 then
+                delta_rat = Rational.from_seconds(delta_ms / 1000.0, fps_num, fps_den)
+            end
+            if not delta_rat then
+                delta_rat = Rational.new(0, fps_num, fps_den)
+            end
+
+            if target_track_id == reference_clip.track_id and delta_rat.frames == 0 then
+                return
+            end
+
+            local cmd = Command.create("DuplicateClips", active_proj)
+            cmd:set_parameter("project_id", active_proj)
+            cmd:set_parameter("sequence_id", active_seq)
+            cmd:set_parameter("__snapshot_sequence_ids", {active_seq})
+            cmd:set_parameter("clip_ids", ids)
+            cmd:set_parameter("delta_rat", delta_rat)
+            cmd:set_parameter("target_track_id", target_track_id)
+            cmd:set_parameter("anchor_clip_id", reference_clip.id)
+
+            local result = command_manager.execute(cmd)
+            if not result.success then
+                logger.error("timeline_drag", string.format("DuplicateClips failed: %s", result.error_message or "unknown"))
+            end
+            return
+        end
+
         local command_specs = {}
 
         -- Track moves: embed pending_new_start when there is a time delta.
