@@ -4,6 +4,7 @@
 local M = {}
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local edge_utils = require("ui.timeline.edge_utils")
+local color_utils = require("ui.color_utils")
 local Rational = require("core.rational")
 local Command = require("command")
 local command_manager = require("core.command_manager")
@@ -23,6 +24,7 @@ local function build_edge_signature(edges)
 end
 
 local TEMP_GAP_PREFIX = "temp_gap_"
+local IMPLIED_EDGE_DIM_FACTOR = 0.55
 
 local function coerce_clip_entries(entries)
     if not entries then
@@ -169,6 +171,17 @@ local function build_track_selection_lookup(edges, state_module)
     return lookup
 end
 
+local function build_edge_selection_lookup(edges)
+    local lookup = {}
+    for _, edge in ipairs(edges or {}) do
+        if edge and edge.clip_id and edge.edge_type then
+            local key = string.format("%s:%s", tostring(edge.clip_id or ""), tostring(edge.edge_type or ""))
+            lookup[key] = true
+        end
+    end
+    return lookup
+end
+
 -- Determine which bracket orientation should be used for a shifted track.
 -- Handles Rule 8.5 semantics: implied edges mirror the dragged orientation unless
 -- the shift direction contradicts the global delta (e.g. opposing track negation),
@@ -186,10 +199,49 @@ local function infer_bracket_for_shift(lead_bracket, shift_sign, global_sign)
     return lead_bracket
 end
 
+local function lower_bound_start_frames_implied(clips, start_frames)
+    if type(clips) ~= "table" or #clips == 0 then
+        return 1
+    end
+    local lo = 1
+    local hi = #clips + 1
+    while lo < hi do
+        local mid = math.floor((lo + hi) / 2)
+        local clip = clips[mid]
+        local clip_start = clip and clip.timeline_start and clip.timeline_start.frames
+        if clip_start == nil then
+            return 1
+        end
+        if clip_start < start_frames then
+            lo = mid + 1
+        else
+            hi = mid
+        end
+    end
+    return lo
+end
+
+local function pick_boundary_anchor_clip(state_module, track_id, boundary_frames, want_left)
+    if not state_module or not state_module.get_track_clip_index or not track_id or boundary_frames == nil then
+        return nil
+    end
+    local track_clips = state_module.get_track_clip_index(track_id) or {}
+    if #track_clips == 0 then
+        return nil
+    end
+    local idx = lower_bound_start_frames_implied(track_clips, boundary_frames)
+    if want_left then
+        -- If there is no clip before the boundary (e.g. boundary at timeline start),
+        -- fall back to anchoring on the right clip so we at least draw an implied handle.
+        return ((idx > 1) and track_clips[idx - 1]) or track_clips[idx]
+    end
+    return track_clips[idx] or track_clips[#track_clips]
+end
+
 -- Compute implied edge metadata for tracks that shift even though their edges are
 -- not explicitly selected. This keeps ripple previews honest by showing the gap
 -- handles that would need to be selected to reproduce the same movement.
-local function compute_implied_edges(preview_data, get_clip, selected_track_lookup, zero_delta, lead_edge, global_delta)
+local function compute_implied_edges(preview_data, state_module, visible_tracks, get_clip, selected_track_lookup, selected_edge_lookup, zero_delta, lead_edge, global_delta)
     if not preview_data or not preview_data.shifted_clips then
         if preview_data then
             preview_data.implied_edges = {}
@@ -217,6 +269,7 @@ local function compute_implied_edges(preview_data, get_clip, selected_track_look
         end
     end
     local implied = {}
+    local implied_keys = {}
     local lead_bracket = nil
     if lead_edge then
         lead_bracket = edge_utils.to_bracket(lead_edge.edge_type or lead_edge.normalized_edge)
@@ -229,8 +282,15 @@ local function compute_implied_edges(preview_data, get_clip, selected_track_look
         if shift_sign ~= 0 then
             local desired_bracket = infer_bracket_for_shift(lead_bracket, shift_sign, global_sign)
             local raw_edge_type = (desired_bracket == "in") and "gap_after" or "gap_before"
+            local anchor_clip = info.clip
+            if raw_edge_type == "gap_after" then
+                local fallback = pick_boundary_anchor_clip(state_module, track_id, info.clip.timeline_start and info.clip.timeline_start.frames, true)
+                if fallback then
+                    anchor_clip = fallback
+                end
+            end
             table.insert(implied, {
-                clip_id = info.clip.id,
+                clip_id = anchor_clip.id,
                 track_id = track_id,
                 edge_type = desired_bracket or "out",
                 raw_edge_type = raw_edge_type,
@@ -240,8 +300,95 @@ local function compute_implied_edges(preview_data, get_clip, selected_track_look
                 color = nil,
                 is_implied = true
             })
+            implied_keys[string.format("%s:%s", tostring(anchor_clip.id or ""), tostring(raw_edge_type))] = true
         end
     end
+
+    -- Some downstream motion is represented as shift blocks (not enumerated in shifted_clips).
+    -- Generate implied edges from those blocks so all affected tracks show handles.
+    if state_module and state_module.get_track_clip_index and type(preview_data.shift_blocks) == "table" then
+        local global_block = nil
+        local per_track_block = {}
+        for _, block in ipairs(preview_data.shift_blocks) do
+            if type(block) == "table" and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
+                if block.track_id then
+                    per_track_block[block.track_id] = block
+                elseif not global_block then
+                    global_block = block
+                end
+            end
+        end
+
+        if global_block or next(per_track_block) then
+            for _, track in ipairs(visible_tracks or {}) do
+                local track_id = track and track.id
+                if track_id and not selected_track_lookup[track_id] then
+                    local block = per_track_block[track_id] or global_block
+                    if block and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
+                        local shift_sign = (block.delta_frames > 0) and 1 or -1
+                        local desired_bracket = infer_bracket_for_shift(lead_bracket, shift_sign, global_sign)
+                        local raw_edge_type = (desired_bracket == "in") and "gap_after" or "gap_before"
+                        local anchor_clip = pick_boundary_anchor_clip(state_module, track_id, block.start_frames, raw_edge_type == "gap_after")
+                        if anchor_clip and anchor_clip.id then
+                            local implied_key = string.format("%s:%s", tostring(anchor_clip.id or ""), tostring(raw_edge_type))
+                            if not implied_keys[implied_key] then
+                                local fps_num = (zero_delta and zero_delta.fps_numerator) or (global_delta and global_delta.fps_numerator) or 30
+                                local fps_den = (zero_delta and zero_delta.fps_denominator) or (global_delta and global_delta.fps_denominator) or 1
+                                table.insert(implied, {
+                                    clip_id = anchor_clip.id,
+                                    track_id = track_id,
+                                    edge_type = desired_bracket or "out",
+                                    raw_edge_type = raw_edge_type,
+                                    delta = Rational.new(block.delta_frames, fps_num, fps_den),
+                                    delta_ms = 0,
+                                    at_limit = false,
+                                    color = nil,
+                                    is_implied = true
+                                })
+                                implied_keys[implied_key] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- If the command reports a clamped gap edge that is not explicitly selected,
+    -- treat it as an implied edge so it renders dimmed instead of "selected".
+    if type(preview_data.clamped_edges) == "table" then
+        for key in pairs(preview_data.clamped_edges) do
+            if not (selected_edge_lookup and selected_edge_lookup[key]) then
+                local clip_id, edge_type = nil, nil
+                if type(key) == "string" then
+                    clip_id, edge_type = key:match("^(.*):([^:]+)$")
+                    if clip_id == "" then
+                        clip_id = nil
+                    end
+                end
+                if clip_id and (edge_type == "gap_before" or edge_type == "gap_after") then
+                    local implied_key = string.format("%s:%s", tostring(clip_id or ""), tostring(edge_type))
+                    if not implied_keys[implied_key] then
+                        local clip = get_clip and get_clip(clip_id) or nil
+                        local track_id = clip and clip.track_id or nil
+                        table.insert(implied, {
+                            clip_id = clip_id,
+                            track_id = track_id,
+                            edge_type = edge_utils.to_bracket(edge_type),
+                            raw_edge_type = edge_type,
+                            delta = global_delta or zero_delta,
+                            delta_ms = 0,
+                            at_limit = true,
+                            color = nil,
+                            is_implied = true
+                        })
+                        implied_keys[implied_key] = true
+                    end
+                end
+            end
+        end
+    end
+
     preview_data.implied_edges = implied
     return implied
 end
@@ -1142,11 +1289,15 @@ function M.render(view)
             (edge_drag_state and edge_drag_state.lead_edge) or nil
         )
         local track_selection_lookup = build_track_selection_lookup(edges_to_render, state_module)
+        local edge_selection_lookup = build_edge_selection_lookup(edges_to_render)
         if dragging_edges then
             local implied_edges = compute_implied_edges(
                 edge_drag_state.preview_data,
+                state_module,
+                view.filtered_tracks,
                 get_clip_by_id,
                 track_selection_lookup,
+                edge_selection_lookup,
                 zero_delta,
                 (edge_drag_state and edge_drag_state.lead_edge) or nil,
                 edge_delta
@@ -1173,6 +1324,9 @@ function M.render(view)
                     if explicit_limit or (clamp_hint and not has_explicit_clamps) then
                         color = state_module.colors.edge_selected_limit or color
                     end
+                    if p.is_implied then
+                        color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
+                    end
                     render_edge_handle(view, clip, normalized_edge, p.raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration_rational)
                 end
             end
@@ -1191,6 +1345,11 @@ function M.render(view)
                             edge_type
                         )
                         if start_value and duration_value then
+                            local is_selected = edge_selection_lookup and edge_selection_lookup[key]
+                            local color = state_module.colors.edge_selected_limit or state_module.colors.edge_selected_available
+                            if not is_selected then
+                                color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
+                            end
                             render_edge_handle(
                                 view,
                                 clip,
@@ -1198,7 +1357,7 @@ function M.render(view)
                                 edge_type,
                                 start_value,
                                 duration_value,
-                                state_module.colors.edge_selected_limit or state_module.colors.edge_selected_available,
+                                color,
                                 state_module,
                                 width,
                                 height,
