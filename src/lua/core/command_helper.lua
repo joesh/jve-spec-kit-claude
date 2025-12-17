@@ -179,11 +179,28 @@ function M.add_update_mutation(command, sequence_id, update)
     if not bucket then
         return
     end
+
+    -- Validate update mutation payload to catch incomplete undo mutations
+    local function validate_update(entry)
+        assert(entry.clip_id, "add_update_mutation: missing clip_id")
+        -- For UI cache updates, we need position data (not just clip_id)
+        -- This catches bugs where undo sends {clip_id = "..."} without start_value/duration_value
+        if not entry.start_value and not entry.duration_value and not entry.track_id then
+            error(string.format(
+                "add_update_mutation: incomplete payload for clip %s - missing start_value, duration_value, and track_id. " ..
+                "Undo mutations must include full clip state for UI cache updates.",
+                tostring(entry.clip_id)
+            ), 2)
+        end
+    end
+
     if update[1] then
         for _, entry in ipairs(update) do
+            validate_update(entry)
             table.insert(bucket.updates, entry)
         end
     else
+        validate_update(update)
         table.insert(bucket.updates, update)
     end
     command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
@@ -197,11 +214,28 @@ function M.add_insert_mutation(command, sequence_id, clip)
     if not bucket then
         return
     end
+
+    -- Validate insert mutation payload to catch incomplete undo mutations
+    local function validate_insert(entry)
+        assert(entry.id, "add_insert_mutation: missing id")
+        -- For UI cache inserts, we need position data (not just id)
+        -- This catches bugs where undo delete sends {id = "..."} without start_value/duration_value
+        if not entry.start_value and not entry.duration_value and not entry.track_id then
+            error(string.format(
+                "add_insert_mutation: incomplete payload for clip %s - missing start_value, duration_value, and track_id. " ..
+                "Undo delete mutations must include full clip state for UI cache inserts.",
+                tostring(entry.id)
+            ), 2)
+        end
+    end
+
     if clip[1] then
         for _, entry in ipairs(clip) do
+            validate_insert(entry)
             table.insert(bucket.inserts, entry)
         end
     else
+        validate_insert(clip)
         table.insert(bucket.inserts, clip)
     end
     command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
@@ -1032,7 +1066,16 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         end
 
         if command then
-            M.add_update_mutation(command, sequence_id, {clip_id = prev.id})
+            -- Include full clip state for UI cache update (not just clip_id)
+            M.add_update_mutation(command, sequence_id, {
+                clip_id = prev.id,
+                track_id = prev.track_id,
+                start_value = val_frames(prev.timeline_start or prev.start_value, "timeline_start"),
+                duration_value = val_frames(prev.duration, "duration"),
+                source_in_value = val_frames(prev.source_in, "source_in"),
+                source_out_value = val_frames(prev.source_out, "source_out"),
+                enabled = prev.enabled
+            })
         end
         return true
     end
@@ -1079,7 +1122,18 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         end
 
         if command then
-            M.add_insert_mutation(command, sequence_id, {id = prev.id})
+            -- Include full clip payload for UI cache insert (not just id)
+            M.add_insert_mutation(command, sequence_id, {
+                id = prev.id,
+                track_id = prev.track_id,
+                start_value = val_frames(prev.timeline_start or prev.start_value, "timeline_start"),
+                duration_value = val_frames(prev.duration, "duration"),
+                source_in_value = val_frames(prev.source_in, "source_in"),
+                source_out_value = val_frames(prev.source_out, "source_out"),
+                enabled = prev.enabled,
+                name = prev.name,
+                media_id = prev.media_id
+            })
         end
         return true
     end
