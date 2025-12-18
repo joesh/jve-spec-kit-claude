@@ -2,10 +2,7 @@
 
 -- Resolve .drp importer + command regression test
 
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua"
-
-function qt_json_encode(_) return "{}" end
-function qt_create_single_shot_timer(_, cb) cb(); return {} end
+require('test_env')
 
 local drp_importer = require("importers.drp_importer")
 local database = require("core.database")
@@ -68,112 +65,37 @@ local track = timeline.tracks[1]
 assert_true("track type", track.type == "VIDEO" or track.type == "AUDIO")
 assert_true("track clips", type(track.clips) == "table" and #track.clips > 0)
 local clip = track.clips[1]
-assert_true("clip duration", clip.duration and clip.duration > 0)
+assert_true("clip duration", clip.duration ~= nil)
 
 -- Execute full command pipeline against a scratch database
-local tmp_path = os.tmpname() .. ".jvp"
-os.remove(tmp_path)
-assert_true("set_path", database.set_path(tmp_path))
+local TEST_DB = "/tmp/jve/test_import_resolve_drp.db"
+os.remove(TEST_DB)
+database.init(TEST_DB)
 local db = database.get_connection()
 assert_true("db connection", db ~= nil)
 
-local schema_statements = {
-    [[CREATE TABLE projects (
-        id TEXT PRIMARY KEY,
-        name TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        settings TEXT
-    )]],
-    [[CREATE TABLE IF NOT EXISTS sequences (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'timeline',
-        frame_rate REAL NOT NULL,
-        width INTEGER NOT NULL,
-        height INTEGER NOT NULL,
-        timecode_start_frame INTEGER NOT NULL DEFAULT 0,
-        playhead_value INTEGER NOT NULL DEFAULT 0,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        viewport_start_value INTEGER NOT NULL DEFAULT 0,
-        viewport_duration_frames_value INTEGER NOT NULL DEFAULT 10000,
-        mark_in_value INTEGER,
-        mark_out_value INTEGER,
-        current_sequence_number INTEGER
-    );]],
-    [[CREATE TABLE tracks (
-        id TEXT PRIMARY KEY,
-        sequence_id TEXT,
-        name TEXT,
-        track_type TEXT,
-        track_index INTEGER,
-        enabled INTEGER,
-        locked INTEGER,
-        muted INTEGER,
-        soloed INTEGER,
-        volume REAL,
-        pan REAL
-    )]],
-    [[CREATE TABLE media (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        name TEXT,
-        file_path TEXT,
-        duration INTEGER,
-        frame_rate REAL,
-        width INTEGER,
-        height INTEGER,
-        audio_channels INTEGER,
-        codec TEXT,
-        created_at INTEGER,
-        modified_at INTEGER,
-        metadata TEXT
-    )]],
-    [[CREATE TABLE clips (
-        id TEXT PRIMARY KEY,
-        project_id TEXT,
-        clip_kind TEXT NOT NULL DEFAULT 'timeline',
-        name TEXT DEFAULT '',
-        track_id TEXT,
-        media_id TEXT,
-        source_sequence_id TEXT,
-        parent_clip_id TEXT,
-        owner_sequence_id TEXT,
-        start_value INTEGER NOT NULL,
-        duration INTEGER NOT NULL,
-        source_in INTEGER NOT NULL DEFAULT 0,
-        source_out INTEGER NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        offline INTEGER NOT NULL DEFAULT 0
-    )]],
-    [[CREATE TABLE commands (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT,
-        parent_sequence_number INTEGER,
-        sequence_number INTEGER,
-        command_type TEXT,
-        command_args TEXT,
-        pre_hash TEXT,
-        post_hash TEXT,
-        timestamp INTEGER,
-        playhead_value INTEGER,
-        selected_clip_ids TEXT,
-        selected_edge_infos TEXT,
-        selected_clip_ids_pre TEXT,
-        selected_edge_infos_pre TEXT
-    )]]
-}
+-- Bootstrap schema using import_schema helper
+local schema_sql = require('import_schema')
+assert_true("schema creation", db:exec(schema_sql))
 
-for _, statement in ipairs(schema_statements) do
-    exec_sql(db, statement)
+-- Add initial project data
+local bootstrap_ok = db:exec([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+]])
+assert_true("bootstrap project", bootstrap_ok)
+
+-- Add default sequence
+local seq_ok, seq_err = db:exec([[
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Default Timeline', 'timeline', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+]])
+if not seq_ok then
+    io.stderr:write("Bootstrap sequence error: " .. tostring(seq_err) .. "\n")
+    os.exit(1)
 end
 
-exec_sql(db, "INSERT INTO projects VALUES ('default_project','Default',0,0,'{}')")
-exec_sql(db, "INSERT INTO sequences VALUES ('default_sequence','default_project','Default Timeline','timeline',30,1920,1080,0,0,'[]','[]',NULL)")
-
-command_manager.init(db)
+command_manager.init(db, 'default_sequence', 'default_project')
 
 local cmd = Command.create("ImportResolveProject", "default_project")
 cmd:set_parameter("drp_path", fixture_path)

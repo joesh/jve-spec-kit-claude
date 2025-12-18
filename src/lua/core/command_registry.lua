@@ -11,6 +11,7 @@ local error_handler = nil
 -- Handle acronyms/numeric command names that don't convert cleanly to snake_case
 local module_aliases = {
     ImportFCP7XML = "core.commands.import_fcp7_xml",
+    ImportResolveProject = "core.commands.import_resolve_project",
 }
 function M.init(database, set_last_error_fn)
     db = database
