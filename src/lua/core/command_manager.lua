@@ -7,7 +7,6 @@ local M = {}
 local db = nil
 
 local profile_scope = require("core.profile_scope")
-local event_log = require("core.event_log")
 local command_scope = require("core.command_scope")
 local frame_utils = require("core.frame_utils")
 local json = require("dkjson")
@@ -616,28 +615,6 @@ function M.execute(command_or_name, params)
             perf.reset()
         end
         if saved then
-            local event_context = {
-                sequence_number = sequence_number,
-                stack_id = stack_id,
-                sequence_id = history.get_current_stack_sequence_id(true),
-                project_id = command.project_id or active_project_id,
-                scope = nil,
-            }
-            local record_ok, record_err = event_log.record_command(command, event_context)
-            if perf.enabled then
-                perf.log("event_log.record_command")
-                perf.reset()
-            end
-            if not record_ok then
-                logger.error("command_manager", "Failed to append event log entry: " .. tostring(record_err))
-                db:exec("ROLLBACK")
-                history.decrement_sequence_number()
-                result.success = false
-                result.error_message = "Failed to append event log"
-                exec_scope:finish("event_log_failure")
-                return result
-            end
-
             result.success = true
             result.result_data = command:serialize()
 

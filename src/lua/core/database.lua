@@ -4,7 +4,6 @@
 local M = {}
 local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
-local event_log = require("core.event_log")
 local Rational = require("core.rational")
 local logger = require("core.logger")
 
@@ -482,11 +481,6 @@ function M.set_path(path)
     -- Apply main application schema
     load_main_schema(db_connection)
 
-    local ok, err = pcall(event_log.init, path)
-    if not ok then
-        error("FATAL: Failed to initialize event log: " .. tostring(err))
-    end
-
     -- Configure busy timeout so we wait for locks instead of failing immediately
     if db_connection.busy_timeout then
         db_connection:busy_timeout(5000)  -- 5 seconds
@@ -546,10 +540,6 @@ function M.shutdown(opts)
     end
 
     cleanup_wal_sidecars(db_path)
-    local ok_ev, ev_err = pcall(event_log.shutdown)
-    if not ok_ev then
-        return false, "failed to shutdown event_log: " .. tostring(ev_err)
-    end
     return true
 end
 
