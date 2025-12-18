@@ -5,33 +5,34 @@ This project implements a hackable, script-forward video editor using C++/Qt6 + 
 
 ## Directory Structure
 
-### Core Engine (`src/core/`)
-- **models/**: SQLite-backed entity classes (Project, Sequence, Clip, etc.)
-- **commands/**: Deterministic command system for editing operations
-- **persistence/**: SQLite integration, atomic saves, command logging
+### C++ Core (`src/*.{cpp,h}`)
+Minimal C++ layer for Qt integration and performance-critical operations:
+- **main.cpp**: Application entry point
+- **qt_bindings.{cpp,h}**: Qt widget bindings exposed to Lua
+- **simple_lua_engine.{cpp,h}**: LuaJIT runtime initialization
+- **timeline_renderer.{cpp,h}**: High-performance timeline rendering widget
+- **resource_paths.{cpp,h}**: Asset path resolution
 
-### User Interface (`src/ui/`)
-- **panels/**: Main UI panels (Project Browser, Timeline, Inspector, Viewers)
-- **widgets/**: Custom controls (tri-state inputs, timeline elements)
-- **dialogs/**: Modal interactions and configurations
-- **selection/**: Multi-selection system for clips and edges
-- **timeline/**: Timeline-specific rendering and interaction
-- **input/**: Keyboard shortcuts and input handling
-- **theme/**: Professional dark theme implementation
+### Bug Reporter (`src/bug_reporter/`)
+Standalone module for capturing reproduction cases:
+- **gesture_logger.cpp**: User interaction recording
+- **qt_bindings_bug_reporter.cpp**: Bug reporting UI bindings
 
-### Lua Integration (`src/lua/`)
-- **runtime/**: LuaJIT initialization and management
-- **api/**: C++ to Lua bindings for command system access
-- **scripts/**: Default panel behaviors and extensibility hooks
-
-### Command Line Tools (`src/cli/`)
-- Debugging and validation utilities (jve-validate, jve-dump, jve-replay)
+### Lua Application Layer (`src/lua/`)
+All application logic, UI layouts, and business rules in Lua:
+- **core/**: Command system, database access, keyboard shortcuts, clipboard
+- **models/**: Entity models (Project, Sequence, Clip, Track, Media)
+- **ui/**: Panel layouts, inspector, project browser, timeline view
+- **importers/**: FCP7 XML, Resolve .drp, media file import
+- **media/**: FFprobe integration for media metadata
+- **qt_bindings/**: Widget creation and manipulation bindings
+- **bug_reporter/**: Bug capture manager integration
 
 ## Testing Structure (`tests/`)
 - **contract/**: API contract tests (TDD first)
 - **integration/**: End-to-end workflow tests
-- **unit/**: Individual component tests
-- **lua/**: Script runtime and behavior tests
+- **unit/**: C++ component tests (Qt bindings, timeline renderer)
+- **test_*.lua**: 220+ Lua tests for command system, timeline operations, importers
 
 ## Design Principles
 - **Library-First**: Each component is a testable, standalone library
