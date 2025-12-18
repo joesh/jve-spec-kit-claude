@@ -51,11 +51,6 @@ include_directories(
 
 # Source files organization
 set(CORE_SOURCES
-    src/core/persistence/migrations.cpp
-    src/core/persistence/schema_validator.cpp
-    src/core/persistence/sql_executor.cpp
-
-    src/core/common/uuid_generator.cpp
     src/core/resource_paths.cpp
 
     src/lua/simple_lua_engine.cpp
@@ -82,16 +77,10 @@ set(UI_SOURCES
     # src/ui/common/performance_monitor.cpp
 )
 
-# LUA sources - timeline FFI implementation (disabled for now)
-# set(LUA_SOURCES
-#     src/lua/timeline_ffi.cpp
-# )
-
 # Core library (for testing and CLI tools)
-add_library(JVECore STATIC 
+add_library(JVECore STATIC
     ${CORE_SOURCES}
     ${UI_SOURCES}
-    # ${LUA_SOURCES}
 )
 
 # Enable MOC for JVECore library

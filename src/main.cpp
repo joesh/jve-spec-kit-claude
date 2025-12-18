@@ -11,7 +11,6 @@
 #include <QFile>
 
 #include "lua/simple_lua_engine.h"
-#include "core/persistence/migrations.h"
 #include "core/resource_paths.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
@@ -116,9 +115,6 @@ int main(int argc, char *argv[])
         qCInfo(jveMain, "Opening default project: %s", qPrintable(projectPath));
     }
 
-    // Initialize database migrations
-    Migrations::initialize();
-    
     // Create Lua engine for pure Lua UI
     SimpleLuaEngine luaEngine;
     
