@@ -12,7 +12,11 @@ function M.register(executors, undoers, db)
 
         local xml_path = command:get_parameter("xml_path")
         local xml_contents = command:get_parameter("xml_contents")
-        local project_id = command:get_parameter("project_id") or "default_project"
+        local project_id = command:get_parameter("project_id") or command.project_id
+        if not project_id or project_id == "" then
+            logger.error("import_fcp7_xml", "ImportFCP7XML missing project_id")
+            return false
+        end
 
         if not xml_path then
             logger.error("import_fcp7_xml", "ImportFCP7XML missing xml_path")
@@ -152,8 +156,10 @@ function M.register(executors, undoers, db)
         end
 
         if timeline_state and timeline_state.reload_clips then
-            local reload_target = fallback_sequence or active_sequence or "default_sequence"
-            timeline_state.reload_clips(reload_target)
+            local reload_target = fallback_sequence or active_sequence
+            if reload_target and reload_target ~= "" then
+                timeline_state.reload_clips(reload_target)
+            end
         end
 
         logger.info("import_fcp7_xml", "Import undone - deleted all imported entities")

@@ -44,7 +44,7 @@ end
 
 -- Regression: Nudge should accept ms input (from drag handlers) by converting to Rational.
 local db = setup_db()
-command_manager.init(db)
+command_manager.init(db, "seq", "proj")
 reload_state()
 
 -- Seed one clip

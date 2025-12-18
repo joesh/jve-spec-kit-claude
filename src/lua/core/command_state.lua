@@ -214,6 +214,14 @@ end
 function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
     local timeline_state = require('ui.timeline.timeline_state')
     local Clip = require('models.clip')
+    local selection_state = require("ui.timeline.state.selection_state")
+    -- Only bypass persistence when using the real timeline_state module and it has not been initialized
+    -- with an active sequence. Test stubs often omit get_sequence_id entirely.
+    local bypass_persist = false
+    if type(timeline_state.get_sequence_id) == "function" then
+        local seq = timeline_state.get_sequence_id()
+        bypass_persist = (not seq or seq == "")
+    end
 
     local function safe_load_clip(clip_id)
     if not clip_id then
@@ -259,10 +267,14 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
         end
 
         if #restored_edges > 0 then
-            if timeline_state.set_edge_selection_raw then
-                timeline_state.set_edge_selection_raw(restored_edges, {normalize = false})
+            if bypass_persist then
+                selection_state.set_edge_selection_raw(restored_edges, {normalize = false}, nil)
             else
-                timeline_state.set_edge_selection(restored_edges)
+                if timeline_state.set_edge_selection_raw then
+                    timeline_state.set_edge_selection_raw(restored_edges, {normalize = false})
+                else
+                    timeline_state.set_edge_selection(restored_edges)
+                end
             end
             return
         end
@@ -279,7 +291,11 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
         end
 
         if #restored_clips > 0 then
-            timeline_state.set_selection(restored_clips)
+            if bypass_persist then
+                selection_state.set_selection(restored_clips, nil)
+            else
+                timeline_state.set_selection(restored_clips)
+            end
             return
         end
     end
@@ -297,14 +313,23 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
             end
         end
         if #restored_gaps > 0 then
-            timeline_state.set_gap_selection(restored_gaps)
+            if bypass_persist then
+                selection_state.set_gap_selection(restored_gaps)
+            else
+                timeline_state.set_gap_selection(restored_gaps)
+            end
             return
         end
     end
 
-    timeline_state.set_selection({})
-    if timeline_state.set_gap_selection then
-        timeline_state.set_gap_selection({})
+    if bypass_persist then
+        selection_state.set_selection({}, nil)
+        selection_state.set_gap_selection({})
+    else
+        timeline_state.set_selection({})
+        if timeline_state.set_gap_selection then
+            timeline_state.set_gap_selection({})
+        end
     end
 end
 

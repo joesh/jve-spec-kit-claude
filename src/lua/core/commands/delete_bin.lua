@@ -1,15 +1,19 @@
 local M = {}
 local tag_service = require("core.tag_service")
 
-function M.register(command_executors, command_undoers, db, set_last_error)
-    command_executors["DeleteBin"] = function(command)
-        command:set_parameter("__skip_sequence_replay", true)
-        local project_id = command:get_parameter("project_id") or "default_project"
-        local bin_id = command:get_parameter("bin_id")
-        if not bin_id or bin_id == "" then
-            set_last_error("DeleteBin: Missing bin_id")
-            return false
-        end
+    function M.register(command_executors, command_undoers, db, set_last_error)
+        command_executors["DeleteBin"] = function(command)
+            command:set_parameter("__skip_sequence_replay", true)
+            local project_id = command:get_parameter("project_id")
+            if not project_id or project_id == "" then
+                set_last_error("DeleteBin: missing project_id")
+                return false
+            end
+            local bin_id = command:get_parameter("bin_id")
+            if not bin_id or bin_id == "" then
+                set_last_error("DeleteBin: Missing bin_id")
+                return false
+            end
 
         local ok, result = tag_service.remove_bin(project_id, bin_id)
         if not ok then
@@ -24,7 +28,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["DeleteBin"] = function(command)
-        local project_id = command:get_parameter("project_id") or "default_project"
+        local project_id = command:get_parameter("project_id")
+        if not project_id or project_id == "" then
+            set_last_error("UndoDeleteBin: missing project_id")
+            return false
+        end
         local target_bin = command:get_parameter("deleted_bin_definition")
         if not target_bin then
             set_last_error("UndoDeleteBin: Missing bin definition")

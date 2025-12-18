@@ -331,7 +331,10 @@ local function apply_event(event_record)
 end
 
 local function normalize_clip_payload(command, context)
-    local seq_id = context.sequence_id or command:get_parameter("sequence_id") or "default_sequence"
+    local seq_id = context.sequence_id or command:get_parameter("sequence_id")
+    if not seq_id or seq_id == "" then
+        error("event_log: normalize_clip_payload missing sequence_id", 2)
+    end
     local duration = command:get_parameter("duration")
     local insert_time = command:get_parameter("insert_time")
     local src_in = command:get_parameter("source_in") or 0
@@ -397,23 +400,27 @@ end
 local function build_event_envelope(command, context)
     local sequence_number = context.sequence_number or command.sequence_number or 0
     local parent_sequence = command.parent_sequence_number
-    local scope = context.scope or "command"
+    local scope = context.scope
     local author = os.getenv("JVE_EVENT_AUTHOR")
     if not author or author == "" then
         author = "node:" .. (os.getenv("USER") or "jve")
+    end
+    local project_id = context.project_id or command.project_id
+    if not project_id or project_id == "" then
+        error("event_log: missing project_id for command " .. tostring(command.type), 2)
     end
 
     local envelope = {
         id = deterministic_event_id(sequence_number),
         type = command.type,
-        scope = scope,
+        scope = scope or "command",
         ts = math.floor((command.executed_at or os.time()) * 1000),
         author = author,
         parents = {},
         schema = 1,
         payload_v = 1,
         command_id = command.id,
-        project_id = context.project_id or command.project_id or "default_project",
+        project_id = project_id,
         stack_id = context.stack_id or "global",
         timeline_payload = nil,
         media_payload = nil,
@@ -429,11 +436,15 @@ local function build_event_envelope(command, context)
         envelope.scope = "media"
     elseif command.type == "Insert" then
         envelope.timeline_payload = normalize_clip_payload(command, context)
-        envelope.scope = string.format("timeline:%s", context.sequence_id or "default_sequence")
+        envelope.scope = string.format("timeline:%s", envelope.timeline_payload.seq_id)
     elseif command.type == "SetActiveSequence" then
+        local seq_id = command:get_parameter("sequence_id") or command:get_parameter("seq_id")
+        if not seq_id or seq_id == "" then
+            error("event_log: SetActiveSequence missing sequence_id", 2)
+        end
         envelope.ui_payload = {
             type = "SetActiveSequence",
-            seq_id = command:get_parameter("sequence_id") or command:get_parameter("seq_id") or "default_sequence"
+            seq_id = seq_id
         }
         envelope.scope = "ui"
     elseif command.type == "SetPlayhead" then

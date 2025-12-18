@@ -71,6 +71,7 @@ local sequence_lookup = {
         id = "timeline_1",
         name = "Main Timeline",
         duration = 9000,
+        project_id = "default_project",
         frame_rate = 29.97,
         width = 1920,
         height = 1080,

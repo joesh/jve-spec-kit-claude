@@ -76,6 +76,8 @@ local dkjson = require("dkjson")
 -- Seed timeline state with a single clip and playhead inside it.
 timeline_state.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
+data.state.project_id = "test_project"
+data.state.sequence_id = "timeline_seq"
 
 local clip = {
     id = "clip_rational",

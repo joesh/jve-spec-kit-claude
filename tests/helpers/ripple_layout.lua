@@ -318,7 +318,7 @@ function M.create(opts)
     end
 
     function layout:init_timeline_state()
-        timeline_state.init(self.sequence_id)
+        timeline_state.init(self.sequence_id, self.project_id)
         return timeline_state
     end
 

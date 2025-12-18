@@ -43,12 +43,13 @@ end
 local function get_active_sequence_rate()
     local conn = database.get_connection()
     if not conn then
-        print("WARNING: No database connection for sequence rate detection, defaulting to 30fps")
-        return 30, 1
+        error("clipboard_actions: No database connection for sequence rate detection", 2)
     end
 
-    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
-                        or "default_sequence"
+    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+    if not sequence_id or sequence_id == "" then
+        error("clipboard_actions: missing active sequence_id for sequence rate detection", 2)
+    end
 
     local query = conn:prepare([[
         SELECT fps_numerator, fps_denominator
@@ -57,8 +58,7 @@ local function get_active_sequence_rate()
     ]])
 
     if not query then
-        print("WARNING: Failed to prepare sequence rate query, defaulting to 30fps")
-        return 30, 1
+        error("clipboard_actions: Failed to prepare sequence rate query", 2)
     end
 
     query:bind_value(1, sequence_id)
@@ -71,15 +71,13 @@ local function get_active_sequence_rate()
         if num and num > 0 and den and den > 0 then
             return num, den
         else
-            print(string.format("WARNING: Invalid sequence frame rate %s/%s, defaulting to 30fps",
-                                tostring(num), tostring(den)))
-            return 30, 1
+            error(string.format("clipboard_actions: invalid sequence frame rate %s/%s for %s",
+                tostring(num), tostring(den), tostring(sequence_id)), 2)
         end
     end
 
     query:finalize()
-    print("WARNING: Sequence not found, defaulting to 30fps")
-    return 30, 1
+    error("clipboard_actions: active sequence not found: " .. tostring(sequence_id), 2)
 end
 
 local function load_clip_properties(clip_id)
@@ -193,12 +191,14 @@ local function copy_timeline_selection()
 
     local payload = {
         kind = "timeline_clips",
-        project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or "default_project",
-        sequence_id = (timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or "default_sequence",
+        project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil,
+        sequence_id = (timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or nil,
         reference_start_frame = earliest_start_frame,
         clips = clip_payloads,
         count = #clip_payloads
     }
+    assert(payload.project_id and payload.project_id ~= "", "clipboard_actions.copy_timeline_selection: missing active project_id")
+    assert(payload.sequence_id and payload.sequence_id ~= "", "clipboard_actions.copy_timeline_selection: missing active sequence_id")
 
     clipboard.set(payload)
     print(string.format("📋 Copied %d timeline clip(s)", #clip_payloads))
@@ -210,14 +210,15 @@ local function paste_timeline(payload)
         return false, "Clipboard does not contain timeline clips"
     end
 
-    local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+    local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+    assert(active_sequence_id and active_sequence_id ~= "", "clipboard_actions.paste_timeline: missing active sequence_id")
     if payload.sequence_id and payload.sequence_id ~= active_sequence_id then
         return false, string.format("Clipboard sequence '%s' differs from active sequence_id '%s'",
             tostring(payload.sequence_id), tostring(active_sequence_id))
     end
 
-    local project_id = (timeline_state.get_project_id and timeline_state.get_project_id())
-        or payload.project_id or "default_project"
+    local project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil
+    assert(project_id and project_id ~= "", "clipboard_actions.paste_timeline: missing active project_id")
 
     local Rational = require("core.rational")
     local playhead_ms = (timeline_state.get_playhead_position and timeline_state.get_playhead_position()) or 0
@@ -357,7 +358,10 @@ local function copy_browser_selection()
         if entry and entry.clip_id then
             local clip = Clip.load(entry.clip_id, database.get_connection())
             if clip then
-                project_id = project_id or clip.project_id or entry.project_id or "default_project"
+                project_id = project_id or clip.project_id or entry.project_id
+                if not project_id or project_id == "" then
+                    error("Clipboard copy: missing project_id for browser selection clip " .. tostring(entry.clip_id), 2)
+                end
                 items[#items + 1] = {
                     bin_id = entry.bin_id,
                     duplicate_name = duplicate_name(entry.name or clip.name),

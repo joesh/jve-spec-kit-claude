@@ -7,7 +7,6 @@ local json = require("dkjson")
 local uuid = require("uuid")
 local db = require("core.database")
 local Clip = require("models.clip")
-local timeline_state = require("ui.timeline.timeline_state")
 local logger = require("core.logger")
 
 local function get_conn()
@@ -44,8 +43,8 @@ function M.trim_string(value)
 end
 
 function M.reload_timeline(sequence_id)
-    local timeline_state_mod = require('ui.timeline.timeline_state')
-    if not timeline_state_mod or not timeline_state_mod.reload_clips then
+    local timeline_state_mod = package.loaded["ui.timeline.timeline_state"]
+    if not timeline_state_mod or type(timeline_state_mod.reload_clips) ~= "function" then
         return
     end
     local target_sequence = sequence_id
@@ -304,11 +303,7 @@ function M.resolve_sequence_id_for_edges(command, primary_edge, edge_list)
         resolved = provided
     end
 
-    if not resolved or resolved == "" then
-        resolved = "default_sequence"
-    end
-
-    if resolved ~= provided then
+    if resolved and resolved ~= "" and resolved ~= provided then
         command:set_parameter("sequence_id", resolved)
     end
 
@@ -365,7 +360,38 @@ function M.restore_clip_state(state)
     local seq_id = state.owner_sequence_id or state.track_sequence_id or lookup_track_sequence(state.track_id)
     state.owner_sequence_id = state.owner_sequence_id or seq_id
     state.track_sequence_id = state.track_sequence_id or seq_id
-    state.project_id = state.project_id or "default_project"
+
+    if not state.project_id or state.project_id == "" then
+        local resolved_project_id = nil
+
+        if seq_id and seq_id ~= "" then
+            local stmt = conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
+            if stmt then
+                stmt:bind_value(1, seq_id)
+                if stmt:exec() and stmt:next() then
+                    resolved_project_id = stmt:value(0)
+                end
+                stmt:finalize()
+            end
+        end
+
+        if (not resolved_project_id or resolved_project_id == "") and state.id and state.id ~= "" then
+            local stmt = conn:prepare("SELECT project_id FROM clips WHERE id = ?")
+            if stmt then
+                stmt:bind_value(1, state.id)
+                if stmt:exec() and stmt:next() then
+                    resolved_project_id = stmt:value(0)
+                end
+                stmt:finalize()
+            end
+        end
+
+        if not resolved_project_id or resolved_project_id == "" then
+            error("restore_clip_state: missing project_id and unable to resolve from database", 2)
+        end
+
+        state.project_id = resolved_project_id
+    end
 
     local clip = Clip.load_optional(state.id, conn)
     

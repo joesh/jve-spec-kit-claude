@@ -34,17 +34,33 @@ local db = database.get_connection()
 assert_true("db connection", db ~= nil)
 _G.db = db
 
-for stmt in schema:gmatch("[^;]+;") do
-    local s = db:prepare(stmt)
-    assert_true("prepare schema", s ~= nil)
-    assert_true("exec schema", s:exec())
-    s:finalize()
+do
+    local ok, err = db:exec(schema)
+    if ok == false then
+        io.stderr:write("exec schema failed: " .. tostring(err) .. "\n")
+        os.exit(1)
+    end
 end
 
-db:exec("INSERT INTO projects (id, name, settings) VALUES ('default_project','BatchCmd','{}')")
-db:exec("INSERT INTO sequences (id, project_id, name, frame_rate, width, height) VALUES ('default_sequence','default_project','Seq',30,1920,1080)")
+local now = os.time()
+db:exec(string.format("INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES ('default_project','BatchCmd',%d,%d,'{}')", now, now))
+db:exec(string.format([[
+    INSERT INTO sequences (
+        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+        width, height, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        view_start_frame, view_duration_frames, created_at, modified_at
+    ) VALUES (
+        'default_sequence', 'default_project', 'Seq', 'timeline', 30, 1, 48000,
+        1920, 1080, 0,
+        '[]', '[]', '[]',
+        0, 240, %d, %d
+    )
+]], now, now))
 
-command_manager.init(db)
+db:exec(string.format("INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('v1','default_sequence','V1','VIDEO',1,1)"))
+
+command_manager.init(db, "default_sequence", "default_project")
 
 -- Test 1: accepts commands_json parameter
 do

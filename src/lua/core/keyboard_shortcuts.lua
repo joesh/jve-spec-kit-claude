@@ -465,6 +465,8 @@ function keyboard_shortcuts.perform_delete_action(opts)
         local Command = require("command")
         local json = require("dkjson")
         local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+        assert(project_id and project_id ~= "", "keyboard_shortcuts.perform_delete_action: missing active project_id")
 
         local command_specs = {}
         for _, clip in ipairs(selected_clips) do
@@ -477,7 +479,7 @@ function keyboard_shortcuts.perform_delete_action(opts)
         end
 
         local commands_json = json.encode(command_specs)
-        local batch_cmd = Command.create("BatchCommand", "default_project")
+        local batch_cmd = Command.create("BatchCommand", project_id)
         batch_cmd:set_parameter("commands_json", commands_json)
         if active_sequence_id and active_sequence_id ~= "" then
             batch_cmd:set_parameter("sequence_id", active_sequence_id)
@@ -888,6 +890,10 @@ function keyboard_shortcuts.handle_key(event)
         local selected_edges = timeline_state.get_selected_edges()
 
         local Command = require("command")
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+        local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+        assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: missing active project_id for ripple/nudge")
+        assert(sequence_id and sequence_id ~= "", "keyboard_shortcuts.handle_key: missing active sequence_id for ripple/nudge")
 
         if #selected_edges > 0 then
             local all_clips = timeline_state.get_clips()
@@ -912,16 +918,16 @@ function keyboard_shortcuts.handle_key(event)
 
             local result
             if #edge_infos > 1 then
-                local batch_cmd = Command.create("BatchRippleEdit", "default_project")
+                local batch_cmd = Command.create("BatchRippleEdit", project_id)
                 batch_cmd:set_parameter("edge_infos", edge_infos)
                 batch_cmd:set_parameter("delta_frames", nudge_ms.frames)
-                batch_cmd:set_parameter("sequence_id", "default_sequence")
+                batch_cmd:set_parameter("sequence_id", sequence_id)
                 result = command_manager.execute(batch_cmd)
             elseif #edge_infos == 1 then
-                local ripple_cmd = Command.create("RippleEdit", "default_project")
+                local ripple_cmd = Command.create("RippleEdit", project_id)
                 ripple_cmd:set_parameter("edge_info", edge_infos[1])
                 ripple_cmd:set_parameter("delta_frames", nudge_ms.frames)
-                ripple_cmd:set_parameter("sequence_id", "default_sequence")
+                ripple_cmd:set_parameter("sequence_id", sequence_id)
                 result = command_manager.execute(ripple_cmd)
             end
 
@@ -936,10 +942,11 @@ function keyboard_shortcuts.handle_key(event)
                 table.insert(clip_ids, clip.id)
             end
 
-            local nudge_cmd = Command.create("Nudge", "default_project")
+            local nudge_cmd = Command.create("Nudge", project_id)
             -- Nudge supports nudge_amount_rat
             nudge_cmd:set_parameter("nudge_amount_rat", nudge_ms)
             nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
+            nudge_cmd:set_parameter("sequence_id", sequence_id)
 
             local result = command_manager.execute(nudge_cmd)
             if result and result.success then
@@ -1008,7 +1015,9 @@ function keyboard_shortcuts.handle_key(event)
                 return true
             end
 
-            local batch_cmd = Command.create("BatchCommand", "default_project")
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+            assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: Blade missing active project_id")
+            local batch_cmd = Command.create("BatchCommand", project_id)
             batch_cmd:set_parameter("commands_json", json.encode(specs))
             local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
             if active_sequence_id and active_sequence_id ~= "" then
@@ -1080,15 +1089,14 @@ function keyboard_shortcuts.handle_key(event)
 
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
-            local Command = require("command")
-            local playhead_value = timeline_state.get_playhead_position()
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
-            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
-            local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
-            if not track_id or track_id == "" then
-                print("❌ INSERT: Active sequence has no video tracks")
-                return true
-            end
+        local Command = require("command")
+        local playhead_value = timeline_state.get_playhead_position()
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+        local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+        assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: Insert missing active project_id")
+        assert(sequence_id and sequence_id ~= "", "keyboard_shortcuts.handle_key: Insert missing active sequence_id")
+        local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
+        assert(track_id and track_id ~= "", "keyboard_shortcuts.handle_key: Insert missing active video track_id")
 
             local insert_cmd = Command.create("Insert", project_id)
             insert_cmd:set_parameter("master_clip_id", selected_clip.clip_id)
@@ -1129,15 +1137,14 @@ function keyboard_shortcuts.handle_key(event)
 
             local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
 
-            local Command = require("command")
-            local playhead_value = timeline_state.get_playhead_position()
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
-            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
-            local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
-            if not track_id or track_id == "" then
-                print("❌ OVERWRITE: Active sequence has no video tracks")
-                return true
-            end
+        local Command = require("command")
+        local playhead_value = timeline_state.get_playhead_position()
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+        local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+        assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: Overwrite missing active project_id")
+        assert(sequence_id and sequence_id ~= "", "keyboard_shortcuts.handle_key: Overwrite missing active sequence_id")
+        local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
+        assert(track_id and track_id ~= "", "keyboard_shortcuts.handle_key: Overwrite missing active video track_id")
 
             local overwrite_cmd = Command.create("Overwrite", project_id)
             overwrite_cmd:set_parameter("master_clip_id", selected_clip.clip_id)

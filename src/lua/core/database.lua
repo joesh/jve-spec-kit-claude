@@ -126,18 +126,28 @@ function M.move_aside_wal_sidecars(project_path, suffix)
     return moves
 end
 
-local function checkpoint_and_disable_wal()
+local function checkpoint_and_disable_wal(opts)
     if not db_connection then
         return true
     end
 
+    opts = opts or {}
+
     local ok, err = db_connection:exec("PRAGMA wal_checkpoint(TRUNCATE);")
     if ok == false then
+        if opts.best_effort then
+            logger.warn("database", "wal_checkpoint failed during shutdown (best_effort): " .. tostring(err))
+            return true
+        end
         return false, "wal_checkpoint failed: " .. tostring(err)
     end
 
     ok, err = db_connection:exec("PRAGMA journal_mode = DELETE;")
     if ok == false then
+        if opts.best_effort then
+            logger.warn("database", "journal_mode=DELETE failed during shutdown (best_effort): " .. tostring(err))
+            return true
+        end
         return false, "journal_mode=DELETE failed: " .. tostring(err)
     end
     return true
@@ -505,12 +515,20 @@ function M.get_connection()
     return db_connection
 end
 
-function M.shutdown()
+function M.shutdown(opts)
     if not db_connection then
         return true
     end
 
-    local ok, err = checkpoint_and_disable_wal()
+    opts = opts or {}
+
+    -- Best-effort cleanup: if a transaction is left open, attempt to roll it back
+    -- so we can checkpoint/close cleanly.
+    pcall(function()
+        db_connection:exec("ROLLBACK;")
+    end)
+
+    local ok, err = checkpoint_and_disable_wal(opts)
     if not ok then
         return false, err
     end
@@ -564,8 +582,10 @@ function M.ensure_media_record(media_id)
             local ok, args = pcall(json.decode, args_json or "{}")
             if ok and args and args.media_id == media_id then
                 local file_path = args.file_path or args.path
-                local project_id = args.project_id or "default_project"
-                if file_path and project_id then
+                local project_id = args.project_id
+                if not project_id or project_id == "" then
+                    logger.warn("database", "ensure_media_record: ImportMedia args missing project_id for media " .. tostring(media_id))
+                elseif file_path and file_path ~= "" then
                     local MediaReader = require('media.media_reader')
                     local new_id, _, import_err = MediaReader.import_media(file_path, db_connection, project_id, media_id)
                     if new_id == media_id then
@@ -586,44 +606,45 @@ function M.ensure_media_record(media_id)
 end
 
 -- Get current project ID
--- Creates a default project if none exists (ensures app can always run)
--- TODO: Implement multi-project support with user selection
 function M.get_current_project_id()
     if not db_connection then
         error("FATAL: No database connection - cannot get current project")
     end
 
-    -- Check if default project exists
-    local stmt = db_connection:prepare("SELECT id FROM projects WHERE id = ?")
+    -- Fail fast: "current project" is only meaningful if there is exactly one project,
+    -- or if an explicit active-project authority exists.
+    local stmt = db_connection:prepare([[
+        SELECT id
+        FROM projects
+        ORDER BY id ASC
+    ]])
     if not stmt then
         error("FATAL: Failed to prepare project query")
     end
-
-    local default_id = "default_project"
-    stmt:bind_value(1, default_id)
 
     if not stmt:exec() then
         stmt:finalize()
         error("FATAL: Failed to execute project query")
     end
 
-    local exists = stmt:next()
+    local ids = {}
+    while stmt:next() do
+        local id = stmt:value(0)
+        if id and id ~= "" then
+            table.insert(ids, id)
+        end
+    end
     stmt:finalize()
 
-    -- If default project doesn't exist, create it
-    if not exists then
-        local Project = require('models.project')
-        local project = Project.create_with_id(default_id, "Default Project")
-        if not project then
-            error("FATAL: Failed to create default project")
-        end
-        if not project:save(db_connection) then
-            error("FATAL: Failed to save default project to database")
-        end
-        logger.info("database", "Created default project")
+    if #ids == 0 then
+        error("FATAL: No projects exist in database")
     end
 
-    return default_id
+    if #ids > 1 then
+        error("FATAL: Multiple projects exist; active project selection is required (count=" .. tostring(#ids) .. ")")
+    end
+
+    return ids[1]
 end
 
 -- Load all tracks for a sequence
@@ -907,7 +928,9 @@ function M.load_media()
 end
 
 function M.load_master_clips(project_id)
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        error("FATAL: load_master_clips requires project_id", 2)
+    end
 
     if not db_connection then
         error("FATAL: No database connection - cannot load master clips")
@@ -1106,7 +1129,9 @@ function M.load_master_clips(project_id)
 end
 
 function M.load_sequences(project_id)
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        error("FATAL: load_sequences requires project_id", 2)
+    end
     if not db_connection then
         error("FATAL: load_sequences: No database connection")
     end
@@ -1363,7 +1388,9 @@ local function ensure_project_record(project_id)
 end
 
 function M.get_project_settings(project_id)
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        error("FATAL: get_project_settings requires project_id", 2)
+    end
     if not db_connection then
         error("FATAL: get_project_settings: No database connection")
     end
@@ -1399,7 +1426,9 @@ function M.set_project_setting(project_id, key, value)
         return false
     end
 
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        error("FATAL: set_project_setting requires project_id", 2)
+    end
     if not db_connection then
         error("FATAL: set_project_setting: No database connection")
     end
@@ -1579,7 +1608,9 @@ local function validate_bin_id(project_id, bin_id)
 end
 
 function M.load_bins(project_id, opts)
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        error("FATAL: load_bins requires project_id", 2)
+    end
     if not db_connection then
         error("FATAL: No database connection - cannot load bins")
     end
@@ -1616,7 +1647,6 @@ function M.load_bins(project_id, opts)
 end
 
 function M.save_bins(project_id, bins, opts)
-    project_id = project_id or M.get_current_project_id()
     if not project_id or project_id == "" then
         local reason = "save_bins: Missing project_id"
         logger.warn("database", reason)
@@ -1769,7 +1799,9 @@ function M.save_bins(project_id, bins, opts)
 end
 
 function M.load_master_clip_bin_map(project_id)
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        error("FATAL: load_master_clip_bin_map requires project_id", 2)
+    end
     local assignments = {}
     if not db_connection then
         return assignments
@@ -1802,7 +1834,9 @@ function M.load_master_clip_bin_map(project_id)
 end
 
 function M.save_master_clip_bin_map(project_id, bin_map)
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        return false
+    end
     if not db_connection then
         return false
     end
@@ -1873,7 +1907,9 @@ function M.save_master_clip_bin_map(project_id, bin_map)
 end
 
 function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
-    project_id = project_id or M.get_current_project_id()
+    if not project_id or project_id == "" then
+        return false, "Missing project_id"
+    end
     if not db_connection then
         return false, "No database connection"
     end

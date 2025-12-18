@@ -27,9 +27,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local source_out_raw = command:get_parameter("source_out_value") or command:get_parameter("source_out")
         local master_clip_id = command:get_parameter("master_clip_id")
         local project_id_param = command:get_parameter("project_id")
+        local project_id = command.project_id or project_id_param
         
-        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id) or "default_sequence"
-        assert(sequence_id and sequence_id ~= "", "Overwrite: missing sequence_id after resolution")
+        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id)
+        if not sequence_id or sequence_id == "" then
+            local msg = "Overwrite: missing sequence_id (unable to resolve from track_id)"
+            set_last_error(msg)
+            return false, msg
+        end
         command:set_parameter("sequence_id", sequence_id)
         if not command:get_parameter("__snapshot_sequence_ids") then
             command:set_parameter("__snapshot_sequence_ids", {sequence_id})
@@ -48,16 +53,34 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
 
         local overwrite_time_rat = rational_helpers.require_rational_in_rate(overwrite_time_raw or 0, seq_fps_num, seq_fps_den, "overwrite_time")
-        local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
+        local duration_frames = nil
+        do
+            local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
+            if duration_rat and duration_rat.frames and duration_rat.frames > 0 then
+                duration_frames = duration_rat.frames
+            end
+        end
 
         if master_clip and (not media_id or media_id == "") then
             media_id = master_clip.media_id
         end
 
         if not media_id or media_id == "" or not track_id or track_id == "" then
-            print("WARNING: Overwrite: Missing media_id or track_id")
-            return false
+            local msg = string.format("Overwrite: missing required ids (media_id=%s track_id=%s)", tostring(media_id), tostring(track_id))
+            set_last_error(msg)
+            return false, msg
         end
+
+        if master_clip then
+            project_id = project_id or master_clip.project_id
+        end
+        if not project_id or project_id == "" then
+            local msg = "Overwrite: missing project_id (command.project_id/parameter/master_clip.project_id all empty)"
+            set_last_error(msg)
+            return false, msg
+        end
+        command:set_parameter("project_id", project_id)
+        command.project_id = project_id
 
         local media_fps_num, media_fps_den
         if master_clip then
@@ -73,26 +96,41 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not source_in_rat then
                 source_in_rat = master_clip.source_in or Rational.new(0, media_fps_num, media_fps_den)
             end
-            if not source_out_rat then
-                local effective_source_duration = duration_rat or master_clip.duration or Rational.new(0, media_fps_num, media_fps_den)
-                source_out_rat = source_in_rat + effective_source_duration
+            if (not duration_frames or duration_frames <= 0) and master_clip.duration and master_clip.duration.frames and master_clip.duration.frames > 0 then
+                duration_frames = master_clip.duration.frames
             end
-
-            if not duration_rat or duration_rat.frames <= 0 then
-                local source_frame_count = source_out_rat.frames - source_in_rat.frames
-                duration_rat = Rational.new(source_frame_count, seq_fps_num, seq_fps_den)
+            if not source_out_rat and (not duration_frames or duration_frames <= 0) and master_clip.source_out then
+                source_out_rat = master_clip.source_out
             end
             copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
+        if not source_in_rat then
+            source_in_rat = Rational.new(0, media_fps_num, media_fps_den)
+        end
+
+        if source_out_rat and (not duration_frames or duration_frames <= 0) then
+            duration_frames = source_out_rat.frames - source_in_rat.frames
+        end
+        if not source_out_rat and duration_frames and duration_frames > 0 then
+            source_out_rat = Rational.new(source_in_rat.frames + duration_frames, media_fps_num, media_fps_den)
+        end
+        if not duration_frames or duration_frames <= 0 then
+            local msg = string.format("Overwrite: invalid duration_frames=%s", tostring(duration_frames))
+            set_last_error(msg)
+            return false, msg
+        end
+
         overwrite_time_rat = Rational.hydrate(overwrite_time_rat, seq_fps_num, seq_fps_den)
-        duration_rat = Rational.hydrate(duration_rat, seq_fps_num, seq_fps_den)
         source_in_rat = Rational.hydrate(source_in_rat, media_fps_num, media_fps_den)
         source_out_rat = Rational.hydrate(source_out_rat, media_fps_num, media_fps_den)
+        local duration_rat = Rational.new(duration_frames, seq_fps_num, seq_fps_den)
 
         if not overwrite_time_rat or not duration_rat or duration_rat.frames <= 0 or not source_out_rat then
-            print("WARNING: Overwrite: Missing or invalid overwrite_time, duration, or source range")
-            return false
+            local msg = string.format("Overwrite: invalid timing params (time=%s dur=%s out=%s)",
+                tostring(overwrite_time_rat), tostring(duration_rat), tostring(source_out_rat))
+            set_last_error(msg)
+            return false, msg
         end
 
         -- Resolve Occlusions (Trim/Delete existing clips)
@@ -104,14 +142,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         })
         
         if not ok_occ then
-            print(string.format("ERROR: Overwrite: Failed to resolve occlusions: %s", tostring(err_occ)))
-            return false
+            local msg = string.format("Overwrite: resolve_occlusions failed: %s", tostring(err_occ))
+            set_last_error(msg)
+            return false, msg
         end
         
         local existing_clip_id = command:get_parameter("clip_id")
         local clip_opts = {
             id = existing_clip_id or uuid.generate(),
-            project_id = project_id_param or (master_clip and master_clip.project_id),
+            project_id = project_id,
             track_id = track_id,
             owner_sequence_id = sequence_id,
             parent_clip_id = master_clip_id,
@@ -204,28 +243,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-                local started, begin_err = db:begin_transaction()
-                if not started then
-                    print("ERROR: UndoOverwrite: Failed to begin transaction: " .. tostring(begin_err))
-                    return false
-                end
-        
-                local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
-                if not ok then
-                    db:rollback_transaction(started)
-                    print("ERROR: UndoOverwrite: Failed to revert mutations: " .. tostring(err))
-                    return false
-                end
-        
-                local ok_commit, commit_err = db:commit_transaction(started)
-                if not ok_commit then
-                    db:rollback_transaction(started)
-                    return false, "Failed to commit undo transaction: " .. tostring(commit_err)
-                end
-        
-                print("✅ Undo Overwrite: Reverted all changes")
-                return true
-            end
+        local started, begin_err = db:begin_transaction()
+        if not started then
+            print("ERROR: UndoOverwrite: Failed to begin transaction: " .. tostring(begin_err))
+            return false
+        end
+
+        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+        if not ok then
+            db:rollback_transaction(started)
+            print("ERROR: UndoOverwrite: Failed to revert mutations: " .. tostring(err))
+            return false
+        end
+
+        local ok_commit, commit_err = db:commit_transaction(started)
+        if not ok_commit then
+            db:rollback_transaction(started)
+            return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+        end
+
+        print("✅ Undo Overwrite: Reverted all changes")
+        return true
+    end
     command_executors["UndoOverwrite"] = command_undoers["Overwrite"]
 
     return {

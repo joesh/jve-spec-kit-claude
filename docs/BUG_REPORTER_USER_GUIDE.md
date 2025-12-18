@@ -232,11 +232,12 @@ local Command = require("command")
 
 -- Setup
 assert(database.init(":memory:"))
-command_manager.init(database.get_connection())
 
 -- Create test data
 setup_test_project()
 setup_test_sequence()
+
+command_manager.init(database.get_connection(), "default_sequence", "default_project")
 
 -- Reproduce the exact sequence that triggered the bug
 local insert1 = Command.create("Insert", "default_project")

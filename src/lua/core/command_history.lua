@@ -9,8 +9,8 @@ local db = nil
 
 -- State tracking
 local last_sequence_number = 0
-local active_sequence_id = "default_sequence"
-local active_project_id = "default_project"
+local active_sequence_id = nil
+local active_project_id = nil
 
 local GLOBAL_STACK_ID = "global"
 local TIMELINE_STACK_PREFIX = "timeline:"
@@ -38,8 +38,14 @@ local command_stack_resolvers = {}
 
 function M.init(database, sequence_id, project_id)
     db = database
-    active_sequence_id = sequence_id or "default_sequence"
-    active_project_id = project_id or "default_project"
+    if not sequence_id or sequence_id == "" then
+        error("CommandHistory.init: sequence_id is required", 2)
+    end
+    if not project_id or project_id == "" then
+        error("CommandHistory.init: project_id is required", 2)
+    end
+    active_sequence_id = sequence_id
+    active_project_id = project_id
     
     M.reset()
 

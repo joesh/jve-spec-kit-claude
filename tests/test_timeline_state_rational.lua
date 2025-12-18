@@ -191,7 +191,7 @@ end
 
 timeline_state.reset()
 
-timeline_state.init() -- Initialize the state, loading default sequence data
+timeline_state.init("default_sequence") -- Initialize the state, loading default sequence data
 
 -- Playhead rational conversion round-trip (frames@24fps)
 local sequence_fps_num = timeline_state.get_sequence_fps_numerator()

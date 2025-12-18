@@ -50,6 +50,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Local scratch review artifacts
+review*.txt
+
 # Project and database files
 *.db
 *.jvp

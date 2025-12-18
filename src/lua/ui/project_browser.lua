@@ -185,7 +185,7 @@ local function current_project_id()
     if ok and value and value ~= "" then
         return value
     end
-    return "default_project"
+    return nil
 end
 
 local function sequence_defaults()
@@ -725,12 +725,12 @@ local function populate_tree()
     end
 
     -- Root sequences
-    for _, sequence in ipairs(sequences) do
-        if not sequence.kind or sequence.kind == "timeline" then
-        local duration_str = format_duration(sequence.duration, sequence.frame_rate)
-        local resolution_str = (sequence.width and sequence.height and sequence.width > 0)
-            and string.format("%dx%d", sequence.width, sequence.height)
-            or ""
+	    for _, sequence in ipairs(sequences) do
+	        if not sequence.kind or sequence.kind == "timeline" then
+	        local duration_str = format_duration(sequence.duration, sequence.frame_rate)
+	        local resolution_str = (sequence.width and sequence.height and sequence.width > 0)
+	            and string.format("%dx%d", sequence.width, sequence.height)
+	            or ""
         
         local fps_val = get_fps_float(sequence.frame_rate)
         local fps_str = (fps_val > 0)
@@ -746,16 +746,17 @@ local function populate_tree()
             ""
         })
 
-        local sequence_info = {
-            type = "timeline",
-            id = sequence.id,
-            name = sequence.name,
-            frame_rate = sequence.frame_rate,
-            width = sequence.width,
-            height = sequence.height,
-            duration = sequence.duration,
-            tree_id = tree_id
-        }
+	        local sequence_info = {
+	            type = "timeline",
+	            id = sequence.id,
+	            project_id = sequence.project_id or project_id,
+	            name = sequence.name,
+	            frame_rate = sequence.frame_rate,
+	            width = sequence.width,
+	            height = sequence.height,
+	            duration = sequence.duration,
+	            tree_id = tree_id
+	        }
 
         store_tree_item(M.tree, tree_id, sequence_info)
         M.sequence_map[sequence.id] = sequence_info
@@ -1757,13 +1758,12 @@ function M.insert_selected_to_timeline()
     local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
 
     local timeline_state_module = M.timeline_panel.get_state()
-    local sequence_id = timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id() or "default_sequence"
-    local project_id = timeline_state_module.get_project_id and timeline_state_module.get_project_id() or "default_project"
+    local sequence_id = timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id() or nil
+    local project_id = timeline_state_module.get_project_id and timeline_state_module.get_project_id() or nil
+    assert(project_id and project_id ~= "", "project_browser.insert_selected_to_timeline: missing active project_id")
+    assert(sequence_id and sequence_id ~= "", "project_browser.insert_selected_to_timeline: missing active sequence_id")
     local track_id = timeline_state_module.get_default_video_track_id and timeline_state_module.get_default_video_track_id() or nil
-    if not track_id or track_id == "" then
-        logger.error("project_browser", "No video track found in active sequence")
-        return
-    end
+    assert(track_id and track_id ~= "", "project_browser.insert_selected_to_timeline: missing active video track_id")
 
     local Command = require("command")
 
@@ -1867,7 +1867,8 @@ function M.delete_selected_items()
         if item.type == "master_clip" and item.clip_id then
             local clip = M.master_clip_map[item.clip_id]
             if clip then
-                local project_id = clip.project_id or M.project_id or "default_project"
+                local project_id = clip.project_id or M.project_id or db.get_current_project_id()
+                assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteMasterClip " .. tostring(item.clip_id))
                 local cmd = Command.create("DeleteMasterClip", project_id)
                 cmd:set_parameter("master_clip_id", clip.clip_id)
                 local result = command_manager.execute(cmd)
@@ -1888,7 +1889,8 @@ function M.delete_selected_items()
                     goto continue_delete_loop
                 end
 
-                local project_id = M.project_id or "default_project"
+                local project_id = M.project_id or db.get_current_project_id()
+                assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteSequence " .. tostring(sequence_id))
                 local cmd = Command.create("DeleteSequence", project_id)
                 cmd:set_parameter("sequence_id", sequence_id)
                 local result = command_manager.execute(cmd)
@@ -1901,7 +1903,8 @@ function M.delete_selected_items()
                 ::continue_delete_loop::
             end
         elseif item.type == "bin" and item.id then
-            local project_id = M.project_id or "default_project"
+            local project_id = M.project_id or db.get_current_project_id()
+            assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteBin " .. tostring(item.id))
             local cmd = Command.create("DeleteBin", project_id)
             cmd:set_parameter("project_id", project_id)
             cmd:set_parameter("bin_id", item.id)
@@ -2150,7 +2153,7 @@ function M.start_inline_rename()
     return edit_started
 end
 
-function M.focus_sequence(sequence_id, opts)
+	function M.focus_sequence(sequence_id, opts)
     opts = opts or {}
     if not sequence_id or sequence_id == "" then
         return false, "Invalid sequence id"
@@ -2164,10 +2167,7 @@ function M.focus_sequence(sequence_id, opts)
     M.selected_item = sequence_info
     M.selected_items = {sequence_info}
 
-    browser_state.update_selection({sequence_info}, {
-        media_lookup = M.media_map,
-        sequence_lookup = M.sequence_map
-    })
+	    browser_state.update_selection({sequence_info}, selection_context())
 
     if not opts.skip_focus then
         if focus_manager and focus_manager.focus_panel then

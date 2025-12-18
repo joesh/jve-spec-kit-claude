@@ -48,6 +48,36 @@ local function setup_test_db()
     local db_path = ":memory:" -- Use in-memory database for tests
     local db = database.init(db_path)
     assert_not_nil(db, "Failed to initialize in-memory database")
+
+    local now = os.time()
+    assert(db:exec(string.format([[
+        INSERT OR IGNORE INTO projects (id, name, created_at, modified_at)
+        VALUES ('default_project', 'Default Project', %d, %d);
+    ]], now, now)))
+    assert(db:exec(string.format([[
+        INSERT OR IGNORE INTO sequences (
+            id, project_id, name, kind,
+            fps_numerator, fps_denominator, audio_rate,
+            width, height,
+            view_start_frame, view_duration_frames, playhead_frame,
+            selected_clip_ids, selected_edge_infos, selected_gap_infos,
+            current_sequence_number,
+            created_at, modified_at
+        ) VALUES (
+            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            30, 1, 48000,
+            1920, 1080,
+            0, 240, 0,
+            '[]', '[]', '[]',
+            0,
+            %d, %d
+        );
+    ]], now, now)))
+    assert(db:exec([[
+        INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index)
+        VALUES ('default_video1', 'default_sequence', 'V1', 'VIDEO', 1);
+    ]]))
+
     return db
 end
 
@@ -70,7 +100,7 @@ end
 
 local function test_create_clip_command_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
     
     local project = Project.create("Test Project")
     project:save(db)
@@ -146,7 +176,7 @@ end
 
 local function test_insert_clip_to_timeline_command_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
     
     local project = Project.create("Test Project 2")
     project:save(db)
@@ -207,7 +237,7 @@ end
 
 local function test_insert_clip_with_master_clip_rescale_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
     
     local project = Project.create("Test Project 3")
     project:save(db)
@@ -293,7 +323,7 @@ end
 
 local function test_split_clip_command_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
 
     local project = Project.create("Test Project Split")
     project:save(db)
@@ -418,7 +448,7 @@ end
 
 local function test_ripple_delete_command_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
 
     local project = Project.create("Test Project Ripple")
     project:save(db)
@@ -508,7 +538,7 @@ end
 
 local function test_ripple_edit_command_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
 
     local project = Project.create("Test Project RippleEdit")
     project:save(db)
@@ -607,7 +637,7 @@ end
 
 local function test_nudge_command_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
 
     local project = Project.create("Test Project Nudge")
     project:save(db)
@@ -707,7 +737,7 @@ end
 
 local function test_move_clip_to_track_command_func()
     local db = setup_test_db()
-    command_manager.init(db)
+    command_manager.init(db, "default_sequence", "default_project")
 
     local project = Project.create("Test Project MoveClip")
     project:save(db)

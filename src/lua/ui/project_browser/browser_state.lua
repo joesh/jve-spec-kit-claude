@@ -58,7 +58,8 @@ local function normalize_master_clip(item, context)
     local source_in = tonumber(clip.source_in) or 0
     local source_out = tonumber(clip.source_out) or duration
 
-    local project_id = clip.project_id or context.project_id or (media and media.project_id) or "default_project"
+    local project_id = clip.project_id or context.project_id or (media and media.project_id)
+    assert(project_id and project_id ~= "", "browser_state.normalize_master_clip: missing project_id for master clip " .. tostring(clip.clip_id or item.clip_id or item.media_id))
     local bin_lookup = context.bin_lookup
     local bin_id = nil
     if item.bin_id then
@@ -93,7 +94,7 @@ local function normalize_master_clip(item, context)
 
     local ok, inspectable = pcall(inspectable_factory.clip, {
         clip_id = clip.clip_id,
-        project_id = project_id or "default_project",
+        project_id = project_id,
         clip = clip
     })
     if ok and inspectable then
@@ -140,9 +141,11 @@ local function normalize_timeline(item, context)
     }
 
     local project_id = sequence.project_id or (context and context.project_id)
+    assert(project_id and project_id ~= "", "browser_state.normalize_timeline: missing project_id for sequence " .. tostring(sequence.id))
+    entry.project_id = project_id
     local ok, inspectable = pcall(inspectable_factory.sequence, {
         sequence_id = sequence.id,
-        project_id = project_id or "default_project",
+        project_id = project_id,
         sequence = sequence
     })
     if ok and inspectable then

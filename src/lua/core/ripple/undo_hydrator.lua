@@ -88,7 +88,10 @@ function M.hydrate_executed_mutations_if_missing(command)
     end
 
     local sequence_id = command:get_parameter("sequence_id")
-    local project_id = command.project_id or command:get_parameter("project_id") or "default_project"
+    local project_id = command.project_id or command:get_parameter("project_id")
+    if not project_id or project_id == "" then
+        error("BatchRippleEdit undo: missing project_id", 2)
+    end
 
     local function normalized_state(state)
         local copy = {}
@@ -174,4 +177,3 @@ function M.hydrate_executed_mutations_if_missing(command)
 end
 
 return M
-

@@ -281,8 +281,10 @@ local function create_timecode_header()
 end
 
 local function normalize_timeline_selection(clips)
-    local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
-    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+    local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+    assert(project_id and project_id ~= "", "timeline_panel.normalize_timeline_selection: missing active project_id")
+    assert(sequence_id and sequence_id ~= "", "timeline_panel.normalize_timeline_selection: missing active sequence_id")
 
     if not clips or #clips == 0 then
         local ok, inspectable = pcall(inspectable_factory.sequence, {
@@ -419,9 +421,16 @@ local function close_tab(sequence_id)
         if next_id then
             M.load_sequence(next_id)
         else
-            local fallback = "default_sequence"
-            ensure_tab_for_sequence(fallback)
-            M.load_sequence(fallback)
+            local project_id = state.get_project_id and state.get_project_id() or nil
+            if not project_id or project_id == "" then
+                return
+            end
+            local sequences = database.load_sequences(project_id) or {}
+            local fallback_id = sequences[1] and sequences[1].id or nil
+            if fallback_id and fallback_id ~= "" then
+                ensure_tab_for_sequence(fallback_id)
+                M.load_sequence(fallback_id)
+            end
         end
     else
         update_tab_styles(current_sequence)
@@ -527,7 +536,18 @@ local function handle_tab_command_event(event)
                 if #tab_order > 0 then
                     fallback = tab_order[#tab_order]
                 end
-                M.load_sequence(fallback or "default_sequence")
+                if fallback and fallback ~= "" then
+                    M.load_sequence(fallback)
+                else
+                    local project_id = state.get_project_id and state.get_project_id() or nil
+                    if project_id and project_id ~= "" then
+                        local sequences = database.load_sequences(project_id) or {}
+                        local fallback_id = sequences[1] and sequences[1].id or nil
+                        if fallback_id and fallback_id ~= "" then
+                            M.load_sequence(fallback_id)
+                        end
+                    end
+                end
             end
         elseif event.event == "execute" or event.event == "redo" then
             local seq_id = created_sequence_ids[1]
@@ -943,12 +963,22 @@ local function create_headers_column()
     return headers_wrapper, headers_main_splitter, video_scroll, audio_scroll
 end
 
-function M.create()
+function M.create(opts)
     logger.debug("timeline_panel", "Creating multi-view timeline panel...")
 
     -- Initialize state
     state = timeline_state
-    state.init("default_sequence")
+    local sequence_id = nil
+    local project_id = nil
+    if type(opts) == "table" then
+        sequence_id = opts.sequence_id
+        project_id = opts.project_id
+    elseif type(opts) == "string" then
+        sequence_id = opts
+    end
+    assert(sequence_id and sequence_id ~= "", "timeline_panel.create: sequence_id is required")
+    assert(project_id and project_id ~= "", "timeline_panel.create: project_id is required")
+    state.init(sequence_id, project_id)
 
     -- Set up selection callback for inspector
     state.set_on_selection_changed(function(selected_clips)
@@ -1421,7 +1451,10 @@ function M.create()
 
     logger.debug("timeline_panel", "Multi-view timeline panel created successfully")
 
-    local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or "default_sequence"
+    local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or nil
+    if not initial_sequence_id or initial_sequence_id == "" then
+        error("timeline_panel: missing initial sequence_id from state", 2)
+    end
     ensure_tab_for_sequence(initial_sequence_id)
     update_tab_styles(initial_sequence_id)
 
@@ -1449,12 +1482,20 @@ function M.load_sequence(sequence_id)
     end
 
     logger.debug("timeline_panel", string.format("Loading sequence %s into timeline panel", sequence_id))
-    state.init(sequence_id)
-
-    local project_id = state.get_project_id and state.get_project_id() or database.get_current_project_id()
-    if project_id then
-        database.set_project_setting(project_id, "last_open_sequence_id", sequence_id)
+    local db_conn = database.get_connection()
+    assert(db_conn, "timeline_panel.load_sequence: missing database connection")
+    local project_id = nil
+    local stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
+    assert(stmt, "timeline_panel.load_sequence: failed to prepare sequence project_id query")
+    stmt:bind_value(1, sequence_id)
+    if stmt:exec() and stmt:next() then
+        project_id = stmt:value(0)
     end
+    stmt:finalize()
+    assert(project_id and project_id ~= "", "timeline_panel.load_sequence: missing project_id for sequence " .. tostring(sequence_id))
+    state.init(sequence_id, project_id)
+
+    database.set_project_setting(project_id, "last_open_sequence_id", sequence_id)
 
     if command_manager and command_manager.activate_timeline_stack then
         command_manager.activate_timeline_stack(sequence_id)

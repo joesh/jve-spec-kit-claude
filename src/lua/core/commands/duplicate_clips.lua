@@ -58,29 +58,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        local started, begin_err = db:begin_transaction()
-        if not started then
-            if string.find(tostring(begin_err), "cannot start a transaction within a transaction") then
-                started = nil
-            else
-                return false, "DuplicateClips: failed to begin transaction: " .. tostring(begin_err)
-            end
-        end
-
         local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
         if not ok_apply then
-            if started then
-                db:rollback_transaction(started)
-            end
             return false, "DuplicateClips: apply_mutations failed: " .. tostring(apply_err)
-        end
-
-        if started then
-            local ok_commit, commit_err = db:commit_transaction(started)
-            if not ok_commit then
-                db:rollback_transaction(started)
-                return false, "DuplicateClips: commit failed: " .. tostring(commit_err)
-            end
         end
 
         command:set_parameter("executed_mutations", planned_mutations)
@@ -122,11 +102,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local started, begin_err = db:begin_transaction()
-        if not started then
-            if not string.find(tostring(begin_err), "cannot start a transaction within a transaction") then
-                return false, "UndoDuplicateClips: failed to begin transaction: " .. tostring(begin_err)
-            end
-        end
+        assert(started, "UndoDuplicateClips: failed to begin transaction: " .. tostring(begin_err))
 
         local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
         if not ok then
@@ -134,12 +110,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, "UndoDuplicateClips: revert_mutations failed: " .. tostring(err)
         end
 
-        if started then
-            local ok_commit, commit_err = db:commit_transaction(started)
-            if not ok_commit then
-                db:rollback_transaction(started)
-                return false, "UndoDuplicateClips: commit failed: " .. tostring(commit_err)
-            end
+        local ok_commit, commit_err = db:commit_transaction(started)
+        if not ok_commit then
+            db:rollback_transaction(started)
+            return false, "UndoDuplicateClips: commit failed: " .. tostring(commit_err)
         end
 
         return true
@@ -154,4 +128,3 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 end
 
 return M
-

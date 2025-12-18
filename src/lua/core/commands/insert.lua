@@ -22,8 +22,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local track_id = command:get_parameter("track_id")
         
         -- Resolve owning sequence (timeline coordinate space).
-        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id) or "default_sequence"
-        assert(sequence_id and sequence_id ~= "", "Insert: missing sequence_id after resolution")
+        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id)
+        if not sequence_id or sequence_id == "" then
+            local msg = "Insert: missing sequence_id (unable to resolve from track_id)"
+            set_last_error(msg)
+            return false, msg
+        end
         command:set_parameter("sequence_id", sequence_id)
         if not command:get_parameter("__snapshot_sequence_ids") then
             command:set_parameter("__snapshot_sequence_ids", {sequence_id})
@@ -38,6 +42,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         
         local master_clip_id = command:get_parameter("master_clip_id")
         local project_id_param = command:get_parameter("project_id")
+        local project_id = command.project_id or project_id_param
 
         local master_clip = nil
         if master_clip_id and master_clip_id ~= "" then
@@ -66,9 +71,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local source_in_rat = rational_helpers.optional_rational_in_rate(source_in_raw, media_fps_num, media_fps_den)
         local source_out_rat = rational_helpers.optional_rational_in_rate(source_out_raw, media_fps_num, media_fps_den)
-        local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
+        local duration_frames = nil
+        do
+            local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
+            if duration_rat and duration_rat.frames and duration_rat.frames > 0 then
+                duration_frames = duration_rat.frames
+            end
+        end
 
         if master_clip then
+            project_id = project_id or master_clip.project_id
             if (not media_id or media_id == "") and master_clip.media_id then
                 media_id = master_clip.media_id
             end
@@ -76,37 +88,52 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not source_in_rat then
                 source_in_rat = master_clip.source_in or Rational.new(0, media_fps_num, media_fps_den)
             end
-            if not source_out_rat then
-                local effective_source_duration = duration_rat or master_clip.duration or Rational.new(0, media_fps_num, media_fps_den)
-                source_out_rat = source_in_rat + effective_source_duration
+            if (not duration_frames or duration_frames <= 0) and master_clip.duration and master_clip.duration.frames and master_clip.duration.frames > 0 then
+                duration_frames = master_clip.duration.frames
             end
-
-            -- Conform semantics: timeline duration uses the same frame count as the source range.
-            if not duration_rat or duration_rat.frames <= 0 then
-                local source_frame_count = source_out_rat.frames - source_in_rat.frames
-                duration_rat = Rational.new(source_frame_count, seq_fps_num, seq_fps_den)
+            if not source_out_rat and (not duration_frames or duration_frames <= 0) and master_clip.source_out then
+                source_out_rat = master_clip.source_out
             end
 
             copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
         if not media_id or media_id == "" or not track_id or track_id == "" then
-            print("WARNING: Insert: Missing media_id or track_id")
-            return false
+            local msg = string.format("Insert: missing required ids (media_id=%s track_id=%s)", tostring(media_id), tostring(track_id))
+            set_last_error(msg)
+            return false, msg
         end
+
+        if not project_id or project_id == "" then
+            local msg = "Insert: missing project_id (command.project_id/parameter/master_clip.project_id all empty)"
+            set_last_error(msg)
+            return false, msg
+        end
+        command:set_parameter("project_id", project_id)
+        command.project_id = project_id
 
         if not source_in_rat then
             source_in_rat = Rational.new(0, media_fps_num, media_fps_den)
         end
-        if not source_out_rat and duration_rat then
-            source_out_rat = source_in_rat + duration_rat
-        end
 
-        if not insert_time_rat or not duration_rat or duration_rat.frames <= 0 or not source_out_rat then
-            print(string.format("WARNING: Insert: Invalid params. time=%s dur=%s out=%s", 
-                tostring(insert_time_rat), tostring(duration_rat), tostring(source_out_rat)))
-            print("WARNING: Insert: Missing or invalid insert_time, duration, or source_out")
-            return false
+        if source_out_rat and (not duration_frames or duration_frames <= 0) then
+            duration_frames = source_out_rat.frames - source_in_rat.frames
+        end
+        if not source_out_rat and duration_frames and duration_frames > 0 then
+            source_out_rat = Rational.new(source_in_rat.frames + duration_frames, media_fps_num, media_fps_den)
+        end
+        if not duration_frames or duration_frames <= 0 then
+            local msg = string.format("Insert: invalid duration_frames=%s", tostring(duration_frames))
+            set_last_error(msg)
+            return false, msg
+        end
+        local duration_rat = Rational.new(duration_frames, seq_fps_num, seq_fps_den)
+
+        if not insert_time_rat or duration_rat.frames <= 0 or not source_out_rat then
+            local msg = string.format("Insert: invalid timing params (time=%s dur=%s out=%s)",
+                tostring(insert_time_rat), tostring(duration_rat), tostring(source_out_rat))
+            set_last_error(msg)
+            return false, msg
         end
 
         -- Resolve occlusions (splits and ripples existing clips)
@@ -118,8 +145,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         })
         
         if not ok_occ then
-            print(string.format("ERROR: Insert: Failed to resolve ripple: %s", tostring(err_occ)))
-            return false
+            local msg = string.format("Insert: resolve_ripple failed: %s", tostring(err_occ))
+            set_last_error(msg)
+            return false, msg
         end
 
         local existing_clip_id = command:get_parameter("clip_id")
@@ -127,7 +155,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         
         local clip_opts = {
             id = existing_clip_id or uuid.generate(),
-            project_id = project_id_param or (master_clip and master_clip.project_id),
+            project_id = project_id,
             track_id = track_id,
             owner_sequence_id = sequence_id,
             parent_clip_id = master_clip_id,

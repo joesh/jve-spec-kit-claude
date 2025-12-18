@@ -12,8 +12,11 @@ We've got lots of context available when anything goes wrong:
 
 ## **🔧 DEVELOPMENT RULES**
 
+### Process (Mandatory)
+- See `DEVELOPMENT-PROCESS.md` for the required workflow used for all future changes (scope/contracts, invariants, and test-gated verification).
+
 ### **0. Todo Management & Session Continuity**
-- **ALWAYS write to TODO.md for real-time task tracking
+- **ALWAYS write to TODO.md** for real-time task tracking
 - **UPDATE immediately** when starting/completing/discovering tasks
 - **CHECK todo list FIRST** before asking what's next
 - **Mark in_progress BEFORE starting, completed IMMEDIATELY after finishing**
@@ -33,7 +36,7 @@ We've got lots of context available when anything goes wrong:
 - **PRESERVE context continuity** - assume future Claude has no memory of this session
 
 ### **1.x Core Development Standards**
-- **1.1**: Comprehensive error handling upfront (not iterative debugging)
+- **1.1**: Comprehensive error handling upfront (not iterative debugging). While in development mode asserts are fine. Later we'll want full cascading error handling. Key is to fail fast with a stack trace as soon as an issue is found.
 - **1.2**: Test before assuming - validate everything incrementally
 - **1.3**: Don't change what's working without proven need
 - **1.4**: Modular architecture - single responsibility, clean separation
@@ -44,6 +47,15 @@ We've got lots of context available when anything goes wrong:
 - **1.10**: Stay in Your Layer - Lua scripts call Qt bindings - never direct Qt; Use widget registry RAII handles - never manual memory management; Go through command dispatcher - never direct function calls
 - **1.12**: External inputs must NEVER crash the system - all imported data (XML, DB, files) must be validated; degrade gracefully when metadata is missing; record warnings, extract whatever can be trusted, and keep the app running
 - **1.13**: Tags Are Canonical Organization - Bins are just the default `bin` tag namespace; every UI tree, importer, and command must talk to `tag_service`/`tag_assignments` (never `project_settings.bin_hierarchy` or `media_bin_map`); if tag tables are missing the build must fail loudly—absolutely no fallbacks or legacy shims unless Joe says otherwise.
+
+### **1.14 FAIL-FAST ASSERT POLICY (Development Phase)**
+- **Default posture**: This codebase is in active development. We prefer **immediate hard failure** over recovery. If a state *should never be possible*, it **must crash** loudly.
+- **Use `assert()` aggressively** for invariant violations, including UI/editor invariants (e.g. missing `project_id`, `sequence_id`, `playhead`, “no tracks” when a timeline is active). A “print and continue” is not acceptable for invariants.
+- **No silent fallbacks**: Never invent `"default_project"`, `"default_sequence"`, default fps, etc. If required identifiers/metadata are missing, **assert with context**.
+- **DB is treated as internal state**: Persisted project DB contents are considered authoritative internal state. Missing rows/metadata that “should exist” are **bugs** and should assert. If the DB is bad from earlier bugs, Joe’s workflow is to **delete/reset the DB** rather than adding shims or recovery paths.
+- **Renderer/UI paths may assert**: If invalid render inputs occur (bad colors, impossible geometry, etc.), crash immediately to force a fix. Prefer assert messages that identify the exact bad value and callsite.
+- **Make crashes actionable**: Assert messages must include the function/module name and relevant IDs/parameters (sequence_id/track_id/clip_id/command name) so the root cause is obvious.
+- **Only soften failures with explicit instruction**: Do not add “graceful degradation”, retries, fallbacks, or compatibility shims unless Joe explicitly asks for production-hardening behavior.
 
 ### **2.x Development Standards**
 - **2.1**: Clear technical tone, no excessive enthusiasm/emojis
@@ -62,7 +74,7 @@ We've got lots of context available when anything goes wrong:
 - **2.17**: No Stub Functions - NEVER create stub functions that return dummy values or print messages instead of implementing real functionality; Stub functions mask architectural problems and prevent proper solutions; ALWAYS implement the complete functionality or fix the underlying architecture issue; Stub functions are forbidden - they hide real problems
 - **2.18**: FFI vs Business Logic Separation - FFI functions are one-to-one mappings with C++ Qt functions; FFI functions contain parameter validation (not business logic) and no application logic; Business logic functions contain application logic and call FFI functions when they need Qt functionality; NEVER have business logic functions call C++ directly - they must go through FFI functions; NEVER have FFI functions contain business logic - they are pure interfaces to C++
 - **2.19**: Complete Tasks Before Building/Testing - NEVER build and test partial work - finish systematic tasks completely first; Building/testing mid-task is a major sidetracking risk that prevents completion; ALWAYS complete entire systematic jobs (like adding validation to ALL functions) before testing; Only build/test when explicitly requested or when systematic work is 100% complete
-- **2.20**: Regression Tests First - ALWAYS add a failing regression test before fixing a bug; PROVE the test fails by temporarily reverting or disabling the fix; ONLY then land the fix and ensure the new test passes; The test suite is more valuable than the implementation
+- **2.20**: Regression Tests First - ALWAYS add a failing regression test BEFORE fixing a bug; PROVE the test fails by temporarily reverting or disabling the fix; ONLY then land the fix and ensure the new test passes; The test suite is more valuable than the implementation
 - **2.21**: Statically-Verifiable Approaches - When deciding implementation approaches, strongly prefer designs that allow the compiler to catch errors rather than runtime detection; Change function signatures, add required parameters, use type systems, and leverage static analysis to make impossible states unrepresentable; Avoid approaches that rely on runtime checks to catch implementation mistakes that could be prevented at compile time
 - **2.24**: Evidence-Based Claims - ONLY claim success/failure based on observable evidence (screenshots, logs, measurements); Code changes alone are not evidence of fixes; If you cannot observe a difference, state: "I see no change"; Evidence trumps expectations every time
 - **2.25**: Document All Debugging Attempts - Failed attempts are valuable progress - document explicitly what didn't work and why; Progress includes: approaches tried, what failed, what was learned; "I tried X but it didn't fix Y" is legitimate progress that guides next steps; Never hide unsuccessful approaches - they prevent repeating failed methods
@@ -70,13 +82,14 @@ We've got lots of context available when anything goes wrong:
 - **2.29**: Snapshot Every BatchCommand - Whenever you queue multiple timeline operations inside a `BatchCommand`, you MUST set `sequence_id` to the active sequence and populate `__snapshot_sequence_ids` with that id. Without this, undo/redo/replay will appear to “do nothing” until a restart because the command manager doesn’t know which sequence to reload. Applies to delete, split, drag/duplicate, ripple, and any future batch operations.
 - **2.30**: Persist Track Heights Per Sequence - Every timeline sequence must write its track heights to SQLite (`sequence_track_layouts.track_heights_json`) whenever a header is resized, and that same height map must be reloaded verbatim on init. The most recently modified sequence becomes the project-wide template (`project_settings.track_height_template`), and any brand-new sequence must immediately adopt that template before saving its own layout. No fallbacks: if persistence fails, surface the error rather than silently using defaults.
 - **2.31**: Never Change Existing Test Expectations Without Approval - Once a regression test exists, its assertions are canon. You MUST obtain Joe's explicit approval before modifying expected values, pass/fail conditions, or other semantics. If a test fails, fix the implementation or write a new test that demonstrates the correct behavior—do not “adjust” an existing test to match buggy code.
+- **2.32**: New Codepaths Require Tests - When you add new behavior, branches, handlers, or invariants, you MUST add tests that exercise the new paths (including edge/failure paths, not just happy paths). For `assert()`-based failure paths, test via `pcall()` and validate the error message is actionable.
 
 ### **3.x Design Principles**
 - **3.1**: Protocol versioning - support only the current protocol/schema; when formats change, bump the version and migrate forward without keeping the old behavior
 - **3.2**: Principle of least amazement - predictable behavior
 - **3.3**: Orthogonality - composable commands
 - **3.4**: Progressive disclosure - core workflow ≤ 3 clicks
-- **3.5**: Fail fast with clear, actionable error messages
+- **3.5**: Fail fast with clear, actionable error messages. While in development mode use asserts to force a stack trace.
 - **3.9-3.10**: Complete error propagation with actionable messages
 - **3.11**: Discoverable UI - tooltips on all non-obvious controls
 - **3.13**: No mysterious disabled controls without explanatory tooltips

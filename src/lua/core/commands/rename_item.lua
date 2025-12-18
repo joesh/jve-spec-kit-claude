@@ -15,8 +15,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, "RenameItem: New name cannot be empty"
         end
 
-        project_id = project_id or "default_project"
-
         if target_type == "master_clip" then
             local Clip = require("models.clip")
             local clip = Clip.load_optional(target_id, db)
@@ -65,6 +63,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command_helper.reload_timeline(sequence.id)
             return true, previous_name
         elseif target_type == "bin" then
+            if not project_id or project_id == "" then
+                return false, "RenameItem: missing project_id for bin rename"
+            end
             local tag_service = require("core.tag_service")
             local ok, result = tag_service.rename_bin(project_id, target_id, new_name)
             if not ok then
@@ -81,7 +82,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["RenameItem"] = function(command)
         local target_type = command:get_parameter("target_type")
         local target_id = command:get_parameter("target_id")
-        local project_id = command:get_parameter("project_id") or command.project_id or "default_project"
+        local project_id = command:get_parameter("project_id") or command.project_id
         local new_name = command_helper.trim_string(command:get_parameter("new_name"))
 
         if not target_type or target_type == "" then
@@ -118,7 +119,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         local target_type = command:get_parameter("target_type")
         local target_id = command:get_parameter("target_id")
-        local project_id = command:get_parameter("project_id") or command.project_id or "default_project"
+        local project_id = command:get_parameter("project_id") or command.project_id
 
         local success, err = perform_item_rename(target_type, target_id, previous_name, project_id)
         if not success then

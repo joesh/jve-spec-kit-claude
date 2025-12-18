@@ -22,8 +22,8 @@ local state_mgr = require("core.command_state")
 local last_error_message = ""
 
 -- Active context
-local active_sequence_id = "default_sequence"
-local active_project_id = "default_project"
+local active_sequence_id = nil
+local active_project_id = nil
 
 local non_recording_commands = {
     SelectAll = true,
@@ -136,18 +136,20 @@ local function normalize_command(command_or_name, params)
     end
 end
 
-local function normalize_executor_result(exec_result)
+local function normalize_executor_result(exec_result, command)
     if exec_result == nil then
         return false, ""
     end
 
     if type(exec_result) == "table" then
+        assert(type(exec_result.success) == "boolean",
+            string.format(
+                "Command executor contract violated: %s returned table without boolean .success",
+                tostring(command and command.type)
+            ))
         local success_field = exec_result.success
-        if success_field == nil then
-            success_field = true
-        end
         local error_message = exec_result.error_message or ""
-        local result_data = exec_result.result_data or ""
+        local result_data = exec_result.result_data
         return success_field ~= false, error_message, result_data
     end
 
@@ -299,12 +301,44 @@ end
 -- Initialize CommandManager with database connection
 function M.init(database, sequence_id, project_id)
     db = database
-    active_sequence_id = sequence_id or "default_sequence"
-    active_project_id = project_id or "default_project"
+    if not sequence_id or sequence_id == "" then
+        error("CommandManager.init: sequence_id is required", 2)
+    end
+    if not project_id or project_id == "" then
+        error("CommandManager.init: project_id is required", 2)
+    end
+    active_sequence_id = sequence_id
+    active_project_id = project_id
     
     registry.init(db, M.set_last_error)
     history.init(db, sequence_id, project_id)
     state_mgr.init(db)
+
+    -- Keep timeline_state IDs initialized so selection persistence doesn't assert during headless tests.
+    -- Only do this when the shared `core.database` connection matches this manager's DB handle.
+    local ok_db, db_module = pcall(require, "core.database")
+    local shared_conn = ok_db and db_module and db_module.get_connection and db_module.get_connection() or nil
+    if shared_conn and shared_conn == db then
+        local seq_stmt = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
+        if seq_stmt then
+            seq_stmt:bind_value(1, sequence_id)
+            local found_project_id = nil
+            if seq_stmt:exec() and seq_stmt:next() then
+                found_project_id = seq_stmt:value(0)
+            end
+            seq_stmt:finalize()
+
+            if found_project_id and found_project_id ~= "" then
+                assert(found_project_id == project_id,
+                    "CommandManager.init: provided project_id does not match sequences.project_id (sequence_id="
+                        .. tostring(sequence_id) .. ", provided=" .. tostring(project_id) .. ", db=" .. tostring(found_project_id) .. ")")
+                local ok_ts, timeline_state = pcall(require, "ui.timeline.timeline_state")
+                if ok_ts and timeline_state and type(timeline_state.init) == "function" then
+                    timeline_state.init(sequence_id, project_id)
+                end
+            end
+        end
+    end
     
     ensure_command_selection_columns()
     
@@ -351,10 +385,16 @@ local function execute_command_implementation(command)
     local executor = registry.get_executor(command.type)
     
     if executor then
-        local success, result, err_msg = pcall(executor, command)
-        if not success then
-            logger.error("command_manager", string.format("Executor failed (%s): %s", tostring(command and command.type), tostring(result)))
-            last_error_message = tostring(result)
+        local ok, result, err_msg = xpcall(
+            executor,
+            function(err)
+                return debug.traceback(tostring(err), 2)
+            end,
+            command
+        )
+        if not ok then
+            logger.error("command_manager", string.format("Executor failed (%s):\n%s", tostring(command and command.type), tostring(result)))
+            last_error_message = tostring(result) -- includes traceback
             scope:finish("executor_error")
             return false
         end
@@ -387,7 +427,7 @@ local function execute_non_recording(command)
         }
     end
 
-    local success, error_message, result_data = normalize_executor_result(exec_result)
+    local success, error_message, result_data = normalize_executor_result(exec_result, command)
     if not success then
         if error_message == "" then
             error_message = last_error_message ~= "" and last_error_message or "Command execution failed"
@@ -524,10 +564,17 @@ function M.execute(command_or_name, params)
     end
 
     -- EXECUTE
-    local execution_success = execute_command_implementation(command)
+    local exec_result = execute_command_implementation(command)
     if perf.enabled then
         perf.log("execute_command_implementation")
         perf.reset()
+    end
+    local execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
+    if execution_result_data ~= nil then
+        result.executor_result_data = execution_result_data
+        if not execution_success then
+            result.result_data = execution_result_data
+        end
     end
 
     if execution_success then
@@ -630,6 +677,11 @@ function M.execute(command_or_name, params)
                  local reload_sequence_id = extract_sequence_id(command)
                  local mutations = command:get_parameter("__timeline_mutations")
                  local applied_mutations = false
+                 local timeline_active_seq = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+                 if reload_sequence_id and reload_sequence_id ~= "" and (not timeline_active_seq or timeline_active_seq == "") then
+                     -- Tests/headless command execution may run without timeline UI bootstrap; initialize on demand.
+                     timeline_state.init(reload_sequence_id, command.project_id)
+                 end
 
                  if mutations and timeline_state.apply_mutations then
                      -- Logic to apply mutations ...
@@ -673,7 +725,8 @@ function M.execute(command_or_name, params)
         end
     else
         command.status = "Failed"
-        result.error_message = last_error_message ~= "" and last_error_message or "Command execution failed"
+        result.error_message = execution_error_message ~= "" and execution_error_message
+            or (last_error_message ~= "" and last_error_message or "Command execution failed")
         last_error_message = ""
         db:exec("ROLLBACK")
         history.decrement_sequence_number()
@@ -1244,7 +1297,11 @@ function M.replay_events(sequence_id, target_sequence_number)
         return false
     end
 
-    local seq_id = sequence_id or active_sequence_id or "default_sequence"
+    local seq_id = sequence_id or active_sequence_id
+    if not seq_id or seq_id == "" then
+        logger.warn("command_manager", "replay_events: missing sequence_id and no active sequence set")
+        return false
+    end
     local target_seq = target_sequence_number
     if type(target_seq) ~= "number" then
         target_seq = history.get_current_sequence_number() or 0
