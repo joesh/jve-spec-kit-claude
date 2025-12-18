@@ -98,7 +98,7 @@ else
 
     if not has_schema then
         logger.info("layout", "Creating database schema...")
-        local schema_path = layout_dir .. "../../core/persistence/schema.sql"
+        local schema_path = layout_dir .. "../schema.sql"
         local schema_file, ferr = io.open(schema_path, "r")
         if not schema_file then
             error("FATAL: Failed to open schema.sql at " .. schema_path .. ": " .. tostring(ferr))

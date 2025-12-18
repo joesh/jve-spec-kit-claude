@@ -15,7 +15,7 @@ local function load_main_schema(db_conn)
         error("FATAL: No database connection provided to load main schema")
     end
 
-    local schema_path = "src/core/persistence/schema.sql"
+    local schema_path = "src/lua/schema.sql"
 
     -- Attempt to resolve schema_path relative to the project root
     -- This relies on `core.database` being loaded, and `package.path` pointing to `src/lua`

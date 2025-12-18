@@ -6,7 +6,7 @@ local function read_file(path)
     return content
 end
 
-local schema_sql = read_file("../src/core/persistence/schema.sql")
+local schema_sql = read_file("../src/lua/schema.sql")
 
 -- Stock SQLite (e.g. /usr/bin/sqlite3 on macOS) requires the RAISE() error message
 -- in triggers to be a string literal. Do not use concatenation like:
