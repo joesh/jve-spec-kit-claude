@@ -86,3 +86,5 @@ tests/**/captures/
 
 # Generated Qt/CMake autogen artifacts
 *_autogen/
+tests/temp/
+tests/tests/

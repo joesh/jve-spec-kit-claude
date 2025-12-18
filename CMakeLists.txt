@@ -133,6 +133,10 @@ target_link_directories(JVEEditor PRIVATE
 # Testing
 enable_testing()
 
+# Configure CTest to use tests/temp instead of Testing/
+set(CMAKE_CTEST_COMMAND "${CMAKE_CTEST_COMMAND}")
+set(CTEST_BINARY_DIRECTORY "${CMAKE_SOURCE_DIR}/tests/temp")
+
 ## Disabled: eventlog golden replay (not used)
 
 # Enable automatic MOC, UIC and RCC processing
