@@ -2,7 +2,7 @@
 
 -- Resolve .drp importer + command regression test
 
-package.path = "src/lua/?.lua;src/lua/?/init.lua;" .. package.path
+package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua"
 
 function qt_json_encode(_) return "{}" end
 function qt_create_single_shot_timer(_, cb) cb(); return {} end
@@ -48,7 +48,7 @@ local function scalar(db, sql, param)
     return value
 end
 
-local fixture_path = "tests/fixtures/resolve/sample_project.drp"
+local fixture_path = "fixtures/resolve/sample_project.drp"
 
 -- Validate raw parser behaviour
 local parse_result = drp_importer.parse_drp_file(fixture_path)

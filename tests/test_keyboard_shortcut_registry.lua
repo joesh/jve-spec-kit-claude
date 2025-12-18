@@ -2,7 +2,7 @@
 
 -- Keyboard shortcut registry behavioural tests.
 
-package.path = "src/lua/?.lua;src/lua/?/init.lua;" .. package.path
+package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua"
 
 local registry = require("core.keyboard_shortcut_registry")
 
