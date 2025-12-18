@@ -10,8 +10,8 @@
 #include <QProcessEnvironment>
 #include <QFile>
 
-#include "lua/simple_lua_engine.h"
-#include "core/resource_paths.h"
+#include "simple_lua_engine.h"
+#include "resource_paths.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
 

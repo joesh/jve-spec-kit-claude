@@ -51,10 +51,9 @@ include_directories(
 
 # Source files organization
 set(CORE_SOURCES
-    src/core/resource_paths.cpp
-
-    src/lua/simple_lua_engine.cpp
-    src/lua/qt_bindings.cpp
+    src/resource_paths.cpp
+    src/simple_lua_engine.cpp
+    src/qt_bindings.cpp
 
     # Bug reporter system
     src/bug_reporter/gesture_logger.cpp
@@ -62,7 +61,7 @@ set(CORE_SOURCES
 )
 
 set(UI_SOURCES
-    src/ui/timeline/timeline_renderer.cpp
+    src/timeline_renderer.cpp
     # Removed C++ UI implementations that violate architecture (should be Lua):
     # src/ui/keyboard_customization_dialog.cpp  (MOVED TO LUA - src/lua/ui/)
     # src/ui/selection/selection_manager.cpp

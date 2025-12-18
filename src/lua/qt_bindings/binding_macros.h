@@ -5,7 +5,7 @@
 #include <lauxlib.h>
 #include <QDebug>
 #include <QWidget>
-#include "../qt_bindings.h"
+#include "../../qt_bindings.h"
 
 #include <QScrollArea>
 // Helper to get widget from Lua stack with type checking

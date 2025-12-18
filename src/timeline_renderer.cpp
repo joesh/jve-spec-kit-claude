@@ -1,5 +1,5 @@
 #include "timeline_renderer.h"
-#include "lua/qt_bindings.h"
+#include "qt_bindings.h"
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QApplication>

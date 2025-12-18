@@ -1,8 +1,8 @@
 #include "simple_lua_engine.h"
 #include "qt_bindings.h"
-#include "ui/timeline/timeline_renderer.h"
-#include "core/resource_paths.h"
-#include "../bug_reporter/qt_bindings_bug_reporter.h"
+#include "timeline_renderer.h"
+#include "resource_paths.h"
+#include "bug_reporter/qt_bindings_bug_reporter.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>

@@ -1,5 +1,5 @@
 #include "binding_macros.h"
-#include "../simple_lua_engine.h"
+#include "../../simple_lua_engine.h"
 #include <QMainWindow>
 #include <QLabel>
 #include <QLineEdit>

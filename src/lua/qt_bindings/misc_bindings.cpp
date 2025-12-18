@@ -1,5 +1,5 @@
 #include "binding_macros.h"
-#include "ui/timeline/timeline_renderer.h" // For lua_create_timeline_renderer
+#include "../../timeline_renderer.h" // For lua_create_timeline_renderer
 #include <QRubberBand>
 #include <QCursor>
 #include <QScrollArea>

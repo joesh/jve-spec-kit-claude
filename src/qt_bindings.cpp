@@ -3,16 +3,16 @@
 
 // Include all the newly split binding files. These files contain the implementations
 // of the Lua C functions and are compiled as part of this module.
-#include "qt_bindings/binding_macros.h" // For get_widget template and other macros
-#include "qt_bindings/widget_bindings.cpp"
-#include "qt_bindings/layout_bindings.cpp"
-#include "qt_bindings/control_bindings.cpp"
-#include "qt_bindings/view_bindings.cpp"
-#include "qt_bindings/signal_bindings.cpp"
-#include "qt_bindings/json_bindings.cpp"
-#include "qt_bindings/menu_bindings.cpp"
-#include "qt_bindings/dialog_bindings.cpp"
-#include "qt_bindings/misc_bindings.cpp"
+#include "lua/qt_bindings/binding_macros.h" // For get_widget template and other macros
+#include "lua/qt_bindings/widget_bindings.cpp"
+#include "lua/qt_bindings/layout_bindings.cpp"
+#include "lua/qt_bindings/control_bindings.cpp"
+#include "lua/qt_bindings/view_bindings.cpp"
+#include "lua/qt_bindings/signal_bindings.cpp"
+#include "lua/qt_bindings/json_bindings.cpp"
+#include "lua/qt_bindings/menu_bindings.cpp"
+#include "lua/qt_bindings/dialog_bindings.cpp"
+#include "lua/qt_bindings/misc_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
