@@ -77,6 +77,13 @@ function db_mt:prepare(sql)
     }, stmt_mt)
 end
 
+function stmt_mt:bind_value(index, value)
+    if not self._stmt then
+        return false
+    end
+    return self._stmt:bind_value(index, value)
+end
+
 function stmt_mt:step()
     if not self._stmt then
         return sqlite3.DONE
@@ -88,10 +95,12 @@ function stmt_mt:step()
         if not ok then
             return sqlite3.DONE
         end
-        return self._stmt:last_result_code() == sqlite3.ROW and sqlite3.ROW or sqlite3.DONE
+        local rc = self._stmt:last_result_code()
+        return rc == sqlite3.ROW and sqlite3.ROW or sqlite3.DONE
     end
 
-    return self._stmt:next() and sqlite3.ROW or sqlite3.DONE
+    local has_next = self._stmt:next()
+    return has_next and sqlite3.ROW or sqlite3.DONE
 end
 
 function stmt_mt:get_value(index)
