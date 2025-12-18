@@ -26,6 +26,9 @@ cmake_install.cmake
 install_manifest.txt
 CTestTestfile.cmake
 Testing/
+CPackConfig.cmake
+CPackSourceConfig.cmake
+_CPack_Packages/
 
 # Binaries
 *.exe
