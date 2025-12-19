@@ -45,7 +45,8 @@ local function scalar(db, sql, param)
     return value
 end
 
-local fixture_path = "fixtures/resolve/sample_project.drp"
+local test_env = require('test_env')
+local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
 
 -- Validate raw parser behaviour
 local parse_result = drp_importer.parse_drp_file(fixture_path)
@@ -126,6 +127,6 @@ assert_true("clips created", clip_count and clip_count > 0)
 local media_count = scalar(db, "SELECT COUNT(*) FROM media WHERE project_id = ?", imported_project_id)
 assert_true("media created", media_count and media_count > 0)
 
-os.remove(tmp_path)
+os.remove(TEST_DB)
 
 print("✅ Resolve .drp importer + command test passed")

@@ -153,13 +153,18 @@ function M.register(executors, undoers, db)
                                 end
                             end
 
-                            local clip = Clip.create({
+                            -- Calculate source_out if not provided
+                            local source_out = clip_data.source_out
+                            if not source_out and clip_data.source_in and clip_data.duration then
+                                source_out = clip_data.source_in + clip_data.duration
+                            end
+
+                            local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
-                                media_id = media_id,
-                                start_value = clip_data.start_value,
+                                timeline_start = clip_data.start_value,  -- Renamed from start_value
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
-                                source_out = clip_data.source_out
+                                source_out = source_out
                             })
 
                             if clip:save(db) then
@@ -190,8 +195,15 @@ function M.register(executors, undoers, db)
         command:set_parameter("created_track_ids", created_track_ids)
         command:set_parameter("created_clip_ids", created_clip_ids)
 
+        -- Set result for test access
+        command.result = {
+            success = true,
+            project_id = project.id
+        }
+
         return {
-            success = true
+            success = true,
+            project_id = project.id
         }
     end
 
@@ -349,13 +361,18 @@ function M.register(executors, undoers, db)
                             -- Find matching media_id using resolve_media_id
                             local media_id = media_id_map[clip_data.resolve_media_id]
 
-                            local clip = Clip.create({
+                            -- Calculate source_out if not provided
+                            local source_out = clip_data.source_out
+                            if not source_out and clip_data.source_in and clip_data.duration then
+                                source_out = clip_data.source_in + clip_data.duration
+                            end
+
+                            local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
-                                media_id = media_id,
-                                start_value = clip_data.start_value,
+                                timeline_start = clip_data.start_value,  -- Renamed from start_value
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
-                                source_out = clip_data.source_out
+                                source_out = source_out
                             })
 
                             if clip:save(db) then
@@ -386,8 +403,15 @@ function M.register(executors, undoers, db)
         command:set_parameter("created_track_ids", created_track_ids)
         command:set_parameter("created_clip_ids", created_clip_ids)
 
+        -- Set result for test access
+        command.result = {
+            success = true,
+            project_id = project.id
+        }
+
         return {
-            success = true
+            success = true,
+            project_id = project.id
         }
     end
 
