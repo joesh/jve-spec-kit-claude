@@ -4,17 +4,17 @@
 local M = {}
 local Command = require("command")
 local command_manager = require("core.command_manager")
-local Rational = require("core.rational")
 local json = require("dkjson")
 local logger = require("core.logger")
 
 function M.handle_release(view, drag_state, modifiers)
     local state_module = view.state
     local drag_type = drag_state.type
-    local delta_ms = drag_state.delta_ms or 0
+    local delta_rat = drag_state.delta_rational
     local current_y = drag_state.current_y or drag_state.start_y
     local height = select(2, timeline.get_dimensions(view.widget))
     local target_track_id = view.get_track_id_at_y(current_y, height)
+    assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta_rational for drag")
     -- alt-copy semantics are tracked on drag_state for potential future use.
 
     if drag_type == "clips" then
@@ -82,20 +82,6 @@ function M.handle_release(view, drag_state, modifiers)
                 end
             end
 
-            local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or nil
-            assert(rate and rate.fps_numerator and rate.fps_denominator,
-                "timeline_view_drag_handler: missing sequence fps metadata for alt-copy")
-            local fps_num = rate.fps_numerator
-            local fps_den = rate.fps_denominator
-
-            local delta_rat = drag_state.delta_rational
-            if not delta_rat and delta_ms ~= 0 then
-                delta_rat = Rational.from_seconds(delta_ms / 1000.0, fps_num, fps_den)
-            end
-            if not delta_rat then
-                delta_rat = Rational.new(0, fps_num, fps_den)
-            end
-
             if target_track_id == reference_clip.track_id and delta_rat.frames == 0 then
                 return
             end
@@ -154,18 +140,9 @@ function M.handle_release(view, drag_state, modifiers)
                                 skip_occlusion = true,
                                 pending_clips = pending_clips
                             }
-                            if delta_ms ~= 0 then
-                                local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or nil
-                                if not (rate and rate.fps_numerator and rate.fps_denominator) then
-                                    logger.error("timeline_drag", "MoveClipToTrack drag: missing sequence fps metadata")
-                                    return
-                                end
-                                local fps_num = rate.fps_numerator
-                                local fps_den = rate.fps_denominator
-                                local delta_rat = drag_state.delta_rational
-                                if not delta_rat then
-                                    delta_rat = Rational.from_seconds(delta_ms / 1000.0, fps_num, fps_den)
-                                end
+                            if delta_rat.frames ~= 0 then
+                                local fps_num = delta_rat.fps_numerator
+                                local fps_den = delta_rat.fps_denominator
                                 local pending_start = clip.timeline_start + delta_rat
                                 params.pending_new_start_rat = {
                                     frames = pending_start.frames,
@@ -194,17 +171,11 @@ function M.handle_release(view, drag_state, modifiers)
         end
 
         -- Time nudge when staying on the same track.
-        if track_offset == 0 and delta_ms ~= 0 then
+        if track_offset == 0 and delta_rat.frames ~= 0 then
             local ids = {}
             for _, c in ipairs(clips) do table.insert(ids, c.id) end
-            local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or nil
-            if not (rate and rate.fps_numerator and rate.fps_denominator) then
-                logger.error("timeline_drag", "Nudge drag: missing sequence fps metadata")
-                return
-            end
-            local fps_num = rate.fps_numerator
-            local fps_den = rate.fps_denominator
-            local nudge_rat = Rational.from_seconds(delta_ms / 1000.0, fps_num, fps_den)
+            local fps_num = delta_rat.fps_numerator
+            local fps_den = delta_rat.fps_denominator
             table.insert(command_specs, {
                 command_type = "Nudge",
                 parameters = {
@@ -212,8 +183,7 @@ function M.handle_release(view, drag_state, modifiers)
                     project_id = active_proj,
                     fps_numerator = fps_num,
                     fps_denominator = fps_den,
-                    nudge_amount_ms = delta_ms,
-                    nudge_amount_rat = nudge_rat,
+                    nudge_amount_rat = delta_rat,
                     selected_clip_ids = ids
                 }
             })
@@ -260,13 +230,8 @@ function M.handle_release(view, drag_state, modifiers)
         local fps_num = rate.fps_numerator
         local fps_den = rate.fps_denominator
 
-        local delta_rat = drag_state.delta_rational
-        if not delta_rat and delta_ms ~= 0 then
-            delta_rat = Rational.from_seconds(delta_ms / 1000.0, fps_num, fps_den)
-        end
-        if not delta_rat then
-            delta_rat = Rational.new(0, fps_num, fps_den)
-        end
+        local delta_rat = drag_state.preview_clamped_delta or drag_state.delta_rational
+        assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta for edge drag")
         if delta_rat.frames == 0 then
             return
         end

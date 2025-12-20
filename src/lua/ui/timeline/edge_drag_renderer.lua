@@ -164,7 +164,6 @@ local function build_preview_edge(edge, applied_delta, requested_delta, trim_con
         raw_edge_type = edge.edge_type,
         target_track_id = edge.track_id,
         delta = clamped_delta,
-        delta_ms = (type(clamped_delta) == "number") and clamped_delta or (clamped_delta.frames and clamped_delta.frames * 1000 / (clamped_delta.fps_numerator or 1) or clamped_delta),
         at_limit = at_limit,
         color = color
     }

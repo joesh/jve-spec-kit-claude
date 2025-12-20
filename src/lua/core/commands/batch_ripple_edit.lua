@@ -1031,6 +1031,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
         ctx.command:set_parameter("clamped_delta_ms", ctx.clamped_delta_rat:to_milliseconds())
+        ctx.command:set_parameter("clamped_delta_frames", ctx.clamped_delta_rat.frames)
         return delta_frames
     end
 
@@ -1659,6 +1660,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.command:set_parameter("delta_frames", retry_delta_frames)
         local adjusted_rat = Rational.new(adjusted_frames, ctx.seq_fps_num, ctx.seq_fps_den)
         ctx.command:set_parameter("clamped_delta_ms", adjusted_rat:to_milliseconds())
+        ctx.command:set_parameter("clamped_delta_frames", adjusted_rat.frames)
 
         return command_executors["BatchRippleEdit"](ctx.command)
     end
@@ -1969,6 +1971,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 shifted_clips = ctx.preview_shifted_clips,
                 shift_blocks = ctx.shift_blocks,
                 clamped_delta_ms = ctx.clamped_delta_rat:to_milliseconds(),
+                clamped_delta_frames = ctx.clamped_delta_rat.frames,
                 materialized_gaps = ctx.materialized_gap_ids,
                 clamped_edges = clamped_edges,
                 edge_preview = build_edge_preview_payload()

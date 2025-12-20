@@ -8,7 +8,6 @@ local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local focus_manager = require("ui.focus_manager")
 local magnetic_snapping = require("core.magnetic_snapping")
 local Rational = require("core.rational")
-local time_utils = require("core.time_utils")
 local TimelineActiveRegion = require("core.timeline_active_region")
 
 local RIGHT_MOUSE_BUTTON = 2
@@ -342,7 +341,6 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 end
                 local diff = view.drag_state.current_time - view.drag_state.start_value
                 view.drag_state.delta_rational = diff
-                view.drag_state.delta_ms = math.floor(time_utils.to_milliseconds(diff))
                 
                 if view.drag_state.type == "edges" then
                     for _, edge in ipairs(view.drag_state.edges) do
@@ -418,14 +416,12 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 view.drag_state.current_time = view.drag_state.start_value
                 local zero = view.drag_state.start_value - view.drag_state.start_value
                 view.drag_state.delta_rational = zero
-                view.drag_state.delta_ms = 0
                 view.drag_state.shift_constrained = true
             else
                 view.drag_state.current_x = x
                 view.drag_state.current_time = current_time
                 local diff = current_time - view.drag_state.start_value
                 view.drag_state.delta_rational = diff
-                view.drag_state.delta_ms = math.floor(time_utils.to_milliseconds(diff))
                 view.drag_state.shift_constrained = false
             end
             view.drag_state.alt_copy = (modifiers and modifiers.alt)

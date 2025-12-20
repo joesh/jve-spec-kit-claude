@@ -52,6 +52,8 @@
 - [x] Fix misleading SQLite errors: `sqlite3.Statement:reset()` no longer treats prior `sqlite3_step` constraint codes as reset failures (unblocks actionable VIDEO_OVERLAP diagnostics).
 
 ## Session Tasks (2025-???)
+- [x] (done) Fix BatchRippleEdit timeline drag VIDEO_OVERLAP failure on video tracks (clip 0500ccf9-eb33-4363-a6b7-a7371829abee); regression covers clamped delta execution (user confirmed fix).
+- [ ] (in_progress) Remove millisecond-based deltas from timeline edge drag handling; keep drag math in Rational frames with regression coverage (implemented, awaiting confirmation).
 - [x] (done) Fix BatchRipple gap lead clamp/negation bugs and extend regression tests.
 - [ ] Edit history UI: verify entries render + jumping works on real app data; ensure Undo/Redo labels match the menu text and stay in sync with branching history.
 - [x] (done) Timeline gap edge selections should render handles just like clip edges; regression surfaced while restoring ripple handle semantics.

@@ -480,10 +480,10 @@ local function ensure_edge_preview(drag_state, state_module)
     local fps_num = seq_rate.fps_numerator
     local fps_den = seq_rate.fps_denominator
 
-    local delta_rat = coerce_to_rational(drag_state.delta_rational or drag_state.delta_ms, fps_num, fps_den)
+    local delta_rat = coerce_to_rational(drag_state.delta_rational, fps_num, fps_den)
     if not delta_rat then
         clear_preview_state()
-        debug("missing delta (delta_rational/delta_ms)")
+        debug("missing delta (delta_rational)")
         return
     end
 
@@ -575,9 +575,8 @@ local function ensure_edge_preview(drag_state, state_module)
     drag_state.preview_request_token = token
     debug("preview ready; affected=" .. tostring(#(drag_state.preview_data.affected_clips or {})))
 
-    local clamped_ms = cmd.get_parameter and cmd:get_parameter("clamped_delta_ms")
-    if clamped_ms then
-        local clamped_frames = math.floor((clamped_ms * fps_num / 1000) + 0.5)
+    local clamped_frames = cmd.get_parameter and cmd:get_parameter("clamped_delta_frames")
+    if clamped_frames ~= nil then
         drag_state.preview_clamped_delta = Rational.new(clamped_frames, fps_num, fps_den)
     else
         drag_state.preview_clamped_delta = nil
@@ -951,11 +950,7 @@ function M.render(view)
 
     if dragging_edges then
         ensure_edge_preview(edge_drag_state, state_module)
-        local requested_delta = coerce_to_rational(
-            edge_drag_state.delta_rational or edge_drag_state.delta_ms,
-            fps_num,
-            fps_den
-        )
+        local requested_delta = coerce_to_rational(edge_drag_state.delta_rational, fps_num, fps_den)
         local clamped_delta = coerce_to_rational(edge_drag_state.preview_clamped_delta, fps_num, fps_den)
         if clamped_delta then
             edge_delta = clamped_delta
