@@ -1,0 +1,282 @@
+{
+  "version": 1,
+  "notes": "Auto-generated command index",
+  "commands": [
+    {
+      "command": "add_clip",
+      "module": "core.commands.add_clip",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "add_track",
+      "module": "core.commands.add_track",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "batch_command",
+      "module": "core.commands.batch_command",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "batch_ripple_edit",
+      "module": "core.commands.batch_ripple_edit",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "create_clip",
+      "module": "core.commands.create_clip",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "create_project",
+      "module": "core.commands.create_project",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "create_sequence",
+      "module": "core.commands.create_sequence",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "cut",
+      "module": "core.commands.cut",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "delete_bin",
+      "module": "core.commands.delete_bin",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "delete_clip",
+      "module": "core.commands.delete_clip",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "delete_master_clip",
+      "module": "core.commands.delete_master_clip",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "delete_sequence",
+      "module": "core.commands.delete_sequence",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "deselect_all",
+      "module": "core.commands.deselect_all",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "duplicate_master_clip",
+      "module": "core.commands.duplicate_master_clip",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "go_to_end",
+      "module": "core.commands.go_to_end",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "go_to_next_edit",
+      "module": "core.commands.go_to_next_edit",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "go_to_prev_edit",
+      "module": "core.commands.go_to_prev_edit",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "go_to_start",
+      "module": "core.commands.go_to_start",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "import_fcp7_xml",
+      "module": "core.commands.import_fcp7_xml",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "import_media",
+      "module": "core.commands.import_media",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "import_resolve_project",
+      "module": "core.commands.import_resolve_project",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "insert",
+      "module": "core.commands.insert",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "insert_clip_to_timeline",
+      "module": "core.commands.insert_clip_to_timeline",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "link_clips",
+      "module": "core.commands.link_clips",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "load_project",
+      "module": "core.commands.load_project",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "match_frame",
+      "module": "core.commands.match_frame",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "modify_property",
+      "module": "core.commands.modify_property",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "move_clip_to_track",
+      "module": "core.commands.move_clip_to_track",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "new_bin",
+      "module": "core.commands.new_bin",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "nudge",
+      "module": "core.commands.nudge",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "overwrite",
+      "module": "core.commands.overwrite",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "relink_media",
+      "module": "core.commands.relink_media",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "rename_item",
+      "module": "core.commands.rename_item",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "ripple_delete",
+      "module": "core.commands.ripple_delete",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "ripple_delete_selection",
+      "module": "core.commands.ripple_delete_selection",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "ripple_edit",
+      "module": "core.commands.ripple_edit",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "select_all",
+      "module": "core.commands.select_all",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "set_clip_property",
+      "module": "core.commands.set_clip_property",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "set_property",
+      "module": "core.commands.set_property",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "set_sequence_metadata",
+      "module": "core.commands.set_sequence_metadata",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "setup_project",
+      "module": "core.commands.setup_project",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "split_clip",
+      "module": "core.commands.split_clip",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "toggle_clip_enabled",
+      "module": "core.commands.toggle_clip_enabled",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "toggle_maximize_panel",
+      "module": "core.commands.toggle_maximize_panel",
+      "entry": "register()",
+      "source": "command_implementations.lua"
+    },
+    {
+      "command": "ImportFCP7XML",
+      "module": "core.commands.import_fcp7_xml",
+      "entry": "register()",
+      "source": "command_registry.lua (alias)"
+    },
+    {
+      "command": "ImportResolveProject",
+      "module": "core.commands.import_resolve_project",
+      "entry": "register()",
+      "source": "command_registry.lua (alias)"
+    }
+  ]
+}
