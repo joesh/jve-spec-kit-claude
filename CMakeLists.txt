@@ -221,3 +221,70 @@ set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY ${PROJECT_DESCRIPTION})
 
 include(CPack)
+
+# ---- Navigation indexes (ctags + JSON) ----
+#
+# Generates:
+#   - ${CMAKE_SOURCE_DIR}/tags
+#   - docs/symbol-index/symbols.json
+#   - docs/symbol-index/commands.json
+#
+# Usage:
+#   cmake --build <build_dir> --target nav-index
+#
+# Notes:
+# - Not wired into default builds to avoid slowing incremental compiles.
+# - If tools are missing, targets print a message and exit successfully (non-fatal).
+
+find_program(CTAGS_EXE ctags)
+find_program(PYTHON3_EXE python3)
+
+set(SYMBOL_INDEX_DIR "${CMAKE_SOURCE_DIR}/docs/symbol-index")
+set(TAGS_FILE "${CMAKE_SOURCE_DIR}/tags")
+set(SYMBOLS_JSON "${SYMBOL_INDEX_DIR}/symbols.json")
+set(COMMANDS_JSON "${SYMBOL_INDEX_DIR}/commands.json")
+
+add_custom_target(nav-index
+    COMMENT "Generate navigation indexes: tags, symbols.json, commands.json"
+)
+
+add_custom_target(tags
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SYMBOL_INDEX_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E echo "Generating ctags: ${TAGS_FILE}"
+    COMMAND ${CMAKE_COMMAND} -E env
+            sh -c "if [ -z \"${CTAGS_EXE}\" ]; then echo \"ctags not found (install universal-ctags)\"; exit 0; fi; \
+                   \"${CTAGS_EXE}\" -R \
+                     --quiet \
+                     --languages=Lua,C,C++,Python \
+                     --exclude=.git --exclude=build --exclude=CMakeFiles \
+                     -f \"${TAGS_FILE}\" \"${CMAKE_SOURCE_DIR}\""
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    VERBATIM
+)
+
+add_custom_target(symbol-index
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SYMBOL_INDEX_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E env
+            sh -c "if [ -z \"${PYTHON3_EXE}\" ]; then echo \"python3 not found\"; exit 0; fi; \
+                   if [ ! -f \"${CMAKE_SOURCE_DIR}/tools/symbol_index_from_tags.py\" ]; then \
+                     echo \"Missing tools/symbol_index_from_tags.py\"; exit 0; fi; \
+                   if [ ! -f \"${TAGS_FILE}\" ]; then echo \"Missing ${TAGS_FILE} (run target: tags)\"; exit 0; fi; \
+                   \"${PYTHON3_EXE}\" \"${CMAKE_SOURCE_DIR}/tools/symbol_index_from_tags.py\" \"${TAGS_FILE}\" \"${SYMBOLS_JSON}\""
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    VERBATIM
+)
+
+add_custom_target(commands-index
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SYMBOL_INDEX_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E env
+            sh -c "if [ -z \"${PYTHON3_EXE}\" ]; then echo \"python3 not found\"; exit 0; fi; \
+                   if [ ! -f \"${CMAKE_SOURCE_DIR}/tools/command_index.py\" ]; then \
+                     echo \"Missing tools/command_index.py\"; exit 0; fi; \
+                   \"${PYTHON3_EXE}\" \"${CMAKE_SOURCE_DIR}/tools/command_index.py\" \"${COMMANDS_JSON}\""
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    VERBATIM
+)
+
+add_dependencies(symbol-index tags)
+add_dependencies(nav-index tags symbol-index commands-index)
+
