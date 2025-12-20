@@ -10,6 +10,7 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local import_schema = require("import_schema")
 local Clip = require("models.clip")
+local Rational = require("core.rational")
 local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
 
 local DB_PATH = "/tmp/jve/test_drag_multi_clip_cross_track_integration.db"
@@ -89,6 +90,7 @@ local drag_state = {
     },
     anchor_clip_id = "c1",
     delta_ms = 0,
+    delta_rational = Rational.new(0, 24, 1),
     current_y = 10,
     start_y = 0
 }

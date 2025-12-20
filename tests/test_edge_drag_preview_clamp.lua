@@ -24,7 +24,7 @@ local edges = {
 local previews = edge_drag_renderer.build_preview_edges(edges, 250, trim_constraints, colors)
 
 assert(#previews == 2, "expected two preview edges")
-assert(previews[1].delta_ms == 100 and previews[2].delta_ms == 100, "shared clamp should limit both edges to 100ms")
+assert(previews[1].delta == 100 and previews[2].delta == 100, "shared clamp should limit both edges to 100 frames")
 -- Only the edge with the tightest constraint should show limit/red
 assert(previews[1].at_limit ~= previews[2].at_limit, "only the limiting edge should hit the limit")
 

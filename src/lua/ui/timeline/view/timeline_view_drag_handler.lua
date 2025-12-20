@@ -10,14 +10,14 @@ local logger = require("core.logger")
 function M.handle_release(view, drag_state, modifiers)
     local state_module = view.state
     local drag_type = drag_state.type
-    local delta_rat = drag_state.delta_rational
     local current_y = drag_state.current_y or drag_state.start_y
     local height = select(2, timeline.get_dimensions(view.widget))
     local target_track_id = view.get_track_id_at_y(current_y, height)
-    assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta_rational for drag")
-    -- alt-copy semantics are tracked on drag_state for potential future use.
 
     if drag_type == "clips" then
+        local delta_rat = drag_state.delta_rational
+        assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta_rational for clip drag")
+        -- alt-copy semantics are tracked on drag_state for potential future use.
         local active_seq = state_module.get_sequence_id()
         local active_proj = state_module.get_project_id()
         local clips = drag_state.clips or {}
@@ -224,11 +224,6 @@ function M.handle_release(view, drag_state, modifiers)
         local lead_edge = drag_state.lead_edge
 
         if #edges == 0 then return end
-
-        local rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate() or nil
-        assert(rate and rate.fps_numerator and rate.fps_denominator, "timeline_view_drag_handler: missing sequence fps metadata")
-        local fps_num = rate.fps_numerator
-        local fps_den = rate.fps_denominator
 
         local delta_rat = drag_state.preview_clamped_delta or drag_state.delta_rational
         assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta for edge drag")

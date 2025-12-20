@@ -16,11 +16,12 @@
 
 # Session State - 2025-?? BatchRippleEdit VIDEO_OVERLAP on Drag
 
-## Current Status (unverified)
-- Timeline drag for BatchRippleEdit fails with SQLite trigger error: `VIDEO_OVERLAP` on video tracks (clip `0500ccf9-eb33-4363-a6b7-a7371829abee`) during `BatchRippleEdit` update.
-- Next steps: add regression coverage for the overlap failure, trace mutation ordering or constraint clamping in `core/commands/batch_ripple_edit.lua`, and confirm the fix prevents overlap-triggered UPDATE failures.
-- Timeline edge drag now keeps deltas in Rational frames only (no ms round-trip); added regression `tests/test_timeline_edge_drag_frames_only.lua`, removed UI ms fallbacks, and added `clamped_delta_frames` for BatchRippleEdit preview consumption while retaining `clamped_delta_ms` for existing tests.
-- Edge drag execution now prefers `preview_clamped_delta` for `BatchRippleEdit` so the commit delta matches the preview clamp; regression `tests/test_timeline_edge_drag_clamped_delta.lua` added (user confirmed in-app).
+## Current Status (verified)
+- Fixed BatchRippleEdit edge drag overlap: execution now uses preview-clamped Rational delta frames, preventing VIDEO_OVERLAP on commit.
+- Timeline edge drag keeps deltas in Rational frames only (no ms round-trip); added regression `tests/test_timeline_edge_drag_frames_only.lua`, removed UI ms fallbacks, and added `clamped_delta_frames` for BatchRippleEdit preview consumption while retaining `clamped_delta_ms` for existing tests.
+- Edge drag execution prefers `preview_clamped_delta` for `BatchRippleEdit` so the commit delta matches the preview clamp; regression `tests/test_timeline_edge_drag_clamped_delta.lua` added (user confirmed in-app).
+- Drag release tests updated to require `delta_rational` for clip drags; edge preview clamp test now validates clamped delta frames.
+- `make -j4` (luacheck + Lua suite + CMake targets) passes.
 
 ---
 

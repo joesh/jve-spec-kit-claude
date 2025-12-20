@@ -10,6 +10,7 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local import_schema = require("import_schema")
 local Clip = require("models.clip")
+local Rational = require("core.rational")
 local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
 
 local DB_PATH = "/tmp/jve/test_drag_block_right_overlap_integration.db"
@@ -82,7 +83,7 @@ local drag_state = {
         {id = "c2"},
     },
     anchor_clip_id = "c1",
-    delta_ms = 5000, -- move right ~5 seconds (~120 frames) -> overlaps c3 without occlusion handling
+    delta_rational = Rational.new(120, 24, 1), -- move right ~5 seconds (~120 frames) -> overlaps c3 without occlusion handling
     current_y = 10,
     start_y = 0
 }
