@@ -2,7 +2,7 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QKeyEvent>
-#include "src/ui/timeline/timeline_renderer.h"
+#include "src/timeline_renderer.h"
 
 extern "C" {
 #include <lua.h>

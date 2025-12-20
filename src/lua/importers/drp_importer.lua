@@ -283,9 +283,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
 
         for _, clip_elem in ipairs(clip_elements) do
             local file_path = get_text(find_element(clip_elem, "MediaFilePath"))
-            local start_frames = tonumber(get_text(find_element(clip_elem, "Start"))) or 0
-            local duration_frames = tonumber(get_text(find_element(clip_elem, "Duration"))) or 0
-            local media_start_frames = tonumber(get_text(find_element(clip_elem, "MediaStartTime"))) or 0
+            local start_frames = math.floor(tonumber(get_text(find_element(clip_elem, "Start"))) or 0)
+            local duration_frames = math.floor(tonumber(get_text(find_element(clip_elem, "Duration"))) or 0)
+            local media_start_frames = math.floor(tonumber(get_text(find_element(clip_elem, "MediaStartTime"))) or 0)
 
             local clip = {
                 name = get_text(find_element(clip_elem, "Name")),

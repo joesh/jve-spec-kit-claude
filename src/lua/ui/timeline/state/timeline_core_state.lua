@@ -106,7 +106,8 @@ local function flush_state_to_db()
     local db_conn = db.get_connection()
     if not db_conn then return end
 
-    local sequence_id = data.state.sequence_id or "default_sequence"
+    local sequence_id = data.state.sequence_id
+    assert(sequence_id and sequence_id ~= "", "timeline_core_state.flush_state_to_db: missing sequence_id")
 
     -- Serialize selection
     local selected_ids = {}
@@ -166,7 +167,8 @@ local function flush_state_to_db()
     if db.set_project_setting then
         local template = build_track_height_template()
         if template then
-            local project_id = data.state.project_id or "default_project"
+            local project_id = data.state.project_id
+            assert(project_id and project_id ~= "", "timeline_core_state.flush_state_to_db: missing project_id")
             db.set_project_setting(project_id, TRACK_HEIGHT_TEMPLATE_KEY, template)
         end
     end
@@ -196,11 +198,11 @@ function M.persist_state_to_db(force)
     end
 end
 
-function M.init(sequence_id)
+function M.init(sequence_id, project_id)
     -- Persist pending state before switching
     if persist_dirty then M.persist_state_to_db(true) end
 
-    sequence_id = sequence_id or "default_sequence"
+    assert(sequence_id and sequence_id ~= "", "timeline_core_state.init: sequence_id is required")
     data.state.sequence_id = sequence_id
 
     -- Load Data
@@ -212,14 +214,22 @@ function M.init(sequence_id)
     local db_conn = db.get_connection()
     if db_conn then
         local project_stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
-        if project_stmt then
-            project_stmt:bind_value(1, sequence_id)
-            if project_stmt:exec() and project_stmt:next() then
-                local p = project_stmt:value(0)
-                data.state.project_id = (p and p ~= "") and p or "default_project"
-            end
-            project_stmt:finalize()
+        if not project_stmt then
+            error("timeline_core_state.init: failed to prepare sequence->project query", 2)
         end
+        project_stmt:bind_value(1, sequence_id)
+        local seq_project_id = nil
+        if project_stmt:exec() and project_stmt:next() then
+            seq_project_id = project_stmt:value(0)
+        end
+        project_stmt:finalize()
+        assert(seq_project_id and seq_project_id ~= "", "timeline_core_state.init: sequence missing project_id in DB (sequence_id=" .. tostring(sequence_id) .. ")")
+        if project_id and project_id ~= "" then
+            assert(seq_project_id == project_id,
+                "timeline_core_state.init: provided project_id does not match sequence.project_id (sequence_id="
+                    .. tostring(sequence_id) .. ", provided=" .. tostring(project_id) .. ", db=" .. tostring(seq_project_id) .. ")")
+        end
+        data.state.project_id = seq_project_id
 
         local query = db_conn:prepare("SELECT playhead_frame, selected_clip_ids, selected_edge_infos, view_start_frame, view_duration_frames, fps_numerator, fps_denominator, mark_in_frame, mark_out_frame FROM sequences WHERE id = ?")
         if query then
@@ -337,12 +347,12 @@ end
 
 function M.reload_clips(target_sequence_id, opts)
     local active = data.state.sequence_id
-    if not active or active == "" then
-        return M.init(target_sequence_id or "default_sequence")
-    end
+    assert(active and active ~= "", "timeline_core_state.reload_clips: missing active sequence_id")
     if target_sequence_id and target_sequence_id ~= "" and target_sequence_id ~= active then
         if opts and opts.allow_sequence_switch then
-            return M.init(target_sequence_id)
+            local project_id = data.state.project_id
+            assert(project_id and project_id ~= "", "timeline_core_state.reload_clips: missing active project_id")
+            return M.init(target_sequence_id, project_id)
         end
         return false
     end

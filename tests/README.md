@@ -19,15 +19,17 @@ Test complete workflows from quickstart.md scenarios. These validate end-to-end 
 
 ### Unit Tests (`tests/unit/`)
 Test individual components in isolation with mocked dependencies.
-- **Purpose**: Component validation  
+- **Purpose**: Component validation
 - **Scope**: Single classes/functions
 - **Dependencies**: Minimal (mocked)
 
-### Lua Tests (`tests/lua/`)
-Test script runtime and Lua-to-C++ integration.
-- **Purpose**: Scripting system validation
-- **Dependencies**: LuaJIT runtime
-- **Coverage**: API bindings, script behaviors
+### Lua Tests (`tests/test_*.lua`)
+Test script runtime, command system, and Lua integration at root level.
+- **Purpose**: Command execution, timeline operations, import/export functionality
+- **Dependencies**: LuaJIT runtime, SQLite
+- **Coverage**: 220+ tests covering command system, ripple edits, batch operations, importers
+- **Discovery**: Test runner uses `find -maxdepth 1 -name 'test_*.lua'` to collect tests
+- **Execution**: All Lua tests run via `scripts/run_lua_tests.sh` during build
 
 ## Running Tests
 

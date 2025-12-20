@@ -24,8 +24,8 @@ local function fresh_state()
         -- Data
         tracks = {},
         clips = {},
-        project_id = "default_project",
-        sequence_id = "default_sequence",
+        project_id = nil,
+        sequence_id = nil,
         
         -- Rate
         sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 },

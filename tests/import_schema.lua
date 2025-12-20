@@ -3,11 +3,11 @@
 
 local function load_schema()
     local paths = {
-        "src/core/persistence/schema.sql",
-        "../src/core/persistence/schema.sql",
-        "../../src/core/persistence/schema.sql"
+        "src/lua/schema.sql",
+        "../src/lua/schema.sql",
+        "../../src/lua/schema.sql"
     }
-    
+
     for _, path in ipairs(paths) do
         local f = io.open(path, "r")
         if f then
@@ -16,8 +16,8 @@ local function load_schema()
             return content
         end
     end
-    
-    error("Could not find src/core/persistence/schema.sql in common search paths")
+
+    error("Could not find src/lua/schema.sql in common search paths")
 end
 
 return load_schema()

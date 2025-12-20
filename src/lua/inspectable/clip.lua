@@ -21,7 +21,10 @@ function ClipInspectable.new(opts)
 
     local self = setmetatable({}, ClipInspectable)
     self.clip_id = opts.clip_id
-    self.project_id = opts.project_id or "default_project"
+    if not opts.project_id or opts.project_id == "" then
+        error("ClipInspectable.new requires project_id")
+    end
+    self.project_id = opts.project_id
     self.sequence_id = opts.sequence_id
     self.clip_ref = opts.clip -- optional table representing live clip state
     self.metadata_overrides = opts.metadata or {}

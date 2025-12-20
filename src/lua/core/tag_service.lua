@@ -51,7 +51,9 @@ function M.list(project_id, opts)
 end
 
 function M.save_hierarchy(project_id, bins, opts)
-    project_id = project_id or database.get_current_project_id()
+    if not project_id or project_id == "" then
+        return false, "tag_service.save_hierarchy: missing project_id"
+    end
     local _, _, namespace_opts = normalize_namespace(opts)
     return database.save_bins(project_id, bins, namespace_opts)
 end

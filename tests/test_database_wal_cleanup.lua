@@ -4,7 +4,6 @@ package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua"
 
 -- Preserve original modules/functions so other tests remain unaffected.
 local original_sqlite3 = package.loaded["core.sqlite3"]
-local original_event_log = package.loaded["core.event_log"]
 local original_os_remove = os.remove
 local original_io_popen = io.popen
 
@@ -21,11 +20,6 @@ end
 io.popen = function()
     return nil
 end
-
--- Minimal event log stub
-package.loaded["core.event_log"] = {
-    init = function() end
-}
 
 -- Create a mock sqlite3 handle that pretends tag tables exist.
 local function make_stmt(sql)
@@ -79,4 +73,3 @@ print("✅ database.set_path does not perform implicit WAL/SHM cleanup fallbacks
 os.remove = original_os_remove
 io.popen = original_io_popen
 package.loaded["core.sqlite3"] = original_sqlite3
-package.loaded["core.event_log"] = original_event_log

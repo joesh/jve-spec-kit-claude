@@ -8,8 +8,8 @@ extern "C" {
 #include <lualib.h>
 }
 
-#include "lua/qt_bindings.h"
-#include "lua/simple_lua_engine.h"
+#include "qt_bindings.h"
+#include "simple_lua_engine.h"
 
 class TestQtBindings : public QObject
 {

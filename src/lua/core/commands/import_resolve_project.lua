@@ -1,6 +1,32 @@
 -- ImportResolveProject and ImportResolveDatabase commands
 local M = {}
 
+-- Helper: Escape SQL string literals (double single quotes)
+local function sql_escape(str)
+    if not str then return "NULL" end
+    return "'" .. tostring(str):gsub("'", "''") .. "'"
+end
+
+-- Helper: Convert decimal frame rate to rational form (fps_numerator, fps_denominator)
+local function frame_rate_to_rational(frame_rate)
+    local fps = tonumber(frame_rate)
+    if not fps then
+        return 30, 1  -- Default fallback
+    end
+
+    -- Handle common NTSC fractional frame rates
+    if math.abs(fps - 23.976) < 0.01 then
+        return 24000, 1001
+    elseif math.abs(fps - 29.97) < 0.01 then
+        return 30000, 1001
+    elseif math.abs(fps - 59.94) < 0.01 then
+        return 60000, 1001
+    end
+
+    -- Integer frame rates
+    return math.floor(fps + 0.5), 1
+end
+
 function M.register(executors, undoers, db)
     local sqlite3 = require("lsqlite3") -- Assuming available, or via core.sqlite3
 
@@ -22,13 +48,17 @@ function M.register(executors, undoers, db)
         local Project = require("models.project")
         local Media = require("models.media")
         local Clip = require("models.clip")
+        local json = require("dkjson")
 
-        -- Create project record
-        local project = Project.create({
-            name = parse_result.project.name,
+        -- Create project record with settings JSON
+        local settings = {
             frame_rate = parse_result.project.settings.frame_rate,
             width = parse_result.project.settings.width,
             height = parse_result.project.settings.height
+        }
+
+        local project = Project.create(parse_result.project.name, {
+            settings = json.encode(settings)
         })
 
         if not project:save(db) then
@@ -36,7 +66,7 @@ function M.register(executors, undoers, db)
         end
 
         print(string.format("Created project: %s (%dx%d @ %.2ffps)",
-            project.name, project.width, project.height, project.frame_rate))
+            project.name, settings.width, settings.height, settings.frame_rate))
 
         -- Track created entities for undo
         local created_media_ids = {}
@@ -70,40 +100,42 @@ function M.register(executors, undoers, db)
         -- Import timelines
         for _, timeline_data in ipairs(parse_result.timelines) do
             -- Create sequence (timeline) record
-            local stmt = db:prepare([[
-                INSERT INTO sequences (id, project_id, name, duration, frame_rate)
-                VALUES (?, ?, ?, ?, ?)
-            ]])
+            local fps_num, fps_den = frame_rate_to_rational(parse_result.project.settings.frame_rate)
+            local timeline_id = require("models.clip").generate_id()
+            local now = os.time()
 
-            local timeline_id = require("models.clip").generate_uuid()  -- Reuse UUID generator
-            stmt:bind_values(
-                timeline_id,
-                project.id,
-                timeline_data.name,
-                timeline_data.duration,
-                parse_result.project.settings.frame_rate
-            )
+            -- Use db:exec() with string formatting (all values are controlled/trusted)
+            local sql = string.format([[
+                INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+                VALUES ('%s', '%s', %s, 'timeline', %d, %d, 48000, %d, %d, %d, %d)
+            ]], timeline_id, project.id, sql_escape(timeline_data.name), fps_num, fps_den, settings.width, settings.height, now, now)
 
-            if stmt:step() == sqlite3.DONE then
+            local ok, err = db:exec(sql)
+            if not ok then
+                return {success = false, error_message = string.format("Failed to insert sequence: %s", tostring(err))}
+            end
+
+            if ok then
                 table.insert(created_timeline_ids, timeline_id)
                 print(string.format("  Imported timeline: %s", timeline_data.name))
 
                 -- Import tracks
                 for _, track_data in ipairs(timeline_data.tracks) do
-                    local track_stmt = db:prepare([[
-                        INSERT INTO tracks (id, sequence_id, track_type, track_index)
-                        VALUES (?, ?, ?, ?)
-                    ]])
+                    local track_id = require("models.clip").generate_id()
+                    local track_prefix = track_data.type == "VIDEO" and "V" or "A"
+                    local track_name = string.format("%s%d", track_prefix, track_data.index)
 
-                    local track_id = require("models.clip").generate_uuid()
-                    track_stmt:bind_values(
-                        track_id,
-                        timeline_id,
-                        track_data.type,
-                        track_data.index
-                    )
+                    local track_sql = string.format([[
+                        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
+                        VALUES ('%s', '%s', '%s', '%s', %d)
+                    ]], track_id, timeline_id, track_name, track_data.type, track_data.index)
 
-                    if track_stmt:step() == sqlite3.DONE then
+                    local track_ok, track_err = db:exec(track_sql)
+                    if not track_ok then
+                        print(string.format("WARNING: Failed to create track: %s%d - %s", track_data.type, track_data.index, tostring(track_err)))
+                    end
+
+                    if track_ok then
                         table.insert(created_track_ids, track_id)
                         print(string.format("    Created track: %s%d", track_data.type, track_data.index))
 
@@ -121,13 +153,18 @@ function M.register(executors, undoers, db)
                                 end
                             end
 
-                            local clip = Clip.create({
+                            -- Calculate source_out if not provided
+                            local source_out = clip_data.source_out
+                            if not source_out and clip_data.source_in and clip_data.duration then
+                                source_out = clip_data.source_in + clip_data.duration
+                            end
+
+                            local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
-                                media_id = media_id,
-                                start_value = clip_data.start_value,
+                                timeline_start = clip_data.start_value,  -- Renamed from start_value
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
-                                source_out = clip_data.source_out
+                                source_out = source_out
                             })
 
                             if clip:save(db) then
@@ -140,13 +177,13 @@ function M.register(executors, undoers, db)
                         print(string.format("WARNING: Failed to create track: %s%d", track_data.type, track_data.index))
                     end
 
-                    track_stmt:finalize()
+                    -- No finalize needed with db:exec()
                 end
             else
                 print(string.format("WARNING: Failed to create timeline: %s", timeline_data.name))
             end
 
-            stmt:finalize()
+            -- No finalize needed with db:exec()
         end
 
         print(string.format("Imported Resolve project: %d media, %d timelines, %d tracks, %d clips",
@@ -158,8 +195,15 @@ function M.register(executors, undoers, db)
         command:set_parameter("created_track_ids", created_track_ids)
         command:set_parameter("created_clip_ids", created_clip_ids)
 
+        -- Set result for test access
+        command.result = {
+            success = true,
+            project_id = project.id
+        }
+
         return {
-            success = true
+            success = true,
+            project_id = project.id
         }
     end
 
@@ -177,42 +221,27 @@ function M.register(executors, undoers, db)
 
         -- Delete clips
         for _, clip_id in ipairs(created_clip_ids or {}) do
-            local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
-            stmt:bind_values(clip_id)
-            stmt:step()
-            stmt:finalize()
+            db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id))
         end
 
         -- Delete tracks
         for _, track_id in ipairs(created_track_ids or {}) do
-            local stmt = db:prepare("DELETE FROM tracks WHERE id = ?")
-            stmt:bind_values(track_id)
-            stmt:step()
-            stmt:finalize()
+            db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id))
         end
 
         -- Delete timelines
         for _, timeline_id in ipairs(created_timeline_ids or {}) do
-            local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
-            stmt:bind_values(timeline_id)
-            stmt:step()
-            stmt:finalize()
+            db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", timeline_id))
         end
 
         -- Delete media
         for _, media_id in ipairs(created_media_ids or {}) do
-            local stmt = db:prepare("DELETE FROM media WHERE id = ?")
-            stmt:bind_values(media_id)
-            stmt:step()
-            stmt:finalize()
+            db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id))
         end
 
         -- Delete project
         if project_id then
-            local stmt = db:prepare("DELETE FROM projects WHERE id = ?")
-            stmt:bind_values(project_id)
-            stmt:step()
-            stmt:finalize()
+            db:exec(string.format("DELETE FROM projects WHERE id = '%s'", project_id))
         end
 
         print("Undo: Deleted imported Resolve project and all associated data")
@@ -237,13 +266,17 @@ function M.register(executors, undoers, db)
         local Project = require("models.project")
         local Media = require("models.media")
         local Clip = require("models.clip")
+        local json = require("dkjson")
 
-        -- Create project record
-        local project = Project.create({
-            name = import_result.project.name,
+        -- Create project record with settings JSON
+        local db_settings = {
             frame_rate = import_result.project.frame_rate,
             width = import_result.project.width,
             height = import_result.project.height
+        }
+
+        local project = Project.create(import_result.project.name, {
+            settings = json.encode(db_settings)
         })
 
         if not project:save(db) then
@@ -251,7 +284,7 @@ function M.register(executors, undoers, db)
         end
 
         print(string.format("Created project from Resolve DB: %s (%dx%d @ %.2ffps)",
-            project.name, project.width, project.height, project.frame_rate))
+            project.name, db_settings.width, db_settings.height, db_settings.frame_rate))
 
         -- Track created entities for undo
         local created_media_ids = {}
@@ -285,40 +318,41 @@ function M.register(executors, undoers, db)
         -- Import timelines
         for _, timeline_data in ipairs(import_result.timelines) do
             -- Create sequence (timeline) record
-            local stmt = db:prepare([[
-                INSERT INTO sequences (id, project_id, name, duration, frame_rate)
-                VALUES (?, ?, ?, ?, ?)
-            ]])
+            local fps_num, fps_den = frame_rate_to_rational(timeline_data.frame_rate or import_result.project.frame_rate)
+            local timeline_id = require("models.clip").generate_id()
+            local now = os.time()
 
-            local timeline_id = require("models.clip").generate_uuid()
-            stmt:bind_values(
-                timeline_id,
-                project.id,
-                timeline_data.name,
-                timeline_data.duration,
-                timeline_data.frame_rate
-            )
+            local sql = string.format([[
+                INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+                VALUES ('%s', '%s', %s, 'timeline', %d, %d, 48000, %d, %d, %d, %d)
+            ]], timeline_id, project.id, sql_escape(timeline_data.name), fps_num, fps_den, db_settings.width, db_settings.height, now, now)
 
-            if stmt:step() == sqlite3.DONE then
+            local ok, err = db:exec(sql)
+            if not ok then
+                return {success = false, error_message = string.format("Failed to insert sequence: %s", tostring(err))}
+            end
+
+            if ok then
                 table.insert(created_timeline_ids, timeline_id)
                 print(string.format("  Imported timeline: %s", timeline_data.name))
 
                 -- Import tracks
                 for _, track_data in ipairs(timeline_data.tracks) do
-                    local track_stmt = db:prepare([[
-                        INSERT INTO tracks (id, sequence_id, track_type, track_index)
-                        VALUES (?, ?, ?, ?)
-                    ]])
+                    local track_id = require("models.clip").generate_id()
+                    local track_prefix = track_data.type == "VIDEO" and "V" or "A"
+                    local track_name = string.format("%s%d", track_prefix, track_data.index)
 
-                    local track_id = require("models.clip").generate_uuid()
-                    track_stmt:bind_values(
-                        track_id,
-                        timeline_id,
-                        track_data.type,
-                        track_data.index
-                    )
+                    local track_sql = string.format([[
+                        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
+                        VALUES ('%s', '%s', '%s', '%s', %d)
+                    ]], track_id, timeline_id, track_name, track_data.type, track_data.index)
 
-                    if track_stmt:step() == sqlite3.DONE then
+                    local track_ok, track_err = db:exec(track_sql)
+                    if not track_ok then
+                        print(string.format("WARNING: Failed to create track: %s%d - %s", track_data.type, track_data.index, tostring(track_err)))
+                    end
+
+                    if track_ok then
                         table.insert(created_track_ids, track_id)
                         print(string.format("    Created track: %s%d", track_data.type, track_data.index))
 
@@ -327,13 +361,18 @@ function M.register(executors, undoers, db)
                             -- Find matching media_id using resolve_media_id
                             local media_id = media_id_map[clip_data.resolve_media_id]
 
-                            local clip = Clip.create({
+                            -- Calculate source_out if not provided
+                            local source_out = clip_data.source_out
+                            if not source_out and clip_data.source_in and clip_data.duration then
+                                source_out = clip_data.source_in + clip_data.duration
+                            end
+
+                            local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
-                                media_id = media_id,
-                                start_value = clip_data.start_value,
+                                timeline_start = clip_data.start_value,  -- Renamed from start_value
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
-                                source_out = clip_data.source_out
+                                source_out = source_out
                             })
 
                             if clip:save(db) then
@@ -346,13 +385,13 @@ function M.register(executors, undoers, db)
                         print(string.format("WARNING: Failed to create track: %s%d", track_data.type, track_data.index))
                     end
 
-                    track_stmt:finalize()
+                    -- No finalize needed with db:exec()
                 end
             else
                 print(string.format("WARNING: Failed to create timeline: %s", timeline_data.name))
             end
 
-            stmt:finalize()
+            -- No finalize needed with db:exec()
         end
 
         print(string.format("Imported Resolve database: %d media, %d timelines, %d tracks, %d clips",
@@ -364,8 +403,15 @@ function M.register(executors, undoers, db)
         command:set_parameter("created_track_ids", created_track_ids)
         command:set_parameter("created_clip_ids", created_clip_ids)
 
+        -- Set result for test access
+        command.result = {
+            success = true,
+            project_id = project.id
+        }
+
         return {
-            success = true
+            success = true,
+            project_id = project.id
         }
     end
 

@@ -26,6 +26,9 @@ cmake_install.cmake
 install_manifest.txt
 CTestTestfile.cmake
 Testing/
+CPackConfig.cmake
+CPackSourceConfig.cmake
+_CPack_Packages/
 
 # Binaries
 *.exe
@@ -49,6 +52,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local scratch review artifacts
+review*.txt
 
 # Project and database files
 *.db
@@ -83,3 +89,5 @@ tests/**/captures/
 
 # Generated Qt/CMake autogen artifacts
 *_autogen/
+tests/temp/
+tests/tests/

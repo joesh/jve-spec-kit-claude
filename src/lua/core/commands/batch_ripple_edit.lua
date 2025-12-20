@@ -4,7 +4,7 @@ local database = require('core.database')
 local frame_utils = require('core.frame_utils')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
-local edge_utils = require("ui.timeline.edge_utils")
+local edge_utils = require("core.edge_utils")
 local ui_constants = require("core.ui_constants")
 local clip_mutator = require('core.clip_mutator') -- New dependency
 local logger = require("core.logger")
@@ -888,20 +888,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(ctx.edge_infos, "setup_edge_context: edge_infos is nil")
         for _, edge_info in ipairs(ctx.edge_infos) do
             if edge_info.clip_id then
+                local gap_edge = is_gap_edge(edge_info.edge_type)
                 ctx.edited_clip_lookup[edge_info.clip_id] = true
-                if edge_info.original_clip_id then
+                if (not gap_edge) and edge_info.original_clip_id then
                     ctx.edited_clip_lookup[edge_info.original_clip_id] = true
-                end
-                if is_gap_edge(edge_info.edge_type) then
-                    local gap_clip = ctx.base_clips and ctx.base_clips[edge_info.clip_id]
-                    if gap_clip then
-                        if gap_clip.gap_left_id then
-                            ctx.edited_clip_lookup[gap_clip.gap_left_id] = true
-                        end
-                        if gap_clip.gap_right_id then
-                            ctx.edited_clip_lookup[gap_clip.gap_right_id] = true
-                        end
-                    end
                 end
                 if not is_gap_edge(edge_info.edge_type) then
                     ctx.selection_has_clip_edge = true

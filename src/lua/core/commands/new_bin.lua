@@ -3,14 +3,18 @@ local uuid = require("uuid")
 local tag_service = require("core.tag_service")
 local command_helper = require("core.command_helper")
 
-function M.register(command_executors, command_undoers, db, set_last_error)
-    command_executors["NewBin"] = function(command)
-        command:set_parameter("__skip_sequence_replay", true)
-        local project_id = command:get_parameter("project_id") or "default_project"
-        local bin_name = command_helper.trim_string(command:get_parameter("name"))
-        if bin_name == "" then
-            bin_name = "New Bin"
-        end
+    function M.register(command_executors, command_undoers, db, set_last_error)
+        command_executors["NewBin"] = function(command)
+            command:set_parameter("__skip_sequence_replay", true)
+            local project_id = command:get_parameter("project_id")
+            if not project_id or project_id == "" then
+                set_last_error("NewBin: missing project_id")
+                return false
+            end
+            local bin_name = command_helper.trim_string(command:get_parameter("name"))
+            if bin_name == "" then
+                bin_name = "New Bin"
+            end
 
         local bin_id = command:get_parameter("bin_id")
         if not bin_id or bin_id == "" then
@@ -33,7 +37,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["NewBin"] = function(command)
-        local project_id = command:get_parameter("project_id") or "default_project"
+        local project_id = command:get_parameter("project_id")
+        if not project_id or project_id == "" then
+            set_last_error("UndoNewBin: missing project_id")
+            return false
+        end
         local bin_id = command:get_parameter("bin_id")
         if not bin_id or bin_id == "" then
             set_last_error("UndoNewBin: Missing bin_id parameter")

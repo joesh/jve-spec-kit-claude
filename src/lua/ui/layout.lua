@@ -7,7 +7,7 @@ local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local Project = require("models.project")
 local logger = require("core.logger")
-local time_utils = require("core.time_utils")
+local project_open = require("core.project_open")
 
 -- Enable strict nil error handling - calling nil will raise an error with proper stack trace
 debug.setmetatable(nil, {
@@ -42,71 +42,6 @@ _G.error_handler = global_error_handler
 io.stdout:setvbuf("no")
 io.stderr:setvbuf("no")
 
-local function open_project_database_or_prompt_cleanup(db_module, project_path)
-    local ok = db_module.set_path(project_path)
-    if ok then
-        return true
-    end
-
-    local list_ok, list_result = pcall(db_module.list_wal_sidecars, project_path)
-    if not list_ok then
-        logger.error("layout", "Failed to check for WAL/SHM sidecars: " .. tostring(list_result))
-        return false
-    end
-    if type(list_result) ~= "table" then
-        logger.error("layout", "database.list_wal_sidecars returned unexpected type: " .. type(list_result))
-        return false
-    end
-    local sidecars = list_result
-
-    local has_sidecars = sidecars and (sidecars.wal or sidecars.shm)
-    if not has_sidecars then
-        return false
-    end
-
-    if not qt_constants or not qt_constants.DIALOG or not qt_constants.DIALOG.SHOW_CONFIRM then
-        logger.error("layout", "Project open failed and WAL/SHM sidecars exist, but confirm dialog bindings are unavailable")
-        return false
-    end
-
-    local existing = {}
-    if sidecars.wal then table.insert(existing, sidecars.wal) end
-    if sidecars.shm then table.insert(existing, sidecars.shm) end
-
-    local suffix = "stale-" .. time_utils.human_datestamp_for_filename(os.time())
-    local accepted = qt_constants.DIALOG.SHOW_CONFIRM({
-        title = "Project Open Failed",
-        message = "This project database failed to open, but SQLite sidecar files were found.",
-        informative_text = "If you replaced the project file with another version, these sidecar files may belong to the previous database. You can move them aside and retry opening.\n\nMoving aside is safer than deleting: it preserves the old files in case they contain recent edits.",
-        detail_text = "Project file:\n" .. tostring(project_path) .. "\n\nSidecar files:\n" .. table.concat(existing, "\n") .. "\n\nMove aside suffix:\n" .. suffix,
-        confirm_text = "Move Aside and Retry",
-        cancel_text = "Cancel",
-        icon = "warning",
-        default_button = "confirm",
-    })
-
-    if not accepted then
-        return false
-    end
-
-    local moved_ok, moved_or_err = pcall(function()
-        return db_module.move_aside_wal_sidecars(project_path, suffix)
-    end)
-    if not moved_ok then
-        logger.error("layout", "Failed to move aside sidecars: " .. tostring(moved_or_err))
-        return false
-    end
-
-    local retry_ok = db_module.set_path(project_path)
-    if not retry_ok then
-        logger.error("layout", "Retry failed after moving aside WAL/SHM sidecars")
-        return false
-    end
-
-    logger.info("layout", "Opened project database after moving aside WAL/SHM sidecars")
-    return true
-end
-
 logger.info("layout", "Creating layout...")
 local layout_path = debug.getinfo(1, "S").source:sub(2)
 local layout_dir = layout_path:match("(.*/)")
@@ -132,12 +67,13 @@ end
 
 local project_display_name = nil
 local active_project_id
+local active_sequence_id
 
 -- Initialize command_manager module reference (will be initialized later)
 local command_manager = require("core.command_manager")
 
 -- Open database connection
-local db_success = open_project_database_or_prompt_cleanup(db_module, db_path)
+local db_success = project_open.open_project_database_or_prompt_cleanup(db_module, qt_constants, db_path)
 if not db_success then
     logger.error("layout", "Failed to open database connection; exiting")
     os.exit(1)
@@ -162,7 +98,7 @@ else
 
     if not has_schema then
         logger.info("layout", "Creating database schema...")
-        local schema_path = layout_dir .. "../../core/persistence/schema.sql"
+        local schema_path = layout_dir .. "../schema.sql"
         local schema_file, ferr = io.open(schema_path, "r")
         if not schema_file then
             error("FATAL: Failed to open schema.sql at " .. schema_path .. ": " .. tostring(ferr))
@@ -292,18 +228,28 @@ else
 
             logger.info("layout", "Inserted default sequence and tracks")
         end
+
+        return sequence_id
     end
 
-    ensure_default_data()
+    active_sequence_id = ensure_default_data()
+    assert(active_sequence_id and active_sequence_id ~= "", "FATAL: Unable to resolve active sequence id after default data init")
 
-    active_project_id = db_module.get_current_project_id()
+    local project_stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
+    assert(project_stmt, "FATAL: Failed to prepare active sequence -> project query")
+    project_stmt:bind_value(1, active_sequence_id)
+    if project_stmt:exec() and project_stmt:next() then
+        active_project_id = project_stmt:value(0)
+    end
+    project_stmt:finalize()
+    assert(active_project_id and active_project_id ~= "", "FATAL: Active sequence missing project_id (sequence_id=" .. tostring(active_sequence_id) .. ")")
     local project_record = Project.load(active_project_id)
     assert(project_record and project_record.name and project_record.name ~= "",
         string.format("Project '%s' missing name", tostring(active_project_id)))
     project_display_name = project_record.name
 
     -- Initialize CommandManager with database
-    command_manager.init(db_module.get_connection())
+    command_manager.init(db_module.get_connection(), active_sequence_id, active_project_id)
     logger.debug("layout", "CommandManager initialized with database")
 
     -- Initialize bug reporter (continuous background capture)
@@ -376,7 +322,10 @@ local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
 
 -- 4. Timeline panel (create early, before inspector blocks execution)
 local timeline_panel_mod = require("ui.timeline.timeline_panel")
-local timeline_panel = timeline_panel_mod.create()
+local timeline_panel = timeline_panel_mod.create({
+    sequence_id = active_sequence_id,
+    project_id = active_project_id,
+})
 
 -- 5. Initialize keyboard shortcuts with the SAME timeline_state instance that timeline_panel uses
 -- Note: Use F9 and F10 to add test clips via commands
@@ -445,7 +394,8 @@ panel_manager.init({
 focus_manager.initialize_all_panels()
 
 -- Restore last-open sequence when available
-local project_id = db_module.get_current_project_id()
+local project_id = active_project_id
+assert(project_id and project_id ~= "", "FATAL: missing active_project_id during sequence restore")
 local sequences = db_module.load_sequences(project_id)
 
 local function find_sequence_id(candidate_id, list)

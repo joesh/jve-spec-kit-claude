@@ -7,7 +7,6 @@ local json = require("dkjson")
 local uuid = require("uuid")
 local db = require("core.database")
 local Clip = require("models.clip")
-local timeline_state = require("ui.timeline.timeline_state")
 local logger = require("core.logger")
 
 local function get_conn()
@@ -44,8 +43,8 @@ function M.trim_string(value)
 end
 
 function M.reload_timeline(sequence_id)
-    local timeline_state_mod = require('ui.timeline.timeline_state')
-    if not timeline_state_mod or not timeline_state_mod.reload_clips then
+    local timeline_state_mod = package.loaded["ui.timeline.timeline_state"]
+    if not timeline_state_mod or type(timeline_state_mod.reload_clips) ~= "function" then
         return
     end
     local target_sequence = sequence_id
@@ -304,11 +303,7 @@ function M.resolve_sequence_id_for_edges(command, primary_edge, edge_list)
         resolved = provided
     end
 
-    if not resolved or resolved == "" then
-        resolved = "default_sequence"
-    end
-
-    if resolved ~= provided then
+    if resolved and resolved ~= "" and resolved ~= provided then
         command:set_parameter("sequence_id", resolved)
     end
 
@@ -365,7 +360,38 @@ function M.restore_clip_state(state)
     local seq_id = state.owner_sequence_id or state.track_sequence_id or lookup_track_sequence(state.track_id)
     state.owner_sequence_id = state.owner_sequence_id or seq_id
     state.track_sequence_id = state.track_sequence_id or seq_id
-    state.project_id = state.project_id or "default_project"
+
+    if not state.project_id or state.project_id == "" then
+        local resolved_project_id = nil
+
+        if seq_id and seq_id ~= "" then
+            local stmt = conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
+            if stmt then
+                stmt:bind_value(1, seq_id)
+                if stmt:exec() and stmt:next() then
+                    resolved_project_id = stmt:value(0)
+                end
+                stmt:finalize()
+            end
+        end
+
+        if (not resolved_project_id or resolved_project_id == "") and state.id and state.id ~= "" then
+            local stmt = conn:prepare("SELECT project_id FROM clips WHERE id = ?")
+            if stmt then
+                stmt:bind_value(1, state.id)
+                if stmt:exec() and stmt:next() then
+                    resolved_project_id = stmt:value(0)
+                end
+                stmt:finalize()
+            end
+        end
+
+        if not resolved_project_id or resolved_project_id == "" then
+            error("restore_clip_state: missing project_id and unable to resolve from database", 2)
+        end
+
+        state.project_id = resolved_project_id
+    end
 
     local clip = Clip.load_optional(state.id, conn)
     
@@ -426,6 +452,7 @@ function M.capture_clip_state(clip)
         source_out = clip.source_out,
         name = clip.name,
         enabled = clip.enabled,
+        offline = clip.offline,
         -- Frame rate needed for Rational reconstruction after JSON round-trip
         fps_numerator = rate.fps_numerator,
         fps_denominator = rate.fps_denominator
@@ -695,11 +722,12 @@ function M.apply_mutations(db, mutations)
         insert_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
+                source_sequence_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled,
+                fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_stmt then
             return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
@@ -838,21 +866,25 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(4, mut.name)
             stmt:bind_value(5, mut.track_id)
             stmt:bind_value(6, mut.media_id)
-            stmt:bind_value(7, mut.timeline_start_frame)
-            stmt:bind_value(8, mut.duration_frames)
-            stmt:bind_value(9, mut.source_in_frame)
-            stmt:bind_value(10, mut.source_out_frame)
-            stmt:bind_value(11, mut.fps_numerator)
-            stmt:bind_value(12, mut.fps_denominator)
-            stmt:bind_value(13, mut.enabled)
+            stmt:bind_value(7, mut.source_sequence_id)
+            stmt:bind_value(8, mut.parent_clip_id)
+            stmt:bind_value(9, mut.owner_sequence_id)
+            stmt:bind_value(10, mut.timeline_start_frame)
+            stmt:bind_value(11, mut.duration_frames)
+            stmt:bind_value(12, mut.source_in_frame)
+            stmt:bind_value(13, mut.source_out_frame)
+            stmt:bind_value(14, mut.fps_numerator)
+            stmt:bind_value(15, mut.fps_denominator)
+            stmt:bind_value(16, mut.enabled)
+            stmt:bind_value(17, (mut.offline == 1 or mut.offline == true) and 1 or 0)
             if mut.created_at == nil or mut.modified_at == nil then
                 finalize_stmt(update_stmt)
                 finalize_stmt(delete_stmt)
                 finalize_stmt(insert_stmt)
                 return false, "INSERT mutation missing created_at/modified_at for clip " .. tostring(mut.clip_id)
             end
-            stmt:bind_value(14, mut.created_at)
-            stmt:bind_value(15, mut.modified_at)
+            stmt:bind_value(18, mut.created_at)
+            stmt:bind_value(19, mut.modified_at)
             local ok = stmt:exec()
             local err = db:last_error()
             reset_stmt(stmt)
@@ -1091,11 +1123,12 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         local stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
+                source_sequence_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled,
+                fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
 
@@ -1105,15 +1138,19 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(4, prev.name)
         stmt:bind_value(5, prev.track_id)
         stmt:bind_value(6, prev.media_id)
-        stmt:bind_value(7, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
-        stmt:bind_value(8, val_frames(prev.duration, "duration"))
-        stmt:bind_value(9, val_frames(prev.source_in, "source_in"))
-        stmt:bind_value(10, val_frames(prev.source_out, "source_out"))
-        stmt:bind_value(11, fps_num)
-        stmt:bind_value(12, fps_den)
-        stmt:bind_value(13, prev.enabled and 1 or 0)
-        stmt:bind_value(14, prev.created_at)
-        stmt:bind_value(15, prev.modified_at)
+        stmt:bind_value(7, prev.source_sequence_id)
+        stmt:bind_value(8, prev.parent_clip_id)
+        stmt:bind_value(9, prev.owner_sequence_id or prev.track_sequence_id)
+        stmt:bind_value(10, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
+        stmt:bind_value(11, val_frames(prev.duration, "duration"))
+        stmt:bind_value(12, val_frames(prev.source_in, "source_in"))
+        stmt:bind_value(13, val_frames(prev.source_out, "source_out"))
+        stmt:bind_value(14, fps_num)
+        stmt:bind_value(15, fps_den)
+        stmt:bind_value(16, prev.enabled and 1 or 0)
+        stmt:bind_value(17, (prev.offline == 1 or prev.offline == true) and 1 or 0)
+        stmt:bind_value(18, prev.created_at)
+        stmt:bind_value(19, prev.modified_at)
 
         local ok = stmt:exec()
         stmt:finalize()

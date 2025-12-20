@@ -30,6 +30,7 @@ local clipboard_actions = require("core.clipboard_actions")
 local profile_scope = require("core.profile_scope")
 local Rational = require("core.rational")
 local logger = require("core.logger")
+local project_open = require("core.project_open")
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
@@ -403,7 +404,7 @@ local function create_action_callback(command_name, params)
             local ok, err = pcall(function()
                 local database = require("core.database")
                 if database and database.shutdown then
-                    local success, message = database.shutdown()
+                    local success, message = database.shutdown({ best_effort = true })
                     if not success then
                         error(message or "database.shutdown failed")
                     end
@@ -413,6 +414,78 @@ local function create_action_callback(command_name, params)
                 logger.error("menu", "Quit shutdown failed: " .. tostring(err))
             end
             os.exit(0)
+        elseif command_name == "OpenProject" then
+            local home = os.getenv("HOME") or ""
+            local default_dir = home ~= "" and (home .. "/Documents/JVE Projects") or ""
+            local project_path = qt_constants.FILE_DIALOG.OPEN_FILE(
+                main_window,
+                "Open Project",
+                "JVE Project Files (*.jvp);;All Files (*)",
+                default_dir
+            )
+
+            if not project_path or project_path == "" then
+                return
+            end
+
+            local database = require("core.database")
+            local opened = project_open.open_project_database_or_prompt_cleanup(database, qt_constants, project_path, main_window)
+            if not opened then
+                qt_constants.DIALOG.SHOW_CONFIRM({
+                    parent = main_window,
+                    title = "Open Project Failed",
+                    message = "Failed to open project database:\n" .. tostring(project_path),
+                    confirm_text = "OK",
+                    cancel_text = "Cancel",
+                    icon = "warning",
+                    default_button = "confirm"
+                })
+                return
+            end
+
+            local db = database.get_connection()
+            assert(db, "OpenProject: database connection is nil after open")
+
+            local sequence_id, project_id
+            local stmt = db:prepare([[
+                SELECT id, project_id
+                FROM sequences
+                ORDER BY modified_at DESC, created_at DESC, id ASC
+                LIMIT 1
+            ]])
+            assert(stmt, "OpenProject: failed to prepare active sequence query")
+            local ok = stmt:exec() and stmt:next()
+            if ok then
+                sequence_id = stmt:value(0)
+                project_id = stmt:value(1)
+            end
+            stmt:finalize()
+
+            assert(sequence_id and sequence_id ~= "", "OpenProject: no sequences found in database (path=" .. tostring(project_path) .. ")")
+            assert(project_id and project_id ~= "", "OpenProject: active sequence missing project_id (sequence_id=" .. tostring(sequence_id) .. ")")
+
+            command_manager.init(db, sequence_id, project_id)
+
+            if timeline_panel and timeline_panel.load_sequence then
+                timeline_panel.load_sequence(sequence_id)
+            end
+
+            if project_browser and project_browser.refresh then
+                project_browser.refresh()
+            end
+
+            if project_browser and project_browser.focus_sequence then
+                project_browser.focus_sequence(sequence_id)
+            end
+
+            local Project = require("models.project")
+            local project = Project.load(project_id)
+            assert(project and project.name and project.name ~= "", "OpenProject: project name missing (project_id=" .. tostring(project_id) .. ")")
+            if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TITLE then
+                qt_constants.PROPERTIES.SET_TITLE(main_window, project.name)
+            end
+
+            update_undo_redo_actions()
         elseif command_name == "GoToTimecode" then
             assert(timeline_panel and timeline_panel.focus_timecode_entry, "GoToTimecode requires timeline_panel.focus_timecode_entry")
             timeline_panel.focus_timecode_entry()
@@ -542,9 +615,11 @@ local function create_action_callback(command_name, params)
                     for i, file_path in ipairs(file_paths) do
                         logger.debug("menu", string.format("ImportMedia[%d]: %s", i, tostring(file_path)))
                         local Command = require("command")
-                        local cmd = Command.create("ImportMedia", "default_project")
+                        local project_id = get_active_project_id()
+                        assert(project_id and project_id ~= "", "menu_system: ImportMedia missing active project_id")
+                        local cmd = Command.create("ImportMedia", project_id)
                         cmd:set_parameter("file_path", file_path)
-                        cmd:set_parameter("project_id", "default_project")
+                        cmd:set_parameter("project_id", project_id)
 
                         local success, result = pcall(function()
                             return command_manager.execute(cmd)
@@ -585,9 +660,11 @@ local function create_action_callback(command_name, params)
             if file_path then
                 logger.info("menu", "Importing FCP7 XML: " .. tostring(file_path))
                 local Command = require("command")
-                local cmd = Command.create("ImportFCP7XML", "default_project")
+                local project_id = get_active_project_id()
+                assert(project_id and project_id ~= "", "menu_system: ImportFCP7XML missing active project_id")
+                local cmd = Command.create("ImportFCP7XML", project_id)
                 cmd:set_parameter("xml_path", file_path)
-                cmd:set_parameter("project_id", "default_project")
+                cmd:set_parameter("project_id", project_id)
 
                 local success, result = pcall(function()
                     return command_manager.execute(cmd)
@@ -615,8 +692,11 @@ local function create_action_callback(command_name, params)
             if file_path then
                 logger.info("menu", "Importing Resolve project: " .. tostring(file_path))
                 local Command = require("command")
-                local cmd = Command.create("ImportResolveProject", "default_project")
+                local project_id = get_active_project_id()
+                assert(project_id and project_id ~= "", "menu_system: ImportResolveProject missing active project_id")
+                local cmd = Command.create("ImportResolveProject", project_id)
                 cmd:set_parameter("drp_path", file_path)
+                cmd:set_parameter("project_id", project_id)
 
                 local success, result = pcall(function()
                     return command_manager.execute(cmd)
@@ -641,8 +721,11 @@ local function create_action_callback(command_name, params)
             if file_path then
                 logger.info("menu", "Importing Resolve database: " .. tostring(file_path))
                 local Command = require("command")
-                local cmd = Command.create("ImportResolveDatabase", "default_project")
+                local project_id = get_active_project_id()
+                assert(project_id and project_id ~= "", "menu_system: ImportResolveDatabase missing active project_id")
+                local cmd = Command.create("ImportResolveDatabase", project_id)
                 cmd:set_parameter("db_path", file_path)
+                cmd:set_parameter("project_id", project_id)
 
                 local success, result = pcall(function()
                     return command_manager.execute(cmd)
@@ -727,12 +810,14 @@ local function create_action_callback(command_name, params)
                 return
             end
 
-            local batch_cmd = Command.create("BatchCommand", "default_project")
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+            assert(project_id and project_id ~= "", "menu_system: Split missing active project_id")
             local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
-            if active_sequence_id and active_sequence_id ~= "" then
-                batch_cmd:set_parameter("sequence_id", active_sequence_id)
-                batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
-            end
+            assert(active_sequence_id and active_sequence_id ~= "", "menu_system: Split missing active sequence_id")
+
+            local batch_cmd = Command.create("BatchCommand", project_id)
+            batch_cmd:set_parameter("sequence_id", active_sequence_id)
+            batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
             batch_cmd:set_parameter("commands_json", json.encode(specs))
 
             local success, result = pcall(function()
@@ -776,13 +861,12 @@ local function create_action_callback(command_name, params)
             local playhead_value = timeline_state.get_playhead_position()
 
             local Command = require("command")
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
-            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+            assert(project_id and project_id ~= "", "menu_system: Insert missing active project_id")
+            assert(sequence_id and sequence_id ~= "", "menu_system: Insert missing active sequence_id")
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
-            if not track_id or track_id == "" then
-                logger.warn("menu", "Insert: active sequence has no video tracks")
-                return
-            end
+            assert(track_id and track_id ~= "", "menu_system: Insert missing active video track_id")
 
             local cmd = Command.create("Insert", project_id)
             cmd:set_parameter("master_clip_id", selected_clip.clip_id)
@@ -836,13 +920,12 @@ local function create_action_callback(command_name, params)
             local playhead_value = timeline_state.get_playhead_position()
 
             local Command = require("command")
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or "default_project"
-            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or "default_sequence"
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+            assert(project_id and project_id ~= "", "menu_system: Overwrite missing active project_id")
+            assert(sequence_id and sequence_id ~= "", "menu_system: Overwrite missing active sequence_id")
             local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
-            if not track_id or track_id == "" then
-                logger.warn("menu", "Overwrite: active sequence has no video tracks")
-                return
-            end
+            assert(track_id and track_id ~= "", "menu_system: Overwrite missing active video track_id")
 
             local cmd = Command.create("Overwrite", project_id)
             cmd:set_parameter("master_clip_id", selected_clip.clip_id)

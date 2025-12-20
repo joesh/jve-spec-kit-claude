@@ -3,7 +3,6 @@
 
 local M = {}
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
-local edge_utils = require("ui.timeline.edge_utils")
 local color_utils = require("ui.color_utils")
 local Rational = require("core.rational")
 local Command = require("command")
@@ -942,25 +941,17 @@ function M.render(view)
 
     local dragging_edges = edge_drag_state and edge_drag_state.type == "edges"
     local preview_clip_cache = {}
-    local function get_clip_by_id(clip_id)
-        if not clip_id or not state_module.get_clip_by_id then
-            return nil
-        end
-        return state_module.get_clip_by_id(clip_id)
-    end
     local seq_rate = state_module.get_sequence_frame_rate()
     assert(seq_rate and seq_rate.fps_numerator and seq_rate.fps_denominator, "timeline_view_renderer: missing sequence fps metadata")
     local fps_num = seq_rate.fps_numerator
     local fps_den = seq_rate.fps_denominator
     local zero_delta = Rational.new(0, fps_num, fps_den)
     local edge_delta = zero_delta
-    local requested_delta = nil
     local edges_to_render = state_module.get_selected_edges() or {}
-    local clamped_edge_lookup = {}
 
     if dragging_edges then
         ensure_edge_preview(edge_drag_state, state_module)
-        requested_delta = coerce_to_rational(
+        local requested_delta = coerce_to_rational(
             edge_drag_state.delta_rational or edge_drag_state.delta_ms,
             fps_num,
             fps_den
@@ -977,7 +968,6 @@ function M.render(view)
         edges_to_render = edge_drag_state.edges or edges_to_render
 
         local preview_data = edge_drag_state.preview_data
-        clamped_edge_lookup = (edge_drag_state and edge_drag_state.clamped_edges) or {}
         if preview_data then
             render_preview_rectangles(view, preview_data, preview_clip_cache, seq_rate, state_module, width, height, viewport_duration_rational)
             render_shift_block_outlines(

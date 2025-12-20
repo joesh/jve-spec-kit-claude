@@ -10,12 +10,6 @@ package.path = package.path
 
 require("test_env")
 
-local event_log_stub = {
-    init = function() return true end,
-    record_command = function() return true end
-}
-package.loaded["core.event_log"] = event_log_stub
-
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 -- core.command_implementations is deleted

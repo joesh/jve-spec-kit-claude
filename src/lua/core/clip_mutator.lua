@@ -3,6 +3,7 @@ local Rational = require("core.rational")
 local uuid = require("uuid")
 local logger = require("core.logger")
 local krono_ok, krono = pcall(require, "core.krono")
+local rational_helpers = require("core.command_rational_helpers")
 
     local function clone_state(row)
 	    return {
@@ -12,6 +13,9 @@ local krono_ok, krono = pcall(require, "core.krono")
 	        name = row.name,
 	        track_id = row.track_id,
 	        media_id = row.media_id,
+            source_sequence_id = row.source_sequence_id,
+            parent_clip_id = row.parent_clip_id,
+            owner_sequence_id = row.owner_sequence_id,
 	        created_at = row.created_at,
 	        modified_at = row.modified_at,
 	        start_value = row.start_value,
@@ -20,7 +24,8 @@ local krono_ok, krono = pcall(require, "core.krono")
 	        source_out = row.source_out,
 	        fps_numerator = row.fps_numerator,
 	        fps_denominator = row.fps_denominator,
-	        enabled = row.enabled
+	        enabled = row.enabled,
+            offline = row.offline
 	    }
 	end
 
@@ -133,6 +138,9 @@ local function plan_insert(row)
         name = row.name or "",
         track_id = row.track_id,
         media_id = row.media_id,
+        source_sequence_id = row.source_sequence_id,
+        parent_clip_id = row.parent_clip_id,
+        owner_sequence_id = row.owner_sequence_id,
         timeline_start_frame = get_frames(row.timeline_start or row.start_value),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
@@ -140,6 +148,7 @@ local function plan_insert(row)
         fps_numerator = fps_num,
         fps_denominator = fps_den,
         enabled = row.enabled and 1 or 0,
+        offline = row.offline and 1 or 0,
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
         modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id))
     }
@@ -152,10 +161,11 @@ end
 local function load_track_clips(db, track_id)
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                s.fps_numerator, s.fps_denominator,
-               c.enabled, c.created_at, c.modified_at
+               c.enabled, c.offline, c.created_at, c.modified_at
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
@@ -175,10 +185,10 @@ local function load_track_clips(db, track_id)
     end
 
     while stmt:next() do
-        local clip_num = stmt:value(10)
-        local clip_den = stmt:value(11)
-        local seq_num = stmt:value(12)
-        local seq_den = stmt:value(13)
+        local clip_num = stmt:value(13)
+        local clip_den = stmt:value(14)
+        local seq_num = stmt:value(15)
+        local seq_den = stmt:value(16)
         assert_rate(clip_num, clip_den, "clip fps")
         assert_rate(seq_num, seq_den, "sequence fps")
         table.insert(results, {
@@ -188,17 +198,21 @@ local function load_track_clips(db, track_id)
 		            name = stmt:value(3),
 		            track_id = stmt:value(4),
 		            media_id = stmt:value(5),
-		            created_at = stmt:value(15),
-		            modified_at = stmt:value(16),
-		            timeline_start = Rational.new(stmt:value(6), seq_num, seq_den),
-		            start_value = Rational.new(stmt:value(6), seq_num, seq_den), -- Legacy compat
-		            duration = Rational.new(stmt:value(7), seq_num, seq_den),
-		            source_in = Rational.new(stmt:value(8), clip_num, clip_den),
-		            source_out = Rational.new(stmt:value(9), clip_num, clip_den),
+                    source_sequence_id = stmt:value(6),
+                    parent_clip_id = stmt:value(7),
+                    owner_sequence_id = stmt:value(8),
+		            created_at = stmt:value(19),
+		            modified_at = stmt:value(20),
+		            timeline_start = Rational.new(stmt:value(9), seq_num, seq_den),
+		            start_value = Rational.new(stmt:value(9), seq_num, seq_den), -- Legacy compat
+		            duration = Rational.new(stmt:value(10), seq_num, seq_den),
+		            source_in = Rational.new(stmt:value(11), clip_num, clip_den),
+		            source_out = Rational.new(stmt:value(12), clip_num, clip_den),
 		            rate = { fps_numerator = clip_num, fps_denominator = clip_den },
 		            fps_numerator = clip_num,
 		            fps_denominator = clip_den,
-		            enabled = stmt:value(14) == 1 or stmt:value(14) == true
+		            enabled = stmt:value(17) == 1 or stmt:value(17) == true,
+                    offline = stmt:value(18) == 1 or stmt:value(18) == true
 		        })
 		    end
     stmt:finalize()
@@ -503,6 +517,9 @@ function ClipMutator.resolve_ripple(db, params)
                 name = row.name .. " (2)",
                 track_id = row.track_id,
                 media_id = row.media_id,
+                source_sequence_id = original.source_sequence_id,
+                parent_clip_id = original.parent_clip_id,
+                owner_sequence_id = original.owner_sequence_id,
                 timeline_start = right_start,
                 duration = right_dur,
                 source_in = right_src_in,
@@ -510,6 +527,7 @@ function ClipMutator.resolve_ripple(db, params)
                 fps_numerator = row_fps_num,
                 fps_denominator = row_fps_den,
                 enabled = row.enabled,
+                offline = original.offline,
                 created_at = os.time(),
                 modified_at = os.time()
             }
@@ -518,6 +536,492 @@ function ClipMutator.resolve_ripple(db, params)
     end
     
     return true, nil, actions
+end
+
+local function load_sequence_tracks(db, sequence_id)
+    local stmt = db:prepare([[
+        SELECT id, track_index, track_type
+        FROM tracks
+        WHERE sequence_id = ?
+        ORDER BY track_type ASC, track_index ASC
+    ]])
+    assert(stmt, "clip_mutator.plan_duplicate_block: failed to prepare tracks query")
+
+    stmt:bind_value(1, sequence_id)
+    local ok = stmt:exec()
+    assert(ok, "clip_mutator.plan_duplicate_block: failed to execute tracks query")
+
+    local tracks = {}
+    while stmt:next() do
+        table.insert(tracks, {
+            id = stmt:value(0),
+            track_index = stmt:value(1),
+            track_type = stmt:value(2),
+        })
+    end
+    stmt:finalize()
+    return tracks
+end
+
+local function build_track_maps(tracks)
+    local by_id = {}
+    local by_type_index = {}
+    for _, track in ipairs(tracks or {}) do
+        if track and track.id and track.track_type and track.track_index then
+            by_id[track.id] = track
+            by_type_index[track.track_type] = by_type_index[track.track_type] or {}
+            by_type_index[track.track_type][track.track_index] = track
+        end
+    end
+    return by_id, by_type_index
+end
+
+local function merge_intervals(intervals)
+    if type(intervals) ~= "table" or #intervals == 0 then
+        return {}
+    end
+
+    table.sort(intervals, function(a, b)
+        return a.start < b.start
+    end)
+
+    local merged = {}
+    local current = {start = intervals[1].start, ["end"] = intervals[1]["end"]}
+    for i = 2, #intervals do
+        local next_it = intervals[i]
+        if next_it.start <= current["end"] then
+            if next_it["end"] > current["end"] then
+                current["end"] = next_it["end"]
+            end
+        else
+            table.insert(merged, current)
+            current = {start = next_it.start, ["end"] = next_it["end"]}
+        end
+    end
+    table.insert(merged, current)
+    return merged
+end
+
+local function validate_no_overlaps_per_track(track_intervals)
+    for track_id, intervals in pairs(track_intervals or {}) do
+        table.sort(intervals, function(a, b)
+            return a.start < b.start
+        end)
+        local prev = nil
+        for _, interval in ipairs(intervals) do
+            if prev and interval.start < prev["end"] then
+                return false, string.format(
+                    "clip_mutator.plan_duplicate_block: pasted clips overlap on track %s (%s < %s)",
+                    tostring(track_id),
+                    tostring(interval.start),
+                    tostring(prev["end"])
+                )
+            end
+            prev = interval
+        end
+    end
+    return true
+end
+
+local function merge_integer_ranges(ranges)
+    if type(ranges) ~= "table" or #ranges == 0 then
+        return {}
+    end
+
+    table.sort(ranges, function(a, b)
+        return a.start < b.start
+    end)
+
+    local merged = {}
+    local current = {start = ranges[1].start, ["end"] = ranges[1]["end"]}
+    for i = 2, #ranges do
+        local next_r = ranges[i]
+        if next_r.start <= current["end"] + 1 then
+            if next_r["end"] > current["end"] then
+                current["end"] = next_r["end"]
+            end
+        else
+            table.insert(merged, current)
+            current = {start = next_r.start, ["end"] = next_r["end"]}
+        end
+    end
+    table.insert(merged, current)
+    return merged
+end
+
+local function clamp_delta_to_avoid_source_overlaps(requested_delta_frames, directional_sign, copy_specs_by_track, source_intervals_by_track)
+    assert(type(requested_delta_frames) == "number", "clip_mutator.plan_duplicate_block: requested_delta_frames must be number")
+    assert(directional_sign == 1 or directional_sign == -1, "clip_mutator.plan_duplicate_block: directional_sign must be ±1")
+
+    local forbidden = {}
+
+    for target_track_id, specs in pairs(copy_specs_by_track or {}) do
+        local originals = source_intervals_by_track[target_track_id]
+        if type(originals) ~= "table" or #originals == 0 then
+            goto continue_track
+        end
+
+        for _, spec in ipairs(specs) do
+            local s_start = spec.source_start_frames
+            local s_end = spec.source_end_frames
+            assert(type(s_start) == "number" and type(s_end) == "number" and s_end >= s_start,
+                "clip_mutator.plan_duplicate_block: invalid copy spec interval")
+
+            for _, original in ipairs(originals) do
+                local o_start = original.start_frames
+                local o_end = original.end_frames
+                assert(type(o_start) == "number" and type(o_end) == "number" and o_end >= o_start,
+                    "clip_mutator.plan_duplicate_block: invalid source interval")
+
+                local delta_before = o_start - s_end
+                local delta_after = o_end - s_start
+
+                local range_start = delta_before + 1
+                local range_end = delta_after - 1
+                if range_start <= range_end then
+                    table.insert(forbidden, {start = range_start, ["end"] = range_end})
+                end
+            end
+        end
+
+        ::continue_track::
+    end
+
+    if #forbidden == 0 then
+        return requested_delta_frames
+    end
+
+    local merged = merge_integer_ranges(forbidden)
+
+    if directional_sign > 0 then
+        local d = requested_delta_frames
+        for _, r in ipairs(merged) do
+            if d < r.start then
+                break
+            end
+            if d >= r.start and d <= r["end"] then
+                d = r["end"] + 1
+            end
+        end
+        return d
+    end
+
+    local d = requested_delta_frames
+    for i = #merged, 1, -1 do
+        local r = merged[i]
+        if d > r["end"] then
+            break
+        end
+        if d >= r.start and d <= r["end"] then
+            d = r.start - 1
+        end
+    end
+    return d
+end
+
+local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
+    local stmt = db:prepare([[
+        SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
+               c.fps_numerator, c.fps_denominator,
+               c.enabled, c.offline, c.created_at, c.modified_at,
+               s.id, s.fps_numerator, s.fps_denominator
+        FROM clips c
+        LEFT JOIN tracks t ON c.track_id = t.id
+        LEFT JOIN sequences s ON t.sequence_id = s.id
+        WHERE c.id = ?
+    ]])
+    assert(stmt, "clip_mutator.plan_duplicate_block: failed to prepare clip query")
+    stmt:bind_value(1, clip_id)
+    local ok = stmt:exec()
+    assert(ok, "clip_mutator.plan_duplicate_block: failed to execute clip query")
+    if not stmt:next() then
+        stmt:finalize()
+        return nil
+    end
+
+    local owning_sequence_id = stmt:value(19)
+    assert(owning_sequence_id, "clip_mutator.plan_duplicate_block: clip missing owning sequence via track_id (clip_id=" .. tostring(clip_id) .. ")")
+    assert(owning_sequence_id == sequence_id,
+        string.format("clip_mutator.plan_duplicate_block: clip %s belongs to sequence %s, not %s",
+            tostring(clip_id), tostring(owning_sequence_id), tostring(sequence_id)))
+
+    local owning_fps_num = stmt:value(20)
+    local owning_fps_den = stmt:value(21)
+    assert(owning_fps_num == seq_fps_num and owning_fps_den == seq_fps_den,
+        string.format("clip_mutator.plan_duplicate_block: clip %s owning sequence rate mismatch (%s/%s vs %s/%s)",
+            tostring(clip_id), tostring(owning_fps_num), tostring(owning_fps_den), tostring(seq_fps_num), tostring(seq_fps_den)))
+
+    local clip_fps_num = stmt:value(13)
+    local clip_fps_den = stmt:value(14)
+    assert_rate(clip_fps_num, clip_fps_den, "clip fps")
+
+    local clip = {
+        id = stmt:value(0),
+        project_id = stmt:value(1),
+        clip_kind = stmt:value(2),
+        name = stmt:value(3),
+        track_id = stmt:value(4),
+        media_id = stmt:value(5),
+        source_sequence_id = stmt:value(6),
+        parent_clip_id = stmt:value(7),
+        owner_sequence_id = stmt:value(8),
+        timeline_start = Rational.new(stmt:value(9), seq_fps_num, seq_fps_den),
+        duration = Rational.new(stmt:value(10), seq_fps_num, seq_fps_den),
+        source_in = Rational.new(stmt:value(11), clip_fps_num, clip_fps_den),
+        source_out = Rational.new(stmt:value(12), clip_fps_num, clip_fps_den),
+        fps_numerator = clip_fps_num,
+        fps_denominator = clip_fps_den,
+        rate = {fps_numerator = clip_fps_num, fps_denominator = clip_fps_den},
+        enabled = stmt:value(15) == 1 or stmt:value(15) == true,
+        offline = stmt:value(16) == 1 or stmt:value(16) == true,
+        created_at = stmt:value(17),
+        modified_at = stmt:value(18),
+    }
+    stmt:finalize()
+    return clip
+end
+
+function ClipMutator.plan_duplicate_block(db, params)
+    assert(db, "clip_mutator.plan_duplicate_block: db is nil")
+    assert(type(params) == "table", "clip_mutator.plan_duplicate_block: params table required")
+
+    local sequence_id = params.sequence_id
+    local clip_ids = params.clip_ids
+    local target_track_id = params.target_track_id
+    local anchor_clip_id = params.anchor_clip_id
+
+    assert(sequence_id and sequence_id ~= "", "clip_mutator.plan_duplicate_block: missing sequence_id")
+    assert(type(clip_ids) == "table" and #clip_ids > 0, "clip_mutator.plan_duplicate_block: missing clip_ids")
+    assert(target_track_id and target_track_id ~= "", "clip_mutator.plan_duplicate_block: missing target_track_id")
+
+    local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
+
+    local delta_rat = params.delta_rat or params.delta_rational
+    delta_rat = Rational.hydrate(delta_rat, seq_fps_num, seq_fps_den) or Rational.new(0, seq_fps_num, seq_fps_den)
+    if delta_rat.fps_numerator ~= seq_fps_num or delta_rat.fps_denominator ~= seq_fps_den then
+        delta_rat = Rational.new(delta_rat.frames, seq_fps_num, seq_fps_den)
+    end
+
+    local tracks = load_sequence_tracks(db, sequence_id)
+    local tracks_by_id, tracks_by_type_index = build_track_maps(tracks)
+
+    anchor_clip_id = anchor_clip_id or clip_ids[1]
+    assert(anchor_clip_id and anchor_clip_id ~= "", "clip_mutator.plan_duplicate_block: missing anchor_clip_id")
+
+    local anchor_clip = load_clip_for_duplicate_plan(db, anchor_clip_id, sequence_id, seq_fps_num, seq_fps_den)
+    assert(anchor_clip, "clip_mutator.plan_duplicate_block: anchor clip not found: " .. tostring(anchor_clip_id))
+
+    local anchor_track = anchor_clip.track_id and tracks_by_id[anchor_clip.track_id] or nil
+    assert(anchor_track, "clip_mutator.plan_duplicate_block: anchor clip track not found in sequence: " .. tostring(anchor_clip.track_id))
+
+    local target_track = tracks_by_id[target_track_id]
+    assert(target_track, "clip_mutator.plan_duplicate_block: target track not found in sequence: " .. tostring(target_track_id))
+
+    assert(target_track.track_type == anchor_track.track_type,
+        string.format("clip_mutator.plan_duplicate_block: target track type mismatch (anchor=%s target=%s)",
+            tostring(anchor_track.track_type), tostring(target_track.track_type)))
+
+    local delta_track_index = target_track.track_index - anchor_track.track_index
+    assert(type(delta_track_index) == "number", "clip_mutator.plan_duplicate_block: invalid delta_track_index")
+
+    if delta_track_index == 0 and delta_rat.frames == 0 then
+        return true, nil, {planned_mutations = {}, new_clip_ids = {}}
+    end
+
+    local source_clips = {}
+    local source_intervals_by_track = {}
+    local copy_specs_by_track = {}
+
+    local min_source_start_frames = nil
+    for _, clip_id in ipairs(clip_ids) do
+        local clip = load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
+        if not clip then
+            return false, "clip_mutator.plan_duplicate_block: source clip not found: " .. tostring(clip_id)
+        end
+        if clip.clip_kind ~= "timeline" then
+            return false, "clip_mutator.plan_duplicate_block: can only duplicate timeline clips (clip_kind=" .. tostring(clip.clip_kind) .. ")"
+        end
+
+        table.insert(source_clips, clip)
+
+        local start_frames = assert(clip.timeline_start and clip.timeline_start.frames, "clip_mutator.plan_duplicate_block: source clip missing timeline_start.frames")
+        local dur_frames = assert(clip.duration and clip.duration.frames, "clip_mutator.plan_duplicate_block: source clip missing duration.frames")
+        local end_frames = start_frames + dur_frames
+
+        source_intervals_by_track[clip.track_id] = source_intervals_by_track[clip.track_id] or {}
+        table.insert(source_intervals_by_track[clip.track_id], {start_frames = start_frames, end_frames = end_frames, clip_id = clip.id})
+
+        if min_source_start_frames == nil or start_frames < min_source_start_frames then
+            min_source_start_frames = start_frames
+        end
+    end
+
+    local lower_bound = 0
+    if min_source_start_frames ~= nil then
+        lower_bound = -min_source_start_frames
+    end
+
+    local requested_delta_frames = delta_rat.frames
+    if requested_delta_frames < lower_bound then
+        requested_delta_frames = lower_bound
+    end
+
+    for _, clip in ipairs(source_clips) do
+        local source_track = clip.track_id and tracks_by_id[clip.track_id] or nil
+        assert(source_track, "clip_mutator.plan_duplicate_block: source clip track not found in sequence: " .. tostring(clip.track_id))
+        if source_track.track_type ~= anchor_track.track_type then
+            goto continue_spec
+        end
+
+        local target_track_index = source_track.track_index + delta_track_index
+        local mapped_track = tracks_by_type_index[source_track.track_type]
+            and tracks_by_type_index[source_track.track_type][target_track_index]
+            or nil
+        if not mapped_track then
+            goto continue_spec
+        end
+
+        local start_frames = clip.timeline_start.frames
+        local end_frames = start_frames + clip.duration.frames
+        copy_specs_by_track[mapped_track.id] = copy_specs_by_track[mapped_track.id] or {}
+        table.insert(copy_specs_by_track[mapped_track.id], {
+            clip_id = clip.id,
+            source_start_frames = start_frames,
+            source_end_frames = end_frames,
+        })
+
+        ::continue_spec::
+    end
+
+    local directional_sign = 1
+    if delta_rat.frames < 0 then
+        directional_sign = -1
+    end
+
+    local clamped_delta_frames = clamp_delta_to_avoid_source_overlaps(
+        requested_delta_frames,
+        directional_sign,
+        copy_specs_by_track,
+        source_intervals_by_track
+    )
+    if clamped_delta_frames < lower_bound then
+        return true, nil, {planned_mutations = {}, new_clip_ids = {}}
+    end
+
+    local effective_delta = Rational.new(clamped_delta_frames, seq_fps_num, seq_fps_den)
+
+    local insert_mutations = {}
+    local planned_intervals_by_track = {}
+    local merged_overwrite_spans_by_track = {}
+    local new_clip_ids = {}
+
+    for _, clip in ipairs(source_clips) do
+        local source_track = clip.track_id and tracks_by_id[clip.track_id] or nil
+        assert(source_track, "clip_mutator.plan_duplicate_block: source clip track not found in sequence: " .. tostring(clip.track_id))
+        if source_track.track_type ~= anchor_track.track_type then
+            goto continue_clip
+        end
+
+        local target_track_index = source_track.track_index + delta_track_index
+        local mapped_track = tracks_by_type_index[source_track.track_type]
+            and tracks_by_type_index[source_track.track_type][target_track_index]
+            or nil
+        if not mapped_track then
+            goto continue_clip
+        end
+
+        local new_start = clip.timeline_start + effective_delta
+        if new_start.frames < 0 then
+            return false, "clip_mutator.plan_duplicate_block: computed negative timeline_start after clamping"
+        end
+
+        if new_start.frames == clip.timeline_start.frames and mapped_track.id == clip.track_id then
+            goto continue_clip
+        end
+
+        local new_id = uuid.generate()
+        local now = os.time()
+        local new_clip = {
+            id = new_id,
+            project_id = clip.project_id,
+            clip_kind = "timeline",
+            name = clip.name,
+            track_id = mapped_track.id,
+            media_id = clip.media_id,
+            owner_sequence_id = sequence_id,
+            parent_clip_id = clip.parent_clip_id,
+            source_sequence_id = clip.source_sequence_id,
+            timeline_start = new_start,
+            duration = clip.duration,
+            source_in = clip.source_in,
+            source_out = clip.source_out,
+            fps_numerator = clip.fps_numerator,
+            fps_denominator = clip.fps_denominator,
+            enabled = clip.enabled,
+            offline = clip.offline,
+            created_at = now,
+            modified_at = now,
+        }
+
+        table.insert(new_clip_ids, new_id)
+
+        planned_intervals_by_track[mapped_track.id] = planned_intervals_by_track[mapped_track.id] or {}
+        table.insert(planned_intervals_by_track[mapped_track.id], {
+            start = new_start,
+            ["end"] = new_start + clip.duration,
+        })
+
+        table.insert(insert_mutations, plan_insert(new_clip))
+
+        ::continue_clip::
+    end
+
+    if #insert_mutations == 0 then
+        return true, nil, {planned_mutations = {}, new_clip_ids = {}}
+    end
+
+    local ok_overlaps, overlap_err = validate_no_overlaps_per_track(planned_intervals_by_track)
+    if not ok_overlaps then
+        return false, overlap_err
+    end
+
+    for track_id, intervals in pairs(planned_intervals_by_track) do
+        merged_overwrite_spans_by_track[track_id] = merge_intervals(intervals)
+    end
+
+    local occlusion_mutations = {}
+    for track_id, spans in pairs(merged_overwrite_spans_by_track) do
+        for _, span in ipairs(spans) do
+            local span_duration = span["end"] - span.start
+            assert(span_duration and span_duration.frames and span_duration.frames >= 0, "clip_mutator.plan_duplicate_block: invalid span duration")
+            if span_duration.frames > 0 then
+                local ok_occ, occ_err, occ_actions = ClipMutator.resolve_occlusions(db, {
+                    track_id = track_id,
+                    timeline_start = span.start,
+                    duration = span_duration,
+                    exclude_clip_id = nil,
+                })
+                if not ok_occ then
+                    return false, "clip_mutator.plan_duplicate_block: resolve_occlusions failed: " .. tostring(occ_err)
+                end
+                for _, mut in ipairs(occ_actions or {}) do
+                    table.insert(occlusion_mutations, mut)
+                end
+            end
+        end
+    end
+
+    local combined = {}
+    for _, mut in ipairs(occlusion_mutations) do
+        table.insert(combined, mut)
+    end
+    for _, mut in ipairs(insert_mutations) do
+        table.insert(combined, mut)
+    end
+
+    return true, nil, {planned_mutations = combined, new_clip_ids = new_clip_ids}
 end
 
 return ClipMutator

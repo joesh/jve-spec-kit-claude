@@ -22,7 +22,10 @@ function SequenceInspectable.new(opts)
 
     local self = setmetatable({}, SequenceInspectable)
     self.sequence_id = opts.sequence_id
-    self.project_id = opts.project_id or "default_project"
+    if not opts.project_id or opts.project_id == "" then
+        error("SequenceInspectable.new requires project_id")
+    end
+    self.project_id = opts.project_id
     self._record = opts.sequence or load_sequence(opts.sequence_id) or {
         id = opts.sequence_id,
         project_id = self.project_id

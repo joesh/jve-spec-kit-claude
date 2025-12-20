@@ -1,0 +1,25 @@
+# Baseline review pass definitions
+#
+# FORMAT:
+#   One pass per line, using a pipe (`|`) separator:
+#
+#     PASS_NAME | space-separated glob paths
+#
+# RULES:
+# - Lines starting with `#` are comments and ignored.
+# - Blank lines are ignored.
+# - PASS_NAME is an arbitrary label used only for logging.
+# - Paths are shell-style globs relative to repo root.
+# - Order matters: passes run top-to-bottom.
+# - Comment out a line to temporarily disable a pass.
+#
+# EXAMPLE:
+#   core_models | src/lua/core/** src/lua/models/**
+#
+
+tests | tests/unit/** tests/integration/** tests/ad_hoc/** tests/*.lua tests/*.sh
+core_models          | src/lua/core/** src/lua/models/**
+ui_inspectable       | src/lua/ui/** src/lua/inspectable/**
+qt_bindings          | src/lua/qt_bindings/**
+importers_media      | src/lua/importers/** src/lua/media/**
+bug_reporter         | src/lua/bug_reporter/** src/bug_reporter/**

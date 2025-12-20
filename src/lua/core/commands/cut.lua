@@ -78,7 +78,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("deleted_clip_states", deleted_states)
         command:set_parameter("deleted_clip_properties", deleted_props)
         if not sequence_id or sequence_id == "" then
-            sequence_id = (timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or "default_sequence"
+            sequence_id = (timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or nil
+            if not sequence_id or sequence_id == "" then
+                set_last_error("Cut: missing sequence_id")
+                return false
+            end
         end
         command_helper.add_delete_mutation(command, sequence_id, clip_ids)
 

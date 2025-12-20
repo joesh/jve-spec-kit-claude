@@ -14,6 +14,9 @@ local mock_state = {
     get_selected_clips = function()
         return {{id = "clip_123"}}
     end,
+    get_project_id = function()
+        return "project_test"
+    end,
     get_sequence_id = function()
         return "sequence_test"
     end,

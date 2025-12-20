@@ -1,6 +1,6 @@
 local M = {}
 
-local edge_utils = require("ui.timeline.edge_utils")
+local edge_utils = require("core.edge_utils")
 
 function M.get_edge_track_id(edge_info, clip_lookup, original_states_map)
     if not edge_info then
@@ -66,4 +66,3 @@ function M.bracket_for_normalized_edge(edge_type)
 end
 
 return M
-

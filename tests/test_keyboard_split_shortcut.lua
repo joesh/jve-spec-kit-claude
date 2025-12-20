@@ -18,6 +18,8 @@ focus_manager.get_focused_panel = function() return "timeline" end
 -- Prepare a clip under the playhead.
 timeline_state.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
+data.state.project_id = "test_project"
+data.state.sequence_id = "timeline_seq"
 local clip = {
     id = "clip_under_playhead",
     track_id = "v1",

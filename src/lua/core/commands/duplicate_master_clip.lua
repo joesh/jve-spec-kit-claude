@@ -19,7 +19,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local project_id = command:get_parameter("project_id") or snapshot.project_id or "default_project"
+        local project_id = command:get_parameter("project_id") or snapshot.project_id
+        if not project_id or project_id == "" then
+            set_last_error("DuplicateMasterClip: missing project_id")
+            return false
+        end
         local target_bin_id = command:get_parameter("bin_id")
         if target_bin_id == "" then
             target_bin_id = nil
@@ -87,7 +91,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local project_id = command:get_parameter("project_id") or "default_project"
+        local project_id = command:get_parameter("project_id")
+        if not project_id or project_id == "" then
+            set_last_error("UndoDuplicateMasterClip: missing project_id")
+            return false
+        end
         local clip = Clip.load_optional(clip_id, db)
         if clip then
             command_helper.delete_properties_for_clip(clip_id)

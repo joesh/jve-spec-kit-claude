@@ -144,7 +144,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local sequence_id = command_helper.resolve_sequence_for_track(nil, edge_info.track_id)
-        if not sequence_id or sequence_id == "" then sequence_id = "default_sequence" end
+        if not sequence_id or sequence_id == "" then
+            return {success = false, error_message = "RippleEdit: missing sequence_id"}
+        end
+        command:set_parameter("sequence_id", sequence_id)
         
         local all_clips = database.load_clips(sequence_id)
         
