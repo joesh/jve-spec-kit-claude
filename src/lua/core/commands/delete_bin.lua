@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~51 LOC
+-- Volatility: unknown
+--
+-- @file delete_bin.lua
 local M = {}
 local tag_service = require("core.tag_service")
 

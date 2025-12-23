@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~275 LOC
+-- Volatility: unknown
+--
+-- @file overwrite.lua
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")

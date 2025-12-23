@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~190 LOC
+-- Volatility: unknown
+--
+-- @file insert_clip_to_timeline.lua
 local M = {}
 local Clip = require('models.clip')
 local Sequence = require('models.sequence')

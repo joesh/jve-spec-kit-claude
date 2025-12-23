@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~113 LOC
+-- Volatility: unknown
+--
+-- @file test_runner_mocked.lua
+-- Original intent (unreviewed):
 -- test_runner_mocked.lua
 -- Mocked test runner for fast regression testing without Qt/GUI
-
 local json_test_loader = require("bug_reporter.json_test_loader")
 local differential_validator = require("bug_reporter.differential_validator")
 

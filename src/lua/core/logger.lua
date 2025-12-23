@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~377 LOC
+-- Volatility: unknown
+--
+-- @file logger.lua
+-- Original intent (unreviewed):
 -- Logging System for FCP7 Clone
 -- Logger with configurable verbosity levels and output destinations
-
 local logger = {}
 
 -- Log levels (lower number = higher priority)

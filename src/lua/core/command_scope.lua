@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~46 LOC
+-- Volatility: unknown
+--
+-- @file command_scope.lua
+-- Original intent (unreviewed):
 -- Command Scope Management
 -- Provides simple panel/global scoping for UI-driven commands.
-
 local focus_manager_ok, focus_manager = pcall(require, "ui.focus_manager")
 
 local M = {}

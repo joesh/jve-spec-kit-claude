@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~116 LOC
+-- Volatility: unknown
+--
+-- @file cut.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
 local Clip = require('models.clip')

@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~127 LOC
+-- Volatility: unknown
+--
+-- @file set_sequence_metadata.lua
 local M = {}
 local database = require("core.database")
 

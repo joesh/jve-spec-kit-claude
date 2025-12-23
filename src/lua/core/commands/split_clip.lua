@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~183 LOC
+-- Volatility: unknown
+--
+-- @file split_clip.lua
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")

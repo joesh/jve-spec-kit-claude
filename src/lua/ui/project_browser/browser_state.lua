@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~174 LOC
+-- Volatility: unknown
+--
+-- @file browser_state.lua
+-- Original intent (unreviewed):
 -- Project Browser selection state
 -- Normalizes browser selections into inspector-friendly payloads and notifies listeners.
-
 local json = require("dkjson")
 local selection_hub = require("ui.selection_hub")
 local inspectable_factory = require("inspectable")

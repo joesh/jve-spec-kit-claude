@@ -1,21 +1,36 @@
---- DaVinci Resolve SQLite Database Importer
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~264 LOC
+-- Volatility: unknown
+--
+-- @file resolve_database_importer.lua
+-- Original intent (unreviewed):
+-- - DaVinci Resolve SQLite Database Importer
 -- Imports projects directly from Resolve's disk-based SQLite databases
 --
 -- Database locations:
---   macOS: ~/Movies/DaVinci Resolve/Resolve Disk Database/Resolve Projects/Users/{user}/Projects/{project}.drp/
---   Windows: %APPDATA%\Blackmagic Design\DaVinci Resolve\Resolve Disk Database\...
+-- macOS: ~/Movies/DaVinci Resolve/Resolve Disk Database/Resolve Projects/Users/{user}/Projects/{project}.drp/
+-- Windows: %APPDATA%\Blackmagic Design\DaVinci Resolve\Resolve Disk Database\...
 --
 -- Key tables:
---   - projects: Project metadata (name, resolution, frame rate)
---   - timelines: Timeline sequences
---   - tracks: Video/audio tracks within timelines
---   - clips: Individual clips on tracks
---   - media: Media pool items (source files)
+-- - projects: Project metadata (name, resolution, frame rate)
+-- - timelines: Timeline sequences
+-- - tracks: Video/audio tracks within timelines
+-- - clips: Individual clips on tracks
+-- - media: Media pool items (source files)
 --
 -- Usage:
---   local resolve_db = require("importers.resolve_database_importer")
---   local result = resolve_db.import_from_database("/path/to/resolve.db")
-
+-- local resolve_db = require("importers.resolve_database_importer")
+-- local result = resolve_db.import_from_database("/path/to/resolve.db")
 local M = {}
 
 local sqlite3 = require("lsqlite3")

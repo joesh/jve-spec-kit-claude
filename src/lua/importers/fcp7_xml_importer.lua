@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~1054 LOC
+-- Volatility: unknown
+--
+-- @file fcp7_xml_importer.lua
+-- Original intent (unreviewed):
 -- FCP7 XML (XMEML) Importer
 -- Imports Final Cut Pro 7 XML sequences into JVE Editor
 -- Supports: sequences, tracks, clips, media references
-
 local M = {}
 local uuid = require("uuid")
 local Rational = require("core.rational")

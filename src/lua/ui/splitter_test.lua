@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~25 LOC
+-- Volatility: unknown
+--
+-- @file splitter_test.lua
+-- Original intent (unreviewed):
 -- Test splitter specifically
 print("🔧 Testing splitter...")
 

@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~2001 LOC
+-- Volatility: unknown
+--
+-- @file project_browser.lua
+-- Original intent (unreviewed):
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
-
 local M = {}
 local db = require("core.database")
 local tag_service = require("core.tag_service")

@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~44 LOC
+-- Volatility: unknown
+--
+-- @file krono.lua
+-- Original intent (unreviewed):
 -- Minimal timer helper for profiling hotspots.
 -- Uses os.clock so it works anywhere Lua runs in-process.
-
 local M = {}
 
 local python_profiler = nil

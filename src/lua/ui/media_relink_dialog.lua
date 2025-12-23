@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~167 LOC
+-- Volatility: unknown
+--
+-- @file media_relink_dialog.lua
+-- Original intent (unreviewed):
 -- Media Relinking Configuration Dialog
 -- Pure Lua UI for customizing metadata matching algorithm
 -- Architecture: Uses Qt bindings, fully customizable without recompilation
-
 local M = {}
 
 -- Qt bindings (set externally)

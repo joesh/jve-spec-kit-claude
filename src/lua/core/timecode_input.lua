@@ -1,14 +1,29 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~176 LOC
+-- Volatility: unknown
+--
+-- @file timecode_input.lua
+-- Original intent (unreviewed):
 -- Flexible timecode input parsing for NLE-style "go to" fields.
 --
 -- Supports:
---   - Absolute:  "01:02:03:04", "1:23" (right-aligned), "1234" (right-aligned digits)
---   - Relative:  "+10" / "-10" (frames), "+1:00" (timecode right-aligned), "+2s", "-3m"
+-- - Absolute:  "01:02:03:04", "1:23" (right-aligned), "1234" (right-aligned digits)
+-- - Relative:  "+10" / "-10" (frames), "+1:00" (timecode right-aligned), "+2s", "-3m"
 --
 -- Design goals:
---   - Never crash on user input; return (nil, err) for invalid strings.
---   - No hidden default frame rates; frame_rate must be provided by caller.
---   - "Right-aligned" interpretation for segmented inputs with <4 fields.
-
+-- - Never crash on user input; return (nil, err) for invalid strings.
+-- - No hidden default frame rates; frame_rate must be provided by caller.
+-- - "Right-aligned" interpretation for segmented inputs with <4 fields.
 local Rational = require("core.rational")
 
 local M = {}

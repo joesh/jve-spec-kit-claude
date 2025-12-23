@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~265 LOC
+-- Volatility: unknown
+--
+-- @file timeline_view_drag_handler.lua
+-- Original intent (unreviewed):
 -- Timeline View Drag Handler
 -- Handles completion of drag operations (executing commands)
-
 local M = {}
 local Command = require("command")
 local command_manager = require("core.command_manager")

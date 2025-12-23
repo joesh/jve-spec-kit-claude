@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~86 LOC
+-- Volatility: unknown
+--
+-- @file simple_main_window.lua
+-- Original intent (unreviewed):
 -- scripts/ui/simple_main_window.lua
 -- PURPOSE: Simple Lua main window creation to test LuaJIT integration
-
 print("🎬 JVE Editor - Starting Lua window creation...")
 
 -- Create main window

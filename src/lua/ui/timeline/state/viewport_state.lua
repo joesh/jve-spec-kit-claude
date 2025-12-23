@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~172 LOC
+-- Volatility: unknown
+--
+-- @file viewport_state.lua
+-- Original intent (unreviewed):
 -- Timeline Viewport State
 -- Manages viewport position, zoom, playhead, and pixel conversions
-
 local M = {}
 local Rational = require("core.rational")
 local data = require("ui.timeline.state.timeline_state_data")

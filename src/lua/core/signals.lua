@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~213 LOC
+-- Volatility: unknown
+--
+-- @file signals.lua
+-- Original intent (unreviewed):
 -- General-purpose signal/slot system for JVE
 -- Inspired by Emacs hooks and Qt signals for maximum user extensibility
 -- Provides unified event system for Qt signals, Lua-to-Lua communication, and user extensions
-
 local error_system = require("core.error_system")
 local unpack = table.unpack or unpack
 

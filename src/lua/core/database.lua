@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~1666 LOC
+-- Volatility: unknown
+--
+-- @file database.lua
+-- Original intent (unreviewed):
 -- Database module for Lua
 -- Provides simple interface to SQLite database
-
 local M = {}
 local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")

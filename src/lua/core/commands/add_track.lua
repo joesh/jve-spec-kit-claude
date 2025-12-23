@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~34 LOC
+-- Volatility: unknown
+--
+-- @file add_track.lua
 local M = {}
 local Track = require('models.track')
 

@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~163 LOC
+-- Volatility: unknown
+--
+-- @file batch_command.lua
 local M = {}
 local json = require("dkjson")
 local Command = require("command")

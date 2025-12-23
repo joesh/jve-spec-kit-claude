@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~30 LOC
+-- Volatility: unknown
+--
+-- @file set_property.lua
 local M = {}
 local Property = require('models.property')
 

@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~964 LOC
+-- Volatility: unknown
+--
+-- @file timeline_view_renderer.lua
+-- Original intent (unreviewed):
 -- Timeline View Renderer
 -- Handles drawing logic for tracks, clips, and overlays
-
 local M = {}
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")

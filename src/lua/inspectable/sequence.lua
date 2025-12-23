@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~79 LOC
+-- Volatility: unknown
+--
+-- @file sequence.lua
 local database = require("core.database")
 local Command = require("command")
 local command_manager = require("core.command_manager")

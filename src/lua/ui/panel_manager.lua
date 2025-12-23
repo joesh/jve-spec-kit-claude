@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~162 LOC
+-- Volatility: unknown
+--
+-- @file panel_manager.lua
 local qt_constants = require("core.qt_constants")
 
 local M = {}

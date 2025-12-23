@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~75 LOC
+-- Volatility: unknown
+--
+-- @file utils.lua
+-- Original intent (unreviewed):
 -- utils.lua
 -- Shared utility functions for bug reporter system
-
 local Utils = {}
 local time_utils = require("core.time_utils")
 

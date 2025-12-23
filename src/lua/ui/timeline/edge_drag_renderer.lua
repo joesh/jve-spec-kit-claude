@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~188 LOC
+-- Volatility: unknown
+--
+-- @file edge_drag_renderer.lua
 local edge_utils = require('ui.timeline.edge_utils')
 local Rational = require('core.rational')
 

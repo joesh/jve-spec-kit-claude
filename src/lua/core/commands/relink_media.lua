@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~102 LOC
+-- Volatility: unknown
+--
+-- @file relink_media.lua
+-- Original intent (unreviewed):
 -- RelinkMedia and BatchRelinkMedia commands
 local M = {}
 

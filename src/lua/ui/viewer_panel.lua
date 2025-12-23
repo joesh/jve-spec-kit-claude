@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~282 LOC
+-- Volatility: unknown
+--
+-- @file viewer_panel.lua
+-- Original intent (unreviewed):
 -- Viewer Panel Module
 -- Provides simple Source/Timeline viewer placeholder that other systems can update.
-
 local qt_constants = require("core.qt_constants")
 local frame_utils = require("core.frame_utils")
 local ui_constants = require("core.ui_constants")

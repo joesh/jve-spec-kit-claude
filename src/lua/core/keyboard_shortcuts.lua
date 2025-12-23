@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~988 LOC
+-- Volatility: unknown
+--
+-- @file keyboard_shortcuts.lua
+-- Original intent (unreviewed):
 -- Keyboard Shortcuts Module
 -- Centralized keyboard shortcut handling for JVE
-
 local keyboard_shortcuts = {}
 local frame_utils = require("core.frame_utils")
 local shortcut_registry = require("core.keyboard_shortcut_registry")

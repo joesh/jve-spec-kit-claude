@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~39 LOC
+-- Volatility: unknown
+--
+-- @file uuid.lua
+-- Original intent (unreviewed):
 -- UUID generator used across Lua modules.
 -- Provides a single encapsulated implementation to avoid duplicated algorithms.
-
 local M = {}
 
 local seeded = false

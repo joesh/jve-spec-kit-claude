@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~72 LOC
+-- Volatility: unknown
+--
+-- @file qt_constants.lua
+-- Original intent (unreviewed):
 -- scripts/core/qt_constants.lua
 -- PURPOSE: Qt binding constants and function mappings for Lua inspector
 -- Maps to the real qt_constants table provided by the C++ application
-
 local function require_global_function(func_name)
     local fn = _G[func_name]
     if fn == nil then

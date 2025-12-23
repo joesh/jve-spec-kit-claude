@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~127 LOC
+-- Volatility: unknown
+--
+-- @file premiere_keyboard_design.lua
+-- Original intent (unreviewed):
 -- Premiere keyboard geometry normalized for JVE layout.
 -- Each row defines physical widths (Premiere pixels) and gaps before the key.
 return {

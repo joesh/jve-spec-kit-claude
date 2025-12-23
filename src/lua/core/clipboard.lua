@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~48 LOC
+-- Volatility: unknown
+--
+-- @file clipboard.lua
+-- Original intent (unreviewed):
 -- Clipboard storage for complex editor payloads
 -- Keeps most recent payload in-memory (Lua-side only)
-
 local M = {}
 
 local current_payload = nil

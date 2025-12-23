@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~41 LOC
+-- Volatility: unknown
+--
+-- @file debounce.lua
+-- Original intent (unreviewed):
 -- Debounce utility for preventing excessive function calls
 -- Useful for throttling redraws during mouse move events
-
 local M = {}
 
 -- Creates a debounced version of a function

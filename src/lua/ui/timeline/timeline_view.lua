@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~106 LOC
+-- Volatility: unknown
+--
+-- @file timeline_view.lua
+-- Original intent (unreviewed):
 -- Timeline View (Coordinator)
 -- Assembles Renderer, Input Handler, and Layout Logic
-
 local M = {}
 local renderer = require("ui.timeline.view.timeline_view_renderer")
 local input = require("ui.timeline.view.timeline_view_input")

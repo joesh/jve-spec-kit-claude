@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~310 LOC
+-- Volatility: unknown
+--
+-- @file timeline_core_state.lua
+-- Original intent (unreviewed):
 -- Timeline Core State
 -- Initialization, Persistence, and Reloading logic
-
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")

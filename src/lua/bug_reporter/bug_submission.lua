@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~225 LOC
+-- Volatility: unknown
+--
+-- @file bug_submission.lua
+-- Original intent (unreviewed):
 -- bug_submission.lua
 -- Orchestrates complete bug submission workflow: capture → video → upload → issue
-
 local json_test_loader = require("bug_reporter.json_test_loader")
 local youtube_uploader = require("bug_reporter.youtube_uploader")
 local github_issue_creator = require("bug_reporter.github_issue_creator")

@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~1212 LOC
+-- Volatility: unknown
+--
+-- @file command_manager.lua
+-- Original intent (unreviewed):
 -- CommandManager: Manages command execution, sequencing, and replay
 -- Refactored to delegate to CommandRegistry, CommandHistory, and CommandState
-
 local M = {}
 
 -- Database connection (set externally)

@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~15 LOC
+-- Volatility: unknown
+--
+-- @file layout_test.lua
+-- Original intent (unreviewed):
 -- Test layout system step by step
 print("🔧 Testing layout system...")
 

@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~203 LOC
+-- Volatility: unknown
+--
+-- @file timeline_state.lua
+-- Original intent (unreviewed):
 -- Timeline State Module (Facade)
 -- Aggregates sub-modules for backward compatibility and API surface
-
 local M = {}
 
 -- Sub-modules

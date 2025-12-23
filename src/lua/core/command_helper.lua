@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~1253 LOC
+-- Volatility: unknown
+--
+-- @file command_helper.lua
+-- Original intent (unreviewed):
 -- Shared helper functions for command implementations.
 -- Extracted to support splitting command_implementations.lua into modular files.
-
 local M = {}
 
 local json = require("dkjson")

@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~263 LOC
+-- Volatility: unknown
+--
+-- @file set_clip_property.lua
 local M = {}
 local json = require("dkjson")
 local uuid = require("uuid")

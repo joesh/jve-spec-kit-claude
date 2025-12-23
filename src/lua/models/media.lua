@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~176 LOC
+-- Volatility: unknown
+--
+-- @file media.lua
 local uuid = require("uuid")
 local Rational = require("core.rational")
 local logger = require("core.logger")

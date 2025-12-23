@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~134 LOC
+-- Volatility: unknown
+--
+-- @file init.lua
+-- Original intent (unreviewed):
 -- init.lua
 -- Bug reporter initialization and Qt bindings integration
-
 local capture_manager = require("bug_reporter.capture_manager")
 local logger = require("core.logger")
 

@@ -1,22 +1,37 @@
---- Menu System - XML-driven menu configuration
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~881 LOC
+-- Volatility: unknown
+--
+-- @file menu_system.lua
+-- Original intent (unreviewed):
+-- - Menu System - XML-driven menu configuration
 -- Parses menus.xml and creates QMenuBar with nested menus
 --
 -- XML Format:
---   <menus>
---     <menu name="File">
---       <item name="Open" command="OpenProject" shortcut="Cmd+O"/>
---       <separator/>
---       <menu name="Import">
---         <item name="Media..." command="ImportMedia"/>
---       </menu>
---     </menu>
---   </menus>
+-- <menus>
+-- <menu name="File">
+-- <item name="Open" command="OpenProject" shortcut="Cmd+O"/>
+-- <separator/>
+-- <menu name="Import">
+-- <item name="Media..." command="ImportMedia"/>
+-- </menu>
+-- </menu>
+-- </menus>
 --
 -- Usage:
---   local menu_system = require("core.menu_system")
---   menu_system.init(main_window, command_manager)
---   menu_system.load_from_file("menus.xml")
-
+-- local menu_system = require("core.menu_system")
+-- menu_system.init(main_window, command_manager)
+-- menu_system.load_from_file("menus.xml")
 local M = {}
 
 local lxp = require("lxp")

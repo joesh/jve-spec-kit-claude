@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~238 LOC
+-- Volatility: unknown
+--
+-- @file keyboard_shortcut_registry.lua
+-- Original intent (unreviewed):
 -- Keyboard Shortcut Registry
 -- Central registry of all available commands and their assigned shortcuts
 -- Supports customization, conflict detection, and preset management
-
 local M = {}
 
 -- Command registry: all commands that can have shortcuts

@@ -1,10 +1,25 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~118 LOC
+-- Volatility: unknown
+--
+-- @file timeline_scrollbar.lua
+-- Original intent (unreviewed):
 -- Timeline Horizontal Scrollbar Module
 -- Custom scrollbar where:
 -- - Thumb position represents viewport_start_value
 -- - Thumb size represents viewport_duration (zoom level)
 -- - Dragging thumb = scroll
 -- - Stretching thumb edges = zoom
-
 local profile_scope = require("core.profile_scope")
 
 local M = {}

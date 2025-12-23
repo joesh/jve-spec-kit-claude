@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~102 LOC
+-- Volatility: unknown
+--
+-- @file duplicate_master_clip.lua
 local M = {}
 local uuid = require("uuid")
 local database = require("core.database")

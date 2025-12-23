@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~1135 LOC
+-- Volatility: unknown
+--
+-- @file view.lua
+-- Original intent (unreviewed):
 -- scripts/ui/inspector/view.lua
 -- PURPOSE: Lua-owned view helpers for the Inspector (header text, batch banner, filter SoT).
 -- Zero C++ calls here.
-
 local error_system = require("core.error_system")
 local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")

@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~225 LOC
+-- Volatility: unknown
+--
+-- @file github_issue_creator.lua
+-- Original intent (unreviewed):
 -- github_issue_creator.lua
 -- Create GitHub issues for bug reports with video links
-
 local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
 local logger = require("core.logger")

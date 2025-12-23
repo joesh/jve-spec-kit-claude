@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~333 LOC
+-- Volatility: unknown
+--
+-- @file command.lua
+-- Original intent (unreviewed):
 -- Command module: Lua representation of commands for the command system
 -- Provides command creation, parameter management, and serialization
-
 local uuid = require("uuid")
 local json = require("dkjson") -- Added
 local logger = require("core.logger")

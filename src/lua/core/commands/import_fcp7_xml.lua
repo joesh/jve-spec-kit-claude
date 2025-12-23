@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~134 LOC
+-- Volatility: unknown
+--
+-- @file import_fcp7_xml.lua
+-- Original intent (unreviewed):
 -- ImportFCP7XML command
 local M = {}
 local logger = require("core.logger")

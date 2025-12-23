@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~52 LOC
+-- Volatility: unknown
+--
+-- @file match_frame.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
 local project_browser = require('ui.project_browser')

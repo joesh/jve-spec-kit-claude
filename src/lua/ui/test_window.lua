@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~17 LOC
+-- Volatility: unknown
+--
+-- @file test_window.lua
+-- Original intent (unreviewed):
 -- Minimal test window to debug black screen issue
 print("🔧 Creating minimal test window...")
 

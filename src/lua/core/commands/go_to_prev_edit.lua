@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~84 LOC
+-- Volatility: unknown
+--
+-- @file go_to_prev_edit.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
 local Rational = require('core.rational')

@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~1162 LOC
+-- Volatility: unknown
+--
+-- @file timeline_panel.lua
+-- Original intent (unreviewed):
 -- Timeline Panel - Multi-view timeline architecture
 -- Assembles ruler, video view, audio view, and scrollbar
-
 local timeline_state = require("ui.timeline.timeline_state")
 local timeline_view = require("ui.timeline.timeline_view")
 local timeline_ruler = require("ui.timeline.timeline_ruler")

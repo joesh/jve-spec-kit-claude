@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~194 LOC
+-- Volatility: unknown
+--
+-- @file preferences_panel.lua
+-- Original intent (unreviewed):
 -- preferences_panel.lua
 -- Bug reporter preferences UI panel (pure Lua + Qt bindings)
-
 local youtube_oauth = require("bug_reporter.youtube_oauth")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
 local bug_submission = require("bug_reporter.bug_submission")

@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~433 LOC
+-- Volatility: unknown
+--
+-- @file error_system.lua
+-- Original intent (unreviewed):
 -- Comprehensive Error Handling System for Final Cut Pro 7 Clone
 -- Provides comprehensive error propagation with context building and remediation suggestions
-
 local error_system = {}
 
 -- Error categories with specific handling strategies

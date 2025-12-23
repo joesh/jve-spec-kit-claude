@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~168 LOC
+-- Volatility: unknown
+--
+-- @file json_exporter.lua
+-- Original intent (unreviewed):
 -- json_exporter.lua
 -- Export captured data to JSON test format
-
 local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
 local logger = require("core.logger")

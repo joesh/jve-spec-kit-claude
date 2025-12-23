@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~18 LOC
+-- Volatility: unknown
+--
+-- @file color_utils.lua
 local M = {}
 
 local function assert_hex_color(hex)

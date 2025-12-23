@@ -1,5 +1,20 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~112 LOC
+-- Volatility: unknown
+--
+-- @file project.lua
+-- Original intent (unreviewed):
 -- Lua wrapper for the projects table. Keeps parity with the modern Lua-first architecture.
-
 local database = require("core.database")
 local uuid = require("uuid")
 

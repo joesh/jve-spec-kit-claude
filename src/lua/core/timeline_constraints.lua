@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~305 LOC
+-- Volatility: unknown
+--
+-- @file timeline_constraints.lua
+-- Original intent (unreviewed):
 -- Timeline Constraints: Collision detection and range calculation for timeline operations
 -- Provides constraint checking for moves, trims, and other timeline operations
-
 local M = {}
 
 local Media = require('models.media')

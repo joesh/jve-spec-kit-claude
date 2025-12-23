@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~157 LOC
+-- Volatility: unknown
+--
+-- @file undo_hydrator.lua
 local M = {}
 
 local database = require("core.database")

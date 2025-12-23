@@ -1,8 +1,23 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~284 LOC
+-- Volatility: unknown
+--
+-- @file timeline_ruler.lua
+-- Original intent (unreviewed):
 -- Timeline Ruler Module
 -- Displays time markers and playhead position in HH:MM:SS:FF timecode format
 -- Listens to timeline state for viewport changes
 -- Dynamically scales tick marks and labels based on zoom level
-
 local M = {}
 local timecode = require("core.timecode")
 local Rational = require("core.rational")

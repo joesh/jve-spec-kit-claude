@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~62 LOC
+-- Volatility: unknown
+--
+-- @file project_open.lua
 local M = {}
 
 local logger = require("core.logger")

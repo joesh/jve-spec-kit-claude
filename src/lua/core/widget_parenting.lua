@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~15 LOC
+-- Volatility: unknown
+--
+-- @file widget_parenting.lua
+-- Original intent (unreviewed):
 -- scripts/core/widget_parenting.lua
 -- PURPOSE: Smart widget parenting system for Qt widgets
-
 local error_system = require("core.error_system")
 local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")

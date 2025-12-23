@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~55 LOC
+-- Volatility: unknown
+--
+-- @file prepare.lua
 local M = {}
 
 local Rational = require("core.rational")

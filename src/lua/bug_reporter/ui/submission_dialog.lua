@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~274 LOC
+-- Volatility: unknown
+--
+-- @file submission_dialog.lua
+-- Original intent (unreviewed):
 -- submission_dialog.lua
 -- Bug submission review dialog (shows before uploading)
-
 local json_test_loader = require("bug_reporter.json_test_loader")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
 local logger = require("core.logger")

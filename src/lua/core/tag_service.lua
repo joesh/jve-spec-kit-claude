@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~178 LOC
+-- Volatility: unknown
+--
+-- @file tag_service.lua
+-- Original intent (unreviewed):
 -- Tag service: higher-level helpers for hierarchical tag namespaces
 local database = require("core.database")
 local uuid = require("uuid")

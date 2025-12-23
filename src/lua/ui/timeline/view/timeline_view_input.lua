@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~445 LOC
+-- Volatility: unknown
+--
+-- @file timeline_view_input.lua
+-- Original intent (unreviewed):
 -- Timeline View Input Handler
 -- Manages mouse and keyboard interactions
-
 local M = {}
 local ui_constants = require("core.ui_constants")
 local edge_picker = require("ui.timeline.edge_picker")

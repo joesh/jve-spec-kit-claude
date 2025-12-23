@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~134 LOC
+-- Volatility: unknown
+--
+-- @file adapter.lua
+-- Original intent (unreviewed):
 -- scripts/ui/inspector/adapter.lua
 -- PURPOSE: Single point that calls C++ panel methods. Keep policy out.
-
 local error_system = require("core.error_system")
 local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")

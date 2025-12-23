@@ -1,19 +1,34 @@
---- DaVinci Resolve .drp Project Importer
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~482 LOC
+-- Volatility: unknown
+--
+-- @file drp_importer.lua
+-- Original intent (unreviewed):
+-- - DaVinci Resolve .drp Project Importer
 -- Parses Resolve's .drp export format (ZIP archive with XML files)
 --
 -- Format structure:
---   .drp file = ZIP archive containing:
---     - project.xml (project settings, users, timeline list)
---     - MediaPool/Master/MpFolder.xml (media bin organization)
---     - SeqContainer/*.xml (timeline sequences with tracks/clips)
+-- .drp file = ZIP archive containing:
+-- - project.xml (project settings, users, timeline list)
+-- - MediaPool/Master/MpFolder.xml (media bin organization)
+-- - SeqContainer/*.xml (timeline sequences with tracks/clips)
 --
 -- Usage:
---   local drp_importer = require("importers.drp_importer")
---   local result = drp_importer.parse_drp_file("/path/to/project.drp")
---   if result.success then
---     print("Imported: " .. result.project.name)
---   end
-
+-- local drp_importer = require("importers.drp_importer")
+-- local result = drp_importer.parse_drp_file("/path/to/project.drp")
+-- if result.success then
+-- print("Imported: " .. result.project.name)
+-- end
 local M = {}
 
 local xml2 = require("xml2")

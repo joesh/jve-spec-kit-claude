@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~125 LOC
+-- Volatility: unknown
+--
+-- @file create_sequence.lua
 local M = {}
 local Sequence = require('models.sequence')
 local Track = require('models.track')

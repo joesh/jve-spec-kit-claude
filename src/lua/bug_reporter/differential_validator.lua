@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~188 LOC
+-- Volatility: unknown
+--
+-- @file differential_validator.lua
+-- Original intent (unreviewed):
 -- differential_validator.lua
 -- Compare replay results against original capture using differential testing
-
 local DifferentialValidator = {}
 
 -- Validate replay results against original capture

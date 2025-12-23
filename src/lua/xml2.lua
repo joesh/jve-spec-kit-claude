@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~136 LOC
+-- Volatility: unknown
+--
+-- @file xml2.lua
+-- Original intent (unreviewed):
 -- Minimal pure-Lua XML parser that supports the subset required by the importers.
 -- Exposes xml2.parse() returning a document with :root(), and nodes with
 -- :name(), :text(), :children(), and :attr() helpers.
-
 local M = {}
 
 local function trim(text)

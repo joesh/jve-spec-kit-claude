@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~186 LOC
+-- Volatility: unknown
+--
+-- @file youtube_oauth.lua
+-- Original intent (unreviewed):
 -- youtube_oauth.lua
 -- YouTube OAuth 2.0 authentication flow for uploading bug report videos
-
 local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
 local logger = require("core.logger")

@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~243 LOC
+-- Volatility: unknown
+--
+-- @file rational.lua
+-- Original intent (unreviewed):
 -- Rational Time Library
 -- Provides frame-accurate time representation (Frame Count @ Frame Rate).
 -- Replaces floating-point time calculations.
-
 local Rational = {}
 local Rational_mt = { __index = Rational }
 

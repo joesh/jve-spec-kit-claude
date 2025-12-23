@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~190 LOC
+-- Volatility: unknown
+--
+-- @file clip_links.lua
+-- Original intent (unreviewed):
 -- Clip Links: A/V sync relationships between clips
 -- Manages linked clip groups for synchronized editing operations
-
 local uuid = require("uuid")
 
 local M = {}

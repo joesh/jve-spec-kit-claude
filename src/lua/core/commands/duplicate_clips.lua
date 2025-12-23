@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~108 LOC
+-- Volatility: unknown
+--
+-- @file duplicate_clips.lua
 local M = {}
 
 local Clip = require("models.clip")

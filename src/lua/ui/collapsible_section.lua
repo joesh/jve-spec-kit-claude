@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~716 LOC
+-- Volatility: unknown
+--
+-- @file collapsible_section.lua
+-- Original intent (unreviewed):
 -- Lua Implementation of CollapsibleSection
 -- Matches C++ CollapsibleSection functionality for Inspector panels
-
 local error_system = require("core.error_system")
 local qt_signals = require("core.qt_signals")
 local signals = require("core.signals")

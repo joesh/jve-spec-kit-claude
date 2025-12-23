@@ -1,13 +1,28 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~92 LOC
+-- Volatility: unknown
+--
+-- @file pipe.lua
+-- Original intent (unreviewed):
 -- pipe.lua
 -- Minimal, composable data-flow helpers (pipe-style).
 --
 -- Intended use:
---   local pipe = require("core.pipe")
---   local out = pipe.pipe(items,
---       pipe.filter(function(x) return x.enabled end),
---       pipe.map(function(x) return x.id end)
---   )
-
+-- local pipe = require("core.pipe")
+-- local out = pipe.pipe(items,
+-- pipe.filter(function(x) return x.enabled end),
+-- pipe.map(function(x) return x.id end)
+-- )
 local M = {}
 
 function M.pipe(value, ...)

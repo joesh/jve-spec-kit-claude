@@ -1,8 +1,23 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~277 LOC
+-- Volatility: unknown
+--
+-- @file metadata_schemas.lua
+-- Original intent (unreviewed):
 -- User-Configurable Metadata Schemas for FCP7 Clone Inspector
 -- This file defines all metadata schemas that appear in the Inspector panel
 -- Users can modify this file to add custom fields, change field types, or create new schemas
 -- Like Emacs: Everything is customizable and extensible!
-
 local metadata_schemas = {}
 
 -- Define field types available to users

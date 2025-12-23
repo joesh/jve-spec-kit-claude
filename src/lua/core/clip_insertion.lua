@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~61 LOC
+-- Volatility: unknown
+--
+-- @file clip_insertion.lua
 local database = require("core.database")
 local clip_links = require("core.clip_links")
 

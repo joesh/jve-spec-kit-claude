@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~119 LOC
+-- Volatility: unknown
+--
+-- @file timeline_renderer.lua
+-- Original intent (unreviewed):
 -- Timeline Renderer - Lua-controlled timeline graphics
 -- This demonstrates the drawing command API where Lua defines timeline appearance
-
 local TimelineRenderer = {}
 local ui_constants = require("core.ui_constants")
 local timeline_state = require("ui.timeline.timeline_state")

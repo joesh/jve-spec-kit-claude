@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~81 LOC
+-- Volatility: unknown
+--
+-- @file selection_inspector.lua
+-- Original intent (unreviewed):
 -- scripts/core/runtime/controller/selection_inspector.lua
 -- PURPOSE: Own selection policy (header text + batch), persist filter, and drive the inspector.
-
 local error_system = require("src.lua.core.error_system")
 local logger = require("src.lua.core.logger")
 local ui_constants = require("src.lua.core.ui_constants")

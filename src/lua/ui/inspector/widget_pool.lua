@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~299 LOC
+-- Volatility: unknown
+--
+-- @file widget_pool.lua
+-- Original intent (unreviewed):
 -- ui/inspector/widget_pool.lua
 -- PURPOSE: Manages a pool of reusable Qt widgets for the inspector panel
 -- Widgets are created once and reused to prevent resource leaks and signal connection issues
-
 local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")

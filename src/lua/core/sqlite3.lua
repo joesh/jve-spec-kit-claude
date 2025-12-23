@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~240 LOC
+-- Volatility: unknown
+--
+-- @file sqlite3.lua
+-- Original intent (unreviewed):
 -- SQLite3 FFI wrapper for LuaJIT
 -- Provides minimal interface matching the API used by command_manager and models
-
 local ffi = require("ffi")
 
 -- SQLite3 C API definitions

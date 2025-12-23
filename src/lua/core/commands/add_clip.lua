@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~24 LOC
+-- Volatility: unknown
+--
+-- @file add_clip.lua
 local M = {}
 
 function M.register(command_executors, command_undoers, db, set_last_error)

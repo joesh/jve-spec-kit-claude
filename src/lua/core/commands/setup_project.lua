@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~34 LOC
+-- Volatility: unknown
+--
+-- @file setup_project.lua
 local M = {}
 local Project = require('models.project')
 local json = require("dkjson")

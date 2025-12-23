@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~91 LOC
+-- Volatility: unknown
+--
+-- @file track_index.lua
 local M = {}
 
 function M.build_track_clip_map(all_clips)

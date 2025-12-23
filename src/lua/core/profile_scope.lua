@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~80 LOC
+-- Volatility: unknown
+--
+-- @file profile_scope.lua
+-- Original intent (unreviewed):
 -- profile_scope.lua
 -- Lightweight scoped profiler helper for KRONO_TRACE instrumentation.
-
 local krono_ok, krono = pcall(require, "core.krono")
 
 local unpack = table.unpack or unpack

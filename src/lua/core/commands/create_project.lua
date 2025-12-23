@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~25 LOC
+-- Volatility: unknown
+--
+-- @file create_project.lua
 local M = {}
 local Project = require('models.project')
 

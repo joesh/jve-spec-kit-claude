@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~10 LOC
+-- Volatility: unknown
+--
+-- @file init.lua
 local ClipInspectable = require("inspectable.clip")
 local SequenceInspectable = require("inspectable.sequence")
 

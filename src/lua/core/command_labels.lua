@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~32 LOC
+-- Volatility: unknown
+--
+-- @file command_labels.lua
 local M = {}
 
 local function split_camel_case(text)

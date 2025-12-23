@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~207 LOC
+-- Volatility: unknown
+--
+-- @file frame_utils.lua
+-- Original intent (unreviewed):
 -- Frame Utilities: Frame-accurate timing calculations for NLE operations
 -- Refactored to use Rational Time objects
-
 local Rational = require("core.rational")
 
 local M = {}

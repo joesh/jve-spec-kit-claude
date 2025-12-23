@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~349 LOC
+-- Volatility: unknown
+--
+-- @file resolve_keyboard_importer.lua
+-- Original intent (unreviewed):
 -- DaVinci Resolve Keyboard Binding Importer
 -- Parses Resolve's keyboard.preset.xml files (proprietary binary format)
 -- File location: ~/Library/Preferences/Blackmagic Design/DaVinci Resolve/keyboard.preset.xml
@@ -5,7 +21,6 @@
 -- Binary Format Structure (UTF-16 BE encoded):
 -- [Header: 12 bytes] [Length: 4B] [Preset Name: UTF-16] [Metadata: 8B]
 -- Then repeating: [Length: 4B] [Command: UTF-16] [Count: 4B] [Shortcuts...]
-
 local M = {}
 
 --- Read 32-bit big-endian integer from hex string

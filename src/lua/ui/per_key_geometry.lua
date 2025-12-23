@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~110 LOC
+-- Volatility: unknown
+--
+-- @file per_key_geometry.lua
 return {
   { key = 'Esc', x = 555.4488, y = 72.5000, w = 56.3750, h = 42.0000 },
   { key = 'F1', x = 605.7083, y = 72.5000, w = 37.5833, h = 42.0000 },

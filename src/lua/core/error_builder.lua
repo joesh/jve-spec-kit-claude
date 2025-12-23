@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~162 LOC
+-- Volatility: unknown
+--
+-- @file error_builder.lua
+-- Original intent (unreviewed):
 -- Error Builder - Fluent interface for constructing rich error contexts
 -- Inspired by C++ ErrorContext::Builder but designed for Lua idioms
 -- Provides method chaining and automatic context accumulation
-
 local error_system = require("core.error_system")
 
 local ErrorBuilder = {}

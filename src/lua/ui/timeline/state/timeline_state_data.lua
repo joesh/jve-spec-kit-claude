@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~70 LOC
+-- Volatility: unknown
+--
+-- @file timeline_state_data.lua
+-- Original intent (unreviewed):
 -- Timeline State Data
 -- Holds the central state table and notification system
-
 local M = {}
 local Rational = require("core.rational")
 local ui_constants = require("core.ui_constants")

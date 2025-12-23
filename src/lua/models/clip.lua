@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~348 LOC
+-- Volatility: unknown
+--
+-- @file clip.lua
+-- Original intent (unreviewed):
 -- Clip model: Lua wrapper around clip database operations
 -- Provides CRUD operations for clips following the Lua-for-logic, C++-for-performance architecture
-
 local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
 local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")

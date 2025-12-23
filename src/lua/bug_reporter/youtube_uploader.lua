@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~210 LOC
+-- Volatility: unknown
+--
+-- @file youtube_uploader.lua
+-- Original intent (unreviewed):
 -- youtube_uploader.lua
 -- Upload bug report slideshow videos to YouTube (unlisted)
-
 local dkjson = require("dkjson")
 local youtube_oauth = require("bug_reporter.youtube_oauth")
 local utils = require("bug_reporter.utils")

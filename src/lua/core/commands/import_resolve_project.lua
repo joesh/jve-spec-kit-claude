@@ -1,3 +1,19 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~310 LOC
+-- Volatility: unknown
+--
+-- @file import_resolve_project.lua
+-- Original intent (unreviewed):
 -- ImportResolveProject and ImportResolveDatabase commands
 local M = {}
 

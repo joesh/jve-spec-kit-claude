@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~70 LOC
+-- Volatility: unknown
+--
+-- @file selection_hub.lua
+-- Original intent (unreviewed):
 -- Selection Hub
 -- Centralizes active selection state across panels and notifies interested listeners.
-
 local M = {}
 
 local selections = {}

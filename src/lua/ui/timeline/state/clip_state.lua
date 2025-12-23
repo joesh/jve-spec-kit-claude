@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~350 LOC
+-- Volatility: unknown
+--
+-- @file clip_state.lua
+-- Original intent (unreviewed):
 -- Timeline Clips State
 -- Manages clip storage, indexing, lookup, and mutation application
-
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")

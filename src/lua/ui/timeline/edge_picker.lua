@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~175 LOC
+-- Volatility: unknown
+--
+-- @file edge_picker.lua
 local ui_constants = require("core.ui_constants")
 local Rational = require("core.rational")
 

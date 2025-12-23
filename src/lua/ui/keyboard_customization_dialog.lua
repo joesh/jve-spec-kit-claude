@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~473 LOC
+-- Volatility: unknown
+--
+-- @file keyboard_customization_dialog.lua
+-- Original intent (unreviewed):
 -- Keyboard Customization Dialog
 -- Provides a Lua-driven UI for inspecting and editing keyboard shortcuts.
-
 local M = {}
 
 local qt_constants = require('core.qt_constants')

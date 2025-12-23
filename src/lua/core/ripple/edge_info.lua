@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~62 LOC
+-- Volatility: unknown
+--
+-- @file edge_info.lua
 local M = {}
 
 local edge_utils = require("core.edge_utils")

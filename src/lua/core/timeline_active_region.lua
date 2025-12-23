@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~233 LOC
+-- Volatility: unknown
+--
+-- @file timeline_active_region.lua
 local M = {}
 
 local function assert_rate(rate)

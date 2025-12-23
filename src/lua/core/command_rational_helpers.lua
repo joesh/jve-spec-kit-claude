@@ -1,8 +1,23 @@
---- Command Rational Helpers
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~69 LOC
+-- Volatility: unknown
+--
+-- @file command_rational_helpers.lua
+-- Original intent (unreviewed):
+-- - Command Rational Helpers
 -- Shared utilities for commands that work with Rational time values and sequence/media frame rates.
 -- Extracted from insert.lua and overwrite.lua to eliminate code duplication.
 -- Uses assertions for fail-fast debugging during development.
-
 local M = {}
 local Rational = require("core.rational")
 

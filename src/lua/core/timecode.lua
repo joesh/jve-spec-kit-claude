@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~55 LOC
+-- Volatility: unknown
+--
+-- @file timecode.lua
+-- Original intent (unreviewed):
 -- Timecode utilities for frame-accurate editing
 -- Refactored to use Rational Time objects
-
 local Rational = require("core.rational")
 local frame_utils = require("core.frame_utils")
 

@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~95 LOC
+-- Volatility: unknown
+--
+-- @file lsqlite3.lua
+-- Original intent (unreviewed):
 -- Lightweight compatibility shim for environments without the native lsqlite3
 -- C module. Tries to load the real module first; if unavailable, falls back to
 -- a thin wrapper over the existing core.sqlite3 FFI binding.
-
 -- Prefer the native library if it is installed (Lua loader runs before C
 -- searchers, so we explicitly ask the C searchers for "lsqlite3").
 local function try_native()

@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~213 LOC
+-- Volatility: unknown
+--
+-- @file delete_master_clip.lua
 local M = {}
 
 local function set_error(set_last_error, message)

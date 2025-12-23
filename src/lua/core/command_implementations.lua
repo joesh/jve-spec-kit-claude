@@ -1,10 +1,25 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~39 LOC
+-- Volatility: unknown
+--
+-- @file command_implementations.lua
+-- Original intent (unreviewed):
 -- Compatibility shim for legacy tests that require the monolithic
 -- core.command_implementations module. The real command execution logic
 -- now lives in per-command modules under core.commands and is auto-loaded
 -- by command_manager/command_registry. We provide a no-op register_commands
 -- so callers that expect the old API continue to work without eagerly
 -- loading every command module.
-
 local command_manager = require("core.command_manager")
 
 local M = {}

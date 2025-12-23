@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~277 LOC
+-- Volatility: unknown
+--
+-- @file oauth_dialogs.lua
+-- Original intent (unreviewed):
 -- oauth_dialogs.lua
 -- OAuth configuration dialogs for YouTube and GitHub
-
 local youtube_oauth = require("bug_reporter.youtube_oauth")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
 local logger = require("core.logger")

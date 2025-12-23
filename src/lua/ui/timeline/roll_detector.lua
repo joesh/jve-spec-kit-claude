@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~88 LOC
+-- Volatility: unknown
+--
+-- @file roll_detector.lua
 local ui_constants = require("core.ui_constants")
 
 local RollDetector = {}

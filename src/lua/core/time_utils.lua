@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~88 LOC
+-- Volatility: unknown
+--
+-- @file time_utils.lua
+-- Original intent (unreviewed):
 -- time_utils.lua
 -- Time conversions for Rational (frames @ rate), plus a small set of filename-safe date helpers.
-
 local Rational = require("core.rational")
 
 local M = {}

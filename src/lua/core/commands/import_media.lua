@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~238 LOC
+-- Volatility: unknown
+--
+-- @file import_media.lua
 local M = {}
 local Sequence = require("models.sequence")
 local Track = require("models.track")

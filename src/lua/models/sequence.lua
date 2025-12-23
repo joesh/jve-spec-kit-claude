@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~193 LOC
+-- Volatility: unknown
+--
+-- @file sequence.lua
+-- Original intent (unreviewed):
 -- Lua representation of timeline sequences.
 -- Mirrors the behaviour of the legacy C++ model closely enough for imports and commands.
-
 local database = require("core.database")
 local uuid = require("uuid")
 local Rational = require("core.rational")

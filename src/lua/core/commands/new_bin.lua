@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~57 LOC
+-- Volatility: unknown
+--
+-- @file new_bin.lua
 local M = {}
 local uuid = require("uuid")
 local tag_service = require("core.tag_service")

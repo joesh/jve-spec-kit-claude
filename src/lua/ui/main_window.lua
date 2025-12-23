@@ -1,7 +1,22 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~246 LOC
+-- Volatility: unknown
+--
+-- @file main_window.lua
+-- Original intent (unreviewed):
 -- scripts/ui/main_window.lua
 -- PURPOSE: Pure Lua main window creation for professional video editor
 -- Creates DaVinci Resolve-style layout with project browser, timeline, and inspector
-
 local error_system = require("scripts.core.error_system")
 local logger = require("scripts.core.logger")
 local ui_constants = require("scripts.core.ui_constants")

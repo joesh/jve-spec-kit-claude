@@ -1,3 +1,18 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~184 LOC
+-- Volatility: unknown
+--
+-- @file move_clip_to_track.lua
 local M = {}
 local Clip = require('models.clip')
 local frame_utils = require('core.frame_utils') -- Still used for legacy/migration. Keep for now.

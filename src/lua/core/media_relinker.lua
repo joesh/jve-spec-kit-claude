@@ -1,10 +1,25 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~417 LOC
+-- Volatility: unknown
+--
+-- @file media_relinker.lua
+-- Original intent (unreviewed):
 -- Media Relinking System
 -- Reconnects offline media files to clips after files have been moved/renamed
 -- Supports three strategies: path-based, filename-based, metadata-based
 --
 -- Architecture: Command-based relinking for full undo/redo support
 -- All relinking operations create ReinkMedia commands that can be undone
-
 local M = {}
 
 --- Check if file exists at given path

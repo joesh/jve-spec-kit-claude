@@ -1,6 +1,21 @@
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~413 LOC
+-- Volatility: unknown
+--
+-- @file keyboard_dialog_premiere.lua
+-- Original intent (unreviewed):
 -- Keyboard Customization Dialog - Premiere Pro Visual Style
 -- Complete visual redesign to match Adobe Premiere Pro's keyboard shortcuts dialog
-
 local M = {}
 
 local ui_constants = require("core.ui_constants")

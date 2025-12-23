@@ -1,7 +1,22 @@
---- Focus Manager Module
---- Tracks which panel has keyboard focus and provides clear visual feedback
---- Shows a bright colored header/border on the active panel
-
+--- TODO: one-line summary (human review required)
+--
+-- Responsibilities:
+-- - TODO
+--
+-- Non-goals:
+-- - TODO
+--
+-- Invariants:
+-- - TODO
+--
+-- Size: ~196 LOC
+-- Volatility: unknown
+--
+-- @file focus_manager.lua
+-- Original intent (unreviewed):
+-- - Focus Manager Module
+-- - Tracks which panel has keyboard focus and provides clear visual feedback
+-- - Shows a bright colored header/border on the active panel
 local qt_constants = require("core.qt_constants")
 local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
