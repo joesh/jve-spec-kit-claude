@@ -70,6 +70,9 @@ Gesture capture + replay system for reproducibility:
 - `src/bug_reporter/gesture_logger.{cpp,h}` (C++ layer)
 - `src/lua/bug_reporter/*.lua` (Lua orchestration)
 - Generates JSON test cases + screen recordings
+- Default output: `tests/captures/capture-<datestamp>-<id>/capture.json` with `screenshots/` subdir
+- Database snapshot: `tests/captures/bug-<datestamp>.db` when `database.backup_to_file` is available
+- Output directory override via `metadata.output_dir` on export
 
 ## Data Model (SQLite)
 

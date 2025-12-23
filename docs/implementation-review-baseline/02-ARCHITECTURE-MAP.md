@@ -6,7 +6,7 @@
 ┌─────────────────────────────────────────────────────────┐
 │ Lua Application Layer                                   │
 │ - Business logic, state management, commands            │
-│ - src/lua/core/, src/lua/models/, src/lua/ui/          │
+│ - src/lua/core/, src/lua/models/, src/lua/ui/           │
 │ - NEVER calls Qt directly                               │
 └───────────────┬─────────────────────────────────────────┘
                 │

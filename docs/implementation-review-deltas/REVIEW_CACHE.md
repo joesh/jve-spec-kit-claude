@@ -12,7 +12,7 @@ Rules:
 - (empty)
 
 ## Hot zones
-- (empty)
+- Bug reporter capture outputs default to `tests/captures/` with per-capture `capture.json` + `screenshots/` and DB snapshots in `tests/captures/bug-<datestamp>.db` (docs/implementation-review-baseline/01-REPO-OVERVIEW.md §Bug Reporter)
 
 ## Accepted structural decisions
 - (empty)
