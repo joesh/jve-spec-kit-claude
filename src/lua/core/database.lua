@@ -6,6 +6,7 @@ local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
 local Rational = require("core.rational")
 local logger = require("core.logger")
+local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
 
@@ -16,24 +17,7 @@ local function load_main_schema(db_conn)
 
     local schema_path = "src/lua/schema.sql"
 
-    -- Attempt to resolve schema_path relative to the project root
-    -- This relies on `core.database` being loaded, and `package.path` pointing to `src/lua`
-    local project_root = nil
-    local core_db_path = package.searchpath("core.database", package.path)
-    if core_db_path then
-        -- core_db_path might be .../src/lua/core/database.lua
-        -- project_root would be .../
-        local root = core_db_path:match("(.*)/src/lua/core/database%.lua")
-        if root then
-            project_root = root .. "/"
-        end
-    end
-
-    if not project_root then
-        error("FATAL: Unable to resolve project root for schema load (package.searchpath(\"core.database\") failed)")
-    end
-    
-    local absolute_schema_path = project_root .. schema_path
+    local absolute_schema_path = path_utils.resolve_repo_root() .. "/" .. schema_path
 
     local file = io.open(absolute_schema_path, "r")
     if not file then

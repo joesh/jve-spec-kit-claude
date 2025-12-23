@@ -149,7 +149,7 @@ function BugReporter.capture_on_error(error_message, stack_trace)
         lua_stack_trace = stack_trace
     }
 
-    local json_path = BugReporter.export_capture(metadata)
+    local json_path, err = BugReporter.export_capture(metadata)
 
     if json_path then
         logger.info("bug_reporter", "\n" .. string.rep("=", 60))
@@ -162,6 +162,8 @@ function BugReporter.capture_on_error(error_message, stack_trace)
         logger.info("bug_reporter", "  - Screenshots from the session")
         logger.info("bug_reporter", "  - Full error stack trace")
         logger.info("bug_reporter", string.rep("=", 60) .. "\n")
+    else
+        logger.error("bug_reporter", "Auto capture failed: " .. (err or "unknown error"))
     end
 
     return json_path
@@ -178,10 +180,12 @@ function BugReporter.capture_manual(description, expected_behavior)
         user_expected_behavior = expected_behavior
     }
 
-    local json_path = BugReporter.export_capture(metadata)
+    local json_path, err = BugReporter.export_capture(metadata)
 
     if json_path then
         logger.info("bug_reporter", "Manual capture saved to: " .. json_path)
+    else
+        logger.error("bug_reporter", "Manual capture failed: " .. (err or "unknown error"))
     end
 
     return json_path

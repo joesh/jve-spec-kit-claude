@@ -4,6 +4,7 @@
 
 local utils = require("bug_reporter.utils")
 local logger = require("core.logger")
+local path_utils = require("core.path_utils")
 
 -- Configuration constants
 local MAX_GESTURES_IN_BUFFER = 200
@@ -285,7 +286,8 @@ function CaptureManager:export_capture(metadata)
     local db_snapshot_path = nil
     if database and database.backup_to_file then
         local suffix = utils.human_datestamp_for_filename(os.time())
-        db_snapshot_path = "tests/captures/bug-" .. suffix .. ".db"
+        local snapshot_dir = path_utils.resolve_repo_path("tests/captures")
+        db_snapshot_path = snapshot_dir .. "/bug-" .. suffix .. ".db"
         local success, err = database.backup_to_file(db_snapshot_path)
         if not success then
             logger.warn("bug_reporter", "Database backup failed: " .. (err or "unknown"))
@@ -306,7 +308,7 @@ function CaptureManager:export_capture(metadata)
     metadata.screenshot_interval_ms = self.screenshot_interval_ms
 
     -- Set default output directory
-    local output_dir = metadata.output_dir or "tests/captures"
+    local output_dir = path_utils.resolve_repo_path(metadata.output_dir or "tests/captures")
 
     -- Export to JSON
     local json_path, err = json_exporter.export(capture_data, metadata, output_dir)
