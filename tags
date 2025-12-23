@@ -74,7 +74,6 @@ ADD_STRETCH	/Users/joe/Local/jve-spec-kit-claude/tests/test_keyboard_renderer.lu
 ADD_SUBMENU	/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua	/^        ADD_SUBMENU = function() end,$/;"	f
 ADD_WIDGET	/Users/joe/Local/jve-spec-kit-claude/tests/test_constants_integration.lua	/^        ADD_WIDGET = function() end,$/;"	f
 ADD_WIDGET	/Users/joe/Local/jve-spec-kit-claude/tests/test_keyboard_renderer.lua	/^function mock_qt.ADD_WIDGET(layout, widget)$/;"	f	unknown:mock_qt
-ALIASES	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^ALIASES = {$/;"	v
 ARCHITECTURE_ID	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_batch_ripple_gap_drag_autogen/moc_predefs.h	/^#define ARCHITECTURE_ID /;"	d
 ARCHITECTURE_ID	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_clip_entity_autogen/moc_predefs.h	/^#define ARCHITECTURE_ID /;"	d
 ARCHITECTURE_ID	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_clip_selection_autogen/moc_predefs.h	/^#define ARCHITECTURE_ID /;"	d
@@ -100,7 +99,7 @@ ARCHITECTURE_ID	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_timeline
 ARCHITECTURE_ID	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_track_entity_autogen/moc_predefs.h	/^#define ARCHITECTURE_ID /;"	d
 BottomAnchorFilter	/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings/signal_bindings.cpp	/^    BottomAnchorFilter(QScrollArea* sa) : QObject(sa), scrollArea(sa), distanceFromBottom(0) {}$/;"	f	class:BottomAnchorFilter	file:
 BottomAnchorFilter	/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings/signal_bindings.cpp	/^class BottomAnchorFilter : public QObject$/;"	c	file:
-COMMAND_MODULES	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^COMMAND_MODULES = [$/;"	v
+COMMANDS_DIR	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^COMMANDS_DIR = ROOT \/ "src" \/ "lua" \/ "core" \/ "commands"$/;"	v
 CONNECT_MENU_ACTION	/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua	/^        CONNECT_MENU_ACTION = function() end,$/;"	f
 CREATE	/Users/joe/Local/jve-spec-kit-claude/tests/test_constants_integration.lua	/^        CREATE = function() return {} end,$/;"	f
 CREATE	/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua	/^        CREATE = function() end,$/;"	f
@@ -137,6 +136,7 @@ GestureLogger	/Users/joe/Local/jve-spec-kit-claude/src/bug_reporter/gesture_logg
 GestureLogger	/Users/joe/Local/jve-spec-kit-claude/src/bug_reporter/gesture_logger.h	/^class GestureLogger : public QObject {$/;"	c	namespace:bug_reporter
 GlobalKeyFilter	/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings/signal_bindings.cpp	/^    GlobalKeyFilter(lua_State* L_ptr, const std::string& handler)$/;"	f	class:GlobalKeyFilter	file:
 GlobalKeyFilter	/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings/signal_bindings.cpp	/^class GlobalKeyFilter : public QObject$/;"	c	file:
+IMPL_FILE	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^IMPL_FILE = ROOT \/ "src" \/ "lua" \/ "core" \/ "command_implementations.lua"$/;"	v
 IS_TREE_ITEM_EXPANDED	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/qt_constants.lua	/^    qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED = qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED or r/;"	f	unknown:qt_constants.CONTROL
 IS_TREE_ITEM_EXPANDED	/Users/joe/Local/jve-spec-kit-claude/tests/test_project_browser_keymap.lua	/^            IS_TREE_ITEM_EXPANDED = function(_, _)$/;"	f
 JSON_decode	/Users/joe/Local/jve-spec-kit-claude/tests/test_set_clip_property.lua	/^local function JSON_decode(raw)$/;"	f
@@ -168,6 +168,7 @@ MAP_POINT_FROM	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/qt_constants.lu
 MAP_RECT_FROM	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/qt_constants.lua	/^    qt_constants.WIDGET.MAP_RECT_FROM = qt_constants.WIDGET.MAP_RECT_FROM or require_global_func/;"	f	unknown:qt_constants.WIDGET
 OPEN_FILE	/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua	/^        OPEN_FILE = function() return nil end,$/;"	f
 OPEN_FILES	/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua	/^        OPEN_FILES = function() return nil end,$/;"	f
+OUT_PATH	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^OUT_PATH = ROOT \/ "docs" \/ "symbol-index" \/ "commands.json"$/;"	v
 QT_CORE_LIB	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_batch_ripple_gap_drag_autogen/moc_predefs.h	/^#define QT_CORE_LIB /;"	d
 QT_CORE_LIB	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_clip_entity_autogen/moc_predefs.h	/^#define QT_CORE_LIB /;"	d
 QT_CORE_LIB	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_clip_selection_autogen/moc_predefs.h	/^#define QT_CORE_LIB /;"	d
@@ -349,7 +350,11 @@ Q_CONSTINIT	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_timeline_ope
 Q_CONSTINIT	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_track_entity_autogen/J2YW4CT3N5/moc_test_base.cpp	/^#define Q_CONSTINIT$/;"	d	file:
 RAISE	/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua	/^        RAISE = function() end,$/;"	f
 RECT	/Users/joe/Local/jve-spec-kit-claude/src/timeline_renderer.h	/^        enum Type { RECT, TEXT, LINE } type;$/;"	e	enum:JVE::TimelineRenderer::DrawCommand::Type
+REG_FILE	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^REG_FILE = ROOT \/ "src" \/ "lua" \/ "core" \/ "command_registry.lua"$/;"	v
 RELEASE_MOUSE	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/qt_constants.lua	/^    qt_constants.WIDGET.RELEASE_MOUSE = qt_constants.WIDGET.RELEASE_MOUSE or require_global_func/;"	f	unknown:qt_constants.WIDGET
+RET_EXEC_RE	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^RET_EXEC_RE = re.compile(r"return\\s*\\{[\\s\\S]*?\\bexecutor\\s*=\\s*([^,}\\n]+)", re.M)$/;"	v
+RET_REDO_RE	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^RET_REDO_RE = re.compile(r"return\\s*\\{[\\s\\S]*?\\bredoer\\s*=\\s*([^,}\\n]+)", re.M)$/;"	v
+RET_UNDO_RE	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^RET_UNDO_RE = re.compile(r"return\\s*\\{[\\s\\S]*?\\bundoer\\s*=\\s*([^,}\\n]+)", re.M)$/;"	v
 ROOT	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^ROOT = Path(__file__).resolve().parents[1]$/;"	v
 ResourcePaths	/Users/joe/Local/jve-spec-kit-claude/src/resource_paths.h	/^class ResourcePaths {$/;"	c	namespace:JVE
 SET_ACTION_CHECKED	/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua	/^        SET_ACTION_CHECKED = function() end,$/;"	f
@@ -470,6 +475,7 @@ _LP64	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_sequence_entity_au
 _LP64	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_timeline_lua_logic_autogen/moc_predefs.h	/^#define _LP64 /;"	d
 _LP64	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_timeline_operations_autogen/moc_predefs.h	/^#define _LP64 /;"	d
 _LP64	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_track_entity_autogen/moc_predefs.h	/^#define _LP64 /;"	d
+_QUOTED_STR_RE	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^_QUOTED_STR_RE = re.compile(r"""(["'])(.*?)\\1""")$/;"	v
 __AARCH64EL__	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_batch_ripple_gap_drag_autogen/moc_predefs.h	/^#define __AARCH64EL__ /;"	d
 __AARCH64EL__	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_clip_entity_autogen/moc_predefs.h	/^#define __AARCH64EL__ /;"	d
 __AARCH64EL__	/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_clip_selection_autogen/moc_predefs.h	/^#define __AARCH64EL__ /;"	d
@@ -11966,6 +11972,7 @@ build_master_key	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/fcp7_xml
 build_media_sql	/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua	/^local function build_media_sql(cfg, media)$/;"	f
 build_menu	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/menu_system.lua	/^local function build_menu(menu_elem, parent_menu, menu_path)$/;"	f
 build_neighbor_bounds_cache	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/ripple/track_index.lua	/^function M.build_neighbor_bounds_cache(track_clip_map)$/;"	f	unknown:M
+build_patterns	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def build_patterns(name: str) -> List[re.Pattern]:$/;"	f	typeref:typename:List[re.Pattern]
 build_planned_mutations	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/batch_ripple_edit.lua	/^		    local function build_planned_mutations(ctx)$/;"	f
 build_preview_edge	/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/edge_drag_renderer.lua	/^local function build_preview_edge(edge, applied_delta, requested_delta, trim_constraints, colors/;"	f
 build_preview_edges	/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/edge_drag_renderer.lua	/^function Renderer.build_preview_edges(drag_edges, drag_delta, trim_constraints, colors, lead_edg/;"	f	unknown:Renderer
@@ -12271,7 +12278,6 @@ command_undoers["ToggleClipEnabled"]	/Users/joe/Local/jve-spec-kit-claude/src/lu
 command_undoers["UndoInsertClipToTimeline"]	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/insert_clip_to_timeline.lua	/^    command_undoers["UndoInsertClipToTimeline"] = function(command)$/;"	f
 command_undoers["UndoMoveClipToTrack"]	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/move_clip_to_track.lua	/^    command_undoers["UndoMoveClipToTrack"] = function(command)$/;"	f
 command_undoers["UndoNudge"]	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/nudge.lua	/^    command_undoers["UndoNudge"] = function(command)$/;"	f
-commands	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^commands = []$/;"	v
 commit_transaction	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/database.lua	/^local function commit_transaction(started, context)$/;"	f
 commit_transaction	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/sqlite3.lua	/^function Database:commit_transaction()$/;"	f	unknown:Database
 commit_transaction	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/fcp7_xml_importer.lua	/^    local function commit_transaction()$/;"	f
@@ -12700,17 +12706,21 @@ export_capture	/Users/joe/Local/jve-spec-kit-claude/src/lua/bug_reporter/capture
 export_capture	/Users/joe/Local/jve-spec-kit-claude/src/lua/bug_reporter/init.lua	/^function BugReporter.export_capture(metadata)$/;"	f	unknown:BugReporter
 export_screenshots	/Users/joe/Local/jve-spec-kit-claude/src/lua/bug_reporter/json_exporter.lua	/^function JsonExporter.export_screenshots(screenshot_buffer, output_dir)$/;"	f	unknown:JsonExporter
 extractModifiers	/Users/joe/Local/jve-spec-kit-claude/src/bug_reporter/gesture_logger.cpp	/^QStringList GestureLogger::extractModifiers(Qt::KeyboardModifiers mods) {$/;"	f	class:bug_reporter::GestureLogger	typeref:typename:QStringList
+extract_aliases_from_command_registry	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def extract_aliases_from_command_registry(lua: str) -> Dict[str, str]:$/;"	f	typeref:typename:Dict[str,str]
 extract_clips	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/resolve_database_importer.lua	/^local function extract_clips(db, track_id)$/;"	f
 extract_drp	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/drp_importer.lua	/^local function extract_drp(drp_path)$/;"	f
+extract_entrypoint	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def extract_entrypoint(lua_text: str, name: str) -> Optional[str]:$/;"	f	typeref:typename:Optional[str]
 extract_filename	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/import_media.lua	/^        local function extract_filename(path)$/;"	f
 extract_filename	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/database.lua	/^local function extract_filename(path)$/;"	f
 extract_frame_rate	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/fcp7_xml_importer.lua	/^local function extract_frame_rate(timebase_node)$/;"	f
 extract_frames	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/create_clip.lua	/^        local function extract_frames(param)$/;"	f
 extract_frames	/Users/joe/Local/jve-spec-kit-claude/tests/test_capture_clip_state_serialization.lua	/^local function extract_frames(captured_state_after_json, field_name)$/;"	f
 extract_media_items	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/resolve_database_importer.lua	/^local function extract_media_items(db)$/;"	f
+extract_module_list_from_command_implementations	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def extract_module_list_from_command_implementations(lua: str) -> List[str]:$/;"	f	typeref:typename:List[str]
 extract_parent_id	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/match_frame.lua	/^        local function extract_parent_id(entry)$/;"	f
 extract_project_metadata	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/resolve_database_importer.lua	/^local function extract_project_metadata(db)$/;"	f
 extract_reel_name	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media_relinker.lua	/^local function extract_reel_name(media, file_path)$/;"	f
+extract_return_binding	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def extract_return_binding(lua_text: str, which: str) -> Optional[str]:$/;"	f	typeref:typename:Optional[str]
 extract_sequence_id	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/command_manager.lua	/^local function extract_sequence_id(command)$/;"	f
 extract_timecode	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media_relinker.lua	/^local function extract_timecode(media, file_path)$/;"	f
 extract_timelines	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/resolve_database_importer.lua	/^local function extract_timelines(db)$/;"	f
@@ -13973,6 +13983,7 @@ m_lastError	/Users/joe/Local/jve-spec-kit-claude/src/simple_lua_engine.h	/^    Q
 m_mainWidget	/Users/joe/Local/jve-spec-kit-claude/src/simple_lua_engine.h	/^    QWidget* m_mainWidget = nullptr;$/;"	m	class:SimpleLuaEngine	typeref:typename:QWidget *
 main	/Users/joe/Local/jve-spec-kit-claude/src/main.cpp	/^int main(int argc, char *argv[])$/;"	f	typeref:typename:int
 main	/Users/joe/Local/jve-spec-kit-claude/tests/test_frame_accuracy.lua	/^local function main()$/;"	f
+main	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def main() -> int:$/;"	f	typeref:typename:int
 makeTreeItemId	/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings/view_bindings.cpp	/^static lua_Integer makeTreeItemId(QTreeWidgetItem* item)$/;"	f	typeref:typename:lua_Integer	file:
 make_clip	/Users/joe/Local/jve-spec-kit-claude/tests/test_edge_picker_gap_zones.lua	/^local function make_clip(id, start_frames, dur_frames)$/;"	f
 make_clip	/Users/joe/Local/jve-spec-kit-claude/tests/test_roll_selection.lua	/^local function make_clip(id, track_id, start_value, duration_value, fps_num, fps_den)$/;"	f
@@ -14141,9 +14152,7 @@ operation	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/error_system.lua	/^ 
 operation	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/error_system.lua	/^            operation = context.operation or "unknown_function_call",$/;"	f
 optional_rational_in_rate	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/command_rational_helpers.lua	/^function M.optional_rational_in_rate(value, fps_num, fps_den)$/;"	f	unknown:M
 optionalmetatables	/Users/joe/Local/jve-spec-kit-claude/src/lua/dkjson.lua	/^local function optionalmetatables(...)$/;"	f
-out	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^out = {$/;"	v
 out_file	/Users/joe/Local/jve-spec-kit-claude/tools/symbol_index_from_tags.py	/^tags_file, out_file = sys.argv[1], sys.argv[2]$/;"	v
-out_path	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^out_path = ROOT \/ "docs" \/ "symbol-index" \/ "commands.json"$/;"	v
 paintBracketShape	/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings/misc_bindings.cpp	/^void paintBracketShape(QPainter& painter, const QPainterPath& path)$/;"	f	namespace:__anon10d27fcb0111	typeref:typename:void
 paintEvent	/Users/joe/Local/jve-spec-kit-claude/src/timeline_renderer.cpp	/^void TimelineRenderer::paintEvent(QPaintEvent* \/* event *\/)$/;"	f	class:JVE::TimelineRenderer	typeref:typename:void
 panel_is_active	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/keyboard_shortcuts.lua	/^local function panel_is_active(required_panel, focused_panel)$/;"	f
@@ -14460,6 +14469,7 @@ rational	/Users/joe/Local/jve-spec-kit-claude/tests/test_timeline_preview_gap_ma
 rational_equals	/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/view/timeline_view_renderer.lua	/^local function rational_equals(a, b)$/;"	f
 read_be_int32	/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/resolve_keyboard_importer.lua	/^local function read_be_int32(hex_str, pos)$/;"	f
 read_file	/Users/joe/Local/jve-spec-kit-claude/tests/test_schema_sql_portability.lua	/^local function read_file(path)$/;"	f
+read_text	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def read_text(p: Path) -> str:$/;"	f	typeref:typename:str
 read_widget_value	/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/inspector/view.lua	/^local function read_widget_value(field_info)$/;"	f
 rebuild_clip_indexes	/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/state/clip_state.lua	/^local function rebuild_clip_indexes()$/;"	f
 record	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/sqlite3.lua	/^function Statement:record()$/;"	f	unknown:Statement
@@ -14853,6 +14863,7 @@ scalar	/Users/joe/Local/jve-spec-kit-claude/tests/test_delete_sequence.lua	/^loc
 scalar	/Users/joe/Local/jve-spec-kit-claude/tests/test_import_resolve_drp.lua	/^local function scalar(db, sql, param)$/;"	f
 scalar	/Users/joe/Local/jve-spec-kit-claude/tests/test_import_reuses_existing_media_by_path.lua	/^local function scalar(db, sql, value)$/;"	f
 scalar	/Users/joe/Local/jve-spec-kit-claude/tests/test_import_undo_removes_sequence.lua	/^local function scalar(db, sql, value)$/;"	f
+scan_command_module	/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py	/^def scan_command_module(mod: str) -> Dict[str, Optional[str]]:$/;"	f	typeref:typename:Dict[str,Optional[str]]
 scan_directory	/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media_relinker.lua	/^local function scan_directory(root_dir, extensions, max_depth)$/;"	f
 scanstring	/Users/joe/Local/jve-spec-kit-claude/src/lua/dkjson.lua	/^local function scanstring (str, pos)$/;"	f
 scantable	/Users/joe/Local/jve-spec-kit-claude/src/lua/dkjson.lua	/^local function scantable (what, closechar, str, startpos, nullval, objectmeta, arraymeta)$/;"	f

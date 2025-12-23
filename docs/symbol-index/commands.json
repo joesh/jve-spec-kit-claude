@@ -1,282 +1,564 @@
 {
-  "version": 1,
-  "notes": "Auto-generated command index",
+  "version": 5,
+  "notes": "Auto-generated from Lua registry sources; entrypoints extracted via static scan (execute/undo/redo) plus return bindings (executor/undoer/redoer).",
+  "sources": [
+    "src/lua/core/command_implementations.lua",
+    "src/lua/core/command_registry.lua"
+  ],
   "commands": [
     {
       "command": "add_clip",
       "module": "core.commands.add_clip",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/add_clip.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"AddClip\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "add_track",
       "module": "core.commands.add_track",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/add_track.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"AddTrack\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "batch_command",
       "module": "core.commands.batch_command",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/batch_command.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"BatchCommand\"]",
+      "undoer_binding": "command_undoers[\"BatchCommand\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "batch_ripple_edit",
       "module": "core.commands.batch_ripple_edit",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/batch_ripple_edit.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"BatchRippleEdit\"]",
+      "undoer_binding": "command_undoers[\"BatchRippleEdit\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "create_clip",
       "module": "core.commands.create_clip",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/create_clip.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"CreateClip\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "create_project",
       "module": "core.commands.create_project",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/create_project.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"CreateProject\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "create_sequence",
       "module": "core.commands.create_sequence",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/create_sequence.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"CreateSequence\"]",
+      "undoer_binding": "command_undoers[\"CreateSequence\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "cut",
       "module": "core.commands.cut",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/cut.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"Cut\"]",
+      "undoer_binding": "command_undoers[\"Cut\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "delete_bin",
       "module": "core.commands.delete_bin",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/delete_bin.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"DeleteBin\"]",
+      "undoer_binding": "command_undoers[\"DeleteBin\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "delete_clip",
       "module": "core.commands.delete_clip",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/delete_clip.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"DeleteClip\"]",
+      "undoer_binding": "command_undoers[\"DeleteClip\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "delete_master_clip",
       "module": "core.commands.delete_master_clip",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/delete_master_clip.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"DeleteMasterClip\"]",
+      "undoer_binding": "command_undoers[\"DeleteMasterClip\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "delete_sequence",
       "module": "core.commands.delete_sequence",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/delete_sequence.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"DeleteSequence\"]",
+      "undoer_binding": "command_undoers[\"DeleteSequence\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "deselect_all",
       "module": "core.commands.deselect_all",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/deselect_all.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"DeselectAll\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "duplicate_master_clip",
       "module": "core.commands.duplicate_master_clip",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/duplicate_master_clip.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"DuplicateMasterClip\"]",
+      "undoer_binding": "command_undoers[\"DuplicateMasterClip\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "go_to_end",
       "module": "core.commands.go_to_end",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/go_to_end.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"GoToEnd\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "go_to_next_edit",
       "module": "core.commands.go_to_next_edit",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/go_to_next_edit.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"GoToNextEdit\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "go_to_prev_edit",
       "module": "core.commands.go_to_prev_edit",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/go_to_prev_edit.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"GoToPrevEdit\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "go_to_start",
       "module": "core.commands.go_to_start",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/go_to_start.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"GoToStart\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "import_fcp7_xml",
       "module": "core.commands.import_fcp7_xml",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/import_fcp7_xml.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "executors[\"ImportFCP7XML\"]",
+      "undoer_binding": "undoers[\"ImportFCP7XML\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "import_media",
       "module": "core.commands.import_media",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/import_media.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"ImportMedia\"]",
+      "undoer_binding": "command_undoers[\"ImportMedia\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "import_resolve_project",
       "module": "core.commands.import_resolve_project",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/import_resolve_project.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "executors[\"ImportResolveProject\"]",
+      "undoer_binding": "undoers[\"ImportResolveProject\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "insert",
       "module": "core.commands.insert",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/insert.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"Insert\"]",
+      "undoer_binding": "command_undoers[\"Insert\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "insert_clip_to_timeline",
       "module": "core.commands.insert_clip_to_timeline",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/insert_clip_to_timeline.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"InsertClipToTimeline\"]",
+      "undoer_binding": "command_undoers[\"UndoInsertClipToTimeline\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "link_clips",
       "module": "core.commands.link_clips",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/link_clips.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "executors[\"LinkClips\"]",
+      "undoer_binding": "undoers[\"LinkClips\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "load_project",
       "module": "core.commands.load_project",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/load_project.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"LoadProject\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "match_frame",
       "module": "core.commands.match_frame",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/match_frame.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"MatchFrame\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "modify_property",
       "module": "core.commands.modify_property",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/modify_property.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"ModifyProperty\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "move_clip_to_track",
       "module": "core.commands.move_clip_to_track",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/move_clip_to_track.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"MoveClipToTrack\"]",
+      "undoer_binding": "command_executors[\"UndoMoveClipToTrack\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "new_bin",
       "module": "core.commands.new_bin",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/new_bin.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"NewBin\"]",
+      "undoer_binding": "command_undoers[\"NewBin\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "nudge",
       "module": "core.commands.nudge",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/nudge.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"Nudge\"]",
+      "undoer_binding": "command_undoers[\"UndoNudge\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "overwrite",
       "module": "core.commands.overwrite",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/overwrite.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"Overwrite\"]",
+      "undoer_binding": "command_undoers[\"Overwrite\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "relink_media",
       "module": "core.commands.relink_media",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/relink_media.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "executors[\"RelinkMedia\"]",
+      "undoer_binding": "undoers[\"RelinkMedia\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "rename_item",
       "module": "core.commands.rename_item",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/rename_item.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"RenameItem\"]",
+      "undoer_binding": "command_undoers[\"RenameItem\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "ripple_delete",
       "module": "core.commands.ripple_delete",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/ripple_delete.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"RippleDelete\"]",
+      "undoer_binding": "command_undoers[\"RippleDelete\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "ripple_delete_selection",
       "module": "core.commands.ripple_delete_selection",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/ripple_delete_selection.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"RippleDeleteSelection\"]",
+      "undoer_binding": "command_undoers[\"RippleDeleteSelection\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "ripple_edit",
       "module": "core.commands.ripple_edit",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/ripple_edit.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"RippleEdit\"]",
+      "undoer_binding": "command_undoers[\"RippleEdit\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "select_all",
       "module": "core.commands.select_all",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/select_all.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"SelectAll\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "set_clip_property",
       "module": "core.commands.set_clip_property",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/set_clip_property.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"SetClipProperty\"]",
+      "undoer_binding": "command_undoers[\"SetClipProperty\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "set_property",
       "module": "core.commands.set_property",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/set_property.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"SetProperty\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "set_sequence_metadata",
       "module": "core.commands.set_sequence_metadata",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/set_sequence_metadata.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"SetSequenceMetadata\"]",
+      "undoer_binding": "command_undoers[\"SetSequenceMetadata\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "setup_project",
       "module": "core.commands.setup_project",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/setup_project.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"SetupProject\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "split_clip",
       "module": "core.commands.split_clip",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/split_clip.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"SplitClip\"]",
+      "undoer_binding": "command_undoers[\"SplitClip\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "toggle_clip_enabled",
       "module": "core.commands.toggle_clip_enabled",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/toggle_clip_enabled.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "command_executors[\"ToggleClipEnabled\"]",
+      "undoer_binding": "command_undoers[\"ToggleClipEnabled\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "toggle_maximize_panel",
       "module": "core.commands.toggle_maximize_panel",
-      "entry": "register()",
-      "source": "command_implementations.lua"
+      "file": "src/lua/core/commands/toggle_maximize_panel.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "executors[\"ToggleMaximizePanel\"]",
+      "undoer_binding": null,
+      "redoer_binding": null,
+      "source": "src/lua/core/command_implementations.lua"
     },
     {
       "command": "ImportFCP7XML",
       "module": "core.commands.import_fcp7_xml",
-      "entry": "register()",
-      "source": "command_registry.lua (alias)"
+      "file": "src/lua/core/commands/import_fcp7_xml.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "executors[\"ImportFCP7XML\"]",
+      "undoer_binding": "undoers[\"ImportFCP7XML\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_registry.lua",
+      "alias_of": "core.commands.import_fcp7_xml"
     },
     {
       "command": "ImportResolveProject",
       "module": "core.commands.import_resolve_project",
-      "entry": "register()",
-      "source": "command_registry.lua (alias)"
+      "file": "src/lua/core/commands/import_resolve_project.lua",
+      "execute_entrypoint": null,
+      "undo_entrypoint": null,
+      "redo_entrypoint": null,
+      "executor_binding": "executors[\"ImportResolveProject\"]",
+      "undoer_binding": "undoers[\"ImportResolveProject\"]",
+      "redoer_binding": null,
+      "source": "src/lua/core/command_registry.lua",
+      "alias_of": "core.commands.import_resolve_project"
     }
   ]
 }

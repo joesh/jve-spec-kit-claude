@@ -60,11 +60,6 @@
     "kind": null
   },
   {
-    "symbol": "ALIASES",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
-    "kind": null
-  },
-  {
     "symbol": "ARCHITECTURE_ID",
     "file": "/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_batch_ripple_gap_drag_autogen/moc_predefs.h",
     "kind": null
@@ -190,7 +185,7 @@
     "kind": null
   },
   {
-    "symbol": "COMMAND_MODULES",
+    "symbol": "COMMANDS_DIR",
     "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
@@ -375,6 +370,11 @@
     "kind": null
   },
   {
+    "symbol": "IMPL_FILE",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
     "symbol": "IS_TREE_ITEM_EXPANDED",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/core/qt_constants.lua",
     "kind": null
@@ -527,6 +527,11 @@
   {
     "symbol": "OPEN_FILES",
     "file": "/Users/joe/Local/jve-spec-kit-claude/tests/test_menu_split_rational.lua",
+    "kind": null
+  },
+  {
+    "symbol": "OUT_PATH",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -1435,8 +1440,28 @@
     "kind": null
   },
   {
+    "symbol": "REG_FILE",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
     "symbol": "RELEASE_MOUSE",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/core/qt_constants.lua",
+    "kind": null
+  },
+  {
+    "symbol": "RET_EXEC_RE",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
+    "symbol": "RET_REDO_RE",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
+    "symbol": "RET_UNDO_RE",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -2037,6 +2062,11 @@
   {
     "symbol": "_LP64",
     "file": "/Users/joe/Local/jve-spec-kit-claude/tests/autogen/test_track_entity_autogen/moc_predefs.h",
+    "kind": null
+  },
+  {
+    "symbol": "_QUOTED_STR_RE",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -59520,6 +59550,11 @@
     "kind": null
   },
   {
+    "symbol": "build_patterns",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
     "symbol": "build_planned_mutations",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/batch_ripple_edit.lua",
     "kind": null
@@ -61042,11 +61077,6 @@
   {
     "symbol": "command_undoers[\"UndoNudge\"]",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/nudge.lua",
-    "kind": null
-  },
-  {
-    "symbol": "commands",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -63190,6 +63220,11 @@
     "kind": null
   },
   {
+    "symbol": "extract_aliases_from_command_registry",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
     "symbol": "extract_clips",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/resolve_database_importer.lua",
     "kind": null
@@ -63197,6 +63232,11 @@
   {
     "symbol": "extract_drp",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/importers/drp_importer.lua",
+    "kind": null
+  },
+  {
+    "symbol": "extract_entrypoint",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -63230,6 +63270,11 @@
     "kind": null
   },
   {
+    "symbol": "extract_module_list_from_command_implementations",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
     "symbol": "extract_parent_id",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/core/commands/match_frame.lua",
     "kind": null
@@ -63242,6 +63287,11 @@
   {
     "symbol": "extract_reel_name",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media_relinker.lua",
+    "kind": null
+  },
+  {
+    "symbol": "extract_return_binding",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -69555,6 +69605,11 @@
     "kind": null
   },
   {
+    "symbol": "main",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
+    "kind": null
+  },
+  {
     "symbol": "makeTreeItemId",
     "file": "/Users/joe/Local/jve-spec-kit-claude/src/lua/qt_bindings/view_bindings.cpp",
     "kind": null
@@ -70395,18 +70450,8 @@
     "kind": null
   },
   {
-    "symbol": "out",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
-    "kind": null
-  },
-  {
     "symbol": "out_file",
     "file": "/Users/joe/Local/jve-spec-kit-claude/tools/symbol_index_from_tags.py",
-    "kind": null
-  },
-  {
-    "symbol": "out_path",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -71987,6 +72032,11 @@
   {
     "symbol": "read_file",
     "file": "/Users/joe/Local/jve-spec-kit-claude/tests/test_schema_sql_portability.lua",
+    "kind": null
+  },
+  {
+    "symbol": "read_text",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
@@ -73952,6 +74002,11 @@
   {
     "symbol": "scalar",
     "file": "/Users/joe/Local/jve-spec-kit-claude/tests/test_import_undo_removes_sequence.lua",
+    "kind": null
+  },
+  {
+    "symbol": "scan_command_module",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tools/command_index.py",
     "kind": null
   },
   {
