@@ -2,6 +2,7 @@ local M = {}
 local Clip = require('models.clip')
 local Sequence = require('models.sequence') -- Added
 local Rational = require("core.rational") -- Added
+local insert_selected_clip_into_timeline = require("core.clip_insertion")
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["CreateClip"] = function(command)
@@ -90,44 +91,89 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local source_in_rational = Rational.new(raw_source_in_frame, fps_num, fps_den)
         local source_out_rational = Rational.new(raw_source_out_frame, fps_num, fps_den)
 
-        local clip = Clip.create("Timeline Clip", media_id, {
+        local clip_payload = {
+            role = "video",
+            media_id = media_id,
+            master_clip_id = master_clip_id,
             project_id = project_id_param or (master_clip and master_clip.project_id),
-            track_id = track_id,
-            owner_sequence_id = sequence_id, -- Use the fetched sequence_id
-            parent_clip_id = master_clip_id,
-            source_sequence_id = master_clip and master_clip.source_sequence_id,
-            
-            -- Pass Rational objects
-            timeline_start = timeline_start_rational,
             duration = duration_rational,
             source_in = source_in_rational,
             source_out = source_out_rational,
-            
-            -- Explicitly pass rate to override defaults
-            rate_num = fps_num,
-            rate_den = fps_den,
-            
-            enabled = true,
-            offline = master_clip and master_clip.offline,
-        })
+            clip_name = "Timeline Clip"
+        }
 
-        command:set_parameter("clip_id", clip.id)
-        if master_clip_id and master_clip_id ~= "" then
-            command:set_parameter("master_clip_id", master_clip_id)
-        end
-        if project_id_param then
-            command:set_parameter("project_id", project_id_param)
-        elseif master_clip and master_clip.project_id then
-            command:set_parameter("project_id", master_clip.project_id)
-        end
+        local selected_clip = {
+            video = clip_payload
+        }
 
-        if clip:save(db) then
-            print(string.format("Created clip with ID: %s on track %s at %s", clip.id, track_id, tostring(timeline_start_rational)))
+        function selected_clip:has_video()
             return true
-        else
-            print("WARNING: Failed to save clip")
+        end
+
+        function selected_clip:has_audio()
             return false
         end
+
+        function selected_clip:audio_channel_count()
+            return 0
+        end
+
+        local function target_video_track(_, index)
+            assert(index == 0, "CreateClip: unexpected video track index")
+            return {id = track_id}
+        end
+
+        local function target_audio_track(_, index)
+            assert(false, "CreateClip: unexpected audio track index " .. tostring(index))
+        end
+
+        local function insert_clip(_, payload, target_track, pos)
+            local insert_time = assert(pos, "CreateClip: missing insert position")
+            local insert_track_id = assert(target_track and target_track.id, "CreateClip: missing target track id")
+            local clip = Clip.create(payload.clip_name or "Timeline Clip", payload.media_id, {
+                project_id = payload.project_id,
+                track_id = insert_track_id,
+                owner_sequence_id = sequence_id,
+                parent_clip_id = payload.master_clip_id,
+                source_sequence_id = master_clip and master_clip.source_sequence_id,
+                timeline_start = insert_time,
+                duration = payload.duration,
+                source_in = payload.source_in,
+                source_out = payload.source_out,
+                rate_num = fps_num,
+                rate_den = fps_den,
+                enabled = true,
+                offline = master_clip and master_clip.offline,
+            })
+
+            command:set_parameter("clip_id", clip.id)
+            if payload.master_clip_id and payload.master_clip_id ~= "" then
+                command:set_parameter("master_clip_id", payload.master_clip_id)
+            end
+            if project_id_param then
+                command:set_parameter("project_id", project_id_param)
+            elseif master_clip and master_clip.project_id then
+                command:set_parameter("project_id", master_clip.project_id)
+            end
+
+            assert(clip:save(db), "CreateClip: failed to save clip")
+            return {id = clip.id, role = payload.role, time_offset = 0}
+        end
+
+        local sequence_proxy = {
+            target_video_track = target_video_track,
+            target_audio_track = target_audio_track,
+            insert_clip = insert_clip
+        }
+
+        insert_selected_clip_into_timeline({
+            selected_clip = selected_clip,
+            sequence = sequence_proxy,
+            insert_pos = timeline_start_rational
+        })
+
+        print(string.format("Created clip with ID: %s on track %s at %s", command:get_parameter("clip_id"), track_id, tostring(timeline_start_rational)))
+        return true
     end
 
     return {

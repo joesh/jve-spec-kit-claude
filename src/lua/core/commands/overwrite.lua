@@ -5,6 +5,7 @@ local Rational = require("core.rational")
 local rational_helpers = require("core.command_rational_helpers")
 local clip_mutator = require("core.clip_mutator")
 local uuid = require("uuid")
+local insert_selected_clip_into_timeline = require("core.clip_insertion")
 local timeline_state
 do
     local status, mod = pcall(require, 'ui.timeline.timeline_state')
@@ -133,103 +134,146 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, msg
         end
 
-        -- Resolve Occlusions (Trim/Delete existing clips)
-        local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_occlusions(db, {
-            track_id = track_id,
-            timeline_start = overwrite_time_rat,
-            duration = duration_rat,
-            exclude_clip_id = nil -- Overwrite replaces everything under it
-        })
-        
-        if not ok_occ then
-            local msg = string.format("Overwrite: resolve_occlusions failed: %s", tostring(err_occ))
-            set_last_error(msg)
-            return false, msg
-        end
-        
+        local clip_name = command:get_parameter("clip_name") or (master_clip and master_clip.name) or "Overwrite Clip"
         local existing_clip_id = command:get_parameter("clip_id")
-        local clip_opts = {
-            id = existing_clip_id or uuid.generate(),
+        local clip_payload = {
+            role = "video",
+            media_id = media_id,
+            master_clip_id = master_clip_id,
             project_id = project_id,
-            track_id = track_id,
-            owner_sequence_id = sequence_id,
-            parent_clip_id = master_clip_id,
-            source_sequence_id = master_clip and master_clip.source_sequence_id,
-            timeline_start = overwrite_time_rat,
             duration = duration_rat,
             source_in = source_in_rat,
             source_out = source_out_rat,
-            enabled = true,
-            offline = master_clip and master_clip.offline,
-            rate_num = media_fps_num,
-            rate_den = media_fps_den,
+            clip_name = clip_name,
+            clip_id = existing_clip_id
         }
-        local clip_name = command:get_parameter("clip_name") or (master_clip and master_clip.name) or "Overwrite Clip"
-        local clip_to_insert = Clip.create(clip_name, media_id, clip_opts)
 
-        command:set_parameter("clip_id", clip_to_insert.id)
-        if master_clip_id and master_clip_id ~= "" then
-            command:set_parameter("master_clip_id", master_clip_id)
-        end
-        if project_id_param then
-            command:set_parameter("project_id", project_id_param)
-        elseif master_clip and master_clip.project_id then
-            command:set_parameter("project_id", master_clip.project_id)
+        local selected_clip = {
+            video = clip_payload
+        }
+
+        function selected_clip:has_video()
+            return true
         end
 
-        -- Add the new clip to the planned mutations
-        table.insert(planned_mutations, clip_mutator.plan_insert(clip_to_insert))
-
-        -- Apply all planned mutations within the transaction
-        local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
-        if not ok_apply then
-            return false, "Failed to apply clip_mutator actions: " .. tostring(apply_err)
+        function selected_clip:has_audio()
+            return false
         end
 
-        -- Populate timeline mutation bucket for UI without falling back to reloads
-        for _, mut in ipairs(planned_mutations) do
-            if mut.type == "delete" then
-                command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
-            elseif mut.type == "update" then
-                local updated = Clip.load_optional(mut.clip_id, db)
-                if updated then
-                    local payload = {
-                        clip_id = updated.id,
-                        track_id = updated.track_id,
-                        track_sequence_id = updated.owner_sequence_id or sequence_id,
-                        start_value = updated.timeline_start and updated.timeline_start.frames,
-                        duration_value = updated.duration and updated.duration.frames,
-                        source_in_value = updated.source_in and updated.source_in.frames,
-                        source_out_value = updated.source_out and updated.source_out.frames,
-                        enabled = updated.enabled
-                    }
-                    command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                end
-            elseif mut.type == "insert" then
-                local payload = command_helper.clip_insert_payload(clip_to_insert, sequence_id)
-                if payload then
-                    command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
+        function selected_clip:audio_channel_count()
+            return 0
+        end
+
+        local function target_video_track(_, index)
+            assert(index == 0, "Overwrite: unexpected video track index")
+            return {id = track_id}
+        end
+
+        local function target_audio_track(_, index)
+            assert(false, "Overwrite: unexpected audio track index " .. tostring(index))
+        end
+
+        local function insert_clip(_, payload, target_track, pos)
+            local overwrite_time = assert(pos, "Overwrite: missing overwrite position")
+            local insert_track_id = assert(target_track and target_track.id, "Overwrite: missing target track id")
+            local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_occlusions(db, {
+                track_id = insert_track_id,
+                timeline_start = overwrite_time,
+                duration = payload.duration,
+                exclude_clip_id = nil
+            })
+            assert(ok_occ, string.format("Overwrite: resolve_occlusions failed: %s", tostring(err_occ)))
+
+            local clip_opts = {
+                id = payload.clip_id or uuid.generate(),
+                project_id = payload.project_id,
+                track_id = insert_track_id,
+                owner_sequence_id = sequence_id,
+                parent_clip_id = payload.master_clip_id,
+                source_sequence_id = master_clip and master_clip.source_sequence_id,
+                timeline_start = overwrite_time,
+                duration = payload.duration,
+                source_in = payload.source_in,
+                source_out = payload.source_out,
+                enabled = true,
+                offline = master_clip and master_clip.offline,
+                rate_num = media_fps_num,
+                rate_den = media_fps_den,
+            }
+            local clip_to_insert = Clip.create(payload.clip_name or "Overwrite Clip", payload.media_id, clip_opts)
+
+            command:set_parameter("clip_id", clip_to_insert.id)
+            if payload.master_clip_id and payload.master_clip_id ~= "" then
+                command:set_parameter("master_clip_id", payload.master_clip_id)
+            end
+            if project_id_param then
+                command:set_parameter("project_id", project_id_param)
+            elseif master_clip and master_clip.project_id then
+                command:set_parameter("project_id", master_clip.project_id)
+            end
+
+            table.insert(planned_mutations, clip_mutator.plan_insert(clip_to_insert))
+
+            local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
+            assert(ok_apply, "Failed to apply clip_mutator actions: " .. tostring(apply_err))
+
+            for _, mut in ipairs(planned_mutations) do
+                if mut.type == "delete" then
+                    command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
+                elseif mut.type == "update" then
+                    local updated = Clip.load_optional(mut.clip_id, db)
+                    if updated then
+                        local payload_update = {
+                            clip_id = updated.id,
+                            track_id = updated.track_id,
+                            track_sequence_id = updated.owner_sequence_id or sequence_id,
+                            start_value = updated.timeline_start and updated.timeline_start.frames,
+                            duration_value = updated.duration and updated.duration.frames,
+                            source_in_value = updated.source_in and updated.source_in.frames,
+                            source_out_value = updated.source_out and updated.source_out.frames,
+                            enabled = updated.enabled
+                        }
+                        command_helper.add_update_mutation(command, payload_update.track_sequence_id or sequence_id, payload_update)
+                    end
+                elseif mut.type == "insert" then
+                    local insert_payload = command_helper.clip_insert_payload(clip_to_insert, sequence_id)
+                    if insert_payload then
+                        command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
+                    end
                 end
             end
-        end
-        
-        -- Record mutations for undo AFTER successful commit
-        command:set_parameter("executed_mutations", planned_mutations)
-        
-        if #copied_properties > 0 then
-            command_helper.delete_properties_for_clip(clip_to_insert.id)
-            if not command_helper.insert_properties_for_clip(clip_to_insert.id, copied_properties) then
-                print(string.format("WARNING: Overwrite: Failed to copy properties from master clip %s", tostring(master_clip_id)))
+
+            command:set_parameter("executed_mutations", planned_mutations)
+
+            if #copied_properties > 0 then
+                command_helper.delete_properties_for_clip(clip_to_insert.id)
+                if not command_helper.insert_properties_for_clip(clip_to_insert.id, copied_properties) then
+                    print(string.format("WARNING: Overwrite: Failed to copy properties from master clip %s", tostring(master_clip_id)))
+                end
             end
+
+            return {id = clip_to_insert.id, role = payload.role, time_offset = 0}
         end
-        
+
+        local sequence = {
+            target_video_track = target_video_track,
+            target_audio_track = target_audio_track,
+            insert_clip = insert_clip
+        }
+
+        insert_selected_clip_into_timeline({
+            selected_clip = selected_clip,
+            sequence = sequence,
+            insert_pos = overwrite_time_rat
+        })
+
         local advance_playhead = command:get_parameter("advance_playhead")
         if advance_playhead and timeline_state then
             timeline_state.set_playhead_position(overwrite_time_rat + duration_rat)
         end
 
         print(string.format("✅ Overwrote at %s (id: %s)",
-            tostring(overwrite_time_rat), tostring(clip_to_insert.id)))
+            tostring(overwrite_time_rat), tostring(command:get_parameter("clip_id"))))
         return true
     end
 

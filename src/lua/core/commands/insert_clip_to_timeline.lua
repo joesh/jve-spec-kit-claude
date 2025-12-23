@@ -4,6 +4,7 @@ local Sequence = require('models.sequence')
 local Media = require('models.media')
 local Rational = require("core.rational")
 local command_helper = require("core.command_helper")
+local insert_selected_clip_into_timeline = require("core.clip_insertion")
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["InsertClipToTimeline"] = function(command)
@@ -105,50 +106,96 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
-        local clip = Clip.create("Clip", media_id, {
+        local clip_payload = {
+            role = "video",
+            media_id = media_id,
+            master_clip_id = master_clip_id,
             project_id = project_id_param or (master_clip and master_clip.project_id),
-            track_id = track_id,
-            owner_sequence_id = sequence_id,
-            parent_clip_id = master_clip_id,
-            source_sequence_id = master_clip and master_clip.source_sequence_id,
-            
-            -- Pass Rational objects
-            timeline_start = timeline_start_rational,
             duration = clip_duration_rational,
             source_in = clip_source_in_rational,
             source_out = clip_source_out_rational,
-            
-            -- Explicitly pass rate to override defaults
-            rate_num = sequence_fps_num,
-            rate_den = sequence_fps_den,
-            
-            enabled = true,
-            offline = master_clip and master_clip.offline,
-        })
+            clip_name = "Clip"
+        }
 
-        command:set_parameter("clip_id", clip.id)
-        if master_clip_id and master_clip_id ~= "" then
-            command:set_parameter("master_clip_id", master_clip_id)
-        end
-        if project_id_param then
-            command:set_parameter("project_id", project_id_param)
-        elseif master_clip and master_clip.project_id then
-            command:set_parameter("project_id", master_clip.project_id)
+        local selected_clip = {
+            video = clip_payload
+        }
+
+        function selected_clip:has_video()
+            return true
         end
 
-        if clip:save(db) then
+        function selected_clip:has_audio()
+            return false
+        end
+
+        function selected_clip:audio_channel_count()
+            return 0
+        end
+
+        local function target_video_track(_, index)
+            assert(index == 0, "InsertClipToTimeline: unexpected video track index")
+            return {id = track_id}
+        end
+
+        local function target_audio_track(_, index)
+            assert(false, "InsertClipToTimeline: unexpected audio track index " .. tostring(index))
+        end
+
+        local function insert_clip(_, payload, target_track, pos)
+            local insert_time = assert(pos, "InsertClipToTimeline: missing insert position")
+            local insert_track_id = assert(target_track and target_track.id, "InsertClipToTimeline: missing target track id")
+            local clip = Clip.create(payload.clip_name or "Clip", payload.media_id, {
+                project_id = payload.project_id,
+                track_id = insert_track_id,
+                owner_sequence_id = sequence_id,
+                parent_clip_id = payload.master_clip_id,
+                source_sequence_id = master_clip and master_clip.source_sequence_id,
+                timeline_start = insert_time,
+                duration = payload.duration,
+                source_in = payload.source_in,
+                source_out = payload.source_out,
+                rate_num = sequence_fps_num,
+                rate_den = sequence_fps_den,
+                enabled = true,
+                offline = master_clip and master_clip.offline,
+            })
+
+            command:set_parameter("clip_id", clip.id)
+            if payload.master_clip_id and payload.master_clip_id ~= "" then
+                command:set_parameter("master_clip_id", payload.master_clip_id)
+            end
+            if project_id_param then
+                command:set_parameter("project_id", project_id_param)
+            elseif master_clip and master_clip.project_id then
+                command:set_parameter("project_id", master_clip.project_id)
+            end
+
+            assert(clip:save(db), "InsertClipToTimeline: failed to save clip to timeline")
             if #copied_properties > 0 then
                 command_helper.delete_properties_for_clip(clip.id)
                 if not command_helper.insert_properties_for_clip(clip.id, copied_properties) then
                     print(string.format("WARNING: InsertClipToTimeline: Failed to copy properties from master clip %s", tostring(master_clip_id)))
                 end
             end
-            print(string.format("✅ Inserted clip %s to track %s at %s", clip.id, track_id, tostring(timeline_start_rational)))
-            return true
-        else
-            print("WARNING: Failed to save clip to timeline")
-            return false
+
+            return {id = clip.id, role = payload.role, time_offset = 0}
         end
+
+        local sequence_proxy = {
+            target_video_track = target_video_track,
+            target_audio_track = target_audio_track,
+            insert_clip = insert_clip
+        }
+
+        insert_selected_clip_into_timeline({
+            selected_clip = selected_clip,
+            sequence = sequence_proxy,
+            insert_pos = timeline_start_rational
+        })
+
+        print(string.format("✅ Inserted clip %s to track %s at %s", command:get_parameter("clip_id"), track_id, tostring(timeline_start_rational)))
+        return true
     end
 
     command_undoers["UndoInsertClipToTimeline"] = function(command)
@@ -187,4 +234,3 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 end
 
 return M
-

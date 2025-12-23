@@ -9,6 +9,7 @@ local Command = require("command")
 local uuid = require("uuid")
 local Clip = require("models.clip")
 local json = require("dkjson")
+local insert_selected_clip_into_timeline = require("core.clip_insertion")
 
 local project_browser = nil
 do
@@ -234,23 +235,25 @@ local function paste_timeline(payload)
         return false, "Clipboard is empty"
     end
 
-    local specs = {}
     local new_selection = {}
+    local tracks = database.load_tracks(active_sequence_id)
+    local track_lookup = {}
+    for _, track in ipairs(tracks) do
+        if track and track.id then
+            track_lookup[track.id] = track
+        end
+    end
 
     for _, clip_data in ipairs(clips) do
         if clip_data.track_id and (clip_data.media_id or clip_data.parent_clip_id) then
+            local track = assert(track_lookup[clip_data.track_id], "clipboard_actions.paste_timeline: missing track for clip")
+            local track_type = assert(track.track_type, "clipboard_actions.paste_timeline: missing track type")
 
             -- Deserialize Rational objects from JSON tables
-            local timeline_start = deserialize_rational(clip_data.timeline_start)
-            local duration = deserialize_rational(clip_data.duration)
-            local source_in = deserialize_rational(clip_data.source_in)
-            local source_out = deserialize_rational(clip_data.source_out)
-
-            if not timeline_start or not duration then
-                print(string.format("WARNING: Skipping clip %s - missing timing data",
-                                    clip_data.original_id or "unknown"))
-                goto continue
-            end
+            local timeline_start = assert(deserialize_rational(clip_data.timeline_start), "clipboard_actions.paste_timeline: missing timeline_start")
+            local duration = assert(deserialize_rational(clip_data.duration), "clipboard_actions.paste_timeline: missing duration")
+            local source_in = assert(deserialize_rational(clip_data.source_in), "clipboard_actions.paste_timeline: missing source_in")
+            local source_out = assert(deserialize_rational(clip_data.source_out), "clipboard_actions.paste_timeline: missing source_out")
 
             -- Calculate offset from reference point
             local offset_frames = clip_data.offset_frames or 0
@@ -263,63 +266,142 @@ local function paste_timeline(payload)
                 timeline_start.fps_denominator
             )
 
-            local clip_id = uuid.generate()
+            local insert_ids = {}
+            local payload = {
+                media_id = clip_data.media_id,
+                master_clip_id = clip_data.parent_clip_id,
+                project_id = project_id,
+                duration = duration,
+                source_in = source_in,
+                source_out = source_out,
+                clip_name = clip_data.name,
+                advance_playhead = false
+            }
 
-            local spec = {
-                command_type = "Overwrite",
-                parameters = {
-                    project_id = project_id,
-                    sequence_id = active_sequence_id,
-                    track_id = clip_data.track_id,
-                    media_id = clip_data.media_id,
-                    master_clip_id = clip_data.parent_clip_id,
-                    overwrite_time = overwrite_time,
-                    duration = duration,
-                    source_in = source_in,
-                    source_out = source_out,
-                    clip_name = clip_data.name,
-                    clip_id = clip_id,
-                    copied_properties = clip_data.copied_properties,
+            local selected_clip = {}
+            if track_type == "VIDEO" then
+                selected_clip.video = {
+                    role = "video",
+                    media_id = payload.media_id,
+                    master_clip_id = payload.master_clip_id,
+                    project_id = payload.project_id,
+                    duration = payload.duration,
+                    source_in = payload.source_in,
+                    source_out = payload.source_out,
+                    clip_name = payload.clip_name,
                     advance_playhead = false
                 }
+
+                function selected_clip:has_video()
+                    return true
+                end
+
+                function selected_clip:has_audio()
+                    return false
+                end
+
+                function selected_clip:audio_channel_count()
+                    return 0
+                end
+
+                function selected_clip:audio()
+                    assert(false, "clipboard_actions.paste_timeline: audio requested for video clip")
+                end
+            elseif track_type == "AUDIO" then
+                function selected_clip:has_video()
+                    return false
+                end
+
+                function selected_clip:has_audio()
+                    return true
+                end
+
+                function selected_clip:audio_channel_count()
+                    return 1
+                end
+
+                function selected_clip:audio(ch)
+                    assert(ch == 0, "clipboard_actions.paste_timeline: unexpected audio channel index")
+                    return {
+                        role = "audio",
+                        media_id = payload.media_id,
+                        master_clip_id = payload.master_clip_id,
+                        project_id = payload.project_id,
+                        duration = payload.duration,
+                        source_in = payload.source_in,
+                        source_out = payload.source_out,
+                        clip_name = payload.clip_name,
+                        advance_playhead = false,
+                        channel = ch
+                    }
+                end
+            else
+                assert(false, "clipboard_actions.paste_timeline: unsupported track type")
+            end
+
+            local function target_video_track(_, index)
+                assert(index == 0, "clipboard_actions.paste_timeline: unexpected video track index")
+                return track
+            end
+
+            local function target_audio_track(_, index)
+                assert(index == 0, "clipboard_actions.paste_timeline: unexpected audio track index")
+                return track
+            end
+
+            local function insert_clip(_, clip_payload, target_track, pos)
+                local clip_id = uuid.generate()
+                local cmd = assert(Command.create("Overwrite", project_id), "clipboard_actions.paste_timeline: failed to create command")
+                cmd:set_parameter("sequence_id", active_sequence_id)
+                cmd:set_parameter("track_id", assert(target_track and target_track.id, "clipboard_actions.paste_timeline: missing track id"))
+                assert(clip_payload.media_id or clip_payload.master_clip_id, "clipboard_actions.paste_timeline: missing payload media/master clip id")
+                if clip_payload.media_id then
+                    cmd:set_parameter("media_id", clip_payload.media_id)
+                end
+                cmd:set_parameter("master_clip_id", clip_payload.master_clip_id)
+                cmd:set_parameter("overwrite_time", assert(pos, "clipboard_actions.paste_timeline: missing insert position"))
+                cmd:set_parameter("duration", assert(clip_payload.duration, "clipboard_actions.paste_timeline: missing payload duration"))
+                cmd:set_parameter("source_in", assert(clip_payload.source_in, "clipboard_actions.paste_timeline: missing payload source_in"))
+                cmd:set_parameter("source_out", assert(clip_payload.source_out, "clipboard_actions.paste_timeline: missing payload source_out"))
+                cmd:set_parameter("project_id", project_id)
+                cmd:set_parameter("clip_id", clip_id)
+                if clip_payload.clip_name then
+                    cmd:set_parameter("clip_name", clip_payload.clip_name)
+                end
+                local result = command_manager.execute(cmd)
+                assert(result and result.success, string.format("clipboard_actions.paste_timeline: paste failed: %s", result and result.error_message or "unknown error"))
+                insert_ids[#insert_ids + 1] = clip_id
+                return {id = clip_id, role = clip_payload.role, time_offset = 0}
+            end
+
+            local sequence = {
+                target_video_track = target_video_track,
+                target_audio_track = target_audio_track,
+                insert_clip = insert_clip
             }
-            specs[#specs + 1] = spec
-            new_selection[#new_selection + 1] = {id = clip_id}
+
+            insert_selected_clip_into_timeline({
+                selected_clip = selected_clip,
+                sequence = sequence,
+                insert_pos = overwrite_time
+            })
+
+            for _, clip_id in ipairs(insert_ids) do
+                new_selection[#new_selection + 1] = {id = clip_id}
+            end
         end
         ::continue::
     end
 
-    if #specs == 0 then
+    if #new_selection == 0 then
         return false, "Clipboard clips missing media references"
-    end
-
-    local result
-    if #specs == 1 then
-        local spec = specs[1]
-        local cmd = Command.create(spec.command_type, project_id)
-        for key, value in pairs(spec.parameters) do
-            cmd:set_parameter(key, value)
-        end
-        result = command_manager.execute(cmd)
-    else
-        local commands_json = json.encode(specs)
-        local batch_cmd = Command.create("BatchCommand", project_id)
-        batch_cmd:set_parameter("commands_json", commands_json)
-        batch_cmd:set_parameter("sequence_id", active_sequence_id)
-        batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
-        result = command_manager.execute(batch_cmd)
-    end
-
-    if not result or not result.success then
-        local message = (result and result.error_message) or "Paste failed"
-        return false, message
     end
 
     if timeline_state and timeline_state.set_selection then
         timeline_state.set_selection(new_selection)
     end
 
-    print(string.format("✅ Pasted %d timeline clip(s)", #specs))
+    print(string.format("✅ Pasted %d timeline clip(s)", #new_selection))
     return true
 end
 

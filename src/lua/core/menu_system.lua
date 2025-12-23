@@ -832,121 +832,15 @@ local function create_action_callback(command_name, params)
             end
         elseif command_name == "Insert" then
             -- Timeline > Insert menu item (same logic as F9)
-            if not timeline_panel then
-                logger.warn("menu", "Insert: timeline panel not available")
-                return
-            end
-
-            -- Get selected media from project browser
-            if not project_browser or not project_browser.get_selected_media then
-                logger.warn("menu", "Insert: project browser not available")
-                return
-            end
-
-            local selected_clip = project_browser.get_selected_media()
-            if not selected_clip then
-                logger.warn("menu", "Insert: no media selected in project browser")
-                return
-            end
-
-            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
-            if not media_id then
-                logger.warn("menu", "Insert: selected clip missing media reference")
-                return
-            end
-
-            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
-
-            local timeline_state = timeline_panel.get_state()
-            local playhead_value = timeline_state.get_playhead_position()
-
-            local Command = require("command")
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
-            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
-            assert(project_id and project_id ~= "", "menu_system: Insert missing active project_id")
-            assert(sequence_id and sequence_id ~= "", "menu_system: Insert missing active sequence_id")
-            local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
-            assert(track_id and track_id ~= "", "menu_system: Insert missing active video track_id")
-
-            local cmd = Command.create("Insert", project_id)
-            cmd:set_parameter("master_clip_id", selected_clip.clip_id)
-            cmd:set_parameter("media_id", media_id)
-            cmd:set_parameter("sequence_id", sequence_id)
-            cmd:set_parameter("track_id", track_id)
-            cmd:set_parameter("insert_time", playhead_value)
-            cmd:set_parameter("duration", clip_duration)
-            cmd:set_parameter("source_in", 0)
-            cmd:set_parameter("source_out", clip_duration)
-            cmd:set_parameter("project_id", project_id)
-            cmd:set_parameter("advance_playhead", true)
-
-            local success, result = pcall(function()
-                return command_manager.execute(cmd)
-            end)
-            if success and result and result.success then
-                logger.info("menu", string.format("Insert: added %s at %s", selected_clip.name or media_id, tostring(playhead_value)))
-            else
-                logger.error("menu", "Insert failed: " .. tostring(result and result.error_message or "unknown error"))
-            end
+            assert(timeline_panel, "menu_system: Insert timeline panel not available")
+            assert(project_browser and project_browser.insert_selected_to_timeline, "menu_system: Insert project browser not available")
+            project_browser.insert_selected_to_timeline("Insert", {advance_playhead = true})
 
         elseif command_name == "Overwrite" then
             -- Timeline > Overwrite menu item (same logic as F10)
-            if not timeline_panel then
-                logger.warn("menu", "Overwrite: timeline panel not available")
-                return
-            end
-
-            -- Get selected media from project browser
-            if not project_browser or not project_browser.get_selected_media then
-                logger.warn("menu", "Overwrite: project browser not available")
-                return
-            end
-
-            local selected_clip = project_browser.get_selected_media()
-            if not selected_clip then
-                logger.warn("menu", "Overwrite: no media selected in project browser")
-                return
-            end
-
-            local media_id = selected_clip.media_id or (selected_clip.media and selected_clip.media.id)
-            if not media_id then
-                logger.warn("menu", "Overwrite: selected clip missing media reference")
-                return
-            end
-
-            local clip_duration = selected_clip.duration or (selected_clip.media and selected_clip.media.duration) or 0
-
-            local timeline_state = timeline_panel.get_state()
-            local playhead_value = timeline_state.get_playhead_position()
-
-            local Command = require("command")
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
-            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
-            assert(project_id and project_id ~= "", "menu_system: Overwrite missing active project_id")
-            assert(sequence_id and sequence_id ~= "", "menu_system: Overwrite missing active sequence_id")
-            local track_id = timeline_state.get_default_video_track_id and timeline_state.get_default_video_track_id() or nil
-            assert(track_id and track_id ~= "", "menu_system: Overwrite missing active video track_id")
-
-            local cmd = Command.create("Overwrite", project_id)
-            cmd:set_parameter("master_clip_id", selected_clip.clip_id)
-            cmd:set_parameter("media_id", media_id)
-            cmd:set_parameter("sequence_id", sequence_id)
-            cmd:set_parameter("track_id", track_id)
-            cmd:set_parameter("overwrite_time", playhead_value)
-            cmd:set_parameter("duration", clip_duration)
-            cmd:set_parameter("source_in", 0)
-            cmd:set_parameter("source_out", clip_duration)
-            cmd:set_parameter("project_id", project_id)
-            cmd:set_parameter("advance_playhead", true)
-
-            local success, result = pcall(function()
-                return command_manager.execute(cmd)
-            end)
-            if success and result and result.success then
-                logger.info("menu", string.format("Overwrite: added %s at %s", selected_clip.name or media_id, tostring(playhead_value)))
-            else
-                logger.error("menu", "Overwrite failed: " .. tostring(result and result.error_message or "unknown error"))
-            end
+            assert(timeline_panel, "menu_system: Overwrite timeline panel not available")
+            assert(project_browser and project_browser.insert_selected_to_timeline, "menu_system: Overwrite project browser not available")
+            project_browser.insert_selected_to_timeline("Overwrite", {advance_playhead = true})
 
         elseif command_name == "TimelineZoomIn" then
             -- Zoom in: decrease viewport duration (show less time)

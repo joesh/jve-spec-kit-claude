@@ -104,6 +104,31 @@ end
 -- Public API
 -- ============================================================================
 
+local function find_media_id_by_path(db, file_path)
+    if not db or not file_path or file_path == "" then
+        return nil
+    end
+    if type(db.prepare) ~= "function" then
+        return nil
+    end
+
+    local stmt = db:prepare("SELECT id FROM media WHERE file_path = ?")
+    if not stmt then
+        return nil
+    end
+
+    stmt:bind_value(1, file_path)
+
+    local media_id = nil
+    if stmt:exec() and stmt:next() then
+        media_id = stmt:value(0)
+    end
+
+    stmt:finalize()
+
+    return media_id
+end
+
 --- Probe media file and extract metadata
 -- @param file_path string Absolute path to media file
 -- @return table|nil Media metadata table, or nil on error
@@ -186,8 +211,9 @@ function M.import_media(file_path, db, project_id, existing_media_id)
         return nil, nil, "Failed to probe media file: " .. (err or "unknown error")
     end
 
-    -- Generate media ID
-    local media_id = existing_media_id or uuid.generate_with_prefix("media")
+    -- Reuse existing media row when file_path is already present.
+    local existing_id = find_media_id_by_path(db, file_path)
+    local media_id = existing_id or existing_media_id or uuid.generate_with_prefix("media")
 
     -- Extract filename from path
     local filename = file_path:match("([^/\\]+)$") or file_path
