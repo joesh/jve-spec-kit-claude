@@ -322,39 +322,37 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
         hub_strength = degree[central] / max(1, max(degree.values()))
     orchestration = (hub_strength >= 0.4 and not symmetric_small)
 
+    # Initialize quality tracking
+    has_quality_issues = False
+    quality_issues = []
+
     if orchestration:
         sentences.append(f"This cluster implements the algorithm described in {central}.")
 
-        # Check if central function has code quality issues
+        # Collect quality issues for later (we'll report them after file location)
         central_loc = func_loc.get(central, 0)
         central_fanout = fanout.get(central, 0)
         central_nested = 0
         if call_graph and central in call_graph:
             central_nested = call_graph[central].get('nested_functions', 0)
 
-        issues = []
-
         # Issue 1: High LOC per call ratio (contains low-level code mixed with orchestration)
         if central_fanout > 0:
             loc_per_call = central_loc / central_fanout
             if loc_per_call > 15:
-                issues.append(f"contains substantial low-level implementation ({central_loc} LOC, {central_fanout} calls)")
+                quality_issues.append(f"contains substantial low-level implementation ({central_loc} LOC, {central_fanout} calls)")
 
         # Issue 2: Excessive nested functions (hard to read, should be extracted)
         if central_nested >= 6:  # Lowered threshold - even 6 nested functions is quite bad
-            issues.append(f"defines {central_nested} nested functions, making it difficult to read and test")
+            quality_issues.append(f"defines {central_nested} nested functions")
 
         # Issue 3: Very high LOC even if calls are many (just too big overall)
         # Only check LOC if we have valid data (> 0)
         if central_loc > 80:
-            issues.append(f"is very large ({central_loc} LOC)")
+            quality_issues.append(f"spans {central_loc} LOC")
 
-        if issues:
-            issue_str = "; ".join(issues)
-            sentences.append(
-                f"{central} {issue_str}; "
-                f"extracting these details into helper functions would improve readability and testability."
-            )
+        # Store quality issues for later (after file location)
+        has_quality_issues = len(quality_issues) > 0
     elif salient_root and salience >= CONTEXT_SALIENCE_THRESHOLD:
         sentences.append(
             f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage."
@@ -364,23 +362,35 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
             f"This cluster is organized around {central}, with cohesion driven by shared local interactions rather than a single dominant context root."
         )
 
+    # File location (immediately after cluster identity)
     if dom_file and dom_file != "<unknown>":
         if dom_pct == 100:
             sentences.append(f"All logic resides in {dom_file}.")
         else:
             sentences.append(f"{dom_pct}% of logic resides in {dom_file}.")
 
+    # Quality issues (after file location, before structural analysis)
+    if orchestration and has_quality_issues:
+        quality_str = ", ".join(quality_issues)
+        sentences.append(f"The hub function {quality_str}, making it difficult to read and test.")
+
     fragile, boundary = _fragile_edges(internal)
 
     if fragile and boundary:
         sentences.append(
-            f"Fragile edges concentrate around {boundary}, which is the lowest-structural-cost seam to peel responsibilities away from the cluster."
+            f"Fragile edges concentrate around {boundary}, the lowest-cost extraction seam."
         )
 
         if boundary == central:
-            sentences.append(
-                f"{central} is the structural hub of this cluster; instead of extracting {central} itself, split responsibilities inside {central} using (a) module-scope helper functions called by {central}, and (b) small nested local helpers for one-off substeps."
-            )
+            # Build refactoring recommendation based on quality issues
+            if has_quality_issues:
+                sentences.append(
+                    f"The hub is the structural center; refactor by extracting logic into (a) module-scope helper functions, and (b) nested local helpers for one-off substeps."
+                )
+            else:
+                sentences.append(
+                    f"{central} is the structural hub; instead of extracting it, split responsibilities inside using (a) module-scope helpers, and (b) nested local helpers for one-off substeps."
+                )
         else:
             sentences.append(
                 f"A first extraction candidate is the responsibility centered on {boundary}; it touches the rest of the cluster mostly through weak ties, so it is a good candidate to separate and reattach with low risk."
