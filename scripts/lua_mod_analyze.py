@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-# lua_mod_analyze_cluster_centric_sentences_fragile_v12.py
+# lua_mod_analyze_cluster_centric_sentences_fragile_v14.py
 #
-# Canonical hub phrasing + helper-candidate sentences
+# v14 change:
+# - Context root is only named in explanations if it appears in >=2 non-hub functions
+# - Otherwise explanation falls back to coordination/orchestration language
+#
+# Clustering and coupling unchanged from v13.
 
 import sys
 import re
@@ -13,6 +17,8 @@ CLUSTER_THRESHOLD = 0.35
 FRAGILE_MARGIN = 0.10
 CONTEXT_SALIENCE_THRESHOLD = 1.5
 GLOBAL_CONTEXT_COVERAGE_MAX = 0.25
+SMALL_CLUSTER_MAX = 4
+LEAF_LOC_MAX = 12
 
 LUA_RUNTIME_ROOTS = {
     "debug", "string", "table", "math", "io",
@@ -172,18 +178,29 @@ def analyze(paths):
             degree[b] += 1
         central = degree.most_common(1)[0][0] if degree else sorted(cluster)[0]
 
+        if len(cluster) <= 3:
+            print("Analysis:")
+            print("This cluster forms a tight, low-complexity unit with no obvious refactor pressure.")
+            continue
+
         cluster_root_counts = Counter()
         for fn in cluster:
             for r in context_roots.get(fn, []):
                 cluster_root_counts[r] += 1
 
-        salient_root = None
-        best_salience = 0.0
-        coordination = False
-
+        # NEW: only consider roots used by >=2 non-hub functions
+        eligible_roots = {}
         for r, cnt in cluster_root_counts.items():
             if r in LUA_RUNTIME_ROOTS:
                 continue
+            users = [fn for fn in cluster if r in context_roots.get(fn, set()) and fn != central]
+            if len(users) >= 2:
+                eligible_roots[r] = cnt
+
+        salient_root = None
+        best_salience = 0.0
+
+        for r, cnt in eligible_roots.items():
             global_cov = global_root_counts[r] / total_functions
             if global_cov > GLOBAL_CONTEXT_COVERAGE_MAX:
                 continue
@@ -196,16 +213,15 @@ def analyze(paths):
                 best_salience = salience
                 salient_root = r
 
-        if salient_root:
-            hub_hits = 0
-            total_hits = 0
-            for fn in cluster:
-                if salient_root in context_roots.get(fn, []):
-                    total_hits += 1
-                    if fn == central or fanout.get(fn,0) >= fanout.get(central,0)*0.7:
-                        hub_hits += 1
-            if total_hits and hub_hits / total_hits >= 0.6:
-                coordination = True
+        symmetric_small = len(cluster) <= SMALL_CLUSTER_MAX and max(fanout.get(f,0) for f in cluster) <= 2
+
+        print("Analysis:")
+        if salient_root and best_salience >= CONTEXT_SALIENCE_THRESHOLD and not symmetric_small:
+            print(f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage.")
+        elif symmetric_small:
+            print("This cluster reflects tightly related domain logic with symmetric responsibilities across its functions.")
+        else:
+            print(f"This cluster is organized around {central}, with cohesion driven primarily by orchestration and coordination logic.")
 
         total = sum(func_loc.get(f,0) for f in cluster)
         by_file = Counter()
@@ -214,18 +230,8 @@ def analyze(paths):
         dom_file, dom_loc = by_file.most_common(1)[0]
         dom_pct = int(round(100 * dom_loc / total)) if total else 0
 
-        print("Analysis:")
-        if coordination:
-            print(f"This cluster is organized around {central}, with cohesion driven primarily by orchestration and registration logic rather than a shared domain context.")
-        elif salient_root and best_salience >= CONTEXT_SALIENCE_THRESHOLD:
-            print(f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage.")
-        else:
-            print(f"This cluster is organized around {central}, with cohesion driven primarily by internal call structure rather than shared context.")
-
         if dom_pct >= 67:
             print(f"Most logic resides in {dom_file} ({dom_pct}% of cluster LOC), indicating an existing structural center.")
-        else:
-            print(f"Logic is split across multiple files, with no single file fully dominating the cluster.")
 
         if internal:
             weights = [c for _,_,c in internal]
@@ -233,44 +239,19 @@ def analyze(paths):
             fragile = [(a,b,c) for (a,b,c) in internal
                        if c < median or abs(c - CLUSTER_THRESHOLD) <= FRAGILE_MARGIN]
 
-            if fragile:
-                funcs = Counter()
-                for a,b,_ in fragile:
-                    funcs[a] += 1
-                    funcs[b] += 1
-                boundary = funcs.most_common(1)[0][0]
+            funcs = Counter()
+            for a,b,_ in fragile:
+                funcs[a] += 1
+                funcs[b] += 1
+            boundary = funcs.most_common(1)[0][0] if funcs else None
 
-                if boundary == central:
-                    if salient_root and not coordination:
-                        print(
-                            f"{boundary} is the structural hub of this cluster; weaker connections here suggest "
-                            f"an opportunity to factor {salient_root}-related responsibilities into well-named "
-                            f"helper functions that are called by {boundary}."
-                        )
-                    else:
-                        print(
-                            f"{boundary} is the structural hub of this cluster; weaker connections here suggest "
-                            f"an opportunity to decompose responsibilities into well-named helper functions "
-                            f"that are called by {boundary}."
-                        )
+            if boundary and boundary == central:
+                print(f"{boundary} is the structural hub of this cluster; weaker connections here suggest an opportunity to factor responsibilities into well-named helper functions that are called by {boundary}.")
 
-                    helpers = Counter()
-                    for a,b,_ in fragile:
-                        other = b if a == central else a
-                        if other != central:
-                            helpers[other] += 1
-                    if helpers:
-                        names = ", ".join(n for n,_ in helpers.most_common(3))
-                        print(
-                            f"Likely helper candidates include {names}, "
-                            f"which form the weakest boundaries around {boundary}."
-                        )
-
-                else:
-                    print(
-                        f"Cohesion weakens at the boundary involving {boundary}, "
-                        f"suggesting this function could be extracted with relatively low structural cost."
-                    )
+                helpers = [f for f in funcs if f != boundary and func_loc.get(f,0) > LEAF_LOC_MAX]
+                if helpers:
+                    names = ", ".join(helpers[:3])
+                    print(f"Likely helper candidates include {names}, which form the weakest boundaries around {boundary}.")
 
         print("Files:")
         for f, loc in by_file.items():
@@ -286,6 +267,6 @@ def analyze(paths):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v12.py <path> [...]")
+        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v14.py <path> [...]")
         sys.exit(1)
     analyze([Path(p) for p in sys.argv[1:]])
