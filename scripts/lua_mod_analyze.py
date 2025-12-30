@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
-# lua_mod_analyze_cluster_centric_sentences.py
+# lua_mod_analyze_cluster_centric_sentences_fragile_v9.py
 #
-# Clean, cluster-centric analyzer with sentence-style analysis.
-# Builds on the previous clean version and adds deterministic summaries.
+# Changes from v8:
+# - Excludes Lua runtime / standard-library roots from explanatory attribution
+#   (debug, string, table, math, etc.)
+# - Still uses rarity-weighted + global-coverage-gated salience
+# - No changes to clustering or coupling
 
 import sys
 import re
+import statistics
 from pathlib import Path
 from collections import defaultdict, Counter, deque
 
-GROUP_BASE = 0.65
-SPLIT_BASE = 0.35
-BIAS_RANGE = (-1.0, 1.0)
 CLUSTER_THRESHOLD = 0.35
+FRAGILE_MARGIN = 0.10
+CONTEXT_SALIENCE_THRESHOLD = 1.5
+GLOBAL_CONTEXT_COVERAGE_MAX = 0.25
+
+# Lua runtime / standard library tables: never architectural carriers
+LUA_RUNTIME_ROOTS = {
+    "debug", "string", "table", "math", "io",
+    "os", "coroutine", "package", "_G"
+}
 
 FUNC_DEF_RE = re.compile(r"\bfunction\s+([a-zA-Z0-9_.:]+)")
 CALL_RE = re.compile(r"\b([a-zA-Z0-9_.:]+)\s*\(")
@@ -45,10 +55,11 @@ def parse_lua(path):
     idents = {}
     roots = {}
     locs = {}
+
     try:
         text = path.read_text()
     except Exception:
-        return {}, calls, {}, {}, {}
+        return set(), calls, idents, roots, locs
 
     for m in FUNC_DEF_RE.finditer(text):
         funcs[m.group(1)] = m.end()
@@ -73,6 +84,7 @@ def analyze(paths):
     context_roots = {}
     func_loc = {}
     func_to_file = {}
+    global_root_counts = Counter()
 
     for p in paths:
         files = list(p.rglob("*.lua")) if p.is_dir() else [p]
@@ -82,11 +94,14 @@ def analyze(paths):
                 functions[fn] = f
                 func_to_file[fn] = f.name
                 func_loc[fn] = locs.get(fn, 0)
+                for r in roots.get(fn, []):
+                    global_root_counts[r] += 1
             for k, v in c.items():
                 calls[k].update(v)
             idents.update(ids)
             context_roots.update(roots)
 
+    total_functions = max(1, len(functions))
     fanout = {fn: len(calls.get(fn, [])) for fn in functions}
 
     def coupling(a, b):
@@ -151,18 +166,37 @@ def analyze(paths):
         internal = [(a,b,c) for (a,b,c) in all_edges if a in cluster and b in cluster]
         internal.sort(key=lambda x: -x[2])
 
-        # Sentence-style analysis
+        print(f"CLUSTER {i}")
+        print(f"Functions ({len(cluster)}):")
+        for fn in sorted(cluster):
+            print(f"  {fn}")
+
         degree = Counter()
         for a,b,_ in internal:
             degree[a] += 1
             degree[b] += 1
         central = degree.most_common(1)[0][0] if degree else sorted(cluster)[0]
 
-        root_counts = Counter()
+        cluster_root_counts = Counter()
         for fn in cluster:
             for r in context_roots.get(fn, []):
-                root_counts[r] += 1
-        dom_root = root_counts.most_common(1)[0][0] if root_counts else None
+                cluster_root_counts[r] += 1
+
+        salient_root = None
+        best_salience = 0.0
+        for r, cnt in cluster_root_counts.items():
+            if r in LUA_RUNTIME_ROOTS:
+                continue
+            global_cov = global_root_counts[r] / total_functions
+            if global_cov > GLOBAL_CONTEXT_COVERAGE_MAX:
+                continue
+            cluster_freq = cnt / len(cluster)
+            global_freq = global_root_counts[r] / total_functions
+            if global_freq > 0:
+                salience = cluster_freq / global_freq
+                if salience > best_salience:
+                    best_salience = salience
+                    salient_root = r
 
         total = sum(func_loc.get(f,0) for f in cluster)
         by_file = Counter()
@@ -171,33 +205,61 @@ def analyze(paths):
         dom_file, dom_loc = by_file.most_common(1)[0]
         dom_pct = int(round(100 * dom_loc / total)) if total else 0
 
-        print(f"CLUSTER {i}")
-        print(f"Functions ({len(cluster)}):")
-        for fn in sorted(cluster):
-            print(f"  {fn}")
-
         print("Analysis:")
-        if dom_root:
-            print(
-                f"This cluster is organized around {central}, with cohesion driven primarily by shared '{dom_root}' context usage."
-            )
+        if salient_root and best_salience >= CONTEXT_SALIENCE_THRESHOLD:
+            print(f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage.")
         else:
-            print(
-                f"This cluster is organized around {central}, with cohesion driven by internal call structure rather than shared context."
-            )
+            print(f"This cluster is organized around {central}, with cohesion driven primarily by internal call structure rather than shared context.")
 
         if dom_pct >= 67:
-            print(
-                f"Most logic resides in {dom_file} ({dom_pct}% of cluster LOC), indicating an existing structural center."
-            )
+            print(f"Most logic resides in {dom_file} ({dom_pct}% of cluster LOC), indicating an existing structural center.")
         else:
             files = ', '.join(by_file.keys())
-            print(
-                f"Logic is split across {files}, with no single file fully dominating the cluster."
-            )
+            print(f"Logic is split across {files}, with no single file fully dominating the cluster.")
 
-        if len(by_file) == 1:
-            print(f"All functions are co-located in {dom_file}.")
+        if internal:
+            weights = [c for _,_,c in internal]
+            median = statistics.median(weights)
+            fragile = [(a,b,c) for (a,b,c) in internal
+                       if c < median or abs(c - CLUSTER_THRESHOLD) <= FRAGILE_MARGIN]
+
+            if fragile:
+                funcs = Counter()
+                for a,b,_ in fragile:
+                    funcs[a] += 1
+                    funcs[b] += 1
+                boundary = funcs.most_common(1)[0][0]
+
+                if boundary == central:
+                    print(
+                        f"{boundary} is the structural hub of this cluster; weaker connections here suggest "
+                        f"an opportunity to decompose responsibilities inside the function rather than extract it."
+                    )
+                else:
+                    frag_neighbors = [
+                        (b if a == boundary else a)
+                        for (a,b,_) in fragile
+                        if a == boundary or b == boundary
+                    ]
+                    by_root = Counter()
+                    for n in frag_neighbors:
+                        for r in context_roots.get(n, []):
+                            if r in LUA_RUNTIME_ROOTS:
+                                continue
+                            by_root[r] += 1
+                    if by_root:
+                        root = by_root.most_common(1)[0][0]
+                        print(
+                            f"Cohesion weakens at the boundary involving {boundary}, "
+                            f"suggesting it primarily mediates '{root}' behavior and could be extracted "
+                            f"along that responsibility with low structural cost."
+                        )
+                    else:
+                        print(
+                            f"Cohesion weakens at the boundary involving {boundary}, "
+                            f"suggesting this function could be extracted alongside its immediate collaborators "
+                            f"with relatively low structural cost."
+                        )
 
         print("Files:")
         for f, loc in by_file.items():
@@ -213,6 +275,6 @@ def analyze(paths):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("usage: lua_mod_analyze_cluster_centric_sentences.py <path> [...]")
+        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v9.py <path> [...]")
         sys.exit(1)
     analyze([Path(p) for p in sys.argv[1:]])
