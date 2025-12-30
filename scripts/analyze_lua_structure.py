@@ -306,7 +306,7 @@ def _fragile_edges(internal):
 def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_roots,
                          valid_context_roots, generic_roots, global_root_counts, total_functions,
                          func_loc, by_file, total_loc, dom_file, dom_pct,
-                         explain_suppressed):
+                         explain_suppressed, call_graph=None):
     sentences = []
 
     salient_root, salience, suppressed = _salient_context_root(
@@ -323,9 +323,38 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
     orchestration = (hub_strength >= 0.4 and not symmetric_small)
 
     if orchestration:
-        sentences.append(
-            f"This cluster is organized around {central}, with cohesion driven by orchestration and coordination logic rather than a shared domain abstraction."
-        )
+        sentences.append(f"This cluster implements the algorithm described in {central}.")
+
+        # Check if central function has code quality issues
+        central_loc = func_loc.get(central, 0)
+        central_fanout = fanout.get(central, 0)
+        central_nested = 0
+        if call_graph and central in call_graph:
+            central_nested = call_graph[central].get('nested_functions', 0)
+
+        issues = []
+
+        # Issue 1: High LOC per call ratio (contains low-level code mixed with orchestration)
+        if central_fanout > 0:
+            loc_per_call = central_loc / central_fanout
+            if loc_per_call > 15:
+                issues.append(f"contains substantial low-level implementation ({central_loc} LOC, {central_fanout} calls)")
+
+        # Issue 2: Excessive nested functions (hard to read, should be extracted)
+        if central_nested >= 6:  # Lowered threshold - even 6 nested functions is quite bad
+            issues.append(f"defines {central_nested} nested functions, making it difficult to read and test")
+
+        # Issue 3: Very high LOC even if calls are many (just too big overall)
+        # Only check LOC if we have valid data (> 0)
+        if central_loc > 80:
+            issues.append(f"is very large ({central_loc} LOC)")
+
+        if issues:
+            issue_str = "; ".join(issues)
+            sentences.append(
+                f"{central} {issue_str}; "
+                f"extracting these details into helper functions would improve readability and testability."
+            )
     elif salient_root and salience >= CONTEXT_SALIENCE_THRESHOLD:
         sentences.append(
             f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage."
@@ -336,9 +365,10 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
         )
 
     if dom_file and dom_file != "<unknown>":
-        sentences.append(
-            f"Most logic resides in {dom_file} ({dom_pct}% of cluster LOC), indicating an existing structural center."
-        )
+        if dom_pct == 100:
+            sentences.append(f"All logic resides in {dom_file}.")
+        else:
+            sentences.append(f"{dom_pct}% of logic resides in {dom_file}.")
 
     fragile, boundary = _fragile_edges(internal)
 
@@ -442,11 +472,16 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 
     # Filter utilities using global call graph (if provided)
     utilities = set()
+    utility_details = []
     if call_graph:
         print(f"# Filtering utilities using global call graph...", file=sys.stderr)
         for fn in functions:
             if fn in call_graph and call_graph[fn].get('is_utility', False):
                 utilities.add(fn)
+                fanin_val = call_graph[fn].get('fanin', 0)
+                files_calling = call_graph[fn].get('files_calling', 0)
+                utility_details.append((fn, fanin_val, files_calling))
+
         print(f"# Identified {len(utilities)} utilities to exclude from clustering", file=sys.stderr)
 
     structural_functions = {fn for fn in functions if fn not in veneers and fn not in utilities}
@@ -567,9 +602,30 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
             clusters.append(cluster)
 
     # Handle remaining unclaimed functions (leaves with no orchestrator, or shared helpers)
-    unclaimed = structural_functions - claimed
+    # Exclude module interface functions (M.*) - those are intentional, not unclaimed
+    unclaimed = {fn for fn in (structural_functions - claimed) if not fn.startswith('M.')}
+    unclaimed_details = []
+
     if unclaimed:
-        print(f"# {len(unclaimed)} unclaimed functions (shared helpers or standalone)", file=sys.stderr)
+        print(f"# {len(unclaimed)} unclaimed internal functions", file=sys.stderr)
+
+        # Categorize and explain unclaimed functions
+        for fn in sorted(unclaimed):
+            fanin_val = fanin.get(fn, 0)
+            fanout_val = fanout.get(fn, 0)
+            caller_list = list(callers.get(fn, set()))
+
+            # Determine why it's unclaimed
+            if fanin_val == 0:
+                reason = "dead code or orphaned"
+            elif fanin_val == 1 and caller_list:
+                reason = f"called only by {caller_list[0]} (non-orchestrator)"
+            elif fanin_val >= 3:
+                reason = f"shared helper (fanin={fanin_val})"
+            else:
+                reason = f"fanin={fanin_val}, fanout={fanout_val}"
+
+            unclaimed_details.append((fn, reason))
 
         # Group unclaimed functions by shared callers (potential utility clusters)
         utility_clusters = defaultdict(set)
@@ -672,13 +728,36 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 
             explain_suppressed=explain_suppressed,
 
+            call_graph=call_graph,
+
         )
 
+        # Build interface information (exported functions, entry points)
+        exported_functions = [f for f in cluster if f.startswith('M.')]
+        entry_points = []
+        internal_only = []
+
+        if call_graph:
+            for f in exported_functions:
+                if f in call_graph:
+                    if call_graph[f].get('fanin', 0) == 0:
+                        entry_points.append(f)
+                    else:
+                        internal_only.append(f)
+
+        interface = {
+            "exported_functions": sorted(exported_functions),
+            "entry_points": sorted(entry_points),
+            "internal_api": sorted(internal_only),
+            "globals_used": [],  # TODO: detect global variable usage
+            "globals_assessment": "None"  # TODO: assess globals
+        }
 
         results.append({
             "id": idx,
             "type": cluster_type,
             "ownership": ownership,
+            "interface": interface,
             "analysis": analysis,
             "functions": sorted(cluster),
             "files": {
@@ -687,14 +766,78 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
             }
         })
 
-    return results
+    # Return results along with diagnostic information
+    diagnostics = {
+        "utilities": sorted(utility_details, key=lambda x: x[1], reverse=True),
+        "unclaimed": unclaimed_details
+    }
+    return results, diagnostics
 
 # -------------------------
 # Output
 # -------------------------
 
 
-def print_text(results, call_graph=None):
+def print_module_interface_summary(call_graph, analyzed_files):
+    """Print summary of module public interface across all analyzed files."""
+    if not call_graph:
+        return
+
+    # Group functions by file
+    by_file = defaultdict(lambda: {"exported": [], "entry_points": [], "internal": []})
+
+    for fn_name, fn_data in call_graph.items():
+        if not fn_name.startswith('M.'):
+            continue  # Only show exported functions
+
+        file_path = fn_data.get('file', '')
+        # Check if this file is in the analyzed set
+        if not any(str(analyzed_file) in file_path for analyzed_file in analyzed_files):
+            continue
+
+        fanin = fn_data.get('fanin', 0)
+        short_file = file_path.split('/')[-1]
+
+        by_file[short_file]["exported"].append(fn_name)
+        if fanin == 0:
+            by_file[short_file]["entry_points"].append(fn_name)
+        else:
+            by_file[short_file]["internal"].append(fn_name)
+
+    if not by_file:
+        return
+
+    print("=" * 70)
+    print("MODULE INTERFACE SUMMARY")
+    print("=" * 70)
+    print()
+
+    for file_name in sorted(by_file.keys()):
+        data = by_file[file_name]
+        if not data["exported"]:
+            continue
+
+        print(f"Module: {file_name}")
+        print(f"  Module API ({len(data['exported'])} functions):")
+
+        # Show exported functions, annotate those called internally
+        for fn in sorted(data["exported"]):
+            if fn in data["internal"]:
+                print(f"    - {fn}  [called internally]")
+            else:
+                print(f"    - {fn}")
+
+        print()
+
+    print("=" * 70)
+    print()
+
+
+def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None):
+    # Print module interface summary first
+    if analyzed_files:
+        print_module_interface_summary(call_graph, analyzed_files)
+
     for r in results:
         print(f"CLUSTER {r['id']}")
         print(f"Type: {r['type']}")
@@ -702,6 +845,29 @@ def print_text(results, call_graph=None):
         own, mod = r["ownership"]
         print(f"{own} of {mod}.")
         print()
+
+        # Print Analysis FIRST (before Files/Functions)
+        analysis = r.get("analysis") or {}
+        sentences = analysis.get("sentences") or []
+        if sentences:
+            print("Analysis:")
+            for s in sentences:
+                print(s)
+            print()
+
+        # Print Interface (module public API)
+        interface = r.get("interface") or {}
+        exported = interface.get("exported_functions", [])
+        internal_api = interface.get("internal_api", [])
+
+        if exported:
+            print("Interface:")
+            for fn in exported:
+                if fn in internal_api:
+                    print(f"  {fn}  [called internally]")
+                else:
+                    print(f"  {fn}")
+            print()
 
         print("Files:")
         for f, p in r["files"].items():
@@ -739,14 +905,6 @@ def print_text(results, call_graph=None):
                     print(f"  - {fn}: {file_list}")
                 print()
 
-        analysis = r.get("analysis") or {}
-        sentences = analysis.get("sentences") or []
-        if sentences:
-            print("Analysis:")
-            for s in sentences:
-                print(s)
-            print()
-
         fragile = analysis.get("fragile_edges") or []
         if fragile:
             parts = [f"{a} ↔ {b} ({c:.2f})" for a, b, c in fragile[:8]]
@@ -762,6 +920,27 @@ def print_text(results, call_graph=None):
         if suppressed:
             items = ", ".join([f"{r} ({why})" for r, why in suppressed[:12]])
             print("Suppressed context roots: " + items + ".")
+            print()
+
+    # Print diagnostics at the end
+    if diagnostics:
+        print("=" * 70)
+        print("DIAGNOSTICS")
+        print("=" * 70)
+        print()
+
+        utilities = diagnostics.get("utilities", [])
+        if utilities:
+            print(f"Utilities excluded from clustering ({len(utilities)}):")
+            for fn, fanin_val, files_calling in utilities:
+                print(f"  {fn}: fanin={fanin_val}, files_calling={files_calling}")
+            print()
+
+        unclaimed = diagnostics.get("unclaimed", [])
+        if unclaimed:
+            print(f"Unclaimed internal functions ({len(unclaimed)}):")
+            for fn, reason in unclaimed:
+                print(f"  {fn}: {reason}")
             print()
 
 def print_json(results, paths):
@@ -785,20 +964,46 @@ def main():
     ap.add_argument("--json", "-j", action="store_true")
     ap.add_argument("--generic-roots", default="")
     ap.add_argument("--explain-suppressed", action="store_true")
-    ap.add_argument("--call-graph", help="Path to global call graph JSON (from build_call_graph.py)")
+    ap.add_argument("--call-graph", help="Path to global call graph JSON (optional, will auto-generate if missing)")
+    ap.add_argument("--update-call-graph", "-ug", action="store_true", help="Force regenerate call graph cache")
     args = ap.parse_args()
 
     generic_roots = set(DEFAULT_GENERIC_CONTEXT_ROOTS)
     if args.generic_roots:
         generic_roots |= {r.strip() for r in args.generic_roots.split(",") if r.strip()}
 
-    # Load call graph if provided
-    call_graph = None
-    if args.call_graph:
-        call_graph = load_call_graph(args.call_graph)
-        print(f"# Loaded call graph with {len(call_graph)} functions", file=sys.stderr)
+    # Auto-generate call graph if needed
+    call_graph_path = args.call_graph or "docs/lua-call-graph.json"
+    call_graph_needs_update = args.update_call_graph or not Path(call_graph_path).exists()
 
-    results = analyze(
+    if call_graph_needs_update:
+        print(f"# Generating call graph cache at {call_graph_path}...", file=sys.stderr)
+        import subprocess
+        # Use venv Python to ensure luaparser is available
+        script_dir = Path(__file__).parent
+        venv_python = script_dir.parent / ".venv" / "bin" / "python3"
+        python_executable = str(venv_python) if venv_python.exists() else sys.executable
+
+        result = subprocess.run(
+            [python_executable, "scripts/build_call_graph_ast.py", "src/lua", "--output", call_graph_path],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print(f"# Warning: Call graph generation failed: {result.stderr}", file=sys.stderr)
+            call_graph = None
+        else:
+            print(f"# Call graph cache generated", file=sys.stderr)
+
+    # Load call graph
+    call_graph = None
+    if Path(call_graph_path).exists():
+        call_graph = load_call_graph(call_graph_path)
+        print(f"# Loaded call graph with {len(call_graph)} functions", file=sys.stderr)
+    else:
+        print(f"# Warning: No call graph available", file=sys.stderr)
+
+    results, diagnostics = analyze(
         [Path(p) for p in args.paths],
         generic_roots,
         explain_suppressed=args.explain_suppressed,
@@ -808,7 +1013,7 @@ def main():
     if args.json:
         print_json(results, args.paths)
     else:
-        print_text(results, call_graph)
+        print_text(results, diagnostics, call_graph, analyzed_files=[Path(p) for p in args.paths])
 
 if __name__ == "__main__":
     main()
