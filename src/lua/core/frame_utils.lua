@@ -179,6 +179,56 @@ function M.parse_timecode(timecode, frame_rate)
     return Rational.new(total_frames, rate.fps_numerator, rate.fps_denominator)
 end
 
+-- ============================================================================
+-- Display helpers
+-- ============================================================================
+
+function M.format_duration(duration_input, frame_rate)
+    if not duration_input then
+        return "--:--"
+    end
+
+    local rate = frame_rate or M.default_frame_rate
+    local ok, formatted = pcall(M.format_timecode, duration_input, rate)
+    if ok and formatted then
+        return formatted
+    end
+
+    if type(duration_input) == "number" then
+        local total_seconds = math.floor(duration_input / 1000)
+        local hours = math.floor(total_seconds / 3600)
+        local minutes = math.floor((total_seconds % 3600) / 60)
+        local seconds = total_seconds % 60
+
+        if hours > 0 then
+            return string.format("%d:%02d:%02d", hours, minutes, seconds)
+        else
+            return string.format("%d:%02d", minutes, seconds)
+        end
+    end
+
+    return "--:--"
+end
+
+function M.get_fps_float(rate)
+    if type(rate) == "table" and rate.fps_numerator then
+        if rate.fps_denominator == 0 then
+            return 0
+        end
+        return rate.fps_numerator / rate.fps_denominator
+    elseif type(rate) == "number" then
+        return rate
+    end
+    return 0
+end
+
+function M.format_date(timestamp)
+    if not timestamp or timestamp == 0 then
+        return ""
+    end
+    return os.date("%b %d %Y", timestamp)
+end
+
 -- Calculate a "nice" ruler interval (prefers 1/2/5 * 10^k frame buckets)
 -- All inputs/outputs are in frames (integers) except hint value which is expressed in hint units.
 -- Returns: interval_frames, format_hint ("frames"/"seconds"/"minutes"), interval_value (in hint units)

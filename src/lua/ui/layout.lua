@@ -308,7 +308,7 @@ local top_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
 -- 1. Project Browser (left) - create EARLY so menu system can reference it
 local selection_hub = require("ui.selection_hub")
-local project_browser_mod = require("ui.project_browser")
+local project_browser_mod = require("ui.project_browser.project_browser")
 local panel_manager = require("ui.panel_manager")
 local project_browser = project_browser_mod.create()
 if project_browser_mod.set_project_title then

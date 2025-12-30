@@ -76,6 +76,50 @@ def extract_identifiers(text):
 def extract_context_roots(text):
     return {m.group(1) for m in CONTEXT_ROOT_RE.finditer(text)}
 
+def tokenize_identifier(name):
+    """
+    Tokenize function name for semantic similarity.
+
+    Examples:
+        "M.start_inline_rename" -> {"M", "start", "inline", "rename"}
+        "create_bin_in_root" -> {"create", "bin", "in", "root"}
+        "finalizePendingRename" -> {"finalize", "pending", "rename"} (camelCase)
+    """
+    # Remove common prefixes
+    name = name.replace("M.", "").replace("_", " ").replace(".", " ").replace(":", " ")
+
+    # Split camelCase: "finalizePending" -> "finalize Pending"
+    name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+
+    # Extract words
+    tokens = {w.lower() for w in name.split() if w and w.lower() not in STOPWORDS}
+    return tokens
+
+def semantic_similarity(name_a, name_b):
+    """
+    Calculate semantic similarity between function names using Jaccard similarity.
+
+    Returns value in [0.0, 1.0] where:
+    - 1.0 = identical token sets
+    - 0.0 = no common tokens
+    """
+    tokens_a = tokenize_identifier(name_a)
+    tokens_b = tokenize_identifier(name_b)
+
+    if not tokens_a or not tokens_b:
+        return 0.0
+
+    intersection = len(tokens_a & tokens_b)
+    union = len(tokens_a | tokens_b)
+
+    return intersection / union if union > 0 else 0.0
+
+def load_call_graph(path):
+    """Load global call graph database from JSON."""
+    with open(path) as f:
+        data = json.load(f)
+    return data.get('functions', {})
+
 # -------------------------
 # Lua parsing with scope
 # -------------------------
@@ -313,7 +357,16 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
         "suppressed_roots": suppressed if explain_suppressed else [],
     }
 
-def analyze(paths, generic_roots, explain_suppressed=False):
+def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
+    """
+    Analyze Lua codebase and identify clusters.
+
+    Args:
+        paths: List of paths to scan
+        generic_roots: Set of generic context roots to filter
+        explain_suppressed: Whether to show suppressed context roots
+        call_graph: Optional dict from load_call_graph() for utility filtering
+    """
     functions = {}
     calls = defaultdict(set)
     idents = {}
@@ -362,21 +415,42 @@ def analyze(paths, generic_roots, explain_suppressed=False):
         if len(callees) == 1 and func_loc.get(fn, 0) <= LEAF_LOC_MAX:
             veneers[fn] = next(iter(callees))
 
-    structural_functions = {fn for fn in functions if fn not in veneers}
+    # Filter utilities using global call graph (if provided)
+    utilities = set()
+    if call_graph:
+        print(f"# Filtering utilities using global call graph...", file=sys.stderr)
+        for fn in functions:
+            if fn in call_graph and call_graph[fn].get('is_utility', False):
+                utilities.add(fn)
+        print(f"# Identified {len(utilities)} utilities to exclude from clustering", file=sys.stderr)
+
+    structural_functions = {fn for fn in functions if fn not in veneers and fn not in utilities}
 
     def coupling(a, b):
         score = 0.0
+
+        # Structural coupling (existing logic)
         shared_roots = context_roots.get(a, set()) & context_roots.get(b, set())
         if shared_roots:
             score += min(0.8, 0.4 + 0.2 * len(shared_roots))
+
         shared = idents.get(a, set()) & idents.get(b, set())
         if len(shared) >= 3:
             score += min(0.3, len(shared) * 0.03)
+
         if b in calls[a]:
             score += 0.5 / max(1, fanout[a])
+
         score -= min(0.5, fanout[b] * 0.03)
+
         if b in calls[a] and a not in calls[b]:
             score -= 0.05
+
+        # Semantic coupling (NEW: name similarity)
+        name_sim = semantic_similarity(a, b)
+        if name_sim > 0:
+            score += name_sim * 0.3  # Weight semantic signal
+
         return max(0.0, min(1.0, score))
 
 
@@ -419,7 +493,8 @@ def analyze(paths, generic_roots, explain_suppressed=False):
                 from networkx.algorithms import community as nx_comm
 
                 # Louvain method - maximizes modularity
-                communities = nx_comm.louvain_communities(G, weight='weight', resolution=1.0, seed=42)
+                # Higher resolution = more, smaller communities
+                communities = nx_comm.louvain_communities(G, weight='weight', resolution=2.0, seed=42)
 
                 print(f"# Found {len(communities)} communities via Louvain", file=sys.stderr)
 
@@ -636,13 +711,25 @@ def main():
     ap.add_argument("--json", "-j", action="store_true")
     ap.add_argument("--generic-roots", default="")
     ap.add_argument("--explain-suppressed", action="store_true")
+    ap.add_argument("--call-graph", help="Path to global call graph JSON (from build_call_graph.py)")
     args = ap.parse_args()
 
     generic_roots = set(DEFAULT_GENERIC_CONTEXT_ROOTS)
     if args.generic_roots:
         generic_roots |= {r.strip() for r in args.generic_roots.split(",") if r.strip()}
 
-    results = analyze([Path(p) for p in args.paths], generic_roots, explain_suppressed=args.explain_suppressed)
+    # Load call graph if provided
+    call_graph = None
+    if args.call_graph:
+        call_graph = load_call_graph(args.call_graph)
+        print(f"# Loaded call graph with {len(call_graph)} functions", file=sys.stderr)
+
+    results = analyze(
+        [Path(p) for p in args.paths],
+        generic_roots,
+        explain_suppressed=args.explain_suppressed,
+        call_graph=call_graph
+    )
 
     if args.json:
         print_json(results, args.paths)

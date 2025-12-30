@@ -1,7 +1,7 @@
 # 01-REPO-OVERVIEW
 
 ## Identity
-JVE (Joe's Video Editor) - frame-accurate non-linear video editor combining Final Cut Pro 7's magnetic timeline with DaVinci Resolve's panel architecture.
+JVE (Joe's Video Editor) - frame-accurate non-linear video editor modelled on EMACS style. All logic that can be in script (in this case Lua) is in script. C++ is reserved for performance bottlenecks.
 
 ## Technology Stack
 - **Language**: C++ (Qt6 bindings) + Lua/LuaJIT (application layer)
@@ -31,7 +31,7 @@ src/
     │   ├── project_browser.lua
     │   └── layout.lua       # Main window
     ├── importers/           # FCP7 XML, DRP, Resolve DB
-    └── bug_reporter/        # Test harness
+    └── bug_reporter/        # Bug info collection harness
 
 tests/                       # 200+ test files
 docs/                        # Architecture docs
@@ -53,7 +53,7 @@ No floating-point time. All durations are `{frames, fps_numerator, fps_denominat
 
 ### Ripple Algorithm
 Batch operations on timeline edges with gap materialization:
-- `src/lua/core/ripple/batch/pipeline.lua` (40 LOC orchestrator)
+- `src/lua/core/ripple/batch/pipeline.lua` (orchestrator)
 - `src/lua/core/ripple/batch/prepare.lua` (edge snapshot)
 - `src/lua/core/ripple/batch/context.lua` (operation state)
 - 60+ ripple-specific tests

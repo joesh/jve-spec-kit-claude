@@ -31,16 +31,7 @@ local content_label = nil
 local content_container = nil
 
 local DEFAULT_MESSAGE = "Double-click a clip in the Project Browser to load it here."
-
-local function get_fps_float(rate)
-    if type(rate) == "table" and rate.fps_numerator then
-        if rate.fps_denominator == 0 then return 0 end
-        return rate.fps_numerator / rate.fps_denominator
-    elseif type(rate) == "number" then
-        return rate
-    end
-    return 0
-end
+local get_fps_float = frame_utils.get_fps_float
 
 local function ensure_created()
     if not viewer_widget then
