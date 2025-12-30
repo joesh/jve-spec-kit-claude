@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-# lua_mod_analyze.py v2 – coupling with shared-identifier attraction
+# lua_mod_analyze_cluster_centric_clean.py
+#
+# Clean rebuild based on original lua_mod_analyze.py, with:
+# - context-root extraction
+# - relaxed directional penalty
+# - cluster-centric output
+#
+# No incremental patching. This file stands alone.
 
 import sys
-import argparse
 import re
 import math
+import argparse
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, deque
 
 GROUP_BASE = 0.65
 SPLIT_BASE = 0.35
 BIAS_RANGE = (-1.0, 1.0)
 CLUSTER_THRESHOLD = 0.35
 
-
 HEADER_RE = re.compile(r"--\s*@(?P<key>\w+)\s+(?P<val>.+)")
 FUNC_DEF_RE = re.compile(r"\bfunction\s+([a-zA-Z0-9_.:]+)")
 CALL_RE = re.compile(r"\b([a-zA-Z0-9_.:]+)\s*\(")
-CONTEXT_ROOT_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)[\.:][a-zA-Z_][a-zA-Z0-9_]*")
 IDENT_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b")
+CONTEXT_ROOT_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)[\.:][a-zA-Z_][a-zA-Z0-9_]*")
 
 STOPWORDS = {
     "local","function","end","if","then","else","for","do","while",
@@ -50,12 +56,11 @@ def parse_headers(path):
         pass
     return {"module": module, "scope": scope, "confidence": confidence}
 
-def extract_context_roots(text):
-    return {m.group(1) for m in CONTEXT_ROOT_RE.finditer(text)}
-
 def extract_identifiers(text):
     return {i for i in IDENT_RE.findall(text) if i not in STOPWORDS}
 
+def extract_context_roots(text):
+    return {m.group(1) for m in CONTEXT_ROOT_RE.finditer(text)}
 
 def compute_loc(text):
     loc = 0
@@ -66,34 +71,36 @@ def compute_loc(text):
         loc += 1
     return loc
 
-
 def parse_lua(path):
     funcs = {}
     calls = defaultdict(set)
     idents = {}
-    context_roots = {}
     roots = {}
+    locs = {}
     try:
         text = path.read_text()
     except Exception:
-        return {}, calls, {}, "", {}
+        return {}, calls, {}, {}, {}, {}
+
     for m in FUNC_DEF_RE.finditer(text):
         funcs[m.group(1)] = m.end()
+
     names = list(funcs.keys())
     ranges = []
     for i, name in enumerate(names):
         start = funcs[name]
         end = funcs[names[i+1]] if i+1 < len(names) else len(text)
         ranges.append((name, start, end))
-    locs = {}
+
     for name, start, end in ranges:
         body = text[start:end]
         idents[name] = extract_identifiers(body)
-        locs[name] = compute_loc(body)
         roots[name] = extract_context_roots(body)
+        locs[name] = compute_loc(body)
         for m in CALL_RE.finditer(body):
             calls[name].add(m.group(1))
-    return set(funcs.keys()), calls, idents, roots, text, locs
+
+    return set(funcs.keys()), calls, idents, roots, locs
 
 def bias_interval(c):
     group_bias = (GROUP_BASE - c) / 0.25
@@ -105,66 +112,51 @@ def bias_interval(c):
         return "invariant", None
     return "sensitive", (split_bias, group_bias)
 
-def analyze(paths, details=False):
+def analyze(paths):
     functions = {}
-
-    func_loc = {}
-    func_to_file = {}
-    func_to_folder = {}
-
     calls = defaultdict(set)
     idents = {}
     context_roots = {}
-    roots = {}
-    fanout = {}
+    func_loc = {}
+    func_to_file = {}
+
     for p in paths:
         files = list(p.rglob("*.lua")) if p.is_dir() else [p]
         for f in files:
-            fns, c, ids, roots, _, locs = parse_lua(f)
+            fns, c, ids, roots, locs = parse_lua(f)
             for fn in fns:
                 functions[fn] = f
                 func_to_file[fn] = f.name
-                func_to_folder[fn] = f.parent.name
                 func_loc[fn] = locs.get(fn, 0)
             for k, v in c.items():
                 calls[k].update(v)
             idents.update(ids)
             context_roots.update(roots)
-    for fn in functions:
-        fanout[fn] = len(calls.get(fn, []))
-    
+
+    fanout = {fn: len(calls.get(fn, [])) for fn in functions}
+
     def coupling(a, b):
         score = 0.0
 
-        # Context-root overlap (primary signal)
         shared_roots = context_roots.get(a, set()) & context_roots.get(b, set())
         if shared_roots:
             score += min(0.8, 0.4 + 0.2 * len(shared_roots))
 
-        # Identifier overlap (weak signal)
-        shared = idents.get(a,set()) & idents.get(b,set())
+        shared = idents.get(a, set()) & idents.get(b, set())
         if len(shared) >= 3:
             score += min(0.3, len(shared) * 0.03)
 
-        # Call signal (supporting)
         if b in calls[a]:
             score += 0.5 / max(1, fanout[a])
 
-        # Fan-out penalty
         score -= min(0.5, fanout[b] * 0.03)
 
-        # Relaxed directional penalty (UI-friendly)
         if b in calls[a] and a not in calls[b]:
             score -= 0.05
 
         return max(0.0, min(1.0, score))
 
-    
-    from collections import deque
-
-    # Build adjacency for clustering
     adj = defaultdict(set)
-
     for a in functions:
         for b in calls[a]:
             if b not in functions or a == b:
@@ -174,7 +166,6 @@ def analyze(paths, details=False):
                 adj[a].add(b)
                 adj[b].add(a)
 
-    # Find connected components
     visited = set()
     clusters = []
 
@@ -183,7 +174,6 @@ def analyze(paths, details=False):
             continue
         queue = deque([fn])
         component = set()
-
         while queue:
             cur = queue.popleft()
             if cur in visited:
@@ -191,82 +181,60 @@ def analyze(paths, details=False):
             visited.add(cur)
             component.add(cur)
             queue.extend(adj[cur])
-
         if len(component) > 1:
             clusters.append(component)
 
-    print("CLUSTERS (coupling ≥ {:.2f})\n".format(CLUSTER_THRESHOLD))
-
-    for i, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
-        print(f"Cluster {i} ({len(cluster)} functions):")
-        for fn in sorted(cluster):
-            print(f"  {fn}")
-        print()
-
-
-    
-    # STEP 2: COMPARE
-    DOMINANCE_THRESHOLD = 2/3
-    UNDERSIZED_THRESHOLD = 0.10
-
-    for i, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
-        total_loc = sum(func_loc.get(fn, 0) for fn in cluster)
-        print(f"COMPARE Cluster {i}:")
-
-        # Files
-        by_file = defaultdict(list)
-        for fn in cluster:
-            by_file[func_to_file.get(fn, '<unknown>')].append(fn)
-        if len(by_file) == 1:
-            f = next(iter(by_file))
-            print(f"Files: all cluster functions are in {f}.")
-        else:
-            shares = {
-                f: sum(func_loc[fn] for fn in fns)/total_loc
-                for f, fns in by_file.items()
-            }
-            print(f"Files: cluster spans {', '.join(by_file.keys())}.")
-            dom = [f for f,s in shares.items() if s >= DOMINANCE_THRESHOLD]
-            if dom:
-                f = dom[0]
-                print(f"{f} dominates, containing {int(round(shares[f]*100))}% of cluster LOC.")
-            else:
-                parts = [f"{f} contains {int(round(shares[f]*100))}%" for f in shares]
-                print('; '.join(parts) + '.')
-            undersized = [f for f,s in shares.items() if s < UNDERSIZED_THRESHOLD]
-            if undersized:
-                print(f"{undersized[0]} is undersized within this cluster.")
-
-        print()
-
-    print("MODULE ANALYSIS REPORT\n")
+    # Precompute internal edges
+    all_edges = []
     seen = set()
     for a in functions:
         for b in calls[a]:
-            if b not in functions:
+            if b not in functions or a == b:
                 continue
-            pair = tuple(sorted((a,b)))
+            pair = tuple(sorted((a, b)))
             if pair in seen:
                 continue
             seen.add(pair)
+            c = coupling(a, b)
+            if c >= 0.15:
+                all_edges.append((a, b, c))
 
-            # skip self-pairs
-            if a == b:
-                continue
+    print(f"CLUSTERS (coupling ≥ {CLUSTER_THRESHOLD:.2f})\n")
 
-            c = coupling(a,b)
-            # ignore very weak couplings
-            if c < 0.15:
-                continue
+    for i, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
+        print(f"CLUSTER {i}")
+        print(f"Functions ({len(cluster)}):")
+        for fn in sorted(cluster):
+            print(f"  {fn}")
 
-            kind, interval = bias_interval(c)
-            if kind == "sensitive":
-                lo, hi = interval
-                print(f"{a} ↔ {b}  coupling={c:.2f}  bias-sensitive [{lo:.2f},{hi:.2f}]")
+        total = sum(func_loc.get(f, 0) for f in cluster)
+        by_file = defaultdict(int)
+        for f in cluster:
+            by_file[func_to_file.get(f, '<unknown>')] += func_loc.get(f, 0)
+
+        if len(by_file) == 1:
+            f = next(iter(by_file))
+            print(f"Files: all functions in {f}.")
+        else:
+            print("Files:")
+            for f, loc in by_file.items():
+                pct = int(round(100 * loc / total)) if total else 0
+                print(f"  {f}: {pct}%")
+            dom = [f for f, loc in by_file.items() if total and loc / total >= 2/3]
+            if dom:
+                print(f"{dom[0]} dominates by LOC.")
+
+        internal = [(a, b, c) for (a, b, c) in all_edges if a in cluster and b in cluster]
+        internal.sort(key=lambda x: -x[2])
+        if internal:
+            print("Strong internal edges:")
+            for a, b, c in internal[:5]:
+                print(f"  {a} ↔ {b}  ({c:.2f})")
+
+        print()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("paths", nargs="+")
-    parser.add_argument("--details", action="store_true")
-    args = parser.parse_args()
-    analyze([Path(p) for p in args.paths], details=args.details)
+    if len(sys.argv) < 2:
+        print("usage: lua_mod_analyze_cluster_centric_clean.py <path> [...]")
+        sys.exit(1)
+    analyze([Path(p) for p in sys.argv[1:]])
