@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-# lua_mod_analyze_cluster_centric_sentences_fragile_v14.py
+# lua_mod_analyze_cluster_centric_sentences_fragile_v15.py
 #
-# v14 change:
-# - Context root is only named in explanations if it appears in >=2 non-hub functions
-# - Otherwise explanation falls back to coordination/orchestration language
+# v15 changes:
+# 1) Configurable generic context-root suppression
+#    - --generic-roots a,b,c
+# 2) Observable suppression (optional)
+#    - --explain-suppressed
+# 3) Explanation wording frozen (no further heuristic tuning)
 #
-# Clustering and coupling unchanged from v13.
+# Clustering and coupling unchanged from v14.
 
 import sys
 import re
 import statistics
+import argparse
 from pathlib import Path
 from collections import defaultdict, Counter, deque
 
@@ -23,6 +27,11 @@ LEAF_LOC_MAX = 12
 LUA_RUNTIME_ROOTS = {
     "debug", "string", "table", "math", "io",
     "os", "coroutine", "package", "_G"
+}
+
+DEFAULT_GENERIC_CONTEXT_ROOTS = {
+    "ctx", "info", "inspectable", "action_def",
+    "qt_constants", "defaults", "params", "options"
 }
 
 FUNC_DEF_RE = re.compile(r"\bfunction\s+([a-zA-Z0-9_.:]+)")
@@ -78,7 +87,7 @@ def parse_lua(path):
 
     return set(funcs.keys()), calls, idents, roots, locs
 
-def analyze(paths):
+def analyze(paths, generic_roots, explain_suppressed):
     functions = {}
     calls = defaultdict(set)
     idents = {}
@@ -188,22 +197,30 @@ def analyze(paths):
             for r in context_roots.get(fn, []):
                 cluster_root_counts[r] += 1
 
-        # NEW: only consider roots used by >=2 non-hub functions
         eligible_roots = {}
+        suppressed = []
+
         for r, cnt in cluster_root_counts.items():
             if r in LUA_RUNTIME_ROOTS:
+                suppressed.append((r, "lua runtime"))
+                continue
+            if r in generic_roots:
+                suppressed.append((r, "generic scaffolding"))
                 continue
             users = [fn for fn in cluster if r in context_roots.get(fn, set()) and fn != central]
-            if len(users) >= 2:
-                eligible_roots[r] = cnt
+            if len(users) < 2:
+                suppressed.append((r, "hub-only or single-use"))
+                continue
+            global_cov = global_root_counts[r] / total_functions
+            if global_cov > GLOBAL_CONTEXT_COVERAGE_MAX:
+                suppressed.append((r, "high global coverage"))
+                continue
+            eligible_roots[r] = cnt
 
         salient_root = None
         best_salience = 0.0
 
         for r, cnt in eligible_roots.items():
-            global_cov = global_root_counts[r] / total_functions
-            if global_cov > GLOBAL_CONTEXT_COVERAGE_MAX:
-                continue
             cluster_freq = cnt / len(cluster)
             global_freq = global_root_counts[r] / total_functions
             if global_freq <= 0:
@@ -253,6 +270,11 @@ def analyze(paths):
                     names = ", ".join(helpers[:3])
                     print(f"Likely helper candidates include {names}, which form the weakest boundaries around {boundary}.")
 
+        if explain_suppressed and suppressed:
+            reasons = Counter(reason for _, reason in suppressed)
+            items = ", ".join(f"{r} ({reason})" for r, reason in suppressed[:5])
+            print(f"Note: context roots suppressed from explanation: {items}.")
+
         print("Files:")
         for f, loc in by_file.items():
             pct = int(round(100 * loc / total)) if total else 0
@@ -265,8 +287,18 @@ def analyze(paths):
 
         print()
 
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("paths", nargs="+")
+    ap.add_argument("--generic-roots", default="")
+    ap.add_argument("--explain-suppressed", action="store_true")
+    args = ap.parse_args()
+
+    generic_roots = set(DEFAULT_GENERIC_CONTEXT_ROOTS)
+    if args.generic_roots:
+        generic_roots |= {r.strip() for r in args.generic_roots.split(",") if r.strip()}
+
+    analyze([Path(p) for p in args.paths], generic_roots, args.explain_suppressed)
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v14.py <path> [...]")
-        sys.exit(1)
-    analyze([Path(p) for p in sys.argv[1:]])
+    main()
