@@ -64,16 +64,55 @@ def parse_lua_file(path):
         funcs[fn_name] = line_num
         func_matches.append((fn_name, m.start(), m.end()))
 
-    # Extract function bodies using actual match positions
-    for i, (name, match_start, match_end) in enumerate(func_matches):
+    # Extract function bodies by parsing function/end pairs
+    for name, match_start, match_end in func_matches:
         # Body starts after "function name(...)"
         body_start = match_end
 
-        # Body ends at the start of next function (or EOF)
-        if i + 1 < len(func_matches):
-            body_end = func_matches[i + 1][1]  # Start position of next function
-        else:
-            body_end = len(text)
+        # Find matching 'end' by counting depth
+        depth = 1  # We've seen one 'function'
+        pos = body_start
+        body_end = len(text)  # Default to EOF if no matching end found
+
+        # Scan forward counting function/end keywords
+        while pos < len(text) and depth > 0:
+            # Look for next 'function' or 'end' keyword
+            next_func = text.find('function', pos)
+            next_end = text.find('end', pos)
+
+            # Ensure we only match whole words (not 'pending', 'append', etc.)
+            if next_end != -1:
+                # Check if 'end' is a whole word
+                before_ok = (next_end == 0 or not text[next_end - 1].isalnum() and text[next_end - 1] != '_')
+                after_ok = (next_end + 3 >= len(text) or not text[next_end + 3].isalnum() and text[next_end + 3] != '_')
+                if not (before_ok and after_ok):
+                    # Not a keyword, skip past it
+                    pos = next_end + 1
+                    continue
+
+            if next_func != -1:
+                # Check if 'function' is a whole word
+                before_ok = (next_func == 0 or not text[next_func - 1].isalnum() and text[next_func - 1] != '_')
+                after_ok = (next_func + 8 >= len(text) or not text[next_func + 8].isalnum() and text[next_func + 8] != '_')
+                if not (before_ok and after_ok):
+                    # Not a keyword, skip past it
+                    pos = next_func + 1
+                    continue
+
+            # Determine which comes first
+            if next_func == -1 and next_end == -1:
+                # No more keywords found - malformed file
+                break
+            elif next_end == -1 or (next_func != -1 and next_func < next_end):
+                # 'function' comes first
+                depth += 1
+                pos = next_func + 8
+            else:
+                # 'end' comes first
+                depth -= 1
+                if depth == 0:
+                    body_end = next_end
+                pos = next_end + 3
 
         body = text[body_start:body_end]
         locs[name] = compute_loc(body)
@@ -105,6 +144,7 @@ def analyze_codebase(root_paths):
     """
     global_functions = {}
     file_to_functions = defaultdict(list)
+    duplicates = defaultdict(list)  # Track duplicate definitions
 
     # Phase 1: Scan all files
     print("Phase 1: Scanning Lua files...", file=sys.stderr)
@@ -118,6 +158,10 @@ def analyze_codebase(root_paths):
             for fn_name, line_num in funcs.items():
                 if fn_name in global_functions:
                     print(f"Warning: Duplicate function '{fn_name}' in {lua_file} and {global_functions[fn_name]['file']}", file=sys.stderr)
+                    # Track all files that define this function
+                    if fn_name not in duplicates:
+                        duplicates[fn_name].append(global_functions[fn_name]['file'])
+                    duplicates[fn_name].append(str(lua_file))
 
                 global_functions[fn_name] = {
                     'file': str(lua_file),
@@ -128,12 +172,18 @@ def analyze_codebase(root_paths):
                     'fanin': 0,
                     'fanout': len(calls.get(fn_name, set())),
                     'files_calling': 0,
-                    'is_utility': False
+                    'is_utility': False,
+                    'duplicate_files': []  # Will be populated later
                 }
 
                 file_to_functions[str(lua_file)].append(fn_name)
 
     print(f"  Found {len(global_functions)} functions across {len(file_to_functions)} files", file=sys.stderr)
+
+    # Populate duplicate_files for all functions that have duplicates
+    for fn_name, files in duplicates.items():
+        if fn_name in global_functions:
+            global_functions[fn_name]['duplicate_files'] = files
 
     # Phase 2: Build reverse index (callers)
     print("Phase 2: Building caller relationships...", file=sys.stderr)

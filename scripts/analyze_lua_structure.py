@@ -170,11 +170,36 @@ def parse_lua(path):
         for mm in MODULE_ASSIGN_RE.finditer(stripped):
             module_roots.add(mm.group(1))
 
-    names = list(funcs.keys())
-    for idx, name in enumerate(names):
-        start = funcs[name]
-        end = funcs[names[idx+1]] if idx+1 < len(names) else len(lines)
-        body = "\n".join(lines[start:end])
+    # Extract function bodies by parsing function/end pairs
+    for name in funcs.keys():
+        start_line = funcs[name]
+
+        # Find matching 'end' by counting depth
+        depth = 1  # We've seen one 'function'
+        end_line = len(lines)  # Default to EOF
+
+        for i in range(start_line + 1, len(lines)):
+            stripped = lines[i].strip()
+
+            # Count 'function' keywords (increases depth)
+            if 'function' in stripped:
+                # Check if it's a whole word
+                for m in re.finditer(r'\bfunction\b', stripped):
+                    depth += 1
+
+            # Count 'end' keywords (decreases depth)
+            if stripped.startswith('end') or ' end' in stripped or '\tend' in stripped:
+                # Check if it's a whole word
+                for m in re.finditer(r'\bend\b', stripped):
+                    depth -= 1
+                    if depth == 0:
+                        end_line = i
+                        break
+
+            if depth == 0:
+                break
+
+        body = "\n".join(lines[start_line:end_line])
 
         idents[name] = extract_identifiers(body)
         roots[name] = extract_context_roots(body)
@@ -528,7 +553,10 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 callee_fanin = fanin.get(callee, 0)
                 callee_callers = callers.get(callee, set())
 
-                if callee_fanin == 1 and callee_callers <= cluster:
+                # Module exports (M.*) are public interface - never treat as exclusive helpers
+                is_module_export = callee.startswith('M.')
+
+                if callee_fanin == 1 and callee_callers <= cluster and not is_module_export:
                     cluster.add(callee)
                     claimed.add(callee)
                     add_exclusive_subtree(callee, depth+1)  # Recursive
@@ -666,7 +694,7 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 # -------------------------
 
 
-def print_text(results):
+def print_text(results, call_graph=None):
     for r in results:
         print(f"CLUSTER {r['id']}")
         print(f"Type: {r['type']}")
@@ -684,6 +712,32 @@ def print_text(results):
         for fn in r["functions"]:
             print(fn)
         print()
+
+        # Check for dead code and duplicates
+        if call_graph:
+            dead_code = []
+            duplicates = []
+            for fn in r["functions"]:
+                if fn in call_graph:
+                    fn_data = call_graph[fn]
+                    if fn_data.get('fanin', 0) == 0:
+                        dead_code.append(fn)
+                    dup_files = fn_data.get('duplicate_files', [])
+                    if dup_files:
+                        duplicates.append((fn, dup_files))
+
+            if dead_code:
+                print("⚠ WARNING: Potentially dead code (fanin=0, not called):")
+                for fn in dead_code:
+                    print(f"  - {fn}")
+                print()
+
+            if duplicates:
+                print("⚠ WARNING: Duplicate definitions:")
+                for fn, files in duplicates:
+                    file_list = ", ".join([f.split("/")[-1] for f in files])
+                    print(f"  - {fn}: {file_list}")
+                print()
 
         analysis = r.get("analysis") or {}
         sentences = analysis.get("sentences") or []
@@ -754,7 +808,7 @@ def main():
     if args.json:
         print_json(results, args.paths)
     else:
-        print_text(results)
+        print_text(results, call_graph)
 
 if __name__ == "__main__":
     main()
