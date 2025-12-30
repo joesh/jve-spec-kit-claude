@@ -2,6 +2,7 @@
 # lua_mod_analyze.py v2 – coupling with shared-identifier attraction
 
 import sys
+import argparse
 import re
 import math
 from pathlib import Path
@@ -51,6 +52,17 @@ def parse_headers(path):
 def extract_identifiers(text):
     return {i for i in IDENT_RE.findall(text) if i not in STOPWORDS}
 
+
+def compute_loc(text):
+    loc = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("--"):
+            continue
+        loc += 1
+    return loc
+
+
 def parse_lua(path):
     funcs = {}
     calls = defaultdict(set)
@@ -58,7 +70,7 @@ def parse_lua(path):
     try:
         text = path.read_text()
     except Exception:
-        return {}, calls, {}, ""
+        return {}, calls, {}, "", {}
     for m in FUNC_DEF_RE.finditer(text):
         funcs[m.group(1)] = m.end()
     names = list(funcs.keys())
@@ -67,12 +79,14 @@ def parse_lua(path):
         start = funcs[name]
         end = funcs[names[i+1]] if i+1 < len(names) else len(text)
         ranges.append((name, start, end))
+    locs = {}
     for name, start, end in ranges:
         body = text[start:end]
         idents[name] = extract_identifiers(body)
+        locs[name] = compute_loc(body)
         for m in CALL_RE.finditer(body):
             calls[name].add(m.group(1))
-    return set(funcs.keys()), calls, idents, text
+    return set(funcs.keys()), calls, idents, text, locs
 
 def bias_interval(c):
     group_bias = (GROUP_BASE - c) / 0.25
@@ -84,17 +98,25 @@ def bias_interval(c):
         return "invariant", None
     return "sensitive", (split_bias, group_bias)
 
-def analyze(paths):
+def analyze(paths, details=False):
     functions = {}
+
+    func_loc = {}
+    func_to_file = {}
+    func_to_folder = {}
+
     calls = defaultdict(set)
     idents = {}
     fanout = {}
     for p in paths:
         files = list(p.rglob("*.lua")) if p.is_dir() else [p]
         for f in files:
-            fns, c, ids, _ = parse_lua(f)
+            fns, c, ids, _, locs = parse_lua(f)
             for fn in fns:
                 functions[fn] = f
+                func_to_file[fn] = f.name
+                func_to_folder[fn] = f.parent.name
+                func_loc[fn] = locs.get(fn, 0)
             for k, v in c.items():
                 calls[k].update(v)
             idents.update(ids)
@@ -156,6 +178,41 @@ def analyze(paths):
         print()
 
 
+    
+    # STEP 2: COMPARE
+    DOMINANCE_THRESHOLD = 2/3
+    UNDERSIZED_THRESHOLD = 0.10
+
+    for i, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
+        total_loc = sum(func_loc.get(fn, 0) for fn in cluster)
+        print(f"COMPARE Cluster {i}:")
+
+        # Files
+        by_file = defaultdict(list)
+        for fn in cluster:
+            by_file[func_to_file.get(fn, '<unknown>')].append(fn)
+        if len(by_file) == 1:
+            f = next(iter(by_file))
+            print(f"Files: all cluster functions are in {f}.")
+        else:
+            shares = {
+                f: sum(func_loc[fn] for fn in fns)/total_loc
+                for f, fns in by_file.items()
+            }
+            print(f"Files: cluster spans {', '.join(by_file.keys())}.")
+            dom = [f for f,s in shares.items() if s >= DOMINANCE_THRESHOLD]
+            if dom:
+                f = dom[0]
+                print(f"{f} dominates, containing {int(round(shares[f]*100))}% of cluster LOC.")
+            else:
+                parts = [f"{f} contains {int(round(shares[f]*100))}%" for f in shares]
+                print('; '.join(parts) + '.')
+            undersized = [f for f,s in shares.items() if s < UNDERSIZED_THRESHOLD]
+            if undersized:
+                print(f"{undersized[0]} is undersized within this cluster.")
+
+        print()
+
     print("MODULE ANALYSIS REPORT\n")
     seen = set()
     for a in functions:
@@ -182,7 +239,8 @@ def analyze(paths):
                 print(f"{a} ↔ {b}  coupling={c:.2f}  bias-sensitive [{lo:.2f},{hi:.2f}]")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("usage: lua_mod_analyze.py <path> [...]")
-        sys.exit(1)
-    analyze([Path(p) for p in sys.argv[1:]])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("paths", nargs="+")
+    parser.add_argument("--details", action="store_true")
+    args = parser.parse_args()
+    analyze([Path(p) for p in args.paths], details=args.details)
