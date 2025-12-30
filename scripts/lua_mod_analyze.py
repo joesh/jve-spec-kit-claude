@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
-# lua_mod_analyze_cluster_centric_sentences_fragile_v11.py
+# lua_mod_analyze_cluster_centric_sentences_fragile_v12.py
 #
-# Option A FINAL:
-# - Coordination contexts are detected mechanically
-# - Coordination contexts are fully suppressed from domain-style explanations
-# - Explanations fall back to orchestration/registration wording
-#
-# No changes to clustering or coupling math.
+# Canonical hub phrasing + helper-candidate sentences
 
 import sys
 import re
@@ -237,16 +232,45 @@ def analyze(paths):
             median = statistics.median(weights)
             fragile = [(a,b,c) for (a,b,c) in internal
                        if c < median or abs(c - CLUSTER_THRESHOLD) <= FRAGILE_MARGIN]
+
             if fragile:
                 funcs = Counter()
                 for a,b,_ in fragile:
                     funcs[a] += 1
                     funcs[b] += 1
                 boundary = funcs.most_common(1)[0][0]
+
                 if boundary == central:
-                    print(f"{boundary} is the structural hub of this cluster; weaker connections here suggest an opportunity to decompose responsibilities inside the function rather than extract it.")
+                    if salient_root and not coordination:
+                        print(
+                            f"{boundary} is the structural hub of this cluster; weaker connections here suggest "
+                            f"an opportunity to factor {salient_root}-related responsibilities into well-named "
+                            f"helper functions that are called by {boundary}."
+                        )
+                    else:
+                        print(
+                            f"{boundary} is the structural hub of this cluster; weaker connections here suggest "
+                            f"an opportunity to decompose responsibilities into well-named helper functions "
+                            f"that are called by {boundary}."
+                        )
+
+                    helpers = Counter()
+                    for a,b,_ in fragile:
+                        other = b if a == central else a
+                        if other != central:
+                            helpers[other] += 1
+                    if helpers:
+                        names = ", ".join(n for n,_ in helpers.most_common(3))
+                        print(
+                            f"Likely helper candidates include {names}, "
+                            f"which form the weakest boundaries around {boundary}."
+                        )
+
                 else:
-                    print(f"Cohesion weakens at the boundary involving {boundary}, suggesting this function could be extracted with relatively low structural cost.")
+                    print(
+                        f"Cohesion weakens at the boundary involving {boundary}, "
+                        f"suggesting this function could be extracted with relatively low structural cost."
+                    )
 
         print("Files:")
         for f, loc in by_file.items():
@@ -257,10 +281,11 @@ def analyze(paths):
             print("Strong internal edges:")
             for a,b,c in internal[:5]:
                 print(f"  {a} ↔ {b}  ({c:.2f})")
+
         print()
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v11.py <path> [...]")
+        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v12.py <path> [...]")
         sys.exit(1)
     analyze([Path(p) for p in sys.argv[1:]])
