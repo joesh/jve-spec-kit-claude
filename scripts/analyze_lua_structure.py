@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""
-analyze_lua_structure.py
-
-Structural Lua analyzer.
-
-- Preserves original lua_mod_analyze.py analysis semantics
-- Adds lexical scope, delegation, ownership, refactor intent
-- Default output: concise declarative sentences
-- JSON output only via --json / -j
-
-Analysis → Interpretation → Action are strictly separated.
-"""
 
 import sys
 import re
@@ -21,7 +9,7 @@ from pathlib import Path
 from collections import defaultdict, Counter, deque
 
 # -------------------------
-# Frozen thresholds (from original tool)
+# Thresholds (unchanged)
 # -------------------------
 
 CLUSTER_THRESHOLD = 0.35
@@ -32,7 +20,7 @@ SMALL_CLUSTER_MAX = 4
 LEAF_LOC_MAX = 12
 
 # -------------------------
-# Runtime / generic roots (unchanged)
+# Runtime / generic roots
 # -------------------------
 
 LUA_RUNTIME_ROOTS = {
@@ -82,7 +70,7 @@ def extract_context_roots(text):
     return {m.group(1) for m in CONTEXT_ROOT_RE.finditer(text)}
 
 # -------------------------
-# Lua parsing with scope tracking
+# Lua parsing with scope
 # -------------------------
 
 def parse_lua(path):
@@ -98,15 +86,12 @@ def parse_lua(path):
     table_roots = set()
     module_roots = set()
 
-    try:
-        text = path.read_text(errors="ignore")
-    except Exception:
-        return funcs, calls, idents, roots, locs, scopes, enclosing, set(), set(), set()
+    text = path.read_text(errors="ignore")
+    lines = text.splitlines()
 
     depth = 0
     active_stack = []
 
-    lines = text.splitlines()
     for i, line in enumerate(lines):
         stripped = line.strip()
 
@@ -161,10 +146,167 @@ def parse_lua(path):
     )
 
 # -------------------------
-# Analysis (original semantics preserved)
+# Analysis
 # -------------------------
 
-def analyze(paths, generic_roots):
+
+# -------------------------
+# Cluster explanation
+# -------------------------
+
+def _cluster_internal_edges(cluster, all_edges):
+    internal = [(a, b, c) for (a, b, c) in all_edges if a in cluster and b in cluster]
+    internal.sort(key=lambda x: -x[2])
+    return internal
+
+def _central_function(cluster, internal):
+    degree = Counter()
+    for a, b, _ in internal:
+        degree[a] += 1
+        degree[b] += 1
+    central = degree.most_common(1)[0][0] if degree else sorted(cluster)[0]
+    return central, degree
+
+def _salient_context_root(cluster, context_roots, valid_context_roots, generic_roots, global_root_counts, total_functions):
+    cluster_root_counts = Counter()
+    for fn in cluster:
+        for r in context_roots.get(fn, set()):
+            cluster_root_counts[r] += 1
+
+    eligible_roots = {}
+    suppressed = []
+
+    for r, cnt in cluster_root_counts.items():
+        if r in LUA_RUNTIME_ROOTS:
+            suppressed.append((r, "lua runtime"))
+            continue
+        if r in generic_roots:
+            suppressed.append((r, "generic scaffolding"))
+            continue
+        if r not in valid_context_roots:
+            suppressed.append((r, "field-only"))
+            continue
+
+        users = [f for f in cluster if r in context_roots.get(f, set())]
+        if len(users) < 2:
+            suppressed.append((r, "hub-only or single-use"))
+            continue
+
+        global_cov = global_root_counts[r] / max(1, total_functions)
+        if global_cov > GLOBAL_CONTEXT_COVERAGE_MAX:
+            suppressed.append((r, "high global coverage"))
+            continue
+
+        eligible_roots[r] = cnt
+
+    salient_root = None
+    best_salience = 0.0
+    for r, cnt in eligible_roots.items():
+        cluster_freq = cnt / max(1, len(cluster))
+        global_freq = global_root_counts[r] / max(1, total_functions)
+        if global_freq <= 0:
+            continue
+        salience = cluster_freq / global_freq
+        if salience > best_salience:
+            best_salience = salience
+            salient_root = r
+
+    return salient_root, best_salience, suppressed
+
+def _fragile_edges(internal):
+    if not internal:
+        return [], None
+    weights = [c for _, _, c in internal]
+    median = statistics.median(weights) if weights else 0.0
+    fragile = [(a, b, c) for (a, b, c) in internal
+               if (c < median) or (abs(c - CLUSTER_THRESHOLD) <= FRAGILE_MARGIN)]
+    funcs = Counter()
+    for a, b, _ in fragile:
+        funcs[a] += 1
+        funcs[b] += 1
+    boundary = funcs.most_common(1)[0][0] if funcs else None
+    return fragile, boundary
+
+def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_roots,
+                         valid_context_roots, generic_roots, global_root_counts, total_functions,
+                         func_loc, by_file, total_loc, dom_file, dom_pct,
+                         explain_suppressed):
+    sentences = []
+
+    salient_root, salience, suppressed = _salient_context_root(
+        cluster, context_roots, valid_context_roots, generic_roots, global_root_counts, total_functions
+    )
+
+    symmetric_small = (
+        len(cluster) <= SMALL_CLUSTER_MAX and
+        max(fanout.get(f, 0) for f in cluster) <= 2
+    )
+    hub_strength = 0.0
+    if degree:
+        hub_strength = degree[central] / max(1, max(degree.values()))
+    orchestration = (hub_strength >= 0.4 and not symmetric_small)
+
+    if orchestration:
+        sentences.append(
+            f"This cluster is organized around {central}, with cohesion driven by orchestration and coordination logic rather than a shared domain abstraction."
+        )
+    elif salient_root and salience >= CONTEXT_SALIENCE_THRESHOLD:
+        sentences.append(
+            f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage."
+        )
+    else:
+        sentences.append(
+            f"This cluster is organized around {central}, with cohesion driven by shared local interactions rather than a single dominant context root."
+        )
+
+    if dom_file and dom_file != "<unknown>":
+        sentences.append(
+            f"Most logic resides in {dom_file} ({dom_pct}% of cluster LOC), indicating an existing structural center."
+        )
+
+    fragile, boundary = _fragile_edges(internal)
+
+    if fragile and boundary:
+        sentences.append(
+            f"Fragile edges concentrate around {boundary}, which is the lowest-structural-cost seam to peel responsibilities away from the cluster."
+        )
+
+        if boundary == central:
+            sentences.append(
+                f"{central} is the structural hub of this cluster; instead of extracting {central} itself, split responsibilities inside {central} using (a) module-scope helper functions called by {central}, and (b) small nested local helpers for one-off substeps."
+            )
+        else:
+            sentences.append(
+                f"A first extraction candidate is the responsibility centered on {boundary}; it touches the rest of the cluster mostly through weak ties, so it is a good candidate to separate and reattach with low risk."
+            )
+
+        funcs = Counter()
+        for a, b, _ in fragile:
+            funcs[a] += 1
+            funcs[b] += 1
+        boundary_candidates = [f for f, _ in funcs.most_common(5)]
+
+        helpers = [f for f in boundary_candidates if f != central and func_loc.get(f, 0) > LEAF_LOC_MAX]
+        if boundary == central and helpers:
+            names = ", ".join(helpers[:3])
+            sentences.append(
+                f"Likely helper extraction targets include {names}, which sit on the weakest boundaries around {central}."
+            )
+    else:
+        boundary_candidates = []
+
+    return {
+        "sentences": sentences,
+        "central": central,
+        "salient_root": salient_root,
+        "salience": round(float(salience), 3),
+        "orchestration": bool(orchestration),
+        "fragile_edges": [(a, b, round(float(c), 3)) for a, b, c in fragile[:12]],
+        "boundary_candidates": boundary_candidates,
+        "suppressed_roots": suppressed if explain_suppressed else [],
+    }
+
+def analyze(paths, generic_roots, explain_suppressed=False):
     functions = {}
     calls = defaultdict(set)
     idents = {}
@@ -172,7 +314,6 @@ def analyze(paths, generic_roots):
     func_loc = {}
     func_file = {}
     func_scope = {}
-    func_enclosing = {}
     global_root_counts = Counter()
     valid_context_roots = set()
 
@@ -192,7 +333,6 @@ def analyze(paths, generic_roots):
                 func_file[fn] = f.name
                 func_loc[fn] = locs.get(fn, 0)
                 func_scope[fn] = scopes.get(fn, "top")
-                func_enclosing[fn] = enclosing.get(fn)
 
                 for r in roots.get(fn, []):
                     global_root_counts[r] += 1
@@ -205,6 +345,17 @@ def analyze(paths, generic_roots):
 
     total_functions = max(1, len(functions))
     fanout = {fn: len(calls.get(fn, [])) for fn in functions}
+
+    # FIX 2: delegation veneers detected EARLY (graph-opaque)
+    veneers = {}
+    for fn in functions:
+        if func_scope.get(fn) != "top":
+            continue
+        callees = calls.get(fn, set())
+        if len(callees) == 1 and func_loc.get(fn, 0) <= LEAF_LOC_MAX:
+            veneers[fn] = next(iter(callees))
+
+    structural_functions = {fn for fn in functions if fn not in veneers}
 
     def coupling(a, b):
         score = 0.0
@@ -221,18 +372,30 @@ def analyze(paths, generic_roots):
             score -= 0.05
         return max(0.0, min(1.0, score))
 
+
+    # Build edges and adjacency
+    MIN_EDGE = 0.15
+    all_edges = []
+    seen = set()
     adj = defaultdict(set)
-    for a in functions:
-        for b in calls[a]:
-            if b not in functions or a == b:
+    for a in structural_functions:
+        for b in calls.get(a, []):
+            if b not in structural_functions or a == b:
                 continue
-            if coupling(a,b) >= CLUSTER_THRESHOLD:
+            pair = tuple(sorted((a, b)))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            c = coupling(a, b)
+            if c >= MIN_EDGE:
+                all_edges.append((a, b, c))
+            if c >= CLUSTER_THRESHOLD:
                 adj[a].add(b)
                 adj[b].add(a)
 
     visited = set()
-    raw_clusters = []
-    for fn in functions:
+    clusters = []
+    for fn in structural_functions:
         if fn in visited:
             continue
         q = deque([fn])
@@ -245,52 +408,15 @@ def analyze(paths, generic_roots):
             comp.add(cur)
             q.extend(adj[cur])
         if len(comp) > 1:
-            raw_clusters.append(comp)
-
-    # -------------------------
-    # Step 3: exclude nested helpers
-    # -------------------------
-
-    clusters = []
-    for cluster in raw_clusters:
-        filtered = {f for f in cluster if func_scope.get(f) == "top"}
-        if len(filtered) > 1:
-            clusters.append(filtered)
-
-    # -------------------------
-    # Step 4: delegation veneer detection
-    # -------------------------
-
-    veneers = {}
-    for fn in functions:
-        if func_scope.get(fn) != "top":
-            continue
-        callees = calls.get(fn, set())
-        if len(callees) == 1:
-            target = next(iter(callees))
-            if func_loc.get(fn, 0) <= LEAF_LOC_MAX:
-                veneers[fn] = target
-
-    final_clusters = []
-    for cluster in clusters:
-        non_veneers = {f for f in cluster if f not in veneers}
-        if len(non_veneers) > 1:
-            final_clusters.append(non_veneers)
-
-    # -------------------------
-    # Build cluster analyses
-    # -------------------------
+            clusters.append(comp)
 
     results = []
-
-    for idx, cluster in enumerate(sorted(final_clusters, key=len, reverse=True), 1):
+    for idx, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
         degree = Counter()
-        internal_edges = []
         for a in cluster:
             for b in adj[a]:
                 if b in cluster:
                     degree[a] += 1
-                    internal_edges.append((a,b,coupling(a,b)))
 
         central = degree.most_common(1)[0][0]
         hub_strength = degree[central] / max(1, max(degree.values()))
@@ -307,106 +433,75 @@ def analyze(paths, generic_roots):
         else:
             cluster_type = "Model"
 
-        # Context salience (unchanged logic)
-        cluster_root_counts = Counter()
-        suppressed = []
-        eligible = {}
-
-        for fn in cluster:
-            for r in context_roots.get(fn, []):
-                cluster_root_counts[r] += 1
-
-        for r, cnt in cluster_root_counts.items():
-            if r in LUA_RUNTIME_ROOTS:
-                suppressed.append((r, "lua runtime"))
-                continue
-            if r in generic_roots:
-                suppressed.append((r, "generic scaffolding"))
-                continue
-            if r not in valid_context_roots:
-                suppressed.append((r, "field-only"))
-                continue
-            users = [fn for fn in cluster if r in context_roots.get(fn, set()) and fn != central]
-            if len(users) < 2:
-                suppressed.append((r, "hub-only or single-use"))
-                continue
-            global_cov = global_root_counts[r] / total_functions
-            if global_cov > GLOBAL_CONTEXT_COVERAGE_MAX:
-                suppressed.append((r, "high global coverage"))
-                continue
-            eligible[r] = cnt
-
-        salient_root = None
-        best_salience = 0.0
-        for r, cnt in eligible.items():
-            cluster_freq = cnt / len(cluster)
-            global_freq = global_root_counts[r] / total_functions
-            if global_freq > 0:
-                salience = cluster_freq / global_freq
-                if salience > best_salience:
-                    best_salience = salience
-                    salient_root = r
-
-        # File distribution
-        total_loc = sum(func_loc.get(f,0) for f in cluster)
         by_file = Counter()
+        total_loc = 0
         for f in cluster:
-            by_file[func_file.get(f)] += func_loc.get(f,0)
+            l = func_loc.get(f, 0)
+            by_file[func_file.get(f)] += l
+            total_loc += l
 
-        # Ownership (Step 5 revised)
         if len(by_file) == 1:
             ownership = ("InternalComponent", next(iter(by_file)))
         else:
             dom_file, dom_loc = by_file.most_common(1)[0]
-            if dom_loc / total_loc >= 0.67:
+            if dom_loc / max(1, total_loc) >= 0.67:
                 ownership = ("InternalComponent", dom_file)
             else:
                 ownership = ("RecommendNewModule", "<unassigned>")
 
-        # Responsibility summary
-        role = (
-            "coordinates related operations"
-            if cluster_type == "Algorithm"
-            else "manages shared state"
-            if cluster_type == "Model"
-            else "implements atomic behavior"
+        internal = _cluster_internal_edges(cluster, all_edges)
+
+        central, degree = _central_function(cluster, internal)
+
+        dom_file, dom_loc = by_file.most_common(1)[0] if by_file else ("<unknown>", 0)
+
+        dom_pct = int(round(100 * dom_loc / max(1, total_loc)))
+
+        analysis = _analysis_for_cluster(
+
+            cluster=cluster,
+
+            internal=internal,
+
+            central=central,
+
+            degree=degree,
+
+            fanout=fanout,
+
+            context_roots=context_roots,
+
+            valid_context_roots=valid_context_roots,
+
+            generic_roots=generic_roots,
+
+            global_root_counts=global_root_counts,
+
+            total_functions=total_functions,
+
+            func_loc=func_loc,
+
+            by_file=by_file,
+
+            total_loc=total_loc,
+
+            dom_file=dom_file,
+
+            dom_pct=dom_pct,
+
+            explain_suppressed=explain_suppressed,
+
         )
 
-        responsibility = {
-            "kind": "algorithmic" if cluster_type == "Algorithm"
-                    else "stateful" if cluster_type == "Model"
-                    else "mixed",
-            "central": central,
-            "hub": "high" if hub_strength >= 0.6
-                   else "medium" if hub_strength >= 0.4
-                   else "low",
-            "salient_root": salient_root,
-            "role": role
-        }
-
-        # Refactor intent (Step 6)
-        if cluster_type == "Algorithm" and not symmetric_small:
-            refactor = (
-                "RecommendRefactor",
-                "Cluster is organized around a coordinating function; responsibilities can be decomposed with low structural risk.",
-                "Define named helper functions and call them from the central function."
-            )
-        else:
-            refactor = (
-                "NoRefactor",
-                "Cluster is structurally stable.",
-                None
-            )
 
         results.append({
             "id": idx,
-            "functions": sorted(cluster),
             "type": cluster_type,
             "ownership": ownership,
-            "responsibility": responsibility,
-            "refactor": refactor,
+            "analysis": analysis,
+            "functions": sorted(cluster),
             "files": {
-                f: round(100 * l / total_loc)
+                f: round(100 * l / max(1, total_loc))
                 for f,l in by_file.items()
             }
         })
@@ -417,36 +512,50 @@ def analyze(paths, generic_roots):
 # Output
 # -------------------------
 
+
 def print_text(results):
     for r in results:
         print(f"CLUSTER {r['id']}")
         print(f"Type: {r['type']}")
         print()
-        resp = r["responsibility"]
-        print("Responsibility:")
-        print(f"{resp['central']} is the structural center.")
-        if resp["salient_root"]:
-            print(f"Cohesion is driven by shared '{resp['salient_root']}' context usage.")
-        print(f"This cluster {resp['role']}.")
-        print()
         own, mod = r["ownership"]
-        print("Ownership:")
         print(f"{own} of {mod}.")
         print()
-        rec, rat, act = r["refactor"]
-        print("Refactor intent:")
-        print(rat)
-        if act:
-            print(act)
-        print()
+
         print("Files:")
-        for f,p in r["files"].items():
+        for f, p in r["files"].items():
             print(f"{f}: {p}%")
         print()
+
         print("Functions:")
         for fn in r["functions"]:
             print(fn)
         print()
+
+        analysis = r.get("analysis") or {}
+        sentences = analysis.get("sentences") or []
+        if sentences:
+            print("Analysis:")
+            for s in sentences:
+                print(s)
+            print()
+
+        fragile = analysis.get("fragile_edges") or []
+        if fragile:
+            parts = [f"{a} ↔ {b} ({c:.2f})" for a, b, c in fragile[:8]]
+            print("Fragile edges: " + ", ".join(parts) + ".")
+            print()
+
+        bc = analysis.get("boundary_candidates") or []
+        if bc:
+            print("Boundary candidates: " + ", ".join(bc[:5]) + ".")
+            print()
+
+        suppressed = analysis.get("suppressed_roots") or []
+        if suppressed:
+            items = ", ".join([f"{r} ({why})" for r, why in suppressed[:12]])
+            print("Suppressed context roots: " + items + ".")
+            print()
 
 def print_json(results, paths):
     out = {
@@ -468,13 +577,14 @@ def main():
     ap.add_argument("paths", nargs="+")
     ap.add_argument("--json", "-j", action="store_true")
     ap.add_argument("--generic-roots", default="")
+    ap.add_argument("--explain-suppressed", action="store_true")
     args = ap.parse_args()
 
     generic_roots = set(DEFAULT_GENERIC_CONTEXT_ROOTS)
     if args.generic_roots:
         generic_roots |= {r.strip() for r in args.generic_roots.split(",") if r.strip()}
 
-    results = analyze([Path(p) for p in args.paths], generic_roots)
+    results = analyze([Path(p) for p in args.paths], generic_roots, explain_suppressed=args.explain_suppressed)
 
     if args.json:
         print_json(results, args.paths)
