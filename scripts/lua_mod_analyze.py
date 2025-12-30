@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# lua_mod_analyze_cluster_centric_sentences_fragile_v9.py
+# lua_mod_analyze_cluster_centric_sentences_fragile_v11.py
 #
-# Changes from v8:
-# - Excludes Lua runtime / standard-library roots from explanatory attribution
-#   (debug, string, table, math, etc.)
-# - Still uses rarity-weighted + global-coverage-gated salience
-# - No changes to clustering or coupling
+# Option A FINAL:
+# - Coordination contexts are detected mechanically
+# - Coordination contexts are fully suppressed from domain-style explanations
+# - Explanations fall back to orchestration/registration wording
+#
+# No changes to clustering or coupling math.
 
 import sys
 import re
@@ -18,7 +19,6 @@ FRAGILE_MARGIN = 0.10
 CONTEXT_SALIENCE_THRESHOLD = 1.5
 GLOBAL_CONTEXT_COVERAGE_MAX = 0.25
 
-# Lua runtime / standard library tables: never architectural carriers
 LUA_RUNTIME_ROOTS = {
     "debug", "string", "table", "math", "io",
     "os", "coroutine", "package", "_G"
@@ -184,6 +184,8 @@ def analyze(paths):
 
         salient_root = None
         best_salience = 0.0
+        coordination = False
+
         for r, cnt in cluster_root_counts.items():
             if r in LUA_RUNTIME_ROOTS:
                 continue
@@ -192,11 +194,23 @@ def analyze(paths):
                 continue
             cluster_freq = cnt / len(cluster)
             global_freq = global_root_counts[r] / total_functions
-            if global_freq > 0:
-                salience = cluster_freq / global_freq
-                if salience > best_salience:
-                    best_salience = salience
-                    salient_root = r
+            if global_freq <= 0:
+                continue
+            salience = cluster_freq / global_freq
+            if salience > best_salience:
+                best_salience = salience
+                salient_root = r
+
+        if salient_root:
+            hub_hits = 0
+            total_hits = 0
+            for fn in cluster:
+                if salient_root in context_roots.get(fn, []):
+                    total_hits += 1
+                    if fn == central or fanout.get(fn,0) >= fanout.get(central,0)*0.7:
+                        hub_hits += 1
+            if total_hits and hub_hits / total_hits >= 0.6:
+                coordination = True
 
         total = sum(func_loc.get(f,0) for f in cluster)
         by_file = Counter()
@@ -206,7 +220,9 @@ def analyze(paths):
         dom_pct = int(round(100 * dom_loc / total)) if total else 0
 
         print("Analysis:")
-        if salient_root and best_salience >= CONTEXT_SALIENCE_THRESHOLD:
+        if coordination:
+            print(f"This cluster is organized around {central}, with cohesion driven primarily by orchestration and registration logic rather than a shared domain context.")
+        elif salient_root and best_salience >= CONTEXT_SALIENCE_THRESHOLD:
             print(f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage.")
         else:
             print(f"This cluster is organized around {central}, with cohesion driven primarily by internal call structure rather than shared context.")
@@ -214,52 +230,23 @@ def analyze(paths):
         if dom_pct >= 67:
             print(f"Most logic resides in {dom_file} ({dom_pct}% of cluster LOC), indicating an existing structural center.")
         else:
-            files = ', '.join(by_file.keys())
-            print(f"Logic is split across {files}, with no single file fully dominating the cluster.")
+            print(f"Logic is split across multiple files, with no single file fully dominating the cluster.")
 
         if internal:
             weights = [c for _,_,c in internal]
             median = statistics.median(weights)
             fragile = [(a,b,c) for (a,b,c) in internal
                        if c < median or abs(c - CLUSTER_THRESHOLD) <= FRAGILE_MARGIN]
-
             if fragile:
                 funcs = Counter()
                 for a,b,_ in fragile:
                     funcs[a] += 1
                     funcs[b] += 1
                 boundary = funcs.most_common(1)[0][0]
-
                 if boundary == central:
-                    print(
-                        f"{boundary} is the structural hub of this cluster; weaker connections here suggest "
-                        f"an opportunity to decompose responsibilities inside the function rather than extract it."
-                    )
+                    print(f"{boundary} is the structural hub of this cluster; weaker connections here suggest an opportunity to decompose responsibilities inside the function rather than extract it.")
                 else:
-                    frag_neighbors = [
-                        (b if a == boundary else a)
-                        for (a,b,_) in fragile
-                        if a == boundary or b == boundary
-                    ]
-                    by_root = Counter()
-                    for n in frag_neighbors:
-                        for r in context_roots.get(n, []):
-                            if r in LUA_RUNTIME_ROOTS:
-                                continue
-                            by_root[r] += 1
-                    if by_root:
-                        root = by_root.most_common(1)[0][0]
-                        print(
-                            f"Cohesion weakens at the boundary involving {boundary}, "
-                            f"suggesting it primarily mediates '{root}' behavior and could be extracted "
-                            f"along that responsibility with low structural cost."
-                        )
-                    else:
-                        print(
-                            f"Cohesion weakens at the boundary involving {boundary}, "
-                            f"suggesting this function could be extracted alongside its immediate collaborators "
-                            f"with relatively low structural cost."
-                        )
+                    print(f"Cohesion weakens at the boundary involving {boundary}, suggesting this function could be extracted with relatively low structural cost.")
 
         print("Files:")
         for f, loc in by_file.items():
@@ -270,11 +257,10 @@ def analyze(paths):
             print("Strong internal edges:")
             for a,b,c in internal[:5]:
                 print(f"  {a} ↔ {b}  ({c:.2f})")
-
         print()
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v9.py <path> [...]")
+        print("usage: lua_mod_analyze_cluster_centric_sentences_fragile_v11.py <path> [...]")
         sys.exit(1)
     analyze([Path(p) for p in sys.argv[1:]])
