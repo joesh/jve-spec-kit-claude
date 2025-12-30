@@ -477,3 +477,68 @@ quality of those things.
   1. Check what exists in those directories
   2. Propose either using existing indices or building a new one
   3. Design a two-pass approach: index → analyze
+
+***more goes here***
+
+Ah! They're calling THEMSELVES - they're recursive! handle_command_event has fanin=1 and its only caller
+   is itself.These aren't exclusive helpers - they're recursive functions or functions that are only 
+  referenced from themselves (maybe as callbacks or method references).So the call tree ownership approach
+   really doesn't work for this codebase because:
+  1. Functions with fanin=1 are mostly recursive or self-referential
+  2. All actual helpers are shared (fanin > 1)The codebase is not hierarchical - it's a peer network where
+   functions call each other mutually.
+
+  I need to admit to the user that this approach doesn't work for this codebase and ask what they want to 
+  do next.
+
+⏺ Ah! The fanin=1 functions are calling themselves (recursive/self-referential). They're not exclusive helpers.
+
+  The fundamental problem: This codebase doesn't have the hierarchical call tree structure I assumed. Instead:
+  - Functions with fanin=1: Recursive or self-referential
+  - Actual helpers: All shared (fanin=2-5)
+  - Architecture: Peer network, not tree
+
+  The call tree ownership approach assumes:
+  - ✅ Clear orchestrators (high fanout) - EXISTS
+  - ❌ Exclusive helpers (fanin=1 to orchestrator) - DOESN'T EXIST
+
+  This codebase is highly interconnected - functions reuse each other mutually rather than forming clean hierarchies.
+
+  What should we try instead?
+  1. Relax exclusivity: Allow helpers with fanin=2-3 (weak ownership)
+  2. Primary caller: Assign shared helpers to whoever calls them most
+  3. Semantic + structural hybrid: Weight name similarity higher
+  4. Different architectural pattern: Accept the peer network, cluster by domain instead
+
+  What's your preference?
+
+> I find it unlikely that functions re-use each other mutually all over the place. I also find it 
+unlikely that most functions are recursive. Have you checked the code yourself to see if these results
+ are accurate? Perhaps there's just something wrong with the call graph crawler that you've made or 
+you're using it wrong. 
+
+∴ Thinking…
+
+  The user is right to be skeptical. Let me actually check the code to see if the call graph is accurate.
+
+  Let me look at one of the fanin=1 functions that supposedly calls itself - handle_command_event:
+
+⏺ You're absolutely right to be skeptical. Let me actually look at the code:
+
+Thinking…
+
+  Ah! I see the bug now. Look at line 87:
+
+  command_manager.add_listener(profile_scope.wrap("project_browser.command_listener", 
+  handle_command_event))
+
+  The call graph crawler is seeing handle_command_event) (with the closing paren) as a function call! It's
+   matching the CALL_RE pattern \b([a-zA-Z0-9_.:]+)\s*\(, but handle_command_event here is being PASSED AS
+   A PARAMETER, not called.
+
+  So the issue is: my call graph crawler doesn't distinguish between function calls and function 
+  references passed as arguments.
+
+  This is a major bug. When you pass a function as a callback (like add_listener(handle_command_event)), 
+  the regex thinks it's calling handle_command_event().
+

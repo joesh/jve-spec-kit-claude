@@ -56,29 +56,26 @@ def parse_lua_file(path):
         print(f"Warning: Could not read {path}: {e}", file=sys.stderr)
         return {}, {}, {}
 
-    # Find all function definitions with line numbers
+    # Find all function definitions with positions
+    func_matches = []
     for m in FUNC_DEF_RE.finditer(text):
         fn_name = m.group(1)
         line_num = text[:m.start()].count('\n') + 1
         funcs[fn_name] = line_num
+        func_matches.append((fn_name, m.start(), m.end()))
 
-    # Extract function bodies and analyze
-    names = list(funcs.keys())
-    for i, name in enumerate(names):
-        start_pos = text.find(f"function {name}")
-        if start_pos == -1:
-            continue
+    # Extract function bodies using actual match positions
+    for i, (name, match_start, match_end) in enumerate(func_matches):
+        # Body starts after "function name(...)"
+        body_start = match_end
 
-        # Find function body (ends at next function or EOF)
-        end_pos = funcs[names[i+1]] if i+1 < len(names) else len(text)
-        if i+1 < len(names):
-            # Find actual position of next function
-            next_fn_text = f"function {names[i+1]}"
-            end_pos = text.find(next_fn_text, start_pos + 1)
-            if end_pos == -1:
-                end_pos = len(text)
+        # Body ends at the start of next function (or EOF)
+        if i + 1 < len(func_matches):
+            body_end = func_matches[i + 1][1]  # Start position of next function
+        else:
+            body_end = len(text)
 
-        body = text[start_pos:end_pos]
+        body = text[body_start:body_end]
         locs[name] = compute_loc(body)
 
         # Extract function calls

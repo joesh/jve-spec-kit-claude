@@ -474,74 +474,88 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 adj[a].add(b)
                 adj[b].add(a)
 
-    # Apply community detection if NetworkX available
-    if HAS_NETWORKX:
-        # Build graph with coupling weights
-        G = nx.Graph()
-        for a in structural_functions:
-            for b in adj[a]:
-                if a < b:  # Add each edge once
-                    # Find coupling score for this edge
-                    edge_weight = coupling(a, b)
-                    G.add_edge(a, b, weight=edge_weight)
-
-        # Use Louvain community detection
-        if len(G.edges()) > 0:
-            print(f"# Running Louvain community detection on {len(G.nodes())} nodes, {len(G.edges())} edges...", file=sys.stderr)
-
-            try:
-                from networkx.algorithms import community as nx_comm
-
-                # Louvain method - maximizes modularity
-                # Higher resolution = more, smaller communities
-                communities = nx_comm.louvain_communities(G, weight='weight', resolution=2.0, seed=42)
-
-                print(f"# Found {len(communities)} communities via Louvain", file=sys.stderr)
-
-                # Convert to cluster format
-                clusters = []
-                for i, comm in enumerate(communities):
-                    if len(comm) > 1:  # Only keep multi-function clusters
-                        clusters.append(comm)
-                        print(f"#   Community {i+1}: {len(comm)} functions", file=sys.stderr)
-
-            except ImportError:
-                print("# NetworkX community module not available, falling back to BFS", file=sys.stderr)
-                # Fallback to BFS
-                visited = set()
-                clusters = []
-                for fn in structural_functions:
-                    if fn in visited:
-                        continue
-                    q = deque([fn])
-                    comp = set()
-                    while q:
-                        cur = q.popleft()
-                        if cur in visited:
-                            continue
-                        visited.add(cur)
-                        comp.add(cur)
-                        q.extend(adj[cur])
-                    if len(comp) > 1:
-                        clusters.append(comp)
-    else:
-        # No NetworkX - use simple BFS
-        visited = set()
-        clusters = []
+    # Calculate fanin and callers
+    # Use global data from call graph if available, otherwise calculate locally
+    if call_graph:
+        fanin = {fn: call_graph.get(fn, {}).get('fanin', 0) for fn in structural_functions}
+        # Use global callers from call graph (but filter to structural_functions)
+        callers = defaultdict(set)
         for fn in structural_functions:
-            if fn in visited:
-                continue
-            q = deque([fn])
-            comp = set()
-            while q:
-                cur = q.popleft()
-                if cur in visited:
+            if fn in call_graph:
+                global_callers = set(call_graph[fn].get('callers', []))
+                # Only include callers that are in structural_functions
+                callers[fn] = global_callers & structural_functions
+    else:
+        # Local calculation (for when call_graph not provided)
+        fanin = Counter()
+        callers = defaultdict(set)
+        for caller in structural_functions:
+            for callee in calls.get(caller, []):
+                if callee in structural_functions:
+                    fanin[callee] += 1
+                    callers[callee].add(caller)
+
+    print(f"# Building call tree ownership clusters...", file=sys.stderr)
+
+    # Identify orchestrators (high fanout - call many helpers)
+    ORCHESTRATOR_THRESHOLD = 3
+    orchestrators = {fn for fn in structural_functions if len(calls.get(fn, [])) >= ORCHESTRATOR_THRESHOLD}
+    print(f"# Found {len(orchestrators)} orchestrators (fanout >= {ORCHESTRATOR_THRESHOLD})", file=sys.stderr)
+
+    # Build clusters around orchestrators using call tree ownership
+    clusters = []
+    claimed = set()  # Track which functions have been claimed by a cluster
+
+    # Sort orchestrators by fanout (descending) to process larger trees first
+    orchestrators_sorted = sorted(orchestrators, key=lambda f: len(calls.get(f, [])), reverse=True)
+
+    for orch in orchestrators_sorted:
+        if orch in claimed:
+            continue  # Already part of another cluster
+
+        cluster = {orch}
+        claimed.add(orch)
+
+        # Recursively add exclusive helpers (fanin=1, only called by this orchestrator)
+        def add_exclusive_subtree(fn, depth=0):
+            for callee in calls.get(fn, []):
+                if callee not in structural_functions:
                     continue
-                visited.add(cur)
-                comp.add(cur)
-                q.extend(adj[cur])
-            if len(comp) > 1:
-                clusters.append(comp)
+                if callee in claimed:
+                    continue
+
+                # Check if this is an exclusive helper (only called by functions in this cluster)
+                callee_fanin = fanin.get(callee, 0)
+                callee_callers = callers.get(callee, set())
+
+                if callee_fanin == 1 and callee_callers <= cluster:
+                    cluster.add(callee)
+                    claimed.add(callee)
+                    add_exclusive_subtree(callee, depth+1)  # Recursive
+
+        add_exclusive_subtree(orch)
+
+        if len(cluster) > 1:
+            clusters.append(cluster)
+
+    # Handle remaining unclaimed functions (leaves with no orchestrator, or shared helpers)
+    unclaimed = structural_functions - claimed
+    if unclaimed:
+        print(f"# {len(unclaimed)} unclaimed functions (shared helpers or standalone)", file=sys.stderr)
+
+        # Group unclaimed functions by shared callers (potential utility clusters)
+        utility_clusters = defaultdict(set)
+        for fn in unclaimed:
+            caller_tuple = tuple(sorted(callers.get(fn, set())))
+            if len(caller_tuple) >= 2:  # Called by multiple functions
+                utility_clusters[caller_tuple].add(fn)
+
+        for caller_set, fns in utility_clusters.items():
+            if len(fns) >= 2:  # At least 2 shared helpers
+                clusters.append(fns)
+                claimed.update(fns)
+
+    print(f"# Created {len(clusters)} call tree clusters", file=sys.stderr)
 
     results = []
     for idx, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
@@ -551,8 +565,14 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 if b in cluster:
                     degree[a] += 1
 
-        central = degree.most_common(1)[0][0]
-        hub_strength = degree[central] / max(1, max(degree.values()))
+        # For call tree clusters, central function is the orchestrator (highest fanout)
+        if degree:
+            central = degree.most_common(1)[0][0]
+            hub_strength = degree[central] / max(1, max(degree.values()))
+        else:
+            # No internal edges - pick function with highest fanout as central
+            central = max(cluster, key=lambda f: len(calls.get(f, [])))
+            hub_strength = 1.0  # It's the only orchestrator
 
         symmetric_small = (
             len(cluster) <= SMALL_CLUSTER_MAX and
