@@ -8,6 +8,12 @@ import statistics
 from pathlib import Path
 from collections import defaultdict, Counter, deque
 
+try:
+    import networkx as nx
+    HAS_NETWORKX = True
+except ImportError:
+    HAS_NETWORKX = False
+
 # -------------------------
 # Thresholds (unchanged)
 # -------------------------
@@ -18,6 +24,7 @@ CONTEXT_SALIENCE_THRESHOLD = 1.5
 GLOBAL_CONTEXT_COVERAGE_MAX = 0.25
 SMALL_CLUSTER_MAX = 4
 LEAF_LOC_MAX = 12
+BETWEENNESS_THRESHOLD = 0.06  # Filter edges with betweenness > this (bridge edges)
 
 # -------------------------
 # Runtime / generic roots
@@ -393,22 +400,73 @@ def analyze(paths, generic_roots, explain_suppressed=False):
                 adj[a].add(b)
                 adj[b].add(a)
 
-    visited = set()
-    clusters = []
-    for fn in structural_functions:
-        if fn in visited:
-            continue
-        q = deque([fn])
-        comp = set()
-        while q:
-            cur = q.popleft()
-            if cur in visited:
+    # Apply community detection if NetworkX available
+    if HAS_NETWORKX:
+        # Build graph with coupling weights
+        G = nx.Graph()
+        for a in structural_functions:
+            for b in adj[a]:
+                if a < b:  # Add each edge once
+                    # Find coupling score for this edge
+                    edge_weight = coupling(a, b)
+                    G.add_edge(a, b, weight=edge_weight)
+
+        # Use Louvain community detection
+        if len(G.edges()) > 0:
+            print(f"# Running Louvain community detection on {len(G.nodes())} nodes, {len(G.edges())} edges...", file=sys.stderr)
+
+            try:
+                from networkx.algorithms import community as nx_comm
+
+                # Louvain method - maximizes modularity
+                communities = nx_comm.louvain_communities(G, weight='weight', resolution=1.0, seed=42)
+
+                print(f"# Found {len(communities)} communities via Louvain", file=sys.stderr)
+
+                # Convert to cluster format
+                clusters = []
+                for i, comm in enumerate(communities):
+                    if len(comm) > 1:  # Only keep multi-function clusters
+                        clusters.append(comm)
+                        print(f"#   Community {i+1}: {len(comm)} functions", file=sys.stderr)
+
+            except ImportError:
+                print("# NetworkX community module not available, falling back to BFS", file=sys.stderr)
+                # Fallback to BFS
+                visited = set()
+                clusters = []
+                for fn in structural_functions:
+                    if fn in visited:
+                        continue
+                    q = deque([fn])
+                    comp = set()
+                    while q:
+                        cur = q.popleft()
+                        if cur in visited:
+                            continue
+                        visited.add(cur)
+                        comp.add(cur)
+                        q.extend(adj[cur])
+                    if len(comp) > 1:
+                        clusters.append(comp)
+    else:
+        # No NetworkX - use simple BFS
+        visited = set()
+        clusters = []
+        for fn in structural_functions:
+            if fn in visited:
                 continue
-            visited.add(cur)
-            comp.add(cur)
-            q.extend(adj[cur])
-        if len(comp) > 1:
-            clusters.append(comp)
+            q = deque([fn])
+            comp = set()
+            while q:
+                cur = q.popleft()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                comp.add(cur)
+                q.extend(adj[cur])
+            if len(comp) > 1:
+                clusters.append(comp)
 
     results = []
     for idx, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
