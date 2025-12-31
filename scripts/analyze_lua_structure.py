@@ -205,54 +205,68 @@ def calculate_nucleus_score(fn_name, cluster, calls, callers, context_roots, boi
     """
     Calculate nucleus score for a function within a cluster.
 
-    A nucleus is where semantic meaning concentrates, not merely where control flows.
+    RECALIBRATED FOR UI/ORCHESTRATION CODE (not pure algorithms):
+    - UI code has directional calls (low inward centrality)
+    - State is often implicit (low shared context overlap)
+    - Name similarity indicates semantic coherence
 
-    Required signals:
-    1. Inward reference strength (other cluster functions call into this)
-    2. Shared context participation (shares non-boilerplate context roots)
-    3. Low boilerplate score
-
-    Formula:
+    Formula (recalibrated):
         nucleus_score =
-            0.45 * inward_call_centrality +
-            0.35 * shared_context_overlap -
-            0.20 * boilerplate_score
+            0.30 * inward_call_centrality +
+            0.30 * shared_context_overlap +
+            0.25 * semantic_name_overlap_with_cluster -
+            0.15 * boilerplate_score
 
-    Normalized to [0, 1].
-    Threshold: ≥ 0.65 → eligible nucleus
+    Thresholds (lowered for UI domain):
+        proto-nucleus: ≥ 0.45
+        nucleus: ≥ 0.55
 
     Returns: float in [0, 1]
     """
-    # 1. Inward call centrality (how many cluster functions call this one)
+    # 1. Inward call centrality (reduced weight: 0.30, was 0.45)
     cluster_callers = [c for c in callers.get(fn_name, []) if c in cluster]
-    inward_centrality = len(cluster_callers) / max(1, len(cluster) - 1)  # Normalize by cluster size
+    inward_centrality = len(cluster_callers) / max(1, len(cluster) - 1)
 
-    # 2. Shared context overlap (how many context roots are shared with cluster peers)
+    # 2. Shared context overlap (reduced weight: 0.30, was 0.35)
     fn_roots = context_roots.get(fn_name, set())
-
-    # Get all context roots used by cluster (excluding boilerplate-heavy functions)
     cluster_roots = set()
     for other_fn in cluster:
-        if other_fn != fn_name and boilerplate_scores.get(other_fn, 0) < 0.6:
+        if other_fn != fn_name:
             cluster_roots.update(context_roots.get(other_fn, set()))
 
-    # Calculate overlap
     if fn_roots and cluster_roots:
         shared = fn_roots & cluster_roots
-        shared_overlap = len(shared) / len(fn_roots)  # Fraction of this fn's roots that are shared
+        shared_overlap = len(shared) / len(fn_roots)
     else:
         shared_overlap = 0.0
 
-    # 3. Boilerplate penalty
+    # 3. Semantic name overlap with cluster (NEW: 0.25)
+    fn_base = fn_name.split('.')[-1].split(':')[-1]
+    cluster_bases = [f.split('.')[-1].split(':')[-1] for f in cluster if f != fn_name]
+
+    fn_tokens = set(fn_base.lower().split('_'))
+    name_overlap = 0.0
+    if cluster_bases and fn_tokens:
+        overlaps = []
+        for other_base in cluster_bases:
+            other_tokens = set(other_base.lower().split('_'))
+            if fn_tokens and other_tokens:
+                overlap = len(fn_tokens & other_tokens) / len(fn_tokens)
+                overlaps.append(overlap)
+        if overlaps:
+            name_overlap = sum(overlaps) / len(overlaps)
+
+    # 4. Boilerplate penalty (reduced: 0.15, was 0.20)
     boilerplate = boilerplate_scores.get(fn_name, 0)
 
     score = (
-        0.45 * inward_centrality +
-        0.35 * shared_overlap -
-        0.20 * boilerplate
+        0.30 * inward_centrality +
+        0.30 * shared_overlap +
+        0.25 * name_overlap -
+        0.15 * boilerplate
     )
 
-    return max(0.0, min(1.0, score))  # Clamp to [0, 1]
+    return max(0.0, min(1.0, score))
 
 def calculate_leverage_score(fn_name, cluster, inappropriate_connections, nucleus_scores, degree):
     """
@@ -329,7 +343,7 @@ def find_inappropriate_connections(cluster, internal_edges, nucleus_scores, cont
         # Check for shared nucleus (both have high nucleus score and share contexts)
         nucleus_a = nucleus_scores.get(fn_a, 0)
         nucleus_b = nucleus_scores.get(fn_b, 0)
-        both_nucleus = nucleus_a >= 0.65 and nucleus_b >= 0.65
+        both_nucleus = nucleus_a >= 0.55 and nucleus_b >= 0.55
 
         # Check for shared non-boilerplate context roots
         roots_a = context_roots.get(fn_a, set())
@@ -367,8 +381,8 @@ def detect_proto_nucleus(cluster, nucleus_scores, context_roots, boilerplate_sco
 
     Returns: list of functions in proto-nucleus, or empty list if none detected
     """
-    # Find candidates with scores ≥ 0.40 but < 0.65 (nucleus threshold)
-    candidates = [fn for fn in cluster if 0.40 <= nucleus_scores.get(fn, 0) < 0.65]
+    # Find candidates with scores ≥ 0.40 but < 0.55 (nucleus threshold)
+    candidates = [fn for fn in cluster if 0.40 <= nucleus_scores.get(fn, 0) < 0.55]
 
     if len(candidates) < 2:
         return []
@@ -382,7 +396,7 @@ def detect_proto_nucleus(cluster, nucleus_scores, context_roots, boilerplate_sco
 
         # Check collective dominance (mean ≥ 0.50)
         proto_strength = sum(nucleus_scores.get(f, 0) for f in proto_set) / len(proto_set)
-        if proto_strength < 0.50:
+        if proto_strength < 0.45:
             continue
 
         # Check shared semantic support
@@ -449,7 +463,7 @@ def validate_and_split_clusters(clusters, calls, callers, context_roots):
             nucleus_scores[fn] = score
 
         # Find nuclei (functions meeting threshold)
-        nuclei = [fn for fn in cluster if nucleus_scores[fn] >= 0.65]
+        nuclei = [fn for fn in cluster if nucleus_scores[fn] >= 0.55]
 
         if len(nuclei) > 1:
             # Competing nuclei - should split cluster
@@ -677,7 +691,7 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
     nucleus = None
     nucleus_score = 0.0
     for fn in cluster:
-        if nucleus_scores[fn] >= 0.65:
+        if nucleus_scores[fn] >= 0.55:
             if nucleus_scores[fn] > nucleus_score:
                 nucleus = fn
                 nucleus_score = nucleus_scores[fn]
@@ -932,13 +946,14 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 
         return max(0.0, min(1.0, score))
 
-    # Calculate boilerplate scores once (ChatGPT Fix #2)
-    # Will use to neutralize boilerplate edges structurally
-    boilerplate_scores = {}
-    for fn in structural_functions:
-        boilerplate_scores[fn] = calculate_boilerplate_score(fn, calls, context_roots)
+    # ====================================================================================
+    # PHASE A: DISCOVER STRUCTURE (NO SUPPRESSION)
+    # ====================================================================================
+    # Measure what structure exists using ONLY positive structural signals.
+    # NO boilerplate downweighting, NO orchestrator filtering, NO ownership logic.
+    # This phase answers: "What structure wants to exist?"
 
-    # Build edges and adjacency
+    # Build edges and adjacency from RAW structural signals
     MIN_EDGE = 0.15
     all_edges = []
     seen = set()
@@ -951,12 +966,7 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
             if pair in seen:
                 continue
             seen.add(pair)
-            c = coupling(a, b)
-
-            # ChatGPT Fix #2: Boilerplate edge neutralization
-            # Boilerplate creates edges everywhere but shouldn't define structure
-            if boilerplate_scores.get(a, 0) >= 0.6 or boilerplate_scores.get(b, 0) >= 0.6:
-                c *= 0.4  # Downweight heavily
+            c = coupling(a, b)  # NO boilerplate downweighting - measure raw structure
 
             if c >= MIN_EDGE:
                 all_edges.append((a, b, c))
@@ -985,43 +995,11 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                     fanin[callee] += 1
                     callers[callee].add(caller)
 
-    # PRE-OWNERSHIP CLUSTERING PASS
-    # Identify orchestrators FIRST, then downweight their edges to prevent collapsing proto-nuclei
+    # Find connected components using simple DFS (no orchestrator filtering, no ownership logic)
+    print(f"# Phase A: Discovering structure from raw signals...", file=sys.stderr)
 
-    print(f"# Building call tree ownership clusters...", file=sys.stderr)
-
-    # Identify orchestrators (high fanout - call many helpers)
-    # Use global fanout from call_graph if available, otherwise use local fanout
-    ORCHESTRATOR_THRESHOLD = 3
-    if call_graph:
-        global_fanout = {fn: call_graph.get(fn, {}).get('fanout', 0) for fn in structural_functions}
-        orchestrators = {fn for fn in structural_functions if global_fanout.get(fn, 0) >= ORCHESTRATOR_THRESHOLD}
-    else:
-        orchestrators = {fn for fn in structural_functions if len(calls.get(fn, [])) >= ORCHESTRATOR_THRESHOLD}
-    print(f"# Found {len(orchestrators)} orchestrators (fanout >= {ORCHESTRATOR_THRESHOLD})", file=sys.stderr)
-
-    # Downweight orchestrator→helper edges by excluding them from component detection
-    # This allows weakly connected subgraphs (proto-nuclei) to emerge before orchestrator
-    # clustering collapses them into larger ownership trees
-    adj_downweighted = defaultdict(set)
-
-    for a in structural_functions:
-        for b in adj[a]:
-            # Exclude edges where ONE endpoint is an orchestrator (orchestrator→helper relationships)
-            # Keep edges where BOTH are non-orchestrators (peer-to-peer relationships)
-            # Keep edges where BOTH are orchestrators (orchestrator-to-orchestrator collaboration)
-            a_is_orch = a in orchestrators
-            b_is_orch = b in orchestrators
-
-            # Only include edge if it's NOT an orchestrator→helper edge
-            # (i.e., both non-orch, or both orch, but not one-of-each)
-            if a_is_orch == b_is_orch:
-                adj_downweighted[a].add(b)
-                adj_downweighted[b].add(a)
-
-    # Find connected components in the downweighted graph
     def find_connected_components(nodes, adjacency):
-        """Find weakly connected components using DFS"""
+        """Find connected components using DFS - pure graph algorithm, no domain logic"""
         visited = set()
         components = []
 
@@ -1029,7 +1007,6 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
             if node in visited:
                 continue
 
-            # DFS to find component
             component = set()
             stack = [node]
             while stack:
@@ -1040,130 +1017,30 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 component.add(n)
                 stack.extend(adjacency.get(n, set()) - visited)
 
-            if len(component) >= 2:  # Only consider multi-function components
+            if len(component) >= 2:  # Only multi-function clusters
                 components.append(component)
 
         return components
 
-    components = find_connected_components(structural_functions, adj_downweighted)
+    raw_clusters = find_connected_components(structural_functions, adj)
+    print(f"# Phase A: Found {len(raw_clusters)} raw clusters from structural coupling", file=sys.stderr)
 
-    # Detect proto-nuclei among small components (2-5 functions)
-    proto_nucleus_clusters = []
-    proto_nucleus_functions = set()
+    # Handle unclaimed functions (singletons with no edges above threshold)
+    claimed = set()
+    for cluster in raw_clusters:
+        claimed.update(cluster)
 
-    for comp in components:
-        if 2 <= len(comp) <= 5:
-            # Calculate nucleus scores for this component
-            comp_boilerplate_scores = {fn: boilerplate_scores[fn] for fn in comp}
-            comp_nucleus_scores = {}
-            for fn in comp:
-                score = calculate_nucleus_score(fn, comp, calls, callers, context_roots, comp_boilerplate_scores)
-                comp_nucleus_scores[fn] = score
-
-            # Check if this component is a proto-nucleus
-            proto = detect_proto_nucleus(comp, comp_nucleus_scores, context_roots, comp_boilerplate_scores, calls)
-            if proto:
-                proto_nucleus_clusters.append(set(comp))
-                proto_nucleus_functions.update(comp)
-
-    if proto_nucleus_clusters:
-        print(f"# Detected {len(proto_nucleus_clusters)} proto-nucleus cluster(s) before ownership pass", file=sys.stderr)
-
-    # Build clusters around orchestrators using call tree ownership
-    clusters = []
-    claimed = set()  # Track which functions have been claimed by a cluster
-
-    # Mark proto-nucleus functions as already claimed (preserve them from orchestrator clustering)
-    for proto_cluster in proto_nucleus_clusters:
-        clusters.append(proto_cluster)
-        claimed.update(proto_cluster)
-
-    # Sort orchestrators by fanout (descending) to process larger trees first
-    orchestrators_sorted = sorted(orchestrators, key=lambda f: len(calls.get(f, [])), reverse=True)
-
-    for orch in orchestrators_sorted:
-        if orch in claimed:
-            continue  # Already part of another cluster
-
-        cluster = {orch}
-        claimed.add(orch)
-
-        # Recursively add exclusive helpers (fanin=1, only called by this orchestrator)
-        def add_exclusive_subtree(fn, depth=0):
-            # Use global call graph's calls if available, otherwise use local calls
-            if call_graph and fn in call_graph:
-                fn_callees = set(call_graph[fn].get('calls', []))
-            else:
-                fn_callees = calls.get(fn, set())
-
-            for callee in fn_callees:
-                if callee not in structural_functions:
-                    continue
-                if callee in claimed:
-                    continue
-
-                # Check if this is an exclusive helper (only called by functions in this cluster)
-                callee_fanin = fanin.get(callee, 0)
-                callee_callers = callers.get(callee, set())
-
-                # Module exports (module.func) are public interface - never treat as exclusive helpers
-                # With qualified names: module exports contain '.', local functions contain ':'
-                is_module_export = '.' in callee and ':' not in callee
-
-                if callee_fanin == 1 and callee_callers <= cluster and not is_module_export:
-                    cluster.add(callee)
-                    claimed.add(callee)
-                    add_exclusive_subtree(callee, depth+1)  # Recursive
-
-        add_exclusive_subtree(orch)
-
-        if len(cluster) > 1:
-            clusters.append(cluster)
-
-    # Handle remaining unclaimed functions (leaves with no orchestrator, or shared helpers)
-    # Exclude module interface functions (module.func) - those are intentional, not unclaimed
-    # With qualified names: module exports contain '.', local functions contain ':'
     unclaimed = {fn for fn in (structural_functions - claimed) if ':' in fn}
 
-    if unclaimed:
-        # Group unclaimed functions by shared callers (potential utility clusters)
-        utility_clusters = defaultdict(set)
-        for fn in unclaimed:
-            caller_tuple = tuple(sorted(callers.get(fn, set())))
-            if len(caller_tuple) >= 2:  # Called by multiple functions
-                utility_clusters[caller_tuple].add(fn)
+    # ====================================================================================
+    # PHASE B: JUDGE QUALITY (APPLY SCORING ON TOP OF PHASE A CLUSTERS)
+    # ====================================================================================
+    # This phase answers: "What is cheap/safe to extract? What should we do about this structure?"
+    # Scoring happens HERE, not during discovery.
 
-        for caller_set, fns in utility_clusters.items():
-            if len(fns) >= 2:  # At least 2 shared helpers
-                clusters.append(fns)
-                claimed.update(fns)
+    print(f"# Phase B: Scoring clusters for quality and refactoring guidance...", file=sys.stderr)
 
-        # Recompute unclaimed after forming utility clusters
-        unclaimed = {fn for fn in (structural_functions - claimed) if ':' in fn}
-
-    # Validate clusters based on nucleus scores (ChatGPT Fix #1)
-    # Split/downgrade clusters with multiple or zero nuclei
-    valid_clusters, weak_clusters = validate_and_split_clusters(clusters, calls, callers, context_roots)
-
-    # Report weak clusters
-    if weak_clusters:
-        print(f"# Downgraded {len(weak_clusters)} weak clusters (competing/no nuclei)", file=sys.stderr)
-        for weak in weak_clusters:
-            reason = weak['reason']
-            if reason == 'competing_nuclei':
-                print(f"#   {len(weak['cluster'])} functions with {len(weak['nuclei'])} competing nuclei", file=sys.stderr)
-            else:
-                print(f"#   {len(weak['cluster'])} functions with no nucleus (scaffolding)", file=sys.stderr)
-
-    # Use validated clusters
-    clusters = valid_clusters
-
-    # Count proto-nucleus clusters (those that were detected before ownership pass)
-    proto_count = len(proto_nucleus_clusters)
-    ownership_count = len(clusters) - proto_count
-
-    print(f"# Created {len(clusters)} clusters ({proto_count} proto-nucleus, {ownership_count} ownership, {len(weak_clusters)} downgraded)", file=sys.stderr)
-    print(f"# {len(unclaimed)} unclaimed internal functions", file=sys.stderr)
+    clusters = raw_clusters  # Phase B operates on Phase A output
 
     # Build unclaimed_details AFTER all clustering is complete
     unclaimed_details = []
