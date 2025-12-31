@@ -985,6 +985,9 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                     fanin[callee] += 1
                     callers[callee].add(caller)
 
+    # PRE-OWNERSHIP CLUSTERING PASS
+    # Identify orchestrators FIRST, then downweight their edges to prevent collapsing proto-nuclei
+
     print(f"# Building call tree ownership clusters...", file=sys.stderr)
 
     # Identify orchestrators (high fanout - call many helpers)
@@ -997,9 +1000,83 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
         orchestrators = {fn for fn in structural_functions if len(calls.get(fn, [])) >= ORCHESTRATOR_THRESHOLD}
     print(f"# Found {len(orchestrators)} orchestrators (fanout >= {ORCHESTRATOR_THRESHOLD})", file=sys.stderr)
 
+    # Downweight orchestrator→helper edges by excluding them from component detection
+    # This allows weakly connected subgraphs (proto-nuclei) to emerge before orchestrator
+    # clustering collapses them into larger ownership trees
+    adj_downweighted = defaultdict(set)
+
+    for a in structural_functions:
+        for b in adj[a]:
+            # Exclude edges where ONE endpoint is an orchestrator (orchestrator→helper relationships)
+            # Keep edges where BOTH are non-orchestrators (peer-to-peer relationships)
+            # Keep edges where BOTH are orchestrators (orchestrator-to-orchestrator collaboration)
+            a_is_orch = a in orchestrators
+            b_is_orch = b in orchestrators
+
+            # Only include edge if it's NOT an orchestrator→helper edge
+            # (i.e., both non-orch, or both orch, but not one-of-each)
+            if a_is_orch == b_is_orch:
+                adj_downweighted[a].add(b)
+                adj_downweighted[b].add(a)
+
+    # Find connected components in the downweighted graph
+    def find_connected_components(nodes, adjacency):
+        """Find weakly connected components using DFS"""
+        visited = set()
+        components = []
+
+        for node in nodes:
+            if node in visited:
+                continue
+
+            # DFS to find component
+            component = set()
+            stack = [node]
+            while stack:
+                n = stack.pop()
+                if n in visited:
+                    continue
+                visited.add(n)
+                component.add(n)
+                stack.extend(adjacency.get(n, set()) - visited)
+
+            if len(component) >= 2:  # Only consider multi-function components
+                components.append(component)
+
+        return components
+
+    components = find_connected_components(structural_functions, adj_downweighted)
+
+    # Detect proto-nuclei among small components (2-5 functions)
+    proto_nucleus_clusters = []
+    proto_nucleus_functions = set()
+
+    for comp in components:
+        if 2 <= len(comp) <= 5:
+            # Calculate nucleus scores for this component
+            comp_boilerplate_scores = {fn: boilerplate_scores[fn] for fn in comp}
+            comp_nucleus_scores = {}
+            for fn in comp:
+                score = calculate_nucleus_score(fn, comp, calls, callers, context_roots, comp_boilerplate_scores)
+                comp_nucleus_scores[fn] = score
+
+            # Check if this component is a proto-nucleus
+            proto = detect_proto_nucleus(comp, comp_nucleus_scores, context_roots, comp_boilerplate_scores, calls)
+            if proto:
+                proto_nucleus_clusters.append(set(comp))
+                proto_nucleus_functions.update(comp)
+
+    if proto_nucleus_clusters:
+        print(f"# Detected {len(proto_nucleus_clusters)} proto-nucleus cluster(s) before ownership pass", file=sys.stderr)
+
     # Build clusters around orchestrators using call tree ownership
     clusters = []
     claimed = set()  # Track which functions have been claimed by a cluster
+
+    # Mark proto-nucleus functions as already claimed (preserve them from orchestrator clustering)
+    for proto_cluster in proto_nucleus_clusters:
+        clusters.append(proto_cluster)
+        claimed.update(proto_cluster)
 
     # Sort orchestrators by fanout (descending) to process larger trees first
     orchestrators_sorted = sorted(orchestrators, key=lambda f: len(calls.get(f, [])), reverse=True)
@@ -1081,7 +1158,11 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
     # Use validated clusters
     clusters = valid_clusters
 
-    print(f"# Created {len(clusters)} call tree clusters ({len(weak_clusters)} downgraded)", file=sys.stderr)
+    # Count proto-nucleus clusters (those that were detected before ownership pass)
+    proto_count = len(proto_nucleus_clusters)
+    ownership_count = len(clusters) - proto_count
+
+    print(f"# Created {len(clusters)} clusters ({proto_count} proto-nucleus, {ownership_count} ownership, {len(weak_clusters)} downgraded)", file=sys.stderr)
     print(f"# {len(unclaimed)} unclaimed internal functions", file=sys.stderr)
 
     # Build unclaimed_details AFTER all clustering is complete
