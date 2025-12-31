@@ -505,6 +505,22 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 qualified_fn = name_mapping.get(fn_unqual, f"{module_name}:{fn_unqual}")
                 context_roots[qualified_fn] = root_list
 
+            # Augment with functions from call graph that regex parser missed
+            # (e.g., bare assignments like: handle_tree_key_event = function(...))
+            if call_graph:
+                # Use relative path to match call graph's file paths
+                file_path_str = str(f)
+                for fn_qual, fn_data in call_graph.items():
+                    # Check if this function is defined in the current file
+                    if fn_data.get('file', '') == file_path_str and fn_qual not in functions:
+                        # Function found by AST parser but not regex parser - add it
+                        functions[fn_qual] = True
+                        func_file[fn_qual] = f.name
+                        func_loc[fn_qual] = fn_data.get('loc', 0)
+                        func_scope[fn_qual] = 'top'  # Assume top-level for AST-only functions
+                        # Note: idents and context_roots remain empty for these functions
+                        # since we didn't parse them locally
+
     total_functions = max(1, len(functions))
     fanout = {fn: len(calls.get(fn, [])) for fn in functions}
 
@@ -664,29 +680,8 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
     # Exclude module interface functions (module.func) - those are intentional, not unclaimed
     # With qualified names: module exports contain '.', local functions contain ':'
     unclaimed = {fn for fn in (structural_functions - claimed) if ':' in fn}
-    unclaimed_details = []
 
     if unclaimed:
-        print(f"# {len(unclaimed)} unclaimed internal functions", file=sys.stderr)
-
-        # Categorize and explain unclaimed functions
-        for fn in sorted(unclaimed):
-            fanin_val = fanin.get(fn, 0)
-            fanout_val = fanout.get(fn, 0)
-            caller_list = list(callers.get(fn, set()))
-
-            # Determine why it's unclaimed
-            if fanin_val == 0:
-                reason = "dead code or orphaned"
-            elif fanin_val == 1 and caller_list:
-                reason = f"called only by {caller_list[0]} (non-orchestrator)"
-            elif fanin_val >= 3:
-                reason = f"shared helper (fanin={fanin_val})"
-            else:
-                reason = f"fanin={fanin_val}, fanout={fanout_val}"
-
-            unclaimed_details.append((fn, reason))
-
         # Group unclaimed functions by shared callers (potential utility clusters)
         utility_clusters = defaultdict(set)
         for fn in unclaimed:
@@ -699,7 +694,30 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 clusters.append(fns)
                 claimed.update(fns)
 
+        # Recompute unclaimed after forming utility clusters
+        unclaimed = {fn for fn in (structural_functions - claimed) if ':' in fn}
+
     print(f"# Created {len(clusters)} call tree clusters", file=sys.stderr)
+    print(f"# {len(unclaimed)} unclaimed internal functions", file=sys.stderr)
+
+    # Build unclaimed_details AFTER all clustering is complete
+    unclaimed_details = []
+    for fn in sorted(unclaimed):
+        fanin_val = fanin.get(fn, 0)
+        fanout_val = fanout.get(fn, 0)
+        caller_list = list(callers.get(fn, set()))
+
+        # Determine why it's unclaimed
+        if fanin_val == 0:
+            reason = "dead code or orphaned"
+        elif fanin_val == 1 and caller_list:
+            reason = f"called only by {caller_list[0]} (non-orchestrator)"
+        elif fanin_val >= 3:
+            reason = f"shared helper (fanin={fanin_val})"
+        else:
+            reason = f"fanin={fanin_val}, fanout={fanout_val}"
+
+        unclaimed_details.append((fn, reason))
 
     results = []
     for idx, cluster in enumerate(sorted(clusters, key=len, reverse=True), 1):
