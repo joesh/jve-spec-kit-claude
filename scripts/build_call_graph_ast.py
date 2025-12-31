@@ -274,7 +274,14 @@ def build_call_graph(root_paths):
     return global_functions
 
 def identify_utilities(global_functions):
-    """Identify utility functions (high fanin + multi-file usage)."""
+    """
+    Identify utility functions (infrastructure/cross-cutting concerns).
+
+    Uses conservative thresholds to avoid misclassifying domain logic:
+    - High fanin (called by many functions, not just a few related ones)
+    - Multi-file usage (true cross-cutting concern, not just command dispatch)
+    - Avoid false positives: domain features called via menu/keyboard aren't utilities
+    """
     utilities = set()
     fanins = [data['fanin'] for data in global_functions.values()]
     if not fanins:
@@ -286,9 +293,13 @@ def identify_utilities(global_functions):
         fanin = data['fanin']
         files_calling = data['files_calling']
 
-        is_high_fanin = fanin >= 5
+        # Conservative thresholds for well-modularized codebases:
+        # - Require fanin >= 8 (not just 5) to avoid domain features
+        # - Still require multi-file usage (files >= 3)
+        # - Extreme outlier threshold raised to 5x average (not 3x)
+        is_high_fanin = fanin >= 8
         is_multi_file = files_calling >= 3
-        is_extreme_outlier = fanin > 3 * avg_fanin and files_calling >= 2
+        is_extreme_outlier = fanin > 5 * avg_fanin and files_calling >= 3
 
         if (is_high_fanin and is_multi_file) or is_extreme_outlier:
             utilities.add(fn_name)

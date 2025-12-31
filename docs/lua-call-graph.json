@@ -3,7 +3,7 @@
     "total_functions": 1552,
     "total_files": 171,
     "total_loc": 0,
-    "utility_count": 40
+    "utility_count": 19
   },
   "functions": {
     "xml2:trim": {
@@ -1525,7 +1525,7 @@
       "fanin": 6,
       "fanout": 0,
       "files_calling": 5,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.get_focused_panel"
@@ -1603,7 +1603,7 @@
       "fanin": 7,
       "fanout": 4,
       "files_calling": 2,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.focus_panel"
@@ -4785,7 +4785,7 @@
       "fanin": 4,
       "fanout": 8,
       "files_calling": 2,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.focus_bin"
@@ -4816,7 +4816,7 @@
       "fanin": 4,
       "fanout": 10,
       "files_calling": 3,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.start_inline_rename"
@@ -5666,7 +5666,7 @@
       "fanin": 6,
       "fanout": 1,
       "files_calling": 3,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.update_selection"
@@ -5959,7 +5959,7 @@
       "fanin": 4,
       "fanout": 2,
       "files_calling": 4,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.add_listener"
@@ -6665,7 +6665,7 @@
       "fanin": 4,
       "fanout": 1,
       "files_calling": 3,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.can_undo"
@@ -6689,7 +6689,7 @@
       "fanin": 5,
       "fanout": 2,
       "files_calling": 3,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.can_redo"
@@ -8765,7 +8765,7 @@
       "fanin": 10,
       "fanout": 2,
       "files_calling": 2,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.normalize_rate"
@@ -11281,7 +11281,7 @@
       "fanin": 4,
       "fanout": 5,
       "files_calling": 3,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.load_clips"
@@ -14417,7 +14417,7 @@
       "fanin": 5,
       "fanout": 1,
       "files_calling": 2,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.begin"
@@ -14445,7 +14445,7 @@
       "fanin": 6,
       "fanout": 5,
       "files_calling": 6,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.wrap"
@@ -14672,7 +14672,7 @@
       "fanin": 5,
       "fanout": 5,
       "files_calling": 2,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.ensure_timeline_mutation_bucket"
@@ -15002,7 +15002,7 @@
       "fanin": 4,
       "fanout": 4,
       "files_calling": 4,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.resolve_sequence_for_track"
@@ -15031,7 +15031,7 @@
       "fanin": 6,
       "fanout": 6,
       "files_calling": 4,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.restore_clip_state"
@@ -15485,7 +15485,7 @@
       "fanin": 5,
       "fanout": 19,
       "files_calling": 5,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.revert_mutations"
@@ -30440,7 +30440,7 @@
       "fanin": 4,
       "fanout": 0,
       "files_calling": 2,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.get_state"
@@ -31051,7 +31051,7 @@
       "fanin": 5,
       "fanout": 16,
       "files_calling": 3,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.load_sequence"
@@ -31539,7 +31539,7 @@
       "fanin": 5,
       "fanout": 1,
       "files_calling": 5,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.clear_edge_selection"
@@ -31620,7 +31620,7 @@
       "fanin": 6,
       "fanout": 0,
       "files_calling": 4,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.get_project_id"
@@ -33402,7 +33402,7 @@
       "fanin": 4,
       "fanout": 0,
       "files_calling": 3,
-      "is_utility": true,
+      "is_utility": false,
       "is_local": false,
       "duplicate_files": [],
       "unqualified_name": "M.invalidate_indexes"
