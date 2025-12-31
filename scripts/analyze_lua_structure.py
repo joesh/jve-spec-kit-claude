@@ -120,6 +120,24 @@ def load_call_graph(path):
         data = json.load(f)
     return data.get('functions', {})
 
+def qualify_function_name(fn_name, module_name):
+    """
+    Qualify a function name with its module name.
+
+    Args:
+        fn_name: Unqualified function name (e.g., "M.create" or "helper")
+        module_name: Module name extracted from filename (e.g., "project_browser")
+
+    Returns:
+        Qualified name (e.g., "project_browser.create" or "project_browser:helper")
+    """
+    if fn_name.startswith('M.'):
+        # Module export: M.create → project_browser.create
+        return f"{module_name}.{fn_name[2:]}"
+    else:
+        # Local function: helper → project_browser:helper
+        return f"{module_name}:{fn_name}"
+
 # -------------------------
 # Lua parsing with scope
 # -------------------------
@@ -453,20 +471,39 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 
             valid_context_roots |= param_roots | table_roots | module_roots
 
+            # Extract module name from filename (matches build_call_graph_ast.py)
+            module_name = f.stem
+
+            # Build mapping from unqualified to qualified names for this file
+            name_mapping = {}
             for fn in fns:
-                functions[fn] = True
-                func_file[fn] = f.name
-                func_loc[fn] = locs.get(fn, 0)
-                func_scope[fn] = scopes.get(fn, "top")
+                qualified_fn = qualify_function_name(fn, module_name)
+                name_mapping[fn] = qualified_fn
+
+                functions[qualified_fn] = True
+                func_file[qualified_fn] = f.name
+                func_loc[qualified_fn] = locs.get(fn, 0)
+                func_scope[qualified_fn] = scopes.get(fn, "top")
 
                 for r in roots.get(fn, []):
                     global_root_counts[r] += 1
 
+            # Qualify call relationships
             for k,v in c.items():
-                calls[k].update(v)
+                qualified_k = name_mapping.get(k, f"{module_name}:{k}")
+                for callee in v:
+                    # Qualify callees too (assume same module for now)
+                    qualified_callee = qualify_function_name(callee, module_name)
+                    calls[qualified_k].add(qualified_callee)
 
-            idents.update(ids)
-            context_roots.update(roots)
+            # Update idents and context_roots with qualified names
+            for fn_unqual, id_list in ids.items():
+                qualified_fn = name_mapping.get(fn_unqual, f"{module_name}:{fn_unqual}")
+                idents[qualified_fn] = id_list
+
+            for fn_unqual, root_list in roots.items():
+                qualified_fn = name_mapping.get(fn_unqual, f"{module_name}:{fn_unqual}")
+                context_roots[qualified_fn] = root_list
 
     total_functions = max(1, len(functions))
     fanout = {fn: len(calls.get(fn, [])) for fn in functions}
@@ -568,8 +605,13 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
     print(f"# Building call tree ownership clusters...", file=sys.stderr)
 
     # Identify orchestrators (high fanout - call many helpers)
+    # Use global fanout from call_graph if available, otherwise use local fanout
     ORCHESTRATOR_THRESHOLD = 3
-    orchestrators = {fn for fn in structural_functions if len(calls.get(fn, [])) >= ORCHESTRATOR_THRESHOLD}
+    if call_graph:
+        global_fanout = {fn: call_graph.get(fn, {}).get('fanout', 0) for fn in structural_functions}
+        orchestrators = {fn for fn in structural_functions if global_fanout.get(fn, 0) >= ORCHESTRATOR_THRESHOLD}
+    else:
+        orchestrators = {fn for fn in structural_functions if len(calls.get(fn, [])) >= ORCHESTRATOR_THRESHOLD}
     print(f"# Found {len(orchestrators)} orchestrators (fanout >= {ORCHESTRATOR_THRESHOLD})", file=sys.stderr)
 
     # Build clusters around orchestrators using call tree ownership
@@ -588,7 +630,13 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 
         # Recursively add exclusive helpers (fanin=1, only called by this orchestrator)
         def add_exclusive_subtree(fn, depth=0):
-            for callee in calls.get(fn, []):
+            # Use global call graph's calls if available, otherwise use local calls
+            if call_graph and fn in call_graph:
+                fn_callees = set(call_graph[fn].get('calls', []))
+            else:
+                fn_callees = calls.get(fn, set())
+
+            for callee in fn_callees:
                 if callee not in structural_functions:
                     continue
                 if callee in claimed:
@@ -598,8 +646,9 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 callee_fanin = fanin.get(callee, 0)
                 callee_callers = callers.get(callee, set())
 
-                # Module exports (M.*) are public interface - never treat as exclusive helpers
-                is_module_export = callee.startswith('M.')
+                # Module exports (module.func) are public interface - never treat as exclusive helpers
+                # With qualified names: module exports contain '.', local functions contain ':'
+                is_module_export = '.' in callee and ':' not in callee
 
                 if callee_fanin == 1 and callee_callers <= cluster and not is_module_export:
                     cluster.add(callee)
@@ -612,8 +661,9 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
             clusters.append(cluster)
 
     # Handle remaining unclaimed functions (leaves with no orchestrator, or shared helpers)
-    # Exclude module interface functions (M.*) - those are intentional, not unclaimed
-    unclaimed = {fn for fn in (structural_functions - claimed) if not fn.startswith('M.')}
+    # Exclude module interface functions (module.func) - those are intentional, not unclaimed
+    # With qualified names: module exports contain '.', local functions contain ':'
+    unclaimed = {fn for fn in (structural_functions - claimed) if ':' in fn}
     unclaimed_details = []
 
     if unclaimed:
@@ -743,7 +793,8 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
         )
 
         # Build interface information (exported functions, entry points)
-        exported_functions = [f for f in cluster if f.startswith('M.')]
+        # With qualified names: module exports contain '.', local functions contain ':'
+        exported_functions = [f for f in cluster if '.' in f and ':' not in f]
         entry_points = []
         internal_only = []
 
@@ -797,8 +848,9 @@ def print_module_interface_summary(call_graph, analyzed_files):
     by_file = defaultdict(lambda: {"exported": [], "entry_points": [], "internal": []})
 
     for fn_name, fn_data in call_graph.items():
-        if not fn_name.startswith('M.'):
-            continue  # Only show exported functions
+        # With qualified names: module exports contain '.', local functions contain ':'
+        if ':' in fn_name:
+            continue  # Only show exported functions (skip local functions)
 
         file_path = fn_data.get('file', '')
         # Check if this file is in the analyzed set

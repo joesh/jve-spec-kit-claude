@@ -182,33 +182,64 @@ def build_call_graph(root_paths):
         for lua_file in lua_files:
             funcs, calls = parse_lua_file(lua_file)
 
+            # Extract module name from filepath
+            module_name = lua_file.stem
+
             for fn_name, (line_num, is_local, loc, nested_count) in funcs.items():
-                # Only track duplicates for non-local functions
-                # Local functions are file-scoped and don't conflict
+                # Qualify function names with module name
                 is_module_func = fn_name.startswith('M.')
 
-                if fn_name in global_functions:
-                    # Skip duplicate tracking for local functions (different scopes)
-                    # Skip duplicate tracking for module functions (different modules)
-                    if not is_local and not is_module_func:
-                        print(f"Warning: Duplicate function '{fn_name}' in {lua_file} and {global_functions[fn_name]['file']}", file=sys.stderr)
-                        if fn_name not in duplicates:
-                            duplicates[fn_name].append(global_functions[fn_name]['file'])
-                        duplicates[fn_name].append(str(lua_file))
+                if is_module_func:
+                    # M.create → project_browser.create
+                    qualified_name = f"{module_name}.{fn_name[2:]}"
+                else:
+                    # focus_tree_widget → project_browser:focus_tree_widget
+                    qualified_name = f"{module_name}:{fn_name}"
 
-                global_functions[fn_name] = {
+                if qualified_name in global_functions:
+                    # This should never happen now with qualified names
+                    print(f"Warning: Duplicate qualified function '{qualified_name}' in {lua_file} and {global_functions[qualified_name]['file']}", file=sys.stderr)
+                    if qualified_name not in duplicates:
+                        duplicates[qualified_name].append(global_functions[qualified_name]['file'])
+                    duplicates[qualified_name].append(str(lua_file))
+
+                # Qualify call targets
+                qualified_calls = set()
+                for call_target in calls.get(fn_name, set()):
+                    if call_target.startswith('M.'):
+                        # Check if this is M.foo.bar (calling through module reference)
+                        # or just M.foo (calling local module function)
+                        rest = call_target[2:]  # Strip 'M.'
+                        if '.' in rest:
+                            # M.timeline_panel.load_sequence → timeline_panel.load_sequence
+                            # This is a call through a module reference, use as-is
+                            qualified_calls.add(rest)
+                        else:
+                            # M.create → project_browser.create
+                            # This is a local module function
+                            qualified_calls.add(f"{module_name}.{rest}")
+                    elif '.' in call_target or ':' in call_target:
+                        # Already qualified (e.g., timeline_panel.load_sequence, db:query)
+                        # Keep as-is
+                        qualified_calls.add(call_target)
+                    else:
+                        # Simple identifier - could be local function in same module
+                        qualified_calls.add(f"{module_name}:{call_target}")
+
+                global_functions[qualified_name] = {
                     'file': str(lua_file),
                     'line': line_num,
                     'loc': loc,
                     'nested_functions': nested_count,
-                    'calls': sorted(calls.get(fn_name, set())),
+                    'calls': sorted(qualified_calls),
                     'callers': [],
                     'fanin': 0,
-                    'fanout': len(calls.get(fn_name, set())),
+                    'fanout': len(qualified_calls),
                     'files_calling': 0,
                     'is_utility': False,
                     'is_local': is_local,
-                    'duplicate_files': []
+                    'duplicate_files': [],
+                    'unqualified_name': fn_name  # Store original name for reference
                 }
 
     # Populate duplicate_files
