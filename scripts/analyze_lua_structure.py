@@ -983,21 +983,33 @@ def main():
         generic_roots |= {r.strip() for r in args.generic_roots.split(",") if r.strip()}
 
     # Auto-generate call graph if needed
-    call_graph_path = args.call_graph or "docs/lua-call-graph.json"
+    # Always use absolute path relative to repo root
+    script_dir = Path(__file__).parent
+    repo_root = script_dir.parent
+
+    if args.call_graph:
+        call_graph_path = args.call_graph
+    else:
+        call_graph_path = str(repo_root / "docs" / "lua-call-graph.json")
+
     call_graph_needs_update = args.update_call_graph or not Path(call_graph_path).exists()
 
     if call_graph_needs_update:
         print(f"# Generating call graph cache at {call_graph_path}...", file=sys.stderr)
         import subprocess
         # Use venv Python to ensure luaparser is available
-        script_dir = Path(__file__).parent
-        venv_python = script_dir.parent / ".venv" / "bin" / "python3"
+        venv_python = repo_root / ".venv" / "bin" / "python3"
         python_executable = str(venv_python) if venv_python.exists() else sys.executable
 
+        # Construct absolute paths
+        build_script = script_dir / "build_call_graph_ast.py"
+        lua_dir = repo_root / "src" / "lua"
+
         result = subprocess.run(
-            [python_executable, "scripts/build_call_graph_ast.py", "src/lua", "--output", call_graph_path],
+            [python_executable, str(build_script), str(lua_dir), "--output", call_graph_path],
             capture_output=True,
-            text=True
+            text=True,
+            cwd=str(repo_root)  # Run from repo root for consistent relative paths
         )
         if result.returncode != 0:
             print(f"# Warning: Call graph generation failed: {result.stderr}", file=sys.stderr)

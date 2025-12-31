@@ -135,14 +135,17 @@ def analyze_lua_ast(tree, filepath, code):
                     func_calls.add(callee)
 
             elif node_type == 'Table':
-                # Table constructor - look for handler/callback patterns
+                # Table constructor - detect function references
                 if hasattr(node, 'fields'):
                     for field in node.fields:
-                        if hasattr(field, 'key') and hasattr(field, 'value'):
-                            key_name = extract_name(field.key)
-                            if key_name in ['handler', 'callback', 'listener', 'action', 'on_click', 'on_change']:
+                        if hasattr(field, 'value'):
+                            # Check if value is a simple identifier (potential function reference)
+                            value_type = type(field.value).__name__
+                            if value_type == 'Name':
                                 func_ref = extract_name(field.value)
                                 if func_ref:
+                                    # Add as potential function reference
+                                    # The caller relationship building will filter out non-functions
                                     func_calls.add(func_ref)
 
         return func_calls
