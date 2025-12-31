@@ -139,6 +139,340 @@ def qualify_function_name(fn_name, module_name):
         return f"{module_name}:{fn_name}"
 
 # -------------------------
+# Signal-Based Scoring (per ANALYSIS_TOOL_DESIGN_ADDENDUM.md)
+# -------------------------
+
+def calculate_boilerplate_score(fn_name, calls, context_roots, call_graph=None):
+    """
+    Calculate boilerplate score for a function.
+
+    Boilerplate signals:
+    - Registers handlers, listeners, commands (register_*, add_listener, bind_*)
+    - Constructs UI widgets (calls into qt_constants, WIDGETS, CREATE_*)
+    - Delegates without transformation (body dominated by calls)
+    - Touches many unrelated context roots (high context-root fanout)
+
+    Formula:
+        boilerplate_score =
+            0.4 * delegation_ratio +
+            0.3 * context_root_fanout +
+            0.3 * registration_or_ui_signal
+
+    Threshold: ≥ 0.6 → boilerplate-heavy
+
+    Returns: float in [0, 1]
+    """
+    # Registration/UI signal patterns
+    registration_patterns = ['register_', 'add_listener', 'bind_', 'set_handler']
+    ui_patterns = ['qt_constants', 'WIDGETS', 'CREATE_', 'LAYOUT', 'qt_']
+
+    registration_or_ui = 0.0
+    fn_calls = calls.get(fn_name, set())
+
+    # Check if function name or calls match boilerplate patterns
+    name_lower = fn_name.lower()
+    if any(p in name_lower for p in registration_patterns + ui_patterns):
+        registration_or_ui = 0.5
+
+    # Check calls for UI/registration patterns
+    for call in fn_calls:
+        call_lower = call.lower()
+        if any(p in call_lower for p in ui_patterns):
+            registration_or_ui = min(1.0, registration_or_ui + 0.2)
+        if any(p in call_lower for p in registration_patterns):
+            registration_or_ui = min(1.0, registration_or_ui + 0.2)
+
+    # Delegation ratio (calls / LOC would be ideal, but we don't have LOC here)
+    # Approximate: high call count suggests delegation
+    call_count = len(fn_calls)
+    delegation_ratio = min(1.0, call_count / 20.0)  # Normalize to ~20 calls = 1.0
+
+    # Context root fanout (diversity of contexts touched)
+    fn_roots = context_roots.get(fn_name, set())
+    # Filter out trivial roots (single-letter, common Lua roots)
+    meaningful_roots = {r for r in fn_roots if len(r) > 1 and r not in LUA_RUNTIME_ROOTS}
+    root_fanout = min(1.0, len(meaningful_roots) / 8.0)  # Normalize to ~8 roots = 1.0
+
+    score = (
+        0.4 * delegation_ratio +
+        0.3 * root_fanout +
+        0.3 * registration_or_ui
+    )
+
+    return min(1.0, score)
+
+def calculate_nucleus_score(fn_name, cluster, calls, callers, context_roots, boilerplate_scores):
+    """
+    Calculate nucleus score for a function within a cluster.
+
+    A nucleus is where semantic meaning concentrates, not merely where control flows.
+
+    Required signals:
+    1. Inward reference strength (other cluster functions call into this)
+    2. Shared context participation (shares non-boilerplate context roots)
+    3. Low boilerplate score
+
+    Formula:
+        nucleus_score =
+            0.45 * inward_call_centrality +
+            0.35 * shared_context_overlap -
+            0.20 * boilerplate_score
+
+    Normalized to [0, 1].
+    Threshold: ≥ 0.65 → eligible nucleus
+
+    Returns: float in [0, 1]
+    """
+    # 1. Inward call centrality (how many cluster functions call this one)
+    cluster_callers = [c for c in callers.get(fn_name, []) if c in cluster]
+    inward_centrality = len(cluster_callers) / max(1, len(cluster) - 1)  # Normalize by cluster size
+
+    # 2. Shared context overlap (how many context roots are shared with cluster peers)
+    fn_roots = context_roots.get(fn_name, set())
+
+    # Get all context roots used by cluster (excluding boilerplate-heavy functions)
+    cluster_roots = set()
+    for other_fn in cluster:
+        if other_fn != fn_name and boilerplate_scores.get(other_fn, 0) < 0.6:
+            cluster_roots.update(context_roots.get(other_fn, set()))
+
+    # Calculate overlap
+    if fn_roots and cluster_roots:
+        shared = fn_roots & cluster_roots
+        shared_overlap = len(shared) / len(fn_roots)  # Fraction of this fn's roots that are shared
+    else:
+        shared_overlap = 0.0
+
+    # 3. Boilerplate penalty
+    boilerplate = boilerplate_scores.get(fn_name, 0)
+
+    score = (
+        0.45 * inward_centrality +
+        0.35 * shared_overlap -
+        0.20 * boilerplate
+    )
+
+    return max(0.0, min(1.0, score))  # Clamp to [0, 1]
+
+def calculate_leverage_score(fn_name, cluster, inappropriate_connections, nucleus_scores, degree):
+    """
+    Calculate leverage point score for a function.
+
+    A leverage point is a restructuring handle: a place where change propagates cleanly.
+
+    Required properties:
+    - Moderate-to-high centrality (not a leaf, not the dominant hub)
+    - High count of inappropriate connections
+    - Low nucleus score
+
+    Formula:
+        leverage_score =
+            0.4 * centrality +
+            0.4 * inappropriate_connections -
+            0.2 * nucleus_score
+
+    Returns: float
+    """
+    # Centrality (degree within cluster)
+    fn_degree = degree.get(fn_name, 0)
+    max_degree = max(degree.values()) if degree else 1
+    centrality = fn_degree / max(1, max_degree)
+
+    # Inappropriate connections (count of edges involving this function)
+    inappropriate_count = sum(1 for (a, b, _) in inappropriate_connections if a == fn_name or b == fn_name)
+    # Normalize by cluster size
+    inappropriate_norm = inappropriate_count / max(1, len(cluster))
+
+    # Nucleus penalty
+    nucleus = nucleus_scores.get(fn_name, 0)
+
+    score = (
+        0.4 * centrality +
+        0.4 * inappropriate_norm -
+        0.2 * nucleus
+    )
+
+    return score
+
+def find_inappropriate_connections(cluster, internal_edges, nucleus_scores, context_roots, boilerplate_scores):
+    """
+    Find inappropriate connections within a cluster.
+
+    An inappropriate connection is a strong linkage that lacks structural justification.
+
+    Operational definition for functions A and B:
+    - coupling(A,B) ≥ (cluster_mean + 1σ)
+    - AND: no shared nucleus
+    - AND: no shared non-boilerplate context root
+
+    Returns: list of (fn_a, fn_b, coupling_strength) tuples
+    """
+    if not internal_edges:
+        return []
+
+    # Calculate coupling statistics
+    couplings = [strength for (_, _, strength) in internal_edges]
+    if not couplings:
+        return []
+
+    mean_coupling = statistics.mean(couplings)
+    stdev_coupling = statistics.stdev(couplings) if len(couplings) > 1 else 0
+    threshold = mean_coupling + stdev_coupling
+
+    inappropriate = []
+
+    for (fn_a, fn_b, strength) in internal_edges:
+        # Check if coupling exceeds threshold
+        if strength < threshold:
+            continue
+
+        # Check for shared nucleus (both have high nucleus score and share contexts)
+        nucleus_a = nucleus_scores.get(fn_a, 0)
+        nucleus_b = nucleus_scores.get(fn_b, 0)
+        both_nucleus = nucleus_a >= 0.65 and nucleus_b >= 0.65
+
+        # Check for shared non-boilerplate context roots
+        roots_a = context_roots.get(fn_a, set())
+        roots_b = context_roots.get(fn_b, set())
+
+        # Filter out roots from boilerplate-heavy functions
+        boilerplate_a = boilerplate_scores.get(fn_a, 0)
+        boilerplate_b = boilerplate_scores.get(fn_b, 0)
+
+        if boilerplate_a < 0.6 and boilerplate_b < 0.6:
+            shared_roots = roots_a & roots_b
+            has_shared_context = len(shared_roots) > 0
+        else:
+            has_shared_context = False
+
+        # If no shared nucleus and no shared context, it's inappropriate
+        if not both_nucleus and not has_shared_context:
+            inappropriate.append((fn_a, fn_b, strength))
+
+    return inappropriate
+
+def detect_proto_nucleus(cluster, nucleus_scores, context_roots, boilerplate_scores, calls):
+    """
+    Detect proto-nucleus: emergent semantic structure not yet collapsed into single function.
+
+    A proto-nucleus is a small set of functions that collectively satisfy nucleus criteria.
+
+    Detection rules (ALL must be true):
+    1. Cardinality: 2 ≤ |P| ≤ 5
+    2. Individual strength: Each f ∈ P has nucleus_score(f) ≥ 0.40
+    3. Shared semantic support:
+       - At least one shared non-boilerplate context root
+       - At least one internal call relationship among members
+    4. Collective dominance: mean(nucleus_score(f) for f in P) ≥ 0.50
+
+    Returns: list of functions in proto-nucleus, or empty list if none detected
+    """
+    # Find candidates with scores ≥ 0.40 but < 0.65 (nucleus threshold)
+    candidates = [fn for fn in cluster if 0.40 <= nucleus_scores.get(fn, 0) < 0.65]
+
+    if len(candidates) < 2:
+        return []
+
+    # Try to find a proto-nucleus among candidates
+    # Start with highest-scoring candidates and expand
+    candidates_sorted = sorted(candidates, key=lambda f: nucleus_scores.get(f, 0), reverse=True)
+
+    for size in range(2, min(6, len(candidates_sorted) + 1)):
+        proto_set = candidates_sorted[:size]
+
+        # Check collective dominance (mean ≥ 0.50)
+        proto_strength = sum(nucleus_scores.get(f, 0) for f in proto_set) / len(proto_set)
+        if proto_strength < 0.50:
+            continue
+
+        # Check shared semantic support
+        # 1. At least one shared non-boilerplate context root
+        shared_roots = None
+        for fn in proto_set:
+            fn_roots = context_roots.get(fn, set())
+            # Filter boilerplate roots
+            if boilerplate_scores.get(fn, 0) < 0.6:
+                if shared_roots is None:
+                    shared_roots = fn_roots.copy()
+                else:
+                    shared_roots &= fn_roots
+
+        has_shared_context = shared_roots and len(shared_roots) > 0
+
+        # 2. At least one internal call relationship
+        has_call_relationship = False
+        for i, fn_a in enumerate(proto_set):
+            for fn_b in proto_set[i+1:]:
+                # Direct call or one hop
+                if fn_b in calls.get(fn_a, []) or fn_a in calls.get(fn_b, []):
+                    has_call_relationship = True
+                    break
+                # One hop: check if they share a callee/caller
+                callees_a = calls.get(fn_a, set())
+                callees_b = calls.get(fn_b, set())
+                if callees_a & callees_b:
+                    has_call_relationship = True
+                    break
+            if has_call_relationship:
+                break
+
+        if has_shared_context and has_call_relationship:
+            # Found valid proto-nucleus
+            return proto_set
+
+    return []
+
+def validate_and_split_clusters(clusters, calls, callers, context_roots):
+    """
+    Validate clusters based on nucleus scores and split/downgrade as needed.
+
+    Per ChatGPT feedback:
+    - If cluster has >1 nucleus ≥ 0.65: competing nuclei, should split
+    - If cluster has 0 nuclei and size > SMALL_CLUSTER_MAX: scaffolding soup, mark weak
+
+    Returns: (valid_clusters, weak_clusters)
+    """
+    valid_clusters = []
+    weak_clusters = []
+
+    for cluster in clusters:
+        # Calculate boilerplate scores
+        boilerplate_scores = {}
+        for fn in cluster:
+            score = calculate_boilerplate_score(fn, calls, context_roots)
+            boilerplate_scores[fn] = score
+
+        # Calculate nucleus scores
+        nucleus_scores = {}
+        for fn in cluster:
+            score = calculate_nucleus_score(fn, cluster, calls, callers, context_roots, boilerplate_scores)
+            nucleus_scores[fn] = score
+
+        # Find nuclei (functions meeting threshold)
+        nuclei = [fn for fn in cluster if nucleus_scores[fn] >= 0.65]
+
+        if len(nuclei) > 1:
+            # Competing nuclei - should split cluster
+            # For now, mark as weak (splitting logic complex)
+            weak_clusters.append({
+                'cluster': cluster,
+                'nuclei': nuclei,
+                'reason': 'competing_nuclei'
+            })
+        elif len(nuclei) == 0 and len(cluster) > SMALL_CLUSTER_MAX:
+            # No semantic center - scaffolding soup
+            weak_clusters.append({
+                'cluster': cluster,
+                'nuclei': [],
+                'reason': 'no_nucleus'
+            })
+        else:
+            # Valid cluster (single nucleus or small enough)
+            valid_clusters.append(cluster)
+
+    return valid_clusters, weak_clusters
+
+# -------------------------
 # Lua parsing with scope
 # -------------------------
 
@@ -307,137 +641,158 @@ def _salient_context_root(cluster, context_roots, valid_context_roots, generic_r
 
     return salient_root, best_salience, suppressed
 
-def _fragile_edges(internal):
-    if not internal:
-        return [], None
-    weights = [c for _, _, c in internal]
-    median = statistics.median(weights) if weights else 0.0
-    fragile = [(a, b, c) for (a, b, c) in internal
-               if (c < median) or (abs(c - CLUSTER_THRESHOLD) <= FRAGILE_MARGIN)]
-    funcs = Counter()
-    for a, b, _ in fragile:
-        funcs[a] += 1
-        funcs[b] += 1
-    boundary = funcs.most_common(1)[0][0] if funcs else None
-    return fragile, boundary
+# Removed: _fragile_edges replaced by find_inappropriate_connections (signal-based scoring)
 
 def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_roots,
                          valid_context_roots, generic_roots, global_root_counts, total_functions,
                          func_loc, by_file, total_loc, dom_file, dom_pct,
-                         explain_suppressed, call_graph=None):
+                         explain_suppressed, call_graph=None, calls=None, callers=None):
+    """
+    Analyze cluster using signal-based scoring per ANALYSIS_TOOL_DESIGN_ADDENDUM.md
+
+    CRITICAL POLICY SHIFT: This tool exposes latent structure for human judgment.
+    It does NOT suppress weak signal. It describes the TYPE of structure (or lack thereof).
+
+    Three cluster states:
+    1. Nucleus-centered: Clear semantic center (≥ 0.65)
+    2. Proto-nucleus: Emergent structure not yet consolidated (2-5 functions, collective strength ≥ 0.50)
+    3. Diffuse/scaffolding: Responsibilities smeared, no semantic center
+
+    Always emit actionable guidance, never suppress.
+    """
     sentences = []
 
-    salient_root, salience, suppressed = _salient_context_root(
-        cluster, context_roots, valid_context_roots, generic_roots, global_root_counts, total_functions
+    # Phase 1: Calculate all scores for cluster functions
+    boilerplate_scores = {}
+    for fn in cluster:
+        score = calculate_boilerplate_score(fn, calls or {}, context_roots, call_graph)
+        boilerplate_scores[fn] = score
+
+    nucleus_scores = {}
+    for fn in cluster:
+        score = calculate_nucleus_score(fn, cluster, calls or {}, callers or {}, context_roots, boilerplate_scores)
+        nucleus_scores[fn] = score
+
+    # Phase 2: Find nucleus (if any meets threshold ≥ 0.65)
+    nucleus = None
+    nucleus_score = 0.0
+    for fn in cluster:
+        if nucleus_scores[fn] >= 0.65:
+            if nucleus_scores[fn] > nucleus_score:
+                nucleus = fn
+                nucleus_score = nucleus_scores[fn]
+
+    # Phase 2b: If no nucleus, check for proto-nucleus (emergent structure)
+    proto_nucleus = []
+    proto_strength = 0.0
+    if not nucleus:
+        proto_nucleus = detect_proto_nucleus(cluster, nucleus_scores, context_roots, boilerplate_scores, calls or {})
+        if proto_nucleus:
+            proto_strength = sum(nucleus_scores.get(fn, 0) for fn in proto_nucleus) / len(proto_nucleus)
+
+    # Phase 3: Find inappropriate connections
+    inappropriate_connections = find_inappropriate_connections(
+        cluster, internal, nucleus_scores, context_roots, boilerplate_scores
     )
 
-    symmetric_small = (
-        len(cluster) <= SMALL_CLUSTER_MAX and
-        max(fanout.get(f, 0) for f in cluster) <= 2
-    )
-    hub_strength = 0.0
-    if degree:
-        hub_strength = degree[central] / max(1, max(degree.values()))
-    orchestration = (hub_strength >= 0.4 and not symmetric_small)
+    # Phase 4: Find leverage point (if inappropriate connections exist)
+    leverage_point = None
+    leverage_score = 0.0
+    if inappropriate_connections:
+        leverage_scores = {}
+        for fn in cluster:
+            score = calculate_leverage_score(fn, cluster, inappropriate_connections, nucleus_scores, degree)
+            leverage_scores[fn] = score
 
-    # Initialize quality tracking
-    has_quality_issues = False
-    quality_issues = []
+        # Select top candidate
+        if leverage_scores:
+            leverage_point = max(leverage_scores, key=leverage_scores.get)
+            leverage_score = leverage_scores[leverage_point]
 
-    if orchestration:
-        sentences.append(f"This cluster implements the algorithm described in {central}.")
+    # Phase 5: Identify structural boilerplate (functions with score ≥ 0.6)
+    boilerplate_functions = [fn for fn, score in boilerplate_scores.items() if score >= 0.6]
 
-        # Collect quality issues for later (we'll report them after file location)
-        central_loc = func_loc.get(central, 0)
-        central_fanout = fanout.get(central, 0)
-        central_nested = 0
-        if call_graph and central in call_graph:
-            central_nested = call_graph[central].get('nested_functions', 0)
+    # Phase 6: Generate explanation based on cluster state
+    # ALWAYS emit actionable guidance - no suppression
 
-        # Issue 1: High LOC per call ratio (contains low-level code mixed with orchestration)
-        if central_fanout > 0:
-            loc_per_call = central_loc / central_fanout
-            if loc_per_call > 15:
-                quality_issues.append(f"contains substantial low-level implementation ({central_loc} LOC, {central_fanout} calls)")
+    if nucleus:
+        # STATE 1: Nucleus-centered (clear semantic center)
+        sentences.append(f"This cluster has a clear nucleus around {nucleus}, indicating a coherent algorithm.")
 
-        # Issue 2: Excessive nested functions (hard to read, should be extracted)
-        if central_nested >= 6:  # Lowered threshold - even 6 nested functions is quite bad
-            quality_issues.append(f"defines {central_nested} nested functions")
+        if boilerplate_functions:
+            bp_names = ", ".join(boilerplate_functions[:3])
+            if len(boilerplate_functions) > 3:
+                bp_names += f", and {len(boilerplate_functions) - 3} more"
+            sentences.append(f"Structural boilerplate is concentrated in {bp_names}, which obscures the core without contributing domain responsibility.")
 
-        # Issue 3: Very high LOC even if calls are many (just too big overall)
-        # Only check LOC if we have valid data (> 0)
-        if central_loc > 80:
-            quality_issues.append(f"spans {central_loc} LOC")
+        if leverage_point and inappropriate_connections:
+            sentences.append(f"The primary leverage point is {leverage_point}, which participates in {len(inappropriate_connections)} inappropriate connection(s).")
+            sentences.append(f"Refactoring should preserve the nucleus while reducing boilerplate and eliminating inappropriate connections by extracting or isolating {leverage_point}.")
+        elif boilerplate_functions:
+            sentences.append(f"Refactoring should preserve the nucleus while extracting boilerplate to clarify the algorithm's semantic core.")
 
-        # Store quality issues for later (after file location)
-        has_quality_issues = len(quality_issues) > 0
-    elif salient_root and salience >= CONTEXT_SALIENCE_THRESHOLD:
-        sentences.append(
-            f"This cluster is organized around {central}, with cohesion driven primarily by shared '{salient_root}' context usage."
-        )
+    elif proto_nucleus:
+        # STATE 2: Proto-nucleus (emergent structure not yet consolidated)
+        proto_names = ", ".join(proto_nucleus)
+        sentences.append(f"This cluster contains a proto-nucleus centered on {proto_names} (collective strength: {proto_strength:.2f}), indicating an algorithm attempting to form but not yet consolidated.")
+
+        # Describe the weakness
+        if len(proto_nucleus) == 2:
+            sentences.append(f"The algorithm is split between two functions that share semantic intent but lack a unified orchestrator.")
+        else:
+            sentences.append(f"The algorithm is distributed across {len(proto_nucleus)} functions that collectively exhibit semantic coherence but lack a single organizing center.")
+
+        # Guidance
+        sentences.append(f"Refactoring should aim to collapse this proto-nucleus into a single function that orchestrates the shared semantic intent, with the current proto-nucleus members becoming focused helpers.")
+
+        if boilerplate_functions:
+            bp_names = ", ".join(boilerplate_functions[:3])
+            sentences.append(f"Additionally, boilerplate concentrated in {bp_names} should be extracted to clarify the emerging algorithm.")
+
     else:
-        sentences.append(
-            f"This cluster is organized around {central}, with cohesion driven by shared local interactions rather than a single dominant context root."
-        )
+        # STATE 3: Diffuse/scaffolding (no semantic center)
+        sentences.append(f"This cluster has no semantic center. Responsibilities are smeared across {len(cluster)} function(s), indicating structural scaffolding rather than an algorithm.")
 
-    # File location (immediately after cluster identity)
+        # Describe the specific weakness
+        max_score = max(nucleus_scores.values()) if nucleus_scores else 0.0
+        if max_score < 0.40:
+            sentences.append(f"No function exhibits meaningful inward centrality (highest score: {max_score:.2f}), suggesting this is a collection of loosely related utilities or UI glue.")
+        else:
+            candidates = [fn for fn, score in nucleus_scores.items() if score >= 0.40]
+            if len(candidates) == 1:
+                sentences.append(f"One function ({candidates[0]}) shows potential (score: {nucleus_scores[candidates[0]]:.2f}) but lacks sufficient shared context with cluster peers.")
+            else:
+                sentences.append(f"{len(candidates)} functions show potential individually but lack the call relationships or shared context to form a coherent nucleus.")
+
+        # Guidance
+        if boilerplate_functions and len(boilerplate_functions) >= len(cluster) // 2:
+            bp_names = ", ".join(boilerplate_functions[:3])
+            sentences.append(f"The cluster is dominated by boilerplate ({bp_names}). Consider dissolving the cluster and relocating non-boilerplate functions to their semantic homes.")
+        elif len(cluster) <= SMALL_CLUSTER_MAX:
+            sentences.append(f"The cluster is small enough ({len(cluster)} functions) that it may represent a legitimate primitive or helper set. Verify whether these functions genuinely collaborate.")
+        else:
+            sentences.append(f"Consider splitting this cluster by identifying distinct semantic responsibilities, or recognize it as scaffolding that doesn't require clustering.")
+
+    # File location (always show this)
     if dom_file and dom_file != "<unknown>":
         if dom_pct == 100:
             sentences.append(f"All logic resides in {dom_file}.")
         else:
             sentences.append(f"{dom_pct}% of logic resides in {dom_file}.")
 
-    # Quality issues (after file location, before structural analysis)
-    if orchestration and has_quality_issues:
-        quality_str = ", ".join(quality_issues)
-        sentences.append(f"The hub function {quality_str}, making it difficult to read and test.")
-
-    fragile, boundary = _fragile_edges(internal)
-
-    if fragile and boundary:
-        sentences.append(
-            f"Fragile edges concentrate around {boundary}, the lowest-cost extraction seam."
-        )
-
-        if boundary == central:
-            # Build refactoring recommendation based on quality issues
-            if has_quality_issues:
-                sentences.append(
-                    f"The hub is the structural center; refactor by extracting logic into (a) module-scope helper functions, and (b) nested local helpers for one-off substeps."
-                )
-            else:
-                sentences.append(
-                    f"{central} is the structural hub; instead of extracting it, split responsibilities inside using (a) module-scope helpers, and (b) nested local helpers for one-off substeps."
-                )
-        else:
-            sentences.append(
-                f"A first extraction candidate is the responsibility centered on {boundary}; it touches the rest of the cluster mostly through weak ties, so it is a good candidate to separate and reattach with low risk."
-            )
-
-        funcs = Counter()
-        for a, b, _ in fragile:
-            funcs[a] += 1
-            funcs[b] += 1
-        boundary_candidates = [f for f, _ in funcs.most_common(5)]
-
-        helpers = [f for f in boundary_candidates if f != central and func_loc.get(f, 0) > LEAF_LOC_MAX]
-        if boundary == central and helpers:
-            names = ", ".join(helpers[:3])
-            sentences.append(
-                f"Likely helper extraction targets include {names}, which sit on the weakest boundaries around {central}."
-            )
-    else:
-        boundary_candidates = []
-
     return {
         "sentences": sentences,
-        "central": central,
-        "salient_root": salient_root,
-        "salience": round(float(salience), 3),
-        "orchestration": bool(orchestration),
-        "fragile_edges": [(a, b, round(float(c), 3)) for a, b, c in fragile[:12]],
-        "boundary_candidates": boundary_candidates,
-        "suppressed_roots": suppressed if explain_suppressed else [],
+        "central": central,  # Keep for compatibility
+        "nucleus": nucleus,
+        "nucleus_score": round(nucleus_score, 3) if nucleus else 0.0,
+        "proto_nucleus": proto_nucleus,
+        "proto_strength": round(proto_strength, 3) if proto_nucleus else 0.0,
+        "boilerplate_functions": boilerplate_functions,
+        "leverage_point": leverage_point,
+        "leverage_score": round(leverage_score, 3) if leverage_point else 0.0,
+        "inappropriate_connections": [(a, b, round(c, 3)) for a, b, c in inappropriate_connections[:12]],
+        "has_signal": True,  # Always have signal (nucleus, proto-nucleus, or diffuse)
+        "cluster_state": "nucleus" if nucleus else ("proto_nucleus" if proto_nucleus else "diffuse"),
     }
 
 def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
@@ -569,13 +924,19 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
         if b in calls[a] and a not in calls[b]:
             score -= 0.05
 
-        # Semantic coupling (NEW: name similarity)
+        # Semantic coupling (ChatGPT Fix #3: gate behind structural justification)
+        # Only reinforce with name similarity when there's calls or shared context
         name_sim = semantic_similarity(a, b)
-        if name_sim > 0:
-            score += name_sim * 0.3  # Weight semantic signal
+        if name_sim > 0 and (shared_roots or b in calls[a] or a in calls[b]):
+            score += name_sim * 0.3  # Reinforce structural signal with names
 
         return max(0.0, min(1.0, score))
 
+    # Calculate boilerplate scores once (ChatGPT Fix #2)
+    # Will use to neutralize boilerplate edges structurally
+    boilerplate_scores = {}
+    for fn in structural_functions:
+        boilerplate_scores[fn] = calculate_boilerplate_score(fn, calls, context_roots)
 
     # Build edges and adjacency
     MIN_EDGE = 0.15
@@ -591,6 +952,12 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
                 continue
             seen.add(pair)
             c = coupling(a, b)
+
+            # ChatGPT Fix #2: Boilerplate edge neutralization
+            # Boilerplate creates edges everywhere but shouldn't define structure
+            if boilerplate_scores.get(a, 0) >= 0.6 or boilerplate_scores.get(b, 0) >= 0.6:
+                c *= 0.4  # Downweight heavily
+
             if c >= MIN_EDGE:
                 all_edges.append((a, b, c))
             if c >= CLUSTER_THRESHOLD:
@@ -697,7 +1064,24 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
         # Recompute unclaimed after forming utility clusters
         unclaimed = {fn for fn in (structural_functions - claimed) if ':' in fn}
 
-    print(f"# Created {len(clusters)} call tree clusters", file=sys.stderr)
+    # Validate clusters based on nucleus scores (ChatGPT Fix #1)
+    # Split/downgrade clusters with multiple or zero nuclei
+    valid_clusters, weak_clusters = validate_and_split_clusters(clusters, calls, callers, context_roots)
+
+    # Report weak clusters
+    if weak_clusters:
+        print(f"# Downgraded {len(weak_clusters)} weak clusters (competing/no nuclei)", file=sys.stderr)
+        for weak in weak_clusters:
+            reason = weak['reason']
+            if reason == 'competing_nuclei':
+                print(f"#   {len(weak['cluster'])} functions with {len(weak['nuclei'])} competing nuclei", file=sys.stderr)
+            else:
+                print(f"#   {len(weak['cluster'])} functions with no nucleus (scaffolding)", file=sys.stderr)
+
+    # Use validated clusters
+    clusters = valid_clusters
+
+    print(f"# Created {len(clusters)} call tree clusters ({len(weak_clusters)} downgraded)", file=sys.stderr)
     print(f"# {len(unclaimed)} unclaimed internal functions", file=sys.stderr)
 
     # Build unclaimed_details AFTER all clustering is complete
@@ -807,6 +1191,10 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
             explain_suppressed=explain_suppressed,
 
             call_graph=call_graph,
+
+            calls=calls,
+
+            callers=callers,
 
         )
 
@@ -985,15 +1373,10 @@ def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None):
                     print(f"  - {fn}: {file_list}")
                 print()
 
-        fragile = analysis.get("fragile_edges") or []
-        if fragile:
-            parts = [f"{a} ↔ {b} ({c:.2f})" for a, b, c in fragile[:8]]
-            print("Fragile edges: " + ", ".join(parts) + ".")
-            print()
-
-        bc = analysis.get("boundary_candidates") or []
-        if bc:
-            print("Boundary candidates: " + ", ".join(bc[:5]) + ".")
+        inappropriate = analysis.get("inappropriate_connections") or []
+        if inappropriate:
+            parts = [f"{a} ↔ {b} ({c:.2f})" for a, b, c in inappropriate[:8]]
+            print("Inappropriate connections: " + ", ".join(parts) + ".")
             print()
 
         suppressed = analysis.get("suppressed_roots") or []

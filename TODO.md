@@ -80,3 +80,23 @@
 - [x] Gap ripple regression: Dragging a gap `]` handle disables the adjacent downstream clip after release (clip becomes unselectable/disabled). Added regression `tests/test_batch_ripple_gap_preserves_enabled.lua`, cloned clips now preserve `enabled` and gap drags keep downstream clips active after release.
 - [x] Leftmost gap clamp bug: Dragging the outermost gap `]` left should only clamp after closing g2, but current behavior blocks once the gap equals g2 width (tests/test_batch_ripple_gap_downstream_block.lua failure). Updated BatchRippleEdit clamp context so only lead gap edges contribute clamp metadata; `test_batch_ripple_gap_downstream_block.lua` and `test_batch_ripple_gap_drag_behavior.lua` pass.
 - [x] Restored the `luacheck` target and wired it into the default `make` flow so lint must pass before builds/tests run (ui/ + core lint now clean at 0 warnings).
+
+## Analysis Tool Refactor (Signal-Based Scoring)
+- [x] (done) Implement context root extraction from call graph (already exists in extract_context_roots)
+- [x] (done) Implement boilerplate scoring (delegation_ratio + context_root_fanout + registration/UI signals, threshold ≥0.6)
+- [x] (done) Implement nucleus scoring (inward_centrality + shared_context_overlap - boilerplate, threshold ≥0.65)
+- [x] (done) Implement leverage point detection (centrality + inappropriate_connections - nucleus_score, top candidate only)
+- [x] (done) Implement inappropriate connection detection (coupling ≥ mean+1σ AND no shared nucleus/context)
+- [x] (done) Replace old terminology (fragile→inappropriate) and integrate new scoring into analysis function
+- [x] (done) Test on project_browser.lua and verify quality improvements against design spec - all clusters now say "No clear nucleus detected" instead of false claims; shared-helper noise eliminated; terminology updated throughout; threshold-based output working correctly
+
+## Analysis Tool Refinement (ChatGPT Structural Fixes)
+- [x] (done) Implement nucleus-constrained clustering (split clusters with >1 nucleus, downgrade clusters with 0 nuclei) - 2 weak clusters downgraded on project_browser
+- [x] (done) Implement boilerplate edge neutralization (multiply coupling by 0.4 when endpoint has boilerplate_score ≥ 0.6)
+- [x] (done) Gate semantic similarity (only apply when reinforced by calls or shared context)
+- [x] (done) Test refined analyzer on project_browser.lua and verify nonsense hubs eliminated - 4 clusters → 2 valid + 2 downgraded; blob clusters (project_browser.create, insert_selected_to_timeline) correctly identified as scaffolding with no nucleus; boilerplate edge neutralization working; semantic similarity gating working
+
+## Proto-Nucleus Implementation (ChatGPT Guidance Fix)
+- [x] (done) Implement proto-nucleus detection (2-5 functions, scores ≥0.40, shared context+calls, mean≥0.50)
+- [x] (done) Rewrite cluster explanation policy (nucleus/proto-nucleus/diffuse states, always emit guidance)
+- [x] (done) Test on project_browser.lua - diffuse state correctly identified with actionable guidance ("verify whether these functions genuinely collaborate")
