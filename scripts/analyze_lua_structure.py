@@ -142,171 +142,242 @@ def qualify_function_name(fn_name, module_name):
 # Signal-Based Scoring (per ANALYSIS_TOOL_DESIGN_ADDENDUM.md)
 # -------------------------
 
-def calculate_boilerplate_score(fn_name, calls, context_roots, call_graph=None):
+def calculate_boilerplate_score(fn_name, calls, context_roots, call_graph=None, func_loc=None, callers=None):
     """
-    Calculate boilerplate score for a function.
+    Calculate boilerplate score per ADDENDUM_2 spec.
 
-    Boilerplate signals:
-    - Registers handlers, listeners, commands (register_*, add_listener, bind_*)
-    - Constructs UI widgets (calls into qt_constants, WIDGETS, CREATE_*)
-    - Delegates without transformation (body dominated by calls)
-    - Touches many unrelated context roots (high context-root fanout)
+    Boilerplate = lifecycle setup, registration/wiring, handler dispatch, glue code.
+    Boilerplate is necessary but NON-STRUCTURAL and SIGNAL-SUPPRESSING.
 
     Formula:
         boilerplate_score =
-            0.4 * delegation_ratio +
-            0.3 * context_root_fanout +
-            0.3 * registration_or_ui_signal
+            0.40 * fanout_weight +
+            0.25 * call_density_weight +
+            0.20 * registration_pattern_weight +
+            0.15 * lifecycle_position_weight
 
-    Threshold: ≥ 0.6 → boilerplate-heavy
+    HARD RULE: If boilerplate_score ≥ 0.6, function CANNOT be a nucleus.
 
     Returns: float in [0, 1]
     """
-    # Registration/UI signal patterns
-    registration_patterns = ['register_', 'add_listener', 'bind_', 'set_handler']
-    ui_patterns = ['qt_constants', 'WIDGETS', 'CREATE_', 'LAYOUT', 'qt_']
-
-    registration_or_ui = 0.0
     fn_calls = calls.get(fn_name, set())
+    fanout = len(fn_calls)
 
-    # Check if function name or calls match boilerplate patterns
+    # 1. Fanout weight (high fanout indicates delegation/wiring)
+    FANOUT_HIGH_WATERMARK = 10
+    fanout_weight = min(1.0, fanout / FANOUT_HIGH_WATERMARK)
+
+    # 2. Call density weight (ratio of calls to total statements)
+    # Approximate: if we don't have LOC, use call count as proxy
+    # Ideal: calls / (LOC - comments - blanks)
+    if func_loc and fn_name in func_loc:
+        loc = func_loc[fn_name]
+        call_density = min(1.0, fanout / max(1, loc)) if loc > 0 else 0
+    else:
+        # Fallback: normalize by expected LOC for given fanout
+        # High fanout with low expected LOC = high density
+        expected_loc = max(5, fanout * 2)  # Assume ~2 LOC per call minimum
+        call_density = min(1.0, fanout / expected_loc)
+
+    # 3. Registration pattern weight
+    registration_patterns = ['register_', 'add_listener', 'bind_', 'set_handler', 'on_', 'handle_']
+    widget_patterns = ['CREATE_', 'LAYOUT', 'qt_', 'WIDGET']
+
+    registration_weight = 0.0
     name_lower = fn_name.lower()
-    if any(p in name_lower for p in registration_patterns + ui_patterns):
-        registration_or_ui = 0.5
 
-    # Check calls for UI/registration patterns
+    # Check function name
+    if any(p.lower() in name_lower for p in registration_patterns):
+        registration_weight += 0.5
+    if any(p.lower() in name_lower for p in widget_patterns):
+        registration_weight += 0.3
+
+    # Check calls
     for call in fn_calls:
         call_lower = call.lower()
-        if any(p in call_lower for p in ui_patterns):
-            registration_or_ui = min(1.0, registration_or_ui + 0.2)
-        if any(p in call_lower for p in registration_patterns):
-            registration_or_ui = min(1.0, registration_or_ui + 0.2)
+        if any(p.lower() in call_lower for p in registration_patterns):
+            registration_weight = min(1.0, registration_weight + 0.1)
+        if any(p.lower() in call_lower for p in widget_patterns):
+            registration_weight = min(1.0, registration_weight + 0.1)
 
-    # Delegation ratio (calls / LOC would be ideal, but we don't have LOC here)
-    # Approximate: high call count suggests delegation
-    call_count = len(fn_calls)
-    delegation_ratio = min(1.0, call_count / 20.0)  # Normalize to ~20 calls = 1.0
+    registration_weight = min(1.0, registration_weight)
 
-    # Context root fanout (diversity of contexts touched)
-    fn_roots = context_roots.get(fn_name, set())
-    # Filter out trivial roots (single-letter, common Lua roots)
-    meaningful_roots = {r for r in fn_roots if len(r) > 1 and r not in LUA_RUNTIME_ROOTS}
-    root_fanout = min(1.0, len(meaningful_roots) / 8.0)  # Normalize to ~8 roots = 1.0
+    # 4. Lifecycle position weight
+    lifecycle_names = ['create', 'init', 'setup', 'ensure', 'build', 'construct']
+    lifecycle_weight = 0.0
+
+    # Check if name matches lifecycle pattern
+    fn_base = fn_name.split('.')[-1].split(':')[-1].lower()
+    if any(lc in fn_base for lc in lifecycle_names):
+        lifecycle_weight += 0.6
+
+    # Check if exported entrypoint (module.func, not module:func)
+    is_exported = '.' in fn_name and ':' not in fn_name
+    if is_exported:
+        lifecycle_weight += 0.2
+
+    # Check if called exactly once externally (strong lifecycle signal)
+    if callers:
+        external_callers = [c for c in callers.get(fn_name, []) if not c.startswith(fn_name.split('.')[0])]
+        if len(external_callers) == 1:
+            lifecycle_weight += 0.2
+
+    lifecycle_weight = min(1.0, lifecycle_weight)
 
     score = (
-        0.4 * delegation_ratio +
-        0.3 * root_fanout +
-        0.3 * registration_or_ui
+        0.40 * fanout_weight +
+        0.25 * call_density +
+        0.20 * registration_weight +
+        0.15 * lifecycle_weight
     )
 
     return min(1.0, score)
 
 def calculate_nucleus_score(fn_name, cluster, calls, callers, context_roots, boilerplate_scores):
     """
-    Calculate nucleus score for a function within a cluster.
+    Calculate nucleus score per ADDENDUM_2 spec.
 
-    RECALIBRATED FOR UI/ORCHESTRATION CODE (not pure algorithms):
-    - UI code has directional calls (low inward centrality)
-    - State is often implicit (low shared context overlap)
-    - Name similarity indicates semantic coherence
+    A nucleus is a function that plausibly represents the center of a responsibility.
+    It is NOT: the most called function, a lifecycle hook, or a registration hub.
 
-    Formula (recalibrated):
-        nucleus_score =
-            0.30 * inward_call_centrality +
-            0.30 * shared_context_overlap +
-            0.25 * semantic_name_overlap_with_cluster -
-            0.15 * boilerplate_score
+    Formula:
+        raw_nucleus_signal(f) =
+            0.40 * inward_call_weight(f) +
+            0.30 * shared_context_weight(f) +
+            0.20 * internal_cluster_participation(f)
 
-    Thresholds (lowered for UI domain):
-        proto-nucleus: ≥ 0.45
-        nucleus: ≥ 0.55
+        nucleus_score(f) = raw_nucleus_signal(f) * (1 - boilerplate_score(f))
+
+    HARD RULE: If boilerplate_score(f) ≥ 0.6, nucleus_score = 0 (cannot be nucleus).
+
+    Threshold: ≥ 0.45 or emit NO cluster.
 
     Returns: float in [0, 1]
     """
-    # 1. Inward call centrality (reduced weight: 0.30, was 0.45)
-    cluster_callers = [c for c in callers.get(fn_name, []) if c in cluster]
-    inward_centrality = len(cluster_callers) / max(1, len(cluster) - 1)
+    boilerplate = boilerplate_scores.get(fn_name, 0)
 
-    # 2. Shared context overlap (reduced weight: 0.30, was 0.35)
+    # HARD RULE: Boilerplate-heavy functions cannot be nuclei
+    if boilerplate >= 0.6:
+        return 0.0
+
+    # 1. Inward call weight (normalized fan-in from non-boilerplate callers)
+    cluster_callers = [c for c in callers.get(fn_name, []) if c in cluster]
+    # Filter out boilerplate-heavy callers (they don't count as meaningful references)
+    non_boilerplate_callers = [c for c in cluster_callers if boilerplate_scores.get(c, 0) < 0.6]
+    inward_call_weight = len(non_boilerplate_callers) / max(1, len(cluster) - 1)
+
+    # 2. Shared context weight (overlap of TABLE context roots with cluster)
+    # Per spec: "table roots only (e.g. `browser_state.*`)"
     fn_roots = context_roots.get(fn_name, set())
+    # Filter to table-like roots (multi-part identifiers, not single tokens)
+    fn_table_roots = {r for r in fn_roots if '.' in r or '_' in r}
+
     cluster_roots = set()
     for other_fn in cluster:
         if other_fn != fn_name:
-            cluster_roots.update(context_roots.get(other_fn, set()))
+            other_roots = context_roots.get(other_fn, set())
+            cluster_roots.update({r for r in other_roots if '.' in r or '_' in r})
 
-    if fn_roots and cluster_roots:
-        shared = fn_roots & cluster_roots
-        shared_overlap = len(shared) / len(fn_roots)
+    if fn_table_roots and cluster_roots:
+        shared = fn_table_roots & cluster_roots
+        shared_context_weight = len(shared) / len(fn_table_roots)
     else:
-        shared_overlap = 0.0
+        shared_context_weight = 0.0
 
-    # 3. Semantic name overlap with cluster (NEW: 0.25)
-    fn_base = fn_name.split('.')[-1].split(':')[-1]
-    cluster_bases = [f.split('.')[-1].split(':')[-1] for f in cluster if f != fn_name]
+    # 3. Internal cluster participation (proportion of calls inside the candidate group)
+    fn_calls = calls.get(fn_name, set())
+    internal_calls = {c for c in fn_calls if c in cluster}
+    if fn_calls:
+        internal_participation = len(internal_calls) / len(fn_calls)
+    else:
+        internal_participation = 0.0
 
-    fn_tokens = set(fn_base.lower().split('_'))
-    name_overlap = 0.0
-    if cluster_bases and fn_tokens:
-        overlaps = []
-        for other_base in cluster_bases:
-            other_tokens = set(other_base.lower().split('_'))
-            if fn_tokens and other_tokens:
-                overlap = len(fn_tokens & other_tokens) / len(fn_tokens)
-                overlaps.append(overlap)
-        if overlaps:
-            name_overlap = sum(overlaps) / len(overlaps)
-
-    # 4. Boilerplate penalty (reduced: 0.15, was 0.20)
-    boilerplate = boilerplate_scores.get(fn_name, 0)
-
-    score = (
-        0.30 * inward_centrality +
-        0.30 * shared_overlap +
-        0.25 * name_overlap -
-        0.15 * boilerplate
+    raw_signal = (
+        0.40 * inward_call_weight +
+        0.30 * shared_context_weight +
+        0.20 * internal_participation
     )
 
-    return max(0.0, min(1.0, score))
+    # Boilerplate MULTIPLIES (suppresses) the raw signal
+    nucleus_score = raw_signal * (1 - boilerplate)
 
-def calculate_leverage_score(fn_name, cluster, inappropriate_connections, nucleus_scores, degree):
+    return max(0.0, min(1.0, nucleus_score))
+
+def calculate_extraction_cost(fn_name, context_roots, idents, calls, callers):
     """
-    Calculate leverage point score for a function.
+    Calculate extraction cost per ADDENDUM_2 spec.
 
-    A leverage point is a restructuring handle: a place where change propagates cleanly.
-
-    Required properties:
-    - Moderate-to-high centrality (not a leaf, not the dominant hub)
-    - High count of inappropriate connections
-    - Low nucleus score
+    Extraction cost reflects how much real editor behavior is at risk.
 
     Formula:
-        leverage_score =
-            0.4 * centrality +
-            0.4 * inappropriate_connections -
-            0.2 * nucleus_score
+        extraction_cost(f) =
+            0.30 * timeline_coupling +
+            0.25 * selection_coupling +
+            0.20 * command_graph_coupling +
+            0.15 * media_identity_coupling +
+            0.10 * global_state_touch
 
-    Returns: float
+    HARD STOP: If timeline_coupling > 0.6 AND selection_coupling > 0.4,
+    emit warning and NO extraction advice.
+
+    Returns: float in [0, 1]
     """
-    # Centrality (degree within cluster)
-    fn_degree = degree.get(fn_name, 0)
-    max_degree = max(degree.values()) if degree else 1
-    centrality = fn_degree / max(1, max_degree)
+    fn_roots = context_roots.get(fn_name, set())
+    fn_idents = idents.get(fn_name, set())
+    fn_calls = calls.get(fn_name, set())
 
-    # Inappropriate connections (count of edges involving this function)
-    inappropriate_count = sum(1 for (a, b, _) in inappropriate_connections if a == fn_name or b == fn_name)
-    # Normalize by cluster size
-    inappropriate_norm = inappropriate_count / max(1, len(cluster))
+    # 1. Timeline coupling
+    timeline_tokens = {'track', 'clip', 'frame', 'time', 'offset', 'ripple', 'insert', 'trim', 'timeline', 'sequence'}
+    timeline_count = sum(1 for token in timeline_tokens if any(token in str(r).lower() for r in fn_roots | fn_idents))
+    timeline_coupling = min(1.0, timeline_count / 5.0)  # Normalize to ~5 tokens = 1.0
 
-    # Nucleus penalty
-    nucleus = nucleus_scores.get(fn_name, 0)
+    # 2. Selection coupling
+    selection_tokens = {'selected', 'selection', 'select_'}
+    selection_count = sum(1 for token in selection_tokens if any(token in str(r).lower() for r in fn_roots | fn_idents | fn_calls))
+    selection_coupling = min(1.0, selection_count / 3.0)  # Normalize to ~3 tokens = 1.0
 
-    score = (
-        0.4 * centrality +
-        0.4 * inappropriate_norm -
-        0.2 * nucleus
+    # 3. Command graph coupling
+    command_tokens = {'undo', 'redo', 'command', 'execute', 'register_command'}
+    command_count = sum(1 for token in command_tokens if any(token in str(r).lower() for r in fn_roots | fn_idents | fn_calls))
+    command_coupling = min(1.0, command_count / 3.0)
+
+    # 4. Media identity coupling
+    media_tokens = {'master_clip', 'media', 'metadata', 'master'}
+    media_count = sum(1 for token in media_tokens if any(token in str(r).lower() for r in fn_roots | fn_idents))
+    media_coupling = min(1.0, media_count / 3.0)
+
+    # 5. Global state touch (module-level writes)
+    # Approximate: if function modifies context roots at module level
+    global_write_score = 0.0
+    for root in fn_roots:
+        # If root is module-scoped (M.*, module.*)
+        if root.startswith('M.') or any(root.startswith(f'{m}.') for m in ['state', 'cache', 'config']):
+            global_write_score += 0.3
+
+    global_state_touch = min(1.0, global_write_score)
+
+    cost = (
+        0.30 * timeline_coupling +
+        0.25 * selection_coupling +
+        0.20 * command_coupling +
+        0.15 * media_coupling +
+        0.10 * global_state_touch
     )
 
-    return score
+    return min(1.0, cost)
+
+def calculate_leverage_score(fn_name, centrality_score, extraction_cost):
+    """
+    Calculate leverage score per ADDENDUM_2 spec.
+
+    Formula:
+        leverage_score = centrality(f) * (1 - extraction_cost(f))
+
+    Only rank candidates that pass nucleus and cost gates.
+
+    Returns: float in [0, 1]
+    """
+    return centrality_score * (1 - extraction_cost)
 
 def find_inappropriate_connections(cluster, internal_edges, nucleus_scores, context_roots, boilerplate_scores):
     """
@@ -463,7 +534,7 @@ def validate_and_split_clusters(clusters, calls, callers, context_roots):
             nucleus_scores[fn] = score
 
         # Find nuclei (functions meeting threshold)
-        nuclei = [fn for fn in cluster if nucleus_scores[fn] >= 0.55]
+        nuclei = [fn for fn in cluster if nucleus_scores[fn] >= 0.45]
 
         if len(nuclei) > 1:
             # Competing nuclei - should split cluster
@@ -691,7 +762,7 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
     nucleus = None
     nucleus_score = 0.0
     for fn in cluster:
-        if nucleus_scores[fn] >= 0.55:
+        if nucleus_scores[fn] >= 0.45:
             if nucleus_scores[fn] > nucleus_score:
                 nucleus = fn
                 nucleus_score = nucleus_scores[fn]
