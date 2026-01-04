@@ -1049,10 +1049,24 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
                     best_candidate = fn
                     best_nucleus_score = nucleus_scores.get(fn, 0)
 
+        # GOLDEN TEST 4: Leverage point suppression rule
+        # Suppress leverage point if context breadth difference is trivial
+        # This prevents false positives in coherent clusters with no responsibility tension
         if best_candidate:
-            leverage_point = best_candidate
-            leverage_context_count = best_context_count
-            leverage_justification = f"touches {best_context_count} distinct contexts (nucleus: {nucleus_context_count})"
+            context_breadth_delta = best_context_count - nucleus_context_count
+
+            # Suppress if difference is trivial (≤ 1 additional context)
+            # Rationale: "Touches multiple contexts" ≠ "Extraction opportunity"
+            # Context breadth alone is insufficient without responsibility tension
+            # Delta ≤1 indicates data flow through coherent algorithm, not cross-cutting concern
+            if context_breadth_delta <= 1:
+                # Explicit restraint: no leverage point when differences are trivial
+                pass  # best_candidate found but suppressed
+            else:
+                # Significant context breadth difference - genuine leverage point
+                leverage_point = best_candidate
+                leverage_context_count = best_context_count
+                leverage_justification = f"touches {best_context_count} distinct contexts (nucleus: {nucleus_context_count})"
 
 
 
@@ -1081,6 +1095,12 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
             # Small, well-factored clusters should NOT be refactored - already tight
             sentences.append(f"The cluster is small ({len(cluster)} functions) and well-factored around a single responsibility.")
             sentences.append(f"No leverage points identified - extraction would add indirection without improving clarity.")
+            sentences.append(f"No refactoring recommended.")
+        elif not leverage_point and not skip_leverage_for_micro:
+            # GOLDEN TEST 4: Leverage suppressed due to trivial context breadth difference
+            # Coherent clusters with no responsibility tension should NOT be refactored
+            sentences.append(f"Responsibilities are appropriately localized within the cluster.")
+            sentences.append(f"No leverage points detected - context breadth differences are trivial.")
             sentences.append(f"No refactoring recommended.")
         elif boilerplate_functions:
             sentences.append(f"Refactoring should preserve the nucleus while extracting boilerplate to clarify the algorithm's semantic core.")
