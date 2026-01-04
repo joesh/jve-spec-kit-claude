@@ -1004,7 +1004,13 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
     leverage_context_count = 0
     leverage_justification = ""
 
-    if nucleus:
+    # GOLDEN TEST 3: Micro-cluster acceptance (≤4 functions)
+    # Small, well-factored clusters should NOT have leverage points identified
+    # Extraction would add indirection, not clarity - explicit restraint
+    is_micro_cluster = len(cluster) <= 4
+    skip_leverage_for_micro = is_micro_cluster and nucleus
+
+    if nucleus and not skip_leverage_for_micro:
         # Search ALL cluster members for leverage point candidates
         # "Within two hops" interpreted as: semantically connected (in same cluster)
         # not requiring direct call-chain reachability
@@ -1070,6 +1076,12 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
             # Report leverage point as extraction opportunity
             sentences.append(f"The primary leverage point is {leverage_point}, which {leverage_justification}.")
             sentences.append(f"Extracting {leverage_point} into a focused module would reduce the nucleus's context dependencies and improve separation of concerns.")
+        elif skip_leverage_for_micro:
+            # GOLDEN TEST 3: Micro-cluster explicit restraint
+            # Small, well-factored clusters should NOT be refactored - already tight
+            sentences.append(f"The cluster is small ({len(cluster)} functions) and well-factored around a single responsibility.")
+            sentences.append(f"No leverage points identified - extraction would add indirection without improving clarity.")
+            sentences.append(f"No refactoring recommended.")
         elif boilerplate_functions:
             sentences.append(f"Refactoring should preserve the nucleus while extracting boilerplate to clarify the algorithm's semantic core.")
 
