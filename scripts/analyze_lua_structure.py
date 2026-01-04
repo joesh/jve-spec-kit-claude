@@ -1647,6 +1647,51 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 # -------------------------
 
 
+def print_module_interface_for_file(call_graph, target_file, analyzed_files):
+    """Print module interface summary for a single file."""
+    if not call_graph:
+        return
+
+    # Collect functions for this specific file
+    exported = []
+    internal = []
+
+    for fn_name, fn_data in call_graph.items():
+        # With qualified names: module exports contain '.', local functions contain ':'
+        if ':' in fn_name:
+            continue  # Only show exported functions (skip local functions)
+
+        file_path = fn_data.get('file', '')
+        short_file = file_path.split('/')[-1]
+
+        # Only process functions from the target file
+        if short_file != target_file:
+            continue
+
+        fanin = fn_data.get('fanin', 0)
+        exported.append(fn_name)
+        if fanin > 0:
+            internal.append(fn_name)
+
+    if not exported:
+        return
+
+    print("=" * 70)
+    print(f"Module: {target_file}")
+    print("=" * 70)
+    print()
+    print(f"  Module API ({len(exported)} functions):")
+
+    # Show exported functions, annotate those called internally
+    for fn in sorted(exported):
+        if fn in internal:
+            print(f"    - {fn}  [called internally]")
+        else:
+            print(f"    - {fn}")
+
+    print()
+
+
 def print_module_interface_summary(call_graph, analyzed_files):
     """Print summary of module public interface across all analyzed files."""
     if not call_graph:
@@ -1704,10 +1749,6 @@ def print_module_interface_summary(call_graph, analyzed_files):
 
 
 def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None):
-    # Print module interface summary first
-    if analyzed_files:
-        print_module_interface_summary(call_graph, analyzed_files)
-
     # ADDENDUM_2 Golden Output: If no clusters passed gates, emit structured analysis
     if not results:
         rejected = diagnostics.get('rejected_clusters', []) if diagnostics else []
@@ -1788,83 +1829,102 @@ def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None):
 
         return  # Don't process clusters since there are none
 
+    # Group results by module for organized output
+    from collections import defaultdict
+    results_by_module = defaultdict(list)
     for r in results:
-        print(f"CLUSTER {r['id']}")
-        print(f"Type: {r['type']}")
-        print()
-        own, mod = r["ownership"]
-        print(f"{own} of {mod}.")
-        print()
+        _, module_name = r["ownership"]
+        results_by_module[module_name].append(r)
 
-        # Print Analysis FIRST (before Files/Functions)
-        analysis = r.get("analysis") or {}
-        sentences = analysis.get("sentences") or []
-        if sentences:
-            print("Analysis:")
-            for s in sentences:
-                print(s)
+    # For each module, print interface summary followed by its clusters
+    for module_name in sorted(results_by_module.keys()):
+        module_results = results_by_module[module_name]
+
+        # Print module interface summary for this module only
+        if call_graph and analyzed_files:
+            print_module_interface_for_file(call_graph, module_name, analyzed_files)
+
+        # Print all clusters for this module
+        for r in module_results:
+            print(f"CLUSTER {r['id']}")
+            print(f"Type: {r['type']}")
+            print()
+            own, mod = r["ownership"]
+            print(f"{own} of {mod}.")
             print()
 
-        # Print Interface (module public API)
-        interface = r.get("interface") or {}
-        exported = interface.get("exported_functions", [])
-        internal_api = interface.get("internal_api", [])
+            # Print Analysis FIRST (before Files/Functions)
+            analysis = r.get("analysis") or {}
+            sentences = analysis.get("sentences") or []
+            if sentences:
+                print("Analysis:")
+                for s in sentences:
+                    print(s)
+                print()
 
-        if exported:
-            print("Interface:")
-            for fn in exported:
-                if fn in internal_api:
-                    print(f"  {fn}  [called internally]")
-                else:
-                    print(f"  {fn}")
+            # Print Interface (module public API)
+            interface = r.get("interface") or {}
+            exported = interface.get("exported_functions", [])
+            internal_api = interface.get("internal_api", [])
+
+            if exported:
+                print("Interface:")
+                for fn in exported:
+                    if fn in internal_api:
+                        print(f"  {fn}  [called internally]")
+                    else:
+                        print(f"  {fn}")
+                print()
+
+            print("Files:")
+            for f, p in r["files"].items():
+                print(f"{f}: {p}%")
             print()
 
-        print("Files:")
-        for f, p in r["files"].items():
-            print(f"{f}: {p}%")
-        print()
-
-        print("Functions:")
-        for fn in r["functions"]:
-            print(fn)
-        print()
-
-        # Check for dead code and duplicates
-        if call_graph:
-            dead_code = []
-            duplicates = []
+            print("Functions:")
             for fn in r["functions"]:
-                if fn in call_graph:
-                    fn_data = call_graph[fn]
-                    if fn_data.get('fanin', 0) == 0:
-                        dead_code.append(fn)
-                    dup_files = fn_data.get('duplicate_files', [])
-                    if dup_files:
-                        duplicates.append((fn, dup_files))
-
-            if dead_code:
-                print("⚠ WARNING: Potentially dead code (fanin=0, not called):")
-                for fn in dead_code:
-                    print(f"  - {fn}")
-                print()
-
-            if duplicates:
-                print("⚠ WARNING: Duplicate definitions:")
-                for fn, files in duplicates:
-                    file_list = ", ".join([f.split("/")[-1] for f in files])
-                    print(f"  - {fn}: {file_list}")
-                print()
-
-        inappropriate = analysis.get("inappropriate_connections") or []
-        if inappropriate:
-            parts = [f"{a} ↔ {b} ({c:.2f})" for a, b, c in inappropriate[:8]]
-            print("Inappropriate connections: " + ", ".join(parts) + ".")
+                print(fn)
             print()
 
-        suppressed = analysis.get("suppressed_roots") or []
-        if suppressed:
-            items = ", ".join([f"{r} ({why})" for r, why in suppressed[:12]])
-            print("Suppressed context roots: " + items + ".")
+            # Check for dead code and duplicates
+            if call_graph:
+                dead_code = []
+                duplicates = []
+                for fn in r["functions"]:
+                    if fn in call_graph:
+                        fn_data = call_graph[fn]
+                        if fn_data.get('fanin', 0) == 0:
+                            dead_code.append(fn)
+                        dup_files = fn_data.get('duplicate_files', [])
+                        if dup_files:
+                            duplicates.append((fn, dup_files))
+
+                if dead_code:
+                    print("⚠ WARNING: Potentially dead code (fanin=0, not called):")
+                    for fn in dead_code:
+                        print(f"  - {fn}")
+                    print()
+
+                if duplicates:
+                    print("⚠ WARNING: Duplicate definitions:")
+                    for fn, files in duplicates:
+                        file_list = ", ".join([f.split("/")[-1] for f in files])
+                        print(f"  - {fn}: {file_list}")
+                    print()
+
+            inappropriate = analysis.get("inappropriate_connections") or []
+            if inappropriate:
+                parts = [f"{a} ↔ {b} ({c:.2f})" for a, b, c in inappropriate[:8]]
+                print("Inappropriate connections: " + ", ".join(parts) + ".")
+                print()
+
+            suppressed = analysis.get("suppressed_roots") or []
+            if suppressed:
+                items = ", ".join([f"{r} ({why})" for r, why in suppressed[:12]])
+                print("Suppressed context roots: " + items + ".")
+                print()
+
+            print("=" * 70)
             print()
 
     # Print diagnostics at the end
