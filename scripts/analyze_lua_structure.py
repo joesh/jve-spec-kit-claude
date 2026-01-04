@@ -660,7 +660,79 @@ def validate_and_split_clusters(clusters, calls, callers, context_roots,
         nuclei = [fn for fn in cluster if nucleus_scores[fn] >= NUCLEUS_THRESHOLD]
         max_nucleus_score = max(nucleus_scores.values()) if nucleus_scores else 0.0
 
-        # STOP CONDITION 1: No nucleus ≥ NUCLEUS_THRESHOLD
+        # STOP CONDITION 1: Boilerplate dominates group (CHECK FIRST - highest priority rejection)
+        # If cluster is lifecycle/wiring dominated, reject regardless of nucleus/competing nuclei status
+        # Two detection modes:
+        # (A) High-fanout boilerplate (score ≥ 0.6): delegation/wiring/dispatch code
+        # (B) Lifecycle coordination: init/setup/teardown/is_*/set_* patterns (low fanout but still boilerplate)
+
+        high_centrality_funcs = sorted(cluster, key=lambda f: nucleus_scores.get(f, 0), reverse=True)[:3]
+        high_centrality_boilerplate = [fn for fn in high_centrality_funcs if boilerplate_scores.get(fn, 0) >= 0.6]
+
+        # Count total boilerplate functions in cluster (Mode A)
+        boilerplate_funcs = [fn for fn in cluster if boilerplate_scores.get(fn, 0) >= 0.6]
+        boilerplate_fraction = len(boilerplate_funcs) / max(1, len(cluster))
+
+        # Identify lifecycle coordination patterns (Mode B)
+        lifecycle_patterns = ['init', 'setup', 'teardown', 'destroy', 'register', 'notify',
+                            'is_ready', 'is_loading', 'set_ready', 'set_loading', 'callback',
+                            'is_', 'set_', 'get_']  # Generic state accessors
+
+        lifecycle_funcs = []
+        boilerplate_nature = []
+        for fn in cluster:
+            fn_lower = fn.lower()
+            is_lifecycle = False
+
+            if any(pattern in fn_lower for pattern in ['init', 'setup']):
+                boilerplate_nature.append('setup')
+                is_lifecycle = True
+            elif any(pattern in fn_lower for pattern in ['register', 'callback', 'notify']):
+                boilerplate_nature.append('registration')
+                is_lifecycle = True
+            elif any(pattern in fn_lower for pattern in ['is_', 'set_', 'get_']):
+                boilerplate_nature.append('wiring')
+                is_lifecycle = True
+            elif any(pattern in fn_lower for pattern in ['teardown', 'destroy', 'cleanup']):
+                boilerplate_nature.append('lifecycle')
+                is_lifecycle = True
+
+            if is_lifecycle:
+                lifecycle_funcs.append(fn)
+
+        lifecycle_fraction = len(lifecycle_funcs) / max(1, len(cluster))
+
+        # Reject if EITHER:
+        # (A) All high-centrality are boilerplate AND majority is boilerplate (high-fanout mode)
+        # (B) Majority is lifecycle coordination (low-fanout mode)
+        mode_a_triggered = (len(high_centrality_boilerplate) >= len(high_centrality_funcs) and boilerplate_fraction >= 0.5)
+        mode_b_triggered = (lifecycle_fraction >= 0.67)  # 2/3 or more are lifecycle functions
+
+        if mode_a_triggered or mode_b_triggered:
+            # Use higher fraction for reporting (either boilerplate or lifecycle)
+            effective_fraction = max(boilerplate_fraction, lifecycle_fraction)
+            effective_funcs = boilerplate_funcs if boilerplate_fraction > lifecycle_fraction else lifecycle_funcs
+
+            rejected_clusters.append({
+                'cluster': cluster,
+                'reason': 'boilerplate_dominated',
+                'boilerplate_fraction': effective_fraction,
+                'boilerplate_functions': effective_funcs,
+                'boilerplate_nature': list(set(boilerplate_nature)),
+                'mode': 'high_fanout' if mode_a_triggered else 'lifecycle'
+            })
+            diagnostics['boilerplate_dominated'].append({
+                'cluster': cluster,
+                'boilerplate_fraction': effective_fraction,
+                'boilerplate_functions': effective_funcs,
+                'lifecycle_functions': lifecycle_funcs,
+                'boilerplate_nature': list(set(boilerplate_nature)),
+                'all_functions': list(cluster),
+                'mode': 'high_fanout' if mode_a_triggered else 'lifecycle'
+            })
+            continue
+
+        # STOP CONDITION 2: No nucleus ≥ NUCLEUS_THRESHOLD
         if len(nuclei) == 0:
             rejected_clusters.append({
                 'cluster': cluster,
@@ -675,7 +747,7 @@ def validate_and_split_clusters(clusters, calls, callers, context_roots,
             })
             continue
 
-        # STOP CONDITION 2: Competing nuclei within ±0.05
+        # STOP CONDITION 3: Competing nuclei within ±0.05
         if len(nuclei) > 1:
             nucleus_scores_sorted = sorted([(s, fn) for fn, s in nucleus_scores.items() if s >= NUCLEUS_THRESHOLD], reverse=True)
             top_score = nucleus_scores_sorted[0][0]
@@ -693,22 +765,6 @@ def validate_and_split_clusters(clusters, calls, callers, context_roots,
                     'scores': {fn: nucleus_scores[fn] for fn in competing}
                 })
                 continue
-
-        # STOP CONDITION 3: Boilerplate dominates group
-        high_centrality_funcs = sorted(cluster, key=lambda f: nucleus_scores.get(f, 0), reverse=True)[:3]
-        high_centrality_boilerplate = [fn for fn in high_centrality_funcs if boilerplate_scores.get(fn, 0) >= 0.6]
-
-        if len(high_centrality_boilerplate) >= len(high_centrality_funcs):
-            # All high-centrality functions are boilerplate-heavy
-            rejected_clusters.append({
-                'cluster': cluster,
-                'reason': 'boilerplate_dominated'
-            })
-            diagnostics['boilerplate_dominated'].append({
-                'cluster': cluster,
-                'boilerplate_functions': high_centrality_boilerplate
-            })
-            continue
 
         # Cluster passes all gates
         valid_clusters.append(cluster)
@@ -1582,35 +1638,62 @@ def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None):
         rejected = diagnostics.get('rejected_clusters', []) if diagnostics else []
         cluster_diag = diagnostics.get('cluster_diagnostics', {}) if diagnostics else {}
 
-        print("No stable structural nuclei detected.")
-        print()
-        print("Findings:")
-
+        # STRUCTURED REJECTION EXPLANATION (Step 2)
         # Analyze WHY clusters were rejected
         no_nucleus_clusters = cluster_diag.get('no_nucleus', [])
-        boilerplate_dominated = cluster_diag.get('boilerplate_dominated', [])
+        boilerplate_dominated_clusters = cluster_diag.get('boilerplate_dominated', [])
         competing_nuclei = cluster_diag.get('competing_nuclei', [])
 
-        if no_nucleus_clusters:
-            # Check if high-centrality functions are boilerplate-heavy
-            boilerplate_count = sum(len(c.get('boilerplate_heavy', [])) for c in no_nucleus_clusters)
-            if boilerplate_count > 0:
-                print("- High-centrality functions are dominated by lifecycle boilerplate")
+        # If boilerplate-dominated, emit Step 2 structured explanation
+        if boilerplate_dominated_clusters:
+            print("Cluster rejected:")
+            print("  - No semantic nucleus detected")
 
-        if boilerplate_dominated:
-            if not no_nucleus_clusters:  # Avoid duplicate if already mentioned
-                print("- High-centrality functions are dominated by lifecycle boilerplate")
+            for cluster_data in boilerplate_dominated_clusters:
+                nature = cluster_data.get('boilerplate_nature', [])
+                fraction = cluster_data.get('boilerplate_fraction', 0)
+                funcs = cluster_data.get('boilerplate_functions', [])
 
-        # Check for timeline+selection entanglement (would need extraction cost analysis)
-        print("- Timeline and selection semantics appear tightly interwoven")
+                if nature:
+                    nature_str = ", ".join(sorted(set(nature)))
+                    print(f"  - Reason: boilerplate dominance ({int(fraction*100)}% of cluster)")
+                    print(f"  - Nature of code: {nature_str}")
+                else:
+                    print(f"  - Reason: boilerplate dominance ({int(fraction*100)}% of cluster)")
 
-        print()
-        print("Actionable guidance:")
-        print("- Reduce boilerplate dominance by extracting lifecycle logic")
-        print("- Decouple selection mutation from timeline mutation")
-        print("- Re-run analysis after structural simplification")
-        print()
-        print("No extraction is recommended at this time.")
+                print()
+                print("Why refactoring would be unsafe:")
+                print("  - Lifecycle coordination code has intentional cross-cutting nature")
+                print("  - Extracting fragments would break initialization order dependencies")
+                print("  - No semantic algorithm exists to isolate - this is structural glue")
+                print()
+                print("No leverage points for extraction.")
+                print()
+                print("Recommendation:")
+                print("  - Keep as-is: lifecycle coordination is inherently cross-cutting")
+                print("  - If truly problematic, consider event-driven architecture")
+        else:
+            # Generic rejection (no nucleus or competing nuclei)
+            print("No stable structural nuclei detected.")
+            print()
+            print("Findings:")
+
+            if no_nucleus_clusters:
+                # Check if high-centrality functions are boilerplate-heavy
+                boilerplate_count = sum(len(c.get('boilerplate_heavy', [])) for c in no_nucleus_clusters)
+                if boilerplate_count > 0:
+                    print("- High-centrality functions are dominated by lifecycle boilerplate")
+
+            # Check for timeline+selection entanglement (would need extraction cost analysis)
+            print("- Timeline and selection semantics appear tightly interwoven")
+
+            print()
+            print("Actionable guidance:")
+            print("- Reduce boilerplate dominance by extracting lifecycle logic")
+            print("- Decouple selection mutation from timeline mutation")
+            print("- Re-run analysis after structural simplification")
+            print()
+            print("No extraction is recommended at this time.")
         print()
         print("=" * 70)
 
