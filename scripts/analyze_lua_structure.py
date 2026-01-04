@@ -1004,6 +1004,14 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
     leverage_context_count = 0
     leverage_justification = ""
 
+    # GOLDEN TEST 5: Track event boundaries for explicit reasoning
+    # Event boundaries are integration points where contexts converge by design
+    event_boundaries = []
+    # Patterns match function name after module prefix (e.g., "handle_foo" or "foo_changed")
+    # Use word boundaries to avoid false matches (e.g., "on_" shouldn't match "selection_state")
+    event_boundary_start_patterns = ['handle_', 'on_']  # Match at start of bare function name
+    event_boundary_end_patterns = ['_changed', '_callback', '_event', '_handler']  # Match at end
+
     # GOLDEN TEST 3: Micro-cluster acceptance (≤4 functions)
     # Small, well-factored clusters should NOT have leverage points identified
     # Extraction would add indirection, not clarity - explicit restraint
@@ -1033,6 +1041,24 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
             # Skip boilerplate-heavy functions
             if boilerplate_scores.get(fn, 0) >= 0.6:
                 continue
+
+            # GOLDEN TEST 5: Detect event boundaries (integration points)
+            # These are NOT leverage points even if they touch many contexts
+            # Rationale: Context convergence is intrinsic to event boundary responsibility
+            fn_lower = fn.lower()
+
+            # Extract bare function name (after module prefix like "project_browser:")
+            bare_name = fn_lower.split(':')[-1].split('.')[-1]
+
+            # Check for event boundary patterns at word boundaries
+            is_event_boundary = (
+                any(bare_name.startswith(pattern) for pattern in event_boundary_start_patterns) or
+                any(bare_name.endswith(pattern) for pattern in event_boundary_end_patterns)
+            )
+
+            if is_event_boundary:
+                event_boundaries.append(fn)
+                continue  # Skip - event boundaries are NOT leverage candidates
 
             # Count distinct context roots
             fn_contexts = context_roots.get(fn, set())
@@ -1104,6 +1130,23 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
             sentences.append(f"No refactoring recommended.")
         elif boilerplate_functions:
             sentences.append(f"Refactoring should preserve the nucleus while extracting boilerplate to clarify the algorithm's semantic core.")
+
+        # GOLDEN TEST 5: Event boundary exclusion with discernment reasoning
+        # Emit explicit reasoning for why event boundaries were NOT considered leverage points
+        if event_boundaries:
+            sentences.append("")  # Blank line for separation
+            sentences.append("Event Boundary Analysis:")
+            for event_fn in event_boundaries:
+                sentences.append(f"")
+                sentences.append(f"  Candidate examined: {event_fn}")
+                sentences.append(f"  Result: Not a leverage point")
+                sentences.append(f"")
+                sentences.append(f"  Reason:")
+                sentences.append(f"    This function serves as an event boundary where state, context, and UI updates")
+                sentences.append(f"    are intentionally coordinated. Its context breadth reflects responsibility,")
+                sentences.append(f"    not accidental coupling. Extraction would create artificial indirection")
+                sentences.append(f"    (a 'traffic cop' module) without reducing complexity.")
+                sentences.append(f"    The coupling is convergent by design, not divergent due to mixed concerns.")
 
     elif proto_nucleus:
         # STATE 2: Proto-nucleus (emergent structure not yet consolidated)
