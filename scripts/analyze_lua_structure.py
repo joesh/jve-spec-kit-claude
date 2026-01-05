@@ -14,6 +14,62 @@ try:
 except ImportError:
     HAS_NETWORKX = False
 
+# =============================================================================
+# ARCHITECTURAL CONTRACT — NON-NEGOTIABLE BEHAVIORAL GUARANTEES
+# =============================================================================
+#
+# This analyzer implements structural discernment, not naive coupling metrics.
+# The following principles are FROZEN and must be preserved across all changes.
+#
+# 1. NUCLEUS DEFINITION
+#    A nucleus is the SEMANTIC CENTER of an algorithm, not the structural hub.
+#    It is the function that ORCHESTRATES intent, even if it has low fanout.
+#    Nucleus selection prioritizes semantic coherence over call graph centrality.
+#
+# 2. LEVERAGE POINT DEFINITION
+#    A leverage point is an EXTRACTION OPPORTUNITY near a nucleus.
+#    It is NOT a code smell, anti-pattern, or high-coupling function.
+#    Criteria:
+#      - Touches MORE distinct context roots than the nucleus
+#      - Context breadth delta > 1 (trivial differences are suppressed)
+#      - NOT boilerplate-dominated (lifecycle/registration/wiring)
+#      - NOT an event boundary (integration point with convergent coupling)
+#    A leverage point represents accidental coupling that can be factored out.
+#
+# 3. BOILERPLATE EXCLUSION
+#    Lifecycle/setup/registration functions are NEVER leverage points.
+#    Rationale: These functions are structural glue with intentional cross-cutting.
+#    Extracting them would break initialization order and create fragility.
+#    Patterns: init*, setup*, register*, is_*, set_*, on_*, handle_*
+#
+# 4. EVENT BOUNDARY PROTECTION
+#    Event boundaries are integration points where contexts CONVERGE BY DESIGN.
+#    They coordinate state, UI, and events as their PRIMARY RESPONSIBILITY.
+#    Context breadth reflects their purpose, not accidental coupling.
+#    Patterns: handle_*, on_*, *_changed, *_callback, *_event, *_handler
+#    These are EXPLICITLY EXCLUDED from leverage point consideration.
+#    The tool must emit discernment reasoning explaining why extraction is harmful.
+#
+# 5. CONTEXT BREADTH INSUFFICIENCY
+#    "Touches many contexts" ≠ "Extract it"
+#    Context breadth ALONE is insufficient without RESPONSIBILITY MISMATCH.
+#    The analyzer must demonstrate architectural judgment:
+#      - Convergent coupling (appropriate) vs Divergent coupling (extract-worthy)
+#      - Responsibility alignment vs Mixed concerns
+#    Extraction recommendations require justification beyond metric thresholds.
+#
+# 6. EXPLICIT RESTRAINT REQUIREMENT
+#    When leverage point detection is suppressed, the tool MUST emit reasoning:
+#      - Micro-clusters (≤4 functions): "well-factored, no extraction needed"
+#      - Trivial context delta (≤1): "context breadth differences are trivial"
+#      - Event boundaries: "convergent coupling by design, extraction harmful"
+#    Silent suppression is forbidden. Restraint must be auditable.
+#
+# VALIDATION: Golden Tests 1, 2, 3, and 5 are FROZEN.
+# Any change that breaks these tests violates the architectural contract.
+#
+# =============================================================================
+
 # -------------------------
 # Thresholds (unchanged)
 # -------------------------
@@ -947,7 +1003,7 @@ def _salient_context_root(cluster, context_roots, valid_context_roots, generic_r
 def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_roots,
                          valid_context_roots, generic_roots, global_root_counts, total_functions,
                          func_loc, by_file, total_loc, dom_file, dom_pct,
-                         explain_suppressed, call_graph=None, calls=None, callers=None, veneers=None, func_scope=None):
+                         explain_suppressed, explain_rejections=False, call_graph=None, calls=None, callers=None, veneers=None, func_scope=None):
     """
     Analyze cluster using signal-based scoring per ANALYSIS_TOOL_DESIGN_ADDENDUM.md
 
@@ -1012,6 +1068,10 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
     event_boundary_start_patterns = ['handle_', 'on_']  # Match at start of bare function name
     event_boundary_end_patterns = ['_changed', '_callback', '_event', '_handler']  # Match at end
 
+    # DIAGNOSTIC MODE: Track rejection reasons for auditability
+    # Only populated when explain_rejections=True
+    rejected_candidates = []  # List of (fn_name, reason, explanation) tuples
+
     # GOLDEN TEST 3: Micro-cluster acceptance (≤4 functions)
     # Small, well-factored clusters should NOT have leverage points identified
     # Extraction would add indirection, not clarity - explicit restraint
@@ -1038,8 +1098,18 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
             if fn == nucleus:
                 continue
 
+            fn_contexts = context_roots.get(fn, set())
+            fn_context_count = len(fn_contexts)
+
             # Skip boilerplate-heavy functions
-            if boilerplate_scores.get(fn, 0) >= 0.6:
+            boilerplate_score = boilerplate_scores.get(fn, 0)
+            if boilerplate_score >= 0.6:
+                if explain_rejections and fn_context_count > nucleus_context_count:
+                    rejected_candidates.append((
+                        fn,
+                        "boilerplate-dominated",
+                        f"Lifecycle/setup functions are structural glue; extracting would break initialization order (score: {boilerplate_score:.2f})"
+                    ))
                 continue
 
             # GOLDEN TEST 5: Detect event boundaries (integration points)
@@ -1058,11 +1128,13 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
 
             if is_event_boundary:
                 event_boundaries.append(fn)
+                if explain_rejections and fn_context_count > nucleus_context_count:
+                    rejected_candidates.append((
+                        fn,
+                        "event boundary",
+                        f"Context convergence is intrinsic to event coordination responsibility; extraction would create artificial indirection"
+                    ))
                 continue  # Skip - event boundaries are NOT leverage candidates
-
-            # Count distinct context roots
-            fn_contexts = context_roots.get(fn, set())
-            fn_context_count = len(fn_contexts)
 
             # Select if more contexts than current best (or tie with higher nucleus score)
             if fn_context_count > best_context_count:
@@ -1087,6 +1159,12 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
             # Delta ≤1 indicates data flow through coherent algorithm, not cross-cutting concern
             if context_breadth_delta <= 1:
                 # Explicit restraint: no leverage point when differences are trivial
+                if explain_rejections:
+                    rejected_candidates.append((
+                        best_candidate,
+                        "insufficient context delta",
+                        f"Context breadth delta ({context_breadth_delta}) is trivial; indicates data flow through coherent algorithm, not accidental coupling"
+                    ))
                 pass  # best_candidate found but suppressed
             else:
                 # Significant context breadth difference - genuine leverage point
@@ -1210,14 +1288,16 @@ def _analysis_for_cluster(cluster, internal, central, degree, fanout, context_ro
         "inappropriate_connections": [(a, b, round(c, 3)) for a, b, c in inappropriate_connections[:12]],
         "has_signal": True,  # Always have signal (nucleus, proto-nucleus, or diffuse)
         "cluster_state": "nucleus" if nucleus else ("proto_nucleus" if proto_nucleus else "diffuse"),
+        "rejected_candidates": rejected_candidates,  # Diagnostic mode: why candidates were rejected
     }
 
-def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
+def analyze(paths, generic_roots, explain_suppressed=False, explain_rejections=False, call_graph=None):
     """
     Analyze Lua codebase and identify clusters.
 
     Args:
         paths: List of paths to scan
+        explain_rejections: If True, emit diagnostic explanations for rejected leverage candidates
         generic_roots: Set of generic context roots to filter
         explain_suppressed: Whether to show suppressed context roots
         call_graph: Optional dict from load_call_graph() for utility filtering
@@ -1586,6 +1666,8 @@ def analyze(paths, generic_roots, explain_suppressed=False, call_graph=None):
 
             explain_suppressed=explain_suppressed,
 
+            explain_rejections=explain_rejections,
+
             call_graph=call_graph,
 
             calls=calls,
@@ -1748,7 +1830,7 @@ def print_module_interface_summary(call_graph, analyzed_files):
     print()
 
 
-def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None):
+def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None, explain_rejections=False):
     # ADDENDUM_2 Golden Output: If no clusters passed gates, emit structured analysis
     if not results:
         rejected = diagnostics.get('rejected_clusters', []) if diagnostics else []
@@ -1924,6 +2006,22 @@ def print_text(results, diagnostics=None, call_graph=None, analyzed_files=None):
                 print("Suppressed context roots: " + items + ".")
                 print()
 
+            # DIAGNOSTIC MODE: Show why leverage candidates were rejected
+            # (Exclude event boundaries - they have their own section)
+            if explain_rejections:
+                rejected_list = analysis.get("rejected_candidates") or []
+                # Filter out event boundaries (already explained in Event Boundary Analysis section)
+                non_event_rejections = [(fn, r, e) for fn, r, e in rejected_list if r != "event boundary"]
+                if non_event_rejections:
+                    # Only show the first rejection as a representative example
+                    fn_name, reason, explanation = non_event_rejections[0]
+                    print()
+                    print("Leverage Candidate Rejection (Diagnostic):")
+                    print(f"  Candidate: {fn_name}")
+                    print(f"  Reason: {reason}")
+                    print(f"  Why extraction would be harmful: {explanation}")
+                    print()
+
             print("=" * 70)
             print()
 
@@ -1969,6 +2067,8 @@ def main():
     ap.add_argument("--json", "-j", action="store_true")
     ap.add_argument("--generic-roots", default="")
     ap.add_argument("--explain-suppressed", action="store_true")
+    ap.add_argument("--explain-rejections", action="store_true",
+                    help="Show why leverage point candidates were rejected (diagnostic mode)")
     ap.add_argument("--call-graph", help="Path to global call graph JSON (optional, will auto-generate if missing)")
     ap.add_argument("--update-call-graph", "-ug", action="store_true", help="Force regenerate call graph cache")
     args = ap.parse_args()
@@ -2024,13 +2124,15 @@ def main():
         [Path(p) for p in args.paths],
         generic_roots,
         explain_suppressed=args.explain_suppressed,
+        explain_rejections=args.explain_rejections,
         call_graph=call_graph
     )
 
     if args.json:
         print_json(results, args.paths)
     else:
-        print_text(results, diagnostics, call_graph, analyzed_files=[Path(p) for p in args.paths])
+        print_text(results, diagnostics, call_graph, analyzed_files=[Path(p) for p in args.paths],
+                   explain_rejections=args.explain_rejections)
 
 if __name__ == "__main__":
     main()
