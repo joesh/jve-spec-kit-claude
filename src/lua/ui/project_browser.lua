@@ -1764,6 +1764,8 @@ end
 
 function M.insert_selected_to_timeline(command_type, options)
     local this_func_label = "project_browser.insert_selected_to_timeline"
+
+    -- UI: Gather user intent and selection
     assert(M.timeline_panel, this_func_label .. ": timeline panel not available")
     local clip = assert(M.get_selected_master_clip(), this_func_label .. ": no media item selected")
     local timeline_state_module = assert(M.timeline_panel.get_state and M.timeline_panel.get_state(), this_func_label .. ": timeline state not available")
@@ -1772,139 +1774,25 @@ function M.insert_selected_to_timeline(command_type, options)
     local insert_pos = assert(timeline_state_module.get_playhead_position and timeline_state_module.get_playhead_position(), this_func_label .. ": missing insert position")
     assert(command_type == "Insert" or command_type == "Overwrite", this_func_label .. ": unsupported command_type")
 
-    local media = assert(clip.media or (clip.media_id and M.media_map[clip.media_id]), this_func_label .. ": missing media") --FIXME: an audo-only clip is just fine
-    local media_id = assert(clip.media_id or media.id, this_func_label .. ": missing media_id") --FIXME: an audo-only clip is just fine
-    local source_in = assert(clip.source_in, this_func_label .. ": missing source_in")
-    local source_out = assert(clip.source_out or clip.duration or media.duration, this_func_label .. ": missing source_out")
-    local duration = source_out - source_in
-    assert(duration.frames and duration.frames > 0, this_func_label .. ": invalid duration")
-
-    local payload_project_id = assert(clip.project_id or project_id, this_func_label .. ": missing clip project_id")
     local advance_playhead = options and options.advance_playhead == true
+    local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
 
-    local function clip_has_video() --FIXME: an audo-only clip is just fine
-        local width = assert(clip.width or media.width, this_func_label .. ": missing video width")
-        local height = assert(clip.height or media.height, this_func_label .. ": missing video height")
-        return width > 0 and height > 0
-    end
+    -- UI: Create and execute command
+    local cmd = assert(Command.create("AddClipToTimeline", project_id), this_func_label .. ": failed to create AddClipToTimeline command")
+    cmd:set_parameter("clip", clip)
+    cmd:set_parameter("timeline_state", timeline_state_module)
+    cmd:set_parameter("sequence_id", sequence_id)
+    cmd:set_parameter("project_id", project_id)
+    cmd:set_parameter("insert_pos", insert_pos)
+    cmd:set_parameter("command_type", command_type)
+    cmd:set_parameter("advance_playhead", advance_playhead)
+    cmd:set_parameter("media_lookup", M.media_map)
 
-    local function clip_audio_channel_count()
-        local channels = assert(clip.audio_channels or media.audio_channels, this_func_label .. ": missing audio channel count")
-        return assert(tonumber(channels), this_func_label .. ": audio channel count must be a number")
-    end
+    local result = command_manager.execute(cmd)
+    assert(result and result.success, string.format(this_func_label .. ": AddClipToTimeline failed: %s", result and result.error_message or "unknown error"))
 
-    local function clip_has_audio()
-        return clip_audio_channel_count() > 0
-    end
-
-    local selected_clip = {
-        video = {
-            role = "video",
-            media_id = media_id,
-            master_clip_id = clip.clip_id,
-            project_id = payload_project_id,
-            duration = duration,
-            source_in = source_in,
-            source_out = source_out,
-            clip_name = clip.name,
-            advance_playhead = advance_playhead
-        }
-    }
-
-    function selected_clip:has_video()
-        return clip_has_video()
-    end
-
-    function selected_clip:has_audio()
-        return clip_has_audio()
-    end
-
-    function selected_clip:audio_channel_count()
-        return clip_audio_channel_count()
-    end
-
-    function selected_clip:audio(ch)
-        assert(ch ~= nil, this_func_label .. ": missing audio channel index")
-        return {
-            role = "audio",
-            media_id = media_id,
-            master_clip_id = clip.clip_id,
-            project_id = payload_project_id,
-            duration = duration,
-            source_in = source_in,
-            source_out = source_out,
-            clip_name = clip.name,
-            advance_playhead = advance_playhead,
-            channel = ch
-        }
-    end
-
-    local function sort_tracks(tracks)
-        table.sort(tracks, function(a, b)
-            local a_index = a.track_index or 0
-            local b_index = b.track_index or 0
-            return a_index < b_index
-        end)
-    end
-
-    local function target_video_track(_, index)
-        local tracks = assert(timeline_state_module.get_video_tracks and timeline_state_module.get_video_tracks(), this_func_label .. ": missing video tracks")
-        sort_tracks(tracks)
-        local track = tracks[index + 1]
-        assert(track and track.id, string.format(this_func_label .. ": missing video track %d", index))
-        return track
-    end
-
-    local function target_audio_track(_, index)
-        local tracks = assert(timeline_state_module.get_audio_tracks and timeline_state_module.get_audio_tracks(), this_func_label .. ": missing audio tracks")
-        sort_tracks(tracks)
-        local track = tracks[index + 1]
-        assert(track and track.id, string.format(this_func_label .. ": missing audio track %d", index))
-        return track
-    end
-
-    local time_param = (command_type == "Overwrite") and "overwrite_time" or "insert_time"
-    local function insert_clip(_, payload, track, pos)
-        local clip_id = uuid.generate()
-        local cmd = assert(Command.create(command_type, payload_project_id), this_func_label .. ": failed to create command")
-        cmd:set_parameter("sequence_id", sequence_id)
-        cmd:set_parameter("track_id", assert(track and track.id, this_func_label .. ": missing track id"))
-        assert(payload.media_id or payload.master_clip_id, this_func_label .. ": missing payload media/master clip id")
-        if payload.media_id then
-            cmd:set_parameter("media_id", payload.media_id)
-        end
-        cmd:set_parameter("master_clip_id", payload.master_clip_id)
-        cmd:set_parameter("duration", assert(payload.duration, this_func_label .. ": missing payload duration"))
-        cmd:set_parameter("source_in", assert(payload.source_in, this_func_label .. ": missing payload source_in"))
-        cmd:set_parameter("source_out", assert(payload.source_out, this_func_label .. ": missing payload source_out"))
-        cmd:set_parameter(time_param, assert(pos, this_func_label .. ": missing insert position"))
-        cmd:set_parameter("project_id", payload_project_id)
-        cmd:set_parameter("clip_id", clip_id)
-        if payload.clip_name then
-            cmd:set_parameter("clip_name", payload.clip_name)
-        end
-        if payload.advance_playhead then
-            cmd:set_parameter("advance_playhead", true)
-        end
-
-        local result = command_manager.execute(cmd)
-        assert(result and result.success, string.format(this_func_label .. ": insert failed: %s", result and result.error_message or "unknown error"))
-        return {id = clip_id, role = payload.role, time_offset = 0}
-    end
-
-    local sequence = {
-        target_video_track = target_video_track,
-        target_audio_track = target_audio_track,
-        insert_clip = insert_clip
-    }
-
-    insert_selected_clip_into_timeline({
-        selected_clip = selected_clip,
-        sequence = sequence,
-        insert_pos = insert_pos
-    })
-
-    logger.info("project_browser", string.format("Media inserted to timeline: %s", media.name or media.file_name))
+    -- UI: Provide feedback
+    logger.info("project_browser", string.format("Media inserted to timeline: %s", media and (media.name or media.file_name) or "unknown"))
     if focus_manager and focus_manager.focus_panel then
         focus_manager.focus_panel("timeline")
     else
