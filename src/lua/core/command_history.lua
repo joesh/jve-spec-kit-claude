@@ -27,6 +27,10 @@ local last_sequence_number = 0
 local active_sequence_id = nil
 local active_project_id = nil
 
+-- Undo group tracking (Emacs-style)
+local undo_group_stack = {}
+local last_undo_group_id = 0
+
 local GLOBAL_STACK_ID = "global"
 local TIMELINE_STACK_PREFIX = "timeline:"
 
@@ -351,6 +355,44 @@ function M.find_latest_child_command(parent_sequence)
     end
     query:finalize()
     return command
+end
+
+-- Undo group management (Emacs-style)
+function M.begin_undo_group(label)
+    last_undo_group_id = last_undo_group_id + 1
+    table.insert(undo_group_stack, {
+        id = last_undo_group_id,
+        label = label or ("group_" .. last_undo_group_id),
+        cursor_on_entry = current_sequence_number  -- Save cursor for rollback
+    })
+    logger.debug("command_history", string.format("Begin undo group %d: %s", last_undo_group_id, label or ""))
+    return last_undo_group_id
+end
+
+function M.end_undo_group()
+    if #undo_group_stack == 0 then
+        logger.warn("command_history", "end_undo_group called with no active group")
+        return nil
+    end
+    local group = table.remove(undo_group_stack)
+    logger.debug("command_history", string.format("End undo group %d: %s", group.id, group.label))
+    return group.id
+end
+
+function M.get_current_undo_group_id()
+    if #undo_group_stack == 0 then
+        return nil
+    end
+    -- Nested groups collapse into outer group (Emacs semantics)
+    return undo_group_stack[1].id
+end
+
+function M.get_undo_group_cursor_on_entry()
+    if #undo_group_stack == 0 then
+        return nil
+    end
+    -- Return cursor position from outermost group (Emacs semantics)
+    return undo_group_stack[1].cursor_on_entry
 end
 
 return M

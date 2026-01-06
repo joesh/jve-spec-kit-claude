@@ -91,6 +91,31 @@ local function ensure_active_project_id()
     return active_project_id
 end
 
+-- SAVEPOINT-aware rollback for undo groups
+local function rollback_transaction()
+    assert(db, "rollback_transaction: no database connection")
+    local group_id = history.get_current_undo_group_id()
+    if group_id then
+        -- Inside undo group - rollback to savepoint
+        local savepoint_name = "undo_group_" .. group_id
+        local rollback_sql = "ROLLBACK TO SAVEPOINT " .. savepoint_name
+        db:exec(rollback_sql)
+
+        -- INVARIANT:
+        -- In-memory history cursor must always point to a durable DB state.
+        -- Commands executed inside an undo group are not durable until the group closes.
+        -- On SAVEPOINT rollback, cursor must be restored to group entry position.
+
+        -- Restore cursor to position before group started (DB ↔ memory sync)
+        local cursor_on_entry = history.get_undo_group_cursor_on_entry()
+        history.set_current_sequence_number(cursor_on_entry)
+        history.save_undo_position()
+    else
+        -- No undo group - full rollback
+        db:exec("ROLLBACK")
+    end
+end
+
 local function normalize_command(command_or_name, params)
     local Command = require('command')
 
@@ -521,18 +546,43 @@ function M.execute(command_or_name, params)
     history.set_active_stack(stack_id, stack_opts)
     command.stack_id = stack_id
 
-    -- No need to manually cache state, snapshots handle restoration now?
-    -- Keeping logic implicitly supported via timeline_state if needed.
 
-    -- BEGIN TRANSACTION
-    local begin_tx = db:prepare("BEGIN TRANSACTION")
-    if not (begin_tx and begin_tx:exec()) then
-        if begin_tx then begin_tx:finalize() end
-        result.error_message = "Failed to begin transaction"
-        exec_scope:finish("begin_tx_failed")
-        return result
+    -- TRANSACTION / UNDO-GROUP INVARIANT
+    --
+    -- command_manager.execute() MUST obey the following rules:
+    --
+    -- 1. When NO undo group is active:
+    --    - execute() owns the transaction lifecycle
+    --    - it is responsible for BEGIN, COMMIT, and full ROLLBACK on failure
+    --
+    -- 2. When an undo group IS active:
+    --    - a SAVEPOINT has already established transactional context
+    --    - execute() MUST NOT issue BEGIN or COMMIT
+    --    - on failure, execute() MUST rollback ONLY to the active SAVEPOINT
+    --    - commit of grouped commands is deferred until end_undo_group()
+    --
+    -- 3. History cursor movement is NOT a transaction concern:
+    --    - execute() never advances the undo/redo cursor
+    --    - undo boundaries are established explicitly by:
+    --        * undo()
+    --        * redo()
+    --        * end_undo_group() (for grouped commands)
+    --
+    -- Violating any of the above will corrupt undo/redo semantics,
+    -- especially under branching histories.
+
+    -- BEGIN TRANSACTION (skip if undo group is active - savepoint already started transaction)
+    local undo_group_active = history.get_current_undo_group_id() ~= nil
+    if not undo_group_active then
+        local begin_tx = db:prepare("BEGIN TRANSACTION")
+        if not (begin_tx and begin_tx:exec()) then
+            if begin_tx then begin_tx:finalize() end
+            result.error_message = "Failed to begin transaction"
+            exec_scope:finish("begin_tx_failed")
+            return result
+        end
+        begin_tx:finalize()
     end
-    begin_tx:finalize()
 
     local perf = create_command_perf_tracker(command)
     local needs_state_hash = should_compute_state_hash(command)
@@ -552,13 +602,14 @@ function M.execute(command_or_name, params)
     local sequence_number = history.increment_sequence_number()
     command.sequence_number = sequence_number
     command.parent_sequence_number = history.get_current_sequence_number()
+    command.undo_group_id = history.get_current_undo_group_id()
 
     -- Validation logic
     if not command.parent_sequence_number then
         local executing_from_root = history.get_current_sequence_number() == nil
         if not executing_from_root and sequence_number > 1 then
             logger.error("command_manager", string.format("Command %d has NULL parent but is not first!", sequence_number))
-            db:exec("ROLLBACK")
+            rollback_transaction()
             history.decrement_sequence_number()
             result.error_message = "FATAL: undo tree corruption"
             exec_scope:finish("null_parent")
@@ -657,7 +708,10 @@ function M.execute(command_or_name, params)
                  end
             end
 
-            db:exec("COMMIT")
+            -- COMMIT (skip if undo group is active - savepoint will handle commit)
+            if not undo_group_active then
+                db:exec("COMMIT")
+            end
             if perf.enabled then
                 perf.log("db_commit")
                 perf.reset()
@@ -712,7 +766,7 @@ function M.execute(command_or_name, params)
 
         else
             result.error_message = "Failed to save command to database"
-            db:exec("ROLLBACK")
+            rollback_transaction()
             history.decrement_sequence_number()
         end
     else
@@ -720,7 +774,7 @@ function M.execute(command_or_name, params)
         result.error_message = execution_error_message ~= "" and execution_error_message
             or (last_error_message ~= "" and last_error_message or "Command execution failed")
         last_error_message = ""
-        db:exec("ROLLBACK")
+        rollback_transaction()
         history.decrement_sequence_number()
     end
 
@@ -977,7 +1031,7 @@ function M.get_command_at_sequence(seq_num, project_id)
     local query = db:prepare([[
         SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_value, playhead_rate,
                selected_clip_ids, selected_edge_infos, selected_gap_infos,
-               selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre
+               selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id
         FROM commands
         WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
     ]])
@@ -1005,6 +1059,7 @@ function M.get_command_at_sequence(seq_num, project_id)
             selected_clip_ids_pre = query:value(13) or "[]",
             selected_edge_infos_pre = query:value(14) or "[]",
             selected_gap_infos_pre = query:value(15) or "[]",
+            undo_group_id = query:value(16),
         }
         
         local command_args_json = query:value(2)
@@ -1038,10 +1093,63 @@ function M.undo()
     if M.can_undo() then
         local last_cmd = M.get_last_command(active_project_id)
         if last_cmd then
-            return M.execute_undo(last_cmd)
+            -- Check if this command is part of an undo group
+            if last_cmd.undo_group_id then
+                -- Undo entire group
+                return M.undo_group(last_cmd.undo_group_id)
+            else
+                -- Undo single command (existing behavior)
+                return M.execute_undo(last_cmd)
+            end
         end
     end
     return { success = false, error_message = "Nothing to undo" }
+end
+
+function M.undo_group(group_id)
+    assert(db, "undo_group: no database connection")
+
+    local current_seq = history.get_current_sequence_number()
+    if not current_seq then
+        return { success = false, error_message = "Nothing to undo" }
+    end
+
+    -- Walk backwards from current position, collecting commands in this group
+    -- Follow parent_sequence_number links for branch-safe traversal
+    local commands_to_undo = {}
+    local seq = current_seq
+
+    while seq do
+        local cmd = M.get_command_at_sequence(seq, active_project_id)
+        if not cmd then
+            break
+        end
+        if cmd.undo_group_id ~= group_id then
+            break
+        end
+        table.insert(commands_to_undo, cmd)
+        -- Follow parent link (tree-based traversal, not linear decrement)
+        seq = cmd.parent_sequence_number
+    end
+
+    if #commands_to_undo == 0 then
+        return { success = false, error_message = "No commands found in undo group" }
+    end
+
+    -- Undo each command (already in reverse order)
+    for _, cmd in ipairs(commands_to_undo) do
+        local result = M.execute_undo(cmd)
+        if not result.success then
+            return result
+        end
+    end
+
+    -- Set history pointer to parent of earliest undone command
+    local earliest_cmd = commands_to_undo[#commands_to_undo]
+    history.set_current_sequence_number(earliest_cmd.parent_sequence_number)
+    history.save_undo_position()
+
+    return { success = true }
 end
 
 local function execute_redo_command(cmd)
@@ -1133,10 +1241,44 @@ function M.redo()
         local parent = history.get_current_sequence_number() or 0
         local next_cmd_info = history.find_latest_child_command(parent)
         if next_cmd_info then
-            return M.redo_to_sequence_number(next_cmd_info.sequence_number)
+            local next_cmd = M.get_command_at_sequence(next_cmd_info.sequence_number, active_project_id)
+            if next_cmd and next_cmd.undo_group_id then
+                -- Redo entire group
+                return M.redo_group(next_cmd.undo_group_id)
+            else
+                return M.redo_to_sequence_number(next_cmd_info.sequence_number)
+            end
         end
     end
     return { success = false, error_message = "Nothing to redo" }
+end
+
+function M.redo_group(group_id)
+    assert(db, "redo_group: no database connection")
+
+    local parent = history.get_current_sequence_number() or 0
+
+    -- Follow history tree forward while commands are in this group
+    while true do
+        local next_cmd_info = history.find_latest_child_command(parent)
+        if not next_cmd_info then
+            break
+        end
+
+        local cmd = M.get_command_at_sequence(next_cmd_info.sequence_number, active_project_id)
+        if not cmd or cmd.undo_group_id ~= group_id then
+            break
+        end
+
+        local result = execute_redo_command(cmd)
+        if not result.success then
+            return result
+        end
+
+        parent = cmd.sequence_number
+    end
+
+    return { success = true }
 end
 
 function M.execute_undo(original_command)
@@ -1483,6 +1625,35 @@ end
 
 function M.get_executor(command_type)
     return registry.get_executor(command_type)
+end
+
+-- Emacs-style undo grouping
+function M.begin_undo_group(label)
+    local group_id = history.begin_undo_group(label)
+    -- Open savepoint for transaction (nested transactions use savepoints)
+    if db then
+        local savepoint_name = "undo_group_" .. group_id
+        local savepoint_sql = "SAVEPOINT " .. savepoint_name
+        local ok = db:exec(savepoint_sql)
+        if not ok then
+            logger.warn("command_manager", "Failed to create savepoint for undo group: " .. savepoint_name)
+        end
+    end
+    return group_id
+end
+
+function M.end_undo_group()
+    local group_id = history.end_undo_group()
+    if group_id and db then
+        -- Commit savepoint
+        local savepoint_name = "undo_group_" .. group_id
+        local release_sql = "RELEASE SAVEPOINT " .. savepoint_name
+        local ok = db:exec(release_sql)
+        if not ok then
+            logger.warn("command_manager", "Failed to release savepoint: " .. savepoint_name)
+        end
+    end
+    return group_id
 end
 
 return M

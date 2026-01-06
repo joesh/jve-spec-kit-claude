@@ -18,6 +18,7 @@ assert(db:exec([[
         pre_hash TEXT,
         post_hash TEXT,
         timestamp INTEGER,
+        undo_group_id INTEGER,
         playhead_value INTEGER DEFAULT 0,
         playhead_rate REAL DEFAULT 0,
         selected_clip_ids TEXT DEFAULT '[]',

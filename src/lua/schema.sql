@@ -175,18 +175,19 @@ CREATE TABLE IF NOT EXISTS commands (
     command_type TEXT NOT NULL,
     command_args TEXT NOT NULL, -- JSON
     parent_sequence_number INTEGER, -- For Undo Tree
+    undo_group_id INTEGER, -- For Emacs-style undo grouping
     pre_hash TEXT,
     post_hash TEXT,
     timestamp INTEGER NOT NULL,
-    
+
     -- Snapshot State (for fast restores)
     playhead_value REAL,
     playhead_rate REAL,
-    
+
     selected_clip_ids TEXT,
     selected_edge_infos TEXT,
     selected_gap_infos TEXT,
-    
+
     selected_clip_ids_pre TEXT,
     selected_edge_infos_pre TEXT,
     selected_gap_infos_pre TEXT

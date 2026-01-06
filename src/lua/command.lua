@@ -334,7 +334,7 @@ function M:save(db)
             SET command_type = ?, sequence_number = ?, command_args = ?,
                 pre_hash = ?, post_hash = ?, timestamp = ?, playhead_value = ?, playhead_rate = ?,
                 selected_clip_ids = ?, selected_edge_infos = ?, selected_gap_infos = ?,
-                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?
+                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?, undo_group_id = ?
             WHERE id = ?
         ]])
         if not query then
@@ -360,12 +360,13 @@ function M:save(db)
         query:bind_value(12, selected_clip_ids_pre_json)
         query:bind_value(13, selected_edge_infos_pre_json)
         query:bind_value(14, selected_gap_infos_pre_json)
-        query:bind_value(15, self.id)
+        query:bind_value(15, self.undo_group_id)
+        query:bind_value(16, self.id)
     else
         -- INSERT
         query = db:prepare([[
-            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not query then
             local err = "unknown error"
@@ -393,6 +394,7 @@ function M:save(db)
         query:bind_value(14, selected_clip_ids_pre_json)
         query:bind_value(15, selected_edge_infos_pre_json)
         query:bind_value(16, selected_gap_infos_pre_json)
+        query:bind_value(17, self.undo_group_id)
     end
 
     if not query:exec() then
