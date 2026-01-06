@@ -73,6 +73,11 @@ eventlog/
 *.bak
 *.orig
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
 # Test capture artifacts (screenshots/logs)
 tests/captures/
 tests/**/captures/
