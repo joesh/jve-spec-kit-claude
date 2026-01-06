@@ -30,7 +30,8 @@
 -- @file add_clip_to_timeline.lua
 local M = {}
 
--- Module dependencies (aligned for clarity)
+--J I want the following ids to have a syntactic convention showing they're module includes. like, say, uuid_module. I also want all the ='s lined up.
+--J Why do we need all of these? What do they each do? What's the diff betw command_manager and command? Why is one in core and not the other?
 local uuid_module            = require("uuid")
 local command_manager_module = require("core.command_manager")
 local command_module         = require("command")
@@ -61,6 +62,7 @@ local track_resolver_module  = require("core.utils.track_resolver")
 --   3. Execute command through command_manager (persists to database)
 --   4. Store clip_id in accumulator for linking step
 --------------------------------------------------------------------------------
+--J This is an INSANE number of parameters. What are they all for?
 local function execute_channel_insertion(
     command_type,
     base_payload,
@@ -74,11 +76,13 @@ local function execute_channel_insertion(
 )
     local clip_id = uuid_module.generate()
 
+    --J what the heck is this doing and why? totally opaque.
     -- Insert and Overwrite use different parameter names for position
     -- Insert: "insert_time" (ripples timeline)
     -- Overwrite: "overwrite_time" (replaces existing content)
     local time_param = (command_type == "Overwrite") and "overwrite_time" or "insert_time"
 
+    --J why do we need to do this? create a packet
     -- Build command packet for Insert or Overwrite
     -- Command system requires all parameters be set explicitly (no defaults)
     local cmd = command_module.create(command_type, project_id)
@@ -92,12 +96,14 @@ local function execute_channel_insertion(
     cmd:set_parameter("clip_id", clip_id)
     cmd:set_parameter(time_param, insert_pos)
 
+    --J what the heck is a base_payload and why do we need to do all this? Totally opaque
     -- Optional parameters (only set if present in base_payload)
     if base_payload.media_id then cmd:set_parameter("media_id", base_payload.media_id) end
     if base_payload.clip_name then cmd:set_parameter("clip_name", base_payload.clip_name) end
     if base_payload.advance_playhead then cmd:set_parameter("advance_playhead", true) end
     if channel_index ~= nil then cmd:set_parameter("channel", channel_index) end
 
+    --J what are we executing? apparently command_type. which isn't really checked. what if someone passed in "howdy"? How would they know what's allowed? This SUCKS.
     -- Execute Insert or Overwrite command
     -- This persists to database, updates timeline state, enables undo
     local result = command_manager_module.execute(cmd)
@@ -106,6 +112,7 @@ local function execute_channel_insertion(
             command_type, result and result.error_message or "unknown error"))
     end
 
+    --J we just executed a command. what's this table we're inserting into and why
     -- Record clip_id for linking step
     -- When video+audio are inserted, they must be linked so they move together
     table.insert(clip_ids_out, {clip_id = clip_id, role = channel_type, time_offset = 0})
@@ -118,7 +125,9 @@ end
 -- After registration, calling command_manager.execute("AddClipToTimeline", {...})
 -- will route to the executor function defined below.
 --------------------------------------------------------------------------------
+--J what are we registering? why? who's going to call this?
 function M.register(command_executors, command_undoers, db, set_last_error)
+    --J why? where does command come from?
     command_executors["AddClipToTimeline"] = function(command)
         -- ====================================================================
         -- PARAMETER EXTRACTION
@@ -127,6 +136,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- This allows serialization to SQLite for undo/redo/replay
         -- Caller (usually UI code) built this packet and passed it to command_manager
 
+        --J from where are we extracting? why so many parameters? why are they in a packet?
         local clip           = assert(command:get_parameter("clip"), "AddClipToTimeline: no clip provided")
         local timeline_state = assert(command:get_parameter("timeline_state"), "AddClipToTimeline: timeline state not available")
         local sequence_id    = assert(command:get_parameter("sequence_id"), "AddClipToTimeline: missing sequence_id")
@@ -166,6 +176,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- ====================================================================
         -- PAYLOAD CONSTRUCTION
         -- ====================================================================
+        --J wtf do we have a payload? why do we need this level of indirection
         -- Build shared data packet for all channel insertions
         -- Why? Video and audio channels share source timing, media_id, etc.
         -- Instead of repeating these 7 fields in execute_channel_insertion calls,
@@ -223,6 +234,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return {success = true}
     end
 
+    --J explain this line
     -- Return executor function to command_manager
     -- command_manager stores this in command_executors["AddClipToTimeline"]
     return {
