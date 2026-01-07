@@ -6,10 +6,11 @@ local command_module         = require("command")
 local clip_media_module      = require("core.utils.clip_media")
 local track_resolver_module  = require("core.utils.track_resolver")
 
-local function set_insert_overwrite_parameters(cmd, command_type, track_id, sequence_id, insert_pos, clip_source, channel)
+local function execute_insert_overwrite(command_type, track_id, sequence_id, insert_pos, clip_source, channel, project_id)
     local clip_id = uuid_module.generate()
     local time_param = (command_type == "Overwrite") and "overwrite_time" or "insert_time"
 
+    local cmd = command_module.create(command_type, project_id)
     cmd:set_parameter("sequence_id", sequence_id)
     cmd:set_parameter("track_id", track_id)
     cmd:set_parameter("master_clip_id", clip_source.master_clip_id)
@@ -25,7 +26,20 @@ local function set_insert_overwrite_parameters(cmd, command_type, track_id, sequ
     if clip_source.advance_playhead then cmd:set_parameter("advance_playhead", true) end
     if channel ~= nil then cmd:set_parameter("channel", channel) end
 
+    local result = command_manager_module.execute(cmd)
+    assert(result and result.success, string.format("Insert/Overwrite failed: %s", result and result.error_message or "unknown"))
+
     return clip_id
+end
+
+local function execute_link_clips(clip_ids, project_id)
+    if #clip_ids <= 1 then return end
+
+    local cmd = command_module.create("LinkClips", project_id)
+    cmd:set_parameter("clips", clip_ids)
+
+    local result = command_manager_module.execute(cmd)
+    assert(result and result.success, string.format("LinkClips failed: %s", result and result.error_message or "unknown"))
 end
 
 function M.register(command_executors, command_undoers, db, set_last_error)
@@ -69,30 +83,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if has_video then
             local video_track = track_resolver_module.resolve_video_track(timeline_state, 0)
-            local video_cmd = command_module.create(command_type, project_id)
-            local clip_id = set_insert_overwrite_parameters(video_cmd, command_type, video_track.id, sequence_id, insert_pos, clip_source, nil)
-            local result = command_manager_module.execute(video_cmd)
-            assert(result and result.success, string.format("AddClipToTimeline: %s failed: %s", command_type, result and result.error_message or "unknown"))
+            local clip_id = execute_insert_overwrite(command_type, video_track.id, sequence_id, insert_pos, clip_source, nil, project_id)
             table.insert(clip_ids, {clip_id = clip_id, role = "video", time_offset = 0})
         end
 
         if has_audio then
             for ch = 0, audio_channel_count - 1 do
                 local audio_track = track_resolver_module.resolve_audio_track(timeline_state, ch)
-                local audio_cmd = command_module.create(command_type, project_id)
-                local clip_id = set_insert_overwrite_parameters(audio_cmd, command_type, audio_track.id, sequence_id, insert_pos, clip_source, ch)
-                local result = command_manager_module.execute(audio_cmd)
-                assert(result and result.success, string.format("AddClipToTimeline: %s failed: %s", command_type, result and result.error_message or "unknown"))
+                local clip_id = execute_insert_overwrite(command_type, audio_track.id, sequence_id, insert_pos, clip_source, ch, project_id)
                 table.insert(clip_ids, {clip_id = clip_id, role = "audio", time_offset = 0})
             end
         end
 
-        if #clip_ids > 1 then
-            local link_cmd = command_module.create("LinkClips", project_id)
-            link_cmd:set_parameter("clips", clip_ids)
-            local link_result = command_manager_module.execute(link_cmd)
-            assert(link_result and link_result.success, string.format("AddClipToTimeline: LinkClips failed: %s", link_result and link_result.error_message or "unknown"))
-        end
+        execute_link_clips(clip_ids, project_id)
 
         command_manager_module.end_undo_group()
 
