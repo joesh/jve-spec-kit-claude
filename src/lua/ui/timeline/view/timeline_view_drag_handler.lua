@@ -101,16 +101,15 @@ function M.handle_release(view, drag_state, modifiers)
                 return
             end
 
-            local cmd = Command.create("DuplicateClips", active_proj)
-            cmd:set_parameter("project_id", active_proj)
-            cmd:set_parameter("sequence_id", active_seq)
-            cmd:set_parameter("__snapshot_sequence_ids", {active_seq})
-            cmd:set_parameter("clip_ids", ids)
-            cmd:set_parameter("delta_rat", delta_rat)
-            cmd:set_parameter("target_track_id", target_track_id)
-            cmd:set_parameter("anchor_clip_id", reference_clip.id)
-
-            local result = command_manager.execute(cmd)
+            local result = command_manager.execute("DuplicateClips", {
+                ["project_id"] = active_proj,
+                                ["sequence_id"] = active_seq,
+                                ["__snapshot_sequence_ids"] = {active_seq},
+                                ["clip_ids"] = ids,
+                                ["delta_rat"] = delta_rat,
+                                ["target_track_id"] = target_track_id,
+                                ["anchor_clip_id"] = reference_clip.id,
+            })
             if not result.success then
                 logger.error("timeline_drag", string.format("DuplicateClips failed: %s", result.error_message or "unknown"))
             end
@@ -220,13 +219,19 @@ function M.handle_release(view, drag_state, modifiers)
                 logger.error("timeline_drag", string.format("%s failed: %s", spec.command_type, result.error_message or "unknown"))
             end
         else
-            local batch_cmd = Command.create("BatchCommand", active_proj)
-            batch_cmd:set_parameter("commands_json", json.encode(command_specs))
+            local batch_cmd_params = {
+                project_id = active_proj,
+            }
+            batch_cmd_params.commands_json = json.encode(command_specs)
             if active_seq and active_seq ~= "" then
-                batch_cmd:set_parameter("sequence_id", active_seq)
-                batch_cmd:set_parameter("__snapshot_sequence_ids", {active_seq})
+                for key, value in pairs({
+                    ["sequence_id"] = active_seq,
+                    ["__snapshot_sequence_ids"] = {active_seq},
+                }) do
+                    batch_cmd_params[key] = value
+                end
             end
-            local result = command_manager.execute(batch_cmd)
+            local result = command_manager.execute("BatchCommand", batch_cmd_params)
             if not result.success then
                 logger.error("timeline_drag", string.format("Batch drag failed: %s", result.error_message or "unknown"))
             end
@@ -290,8 +295,10 @@ function M.handle_release(view, drag_state, modifiers)
         local lead_edge_info = normalize_edge_entry(lead_edge)
 
         local cmd = Command.create("BatchRippleEdit", active_proj)
-        cmd:set_parameter("edge_infos", edge_infos)
-        cmd:set_parameter("delta_frames", delta_rat.frames)
+        cmd:set_parameters({
+            ["edge_infos"] = edge_infos,
+            ["delta_frames"] = delta_rat.frames,
+        })
         if lead_edge_info then
             cmd:set_parameter("lead_edge", lead_edge_info)
         end
