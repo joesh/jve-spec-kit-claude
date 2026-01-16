@@ -116,6 +116,7 @@ function M.handle_release(view, drag_state, modifiers)
             if not result.success then
                 logger.error("timeline_drag", string.format("DuplicateClips failed: %s", result.error_message or "unknown"))
             end
+            command_manager.end_command_event()
             return
         end
 
