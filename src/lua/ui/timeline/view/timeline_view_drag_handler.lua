@@ -28,6 +28,9 @@ function M.handle_release(view, drag_state, modifiers)
     local current_y = drag_state.current_y or drag_state.start_y
     local height = select(2, timeline.get_dimensions(view.widget))
     local target_track_id = view.get_track_id_at_y(current_y, height)
+    
+    -- Begin a command event for all command executions in this handler
+    command_manager.begin_command_event("timeline_drag_release")
 
     if drag_type == "clips" then
         local delta_rat = drag_state.delta_rational
@@ -218,6 +221,7 @@ function M.handle_release(view, drag_state, modifiers)
             if not result.success then
                 logger.error("timeline_drag", string.format("%s failed: %s", spec.command_type, result.error_message or "unknown"))
             end
+            command_manager.end_command_event()
         else
             local batch_cmd_params = {
                 project_id = active_proj,
@@ -235,6 +239,7 @@ function M.handle_release(view, drag_state, modifiers)
             if not result.success then
                 logger.error("timeline_drag", string.format("Batch drag failed: %s", result.error_message or "unknown"))
             end
+            command_manager.end_command_event()
         end
 
     elseif drag_type == "edges" then
@@ -324,7 +329,10 @@ function M.handle_release(view, drag_state, modifiers)
         if not result.success then
             logger.error("timeline_drag", string.format("BatchRippleEdit failed: %s", result.error_message or "unknown"))
         end
+        command_manager.end_command_event()
     end
+    -- Ensure the command event is ended if no specific command was executed
+    command_manager.end_command_event()
 end
 
 return M
