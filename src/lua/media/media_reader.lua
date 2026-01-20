@@ -263,7 +263,7 @@ function M.import_media(file_path, db, project_id, existing_media_id)
     end
 
     -- Save to database
-    if not media:save(db) then
+    if not media:save() then
         return nil, nil, "Failed to save Media record to database"
     end
 

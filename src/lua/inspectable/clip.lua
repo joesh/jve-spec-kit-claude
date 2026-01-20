@@ -123,16 +123,20 @@ function ClipInspectable:set(field, value)
     end
 
     local cmd = Command.create("SetClipProperty", self.project_id)
-    cmd:set_parameter("clip_id", self.clip_id)
-    cmd:set_parameter("property_name", field)
-    cmd:set_parameter("value", payload_value)
-    cmd:set_parameter("property_type", property_type)
+    cmd:set_parameters({
+        ["clip_id"] = self.clip_id,
+        ["property_name"] = field,
+        ["value"] = payload_value,
+        ["property_type"] = property_type,
+    })
     if default_value ~= nil then
         cmd:set_parameter("default_value", default_value)
     end
-    cmd:set_parameter("__skip_selection_snapshot", true)
-    cmd:set_parameter("__skip_timeline_cache", true)
-    cmd:set_parameter("__skip_timeline_reload", true)
+    cmd:set_parameters({
+        ["__skip_selection_snapshot"] = true,
+        ["__skip_timeline_cache"] = true,
+        ["__skip_timeline_reload"] = true,
+    })
     cmd.stack_id = "global"
     cmd.skip_selection_snapshot = true
     cmd.skip_timeline_cache = true

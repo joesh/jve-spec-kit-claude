@@ -21,6 +21,30 @@ local clip_mutator = require("core.clip_mutator")
 local timeline_state = require('ui.timeline.timeline_state')
 local frame_utils = require('core.frame_utils')
 
+
+local SPEC = {
+    requires_any = {
+        { "nudge_amount_rat", "nudge_amount" },
+    },
+    args = {
+        dry_run = { kind = "boolean" },
+        fps_denominator = { kind = "number" },
+        fps_numerator = { kind = "number" },
+        nudge_amount = { kind = "number" },
+        nudge_amount_rat = { kind = "any" },
+        nudge_axis = {},
+        nudge_type = {},  -- Set by executor ("clip" or "edge")
+        project_id = { required = true },
+        selected_clip_ids = {},
+        selected_edges = {},
+        sequence_id = {},
+    },
+    persisted = {
+        executed_mutations = {},
+    },
+
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     local Rational = require("core.rational") -- Ensure Rational is available
     local TIMELINE_CLIP_KIND = "timeline"
@@ -47,16 +71,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["Nudge"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing Nudge command")
         end
 
-        local nudge_amount_rat = command:get_parameter("nudge_amount_rat")
-        local nudge_amount_frames = command:get_parameter("nudge_amount") -- Integer frames
+        local nudge_amount_rat = args.nudge_amount_rat
+        local nudge_amount_frames = args.nudge_amount -- Integer frames
 
-        local selected_clip_ids = command:get_parameter("selected_clip_ids")
-        local selected_edges = command:get_parameter("selected_edges")
+
+
 
 	        local function require_sequence_rate()
 	            local rate = timeline_state and timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
@@ -96,12 +121,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local updates_by_clip = {}
         local mutated_clip_ids = {}
         
-        local active_sequence_id = command:get_parameter("sequence_id")
-        if (not active_sequence_id or active_sequence_id == "") and timeline_state and timeline_state.get_sequence_id then
-            active_sequence_id = timeline_state.get_sequence_id()
-            if active_sequence_id and active_sequence_id ~= "" then
-                command:set_parameter("sequence_id", active_sequence_id)
-            end
+        local active_sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
+        if active_sequence_id and active_sequence_id ~= args.sequence_id then
+            command:set_parameter("sequence_id", active_sequence_id)
         end
 
         local function register_update(clip)
@@ -145,7 +167,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local mutated_count = 0
             for clip_id in pairs(mutated_clip_ids) do
                 mutated_count = mutated_count + 1
-                local clip = Clip.load_optional(clip_id, db)
+                local clip = Clip.load_optional(clip_id)
                 if clip then
                     local update_payload = command_helper.clip_update_payload(clip, sequence_id)
                     if update_payload then
@@ -170,15 +192,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local function capture_updates_from_selection(default_sequence_id)
             local collected_ids = {}
-            if type(selected_clip_ids) == "table" then
-                for _, clip_id in ipairs(selected_clip_ids) do
+            if type(args.selected_clip_ids) == "table" then
+                for _, clip_id in ipairs(args.selected_clip_ids) do
                     if clip_id then
                         collected_ids[clip_id] = true
                     end
                 end
             end
-            if type(selected_edges) == "table" then
-                for _, edge_info in ipairs(selected_edges) do
+            if type(args.selected_edges) == "table" then
+                for _, edge_info in ipairs(args.selected_edges) do
                     if edge_info and edge_info.clip_id then
                         collected_ids[edge_info.clip_id] = true
                     end
@@ -190,7 +212,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local updates = {}
             local sequence_id = default_sequence_id
             for clip_id in pairs(collected_ids) do
-                local clip = Clip.load_optional(clip_id, db)
+                local clip = Clip.load_optional(clip_id)
                 if clip then
                     local update_payload = command_helper.clip_update_payload(clip, sequence_id)
                     if update_payload then
@@ -220,12 +242,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        if selected_edges and #selected_edges > 0 then
+        if args.selected_edges and #args.selected_edges > 0 then
             nudge_type = "edges"
             local preview_clips = {}
 
-            for _, edge_info in ipairs(selected_edges) do
-                local clip = Clip.load(edge_info.clip_id, db)
+            for _, edge_info in ipairs(args.selected_edges) do
+                local clip = Clip.load(edge_info.clip_id)
 
                 if not clip then
                     print(string.format("WARNING: Nudge: Clip %s not found", edge_info.clip_id:sub(1,8)))
@@ -235,9 +257,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 register_original_state(clip)
                 
                 -- Ensure the clip's rate is valid for Rational calculations
-                local clip_rate_num = clip.rate.fps_numerator
-                local clip_rate_den = clip.rate.fps_denominator
-                if not clip_rate_num or clip_rate_num <= 0 then
+                local clip_fps_numerator = clip.rate.fps_numerator
+                local clip_fps_denominator = clip.rate.fps_denominator
+                if not clip_fps_numerator or clip_fps_numerator <= 0 then
                     print(string.format("ERROR: Nudge: Clip %s has invalid rate for Rational math", clip.id:sub(1,8)))
                     return false
                 end
@@ -249,7 +271,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     local new_source_in = clip.source_in + nudge_amount_rat
 
                     -- Clamp duration to minimum 1 frame
-                    if new_duration.frames < 1 then new_duration = Rational.new(1, clip_rate_num, clip_rate_den) end
+                    if new_duration.frames < 1 then new_duration = Rational.new(1, clip_fps_numerator, clip_fps_denominator) end
                     
                     clip.timeline_start = new_timeline_start
                     clip.duration = new_duration
@@ -260,7 +282,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     local new_duration = clip.duration + nudge_amount_rat
                     
                     -- Clamp duration to minimum 1 frame
-                    if new_duration.frames < 1 then new_duration = Rational.new(1, clip_rate_num, clip_rate_den) end
+                    if new_duration.frames < 1 then new_duration = Rational.new(1, clip_fps_numerator, clip_fps_denominator) end
 
                     clip.duration = new_duration
                     clip.source_out = clip.source_in + new_duration
@@ -268,10 +290,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 
                 -- Clamp timeline_start to 0 or greater (Rational(0))
                 if clip.timeline_start.frames < 0 then
-                    clip.timeline_start = Rational.new(0, clip_rate_num, clip_rate_den)
+                    clip.timeline_start = Rational.new(0, clip_fps_numerator, clip_fps_denominator)
                 end
 
-                if dry_run then
+                if args.dry_run then
                     table.insert(preview_clips, {
                         clip_id = clip.id,
                         new_start_value = clip.timeline_start,
@@ -287,20 +309,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ::continue::
             end
 
-            if dry_run then
+            if args.dry_run then
                 return true, {
                     nudge_type = "edges",
                     affected_clips = preview_clips
                 }
             end
 
-            print(string.format("✅ Nudged %d edge(s) by %s", #selected_edges, tostring(nudge_amount_rat)))
-        elseif selected_clip_ids and #selected_clip_ids > 0 then
+            print(string.format("✅ Nudged %d edge(s) by %s", #args.selected_edges, tostring(nudge_amount_rat)))
+        elseif args.selected_clip_ids and #args.selected_clip_ids > 0 then
             nudge_type = "clips"
             local clips_to_move = {}
             local processed_groups = {}
 
-            for _, clip_id in ipairs(selected_clip_ids) do
+            for _, clip_id in ipairs(args.selected_clip_ids) do
                 clips_to_move[clip_id] = true
                 local link_group = clip_links.get_link_group(clip_id, db)
                 if link_group then
@@ -323,7 +345,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local preview_clips = {}
 
             for clip_id, _ in pairs(clips_to_move) do
-                local clip = Clip.load(clip_id, db)
+                local clip = Clip.load(clip_id)
                 if not clip then
                     print(string.format("WARNING: Nudge: Clip %s not found", clip_id:sub(1,8)))
                     clips_to_move[clip_id] = nil
@@ -397,7 +419,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ::continue_collect_block::
             end
 
-            if dry_run then
+            if args.dry_run then
                 return true, {
                     nudge_type = "clips",
                     affected_clips = preview_clips
@@ -455,21 +477,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 total_moved = total_moved + 1
             end
 
-            local linked_count = total_moved - #selected_clip_ids
+            local linked_count = total_moved - #args.selected_clip_ids
             if linked_count > 0 then
                 print(string.format("✅ Nudged %d clip(s) + %d linked clip(s) by %s",
-                    #selected_clip_ids, linked_count, tostring(nudge_amount_rat)))
+                    #args.selected_clip_ids, linked_count, tostring(nudge_amount_rat)))
             else
-                print(string.format("✅ Nudged %d clip(s) by %s", #selected_clip_ids, tostring(nudge_amount_rat)))
+                print(string.format("✅ Nudged %d clip(s) by %s", #args.selected_clip_ids, tostring(nudge_amount_rat)))
             end
         else
-            print("WARNING: Nudge: Nothing selected")
+            set_last_error("Nudge: Nothing selected")
             return false
         end
 
-        command:set_parameter("nudge_type", nudge_type)
-        command:set_parameter("executed_mutations", planned_mutations)
-
+        command:set_parameters({
+            ["nudge_type"] = nudge_type,
+            ["executed_mutations"] = planned_mutations,
+        })
         -- Execute all mutations
         local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
         if not ok_apply then
@@ -493,18 +516,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["UndoNudge"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing UndoNudge command")
 
-        local executed_mutations = command:get_parameter("executed_mutations")
-        local sequence_id = command:get_parameter("sequence_id")
+
+
         -- Best-effort state resync before applying undo to avoid stale in-memory clips causing overlap side-effects.
         local ts_ok, ts_mod = pcall(require, 'ui.timeline.timeline_state')
-        if ts_ok and ts_mod and ts_mod.reload_clips and sequence_id and sequence_id ~= "" then
-            ts_mod.reload_clips(sequence_id)
+        if ts_ok and ts_mod and ts_mod.reload_clips and args.sequence_id and args.sequence_id ~= "" then
+            ts_mod.reload_clips(args.sequence_id)
         end
         
-        if not executed_mutations then
-             print("WARNING: UndoNudge: No executed mutations found (legacy command?)")
+        if not args.executed_mutations then
+             set_last_error("UndoNudge: No executed mutations found (legacy command?)")
              return false
         end
 
@@ -513,13 +537,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             print("WARNING: UndoNudge: Proceeding without transaction: " .. tostring(begin_err))
         end
 
-        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+        local ok, err = command_helper.revert_mutations(db, args.executed_mutations, command, args.sequence_id)
         if not ok then
             if started then db:rollback_transaction(started) end
             print("ERROR: UndoNudge: Failed to revert mutations: " .. tostring(err))
             -- Ensure UI state is consistent with DB after failure
-            if ts_ok and ts_mod and ts_mod.reload_clips and sequence_id and sequence_id ~= "" then
-                ts_mod.reload_clips(sequence_id)
+            if ts_ok and ts_mod and ts_mod.reload_clips and args.sequence_id and args.sequence_id ~= "" then
+                ts_mod.reload_clips(args.sequence_id)
             end
             return false
         end
@@ -542,7 +566,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["Nudge"],
-        undoer = command_undoers["UndoNudge"]
+        undoer = command_undoers["UndoNudge"],
+        spec = SPEC,
     }
 end
 

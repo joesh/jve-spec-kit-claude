@@ -38,254 +38,59 @@ local find_next_clip_on_track = ripple_track.find_next_clip_on_track
 local find_prev_clip_on_track = ripple_track.find_prev_clip_on_track
 local build_track_clip_map = ripple_track.build_track_clip_map
 local hydrate_executed_mutations_if_missing = ripple_undo.hydrate_executed_mutations_if_missing
+local signum
+local infer_implied_normalized_edge
+local lower_bound_start_frames
+local pick_gap_anchor_clip_id
+local create_temp_gap_clip
+local compute_neighbor_bounds
+local ensure_neighbor_bounds
+local should_negate_edge
+local resolve_gap_timeline_start_frames
 
-local function signum(value)
-    if not value then
-        return 0
-    end
-    if value > 0 then
-        return 1
-    elseif value < 0 then
-        return -1
-    end
-    return 0
-end
 
-local function infer_implied_normalized_edge(lead_normalized, shift_sign, global_sign)
-    if shift_sign == 0 then
-        return lead_normalized
-    end
-    if not lead_normalized then
-        return (shift_sign > 0) and "out" or "in"
-    end
-    if global_sign ~= 0 and shift_sign ~= global_sign then
-        return (lead_normalized == "in") and "out" or "in"
-    end
-    return lead_normalized
-end
+-- SPEC.args: caller inputs. SPEC.persisted: executor-written undo/results payload. __keys: ephemeral scratch.
+local SPEC = {
+    args = {
+        project_id = { required = true, kind = "string", empty_as_nil = true },
+        sequence_id = { kind = "string", empty_as_nil = true },
 
-local function lower_bound_start_frames(track_clips, boundary_frames)
-    if type(track_clips) ~= "table" or #track_clips == 0 then
-        return 1
-    end
-    local lo = 1
-    local hi = #track_clips + 1
-    while lo < hi do
-        local mid = math.floor((lo + hi) / 2)
-        local clip = track_clips[mid]
-        local start_frames = clip and clip.timeline_start and clip.timeline_start.frames
-        if start_frames == nil then
-            return 1
-        end
-        if start_frames < boundary_frames then
-            lo = mid + 1
-        else
-            hi = mid
-        end
-    end
-    return lo
-end
+        -- Provided by tests/UI. Normalized into ctx.edge_infos by batch_context.
+        -- Accept multiple caller flavors; batch_context is the choke point that normalizes.
+        -- (Most callers should pass edge_infos.)
+        edge_infos = { kind = "table" },
+        edge_info = { kind = "table" },
+        __edge_infos = { kind = "table" },
+        __selected_edge_infos = { kind = "table" },
+        __selected_edge_infos_pre = { kind = "table" },
+        lead_edge = { kind = "table" },
 
-local function pick_gap_anchor_clip_id(track_clips, boundary_frames, raw_edge_type)
-    if type(track_clips) ~= "table" or #track_clips == 0 then
-        return nil
-    end
-    local idx = lower_bound_start_frames(track_clips, boundary_frames or 0)
-    local right = track_clips[idx]
-    local left = (idx > 1) and track_clips[idx - 1] or nil
-    if raw_edge_type == "gap_before" then
-        return (right and right.id) or (left and left.id) or nil
-    end
-    return (left and left.id) or (right and right.id) or nil
-end
+        delta_frames = { kind = "number" },
+        delta_ms = { kind = "number" },
+        dry_run = { kind = "boolean" },
 
--- Materialize a synthetic clip representing the requested gap edge so downstream
--- logic (trim/apply) can treat it like a normal clip. Returns nil when the edge
--- no longer corresponds to a real gap because the neighbors are missing.
-local function create_temp_gap_clip(edge_info, clip_lookup, all_clips, seq_fps_num, seq_fps_den)
-        if not edge_info or (edge_info.edge_type ~= "gap_after" and edge_info.edge_type ~= "gap_before") then
-            return nil
-        end
+        -- Internal/computed parameters (set by executor)
+        __retry_delta_count = { kind = "number" },
+        __preloaded_clip_snapshot = { kind = "table" },
+        __timeline_active_region = { kind = "table" },
+        __use_timeline_state_cache = { kind = "boolean" },
+        __force_conflict_delta = { kind = "boolean" },
+        __force_retry_delta = { kind = "number" },
+    },
+    persisted = {
+        bulk_shifts = { kind = "table" },
+        clamped_delta_ms = { kind = "number" },
+        clamped_delta_frames = { kind = "number" },
+        original_states = { kind = "table" },
+        executed_mutation_order = { kind = "table" },
+        executed_mutations = { kind = "table" },
+    },
 
-	        local function ensure_rational(value)
-	            assert(value ~= nil, "create_temp_gap_clip: missing time value")
-	            if getmetatable(value) == Rational.metatable then
-	                return value:rescale(seq_fps_num, seq_fps_den)
-	            end
-	            if type(value) == "table" and value.frames then
-	                return Rational.new(value.frames, seq_fps_num, seq_fps_den)
-	            end
-	            assert(type(value) == "number", "create_temp_gap_clip: expected number or Rational-like")
-	            return Rational.new(value, seq_fps_num, seq_fps_den)
-	        end
-
-        local track_id = edge_info.track_id
-        local reference_clip = clip_lookup[edge_info.clip_id]
-        if reference_clip and not track_id then
-            track_id = reference_clip.track_id
-        end
-    if not track_id then
-        return nil
-    end
-
-    local gap_start
-    local gap_end
-    local left_clip
-    local right_clip
-
-    if edge_info.edge_type == "gap_after" then
-        left_clip = reference_clip
-        if not left_clip or not left_clip.timeline_start or not left_clip.duration then
-            return nil
-        end
-        gap_start = left_clip.timeline_start + left_clip.duration
-        right_clip = find_next_clip_on_track(all_clips, left_clip)
-        if right_clip then
-            gap_end = right_clip.timeline_start
-        else
-            gap_end = gap_start
-        end
-    else -- gap_before
-        right_clip = reference_clip
-        if not right_clip or not right_clip.timeline_start then
-            return nil
-        end
-        gap_end = right_clip.timeline_start
-        left_clip = find_prev_clip_on_track(all_clips, right_clip)
-        if left_clip then
-            gap_start = left_clip.timeline_start + left_clip.duration
-        else
-            gap_start = Rational.new(0, seq_fps_num, seq_fps_den)
-        end
-        end
-
-        gap_start = ensure_rational(gap_start)
-        gap_end = ensure_rational(gap_end)
-
-	        local duration = gap_end - gap_start
-	        assert(duration and duration.frames ~= nil, "create_temp_gap_clip: failed to compute gap duration")
-	        if duration.frames < 0 then
-	            duration = Rational.new(0, seq_fps_num, seq_fps_den)
-	        end
-
-	    assert(gap_start.frames ~= nil and gap_end.frames ~= nil, "create_temp_gap_clip: missing gap_start/gap_end frames")
-	    local temp_id = string.format("temp_gap_%s_%s_%s", tostring(track_id), tostring(gap_start.frames), tostring(gap_end.frames))
-
-    local gap_clip = {
-        id = temp_id,
-        track_id = track_id,
-        timeline_start = gap_start,
-        duration = duration,
-        source_in = Rational.new(ui_constants.TIMELINE.GAP_SOURCE_MIN_FRAMES, seq_fps_num, seq_fps_den),
-        source_out = Rational.new(ui_constants.TIMELINE.GAP_SOURCE_MAX_FRAMES, seq_fps_num, seq_fps_den),
-        fps_numerator = seq_fps_num,
-        fps_denominator = seq_fps_den,
-        rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
-        enabled = 1,
-        created_at = 0,
-        modified_at = 0,
-        is_temp_gap = true,
-        gap_left_id = left_clip and left_clip.id or nil,
-        gap_right_id = right_clip and right_clip.id or nil
-    }
-    return gap_clip
-end
-
-local function compute_neighbor_bounds(all_clips, original_state, clip_id)
-    if not original_state or not original_state.track_id then
-        return nil, nil, nil, nil
-    end
-    local track_id = original_state.track_id
-    local start_value = original_state.timeline_start
-    local duration_value = original_state.duration
-    if not start_value or not duration_value then
-        return nil, nil, nil, nil
-    end
-    assert(type(start_value) == "table" and start_value.frames, "compute_neighbor_bounds: timeline_start must be Rational-like")
-    assert(type(duration_value) == "table" and duration_value.frames, "compute_neighbor_bounds: duration must be Rational-like")
-
-    local start_frames = start_value.frames
-    local end_frames = start_frames + duration_value.frames
-
-    local prev_end_frames = nil
-    local next_start_frames = nil
-    local prev_clip_id = nil
-    local next_clip_id = nil
-
-    assert(all_clips, "compute_neighbor_bounds: all_clips is nil")
-    for _, other in ipairs(all_clips) do
-        if other.id ~= clip_id and other.track_id == track_id then
-            assert(other.timeline_start and other.timeline_start.frames, "compute_neighbor_bounds: other clip missing timeline_start.frames")
-            assert(other.duration and other.duration.frames, "compute_neighbor_bounds: other clip missing duration.frames")
-            local other_start_frames = other.timeline_start.frames
-            local other_end_frames = other_start_frames + other.duration.frames
-
-            if other_end_frames <= start_frames then
-                if not prev_end_frames or other_end_frames > prev_end_frames then
-                    prev_end_frames = other_end_frames
-                    prev_clip_id = other.id
-                end
-            end
-            if other_start_frames >= end_frames then
-                if not next_start_frames or other_start_frames < next_start_frames then
-                    next_start_frames = other_start_frames
-                    next_clip_id = other.id
-                end
-            end
-        end
-    end
-
-    return prev_end_frames, next_start_frames, prev_clip_id, next_clip_id
-end
-
-local function ensure_neighbor_bounds(ctx, clip_id)
-    ctx.neighbor_bounds_cache = ctx.neighbor_bounds_cache or {}
-    if ctx.neighbor_bounds_cache[clip_id] then
-        return ctx.neighbor_bounds_cache[clip_id]
-    end
-
-    local original = ctx.original_states_map[clip_id] or ctx.base_clips[clip_id] or (ctx.clip_lookup and ctx.clip_lookup[clip_id])
-    if not original then
-        error(string.format("ensure_neighbor_bounds: missing original state for clip %s", tostring(clip_id)))
-    end
-    if not original.track_id then
-        error(string.format("ensure_neighbor_bounds: clip %s missing track_id", tostring(clip_id)))
-    end
-
-    local prev_end_frames, next_start_frames, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, original, clip_id)
-    ctx.neighbor_bounds_cache[clip_id] = {
-        prev_end_frames = prev_end_frames,
-        next_start_frames = next_start_frames,
-        prev_id = prev_id,
-        next_id = next_id
-    }
-    return ctx.neighbor_bounds_cache[clip_id]
-end
-
-local function should_negate_edge(ctx, edge_key)
-    return ctx.edge_will_negate and ctx.edge_will_negate[edge_key]
-end
-
-local function resolve_gap_timeline_start_frames(ctx, clip, edge_info)
-    local start_value = clip.timeline_start and clip.timeline_start.frames
-    if edge_info.edge_type ~= "gap_before" then
-        return start_value
-    end
-    if not clip.is_temp_gap then
-        -- Non-materialized gap_before edges use the real clip's timeline_start.
-        return start_value
-    end
-    local right_id = clip.gap_right_id or edge_info.original_clip_id or edge_info.clip_id
-    assert(right_id, "resolve_gap_timeline_start_frames: gap_before requires right clip id")
-    local right_original = ctx.original_states_map[right_id]
-        or ctx.base_clips[right_id]
-        or ctx.clip_lookup[right_id]
-    if right_original and right_original.timeline_start and right_original.timeline_start.frames then
-        return right_original.timeline_start.frames
-    end
-    return start_value
-end
-
+    requires_any = {
+        { "delta_frames", "delta_ms" },
+        { "edge_infos", "edge_info", "__edge_infos", "__selected_edge_infos", "__selected_edge_infos_pre" },
+    },
+}
 function M.register(command_executors, command_undoers, db, set_last_error)
     -- Helper: Load clip and capture original state if not already cached
     local function ensure_clip_loaded(ctx, clip_id, db)
@@ -299,7 +104,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
             if not clip and not is_temp_gap then
-                clip = Clip.load_optional(clip_id, db)
+                clip = Clip.load_optional(clip_id)
             end
             if clip then
                 ctx.base_clips[clip_id] = clip
@@ -608,7 +413,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             for _, clip_id in ipairs(clip_ids) do
                 local is_temp_gap = type(clip_id) == "string" and clip_id:find("^temp_gap_")
-                local clip = is_temp_gap and snapshot.clip_lookup[clip_id] or Clip.load_optional(clip_id, db)
+                local clip = is_temp_gap and snapshot.clip_lookup[clip_id] or Clip.load_optional(clip_id)
                 if clip then
                     table.insert(ctx.all_clips, clip)
                     ctx.clip_lookup[clip_id] = clip
@@ -628,7 +433,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- UI-only optimization: prefer the in-memory timeline state for the
         -- active sequence to avoid reloading thousands of clips from SQLite.
-        local use_timeline_state_cache = ctx.command:get_parameter("__use_timeline_state_cache") == true
+        local use_timeline_state_cache = ctx.args.__use_timeline_state_cache == true
         local timeline_state = use_timeline_state_cache and package.loaded["ui.timeline.timeline_state"] or nil
         if ctx.dry_run and timeline_state
             and timeline_state.get_sequence_id
@@ -772,7 +577,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
             if not base and not is_temp_gap then
-                base = Clip.load_optional(clip_id, db)
+                base = Clip.load_optional(clip_id)
             end
             if base then
                 ctx.base_clips[clip_id] = base
@@ -841,7 +646,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if is_temp_gap then
             return cached
         end
-        return Clip.load_optional(clip_id, db)
+        return Clip.load_optional(clip_id)
     end
 
 -- Apply the requested trim delta to clip/gap edges and return the ripple start.
@@ -1590,7 +1395,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if max_shift_frames ~= math.huge and desired_shift_frames > max_shift_frames then
             adjusted_frames = max_shift_frames
         end
-        local forced_retry = ctx.command:get_parameter("__force_retry_delta")
+        local forced_retry = ctx.args.__force_retry_delta
         if forced_retry then
             adjusted_frames = forced_retry
         end
@@ -1657,7 +1462,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	    end
 
 	    local function retry_with_adjusted_delta(ctx, adjusted_frames)
-	        local retry_count = ctx.command:get_parameter("__retry_delta_count") or 0
+	        local retry_count = ctx.args.__retry_delta_count or 0
 	        if retry_count > ui_constants.TIMELINE.MAX_RIPPLE_CONSTRAINT_RETRIES then
 	            return false, "Failed to clamp ripple delta without overlap (retry limit)"
 	        end
@@ -2016,7 +1821,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            elseif mut.type == "delete" then
 	                command_helper.add_delete_mutation(ctx.command, seq_id, mut.clip_id)
 	            elseif mut.type == "insert" then
-	                local inserted = Clip.load_optional(mut.clip_id, db)
+	                local inserted = Clip.load_optional(mut.clip_id)
 	                if inserted then
 	                    local payload = command_helper.clip_insert_payload(inserted, seq_id)
 	                    if payload then
@@ -2042,6 +1847,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	    end
 
     command_executors["BatchRippleEdit"] = function(command)
+        local args = command:get_all_parameters()
         local ctx = batch_context.create(command)
 
         if not ctx.edge_infos or #ctx.edge_infos == 0 then
@@ -2075,10 +1881,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
 		    command_undoers["BatchRippleEdit"] = function(command)
+		        local args = command:get_all_parameters()
 		        logger.info("ripple", "Undoing BatchRippleEdit command")
 
 		        local executed_mutations = hydrate_executed_mutations_if_missing(command)
-		        local sequence_id = command:get_parameter("sequence_id")
+
+		        -- Persist hydrated mutations to avoid re-hydration on subsequent undos
+		        if command.sequence_number and executed_mutations then
+		            local save_ok, save_err = pcall(function() return command:save(db) end)
+		            if not save_ok then
+		                logger.warn("ripple", "Failed to persist hydrated mutations: " .. tostring(save_err))
+		            end
+		        end
 
 		        local started, begin_err = db:begin_transaction()
 		        if not started then
@@ -2090,7 +1904,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		            end
 		        end
 
-		        local ok, success, err = pcall(command_helper.revert_mutations, db, executed_mutations, command, sequence_id)
+		        local ok, success, err = pcall(command_helper.revert_mutations, db, executed_mutations, command, args.sequence_id)
 		        if not ok then
 		            if started then db:rollback_transaction(started) end
 		            logger.error("ripple", "UndoBatchRippleEdit: Failed to revert mutations: " .. tostring(success))
@@ -2118,8 +1932,257 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["BatchRippleEdit"],
-        undoer = command_undoers["BatchRippleEdit"]
+        undoer = command_undoers["BatchRippleEdit"],
+        spec = SPEC,
     }
+end
+
+
+signum = function(value)
+    if not value then
+        return 0
+    end
+    if value > 0 then
+        return 1
+    elseif value < 0 then
+        return -1
+    end
+    return 0
+end
+
+infer_implied_normalized_edge = function(lead_normalized, shift_sign, global_sign)
+    if shift_sign == 0 then
+        return lead_normalized
+    end
+    if not lead_normalized then
+        return (shift_sign > 0) and "out" or "in"
+    end
+    if global_sign ~= 0 and shift_sign ~= global_sign then
+        return (lead_normalized == "in") and "out" or "in"
+    end
+    return lead_normalized
+end
+
+lower_bound_start_frames = function(track_clips, boundary_frames)
+    if type(track_clips) ~= "table" or #track_clips == 0 then
+        return 1
+    end
+    local lo = 1
+    local hi = #track_clips + 1
+    while lo < hi do
+        local mid = math.floor((lo + hi) / 2)
+        local clip = track_clips[mid]
+        local start_frames = clip and clip.timeline_start and clip.timeline_start.frames
+        if start_frames == nil then
+            return 1
+        end
+        if start_frames < boundary_frames then
+            lo = mid + 1
+        else
+            hi = mid
+        end
+    end
+    return lo
+end
+
+pick_gap_anchor_clip_id = function(track_clips, boundary_frames, raw_edge_type)
+    if type(track_clips) ~= "table" or #track_clips == 0 then
+        return nil
+    end
+    local idx = lower_bound_start_frames(track_clips, boundary_frames or 0)
+    local right = track_clips[idx]
+    local left = (idx > 1) and track_clips[idx - 1] or nil
+    if raw_edge_type == "gap_before" then
+        return (right and right.id) or (left and left.id) or nil
+    end
+    return (left and left.id) or (right and right.id) or nil
+end
+
+-- Materialize a synthetic clip representing the requested gap edge so downstream
+-- logic (trim/apply) can treat it like a normal clip. Returns nil when the edge
+-- no longer corresponds to a real gap because the neighbors are missing.
+create_temp_gap_clip = function(edge_info, clip_lookup, all_clips, seq_fps_num, seq_fps_den)
+        if not edge_info or (edge_info.edge_type ~= "gap_after" and edge_info.edge_type ~= "gap_before") then
+            return nil
+        end
+
+	        local function ensure_rational(value)
+	            assert(value ~= nil, "create_temp_gap_clip: missing time value")
+	            if getmetatable(value) == Rational.metatable then
+	                return value:rescale(seq_fps_num, seq_fps_den)
+	            end
+	            if type(value) == "table" and value.frames then
+	                return Rational.new(value.frames, seq_fps_num, seq_fps_den)
+	            end
+	            assert(type(value) == "number", "create_temp_gap_clip: expected number or Rational-like")
+	            return Rational.new(value, seq_fps_num, seq_fps_den)
+	        end
+
+        local track_id = edge_info.track_id
+        local reference_clip = clip_lookup[edge_info.clip_id]
+        if reference_clip and not track_id then
+            track_id = reference_clip.track_id
+        end
+    if not track_id then
+        return nil
+    end
+
+    local gap_start
+    local gap_end
+    local left_clip
+    local right_clip
+
+    if edge_info.edge_type == "gap_after" then
+        left_clip = reference_clip
+        if not left_clip or not left_clip.timeline_start or not left_clip.duration then
+            return nil
+        end
+        gap_start = left_clip.timeline_start + left_clip.duration
+        right_clip = find_next_clip_on_track(all_clips, left_clip)
+        if right_clip then
+            gap_end = right_clip.timeline_start
+        else
+            gap_end = gap_start
+        end
+    else -- gap_before
+        right_clip = reference_clip
+        if not right_clip or not right_clip.timeline_start then
+            return nil
+        end
+        gap_end = right_clip.timeline_start
+        left_clip = find_prev_clip_on_track(all_clips, right_clip)
+        if left_clip then
+            gap_start = left_clip.timeline_start + left_clip.duration
+        else
+            gap_start = Rational.new(0, seq_fps_num, seq_fps_den)
+        end
+        end
+
+        gap_start = ensure_rational(gap_start)
+        gap_end = ensure_rational(gap_end)
+
+	        local duration = gap_end - gap_start
+	        assert(duration and duration.frames ~= nil, "create_temp_gap_clip: failed to compute gap duration")
+	        if duration.frames < 0 then
+	            duration = Rational.new(0, seq_fps_num, seq_fps_den)
+	        end
+
+	    assert(gap_start.frames ~= nil and gap_end.frames ~= nil, "create_temp_gap_clip: missing gap_start/gap_end frames")
+	    local temp_id = string.format("temp_gap_%s_%s_%s", tostring(track_id), tostring(gap_start.frames), tostring(gap_end.frames))
+
+    local gap_clip = {
+        id = temp_id,
+        track_id = track_id,
+        timeline_start = gap_start,
+        duration = duration,
+        source_in = Rational.new(ui_constants.TIMELINE.GAP_SOURCE_MIN_FRAMES, seq_fps_num, seq_fps_den),
+        source_out = Rational.new(ui_constants.TIMELINE.GAP_SOURCE_MAX_FRAMES, seq_fps_num, seq_fps_den),
+        fps_numerator = seq_fps_num,
+        fps_denominator = seq_fps_den,
+        rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
+        enabled = 1,
+        created_at = 0,
+        modified_at = 0,
+        is_temp_gap = true,
+        gap_left_id = left_clip and left_clip.id or nil,
+        gap_right_id = right_clip and right_clip.id or nil
+    }
+    return gap_clip
+end
+
+compute_neighbor_bounds = function(all_clips, original_state, clip_id)
+    if not original_state or not original_state.track_id then
+        return nil, nil, nil, nil
+    end
+    local track_id = original_state.track_id
+    local start_value = original_state.timeline_start
+    local duration_value = original_state.duration
+    if not start_value or not duration_value then
+        return nil, nil, nil, nil
+    end
+    assert(type(start_value) == "table" and start_value.frames, "compute_neighbor_bounds: timeline_start must be Rational-like")
+    assert(type(duration_value) == "table" and duration_value.frames, "compute_neighbor_bounds: duration must be Rational-like")
+
+    local start_frames = start_value.frames
+    local end_frames = start_frames + duration_value.frames
+
+    local prev_end_frames = nil
+    local next_start_frames = nil
+    local prev_clip_id = nil
+    local next_clip_id = nil
+
+    assert(all_clips, "compute_neighbor_bounds: all_clips is nil")
+    for _, other in ipairs(all_clips) do
+        if other.id ~= clip_id and other.track_id == track_id then
+            assert(other.timeline_start and other.timeline_start.frames, "compute_neighbor_bounds: other clip missing timeline_start.frames")
+            assert(other.duration and other.duration.frames, "compute_neighbor_bounds: other clip missing duration.frames")
+            local other_start_frames = other.timeline_start.frames
+            local other_end_frames = other_start_frames + other.duration.frames
+
+            if other_end_frames <= start_frames then
+                if not prev_end_frames or other_end_frames > prev_end_frames then
+                    prev_end_frames = other_end_frames
+                    prev_clip_id = other.id
+                end
+            end
+            if other_start_frames >= end_frames then
+                if not next_start_frames or other_start_frames < next_start_frames then
+                    next_start_frames = other_start_frames
+                    next_clip_id = other.id
+                end
+            end
+        end
+    end
+
+    return prev_end_frames, next_start_frames, prev_clip_id, next_clip_id
+end
+
+ensure_neighbor_bounds = function(ctx, clip_id)
+    ctx.neighbor_bounds_cache = ctx.neighbor_bounds_cache or {}
+    if ctx.neighbor_bounds_cache[clip_id] then
+        return ctx.neighbor_bounds_cache[clip_id]
+    end
+
+    local original = ctx.original_states_map[clip_id] or ctx.base_clips[clip_id] or (ctx.clip_lookup and ctx.clip_lookup[clip_id])
+    if not original then
+        error(string.format("ensure_neighbor_bounds: missing original state for clip %s", tostring(clip_id)))
+    end
+    if not original.track_id then
+        error(string.format("ensure_neighbor_bounds: clip %s missing track_id", tostring(clip_id)))
+    end
+
+    local prev_end_frames, next_start_frames, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, original, clip_id)
+    ctx.neighbor_bounds_cache[clip_id] = {
+        prev_end_frames = prev_end_frames,
+        next_start_frames = next_start_frames,
+        prev_id = prev_id,
+        next_id = next_id
+    }
+    return ctx.neighbor_bounds_cache[clip_id]
+end
+
+should_negate_edge = function(ctx, edge_key)
+    return ctx.edge_will_negate and ctx.edge_will_negate[edge_key]
+end
+
+resolve_gap_timeline_start_frames = function(ctx, clip, edge_info)
+    local start_value = clip.timeline_start and clip.timeline_start.frames
+    if edge_info.edge_type ~= "gap_before" then
+        return start_value
+    end
+    if not clip.is_temp_gap then
+        -- Non-materialized gap_before edges use the real clip's timeline_start.
+        return start_value
+    end
+    local right_id = clip.gap_right_id or edge_info.original_clip_id or edge_info.clip_id
+    assert(right_id, "resolve_gap_timeline_start_frames: gap_before requires right clip id")
+    local right_original = ctx.original_states_map[right_id]
+        or ctx.base_clips[right_id]
+        or ctx.clip_lookup[right_id]
+    if right_original and right_original.timeline_start and right_original.timeline_start.frames then
+        return right_original.timeline_start.frames
+    end
+    return start_value
 end
 
 return M

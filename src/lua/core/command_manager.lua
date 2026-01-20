@@ -21,6 +21,83 @@ local M = {}
 -- Database connection (set externally)
 local db = nil
 
+-- State tracking
+local last_error_message = ""
+
+-- Forward declarations for modules used in helper functions
+local asserts_module
+
+
+-- Command event context (UI vs script).
+--
+-- NOTE: The UI frequently triggers commands from within other UI callbacks
+-- (e.g., menu actions calling into project browser helpers that also execute
+-- commands). To avoid brittle "Nested command events" crashes at runtime,
+-- command events are nestable via a simple depth counter. Only the outermost
+-- begin/end pair establishes/clears the origin.
+local command_event_origin = nil
+local command_event_depth = 0
+
+-- Execution depth tracking for nested command execution
+-- Depth 0 = top-level execution (full ceremony: transaction, history, DB save)
+-- Depth > 0 = nested execution (just run executor, no ceremony)
+local execution_depth = 0
+
+
+
+local function bug_result(message)
+    last_error_message = message or ""
+    local result = { success = false, error_message = last_error_message, result_data = "", is_bug = true }
+    if asserts_module.enabled() then
+        assert(false, last_error_message)
+    end
+    return result
+end
+
+local function dev_assert(condition, message)
+    if condition then
+        return true
+    end
+    bug_result(message)
+    return false
+end
+
+local function get_command_event_origin()
+    if not command_event_origin or command_event_depth == 0 then
+        return nil, "No active command event: call command_manager.begin_command_event(origin) before execute"
+    end
+    return command_event_origin, nil
+end
+
+function M.peek_command_event_origin()
+    return command_event_origin
+end
+
+
+function M.begin_command_event(origin)
+    if command_event_origin and command_event_depth > 0 then
+        command_event_depth = command_event_depth + 1
+        return true
+    end
+    if not (origin == "ui" or origin == "script") then
+        return dev_assert(false, "Invalid command event origin: " .. tostring(origin))
+    end
+    command_event_origin = origin
+    command_event_depth = 1
+    return true
+end
+
+function M.end_command_event()
+    if not command_event_origin or command_event_depth == 0 then
+        return dev_assert(false, "No active command event to end")
+    end
+    command_event_depth = command_event_depth - 1
+    if command_event_depth == 0 then
+        command_event_origin = nil
+    end
+    return true
+end
+
 local profile_scope = require("core.profile_scope")
 local command_scope = require("core.command_scope")
 local frame_utils = require("core.frame_utils")
@@ -29,11 +106,10 @@ local logger = require("core.logger")
 
 -- Sub-modules
 local registry = require("core.command_registry")
+asserts_module         = require("core.asserts")
+local command_schema_module = require("core.command_schema")
 local history = require("core.command_history")
 local state_mgr = require("core.command_state")
-
--- State tracking
-local last_error_message = ""
 
 -- Active context
 local active_sequence_id = nil
@@ -49,8 +125,8 @@ local non_recording_commands = {
     ActivateBrowserSelection = true,
     ToggleMaximizePanel = true,
     MatchFrame = true,
-    RevealInFilesystem = true,
-}
+    RevealInFilesystem = true
+    }
 
 local command_event_listeners = {}
 
@@ -86,9 +162,66 @@ end
 
 local function ensure_active_project_id()
     if not active_project_id or active_project_id == "" then
-        error("CommandManager.execute: active project_id is not set")
+        return nil, "CommandManager.execute: active project_id is not set"
     end
+    return active_project_id, nil
+end
+
+function M.get_active_project_id()
     return active_project_id
+end
+
+function M.get_active_sequence_id()
+    return active_sequence_id
+end
+
+-- UI entrypoint convenience.
+--
+-- Contract:
+-- - UI code should call execute_ui() (or begin/end_command_event + execute) rather than
+--   calling execute() directly.
+-- - This ensures a command event exists and threads implicit UI context (active project/
+--   sequence) into the params.
+-- - If active context is missing, we error (this is a bug, not a case to "defensively" hide).
+function M.execute_ui(command_name, params)
+    params = params or {}
+
+    -- Establish (or join) a UI command event.
+    local had_event = (command_event_depth > 0)
+    if not had_event then
+        M.begin_command_event("ui")
+    else
+        -- Nested UI dispatch while already in an event is allowed.
+        -- We *do not* allow switching origins mid-event.
+        if command_event_origin ~= "ui" then
+            return false, nil, string.format(
+                "execute_ui(%s): cannot execute UI command inside %s command event",
+                tostring(command_name),
+                tostring(command_event_origin)
+            )
+        end
+        -- Balance begin/end so execute_ui always closes what it opens.
+        M.begin_command_event("ui")
+    end
+
+    local result = nil
+    local status, exec_err = xpcall(function()
+        if params.project_id == nil then
+            local pid, pid_err = ensure_active_project_id()
+            assert(pid, pid_err)
+            params.project_id = pid
+        end
+        if params.sequence_id == nil and active_sequence_id ~= nil and active_sequence_id ~= "" then
+            params.sequence_id = active_sequence_id
+        end
+        result = M.execute(command_name, params)
+    end, debug.traceback)
+
+    M.end_command_event()
+    if not status then
+        error(exec_err)
+    end
+    return result
 end
 
 -- SAVEPOINT-aware rollback for undo groups
@@ -117,11 +250,51 @@ local function rollback_transaction()
 end
 
 local function normalize_command(command_or_name, params)
-    local Command = require('command')
+    local Command = require("command")
+
+    local origin, origin_err = get_command_event_origin()
+    if origin_err then
+        return nil, bug_result(origin_err)
+    end
+
+    local active_project_id, active_project_err = ensure_active_project_id()
+    if active_project_err then
+        return nil, bug_result(active_project_err)
+    end
 
     if type(command_or_name) == "string" then
-        local project_id = ensure_active_project_id()
-        local command = Command.create(command_or_name, project_id)
+		params = params or {}
+		-- UI convenience: if caller omitted project_id, default to active project.
+		-- Script callers must pass it explicitly to avoid silently targeting the wrong project.
+		if origin == "ui" and (not params.project_id or params.project_id == "") then
+			params.project_id = active_project_id
+		end
+		if not (params.project_id and params.project_id ~= "") then
+			return nil, bug_result("execute(command_name, params): params.project_id is required")
+		end
+        if origin == "ui" and params.project_id ~= active_project_id then
+            return nil, bug_result("UI command must target active project_id")
+        end
+
+
+        local executor = registry.get_executor(command_or_name)
+        if executor == nil then
+            return nil, bug_result("No executor registered for command type: " .. tostring(command_or_name))
+        end
+
+        local spec = registry.get_spec(command_or_name)
+        local ok, normalized_params, schema_err = command_schema_module.validate_and_normalize(
+            command_or_name,
+            spec,
+            params,
+            { apply_defaults = true, is_ui_context = (origin == "ui") }
+        )
+        if not ok then
+            return nil, bug_result(schema_err)
+        end
+        params = normalized_params
+
+        local command = Command.create(command_or_name, active_project_id)
 
         if params then
             for key, value in pairs(params) do
@@ -129,21 +302,18 @@ local function normalize_command(command_or_name, params)
             end
         end
 
-        local param_project_id = command:get_parameter("project_id")
-        if param_project_id and param_project_id ~= "" then
-            command.project_id = param_project_id
-        else
-            command:set_parameter("project_id", project_id)
-            command.project_id = project_id
-        end
+        command:set_parameter("__origin", origin)
+        command.project_id = params.project_id
 
-        return command
-    elseif type(command_or_name) == "table" then
+        return command, nil
+    end
+
+    if type(command_or_name) == "table" then
         local command = command_or_name
 
         local mt = getmetatable(command)
         if not mt or mt.__index ~= Command then
-            setmetatable(command, {__index = Command})
+            setmetatable(command, { __index = Command })
         end
 
         local param_project_id = nil
@@ -153,26 +323,60 @@ local function normalize_command(command_or_name, params)
             param_project_id = command.parameters.project_id
         end
 
-        if not command.project_id or command.project_id == "" then
-            if param_project_id and param_project_id ~= "" then
-                command.project_id = param_project_id
-            else
-                command.project_id = ensure_active_project_id()
-            end
+        if not (param_project_id and param_project_id ~= "") then
+            param_project_id = command.project_id
+        end
+
+        if not (param_project_id and param_project_id ~= "") then
+            return nil, bug_result("execute(command, params): command must carry project_id")
+        end
+        if origin == "ui" and param_project_id ~= active_project_id then
+            return nil, bug_result("UI command must target active project_id")
         end
 
         if command.get_parameter then
-            if not param_project_id or param_project_id == "" then
-                command:set_parameter("project_id", command.project_id)
-            end
+            command:set_parameter("__origin", origin)
         elseif command.parameters then
-            command.parameters.project_id = command.project_id
+            command.parameters.__origin = origin
         end
 
-        return command
-    else
-        error(string.format("CommandManager.execute: Unsupported command argument type '%s'", type(command_or_name)))
+        command.project_id = param_project_id
+
+        local spec_command_type = command.type
+        if type(spec_command_type) == "string" and spec_command_type:sub(1, 4) == "Undo" then
+            spec_command_type = spec_command_type:sub(5)
+        end
+
+        local executor = registry.get_executor(spec_command_type)
+        if executor == nil then
+            return nil, bug_result("No executor registered for command type: " .. tostring(spec_command_type))
+        end
+
+        local spec = registry.get_spec(spec_command_type)
+
+        local params = command.parameters or {}
+        if not (params.project_id and params.project_id ~= "") then
+            params.project_id = param_project_id
+        end
+
+        local ok, normalized, schema_err = command_schema_module.validate_and_normalize(
+            command.type,
+            spec,
+            params,
+            { apply_defaults = true, is_ui_context = (origin == "ui") }
+        )
+        if ok and normalized ~= nil then
+            command.parameters = normalized
+        end
+        if not ok then
+            return nil, bug_result(schema_err)
+        end
+
+
+        return command, nil
     end
+
+    return nil, bug_result(string.format("CommandManager.execute: Unsupported command argument type '%s'", type(command_or_name)))
 end
 
 local function normalize_executor_result(exec_result, command)
@@ -275,7 +479,7 @@ local function create_command_perf_tracker(command)
     return {
         enabled = enabled,
         reset = reset,
-        log = log,
+        log = log
     }
 end
 
@@ -348,15 +552,21 @@ function M.init(database, sequence_id, project_id)
     end
     active_sequence_id = sequence_id
     active_project_id = project_id
-    
+
+    -- Ensure model methods use the same database connection as commands
+    local db_module = require("core.database")
+    if db_module.set_connection then
+        db_module.set_connection(db)
+    end
+
     registry.init(db, M.set_last_error)
     history.init(db, sequence_id, project_id)
     state_mgr.init(db)
 
     -- Keep timeline_state IDs initialized so selection persistence doesn't assert during headless tests.
     -- Only do this when the shared `core.database` connection matches this manager's DB handle.
-    local ok_db, db_module = pcall(require, "core.database")
-    local shared_conn = ok_db and db_module and db_module.get_connection and db_module.get_connection() or nil
+    local ok_db, db_mod = pcall(require, "core.database")
+    local shared_conn = ok_db and db_mod and db_mod.get_connection and db_mod.get_connection() or nil
     if shared_conn and shared_conn == db then
         local seq_stmt = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
         if seq_stmt then
@@ -489,55 +699,86 @@ end
 
 -- Main execute function
 function M.execute(command_or_name, params)
-    local command
-    local ok, normalize_err = pcall(function()
-        command = normalize_command(command_or_name, params)
-    end)
-    if not ok then
-        return {
-            success = false,
-            error_message = tostring(normalize_err),
-            result_data = ""
-        }
+    -- Track execution depth for nested command support
+    execution_depth = execution_depth + 1
+    local is_nested = execution_depth > 1
+
+    local command, normalize_failure = normalize_command(command_or_name, params)
+    if not command then
+        execution_depth = execution_depth - 1
+        return normalize_failure, nil
     end
 
-    local exec_scope = profile_scope.begin("command_manager.execute", {
-        details_fn = function() 
-            return string.format("command=%s", command and command.type or tostring(command_or_name))
+    -- Declare all locals upfront to avoid goto scope issues
+    local exec_scope, result, scope_ok, scope_err, stack_id, stack_info, stack_opts
+    local undo_group_active, begin_tx, perf, needs_state_hash, pre_hash
+    local sequence_number, executing_from_root, skip_selection_snapshot
+    local exec_result, execution_success, execution_error_message, execution_result_data
+    local suppress_noop_after, post_hash, saved
+    local timeline_state, capture_manager
+
+    exec_scope = profile_scope.begin("command_manager.execute", {
+        details_fn = function()
+            return string.format("command=%s (depth=%d)", command and command.type or tostring(command_or_name), execution_depth)
         end
     })
-    local result = {
+    result = {
         success = false,
         error_message = "",
         result_data = ""
     }
 
+    -- Nested execution: skip ceremony, just execute and return
+    if is_nested then
+        exec_result = execute_command_implementation(command)
+        execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
+
+        result.success = execution_success
+        result.error_message = execution_error_message or ""
+        if execution_result_data ~= nil then
+            result.result_data = execution_result_data
+        end
+
+        -- Preserve custom fields from executor result
+        if type(exec_result) == "table" then
+            for key, value in pairs(exec_result) do
+                if key ~= "success" and key ~= "error_message" and key ~= "result_data" and key ~= "cancelled" then
+                    result[key] = value
+                end
+            end
+        end
+
+        exec_scope:finish(execution_success and "success_nested" or "failure_nested")
+        goto cleanup
+    end
+
+    -- Top-level execution: full ceremony below
     if not validate_command_parameters(command) then
         result.error_message = "Invalid command parameters"
         exec_scope:finish("invalid_params")
-        return result
+        goto cleanup
     end
 
-    local scope_ok, scope_err = command_scope.check(command)
+    scope_ok, scope_err = command_scope.check(command)
     if not scope_ok then
         result.error_message = scope_err or "Command cannot execute in current scope"
         exec_scope:finish("scope_violation")
-        return result
+        goto cleanup
     end
 
     if non_recording_commands[command.type] then
-        local non_record_result = execute_non_recording(command)
+        result = execute_non_recording(command)
         exec_scope:finish("non_recording")
-        return non_record_result
+        goto cleanup
     end
 
-    local stack_id, stack_info = history.resolve_stack_for_command(command)
-    local stack_opts = nil
+    stack_id, stack_info = history.resolve_stack_for_command(command)
+    stack_opts = nil
     if stack_info and type(stack_info) == "table" and stack_info.sequence_id then
         stack_opts = {sequence_id = stack_info.sequence_id}
     end
     if not stack_opts or not stack_opts.sequence_id then
-        local seq_param = extract_sequence_id(command)
+        local seq_param = extract_sequence_id(command)  -- This one is OK, it's within a block
         if seq_param and seq_param ~= "" then
             stack_opts = stack_opts or {}
             stack_opts.sequence_id = seq_param
@@ -572,21 +813,21 @@ function M.execute(command_or_name, params)
     -- especially under branching histories.
 
     -- BEGIN TRANSACTION (skip if undo group is active - savepoint already started transaction)
-    local undo_group_active = history.get_current_undo_group_id() ~= nil
+    undo_group_active = history.get_current_undo_group_id() ~= nil
     if not undo_group_active then
-        local begin_tx = db:prepare("BEGIN TRANSACTION")
+        begin_tx = db:prepare("BEGIN TRANSACTION")
         if not (begin_tx and begin_tx:exec()) then
             if begin_tx then begin_tx:finalize() end
             result.error_message = "Failed to begin transaction"
             exec_scope:finish("begin_tx_failed")
-            return result
+            goto cleanup
         end
         begin_tx:finalize()
     end
 
-    local perf = create_command_perf_tracker(command)
-    local needs_state_hash = should_compute_state_hash(command)
-    local pre_hash = ""
+    perf = create_command_perf_tracker(command)
+    needs_state_hash = should_compute_state_hash(command)
+    pre_hash = ""
     if needs_state_hash then
         perf.reset()
         pre_hash = state_mgr.calculate_state_hash(command.project_id)
@@ -597,48 +838,59 @@ function M.execute(command_or_name, params)
         perf.log("state_hash_pre_skipped")
         perf.reset()
     end
-    
+
     -- Use history module for sequence tracking
-    local sequence_number = history.increment_sequence_number()
+    sequence_number = history.increment_sequence_number()
     command.sequence_number = sequence_number
     command.parent_sequence_number = history.get_current_sequence_number()
     command.undo_group_id = history.get_current_undo_group_id()
 
     -- Validation logic
     if not command.parent_sequence_number then
-        local executing_from_root = history.get_current_sequence_number() == nil
+        executing_from_root = history.get_current_sequence_number() == nil
         if not executing_from_root and sequence_number > 1 then
             logger.error("command_manager", string.format("Command %d has NULL parent but is not first!", sequence_number))
             rollback_transaction()
             history.decrement_sequence_number()
             result.error_message = "FATAL: undo tree corruption"
             exec_scope:finish("null_parent")
-            return result
+            goto cleanup
         end
     end
 
     state_mgr.update_command_hashes(command, pre_hash)
 
     -- Capture playhead/selection
-    local timeline_state = require('ui.timeline.timeline_state')
+    timeline_state = require('ui.timeline.timeline_state')
     command.playhead_value = timeline_state.get_playhead_position()
     command.playhead_rate = timeline_state.get_sequence_frame_rate()
-    local skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
+    skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
     if not skip_selection_snapshot then
         capture_pre_selection_for_command(command)
     end
 
     -- EXECUTE
-    local exec_result = execute_command_implementation(command)
+    exec_result = execute_command_implementation(command)
     if perf.enabled then
         perf.log("execute_command_implementation")
         perf.reset()
     end
-    local execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
+    execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
     if execution_result_data ~= nil then
         result.executor_result_data = execution_result_data
         if not execution_success then
             result.result_data = execution_result_data
+        end
+    end
+
+    -- Preserve custom fields from executor result (e.g., project_id, sequence_id, etc.)
+    -- Copy all non-standard fields from exec_result into result
+    if type(exec_result) == "table" then
+        for key, value in pairs(exec_result) do
+            -- Skip standard contract fields (already handled by normalize_executor_result)
+            if key ~= "success" and key ~= "error_message" and key ~= "result_data" and key ~= "cancelled" then
+                result[key] = value
+            end
         end
     end
 
@@ -650,14 +902,15 @@ function M.execute(command_or_name, params)
             capture_post_selection_for_command(command)
         end
 
-        local suppress_noop_after = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
+        suppress_noop_after = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
         if suppress_noop_after and not needs_state_hash then
             -- Executor decided this command is a no-op, but the flag was set during execution,
             -- so we didn't pay the cost of hashing. Treat as no-op and suppress persistence/UI refresh.
-            return finish_as_noop(db, history, exec_scope, result)
+            result = finish_as_noop(db, history, exec_scope, result)
+            goto cleanup
         end
 
-        local post_hash = ""
+        post_hash = ""
         if needs_state_hash then
             perf.reset()
             post_hash = state_mgr.calculate_state_hash(command.project_id)
@@ -672,10 +925,11 @@ function M.execute(command_or_name, params)
 
         -- No-op detection (hash-based)
         if suppress_noop_after and post_hash == pre_hash then
-            return finish_as_noop(db, history, exec_scope, result)
+            result = finish_as_noop(db, history, exec_scope, result)
+            goto cleanup
         end
 
-        local saved = command:save(db)
+        saved = command:save(db)
         if perf.enabled then
             perf.log("command:save")
             perf.reset()
@@ -781,7 +1035,7 @@ function M.execute(command_or_name, params)
     exec_scope:finish(result.success and "success" or "failure")
 
     -- Capture command execution for bug reporter
-    local capture_manager = require("bug_reporter.capture_manager")
+    capture_manager = require("bug_reporter.capture_manager")
     if capture_manager.capture_enabled then
         capture_manager:log_command(
             command.type,
@@ -791,7 +1045,9 @@ function M.execute(command_or_name, params)
         )
     end
 
-    return result
+::cleanup::
+    execution_depth = execution_depth - 1
+    return result, command
 end
 
 function M.get_last_command(project_id)
@@ -857,8 +1113,8 @@ function M:list_history_entries()
                 sequence_number = seq,
                 command_type = command_type,
                 timestamp = timestamp,
-                parent_sequence_number = parent,
-            }
+                parent_sequence_number = parent
+    }
             parent_of[seq] = parent_seq
             add_child(parent_seq, seq)
         end
@@ -1059,8 +1315,8 @@ function M.get_command_at_sequence(seq_num, project_id)
             selected_clip_ids_pre = query:value(13) or "[]",
             selected_edge_infos_pre = query:value(14) or "[]",
             selected_gap_infos_pre = query:value(15) or "[]",
-            undo_group_id = query:value(16),
-        }
+            undo_group_id = query:value(16)
+    }
         
         local command_args_json = query:value(2)
         if command_args_json and command_args_json ~= "" and command_args_json ~= "{}" then
@@ -1140,7 +1396,7 @@ function M.undo_group(group_id)
     for _, cmd in ipairs(commands_to_undo) do
         local result = M.execute_undo(cmd)
         if not result.success then
-            return result
+            return result, command
         end
     end
 
@@ -1272,7 +1528,7 @@ function M.redo_group(group_id)
 
         local result = execute_redo_command(cmd)
         if not result.success then
-            return result
+            return result, command
         end
 
         parent = cmd.sequence_number
@@ -1322,7 +1578,7 @@ function M.execute_undo(original_command)
 
         history.set_current_sequence_number(original_command.parent_sequence_number)
         history.save_undo_position()
-        
+
         state_mgr.restore_selection_from_serialized(original_command.selected_clip_ids_pre, original_command.selected_edge_infos_pre, original_command.selected_gap_infos_pre)
 
         -- Handle mutations for Undo
@@ -1382,8 +1638,8 @@ function M.execute_batch(commands)
 end
 
 -- Delegate registration to registry
-function M.register_executor(command_type, executor, undoer)
-    registry.register_executor(command_type, executor, undoer)
+function M.register_executor(command_type, executor, undoer, spec)
+    registry.register_executor(command_type, executor, undoer, spec)
 end
 
 -- Convenience for tests: register an undoer separately.
@@ -1418,9 +1674,11 @@ function M.get_current_state()
     local state_command = require('command').create("StateSnapshot", "current-project")
     -- We need current hash
     local hash = state_mgr.calculate_state_hash(active_project_id)
-    state_command:set_parameter("state_hash", hash)
-    state_command:set_parameter("sequence_number", history.get_last_sequence_number())
-    state_command:set_parameter("timestamp", os.time())
+    state_command:set_parameters({
+        ["state_hash"] = hash,
+        ["sequence_number"] = history.get_last_sequence_number(),
+        ["timestamp"] = os.time()
+    })
     return state_command
 end
 
@@ -1645,15 +1903,26 @@ end
 function M.end_undo_group()
     local group_id = history.end_undo_group()
     if group_id and db then
-        -- Commit savepoint
         local savepoint_name = "undo_group_" .. group_id
         local release_sql = "RELEASE SAVEPOINT " .. savepoint_name
-        local ok = db:exec(release_sql)
+        local ok, err = pcall(function()
+            db:exec(release_sql)
+        end)
         if not ok then
-            logger.warn("command_manager", "Failed to release savepoint: " .. savepoint_name)
+            logger.error("command_manager", string.format("Failed to release savepoint %s: %s", savepoint_name, tostring(err)))
+            return
+        end
+
+        -- Only commit once the outermost undo group closes.
+        if not history.get_current_undo_group_id() then
+            local commit_ok, commit_err = pcall(function()
+                db:exec("COMMIT")
+            end)
+            if not commit_ok then
+                logger.error("command_manager", string.format("Failed to commit undo group transaction: %s", tostring(commit_err)))
+            end
         end
     end
-    return group_id
 end
 
 return M

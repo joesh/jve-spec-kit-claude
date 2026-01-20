@@ -18,10 +18,22 @@ local timeline_state = require('ui.timeline.timeline_state')
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 
+
+local SPEC = {
+    args = {
+        deleted_clip_properties = {},
+        deleted_clip_states = {},
+        dry_run = { kind = "boolean" },
+        project_id = { required = true },
+        sequence_id = {},
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["Cut"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing Cut command")
         end
 
@@ -45,21 +57,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if #clip_ids == 0 then
-            if not dry_run then
+            if not args.dry_run then
                 print("Cut: nothing selected")
             end
             return true
         end
 
-        if dry_run then
+        if args.dry_run then
             return true, { clip_count = #clip_ids }
         end
 
-        local sequence_id = command:get_parameter("sequence_id")
-        if (not sequence_id or sequence_id == "") and timeline_state and timeline_state.get_sequence_id then
-            sequence_id = timeline_state.get_sequence_id()
-        end
-        if sequence_id and sequence_id ~= "" then
+        local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
+        if sequence_id then
             command:set_parameter("sequence_id", sequence_id)
         end
 
@@ -67,7 +76,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local deleted_states = {}
         local deleted_props = {}
         for _, clip_id in ipairs(clip_ids) do
-            local clip = Clip.load_optional(clip_id, db)
+            local clip = Clip.load_optional(clip_id)
             if clip then
                 sequence_id = sequence_id or clip.owner_sequence_id or clip.track_sequence_id
                 local state = command_helper.capture_clip_state(clip)
@@ -79,7 +88,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
                 deleted_props[clip_id] = command_helper.snapshot_properties_for_clip(clip_id)
 
-                if clip:delete(db) then
+                if clip:delete() then
                     deleted_count = deleted_count + 1
                 else
                     print(string.format("WARNING: Cut: failed to delete clip %s", clip_id))
@@ -89,12 +98,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        command:set_parameter("cut_clip_ids", clip_ids)
-        command:set_parameter("deleted_clip_states", deleted_states)
-        command:set_parameter("deleted_clip_properties", deleted_props)
-        if not sequence_id or sequence_id == "" then
-            sequence_id = (timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or nil
-            if not sequence_id or sequence_id == "" then
+        command:set_parameters({
+            ["cut_clip_ids"] = clip_ids,
+            ["deleted_clip_states"] = deleted_states,
+            ["deleted_clip_properties"] = deleted_props,
+        })
+        if not sequence_id then
+            sequence_id = command_helper.resolve_active_sequence_id(nil, timeline_state)
+            if not sequence_id then
                 set_last_error("Cut: missing sequence_id")
                 return false
             end
@@ -111,20 +122,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["Cut"] = function(command)
-        local states = command:get_parameter("deleted_clip_states") or {}
-        local props = command:get_parameter("deleted_clip_properties") or {}
+        local args = command:get_all_parameters()
+        local states = args.deleted_clip_states or {}
+        local props = args.deleted_clip_properties or {}
         if type(states) ~= "table" then
             return false
         end
 
-        local conn = require("core.database").get_connection()
         for _, state in ipairs(states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
-                if restored.restore_without_occlusion and conn then
-                    restored:restore_without_occlusion(conn)
-                elseif restored.save and conn then
-                    restored:save(conn, { skip_occlusion = true })
+                if restored.restore_without_occlusion then
+                    restored:restore_without_occlusion(nil)
+                elseif restored.save then
+                    restored:save(nil, { skip_occlusion = true })
                 end
                 local clip_props = props[state.id] or {}
                 if clip_props and #clip_props > 0 then
@@ -133,7 +144,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        local sequence_id = command:get_parameter("sequence_id") or (timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id())
+        local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
         command_helper.reload_timeline(sequence_id)
         print("✅ Undo Cut: Restored deleted clips")
         return true
@@ -141,7 +152,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["Cut"],
-        undoer = command_undoers["Cut"]
+        undoer = command_undoers["Cut"],
+        spec = SPEC,
     }
 end
 

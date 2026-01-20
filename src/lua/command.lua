@@ -28,7 +28,7 @@ local function is_ephemeral_parameter_key(key)
 end
 
 -- Create a new Command
-function M.create(command_type, project_id)
+function M.create(command_type, project_id, params)
     local command = {
         id = uuid.generate(),
         type = command_type,
@@ -43,6 +43,10 @@ function M.create(command_type, project_id)
     }
 
     setmetatable(command, {__index = M})
+    if params then
+        command:set_parameters(params)
+    end
+
     return command
 end
 
@@ -172,6 +176,14 @@ end
 -- Set a parameter
 function M:set_parameter(key, value)
     self.parameters[key] = value
+end
+
+-- Set multiple parameters
+function M:set_parameters(params)
+    if not params then return end
+    for key, value in pairs(params) do
+        self.parameters[key] = value
+    end
 end
 
 -- Get a parameter

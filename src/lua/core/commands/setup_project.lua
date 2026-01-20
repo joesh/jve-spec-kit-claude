@@ -17,44 +17,53 @@ local M = {}
 local Project = require('models.project')
 local json = require("dkjson")
 
+
+local SPEC = {
+    args = {
+        project_id = { required = true },
+        settings = {},
+    },
+    persisted = {
+        previous_settings = {},
+    },
+}
+
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetupProject"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing SetupProject command")
 
-        local project_id = command:get_parameter("project_id")
-        local settings = command:get_parameter("settings")
 
-        if not project_id or project_id == "" then
-            print("WARNING: SetupProject: Missing required parameters")
-            return false
-        end
 
-        local project = Project.load(project_id, db)
+
+        local project = Project.load(args.project_id, db)
         if not project or project.id == "" then
-            print(string.format("WARNING: SetupProject: Project not found: %s", project_id))
+            print(string.format("WARNING: SetupProject: Project not found: %s", args.project_id))
             return false
         end
 
-        -- Store previous settings for undo
-        local previous_settings = project.settings
+        -- Store previous args.settings for undo
+        local previous_settings = project.args.settings
         command:set_parameter("previous_settings", previous_settings)
 
-        -- Apply new settings
-        local settings_json = json.encode(settings)
+        -- Apply new args.settings
+        local settings_json = json.encode(args.settings)
         project:set_settings(settings_json)
 
         if project:save(db) then
-            print(string.format("Applied settings to project: %s", project_id))
+            print(string.format("Applied args.settings to project: %s", args.project_id))
             return true
         else
-            print("WARNING: Failed to save project settings")
+            set_last_error("Failed to save project args.settings")
             return false
         end
     end
 
     -- No undo defined in original source for SetupProject, assumed to be setup-only
     return {
-        executor = command_executors["SetupProject"]
+        executor = command_executors["SetupProject"],
+        spec = SPEC,
     }
 end
 

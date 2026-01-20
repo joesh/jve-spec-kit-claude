@@ -17,12 +17,21 @@
 -- ToggleMaximizePanel command
 local M = {}
 
+
+local SPEC = {
+    args = {
+        panel_id = {},
+        project_id = { required = true },
+    }
+}
+
 function M.register(executors, undoers, db)
     
-    executors["ToggleMaximizePanel"] = function(command)
+    local function executor(command)
+        local args = command:get_all_parameters()
         local panel_manager = require("ui.panel_manager")
-        local panel_id = command:get_parameter("panel_id")
-        local ok, err = panel_manager.toggle_maximize(panel_id)
+
+        local ok, err = panel_manager.toggle_maximize(args.panel_id)
         if not ok and err then
             print(string.format("WARNING: ToggleMaximizePanel: %s", err))
         end
@@ -30,7 +39,10 @@ function M.register(executors, undoers, db)
     end
 
     -- No undo needed for UI state changes that are non-recording
-    return {executor = executors["ToggleMaximizePanel"]}
+    return {
+        executor = executor,
+        spec = SPEC,
+    }
 end
 
 return M

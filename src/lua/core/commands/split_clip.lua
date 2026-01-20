@@ -18,6 +18,27 @@ local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
 
+
+local SPEC = {
+    args = {
+        clip_id = { required = true },
+        dry_run = { kind = "boolean" },
+        second_clip_id = {},  -- Set by executor
+        sequence_id = { required = true },
+        split_time = {},
+        split_value = {},
+        track_id = {},
+    },
+    persisted = {
+        original_duration = {},  -- Set by executor
+        original_source_in = {},  -- Set by executor
+        original_source_out = {},  -- Set by executor
+        original_timeline_start = {},  -- Set by executor
+        project_id = { required = true },
+    },
+
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function to_rational(val, context_clip)
         if type(val) == "table" and val.frames then return val end
@@ -32,25 +53,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["SplitClip"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing SplitClip command")
         end
 
-        local clip_id = command:get_parameter("clip_id")
-        local split_val_param = command:get_parameter("split_value") or command:get_parameter("split_time")
+        local clip_id = args.clip_id
 
-        if not dry_run then
+
+        if not args.dry_run then
             print(string.format("  clip_id: %s", tostring(clip_id)))
-            print(string.format("  split_value: %s", tostring(split_val_param)))
+            print(string.format("  split_value: %s", tostring(args.split_value)))
         end
 
-        if not clip_id or clip_id == "" or not split_val_param then
-            print("WARNING: SplitClip: Missing required parameters")
-            return false
-        end
-
-        local original_clip = Clip.load(clip_id, db)
+        local original_clip = Clip.load(clip_id)
         if not original_clip or original_clip.id == "" then
             print(string.format("WARNING: SplitClip: Clip not found: %s", clip_id))
             return false
@@ -62,7 +79,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Split values are in timeline (owning sequence) frames.
-        local split_rat = Rational.hydrate(split_val_param, start_rat.fps_numerator, start_rat.fps_denominator)
+        local split_rat = Rational.hydrate(args.split_value, start_rat.fps_numerator, start_rat.fps_denominator)
         
         if not split_rat or not split_rat.frames then
             error("SplitClip: Invalid split_value (missing frames)")
@@ -82,27 +99,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local mutation_sequence = original_clip.owner_sequence_id or original_clip.track_sequence_id
         if (not mutation_sequence or mutation_sequence == "") and original_clip.track_id then
-            mutation_sequence = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), original_clip.track_id)
+            mutation_sequence = command_helper.resolve_sequence_for_track(args.sequence_id, original_clip.track_id)
         end
-        if mutation_sequence and (not command:get_parameter("sequence_id") or command:get_parameter("sequence_id") == "") then
+        if mutation_sequence and (not args.sequence_id or args.sequence_id == "") then
             command:set_parameter("sequence_id", mutation_sequence)
         end
-        if mutation_sequence and not command:get_parameter("__snapshot_sequence_ids") then
+        if mutation_sequence and not args.__snapshot_sequence_ids then
             command:set_parameter("__snapshot_sequence_ids", {mutation_sequence})
         end
 
-        command:set_parameter("track_id", original_clip.track_id)
-        command:set_parameter("original_timeline_start", start_rat)
-        command:set_parameter("original_duration", dur_rat)
-        command:set_parameter("original_source_in", original_clip.source_in)
-        command:set_parameter("original_source_out", original_clip.source_out)
-
+        command:set_parameters({
+            ["track_id"] = original_clip.track_id,
+            ["original_timeline_start"] = start_rat,
+            ["original_duration"] = dur_rat,
+            ["original_source_in"] = original_clip.source_in,
+            ["original_source_out"] = original_clip.source_out,
+        })
         local first_duration = split_rat - start_rat
         local second_duration = dur_rat - first_duration
         local source_in_rat = original_clip.source_in or to_rational(original_clip.source_in_value or 0, original_clip)
         local source_split_point = source_in_rat + first_duration
 
-        local existing_second_clip_id = command:get_parameter("second_clip_id")
+
         
         local second_clip = Clip.create(original_clip.name, original_clip.media_id, {
             project_id = original_clip.project_id,
@@ -116,15 +134,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_out = original_clip.source_out,
             enabled = original_clip.enabled,
             offline = original_clip.offline,
-            rate_num = original_clip.rate.fps_numerator, -- Explicitly pass rate
-            rate_den = original_clip.rate.fps_denominator, -- Explicitly pass rate
+            fps_numerator = original_clip.rate.fps_numerator, -- Explicitly pass rate
+            fps_denominator = original_clip.rate.fps_denominator, -- Explicitly pass rate
         })
         
-        if existing_second_clip_id then
-            second_clip.id = existing_second_clip_id
+        if args.second_clip_id then
+            second_clip.id = args.second_clip_id
         end
 
-        if dry_run then
+        if args.dry_run then
             -- Return simple preview
             return true, {
                 first_clip = { clip_id = original_clip.id },
@@ -135,8 +153,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         original_clip.duration = first_duration
         original_clip.source_out = source_split_point
 
-        if not original_clip:save(db) then
-            print("WARNING: SplitClip: Failed to save modified original clip")
+        if not original_clip:save() then
+            set_last_error("SplitClip: Failed to save modified original clip")
             return false
         end
 
@@ -145,8 +163,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command_helper.add_update_mutation(command, first_update.track_sequence_id or mutation_sequence, first_update)
         end
 
-        if not second_clip:save(db) then
-            print("WARNING: SplitClip: Failed to save new clip")
+        if not second_clip:save() then
+            set_last_error("SplitClip: Failed to save new clip")
             return false
         end
 
@@ -165,19 +183,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function perform_split_clip_undo(command)
         print("Executing UndoSplitClip command")
 
-        local clip_id = command:get_parameter("clip_id")
-        local track_id = command:get_parameter("track_id")
-        local original_timeline_start = command:get_parameter("original_timeline_start")
-        local original_duration = command:get_parameter("original_duration")
-        local original_source_in = command:get_parameter("original_source_in")
-        local original_source_out = command:get_parameter("original_source_out")
-        local second_clip_id = command:get_parameter("second_clip_id")
-        local mutation_sequence = command:get_parameter("sequence_id")
+        local args = command:get_all_parameters()
 
-        if not clip_id or not second_clip_id then
-            print("WARNING: UndoSplitClip: Missing required parameters")
-            return false
-        end
+        local original_timeline_start = args.original_timeline_start
+        local original_duration = args.original_duration
+        local original_source_in = args.original_source_in
+        local original_source_out = args.original_source_out
+
+
 
         -- Re-hydrate Rationals if they came back as tables/numbers
         local function restore_rat(val)
@@ -191,53 +204,136 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         original_source_in = restore_rat(original_source_in)
         original_source_out = restore_rat(original_source_out)
 
-        local original_clip = Clip.load(clip_id, db)
+        local original_clip = Clip.load(args.clip_id)
         if not original_clip then
-            print(string.format("WARNING: UndoSplitClip: Original clip not found: %s", clip_id))
+            print(string.format("WARNING: UndoSplitClip: Original clip not found: %s", args.clip_id))
             return false
         end
 
-        local second_clip = Clip.load(second_clip_id, db)
+        local second_clip = Clip.load(args.second_clip_id)
         if not second_clip then
-            print(string.format("WARNING: UndoSplitClip: Second clip not found: %s", second_clip_id))
-            -- Fallback: try to proceed if original clip is valid, but maybe we can't delete second clip?
-            -- If second clip is missing, maybe we just restore first.
+            set_last_error(string.format("UndoSplitClip: Second clip not found: %s", tostring(args.second_clip_id)))
+            return false
         end
 
-        if second_clip then
-            if not second_clip:delete(db) then
-                print("WARNING: UndoSplitClip: Failed to delete second clip")
-                return false
-            end
-            command_helper.add_delete_mutation(command, mutation_sequence, second_clip_id)
+        if not second_clip:delete() then
+            set_last_error("UndoSplitClip: Failed to delete second clip")
+            return false
         end
+        command_helper.add_delete_mutation(command, args.sequence_id, args.second_clip_id)
 
         original_clip.timeline_start = original_timeline_start
         original_clip.duration = original_duration
         original_clip.source_in = original_source_in
         original_clip.source_out = original_source_out
 
-        if not original_clip:save(db) then
-            print("WARNING: UndoSplitClip: Failed to save original clip")
+        if not original_clip:save() then
+            set_last_error("UndoSplitClip: Failed to save original clip")
             return false
         end
 
-        local restore_update = command_helper.clip_update_payload(original_clip, mutation_sequence)
+        local restore_update = command_helper.clip_update_payload(original_clip, args.sequence_id)
         if restore_update then
-            command_helper.add_update_mutation(command, restore_update.track_sequence_id or mutation_sequence, restore_update)
+            command_helper.add_update_mutation(command, restore_update.track_sequence_id or args.sequence_id, restore_update)
         end
 
         print(string.format("Undid split: restored clip %s and deleted clip %s",
-            clip_id, second_clip_id))
+            args.clip_id, args.second_clip_id))
         return true
     end
 
     command_undoers["SplitClip"] = perform_split_clip_undo
     command_executors["UndoSplitClip"] = perform_split_clip_undo
 
+    -- Interactive Split command (gathers context from timeline)
+    command_executors["Split"] = function(command)
+        local args = command:get_all_parameters()
+
+        -- Get timeline state to gather interactive parameters
+        local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
+        if not timeline_state_ok or not timeline_state then
+            return {success = false, error_message = "Split: timeline state unavailable"}
+        end
+
+        local playhead_value = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
+        if not playhead_value then
+            return {success = false, error_message = "Split: playhead position unavailable"}
+        end
+
+        local selected_clips = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
+        if #selected_clips == 0 then
+            return {success = false, error_message = "Split: no clips selected"}
+        end
+
+        local Rational = require("core.rational")
+        local json = require("dkjson")
+        local Command = require("command")
+        local specs = {}
+
+        for _, clip in ipairs(selected_clips) do
+            local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
+            if not rate or not rate.fps_numerator or not rate.fps_denominator then
+                return {success = false, error_message = "Split: sequence frame rate unavailable"}
+            end
+            local start_value = Rational.hydrate(clip.timeline_start or clip.start_value, rate.fps_numerator, rate.fps_denominator)
+            local duration_value = Rational.hydrate(clip.duration or clip.duration_value, rate.fps_numerator, rate.fps_denominator)
+            local playhead_rt = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator)
+
+            if start_value and duration_value and duration_value.frames > 0 and playhead_rt then
+                local end_time = start_value + duration_value
+                if playhead_rt > start_value and playhead_rt < end_time then
+                    table.insert(specs, {
+                        command_type = "SplitClip",
+                        parameters = {
+                            clip_id = clip.id,
+                            split_time = playhead_rt
+                        }
+                    })
+                end
+            end
+        end
+
+        if #specs == 0 then
+            return {success = false, error_message = "Split: no valid clips to split at current playhead position"}
+        end
+
+        -- Create BatchCommand internally
+        local project_id = args.project_id or (timeline_state.get_project_id and timeline_state.get_project_id())
+        if not project_id or project_id == "" then
+            return {success = false, error_message = "Split: project_id unavailable"}
+        end
+
+        local batch_cmd = Command.create("BatchCommand", project_id)
+        batch_cmd:set_parameter("commands_json", json.encode(specs))
+
+        local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+        if active_sequence_id and active_sequence_id ~= "" then
+            batch_cmd:set_parameter("sequence_id", active_sequence_id)
+            batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+        end
+
+        -- Execute the batch command
+        local command_manager = require("core.command_manager")
+        local result = command_manager.execute(batch_cmd)
+
+        if result.success then
+            print(string.format("Split %d clip(s) at playhead", #specs))
+        end
+
+        return result
+    end
+
     return {
-        executor = command_executors["SplitClip"],
-        undoer = command_undoers["SplitClip"]
+        ["SplitClip"] = {
+            executor = command_executors["SplitClip"],
+            undoer = command_undoers["SplitClip"],
+            spec = SPEC,
+        },
+        ["Split"] = {
+            executor = command_executors["Split"],
+            undoer = nil, -- Undo handled by BatchCommand
+            spec = {args = {project_id = {required = true}}},
+        },
     }
 end
 

@@ -18,12 +18,33 @@ local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local timeline_state = require('ui.timeline.timeline_state')
 
+
+local SPEC = {
+    args = {
+        -- Provide either clip_ids or clip_toggles.
+        --
+        -- clip_ids: convenience input. Executor derives clip_toggles (with before/after) and
+        --           persists them onto the command for replay/undo.
+        clip_ids = { kind = "table" },
+        dry_run = { kind = "boolean" },
+        project_id = { required = true },
+        sequence_id = {},
+    },
+    persisted = {
+        -- Derived output (and accepted as an input for replay): list of {clip_id, enabled_before, enabled_after}.
+        clip_toggles = { kind = "table" },
+    },
+    requires_any = {
+        { "clip_ids", "clip_toggles" },
+    },
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local function record_clip_enabled_mutation(command, clip)
+    local function record_clip_enabled_mutation(command, clip, args)
         if not clip then
             return
         end
-        local mutation_sequence = command:get_parameter("sequence_id") or clip.owner_sequence_id or clip.track_sequence_id
+        local mutation_sequence = (args and args.sequence_id) or clip.owner_sequence_id or clip.track_sequence_id
         local update_payload = command_helper.clip_update_payload(clip, mutation_sequence)
         if update_payload then
             command_helper.add_update_mutation(command, update_payload.track_sequence_id or mutation_sequence, update_payload)
@@ -31,22 +52,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["ToggleClipEnabled"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing ToggleClipEnabled command")
         end
 
-        local active_sequence_id = command:get_parameter("sequence_id")
-        if (not active_sequence_id or active_sequence_id == "") and timeline_state and timeline_state.get_sequence_id then
-            active_sequence_id = timeline_state.get_sequence_id()
-            if active_sequence_id and active_sequence_id ~= "" then
-                command:set_parameter("sequence_id", active_sequence_id)
-            end
+        local active_sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
+        if active_sequence_id and active_sequence_id ~= args.sequence_id then
+            command:set_parameter("sequence_id", active_sequence_id)
         end
 
-        local toggles = command:get_parameter("clip_toggles")
+        local toggles = args.clip_toggles
         if not toggles or #toggles == 0 then
-            local clip_ids = command:get_parameter("clip_ids")
+            local clip_ids = args.clip_ids
 
             if not clip_ids or #clip_ids == 0 then
                 local selected_clips = timeline_state.get_selected_clips() or {}
@@ -65,7 +84,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             toggles = {}
             for _, clip_id in ipairs(clip_ids) do
-                local clip = Clip.load_optional(clip_id, db)
+                local clip = Clip.load_optional(clip_id)
                 if clip then
                     local enabled_before = clip.enabled ~= false
                     table.insert(toggles, {
@@ -86,7 +105,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("clip_toggles", toggles)
         end
 
-        if dry_run then
+        if args.dry_run then
             return true, {clip_toggles = toggles}
         end
 
@@ -94,11 +113,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local toggled = 0
         for _, toggle in ipairs(toggles) do
-            local clip = Clip.load_optional(toggle.clip_id, db)
+            local clip = Clip.load_optional(toggle.clip_id)
             if clip then
                 clip.enabled = toggle.enabled_after and true or false
-                if clip:save(db, {skip_occlusion = true}) then
-                    record_clip_enabled_mutation(command, clip)
+                if clip:save({skip_occlusion = true}) then
+                    record_clip_enabled_mutation(command, clip, args)
                     toggled = toggled + 1
                 else
                     print(string.format("ERROR: ToggleClipEnabled: Failed to save clip %s", tostring(toggle.clip_id)))
@@ -114,18 +133,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["ToggleClipEnabled"] = function(command)
-        local toggles = command:get_parameter("clip_toggles")
-        if not toggles or #toggles == 0 then
+        local args = command:get_all_parameters()
+
+        if not args.clip_toggles or #args.clip_toggles == 0 then
             return true
         end
 
         local restored = 0
-        for _, toggle in ipairs(toggles) do
-            local clip = Clip.load_optional(toggle.clip_id, db)
+        for _, toggle in ipairs(args.clip_toggles) do
+            local clip = Clip.load_optional(toggle.clip_id)
             if clip then
                 clip.enabled = toggle.enabled_before and true or false
-                if clip:save(db, {skip_occlusion = true}) then
-                    record_clip_enabled_mutation(command, clip)
+                if clip:save({skip_occlusion = true}) then
+                    record_clip_enabled_mutation(command, clip, args)
                     restored = restored + 1
                 else
                     print(string.format("WARNING: ToggleClipEnabled undo: Failed to restore clip %s", tostring(toggle.clip_id)))
@@ -142,7 +162,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["ToggleClipEnabled"],
-        undoer = command_undoers["ToggleClipEnabled"]
+        undoer = command_undoers["ToggleClipEnabled"],
+        spec = SPEC,
     }
 end
 

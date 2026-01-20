@@ -503,8 +503,64 @@ function M.get_path()
     return db_path
 end
 
+-- SQL ISOLATION ENFORCEMENT - ACTIVE
+-- Models (models/*.lua) = ONLY SQL layer
+-- Commands (core/commands/*.lua) = call models
+-- UI (ui/*.lua) = call models
+-- Tests (tests/*.lua) = SQL allowed for setup/assertions
+
+local ALLOWED_SQL_CALLERS = {
+    ["models/"] = true,
+    ["core/database.lua"] = true,
+    ["core/command_manager.lua"] = true,  -- Transaction management only
+}
+
+local function validate_sql_access()
+    local info = debug.getinfo(3, "S")
+    assert(info, "validate_sql_access: failed to get caller info")
+
+    local source = info.source:match("@?(.+)")
+    assert(source, "validate_sql_access: failed to extract source path")
+
+    -- Allow tests to access database (tests/ directory or test_*.lua files)
+    -- Tests SHOULD use model abstractions where possible, but need DB for setup/assertions
+    if source:match("tests/") or source:match("/test_[^/]+%.lua$") or source:match("^test_[^/]+%.lua$") then
+        return  -- Tests granted access (prefer using models though)
+    end
+
+    local relative_path = source:match("src/lua/(.+)$")
+    assert(relative_path, string.format(
+        "validate_sql_access: caller outside src/lua and tests/: %s",
+        source
+    ))
+
+    -- Check if caller is in allowed list
+    for allowed_prefix, _ in pairs(ALLOWED_SQL_CALLERS) do
+        if relative_path:match("^" .. allowed_prefix) then
+            return  -- Access granted
+        end
+    end
+
+    -- FAIL FAST with actionable error
+    assert(false, string.format(
+        "SQL ISOLATION VIOLATION: %s attempted to get database connection.\n" ..
+        "Only models/ can execute SQL in production code.\n" ..
+        "Fix: Add method to appropriate model (Track, Clip, Media, Sequence, etc.)",
+        relative_path
+    ))
+end
+
 -- Get database connection (for use by command_manager, models, etc.)
+function M.set_connection(conn)
+    db_connection = conn
+end
+
 function M.get_connection()
+    assert(db_connection, "database.get_connection: no active database connection")
+
+    -- Enforce SQL isolation at connection access point
+    validate_sql_access()
+
     return db_connection
 end
 

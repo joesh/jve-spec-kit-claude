@@ -16,15 +16,17 @@
 local M = {}
 local Project = require('models.project')
 
+
+local SPEC = {
+    args = {
+        name = { required = true },
+        project_id = { required = true },
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["CreateProject"] = function(command)
         print("Executing CreateProject command")
-
-        local name = command:get_parameter("name")
-        if not name or name == "" then
-            print("WARNING: CreateProject: Missing required 'name' parameter")
-            return false
-        end
 
         local project = Project.create(name)
 
@@ -41,7 +43,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     -- No undo for CreateProject currently defined in source
     return {
-        executor = command_executors["CreateProject"]
+        executor = command_executors["CreateProject"],
+        spec = SPEC,
     }
 end
 

@@ -542,12 +542,14 @@ local function ensure_edge_preview(drag_state, state_module)
         })
     end
     local cmd = Command.create("BatchRippleEdit", project_id)
-    cmd:set_parameter("edge_infos", edge_infos)
-    cmd:set_parameter("sequence_id", sequence_id)
-    cmd:set_parameter("delta_frames", delta_rat.frames)
-    cmd:set_parameter("dry_run", true)
-    cmd:set_parameter("__preloaded_clip_snapshot", snapshot)
-    cmd:set_parameter("__timeline_active_region", active_region)
+    cmd:set_parameters({
+        ["edge_infos"] = edge_infos,
+        ["sequence_id"] = sequence_id,
+        ["delta_frames"] = delta_rat.frames,
+        ["dry_run"] = true,
+        ["__preloaded_clip_snapshot"] = snapshot,
+        ["__timeline_active_region"] = active_region,
+    })
     if normalized_lead then
         cmd:set_parameter("lead_edge", normalized_lead)
     end

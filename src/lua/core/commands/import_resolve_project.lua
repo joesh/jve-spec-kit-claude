@@ -1,61 +1,114 @@
---- TODO: one-line summary (human review required)
+--- Import Resolve Commands - Import Resolve projects and databases
 --
 -- Responsibilities:
--- - TODO
+-- - ImportResolveProject: Import .drp file with optional interactive dialog
+-- - ImportResolveDatabase: Import Resolve database with optional interactive dialog
 --
 -- Non-goals:
--- - TODO
+-- - Direct Resolve API integration (file-based import only)
 --
 -- Invariants:
--- - TODO
+-- - Commands must receive file paths (or gather from dialog)
+-- - Undo deletes all created entities
 --
--- Size: ~310 LOC
--- Volatility: unknown
+-- Size: ~450 LOC
+-- Volatility: low
 --
 -- @file import_resolve_project.lua
--- Original intent (unreviewed):
--- ImportResolveProject and ImportResolveDatabase commands
 local M = {}
+local logger = require("core.logger")
 
--- Helper: Escape SQL string literals (double single quotes)
-local function sql_escape(str)
-    if not str then return "NULL" end
-    return "'" .. tostring(str):gsub("'", "''") .. "'"
-end
+local sql_escape
+local frame_rate_to_rational
 
--- Helper: Convert decimal frame rate to rational form (fps_numerator, fps_denominator)
-local function frame_rate_to_rational(frame_rate)
-    local fps = tonumber(frame_rate)
-    if not fps then
-        return 30, 1  -- Default fallback
-    end
+-- Schema for .drp import command
+local SPEC_DRP = {
+    args = {
+        project_id = { required = true },
+        interactive = { kind = "boolean" },  -- If true, show file picker dialog
+        drp_path = {},  -- Path to .drp file (or gathered from dialog)
+    },
+    persisted = {
+        created_clip_ids = {},
+        created_media_ids = {},
+        created_timeline_ids = {},
+        created_track_ids = {},
+        result_project_id = {},
+    },
+}
 
-    -- Handle common NTSC fractional frame rates
-    if math.abs(fps - 23.976) < 0.01 then
-        return 24000, 1001
-    elseif math.abs(fps - 29.97) < 0.01 then
-        return 30000, 1001
-    elseif math.abs(fps - 59.94) < 0.01 then
-        return 60000, 1001
-    end
-
-    -- Integer frame rates
-    return math.floor(fps + 0.5), 1
-end
+-- Schema for database import command
+local SPEC_DB = {
+    args = {
+        project_id = { required = true },
+        interactive = { kind = "boolean" },  -- If true, show file picker dialog
+        db_path = {},  -- Path to database file (or gathered from dialog)
+    },
+    persisted = {
+        created_clip_ids = {},
+        created_media_ids = {},
+        created_timeline_ids = {},
+        created_track_ids = {},
+        result_project_id = {},
+    },
+}
 
 function M.register(executors, undoers, db)
-    local sqlite3 = require("lsqlite3") -- Assuming available, or via core.sqlite3
+    local sqlite3 = require("lsqlite3")
 
+    -- =========================================================================
+    -- ImportResolveProject: Import .drp file with optional interactive dialog
+    -- =========================================================================
     executors["ImportResolveProject"] = function(command)
-        local drp_path = command:get_parameter("drp_path")
+        local args = command:get_all_parameters()
 
-        if not drp_path or drp_path == "" then
+        local project_id = args.project_id
+        if not project_id or project_id == "" then
+            return { success = false, error_message = "Missing project_id" }
+        end
+
+        local file_path = args.drp_path
+
+        -- If interactive mode or no file path provided, show dialog
+        if args.interactive or not file_path or file_path == "" then
+            logger.info("import_resolve", "ImportResolveProject: Showing file picker dialog")
+
+            -- Get UI references for dialog
+            local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+            if not ui_state_ok then
+                return { success = false, error_message = "UI state not initialized" }
+            end
+
+            local main_window = ui_state.get_main_window()
+            if not main_window then
+                return { success = false, error_message = "Main window not initialized" }
+            end
+
+            -- Show file picker dialog
+            file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
+                main_window,
+                "Import Resolve Project (.drp)",
+                "Resolve Project Files (*.drp);;All Files (*)"
+            )
+
+            if not file_path or file_path == "" then
+                logger.debug("import_resolve", "ImportResolveProject: User cancelled file picker")
+                return { success = true, cancelled = true }
+            end
+
+            -- Store the gathered file path for undo/redo
+            command:set_parameter("drp_path", file_path)
+        end
+
+        logger.info("import_resolve", "Importing Resolve project: " .. tostring(file_path))
+
+        if not args.drp_path or args.drp_path == "" then
             return {success = false, error_message = "No .drp file path provided"}
         end
 
         -- Parse .drp file
         local drp_importer = require("importers.drp_importer")
-        local parse_result = drp_importer.parse_drp_file(drp_path)
+        local parse_result = drp_importer.parse_drp_file(args.drp_path)
 
         if not parse_result.success then
             return {success = false, error_message = parse_result.error}
@@ -81,7 +134,7 @@ function M.register(executors, undoers, db)
             return {success = false, error_message = "Failed to create project"}
         end
 
-        print(string.format("Created project: %s (%dx%d @ %.2ffps)",
+        logger.info("import_resolve", string.format("Created project: %s (%dx%d @ %.2ffps)",
             project.name, settings.width, settings.height, settings.frame_rate))
 
         -- Track created entities for undo
@@ -91,7 +144,7 @@ function M.register(executors, undoers, db)
         local created_clip_ids = {}
 
         -- Import media items
-        local media_id_map = {}  -- resolve_id -> jve_media_id
+        local media_id_map = {}
         for _, media_item in ipairs(parse_result.media_items) do
             local media = Media.create({
                 project_id = project.id,
@@ -102,25 +155,23 @@ function M.register(executors, undoers, db)
                 height = parse_result.project.settings.height
             })
 
-            if media:save(db) then
+            if media:save() then
                 table.insert(created_media_ids, media.id)
                 if media_item.resolve_id then
                     media_id_map[media_item.resolve_id] = media.id
                 end
-                print(string.format("  Imported media: %s", media.name))
+                logger.debug("import_resolve", string.format("  Imported media: %s", media.name))
             else
-                print(string.format("WARNING: Failed to import media: %s", media_item.name))
+                logger.warn("import_resolve", string.format("Failed to import media: %s", media_item.name))
             end
         end
 
         -- Import timelines
         for _, timeline_data in ipairs(parse_result.timelines) do
-            -- Create sequence (timeline) record
             local fps_num, fps_den = frame_rate_to_rational(parse_result.project.settings.frame_rate)
             local timeline_id = require("models.clip").generate_id()
             local now = os.time()
 
-            -- Use db:exec() with string formatting (all values are controlled/trusted)
             local sql = string.format([[
                 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
                 VALUES ('%s', '%s', %s, 'timeline', %d, %d, 48000, %d, %d, %d, %d)
@@ -133,7 +184,7 @@ function M.register(executors, undoers, db)
 
             if ok then
                 table.insert(created_timeline_ids, timeline_id)
-                print(string.format("  Imported timeline: %s", timeline_data.name))
+                logger.debug("import_resolve", string.format("  Imported timeline: %s", timeline_data.name))
 
                 -- Import tracks
                 for _, track_data in ipairs(timeline_data.tracks) do
@@ -148,20 +199,18 @@ function M.register(executors, undoers, db)
 
                     local track_ok, track_err = db:exec(track_sql)
                     if not track_ok then
-                        print(string.format("WARNING: Failed to create track: %s%d - %s", track_data.type, track_data.index, tostring(track_err)))
+                        logger.warn("import_resolve", string.format("Failed to create track: %s%d - %s", track_data.type, track_data.index, tostring(track_err)))
                     end
 
                     if track_ok then
                         table.insert(created_track_ids, track_id)
-                        print(string.format("    Created track: %s%d", track_data.type, track_data.index))
 
                         -- Import clips
                         for _, clip_data in ipairs(track_data.clips) do
-                            -- Find matching media_id (if file_path available)
                             local media_id = nil
                             if clip_data.file_path then
                                 for _, media in ipairs(created_media_ids) do
-                                    local m = Media.load(media, db)
+                                    local m = Media.load(media)
                                     if m and m.file_path == clip_data.file_path then
                                         media_id = m.id
                                         break
@@ -169,7 +218,6 @@ function M.register(executors, undoers, db)
                                 end
                             end
 
-                            -- Calculate source_out if not provided
                             local source_out = clip_data.source_out
                             if not source_out and clip_data.source_in and clip_data.duration then
                                 source_out = clip_data.source_in + clip_data.duration
@@ -177,45 +225,42 @@ function M.register(executors, undoers, db)
 
                             local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
-                                timeline_start = clip_data.start_value,  -- Renamed from start_value
+                                timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
                                 source_out = source_out
                             })
 
-                            if clip:save(db) then
+                            if clip:save() then
                                 table.insert(created_clip_ids, clip.id)
                             else
-                                print(string.format("WARNING: Failed to import clip: %s", clip_data.name))
+                                logger.warn("import_resolve", string.format("Failed to import clip: %s", clip_data.name))
                             end
                         end
-                    else
-                        print(string.format("WARNING: Failed to create track: %s%d", track_data.type, track_data.index))
                     end
-
-                    -- No finalize needed with db:exec()
                 end
-            else
-                print(string.format("WARNING: Failed to create timeline: %s", timeline_data.name))
             end
-
-            -- No finalize needed with db:exec()
         end
 
-        print(string.format("Imported Resolve project: %d media, %d timelines, %d tracks, %d clips",
+        logger.info("import_resolve", string.format("Imported Resolve project: %d media, %d timelines, %d tracks, %d clips",
             #created_media_ids, #created_timeline_ids, #created_track_ids, #created_clip_ids))
 
-        command:set_parameter("result_project_id", project.id)
-        command:set_parameter("created_media_ids", created_media_ids)
-        command:set_parameter("created_timeline_ids", created_timeline_ids)
-        command:set_parameter("created_track_ids", created_track_ids)
-        command:set_parameter("created_clip_ids", created_clip_ids)
+        command:set_parameters({
+            ["result_project_id"] = project.id,
+            ["created_media_ids"] = created_media_ids,
+            ["created_timeline_ids"] = created_timeline_ids,
+            ["created_track_ids"] = created_track_ids,
+            ["created_clip_ids"] = created_clip_ids,
+        })
 
-        -- Set result for test access
-        command.result = {
-            success = true,
-            project_id = project.id
-        }
+        -- Refresh project browser
+        local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+        if ui_state_ok then
+            local project_browser = ui_state.get_project_browser()
+            if project_browser and project_browser.refresh then
+                project_browser.refresh()
+            end
+        end
 
         return {
             success = true,
@@ -223,57 +268,100 @@ function M.register(executors, undoers, db)
         }
     end
 
-    undoers["ImportResolveProject"] = function(command)
-        local project_id = command:get_parameter("result_project_id")
-        local created_clip_ids = command:get_parameter("created_clip_ids")
-        local created_track_ids = command:get_parameter("created_track_ids")
-        local created_timeline_ids = command:get_parameter("created_timeline_ids")
-        local created_media_ids = command:get_parameter("created_media_ids")
+    -- Undoer for ImportResolveProject
+    local function resolve_project_undoer(command)
+        local args = command:get_all_parameters()
 
-        if not project_id then
-            print("ERROR: Cannot undo ImportResolveProject - command state missing")
+        if not args.result_project_id then
+            logger.error("import_resolve", "Cannot undo - command state missing")
             return false
         end
 
         -- Delete clips
-        for _, clip_id in ipairs(created_clip_ids or {}) do
+        for _, clip_id in ipairs(args.created_clip_ids or {}) do
             db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id))
         end
 
         -- Delete tracks
-        for _, track_id in ipairs(created_track_ids or {}) do
+        for _, track_id in ipairs(args.created_track_ids or {}) do
             db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id))
         end
 
         -- Delete timelines
-        for _, timeline_id in ipairs(created_timeline_ids or {}) do
+        for _, timeline_id in ipairs(args.created_timeline_ids or {}) do
             db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", timeline_id))
         end
 
         -- Delete media
-        for _, media_id in ipairs(created_media_ids or {}) do
+        for _, media_id in ipairs(args.created_media_ids or {}) do
             db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id))
         end
 
         -- Delete project
-        if project_id then
-            db:exec(string.format("DELETE FROM projects WHERE id = '%s'", project_id))
+        if args.result_project_id then
+            db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id))
         end
 
-        print("Undo: Deleted imported Resolve project and all associated data")
+        logger.info("import_resolve", "Undo: Deleted imported Resolve project and all associated data")
         return true
     end
 
-    executors["ImportResolveDatabase"] = function(command)
-        local db_path = command:get_parameter("db_path")
+    undoers["ImportResolveProject"] = resolve_project_undoer
 
-        if not db_path or db_path == "" then
+    -- =========================================================================
+    -- ImportResolveDatabase: Import Resolve database with optional interactive dialog
+    -- =========================================================================
+    executors["ImportResolveDatabase"] = function(command)
+        local args = command:get_all_parameters()
+
+        local project_id = args.project_id
+        if not project_id or project_id == "" then
+            return { success = false, error_message = "Missing project_id" }
+        end
+
+        local file_path = args.db_path
+
+        -- If interactive mode or no file path provided, show dialog
+        if args.interactive or not file_path or file_path == "" then
+            logger.info("import_resolve", "ImportResolveDatabase: Showing file picker dialog")
+
+            -- Get UI references for dialog
+            local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+            if not ui_state_ok then
+                return { success = false, error_message = "UI state not initialized" }
+            end
+
+            local main_window = ui_state.get_main_window()
+            if not main_window then
+                return { success = false, error_message = "Main window not initialized" }
+            end
+
+            -- Show file picker dialog
+            file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
+                main_window,
+                "Import Resolve Database",
+                "Database Files (*.db *.sqlite *.resolve);;All Files (*)",
+                os.getenv("HOME") .. "/Movies/DaVinci Resolve"
+            )
+
+            if not file_path or file_path == "" then
+                logger.debug("import_resolve", "ImportResolveDatabase: User cancelled file picker")
+                return { success = true, cancelled = true }
+            end
+
+            -- Store the gathered file path for undo/redo
+            command:set_parameter("db_path", file_path)
+        end
+
+        logger.info("import_resolve", "Importing Resolve database: " .. tostring(file_path))
+
+        if not args.db_path or args.db_path == "" then
             return {success = false, error_message = "No database path provided"}
         end
 
         -- Import from Resolve database
         local resolve_db_importer = require("importers.resolve_database_importer")
-        local import_result = resolve_db_importer.import_from_database(db_path)
+        local import_result = resolve_db_importer.import_from_database(args.db_path)
 
         if not import_result.success then
             return {success = false, error_message = import_result.error}
@@ -299,7 +387,7 @@ function M.register(executors, undoers, db)
             return {success = false, error_message = "Failed to create project"}
         end
 
-        print(string.format("Created project from Resolve DB: %s (%dx%d @ %.2ffps)",
+        logger.info("import_resolve", string.format("Created project from Resolve DB: %s (%dx%d @ %.2ffps)",
             project.name, db_settings.width, db_settings.height, db_settings.frame_rate))
 
         -- Track created entities for undo
@@ -309,7 +397,7 @@ function M.register(executors, undoers, db)
         local created_clip_ids = {}
 
         -- Import media items
-        local media_id_map = {}  -- resolve_id -> jve_media_id
+        local media_id_map = {}
         for _, media_item in ipairs(import_result.media_items) do
             local media = Media.create({
                 project_id = project.id,
@@ -320,20 +408,19 @@ function M.register(executors, undoers, db)
                 height = import_result.project.height
             })
 
-            if media:save(db) then
+            if media:save() then
                 table.insert(created_media_ids, media.id)
                 if media_item.resolve_id then
                     media_id_map[media_item.resolve_id] = media.id
                 end
-                print(string.format("  Imported media: %s", media.name))
+                logger.debug("import_resolve", string.format("  Imported media: %s", media.name))
             else
-                print(string.format("WARNING: Failed to import media: %s", media_item.name))
+                logger.warn("import_resolve", string.format("Failed to import media: %s", media_item.name))
             end
         end
 
         -- Import timelines
         for _, timeline_data in ipairs(import_result.timelines) do
-            -- Create sequence (timeline) record
             local fps_num, fps_den = frame_rate_to_rational(timeline_data.frame_rate or import_result.project.frame_rate)
             local timeline_id = require("models.clip").generate_id()
             local now = os.time()
@@ -350,7 +437,7 @@ function M.register(executors, undoers, db)
 
             if ok then
                 table.insert(created_timeline_ids, timeline_id)
-                print(string.format("  Imported timeline: %s", timeline_data.name))
+                logger.debug("import_resolve", string.format("  Imported timeline: %s", timeline_data.name))
 
                 -- Import tracks
                 for _, track_data in ipairs(timeline_data.tracks) do
@@ -365,19 +452,16 @@ function M.register(executors, undoers, db)
 
                     local track_ok, track_err = db:exec(track_sql)
                     if not track_ok then
-                        print(string.format("WARNING: Failed to create track: %s%d - %s", track_data.type, track_data.index, tostring(track_err)))
+                        logger.warn("import_resolve", string.format("Failed to create track: %s%d - %s", track_data.type, track_data.index, tostring(track_err)))
                     end
 
                     if track_ok then
                         table.insert(created_track_ids, track_id)
-                        print(string.format("    Created track: %s%d", track_data.type, track_data.index))
 
                         -- Import clips
                         for _, clip_data in ipairs(track_data.clips) do
-                            -- Find matching media_id using resolve_media_id
                             local media_id = media_id_map[clip_data.resolve_media_id]
 
-                            -- Calculate source_out if not provided
                             local source_out = clip_data.source_out
                             if not source_out and clip_data.source_in and clip_data.duration then
                                 source_out = clip_data.source_in + clip_data.duration
@@ -385,55 +469,128 @@ function M.register(executors, undoers, db)
 
                             local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
-                                timeline_start = clip_data.start_value,  -- Renamed from start_value
+                                timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
                                 source_out = source_out
                             })
 
-                            if clip:save(db) then
+                            if clip:save() then
                                 table.insert(created_clip_ids, clip.id)
                             else
-                                print(string.format("WARNING: Failed to import clip: %s", clip_data.name))
+                                logger.warn("import_resolve", string.format("Failed to import clip: %s", clip_data.name))
                             end
                         end
-                    else
-                        print(string.format("WARNING: Failed to create track: %s%d", track_data.type, track_data.index))
                     end
-
-                    -- No finalize needed with db:exec()
                 end
-            else
-                print(string.format("WARNING: Failed to create timeline: %s", timeline_data.name))
             end
-
-            -- No finalize needed with db:exec()
         end
 
-        print(string.format("Imported Resolve database: %d media, %d timelines, %d tracks, %d clips",
+        logger.info("import_resolve", string.format("Imported Resolve database: %d media, %d timelines, %d tracks, %d clips",
             #created_media_ids, #created_timeline_ids, #created_track_ids, #created_clip_ids))
 
-        command:set_parameter("result_project_id", project.id)
-        command:set_parameter("created_media_ids", created_media_ids)
-        command:set_parameter("created_timeline_ids", created_timeline_ids)
-        command:set_parameter("created_track_ids", created_track_ids)
-        command:set_parameter("created_clip_ids", created_clip_ids)
+        command:set_parameters({
+            ["result_project_id"] = project.id,
+            ["created_media_ids"] = created_media_ids,
+            ["created_timeline_ids"] = created_timeline_ids,
+            ["created_track_ids"] = created_track_ids,
+            ["created_clip_ids"] = created_clip_ids,
+        })
 
-        -- Set result for test access
-        command.result = {
-            success = true,
-            project_id = project.id
-        }
+        -- Refresh project browser
+        local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+        if ui_state_ok then
+            local project_browser = ui_state.get_project_browser()
+            if project_browser and project_browser.refresh then
+                project_browser.refresh()
+            end
+        end
 
         return {
             success = true,
-            project_id = project.id
+            project_id = project.id,
         }
     end
 
-    undoers["ImportResolveDatabase"] = undoers["ImportResolveProject"] -- Share logic as structures match
+    -- Undoer for ImportResolveDatabase (shared undoer logic)
+    local function resolve_database_undoer(command)
+        local args = command:get_all_parameters()
 
-    return {executor = executors["ImportResolveProject"], undoer = undoers["ImportResolveProject"]}
+        if not args.result_project_id then
+            logger.error("import_resolve", "Cannot undo - command state missing")
+            return false
+        end
+
+        -- Delete clips
+        for _, clip_id in ipairs(args.created_clip_ids or {}) do
+            db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id))
+        end
+
+        -- Delete tracks
+        for _, track_id in ipairs(args.created_track_ids or {}) do
+            db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id))
+        end
+
+        -- Delete timelines
+        for _, timeline_id in ipairs(args.created_timeline_ids or {}) do
+            db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", timeline_id))
+        end
+
+        -- Delete media
+        for _, media_id in ipairs(args.created_media_ids or {}) do
+            db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id))
+        end
+
+        -- Delete project
+        if args.result_project_id then
+            db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id))
+        end
+
+        logger.info("import_resolve", "Undo: Deleted imported Resolve database and all associated data")
+        return true
+    end
+
+    undoers["ImportResolveDatabase"] = resolve_database_undoer
+
+    -- Return command registration
+    return {
+        ["ImportResolveProject"] = {
+            executor = executors["ImportResolveProject"],
+            undoer = undoers["ImportResolveProject"],
+            spec = SPEC_DRP,
+        },
+        ["ImportResolveDatabase"] = {
+            executor = executors["ImportResolveDatabase"],
+            undoer = undoers["ImportResolveDatabase"],
+            spec = SPEC_DB,
+        },
+    }
+end
+
+-- Helper: Escape SQL string literals (double single quotes)
+sql_escape = function(str)
+    if not str then return "NULL" end
+    return "'" .. tostring(str):gsub("'", "''") .. "'"
+end
+
+-- Helper: Convert decimal frame rate to rational form (fps_numerator, fps_denominator)
+frame_rate_to_rational = function(frame_rate)
+    local fps = tonumber(frame_rate)
+    if not fps then
+        error("ImportResolveProject: missing/invalid frame_rate", 2)
+    end
+
+    -- Handle common NTSC fractional frame rates
+    if math.abs(fps - 23.976) < 0.01 then
+        return 24000, 1001
+    elseif math.abs(fps - 29.97) < 0.01 then
+        return 30000, 1001
+    elseif math.abs(fps - 59.94) < 0.01 then
+        return 60000, 1001
+    end
+
+    -- Integer frame rates
+    return math.floor(fps + 0.5), 1
 end
 
 return M

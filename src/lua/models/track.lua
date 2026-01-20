@@ -21,10 +21,7 @@ local uuid = require("uuid")
 local Track = {}
 Track.__index = Track
 
-local function resolve_db(db)
-    if db then
-        return db
-    end
+local function resolve_db()
     local conn = database.get_connection()
     if not conn then
         print("WARNING: Track.save: No database connection available")
@@ -32,12 +29,12 @@ local function resolve_db(db)
     return conn
 end
 
-local function determine_next_index(sequence_id, track_type, provided_index, db)
+local function determine_next_index(sequence_id, track_type, provided_index)
     if provided_index and provided_index > 0 then
         return provided_index
     end
 
-    local conn = resolve_db(db)
+    local conn = resolve_db()
     if not conn then
         -- Fall back to first track if we cannot query
         return 1
@@ -81,7 +78,7 @@ local function build_track(track_type, name, sequence_id, opts)
         sequence_id = sequence_id,
         name = name,
         track_type = track_type,
-        track_index = determine_next_index(sequence_id, track_type, opts.index, opts.db),
+        track_index = determine_next_index(sequence_id, track_type, opts.index),
         enabled = opts.enabled ~= false,
         locked = opts.locked == true,
         muted = opts.muted == true,
@@ -103,13 +100,13 @@ function Track.create_audio(name, sequence_id, opts)
     return build_track("AUDIO", name or "Audio Track", sequence_id, opts)
 end
 
-function Track.load(id, db)
+function Track.load(id)
     if not id or id == "" then
         print("ERROR: Track.load: id is required")
         return nil
     end
 
-    local conn = resolve_db(db)
+    local conn = resolve_db()
     if not conn then
         return nil
     end
@@ -151,7 +148,101 @@ function Track.load(id, db)
     return setmetatable(track, Track)
 end
 
-function Track:save(db)
+function Track.find_by_sequence(sequence_id, track_type)
+    assert(sequence_id and sequence_id ~= "", "Track.find_by_sequence: sequence_id is required")
+
+    local conn = resolve_db()
+    assert(conn, "Track.find_by_sequence: no database connection available")
+
+    local sql = [[
+        SELECT id, sequence_id, name, track_type, track_index,
+               enabled, locked, muted, soloed, volume, pan
+        FROM tracks
+        WHERE sequence_id = ?
+    ]]
+
+    if track_type and track_type ~= "" then
+        sql = sql .. " AND track_type = ?"
+    end
+
+    sql = sql .. " ORDER BY track_index ASC"
+
+    local stmt = conn:prepare(sql)
+    assert(stmt, string.format(
+        "Track.find_by_sequence: failed to prepare query for sequence_id=%s",
+        tostring(sequence_id)
+    ))
+
+    stmt:bind_value(1, sequence_id)
+    if track_type and track_type ~= "" then
+        stmt:bind_value(2, track_type)
+    end
+
+    local tracks = {}
+    local exec_ok = stmt:exec()
+    assert(exec_ok, string.format(
+        "Track.find_by_sequence: query execution failed for sequence_id=%s",
+        tostring(sequence_id)
+    ))
+
+    while stmt:next() do
+        local track = {
+            id = stmt:value(0),
+            sequence_id = stmt:value(1),
+            name = stmt:value(2),
+            track_type = stmt:value(3),
+            track_index = stmt:value(4),
+            enabled = stmt:value(5) == 1,
+            locked = stmt:value(6) == 1,
+            muted = stmt:value(7) == 1,
+            soloed = stmt:value(8) == 1,
+            volume = stmt:value(9),
+            pan = stmt:value(10),
+            created_at = os.time(),
+            modified_at = os.time()
+        }
+        tracks[#tracks + 1] = setmetatable(track, Track)
+    end
+
+    stmt:finalize()
+    return tracks
+end
+
+function Track.get_sequence_id(track_id)
+    assert(track_id and track_id ~= "", "Track.get_sequence_id: track_id is required")
+
+    local conn = resolve_db()
+    assert(conn, "Track.get_sequence_id: no database connection available")
+
+    local stmt = conn:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
+    assert(stmt, string.format(
+        "Track.get_sequence_id: failed to prepare query for track_id=%s",
+        tostring(track_id)
+    ))
+
+    stmt:bind_value(1, track_id)
+    local exec_ok = stmt:exec()
+    assert(exec_ok, string.format(
+        "Track.get_sequence_id: query execution failed for track_id=%s",
+        tostring(track_id)
+    ))
+
+    local sequence_id = nil
+    if stmt:next() then
+        sequence_id = stmt:value(0)
+    end
+
+    stmt:finalize()
+
+    assert(sequence_id and sequence_id ~= "", string.format(
+        "Track.get_sequence_id: track_id=%s not found in database",
+        tostring(track_id)
+    ))
+
+    return sequence_id
+end
+
+function Track:save()
     if not self or not self.id or self.id == "" then
         print("ERROR: Track.save: invalid track or missing id")
         return false
@@ -161,17 +252,30 @@ function Track:save(db)
         return false
     end
 
-    local conn = resolve_db(db)
+    local conn = resolve_db()
     if not conn then
         return false
     end
 
     self.modified_at = os.time()
 
+    -- CRITICAL: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
+    -- INSERT OR REPLACE triggers DELETE first, which cascades to delete clips via foreign keys!
     local stmt = conn:prepare([[
-        INSERT OR REPLACE INTO tracks
+        INSERT INTO tracks
         (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            sequence_id = excluded.sequence_id,
+            name = excluded.name,
+            track_type = excluded.track_type,
+            track_index = excluded.track_index,
+            enabled = excluded.enabled,
+            locked = excluded.locked,
+            muted = excluded.muted,
+            soloed = excluded.soloed,
+            volume = excluded.volume,
+            pan = excluded.pan
     ]])
 
     if not stmt then

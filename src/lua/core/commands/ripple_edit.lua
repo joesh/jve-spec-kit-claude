@@ -25,6 +25,26 @@ do
     if status then timeline_state = mod end
 end
 
+
+local SPEC = {
+    args = {
+        delta_ms = {},
+        dry_run = { kind = "boolean" },
+        edge_info = { required = true },
+        project_id = { required = true },
+        ripple_deleted_clips = {},  -- Set by executor
+        ripple_original_clip_state = {},
+        ripple_post_states = {},
+        ripple_shift_amount_rat = {},
+        sequence_id = {},
+    },
+    persisted = {
+        clamped_delta_ms = {},  -- Set by executor
+        delta_frames = {},
+    },
+
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function append_actions(target, actions)
         if not actions or target == nil then
@@ -65,7 +85,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if action.type == 'trim' then
                 local restored = command_helper.restore_clip_state(action.before)
                 if restored and command then
-                    restored:save(db, {skip_occlusion = true})
+                    restored:save({skip_occlusion = true})
                     local payload = command_helper.clip_update_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
                     if payload then
                         command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
@@ -74,7 +94,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             elseif action.type == 'delete' then
                 local restored = command_helper.restore_clip_state(action.clip or action.before)
                 if restored and command then
-                    restored:save(db, {skip_occlusion = true})
+                    restored:save({skip_occlusion = true})
                     local payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
                     if payload then
                         command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
@@ -83,8 +103,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             elseif action.type == 'insert' then
                 local state = action.clip
                 if state then
-                    local clip = Clip.load_optional(state.id, db)
-                    if clip and clip:delete(db) and command then
+                    local clip = Clip.load_optional(state.id)
+                    if clip and clip:delete() and command then
                         command_helper.add_delete_mutation(command, sequence_id or state.owner_sequence_id or state.track_sequence_id, state.id)
                     end
                 end
@@ -136,24 +156,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["RippleEdit"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing RippleEdit command")
         end
 
-        local raw_edge_info = command:get_parameter("edge_info")
-        local delta_frames = command:get_parameter("delta_frames")
-        local delta_ms = command:get_parameter("delta_ms") 
+
+
+
         
-        if not raw_edge_info or (not delta_frames and not delta_ms) then
-             print("ERROR: RippleEdit missing parameters")
+        if not args.edge_info or (not args.delta_frames and not args.delta_ms) then
+             set_last_error("RippleEdit missing parameters")
              return {success = false, error_message = "RippleEdit missing parameters"}
         end
         
-        local edge_info = raw_edge_info
-        if type(raw_edge_info.clip_id) == "string" and raw_edge_info.clip_id:find("^temp_gap_") then
+        local edge_info = args.edge_info
+        if type(args.edge_info.clip_id) == "string" and args.edge_info.clip_id:find("^temp_gap_") then
             edge_info = {}
-            for k, v in pairs(raw_edge_info) do edge_info[k] = v end
+            for k, v in pairs(args.edge_info) do edge_info[k] = v end
             edge_info.clip_id = edge_info.clip_id:gsub("^temp_gap_", "")
             command:set_parameter("edge_info", edge_info)
         end
@@ -182,29 +203,29 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             seq_stmt:finalize()
         end
         
-        -- Strict input: delta must be Rational via delta_ms (Rational/table) or integer frames
+        -- Strict input: delta must be Rational via args.delta_ms (Rational/table) or integer frames
         local delta_rat
-        if delta_frames then
-            delta_rat = Rational.new(delta_frames, seq_fps_num, seq_fps_den)
-        elseif delta_ms then
-            if type(delta_ms) == "number" then
-                error("RippleEdit: delta_ms must be Rational, not number")
+        if args.delta_frames then
+            delta_rat = Rational.new(args.delta_frames, seq_fps_num, seq_fps_den)
+        elseif args.delta_ms then
+            if type(args.delta_ms) == "number" then
+                error("RippleEdit: args.delta_ms must be Rational, not number")
             end
-            if getmetatable(delta_ms) == Rational.metatable then
-                delta_rat = delta_ms:rescale(seq_fps_num, seq_fps_den)
-            elseif type(delta_ms) == "table" and delta_ms.frames then
-                delta_rat = Rational.new(delta_ms.frames, delta_ms.fps_numerator or seq_fps_num, delta_ms.fps_denominator or seq_fps_den)
+            if getmetatable(args.delta_ms) == Rational.metatable then
+                delta_rat = args.delta_ms:rescale(seq_fps_num, seq_fps_den)
+            elseif type(args.delta_ms) == "table" and args.delta_ms.frames then
+                delta_rat = Rational.new(args.delta_ms.frames, args.delta_ms.fps_numerator or seq_fps_num, args.delta_ms.fps_denominator or seq_fps_den)
             else
-                error("RippleEdit: delta_ms must be Rational-like")
+                error("RippleEdit: args.delta_ms must be Rational-like")
             end
         end
         if not delta_rat or not delta_rat.frames then
             return {success = false, error_message = "RippleEdit missing valid delta"}
         end
 
-        local clip = Clip.load(edge_info.clip_id, db)
+        local clip = Clip.load(edge_info.clip_id)
         if not clip then
-             print("ERROR: RippleEdit: Clip not found")
+             set_last_error("RippleEdit: Clip not found")
              return {success = false, error_message = "Clip not found"}
         end
         
@@ -301,7 +322,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("clamped_delta_ms", clamped_delta_ms)
 
         local original_clip_state = nil
-        if not dry_run and not is_gap_clip then
+        if not args.dry_run and not is_gap_clip then
             original_clip_state = command_helper.capture_clip_state(clip)
         end
 
@@ -344,16 +365,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             ripple_time = original_end_rat
         end
         
-        if not dry_run
+        if not args.dry_run
             and shift_rat.frames == 0 and not deleted_clip
             and clip.timeline_start == original_start_rat
             and clip.duration == original_duration_rat then
-            command:set_parameter("__suppress_if_unchanged", true)
-            command:set_parameter("__skip_selection_snapshot", true)
+            command:set_parameters({
+                ["__suppress_if_unchanged"] = true,
+                ["__skip_selection_snapshot"] = true,
+            })
             return {success = true}
         end
 
-        if not dry_run then
+        if not args.dry_run then
             print(string.format("RippleEdit: edge=%s, delta=%s, shift=%s",
                 edge_info.edge_type, tostring(delta_rat), tostring(shift_rat)))
         end
@@ -390,7 +413,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        if dry_run then
+        if args.dry_run then
             local clamped_edges = {}
             if clamped_delta and clamped_delta.frames and requested_delta_frames and clamped_delta.frames ~= requested_delta_frames then
                 local key = string.format("%s:%s", tostring(edge_info.clip_id or ""), tostring(edge_info.edge_type or ""))
@@ -425,14 +448,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local function save_trimmed_clip()
             if not is_gap_clip then
                 if deleted_clip then
-                    if not clip:delete(db) then
+                    if not clip:delete() then
                         print(string.format("ERROR: RippleEdit: Failed to delete clip %s", edge_info.clip_id:sub(1,8)))
                         return false
                     end
                     command_helper.add_delete_mutation(command, sequence_id, clip.id)
                 else
-                    local save_opts = nil
-                    local ok, actions = clip:save(db, save_opts)
+                    local ok, actions = clip:save()
                     if not ok then
                         print(string.format("ERROR: RippleEdit: Failed to save clip %s", edge_info.clip_id:sub(1,8)))
                         return false
@@ -450,11 +472,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local function shift_downstream()
             for _, downstream_clip in ipairs(clips_to_shift) do
-                local shift_clip = Clip.load(downstream_clip.id, db)
+                local shift_clip = Clip.load(downstream_clip.id)
                 if shift_clip then
                     shift_clip.timeline_start = shift_clip.timeline_start + shift_rat
-                    local save_opts = nil 
-                    local ok, actions = shift_clip:save(db, save_opts)
+                    local ok, actions = shift_clip:save()
                     if ok then
                         append_actions(occlusion_actions, actions)
                         local update_payload = command_helper.clip_update_payload(shift_clip, sequence_id)
@@ -484,9 +505,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             record_occlusion_actions(command, sequence_id, occlusion_actions)
         end
         
-        command:set_parameter("ripple_shift_amount_rat", shift_rat)
-        command:set_parameter("ripple_post_states", post_states)
-        command:set_parameter("ripple_deleted_clips", deleted_clip_ids)
+        command:set_parameters({
+            ["ripple_shift_amount_rat"] = shift_rat,
+            ["ripple_post_states"] = post_states,
+            ["ripple_deleted_clips"] = deleted_clip_ids,
+        })
         if original_clip_state then
             command:set_parameter("ripple_original_clip_state", original_clip_state)
         end
@@ -496,22 +519,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["RippleEdit"] = function(command)
+        local args = command:get_all_parameters()
         print("Undoing RippleEdit command")
-        local sequence_id = command:get_parameter("sequence_id") or command_helper.resolve_sequence_for_track(nil, command:get_parameter("edge_info").track_id)
+        local sequence_id = args.sequence_id or command_helper.resolve_sequence_for_track(nil, args.edge_info.track_id)
         
-        local post_states = command:get_parameter("ripple_post_states")
-        local original_clip_state = command:get_parameter("ripple_original_clip_state")
-        local shift_rat = command:get_parameter("ripple_shift_amount_rat")
+
+
+        local shift_rat = args.ripple_shift_amount_rat
         
         if type(shift_rat) == "table" and shift_rat.frames and (not getmetatable(shift_rat) or not getmetatable(shift_rat).__lt) then
              shift_rat = Rational.new(shift_rat.frames, shift_rat.fps_numerator, shift_rat.fps_denominator)
         end
         
         local function restore_target()
-            if original_clip_state then
-                local restored = command_helper.restore_clip_state(original_clip_state)
+            if args.ripple_original_clip_state then
+                local restored = command_helper.restore_clip_state(args.ripple_original_clip_state)
                 if restored then
-                    local ok, err = restored:save(db, {skip_occlusion = true}) 
+                    local ok, err = restored:save({skip_occlusion = true}) 
                     if not ok then
                          print("ERROR: UndoRippleEdit: restore_target failed: " .. (err or "unknown"))
                     end
@@ -525,14 +549,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         
         local function reverse_shift()
-            if post_states then
-                for _, state in ipairs(post_states) do
-                    if not original_clip_state or state.id ~= original_clip_state.id then
-                        local clip = Clip.load_optional(state.id, db)
+            if args.ripple_post_states then
+                for _, state in ipairs(args.ripple_post_states) do
+                    if not args.ripple_original_clip_state or state.id ~= args.ripple_original_clip_state.id then
+                        local clip = Clip.load_optional(state.id)
                         if clip then
                             clip.timeline_start = clip.timeline_start - shift_rat
                             
-                            clip:save(db, {skip_occlusion = true})
+                            clip:save({skip_occlusion = true})
                             local payload = command_helper.clip_update_payload(clip, sequence_id)
                             if payload then
                                 command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
@@ -559,7 +583,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["RippleEdit"],
-        undoer = command_undoers["RippleEdit"]
+        undoer = command_undoers["RippleEdit"],
+        spec = SPEC,
     }
 end
 

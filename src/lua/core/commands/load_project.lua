@@ -16,15 +16,16 @@
 local M = {}
 local Project = require('models.project')
 
+
+local SPEC = {
+    args = {
+        project_id = { required = true },
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["LoadProject"] = function(command)
         print("Executing LoadProject command")
-
-        local project_id = command:get_parameter("project_id")
-        if not project_id or project_id == "" then
-            print("WARNING: LoadProject: Missing required 'project_id' parameter")
-            return false
-        end
 
         local project = Project.load(project_id, db)
         if not project or project.id == "" then
@@ -37,7 +38,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     return {
-        executor = command_executors["LoadProject"]
+        executor = command_executors["LoadProject"],
+        spec = SPEC,
     }
 end
 

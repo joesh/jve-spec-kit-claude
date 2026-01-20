@@ -3,6 +3,16 @@
 
 local M = {}
 
+
+local SPEC = {
+    args = {
+        project_id = { required = true },
+        sequence_id = { kind = "string", required = false },
+        position = { kind = "number", required = false },
+        duration = { kind = "number", required = false },
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["InsertGap"] = function(command)
         -- Minimal implementation: just succeed and do nothing
@@ -18,7 +28,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["InsertGap"],
-        undoer = command_undoers["UndoInsertGap"]
+        undoer = command_undoers["UndoInsertGap"],
+        spec = SPEC,
     }
 end
 

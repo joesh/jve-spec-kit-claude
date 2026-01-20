@@ -19,6 +19,7 @@
 -- Part of the event sourcing architecture
 local uuid = require("uuid")
 local Rational = require("core.rational")
+local asserts = require("core.asserts")
 
 local M = {}
 
@@ -336,8 +337,8 @@ local function deserialize_snapshot_payload(json_str)
         for _, media_data in ipairs(payload.media) do
             require_field("deserialize_snapshot_payload", "media", "id", media_data.id)
             
-            local num = media_data.fps_numerator or 30
-            local den = media_data.fps_denominator or 1
+            local num = require_field("deserialize_snapshot_payload", "media", "fps_numerator", media_data.fps_numerator)
+            local den = require_field("deserialize_snapshot_payload", "media", "fps_denominator", media_data.fps_denominator)
             
             media[#media + 1] = {
                 id = media_data.id,
@@ -370,8 +371,9 @@ end
 -- Create a snapshot of current state
 -- Saves clips state at a specific sequence number
 function M.create_snapshot(db, sequence_id, sequence_number, clips)
-    if not db or not sequence_id then
-        print("WARNING: create_snapshot: Missing required parameters")
+    if asserts.enabled() then
+        assert(db ~= nil and sequence_id ~= nil and sequence_number ~= nil and clips ~= nil, "snapshot_manager.create_snapshot: missing required parameters")
+    elseif (not db) or (not sequence_id) or (sequence_number == nil) or (clips == nil) then
         return false
     end
 
@@ -420,8 +422,9 @@ end
 -- Load the most recent snapshot for a sequence
 -- Returns: {sequence_number, clips} or nil if no snapshot exists
 function M.load_snapshot(db, sequence_id)
-    if not db or not sequence_id then
-        print("WARNING: load_snapshot: Missing required parameters")
+    if asserts.enabled() then
+        assert(db ~= nil and sequence_id ~= nil, "snapshot_manager.load_snapshot: missing required parameters")
+    elseif (not db) or (not sequence_id) then
         return nil
     end
 

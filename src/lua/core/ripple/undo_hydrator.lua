@@ -97,11 +97,6 @@ function M.hydrate_executed_mutations_if_missing(command)
     end
     local ordered = command:get_parameter("executed_mutation_order")
 
-    local conn = database.get_connection()
-    if not conn then
-        error("BatchRippleEdit undo: no database connection available to hydrate mutations")
-    end
-
     local sequence_id = command:get_parameter("sequence_id")
     local project_id = command.project_id or command:get_parameter("project_id")
     if not project_id or project_id == "" then
@@ -124,14 +119,9 @@ function M.hydrate_executed_mutations_if_missing(command)
         if not clip_id or clip_id == "" then
             return false
         end
-        local stmt = conn:prepare("SELECT 1 FROM clips WHERE id = ? LIMIT 1")
-        if not stmt then
-            error("BatchRippleEdit undo: failed to inspect clip existence")
-        end
-        stmt:bind_value(1, clip_id)
-        local exists = stmt:exec() and stmt:next()
-        stmt:finalize()
-        return exists
+        local Clip = require("models.clip")
+        local clip = Clip.load_optional(clip_id)
+        return clip ~= nil
     end
 
     local rebuilt = {}
@@ -174,19 +164,9 @@ function M.hydrate_executed_mutations_if_missing(command)
     rebuilt = append_bulk_shifts(rebuilt)
     command:set_parameter("executed_mutations", rebuilt)
 
-    if command.sequence_number then
-        local params = command.parameters or {}
-        local encoded = json.encode(params)
-        local stmt = conn:prepare("UPDATE commands SET command_args = ? WHERE sequence_number = ?")
-        if stmt then
-            stmt:bind_value(1, encoded)
-            stmt:bind_value(2, command.sequence_number)
-            if not stmt:exec() then
-                logger.warn("ripple", string.format("Failed to persist hydrated executed_mutations for sequence %s", tostring(command.sequence_number)))
-            end
-            stmt:finalize()
-        end
-    end
+    -- Note: Hydrated mutations stored in command.parameters
+    -- Caller (UndoBatchRippleEdit) is responsible for persisting via command:save(db)
+    -- to avoid re-hydration on subsequent undos
 
     return rebuilt
 end

@@ -20,30 +20,30 @@ local M = {}
 
 local json = require("dkjson")
 local uuid = require("uuid")
-local db = require("core.database")
 local Clip = require("models.clip")
+local Track = require("models.track")
+local Sequence = require("models.sequence")
+local Property = require("models.property")
 local logger = require("core.logger")
 
-local function get_conn()
-    local conn = db.get_connection()
-    if not conn then
-        logger.warn("command_helper", "No database connection")
-    end
-    return conn
+local function lookup_track_sequence(track_id)
+    if not track_id or track_id == "" then return nil end
+    local ok, result = pcall(Track.get_sequence_id, track_id)
+    if not ok then return nil end
+    return result
 end
 
-local function lookup_track_sequence(track_id)
-    local conn = get_conn()
-    if not conn or not track_id then return nil end
-    local stmt = conn:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
-    if not stmt then return nil end
-    stmt:bind_value(1, track_id)
-    local seq = nil
-    if stmt:exec() and stmt:next() then
-        seq = stmt:value(0)
+function M.resolve_active_sequence_id(sequence_id_param, timeline_state)
+    if sequence_id_param and sequence_id_param ~= "" then
+        return sequence_id_param
     end
-    stmt:finalize()
-    return seq
+    if timeline_state and type(timeline_state.get_sequence_id) == "function" then
+        local ok, seq = pcall(timeline_state.get_sequence_id)
+        if ok and seq and seq ~= "" then
+            return seq
+        end
+    end
+    return nil
 end
 
 function M.trim_string(value)
@@ -281,27 +281,9 @@ function M.resolve_sequence_id_for_edges(command, primary_edge, edge_list)
             return nil
         end
 
-        local conn = get_conn()
-        if not conn then return nil end
-        
-        local stmt = conn:prepare([[
-            SELECT t.sequence_id
-            FROM clips c
-            JOIN tracks t ON c.track_id = t.id
-            WHERE c.id = ?
-        ]])
-
-        if not stmt then
-            return nil
-        end
-
-        stmt:bind_value(1, edge.clip_id)
-        local sequence_id = nil
-        if stmt:exec() and stmt:next() then
-            sequence_id = stmt:value(0)
-        end
-        stmt:finalize()
-        return sequence_id
+        local ok, result = pcall(Clip.get_sequence_id, edge.clip_id)
+        if not ok then return nil end
+        return result
     end
 
     local resolved = lookup_sequence_id(primary_edge)
@@ -331,24 +313,8 @@ function M.resolve_sequence_for_track(sequence_id_param, track_id)
         return provided
     end
 
-    local conn = get_conn()
-    if not conn then
-        return provided
-    end
-
-    local stmt = conn:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
-    if not stmt then
-        return provided
-    end
-
-    stmt:bind_value(1, track_id)
-    local track_sequence_id = nil
-    if stmt:exec() and stmt:next() then
-        track_sequence_id = stmt:value(0)
-    end
-    stmt:finalize()
-
-    if not track_sequence_id or track_sequence_id == "" then
+    local ok, track_sequence_id = pcall(Track.get_sequence_id, track_id)
+    if not ok or not track_sequence_id or track_sequence_id == "" then
         return provided
     end
 
@@ -367,9 +333,6 @@ end
 function M.restore_clip_state(state)
     if not state then return end
     if type(state.id) == "string" and state.id:find("^temp_gap_") then return nil end
-    
-    local conn = get_conn()
-    if not conn then return nil end
 
     -- Fill missing ownership if possible
     local seq_id = state.owner_sequence_id or state.track_sequence_id or lookup_track_sequence(state.track_id)
@@ -380,24 +343,16 @@ function M.restore_clip_state(state)
         local resolved_project_id = nil
 
         if seq_id and seq_id ~= "" then
-            local stmt = conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
-            if stmt then
-                stmt:bind_value(1, seq_id)
-                if stmt:exec() and stmt:next() then
-                    resolved_project_id = stmt:value(0)
-                end
-                stmt:finalize()
+            local ok, sequence = pcall(Sequence.load, seq_id)
+            if ok and sequence and sequence.project_id then
+                resolved_project_id = sequence.project_id
             end
         end
 
         if (not resolved_project_id or resolved_project_id == "") and state.id and state.id ~= "" then
-            local stmt = conn:prepare("SELECT project_id FROM clips WHERE id = ?")
-            if stmt then
-                stmt:bind_value(1, state.id)
-                if stmt:exec() and stmt:next() then
-                    resolved_project_id = stmt:value(0)
-                end
-                stmt:finalize()
+            local existing_clip = Clip.load_optional(state.id)
+            if existing_clip and existing_clip.project_id then
+                resolved_project_id = existing_clip.project_id
             end
         end
 
@@ -408,7 +363,7 @@ function M.restore_clip_state(state)
         state.project_id = resolved_project_id
     end
 
-    local clip = Clip.load_optional(state.id, conn)
+    local clip = Clip.load_optional(state.id)
     
     if not clip then
         -- Create new if missing
@@ -421,16 +376,16 @@ function M.restore_clip_state(state)
             owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
             source_sequence_id = state.source_sequence_id,
             track_sequence_id = state.track_sequence_id or state.owner_sequence_id,
-            
+
             timeline_start = state.timeline_start,
             duration = state.duration,
             source_in = state.source_in,
             source_out = state.source_out,
-            
+
             enabled = state.enabled ~= false,
             offline = state.offline,
         })
-        clip:restore_without_occlusion(conn)
+        clip:restore_without_occlusion(nil)
     else
         -- Update existing
         clip.track_id = state.track_id or clip.track_id
@@ -439,7 +394,7 @@ function M.restore_clip_state(state)
         clip.source_in = state.source_in
         clip.source_out = state.source_out
         clip.enabled = state.enabled ~= false
-        clip:restore_without_occlusion(conn)
+        clip:restore_without_occlusion(nil)
     end
     
     return clip
@@ -479,70 +434,26 @@ function M.capture_clip_state(clip)
 end
 
 function M.snapshot_properties_for_clip(clip_id)
-    local props = {}
     if not clip_id or clip_id == "" then
-        return props
+        return {}
     end
 
-    local conn = get_conn()
-    if not conn then return props end
-
-    local query = conn:prepare("SELECT id, property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
-    if not query then
-        return props
+    local ok, props = pcall(Property.load_for_clip, clip_id)
+    if not ok then
+        return {}
     end
-    query:bind_value(1, clip_id)
-
-    if query:exec() then
-        while query:next() do
-            table.insert(props, {
-                id = query:value(0),
-                property_name = query:value(1),
-                property_value = query:value(2),
-                property_type = query:value(3),
-                default_value = query:value(4)
-            })
-        end
-    end
-    query:finalize()
     return props
 end
 
 function M.fetch_clip_properties_for_copy(clip_id)
-    local props = {}
     if not clip_id or clip_id == "" then
-        return props
+        return {}
     end
 
-    local conn = get_conn()
-    if not conn then return props end
-
-    local query = conn:prepare("SELECT property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
-    if not query then
-        return props
+    local ok, props = pcall(Property.copy_for_clip, clip_id)
+    if not ok then
+        return {}
     end
-    query:bind_value(1, clip_id)
-
-    if query:exec() then
-        while query:next() do
-            local property_name = query:value(0)
-            local property_value = M.encode_property_json(query:value(1))
-            local property_type = query:value(2) or "STRING"
-            local default_value = query:value(3)
-            if default_value == nil or default_value == "" then
-                default_value = json.encode({ value = nil })
-            end
-
-            table.insert(props, {
-                id = uuid.generate(),
-                property_name = property_name,
-                property_value = property_value,
-                property_type = property_type,
-                default_value = default_value
-            })
-        end
-    end
-    query:finalize()
     return props
 end
 
@@ -558,64 +469,16 @@ function M.insert_properties_for_clip(clip_id, properties)
         return true
     end
 
-    local conn = get_conn()
-    if not conn then return false end
-
-    local stmt = conn:prepare([[
-        INSERT OR REPLACE INTO properties
-        (id, clip_id, property_name, property_value, property_type, default_value)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ]])
-
-    if not stmt then
-        logger.warn("command_helper", string.format("Failed to prepare property insert for clip %s", tostring(clip_id)))
-        return false
-    end
-
-    for _, prop in ipairs(properties) do
-        stmt:bind_value(1, prop.id or uuid.generate())
-        stmt:bind_value(2, clip_id)
-        stmt:bind_value(3, prop.property_name)
-        stmt:bind_value(4, M.encode_property_json(prop.property_value))
-        stmt:bind_value(5, prop.property_type or "STRING")
-        stmt:bind_value(6, M.encode_property_json(prop.default_value))
-
-        if not stmt:exec() then
-            local err = "unknown"
-            if stmt.last_error then
-                local ok, msg = pcall(stmt.last_error, stmt)
-                if ok and msg and msg ~= "" then
-                    err = msg
-                end
-            end
-            logger.warn("command_helper", string.format("Failed to insert property %s for clip %s: %s",
-                tostring(prop.property_name), tostring(clip_id), tostring(err)))
-            stmt:finalize()
-            return false
-        end
-        stmt:reset()
-        stmt:clear_bindings()
-    end
-
-    stmt:finalize()
-    return true
+    local ok, result = pcall(Property.save_for_clip, clip_id, properties)
+    return ok
 end
 
 function M.delete_properties_for_clip(clip_id)
     if not clip_id or clip_id == "" then
         return true
     end
-    
-    local conn = get_conn()
-    if not conn then return false end
 
-    local stmt = conn:prepare("DELETE FROM properties WHERE clip_id = ?")
-    if not stmt then
-        return false
-    end
-    stmt:bind_value(1, clip_id)
-    local ok = stmt:exec()
-    stmt:finalize()
+    local ok, result = pcall(Property.delete_for_clip, clip_id)
     return ok
 end
 
@@ -623,37 +486,25 @@ function M.delete_properties_by_list(properties)
     if not properties or #properties == 0 then
         return true
     end
-    
-    local conn = get_conn()
-    if not conn then return false end
 
-    local stmt = conn:prepare("DELETE FROM properties WHERE id = ?")
-    if not stmt then
-        return false
-    end
+    local prop_ids = {}
     for _, prop in ipairs(properties) do
         if prop.id then
-            stmt:bind_value(1, prop.id)
-            if not stmt:exec() then
-                stmt:finalize()
-                return false
-            end
-            stmt:reset()
-            stmt:clear_bindings()
+            table.insert(prop_ids, prop.id)
         end
     end
-    stmt:finalize()
-    return true
+
+    local ok, result = pcall(Property.delete_by_ids, prop_ids)
+    return ok
 end
 
 function M.delete_clips_by_id(command, sequence_id, clip_ids)
     if not clip_ids or #clip_ids == 0 then return end
-    local conn = get_conn()
     for _, clip_id in ipairs(clip_ids) do
-        local clip = Clip.load_optional(clip_id, conn)
+        local clip = Clip.load_optional(clip_id)
         if clip then
             M.delete_properties_for_clip(clip_id)
-            if clip:delete(conn) then
+            if clip:delete(nil) then
                 M.add_delete_mutation(command, sequence_id, clip_id)
             end
         end

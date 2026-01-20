@@ -15,22 +15,23 @@
 -- @file go_to_prev_edit.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
+local sequence_frame_rate = require('core.utils.sequence_frame_rate')
 local Rational = require('core.rational')
+
+
+local SPEC = {
+    args = {
+        dry_run = { kind = "boolean" },
+        project_id = { required = true },
+    }
+}
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function collect_edit_points()
         local clips = timeline_state.get_clips() or {}
         
         -- Determine rate
-        local fps_num = 30
-        local fps_den = 1
-        if timeline_state.get_sequence_frame_rate then
-            local rate = timeline_state.get_sequence_frame_rate()
-            if type(rate) == "table" and rate.fps_numerator then
-                fps_num = rate.fps_numerator
-                fps_den = rate.fps_denominator
-            end
-        end
+        local fps_num, fps_den = sequence_frame_rate.require_sequence_frame_rate(timeline_state, "GoToPrevEdit")
         local zero = Rational.new(0, fps_num, fps_den)
         
         local points = {zero}
@@ -67,8 +68,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["GoToPrevEdit"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing GoToPrevEdit command")
         end
 
@@ -76,15 +78,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local playhead = timeline_state.get_playhead_position()
         
         if type(playhead) == "number" then
-             local fps_num = 30
-             local fps_den = 1
-             if timeline_state.get_sequence_frame_rate then
-                 local rate = timeline_state.get_sequence_frame_rate()
-                 if type(rate) == "table" and rate.fps_numerator then
-                     fps_num = rate.fps_numerator
-                     fps_den = rate.fps_denominator
-                 end
-             end
+             local fps_num, fps_den = sequence_frame_rate.require_sequence_frame_rate(timeline_state, "GoToPrevEdit")
              playhead = Rational.new(playhead, fps_num, fps_den)
         end
 
@@ -98,7 +92,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        if dry_run then
+        if args.dry_run then
             return true, { target = target }
         end
 
@@ -110,7 +104,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     return {
-        executor = command_executors["GoToPrevEdit"]
+        executor = command_executors["GoToPrevEdit"],
+        spec = SPEC,
     }
 end
 

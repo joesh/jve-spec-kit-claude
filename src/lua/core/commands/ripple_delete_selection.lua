@@ -20,6 +20,23 @@ local timeline_state = require('ui.timeline.timeline_state')
 local Rational = require("core.rational")
 local logger = require("core.logger")
 
+
+local SPEC = {
+    args = {
+        clip_ids = { required = true },
+        dry_run = { kind = "boolean" },
+        project_id = { required = true },
+        ripple_selection_deleted_clips = {},
+        ripple_selection_sequence_id = {},
+        ripple_selection_shift_amount = {},
+        ripple_selection_shifted = {},
+        ripple_selection_total_removed = {},
+        ripple_selection_window_end = {},
+        ripple_selection_window_start = {},
+        sequence_id = {},
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     local debug_enabled = os.getenv("JVE_DEBUG_RIPPLE_DELETE_SELECTION") == "1"
     local function debug_log(message)
@@ -121,12 +138,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["RippleDeleteSelection"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             debug_log("Executing RippleDeleteSelection command")
         end
 
-        local clip_ids = command:get_parameter("clip_ids")
+        local clip_ids = args.clip_ids
 
         if (not clip_ids or #clip_ids == 0) and timeline_state and timeline_state.get_selected_clips then
             local selected = timeline_state.get_selected_clips() or {}
@@ -173,7 +191,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         for _, clip_id in ipairs(clip_ids) do
-            local clip = Clip.load_optional(clip_id, db)
+            local clip = Clip.load_optional(clip_id)
             if clip then
                 clips[#clips + 1] = clip
                 local clip_start = clip_start_frames(clip)
@@ -199,7 +217,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             error("FATAL: RippleDeleteSelection: computed negative shift_amount")
         end
 
-        local sequence_id = command:get_parameter("sequence_id")
+        local sequence_id = args.sequence_id
         if (not sequence_id or sequence_id == "") and #clips > 0 then
             local track_query = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
             if track_query then
@@ -218,7 +236,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local sequence_fps_num, sequence_fps_den = load_sequence_rate(sequence_id)
 
-        if dry_run then
+        if args.dry_run then
             return true, {
                 clip_count = #clips,
                 shift_amount = shift_amount,
@@ -249,7 +267,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         for _, clip in ipairs(clips) do
-            if not clip:delete(db) then
+            if not clip:delete() then
                 logger.error("ripple_delete_selection", string.format("Failed to delete clip %s", tostring(clip.id)))
                 return false
             end
@@ -276,13 +294,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             deleted_lookup[deleted_id] = true
         end
 
-        local active_sequence_id = nil
-        if timeline_state and timeline_state.get_sequence_id then
-            local ok, seq = pcall(timeline_state.get_sequence_id)
-            if ok then
-                active_sequence_id = seq
-            end
-        end
+        local active_sequence_id = command_helper.resolve_active_sequence_id(nil, timeline_state)
         local timeline_track_cache_allowed = timeline_state
             and timeline_state.get_clips_for_track
             and active_sequence_id
@@ -318,7 +330,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     end
 
                     if cumulative_removed > 0 then
-                        local shift_clip = Clip.load_optional(shifted_id, db)
+                        local shift_clip = Clip.load_optional(shifted_id)
                         if shift_clip then
                             local new_start_frames = original_start - cumulative_removed
                             if new_start_frames < 0 then
@@ -326,7 +338,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             end
 
                             shift_clip.timeline_start = Rational.new(new_start_frames, sequence_fps_num, sequence_fps_den)
-                            if shift_clip:save(db, {skip_occlusion = true}) then
+                            if shift_clip:save({skip_occlusion = true}) then
                                 table.insert(shifted_clips, {
                                     clip_id = shifted_id,
                                     original_start = original_start,
@@ -395,14 +407,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        command:set_parameter("ripple_selection_deleted_clips", deleted_states)
-        command:set_parameter("ripple_selection_shifted", shifted_clips)
-        command:set_parameter("ripple_selection_shift_amount", total_removed_duration)
-        command:set_parameter("ripple_selection_total_removed", total_removed_duration)
-        command:set_parameter("ripple_selection_window_start", window_start)
-        command:set_parameter("ripple_selection_window_end", window_end)
-        command:set_parameter("ripple_selection_sequence_id", sequence_id)
-
+        command:set_parameters({
+            ["ripple_selection_deleted_clips"] = deleted_states,
+            ["ripple_selection_shifted"] = shifted_clips,
+            ["ripple_selection_shift_amount"] = total_removed_duration,
+            ["ripple_selection_total_removed"] = total_removed_duration,
+            ["ripple_selection_window_start"] = window_start,
+            ["ripple_selection_window_end"] = window_end,
+            ["ripple_selection_sequence_id"] = sequence_id,
+        })
         if timeline_state then
             if timeline_state.set_selection then
                 timeline_state.set_selection({})
@@ -424,33 +437,34 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["RippleDeleteSelection"] = function(command)
-        local deleted_states = command:get_parameter("ripple_selection_deleted_clips") or {}
-        local shifted_clips = command:get_parameter("ripple_selection_shifted") or {}
-        local sequence_id = command:get_parameter("ripple_selection_sequence_id")
+        local args = command:get_all_parameters()
+        local deleted_states = args.ripple_selection_deleted_clips or {}
+        local shifted_clips = args.ripple_selection_shifted or {}
+
 
         local failed = false
 
-        if not sequence_id or sequence_id == "" then
+        if not args.ripple_selection_sequence_id or args.ripple_selection_sequence_id == "" then
             error("FATAL: RippleDeleteSelection undo requires ripple_selection_sequence_id")
         end
 
-        local sequence_fps_num, sequence_fps_den = load_sequence_rate(sequence_id)
+        local sequence_fps_num, sequence_fps_den = load_sequence_rate(args.ripple_selection_sequence_id)
 
         table.sort(shifted_clips, function(a, b)
             return require_number(a.original_start, "shifted_clip.original_start") > require_number(b.original_start, "shifted_clip.original_start")
         end)
 
         for _, info in ipairs(shifted_clips) do
-            local clip = Clip.load_optional(info.clip_id, db)
+            local clip = Clip.load_optional(info.clip_id)
             if clip and info.original_start then
                 clip.timeline_start = Rational.new(info.original_start, sequence_fps_num, sequence_fps_den)
-                if not clip:save(db, {skip_occlusion = true}) then
+                if not clip:save({skip_occlusion = true}) then
                     logger.warn("ripple_delete_selection", string.format("Undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
                     failed = true
                 else
-                    local update_payload = command_helper.clip_update_payload(clip, sequence_id)
+                    local update_payload = command_helper.clip_update_payload(clip, args.ripple_selection_sequence_id)
                     if update_payload then
-                        command_helper.add_update_mutation(command, update_payload.track_sequence_id or sequence_id, update_payload)
+                        command_helper.add_update_mutation(command, update_payload.track_sequence_id or args.ripple_selection_sequence_id, update_payload)
                     end
                 end
             end
@@ -466,14 +480,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     restored.duration = Rational.new(tonumber(restored.duration.frames), sequence_fps_num, sequence_fps_den)
                 end
 
-                local ok = restored:save(db, {skip_occlusion = true})
+                local ok = restored:save({skip_occlusion = true})
                 if not ok then
                     logger.warn("ripple_delete_selection", string.format("Undo: Failed to reinsert deleted clip %s", tostring(restored.id)))
                     failed = true
                 else
-                    local insert_payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id)
+                    local insert_payload = command_helper.clip_insert_payload(restored, args.ripple_selection_sequence_id or restored.owner_sequence_id)
                     if insert_payload then
-                        command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
+                        command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or args.ripple_selection_sequence_id, insert_payload)
                     end
                 end
             end
@@ -490,7 +504,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["RippleDeleteSelection"],
-        undoer = command_undoers["RippleDeleteSelection"]
+        undoer = command_undoers["RippleDeleteSelection"],
+        spec = SPEC,
     }
 end
 

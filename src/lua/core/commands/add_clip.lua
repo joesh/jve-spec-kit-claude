@@ -15,6 +15,13 @@
 -- @file add_clip.lua
 local M = {}
 
+
+local SPEC = {
+    args = {
+        project_id = { required = true },
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     -- This command is just an alias for CreateClip
     command_executors["AddClip"] = function(command)
@@ -33,13 +40,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if CreateClip then
             return CreateClip(command)
         else
-            print("ERROR: AddClip: CreateClip command not found")
+            set_last_error("AddClip: CreateClip command not found")
             return false
         end
     end
 
     return {
-        executor = command_executors["AddClip"]
+        executor = command_executors["AddClip"],
+        spec = SPEC,
     }
 end
 

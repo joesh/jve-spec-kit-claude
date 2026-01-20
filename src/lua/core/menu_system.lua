@@ -1,79 +1,36 @@
---- TODO: one-line summary (human review required)
+--- Menu System - XML-driven menu configuration with pure command dispatch
 --
 -- Responsibilities:
--- - TODO
+-- - Parse menus.xml and create QMenuBar with nested menus
+-- - Map keyboard shortcuts (for display)
+-- - On click: dispatch to command_manager.execute(command_name, params)
 --
 -- Non-goals:
--- - TODO
+-- - Business logic (moved to commands)
+-- - Dialog handling (moved to commands)
 --
 -- Invariants:
--- - TODO
+-- - All menu items dispatch to commands (except Undo/Redo/Quit)
+-- - Menu item name = command name (no indirection)
 --
--- Size: ~881 LOC
--- Volatility: unknown
+-- Size: ~400 LOC
+-- Volatility: low
 --
 -- @file menu_system.lua
--- Original intent (unreviewed):
--- - Menu System - XML-driven menu configuration
--- Parses menus.xml and creates QMenuBar with nested menus
---
--- XML Format:
--- <menus>
--- <menu name="File">
--- <item name="Open" command="OpenProject" shortcut="Cmd+O"/>
--- <separator/>
--- <menu name="Import">
--- <item name="Media..." command="ImportMedia"/>
--- </menu>
--- </menu>
--- </menus>
---
--- Usage:
--- local menu_system = require("core.menu_system")
--- menu_system.init(main_window, command_manager)
--- menu_system.load_from_file("menus.xml")
 local M = {}
 
 local lxp = require("lxp")
 local keyboard_shortcut_registry = require("core.keyboard_shortcut_registry")
-local keyboard_shortcuts = require("core.keyboard_shortcuts")
+local logger = require("core.logger")
+
 local command_manager = nil
 local main_window = nil
-local project_browser = nil
-local timeline_panel = nil
-local clipboard_actions = require("core.clipboard_actions")
-local profile_scope = require("core.profile_scope")
-local Rational = require("core.rational")
-local logger = require("core.logger")
-local project_open = require("core.project_open")
 
 local registered_shortcut_commands = {}
 local defaults_initialized = false
 local actions_by_command = {}
 local undo_listener_token = nil
 local update_undo_redo_actions  -- forward declaration
-
-local function get_active_project_id()
-    if timeline_panel and timeline_panel.get_state then
-        local state = timeline_panel.get_state()
-        if state and state.get_project_id then
-            local project_id = state.get_project_id()
-            if project_id and project_id ~= "" then
-                return project_id
-            end
-        end
-    end
-
-    local database = require("core.database")
-    if database and database.get_current_project_id then
-        local project_id = database.get_current_project_id()
-        if project_id and project_id ~= "" then
-            return project_id
-        end
-    end
-
-    return nil
-end
 
 -- Qt bindings (loaded from qt_constants global)
 local qt = {
@@ -92,11 +49,18 @@ local qt = {
 --- Initialize menu system
 -- @param window userdata: QMainWindow instance
 -- @param cmd_mgr table: Command manager instance
--- @param proj_browser table: Project browser instance (optional)
+-- @param proj_browser table: Project browser instance (optional, now uses ui_state)
 function M.init(window, cmd_mgr, proj_browser)
     main_window = window
     command_manager = cmd_mgr
-    project_browser = proj_browser
+
+    -- Initialize ui_state so commands can access main_window (only if window provided)
+    if window then
+        local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+        if ui_state_ok then
+            ui_state.init(window, { project_browser = proj_browser })
+        end
+    end
 
     if undo_listener_token and command_manager and command_manager.remove_listener then
         command_manager.remove_listener(undo_listener_token)
@@ -104,14 +68,14 @@ function M.init(window, cmd_mgr, proj_browser)
     end
 
     if command_manager and command_manager.add_listener then
-        undo_listener_token = command_manager.add_listener(profile_scope.wrap("menu_system.undo_listener", function(event)
+        undo_listener_token = command_manager.add_listener(function(event)
             if not event or not event.event then
                 return
             end
             if event.event == "execute" or event.event == "undo" or event.event == "redo" then
                 update_undo_redo_actions()
             end
-        end))
+        end)
     end
 
     if update_undo_redo_actions then
@@ -122,7 +86,10 @@ end
 --- Set timeline panel reference (called after timeline is created)
 -- @param timeline_pnl table: Timeline panel instance
 function M.set_timeline_panel(timeline_pnl)
-    timeline_panel = timeline_pnl
+    local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+    if ui_state_ok then
+        ui_state.set_timeline_panel(timeline_pnl)
+    end
 end
 
 --- Parse XML file using LuaExpat
@@ -386,7 +353,34 @@ update_undo_redo_actions = function()
     set_actions_text_for_command("Redo", redo_label)
 end
 
---- Create menu action callback
+--- Get active project ID from timeline or database
+local function get_active_project_id()
+    local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+    if ui_state_ok then
+        local timeline_panel = ui_state.get_timeline_panel()
+        if timeline_panel and timeline_panel.get_state then
+            local state = timeline_panel.get_state()
+            if state and state.get_project_id then
+                local project_id = state.get_project_id()
+                if project_id and project_id ~= "" then
+                    return project_id
+                end
+            end
+        end
+    end
+
+    local database = require("core.database")
+    if database and database.get_current_project_id then
+        local project_id = database.get_current_project_id()
+        if project_id and project_id ~= "" then
+            return project_id
+        end
+    end
+
+    return nil
+end
+
+--- Create menu action callback - Pure command dispatch
 -- @param command_name string: Command to execute
 -- @param params table: Command parameters
 -- @return function: Callback function
@@ -399,594 +393,62 @@ local function create_action_callback(command_name, params)
 
         logger.debug("menu", string.format("Menu clicked: %s", tostring(command_name)))
 
-        -- Handle special commands that aren't normal execute() calls
+        -- Special handling for meta-commands (not data commands)
         if command_name == "Undo" then
             if command_manager.can_undo and not command_manager.can_undo() then
                 return
             end
-            logger.debug("menu", "Calling command_manager.undo()")
             command_manager.undo()
             update_undo_redo_actions()
-        elseif command_name == "Redo" then
+            return
+        end
+
+        if command_name == "Redo" then
             if command_manager.can_redo and not command_manager.can_redo() then
                 return
             end
-            logger.debug("menu", "Calling command_manager.redo()")
             command_manager.redo()
             update_undo_redo_actions()
-        elseif command_name == "Quit" then
+            return
+        end
+
+        if command_name == "Quit" then
             logger.info("menu", "Quitting application")
             local ok, err = pcall(function()
                 local database = require("core.database")
                 if database and database.shutdown then
-                    local success, message = database.shutdown({ best_effort = true })
-                    if not success then
-                        error(message or "database.shutdown failed")
-                    end
+                    database.shutdown({ best_effort = true })
                 end
             end)
             if not ok then
                 logger.error("menu", "Quit shutdown failed: " .. tostring(err))
             end
             os.exit(0)
-        elseif command_name == "OpenProject" then
-            local home = os.getenv("HOME") or ""
-            local default_dir = home ~= "" and (home .. "/Documents/JVE Projects") or ""
-            local project_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
-                "Open Project",
-                "JVE Project Files (*.jvp);;All Files (*)",
-                default_dir
-            )
-
-            if not project_path or project_path == "" then
-                return
-            end
-
-            local database = require("core.database")
-            local opened = project_open.open_project_database_or_prompt_cleanup(database, qt_constants, project_path, main_window)
-            if not opened then
-                qt_constants.DIALOG.SHOW_CONFIRM({
-                    parent = main_window,
-                    title = "Open Project Failed",
-                    message = "Failed to open project database:\n" .. tostring(project_path),
-                    confirm_text = "OK",
-                    cancel_text = "Cancel",
-                    icon = "warning",
-                    default_button = "confirm"
-                })
-                return
-            end
-
-            local db = database.get_connection()
-            assert(db, "OpenProject: database connection is nil after open")
-
-            local sequence_id, project_id
-            local stmt = db:prepare([[
-                SELECT id, project_id
-                FROM sequences
-                ORDER BY modified_at DESC, created_at DESC, id ASC
-                LIMIT 1
-            ]])
-            assert(stmt, "OpenProject: failed to prepare active sequence query")
-            local ok = stmt:exec() and stmt:next()
-            if ok then
-                sequence_id = stmt:value(0)
-                project_id = stmt:value(1)
-            end
-            stmt:finalize()
-
-            assert(sequence_id and sequence_id ~= "", "OpenProject: no sequences found in database (path=" .. tostring(project_path) .. ")")
-            assert(project_id and project_id ~= "", "OpenProject: active sequence missing project_id (sequence_id=" .. tostring(sequence_id) .. ")")
-
-            command_manager.init(db, sequence_id, project_id)
-
-            if timeline_panel and timeline_panel.load_sequence then
-                timeline_panel.load_sequence(sequence_id)
-            end
-
-            if project_browser and project_browser.refresh then
-                project_browser.refresh()
-            end
-
-            if project_browser and project_browser.focus_sequence then
-                project_browser.focus_sequence(sequence_id)
-            end
-
-            local Project = require("models.project")
-            local project = Project.load(project_id)
-            assert(project and project.name and project.name ~= "", "OpenProject: project name missing (project_id=" .. tostring(project_id) .. ")")
-            if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TITLE then
-                qt_constants.PROPERTIES.SET_TITLE(main_window, project.name)
-            end
-
-            update_undo_redo_actions()
-        elseif command_name == "GoToTimecode" then
-            assert(timeline_panel and timeline_panel.focus_timecode_entry, "GoToTimecode requires timeline_panel.focus_timecode_entry")
-            timeline_panel.focus_timecode_entry()
-        elseif command_name == "EditHistory" then
-            local edit_history_window = require("ui.edit_history_window")
-            edit_history_window.show(command_manager, main_window)
-        elseif command_name == "ShowRelinkDialog" then
-            local database = require("core.database")
-            local db = database and database.get_connection and database.get_connection()
-            if not db then
-                logger.error("menu", "ShowRelinkDialog: database not available")
-                return
-            end
-
-            local project_id = get_active_project_id()
-            assert(project_id and project_id ~= "", "ShowRelinkDialog: active project_id unavailable")
-            local media_relinker = require("core.media_relinker")
-            local offline = media_relinker.find_offline_media(db, project_id)
-            if not offline or #offline == 0 then
-                qt_constants.DIALOG.SHOW_CONFIRM({
-                    parent = main_window,
-                    title = "Relink Media",
-                    message = "No offline media found.",
-                    confirm_text = "OK",
-                    cancel_text = "Cancel",
-                    icon = "information",
-                    default_button = "confirm"
-                })
-                return
-            end
-
-            local dir = qt_constants.FILE_DIALOG.OPEN_DIRECTORY(
-                main_window,
-                "Select Search Directory",
-                os.getenv("HOME") or ""
-            )
-            if not dir or dir == "" then
-                return
-            end
-
-            local results = media_relinker.batch_relink(offline, {
-                search_paths = {dir}
-            })
-
-            local relinked = (results and results.relinked) or {}
-            local failed = (results and results.failed) or {}
-            if #relinked == 0 then
-                qt_constants.DIALOG.SHOW_CONFIRM({
-                    parent = main_window,
-                    title = "Relink Media",
-                    message = "No matches found in the selected directory.",
-                    confirm_text = "OK",
-                    cancel_text = "Cancel",
-                    icon = "warning",
-                    default_button = "confirm"
-                })
-                return
-            end
-
-            local accepted = qt_constants.DIALOG.SHOW_CONFIRM({
-                parent = main_window,
-                title = "Relink Media",
-                message = string.format("Relink %d media file(s)? (%d could not be matched)", #relinked, #failed),
-                confirm_text = "Relink",
-                cancel_text = "Cancel",
-                icon = "question",
-                default_button = "confirm"
-            })
-
-            if not accepted then
-                return
-            end
-
-            local relink_map = {}
-            for _, entry in ipairs(relinked) do
-                if entry and entry.media and entry.media.id and entry.new_path then
-                    relink_map[entry.media.id] = entry.new_path
-                end
-            end
-
-            local Command = require("command")
-            local cmd = Command.create("BatchRelinkMedia", project_id)
-            cmd:set_parameter("relink_map", relink_map)
-            local ok, result = pcall(function()
-                return command_manager.execute(cmd)
-            end)
-            if not ok then
-                logger.error("menu", "ShowRelinkDialog: BatchRelinkMedia threw: " .. tostring(result))
-                return
-            end
-            if not result or not result.success then
-                logger.error("menu", "ShowRelinkDialog: BatchRelinkMedia failed: " .. tostring(result and result.error_message or "unknown"))
-                return
-            end
-        elseif command_name == "ManageTags" then
-            if project_browser and project_browser.focus_bin then
-                project_browser.focus_bin()
-            end
-            qt_constants.DIALOG.SHOW_CONFIRM({
-                parent = main_window,
-                title = "Manage Tags",
-                message = "Tags are currently managed as bins in the Project Browser.",
-                confirm_text = "OK",
-                cancel_text = "Cancel",
-                icon = "information",
-                default_button = "confirm"
-            })
-        elseif command_name == "ConsolidateMedia" then
-            qt_constants.DIALOG.SHOW_CONFIRM({
-                parent = main_window,
-                title = "Consolidate Media",
-                message = "Consolidate Media is not implemented yet.",
-                confirm_text = "OK",
-                cancel_text = "Cancel",
-                icon = "information",
-                default_button = "confirm"
-            })
-        elseif command_name == "ImportMedia" then
-            local file_paths = qt_constants.FILE_DIALOG.OPEN_FILES(
-                main_window,
-                "Import Media Files",
-                "Media Files (*.mp4 *.mov *.m4v *.avi *.mkv *.mxf *.wav *.aiff *.mp3);;All Files (*)"
-            )
-
-            if file_paths then
-                if type(file_paths) == "table" then
-                    for i, file_path in ipairs(file_paths) do
-                        logger.debug("menu", string.format("ImportMedia[%d]: %s", i, tostring(file_path)))
-                        local Command = require("command")
-                        local project_id = get_active_project_id()
-                        assert(project_id and project_id ~= "", "menu_system: ImportMedia missing active project_id")
-                        local cmd = Command.create("ImportMedia", project_id)
-                        cmd:set_parameter("file_path", file_path)
-                        cmd:set_parameter("project_id", project_id)
-
-                        local success, result = pcall(function()
-                            return command_manager.execute(cmd)
-                        end)
-                        if success then
-                            if result and result.success then
-                                logger.info("menu", "Imported media: " .. tostring(file_path))
-                            else
-                                logger.error("menu", "ImportMedia returned error: " .. tostring(result and result.error_message or "unknown"))
-                            end
-                        else
-                            logger.error("menu", "ImportMedia threw: " .. tostring(result))
-                        end
-                    end
-
-                    -- Refresh project browser to show newly imported media
-                    if project_browser then
-                        if project_browser.refresh then
-                            project_browser.refresh()
-                        else
-                            logger.warn("menu", "project_browser.refresh is nil")
-                        end
-                    else
-                        logger.warn("menu", "project_browser is nil (menu system not initialized with project browser)")
-                    end
-                else
-                    logger.warn("menu", "ImportMedia file dialog returned non-table value")
-                end
-            end
-
-        elseif command_name == "ImportFCP7XML" then
-            local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
-                "Import Final Cut Pro 7 XML",
-                "Final Cut Pro XML (*.xml);;All Files (*)"
-            )
-
-            if file_path then
-                logger.info("menu", "Importing FCP7 XML: " .. tostring(file_path))
-                local Command = require("command")
-                local project_id = get_active_project_id()
-                assert(project_id and project_id ~= "", "menu_system: ImportFCP7XML missing active project_id")
-                local cmd = Command.create("ImportFCP7XML", project_id)
-                cmd:set_parameter("xml_path", file_path)
-                cmd:set_parameter("project_id", project_id)
-
-                local success, result = pcall(function()
-                    return command_manager.execute(cmd)
-                end)
-
-                if not success then
-                    logger.error("menu", "ImportFCP7XML threw: " .. tostring(result))
-                elseif result and not result.success then
-                    logger.error("menu", "ImportFCP7XML returned error: " .. tostring(result.error_message or "unknown"))
-                else
-                    logger.info("menu", "FCP7 XML imported successfully")
-                    if project_browser and project_browser.refresh then
-                        project_browser.refresh()
-                    end
-                end
-            end
-
-        elseif command_name == "ImportResolveProject" then
-            local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
-                "Import Resolve Project (.drp)",
-                "Resolve Project Files (*.drp);;All Files (*)"
-            )
-
-            if file_path then
-                logger.info("menu", "Importing Resolve project: " .. tostring(file_path))
-                local Command = require("command")
-                local project_id = get_active_project_id()
-                assert(project_id and project_id ~= "", "menu_system: ImportResolveProject missing active project_id")
-                local cmd = Command.create("ImportResolveProject", project_id)
-                cmd:set_parameter("drp_path", file_path)
-                cmd:set_parameter("project_id", project_id)
-
-                local success, result = pcall(function()
-                    return command_manager.execute(cmd)
-                end)
-                if not success then
-                    logger.error("menu", "ImportResolveProject threw: " .. tostring(result))
-                elseif result and not result.success then
-                    logger.error("menu", "ImportResolveProject returned error: " .. tostring(result.error_message or "unknown"))
-                else
-                    logger.info("menu", "Resolve project imported successfully")
-                end
-            end
-
-        elseif command_name == "ImportResolveDatabase" then
-            local file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
-                "Import Resolve Database",
-                "Database Files (*.db *.sqlite *.resolve);;All Files (*)",
-                os.getenv("HOME") .. "/Movies/DaVinci Resolve"
-            )
-
-            if file_path then
-                logger.info("menu", "Importing Resolve database: " .. tostring(file_path))
-                local Command = require("command")
-                local project_id = get_active_project_id()
-                assert(project_id and project_id ~= "", "menu_system: ImportResolveDatabase missing active project_id")
-                local cmd = Command.create("ImportResolveDatabase", project_id)
-                cmd:set_parameter("db_path", file_path)
-                cmd:set_parameter("project_id", project_id)
-
-                local success, result = pcall(function()
-                    return command_manager.execute(cmd)
-                end)
-                if not success then
-                    logger.error("menu", "ImportResolveDatabase threw: " .. tostring(result))
-                elseif result and not result.success then
-                    logger.error("menu", "ImportResolveDatabase returned error: " .. tostring(result.error_message or "unknown"))
-                else
-                    logger.info("menu", "Resolve database imported successfully")
-                end
-            end
-
-        elseif command_name == "ShowKeyboardCustomization" then
-            logger.info("menu", "Opening keyboard customization dialog")
-            local ok, err = pcall(function()
-                require("ui.keyboard_customization_dialog").show()
-            end)
-            if not ok then
-                logger.error("menu", "Failed to open keyboard dialog: " .. tostring(err))
-            end
-
-        elseif command_name == "Split" then
-            -- Map Split menu item to BatchCommand of SplitClip operations
-            if not timeline_panel then
-                logger.warn("menu", "Split: timeline panel not available")
-                return
-            end
-
-            local timeline_state = timeline_panel.get_state()
-            local playhead_value = timeline_state.get_playhead_position()
-            local selected_clips = timeline_state.get_selected_clips()
-
-            local target_clips
-            if selected_clips and #selected_clips > 0 then
-                target_clips = timeline_state.get_clips_at_time(playhead_value, selected_clips)
-            else
-                target_clips = timeline_state.get_clips_at_time(playhead_value)
-            end
-
-            if #target_clips == 0 then
-                if selected_clips and #selected_clips > 0 then
-                    logger.warn("menu", "Split: playhead does not intersect selected clips")
-                else
-                    logger.warn("menu", "Split: no clips under playhead")
-                end
-                return
-            end
-
-            local json = require("dkjson")
-            local Command = require("command")
-            local specs = {}
-
-            local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
-            if not rate or not rate.fps_numerator or not rate.fps_denominator then
-                error("Split: Active sequence frame rate unavailable", 2)
-            end
-
-            for _, clip in ipairs(target_clips) do
-                local start_value = Rational.hydrate(clip.timeline_start or clip.start_value, rate.fps_numerator, rate.fps_denominator)
-                local duration_value = Rational.hydrate(clip.duration or clip.duration_value, rate.fps_numerator, rate.fps_denominator)
-                local playhead_rt = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator)
-
-                if start_value and duration_value and duration_value.frames > 0 and playhead_rt then
-                    local end_time = start_value + duration_value
-                    if playhead_rt > start_value and playhead_rt < end_time then
-                        table.insert(specs, {
-                            command_type = "SplitClip",
-                            parameters = {
-                                clip_id = clip.id,
-                                split_time = playhead_rt
-                            }
-                        })
-                    end
-                else
-                    -- Skip invalid targets to avoid SplitClip errors
-                end
-            end
-
-            if #specs == 0 then
-                logger.warn("menu", "Split: no valid clips to split at current playhead position")
-                return
-            end
-
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
-            assert(project_id and project_id ~= "", "menu_system: Split missing active project_id")
-            local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
-            assert(active_sequence_id and active_sequence_id ~= "", "menu_system: Split missing active sequence_id")
-
-            local batch_cmd = Command.create("BatchCommand", project_id)
-            batch_cmd:set_parameter("sequence_id", active_sequence_id)
-            batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
-            batch_cmd:set_parameter("commands_json", json.encode(specs))
-
-            local success, result = pcall(function()
-                return command_manager.execute(batch_cmd)
-            end)
-            if not success then
-                logger.error("menu", "Split failed: " .. tostring(result))
-            elseif result and not result.success then
-                logger.error("menu", "Split returned error: " .. tostring(result.error_message or "unknown"))
-            else
-                logger.info("menu", string.format("Split executed on %d clip(s)", #specs))
-            end
-        elseif command_name == "Insert" then
-            -- Timeline > Insert menu item (same logic as F9)
-            assert(timeline_panel, "menu_system: Insert timeline panel not available")
-            assert(project_browser and project_browser.insert_selected_to_timeline, "menu_system: Insert project browser not available")
-            project_browser.insert_selected_to_timeline("Insert", {advance_playhead = true})
-
-        elseif command_name == "Overwrite" then
-            -- Timeline > Overwrite menu item (same logic as F10)
-            assert(timeline_panel, "menu_system: Overwrite timeline panel not available")
-            assert(project_browser and project_browser.insert_selected_to_timeline, "menu_system: Overwrite project browser not available")
-            project_browser.insert_selected_to_timeline("Overwrite", {advance_playhead = true})
-
-        elseif command_name == "TimelineZoomIn" then
-            -- Zoom in: decrease viewport duration (show less time)
-            if not timeline_panel then
-                logger.warn("menu", "ZoomIn: timeline panel not available")
-                return
-            end
-
-            local timeline_state = timeline_panel.get_state()
-            local current_duration = timeline_state.get_viewport_duration()
-            local new_duration = current_duration * 0.8  -- Rational arithmetic
-            
-            -- Clamp to min 1 second (Rational)
-            local min_dur = Rational.from_seconds(1.0, new_duration.fps_numerator, new_duration.fps_denominator)
-            new_duration = Rational.max(min_dur, new_duration)
-            
-            if keyboard_shortcuts.clear_zoom_toggle then
-                keyboard_shortcuts.clear_zoom_toggle()
-            end
-            timeline_state.set_viewport_duration(new_duration)
-            logger.info("menu", string.format("Zoomed in: %s visible", tostring(new_duration)))
-
-        elseif command_name == "TimelineZoomOut" then
-            -- Zoom out: increase viewport duration (show more time)
-            if not timeline_panel then
-                logger.warn("menu", "ZoomOut: timeline panel not available")
-                return
-            end
-
-            local timeline_state = timeline_panel.get_state()
-            local current_duration = timeline_state.get_viewport_duration()
-            local new_duration = current_duration * 1.25  -- Rational arithmetic
-            
-            if keyboard_shortcuts.clear_zoom_toggle then
-                keyboard_shortcuts.clear_zoom_toggle()
-            end
-            timeline_state.set_viewport_duration(new_duration)
-            logger.info("menu", string.format("Zoomed out: %s visible", tostring(new_duration)))
-
-        elseif command_name == "TimelineZoomFit" then
-            -- Zoom to fit: show entire timeline
-            if not timeline_panel then
-                logger.warn("menu", "ZoomFit: timeline panel not available")
-                return
-            end
-
-            local timeline_state = timeline_panel.get_state()
-            local ok = keyboard_shortcuts.toggle_zoom_fit(timeline_state)
-            if not ok then
-                -- toggle function already printed warning
-                return
-            end
-
-        elseif command_name == "RenameItem" or command_name == "RenameMedia" then
-            local rename_started = false
-            if project_browser and project_browser.start_inline_rename then
-                -- Ensure project browser has matching selection when timeline clip is focused
-                if focus_manager and focus_manager.get_focused_panel then
-                    local focused_panel = focus_manager.get_focused_panel()
-                    logger.debug("menu", string.format("Rename: focused panel=%s", tostring(focused_panel)))
-                    if focused_panel == "timeline" and timeline_panel and timeline_panel.get_state then
-                        local state = timeline_panel.get_state()
-                        if not state then
-                            logger.warn("menu", "Rename: timeline_panel.get_state() returned nil")
-                        end
-                        if state and state.get_selected_clips then
-                            local selected_clips = state.get_selected_clips()
-                            logger.debug("menu", string.format("Rename: timeline selected clips=%d", selected_clips and #selected_clips or 0))
-                            local target_clip = selected_clips and selected_clips[1] or nil
-                            if target_clip then
-                                local master_id = target_clip.parent_clip_id or target_clip.id
-                                logger.debug("menu", string.format("Rename: targeting master clip %s", tostring(master_id)))
-                                if master_id and project_browser.focus_master_clip then
-                                    local ok, focus_err = project_browser.focus_master_clip(master_id, {skip_activate = true})
-                                    if not ok then
-                                        logger.warn("menu", "Rename: focus_master_clip failed - " .. tostring(focus_err))
-                                    end
-                                    if not ok then
-                                        -- keep going; inline rename will still attempt current selection
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-                rename_started = project_browser.start_inline_rename()
-                logger.debug("menu", string.format("Rename: start_inline_rename returned %s", tostring(rename_started)))
-            end
-            if not rename_started then
-                logger.warn("menu", "Rename: no available item to rename")
-            end
             return
+        end
 
-        elseif command_name == "Cut" then
-            local result = command_manager.execute("Cut")
-            if result.success then
-                logger.info("menu", "Cut executed successfully")
-            else
-                logger.error("menu", "Cut returned error: " .. tostring(result.error_message or "unknown"))
-            end
-        elseif command_name == "Copy" then
-            local ok, err = clipboard_actions.copy()
-            if not ok then
-                logger.error("menu", "Copy failed: " .. tostring(err or "unknown error"))
-            end
-        elseif command_name == "Paste" then
-            local ok, err = clipboard_actions.paste()
-            if not ok then
-                logger.error("menu", "Paste failed: " .. tostring(err or "unknown error"))
-            end
-        elseif command_name == "Delete" then
-            if keyboard_shortcuts.perform_delete_action({shift = false}) then
-                return
-            end
-            logger.debug("menu", "Delete: nothing to delete in current context")
+        -- Pure command dispatch for everything else
+        local project_id = get_active_project_id()
+        local command_params = params or {}
+        command_params.project_id = command_params.project_id or project_id
+
+		local success_flag, result_value = pcall(function()
+			-- Headless tests inject a minimal command_manager stub (execute-only).
+			if type(command_manager.execute_ui) == "function" then
+				return command_manager.execute_ui(command_name, command_params)
+			end
+			-- Fallback for stubs that don't implement execute_ui.
+			return command_manager.execute(command_name, command_params)
+		end)
+
+        if not success_flag then
+            logger.error("menu", string.format("Command '%s' failed: %s", tostring(command_name), tostring(result_value)))
+        elseif result_value and not result_value.success and not result_value.cancelled then
+            logger.error("menu", string.format("Command '%s' returned error: %s", tostring(command_name), tostring(result_value.error_message or "unknown")))
+        elseif result_value and result_value.cancelled then
+            logger.debug("menu", string.format("Command '%s' cancelled by user", tostring(command_name)))
         else
-            -- Regular command execution
-            local command_params = params
-            if command_params == nil then
-                command_params = {}
-            end
-            local success_flag, result_value = pcall(function()
-                return command_manager.execute(command_name, command_params)
-            end)
-            if not success_flag then
-                logger.error("menu", string.format("Command '%s' failed: %s", tostring(command_name), tostring(result_value)))
-            elseif result_value and not result_value.success then
-                logger.error("menu", string.format("Command '%s' returned error: %s", tostring(command_name), tostring(result_value.error_message or "unknown")))
-            else
-                logger.debug("menu", string.format("Command '%s' executed successfully", tostring(command_name)))
-            end
+            logger.debug("menu", string.format("Command '%s' executed successfully", tostring(command_name)))
         end
     end
 end

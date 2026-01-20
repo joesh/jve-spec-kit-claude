@@ -27,39 +27,66 @@ do
     if status then timeline_state = mod end
 end
 
+
+local SPEC = {
+    args = {
+        advance_playhead = { kind = "boolean" },
+        clip_id = {},
+        clip_name = {},
+        dry_run = { kind = "boolean" },
+        duration = {},
+        duration_value = {},
+        master_clip_id = {},
+        media_id = { required = true },
+        overwrite_time = { default = 0 },
+        project_id = { required = true },
+        sequence_id = {},
+        source_in = {},
+        source_in_value = {},
+        source_out = {},
+        source_out_value = {},
+        track_id = {},
+    },
+    persisted = {
+        executed_mutations = {},
+    },
+
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["Overwrite"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing Overwrite command")
         end
 
-        local media_id = command:get_parameter("media_id")
-        local track_id = command:get_parameter("track_id")
+        local media_id = args.media_id
+        local track_id = args.track_id
         
-        local overwrite_time_raw = command:get_parameter("overwrite_time")
-        local duration_raw = command:get_parameter("duration_value") or command:get_parameter("duration")
-        local source_in_raw = command:get_parameter("source_in_value") or command:get_parameter("source_in")
-        local source_out_raw = command:get_parameter("source_out_value") or command:get_parameter("source_out")
-        local master_clip_id = command:get_parameter("master_clip_id")
-        local project_id_param = command:get_parameter("project_id")
-        local project_id = command.project_id or project_id_param
+
+        local duration_raw = args.duration_value or args.duration
+        local source_in_raw = args.source_in_value or args.source_in
+        local source_out_raw = args.source_out_value or args.source_out
+        local master_clip_id = args.master_clip_id
+
+        local project_id = command.project_id or args.project_id
         
-        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id)
+        local sequence_id = command_helper.resolve_sequence_for_track(args.sequence_id, track_id)
         if not sequence_id or sequence_id == "" then
             local msg = "Overwrite: missing sequence_id (unable to resolve from track_id)"
             set_last_error(msg)
             return false, msg
         end
         command:set_parameter("sequence_id", sequence_id)
-        if not command:get_parameter("__snapshot_sequence_ids") then
+        if not args.__snapshot_sequence_ids then
             command:set_parameter("__snapshot_sequence_ids", {sequence_id})
         end
 
         local master_clip = nil
         local copied_properties = {}
         if master_clip_id and master_clip_id ~= "" then
-            master_clip = Clip.load_optional(master_clip_id, db)
+            master_clip = Clip.load_optional(master_clip_id)
             if not master_clip then
                 print(string.format("WARNING: Overwrite: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
                 master_clip_id = nil
@@ -68,7 +95,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
 
-        local overwrite_time_rat = rational_helpers.require_rational_in_rate(overwrite_time_raw or 0, seq_fps_num, seq_fps_den, "overwrite_time")
+        local overwrite_time_rat = rational_helpers.require_rational_in_rate(args.overwrite_time, seq_fps_num, seq_fps_den, "overwrite_time")
         local duration_frames = nil
         do
             local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
@@ -149,8 +176,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, msg
         end
 
-        local clip_name = command:get_parameter("clip_name") or (master_clip and master_clip.name) or "Overwrite Clip"
-        local existing_clip_id = command:get_parameter("clip_id")
+        local clip_name = args.clip_name or (master_clip and master_clip.name) or "Overwrite Clip"
+
         local clip_payload = {
             role = "video",
             media_id = media_id,
@@ -160,7 +187,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_in = source_in_rat,
             source_out = source_out_rat,
             clip_name = clip_name,
-            clip_id = existing_clip_id
+            clip_id = args.clip_id
         }
 
         local selected_clip = {
@@ -212,8 +239,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 source_out = payload.source_out,
                 enabled = true,
                 offline = master_clip and master_clip.offline,
-                rate_num = media_fps_num,
-                rate_den = media_fps_den,
+                fps_numerator = media_fps_num,
+                fps_denominator = media_fps_den,
             }
             local clip_to_insert = Clip.create(payload.clip_name or "Overwrite Clip", payload.media_id, clip_opts)
 
@@ -221,8 +248,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if payload.master_clip_id and payload.master_clip_id ~= "" then
                 command:set_parameter("master_clip_id", payload.master_clip_id)
             end
-            if project_id_param then
-                command:set_parameter("project_id", project_id_param)
+            if args.project_id then
+                command:set_parameter("project_id", args.project_id)
             elseif master_clip and master_clip.project_id then
                 command:set_parameter("project_id", master_clip.project_id)
             end
@@ -236,7 +263,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if mut.type == "delete" then
                     command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
                 elseif mut.type == "update" then
-                    local updated = Clip.load_optional(mut.clip_id, db)
+                    local updated = Clip.load_optional(mut.clip_id)
                     if updated then
                         local payload_update = {
                             clip_id = updated.id,
@@ -282,23 +309,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             insert_pos = overwrite_time_rat
         })
 
-        local advance_playhead = command:get_parameter("advance_playhead")
-        if advance_playhead and timeline_state then
+
+        if args.advance_playhead and timeline_state then
             timeline_state.set_playhead_position(overwrite_time_rat + duration_rat)
         end
 
         print(string.format("✅ Overwrote at %s (id: %s)",
-            tostring(overwrite_time_rat), tostring(command:get_parameter("clip_id"))))
+            tostring(overwrite_time_rat), tostring(args.clip_id)))
         return true
     end
 
     command_undoers["Overwrite"] = function(command)
+        local args = command:get_all_parameters()
         print("Undoing Overwrite command")
-        local executed_mutations = command:get_parameter("executed_mutations") or {}
-        local sequence_id = command:get_parameter("sequence_id")
+        local executed_mutations = args.executed_mutations or {}
+
         
         if not executed_mutations or #executed_mutations == 0 then
-            print("WARNING: UndoOverwrite: No executed mutations to undo.")
+            set_last_error("UndoOverwrite: No executed mutations to undo.")
             return false
         end
 
@@ -308,7 +336,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, args.sequence_id)
         if not ok then
             db:rollback_transaction(started)
             print("ERROR: UndoOverwrite: Failed to revert mutations: " .. tostring(err))
@@ -328,7 +356,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["Overwrite"],
-        undoer = command_undoers["Overwrite"]
+        undoer = command_undoers["Overwrite"],
+        spec = SPEC,
     }
 end
 

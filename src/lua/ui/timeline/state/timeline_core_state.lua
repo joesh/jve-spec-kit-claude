@@ -23,7 +23,6 @@ local track_state = require("ui.timeline.state.track_state")
 local selection_state = require("ui.timeline.state.selection_state")
 local db = require("core.database")
 local json = require("dkjson")
-local Rational = require("core.rational")
 local ui_constants = require("core.ui_constants")
 
 local persist_timer = nil
@@ -106,23 +105,21 @@ local function build_track_height_template()
     return template
 end
 
--- Column Constants
-local SEQ_COL_PLAYHEAD = 0
-local SEQ_COL_SEL_CLIPS = 1
-local SEQ_COL_SEL_EDGES = 2
-local SEQ_COL_VIEW_START = 3
-local SEQ_COL_VIEW_DUR = 4
-local SEQ_COL_FPS_NUM = 5
-local SEQ_COL_FPS_DEN = 6
-local SEQ_COL_MARK_IN = 7
-local SEQ_COL_MARK_OUT = 8
-
 local function flush_state_to_db()
-    local db_conn = db.get_connection()
-    if not db_conn then return end
-
     local sequence_id = data.state.sequence_id
     assert(sequence_id and sequence_id ~= "", "timeline_core_state.flush_state_to_db: missing sequence_id")
+
+    -- Load current sequence, update UI state fields, save back
+    local Sequence = require("models.sequence")
+    local sequence = Sequence.load(sequence_id)
+    assert(sequence, string.format("timeline_core_state.flush_state_to_db: failed to load sequence_id=%s", tostring(sequence_id)))
+
+    -- Update UI state fields
+    sequence.playhead_position = data.state.playhead_position
+    sequence.viewport_start_time = data.state.viewport_start_time
+    sequence.viewport_duration = data.state.viewport_duration
+    sequence.mark_in = data.state.mark_in_value
+    sequence.mark_out = data.state.mark_out_value
 
     -- Serialize selection
     local selected_ids = {}
@@ -130,7 +127,7 @@ local function flush_state_to_db()
         table.insert(selected_ids, clip.id)
     end
     local success, json_str = pcall(json.encode, selected_ids)
-    if not success then json_str = "[]" end
+    sequence.selected_clip_ids_json = success and json_str or "[]"
 
     -- Serialize edges
     local edge_descriptors = {}
@@ -149,25 +146,10 @@ local function flush_state_to_db()
         end
     end
     local success_edges, edges_json = pcall(json.encode, edge_descriptors)
-    if not success_edges then edges_json = "[]" end
+    sequence.selected_edge_infos_json = success_edges and edges_json or "[]"
 
-    local query = db_conn:prepare([[ 
-        UPDATE sequences
-        SET playhead_frame = ?, selected_clip_ids = ?, selected_edge_infos = ?, view_start_frame = ?, view_duration_frames = ?, mark_in_frame = ?, mark_out_frame = ?
-        WHERE id = ?
-    ]])
-
-    if query then
-        query:bind_value(1, data.state.playhead_position.frames)
-        query:bind_value(2, json_str)
-        query:bind_value(3, edges_json)
-        query:bind_value(4, data.state.viewport_start_time.frames)
-        query:bind_value(5, data.state.viewport_duration.frames)
-        query:bind_value(6, data.state.mark_in_value and data.state.mark_in_value.frames or nil)
-        query:bind_value(7, data.state.mark_out_value and data.state.mark_out_value.frames or nil)
-        query:bind_value(8, sequence_id)
-        query:exec()
-    end
+    -- Save updated sequence
+    sequence:save()
 
     if track_state.is_layout_dirty() and db.set_sequence_track_heights then
         local height_map = build_track_height_map()
@@ -225,111 +207,78 @@ function M.init(sequence_id, project_id)
     data.state.clips = db.load_clips(sequence_id)
     clip_state.invalidate_indexes()
 
-    -- Load Sequence Settings
-    local db_conn = db.get_connection()
-    if db_conn then
-        local project_stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
-        if not project_stmt then
-            error("timeline_core_state.init: failed to prepare sequence->project query", 2)
-        end
-        project_stmt:bind_value(1, sequence_id)
-        local seq_project_id = nil
-        if project_stmt:exec() and project_stmt:next() then
-            seq_project_id = project_stmt:value(0)
-        end
-        project_stmt:finalize()
-        assert(seq_project_id and seq_project_id ~= "", "timeline_core_state.init: sequence missing project_id in DB (sequence_id=" .. tostring(sequence_id) .. ")")
-        if project_id and project_id ~= "" then
-            assert(seq_project_id == project_id,
-                "timeline_core_state.init: provided project_id does not match sequence.project_id (sequence_id="
-                    .. tostring(sequence_id) .. ", provided=" .. tostring(project_id) .. ", db=" .. tostring(seq_project_id) .. ")")
-        end
-        data.state.project_id = seq_project_id
+    -- Load Sequence Settings using Sequence model
+    local Sequence = require("models.sequence")
+    local sequence = Sequence.load(sequence_id)
+    assert(sequence, string.format("timeline_core_state.init: failed to load sequence_id=%s", tostring(sequence_id)))
+    assert(sequence.project_id and sequence.project_id ~= "",
+        string.format("timeline_core_state.init: sequence missing project_id (sequence_id=%s)", tostring(sequence_id)))
 
-        local query = db_conn:prepare("SELECT playhead_frame, selected_clip_ids, selected_edge_infos, view_start_frame, view_duration_frames, fps_numerator, fps_denominator, mark_in_frame, mark_out_frame FROM sequences WHERE id = ?")
-        if query then
-            query:bind_value(1, sequence_id)
-            if query:exec() and query:next() then
-                local fps_num = query:value(SEQ_COL_FPS_NUM)
-                local fps_den = query:value(SEQ_COL_FPS_DEN)
-                
-                if not fps_num or not fps_den then
-                    error(string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(sequence_id)))
-                end
-                
-                data.state.sequence_frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den }
+    if project_id and project_id ~= "" then
+        assert(sequence.project_id == project_id, string.format(
+            "timeline_core_state.init: provided project_id does not match sequence.project_id (sequence_id=%s, provided=%s, db=%s)",
+            tostring(sequence_id), tostring(project_id), tostring(sequence.project_id)
+        ))
+    end
 
-                -- Rescale existing rationals if rate changed (though we just reloaded state so they are fresh/default)
-                -- But if we are re-initing same state object, we should be careful.
-                -- `fresh_state` in data.lua sets defaults.
+    data.state.project_id = sequence.project_id
+    data.state.sequence_frame_rate = sequence.frame_rate
 
-                -- Restore Playhead
-                local saved_playhead = query:value(SEQ_COL_PLAYHEAD)
-                data.state.playhead_position = Rational.new(saved_playhead or 0, fps_num, fps_den)
+    assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
+        string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(sequence_id)))
 
-                -- Restore Selection
-                local saved_sel = query:value(SEQ_COL_SEL_CLIPS)
-                if saved_sel and saved_sel ~= "" then
-                    local ok, ids = pcall(json.decode, saved_sel)
-                    if ok and type(ids) == "table" then
-                        data.state.selected_clips = {}
-                        for _, cid in ipairs(ids) do
-                            local clip = clip_state.get_by_id(cid)
-                            if clip then table.insert(data.state.selected_clips, clip) end
-                        end
-                    end
-                end
+    -- Restore Playhead from sequence model
+    data.state.playhead_position = sequence.playhead_position
 
-                -- Restore Edges
-                local saved_edges = query:value(SEQ_COL_SEL_EDGES)
-                if saved_edges and saved_edges ~= "" then
-                    local ok, edges = pcall(json.decode, saved_edges)
-                    if ok and type(edges) == "table" then
-                        data.state.selected_edges = {}
-                        for _, edge in ipairs(edges) do
-                            if type(edge) == "table" and edge.clip_id and edge.edge_type then
-                                local clip_obj = clip_state.get_by_id(edge.clip_id)
-                                if not clip_obj and type(edge.clip_id) == "string" and edge.clip_id:find("^" .. TEMP_GAP_PREFIX) then
-                                    local resolved = resolve_gap_clip_id(edge)
-                                    if resolved then
-                                        clip_obj = clip_state.get_by_id(resolved)
-                                        if clip_obj then
-                                            edge.clip_id = resolved
-                                        end
-                                    end
-                                end
-                                if clip_obj then
-                                    table.insert(data.state.selected_edges, {
-                                        clip_id = edge.clip_id,
-                                        edge_type = edge.edge_type,
-                                        trim_type = edge.trim_type
-                                    })
-                                end
-                            end
-                        end
-                        if #data.state.selected_edges > 0 then data.state.selected_clips = {} end
-                    end
-                end
-
-                -- Marks
-                local mi = query:value(SEQ_COL_MARK_IN)
-                data.state.mark_in_value = mi and Rational.new(mi, fps_num, fps_den) or nil
-                local mo = query:value(SEQ_COL_MARK_OUT)
-                data.state.mark_out_value = mo and Rational.new(mo, fps_num, fps_den) or nil
-
-                -- Viewport
-                local vs = query:value(SEQ_COL_VIEW_START)
-                local vd = query:value(SEQ_COL_VIEW_DUR)
-                data.state.viewport_start_time = Rational.new(vs or 0, fps_num, fps_den)
-                if vd and vd > 0 then
-                    data.state.viewport_duration = Rational.new(vd, fps_num, fps_den)
-                else
-                    data.state.viewport_duration = Rational.new(300, fps_num, fps_den)
-                end
+    -- Restore Selection from sequence model (JSON strings)
+    if sequence.selected_clip_ids_json and sequence.selected_clip_ids_json ~= "" then
+        local ok, ids = pcall(json.decode, sequence.selected_clip_ids_json)
+        if ok and type(ids) == "table" then
+            data.state.selected_clips = {}
+            for _, cid in ipairs(ids) do
+                local clip = clip_state.get_by_id(cid)
+                if clip then table.insert(data.state.selected_clips, clip) end
             end
-            query:finalize()
         end
     end
+
+    -- Restore Edges from sequence model (JSON strings)
+    if sequence.selected_edge_infos_json and sequence.selected_edge_infos_json ~= "" then
+        local ok, edges = pcall(json.decode, sequence.selected_edge_infos_json)
+        if ok and type(edges) == "table" then
+            data.state.selected_edges = {}
+            for _, edge in ipairs(edges) do
+                if type(edge) == "table" and edge.clip_id and edge.edge_type then
+                    local clip_obj = clip_state.get_by_id(edge.clip_id)
+                    if not clip_obj and type(edge.clip_id) == "string" and edge.clip_id:find("^" .. TEMP_GAP_PREFIX) then
+                        local resolved = resolve_gap_clip_id(edge)
+                        if resolved then
+                            clip_obj = clip_state.get_by_id(resolved)
+                            if clip_obj then
+                                edge.clip_id = resolved
+                            end
+                        end
+                    end
+                    if clip_obj then
+                        table.insert(data.state.selected_edges, {
+                            clip_id = edge.clip_id,
+                            edge_type = edge.edge_type,
+                            trim_type = edge.trim_type
+                        })
+                    end
+                end
+            end
+            if #data.state.selected_edges > 0 then data.state.selected_clips = {} end
+        end
+    end
+
+    -- Marks from sequence model
+    data.state.mark_in_value = sequence.mark_in
+    data.state.mark_out_value = sequence.mark_out
+
+    -- Viewport from sequence model
+    data.state.viewport_start_time = sequence.viewport_start_time
+    data.state.viewport_duration = sequence.viewport_duration
 
     -- Init Track Heights
     for _, track in ipairs(data.state.tracks) do

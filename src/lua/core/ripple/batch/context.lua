@@ -20,10 +20,29 @@ local command_helper = require("core.command_helper")
 function M.create(command)
     assert(command and command.get_parameter, "BatchRippleEdit: missing command handle")
 
+    -- Selection/shape normalization (choke point for BatchRippleEdit).
+    --
+    -- UI callers typically pass explicit edge_infos.
+    -- Some tests pass pre-selection via __selected_edge_infos* (or a single edge_info).
+    -- Executors should consume ctx.edge_infos and never care which input flavor was used.
+    local edge_infos_raw = command:get_parameter("edge_infos")
+    if edge_infos_raw == nil then
+        edge_infos_raw = command:get_parameter("edge_info")
+            or command:get_parameter("__edge_infos")
+            or command:get_parameter("__selected_edge_infos")
+            or command:get_parameter("__selected_edge_infos_pre")
+    end
+    if edge_infos_raw ~= nil and type(edge_infos_raw) == "table" and #edge_infos_raw == 0 then
+        if edge_infos_raw.clip_id ~= nil or edge_infos_raw.edge_type ~= nil or edge_infos_raw.edge ~= nil then
+            edge_infos_raw = { edge_infos_raw }
+        end
+    end
+
     local ctx = {
         command = command,
+        args = command:get_all_parameters(),
         dry_run = command:get_parameter("dry_run"),
-        edge_infos_raw = command:get_parameter("edge_infos"),
+        edge_infos_raw = edge_infos_raw,
         provided_lead_edge = command:get_parameter("lead_edge"),
         delta_frames = command:get_parameter("delta_frames"),
         delta_ms = command:get_parameter("delta_ms"),

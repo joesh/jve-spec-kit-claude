@@ -16,23 +16,24 @@
 local M = {}
 local command_helper = require("core.command_helper")
 
+
+local SPEC = {
+    args = {
+        new_name = { required = true, kind = "string" },
+        previous_name = { required = true, kind = "string" },
+        project_id = { required = true, kind = "string" },
+        target_id = { required = true, kind = "string" },
+        target_type = { required = true, kind = "string" },
+    }
+}
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function perform_item_rename(target_type, target_id, new_name, project_id)
-        if not target_type or target_type == "" then
-            return false, "RenameItem: Missing target_type"
-        end
-        if not target_id or target_id == "" then
-            return false, "RenameItem: Missing target_id"
-        end
 
         new_name = command_helper.trim_string(new_name)
-        if new_name == "" then
-            return false, "RenameItem: New name cannot be empty"
-        end
 
         if target_type == "master_clip" then
             local Clip = require("models.clip")
-            local clip = Clip.load_optional(target_id, db)
+            local clip = Clip.load_optional(target_id)
             if not clip then
                 return false, "RenameItem: Master clip not found"
             end
@@ -41,7 +42,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return true, previous_name
             end
             clip.name = new_name
-            if not clip:save(db, {skip_occlusion = true}) then
+            if not clip:save({skip_occlusion = true}) then
                 return false, "RenameItem: Failed to save master clip"
             end
             local update_stmt = db:prepare([[
@@ -63,7 +64,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true, previous_name
         elseif target_type == "sequence" then
             local Sequence = require("models.sequence")
-            local sequence = Sequence.load(target_id, db)
+            local sequence = Sequence.load(target_id)
             if not sequence then
                 return false, "RenameItem: Sequence not found"
             end
@@ -72,15 +73,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return true, previous_name
             end
             sequence.name = new_name
-            if not sequence:save(db) then
+            if not sequence:save() then
                 return false, "RenameItem: Failed to save sequence"
             end
             command_helper.reload_timeline(sequence.id)
             return true, previous_name
         elseif target_type == "bin" then
-            if not project_id or project_id == "" then
-                return false, "RenameItem: missing project_id for bin rename"
-            end
             local tag_service = require("core.tag_service")
             local ok, result = tag_service.rename_bin(project_id, target_id, new_name)
             if not ok then
@@ -95,48 +93,35 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["RenameItem"] = function(command)
-        local target_type = command:get_parameter("target_type")
-        local target_id = command:get_parameter("target_id")
-        local project_id = command:get_parameter("project_id") or command.project_id
-        local new_name = command_helper.trim_string(command:get_parameter("new_name"))
+        local args = command:get_all_parameters()
 
-        if not target_type or target_type == "" then
-            set_last_error("RenameItem: Missing target_type")
-            return false
-        end
-        if not target_id or target_id == "" then
-            set_last_error("RenameItem: Missing target_id")
-            return false
-        end
-        if new_name == "" then
-            set_last_error("RenameItem: New name cannot be empty")
-            return false
-        end
 
-        local success, previous_or_err = perform_item_rename(target_type, target_id, new_name, project_id)
+        local project_id = args.project_id or command.project_id
+        local new_name = command_helper.trim_string(args.new_name)
+
+        local success, previous_or_err = perform_item_rename(args.target_type, args.target_id, new_name, project_id)
         if not success then
             set_last_error(previous_or_err or "RenameItem failed")
             return false
         end
 
-        command:set_parameter("target_type", target_type)
-        command:set_parameter("target_id", target_id)
-        command:set_parameter("project_id", project_id)
-        command:set_parameter("previous_name", previous_or_err or "")
-        command:set_parameter("final_name", new_name)
+        command:set_parameters({
+            ["args.target_type"] = args.target_type,
+            ["args.target_id"] = args.target_id,
+            ["project_id"] = project_id,
+            ["previous_name"] = previous_or_err or "",
+            ["final_name"] = new_name,
+        })
         return true
     end
 
     command_undoers["RenameItem"] = function(command)
-        local previous_name = command:get_parameter("previous_name")
-        if not previous_name or previous_name == "" then
-            return true
-        end
-        local target_type = command:get_parameter("target_type")
-        local target_id = command:get_parameter("target_id")
-        local project_id = command:get_parameter("project_id") or command.project_id
+        local args = command:get_all_parameters()
 
-        local success, err = perform_item_rename(target_type, target_id, previous_name, project_id)
+
+        local project_id = args.project_id or command.project_id
+
+        local success, err = perform_item_rename(args.target_type, args.target_id, args.previous_name, project_id)
         if not success then
             set_last_error(err or "UndoRenameItem failed")
             return false
@@ -146,7 +131,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["RenameItem"],
-        undoer = command_undoers["RenameItem"]
+        undoer = command_undoers["RenameItem"],
+        spec = SPEC,
     }
 end
 

@@ -17,27 +17,45 @@
 -- LinkClips and UnlinkClip commands
 local M = {}
 
+
+local SPEC = {
+    args = {
+        clip_id = { required = true },
+        clips = { required = true },
+        dry_run = { kind = "boolean" },
+        link_group_id = { required = true },
+        project_id = { required = true },
+    },
+    persisted = {
+        original_link_group = {},
+        original_role = {},
+        original_time_offset = { kind = "number", default = 0 },
+    },
+
+}
+
 function M.register(executors, undoers, db)
     
-    executors["LinkClips"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+    local function executor(command)
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing LinkClips command")
         end
 
-        local clips_to_link = command:get_parameter("clips")
 
-        if not clips_to_link or #clips_to_link < 2 then
+
+        if not args.clips or #args.clips < 2 then
             print("ERROR: LinkClips requires at least 2 clips")
             return false
         end
 
-        if dry_run then
+        if args.dry_run then
             return true  -- Preview is valid
         end
 
         local clip_links = require('core.clip_links')
-        local link_group_id, error_msg = clip_links.create_link_group(clips_to_link, db)
+        local link_group_id, error_msg = clip_links.create_link_group(args.clips, db)
 
         if not link_group_id then
             print(string.format("ERROR: LinkClips failed: %s", error_msg or "unknown error"))
@@ -47,12 +65,13 @@ function M.register(executors, undoers, db)
         -- Store link group ID for undo
         command:set_parameter("link_group_id", link_group_id)
 
-        print(string.format("✅ Linked %d clips (group %s)", #clips_to_link, link_group_id:sub(1,8)))
+        print(string.format("✅ Linked %d clips (group %s)", #args.clips, link_group_id:sub(1,8)))
         return true
     end
 
-    undoers["LinkClips"] = function(command)
-        local link_group_id = command:get_parameter("link_group_id")
+    local function undoer(command)
+        local args = command:get_all_parameters()
+        local link_group_id = args.link_group_id
 
         if not link_group_id then
             return false
@@ -75,61 +94,65 @@ function M.register(executors, undoers, db)
     end
 
     executors["UnlinkClip"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing UnlinkClip command")
         end
 
-        local clip_id = command:get_parameter("clip_id")
 
-        if not clip_id then
-            print("ERROR: UnlinkClip missing clip_id")
+
+        if not args.clip_id then
+            print("ERROR: UnlinkClip missing args.clip_id")
             return false
         end
 
-        if dry_run then
+        if args.dry_run then
             return true
         end
 
         local clip_links = require('core.clip_links')
 
         -- Save original link info for undo
-        local link_group = clip_links.get_link_group(clip_id, db)
+        local link_group = clip_links.get_link_group(args.clip_id, db)
         if link_group then
             command:set_parameter("original_link_group", link_group)
 
             -- Find this clip's info in the group
             for _, link_info in ipairs(link_group) do
-                if link_info.clip_id == clip_id then
-                    command:set_parameter("original_role", link_info.role)
-                    command:set_parameter("original_time_offset", link_info.time_offset)
+                if link_info.args.clip_id == args.clip_id then
+                    command:set_parameters({
+                        ["original_role"] = link_info.role,
+                        ["original_time_offset"] = link_info.time_offset,
+                    })
                     break
                 end
             end
         end
 
-        local success = clip_links.unlink_clip(clip_id, db)
+        local success = clip_links.unlink_clip(args.clip_id, db)
 
         if success then
-            print(string.format("✅ Unlinked clip %s", clip_id:sub(1,8)))
+            print(string.format("✅ Unlinked clip %s", args.clip_id:sub(1,8)))
         else
-            print(string.format("ERROR: Failed to unlink clip %s", clip_id:sub(1,8)))
+            print(string.format("ERROR: Failed to unlink clip %s", args.clip_id:sub(1,8)))
         end
 
         return success
     end
 
     undoers["UnlinkClip"] = function(command)
-        local clip_id = command:get_parameter("clip_id")
-        local original_link_group = command:get_parameter("original_link_group")
+        local args = command:get_all_parameters()
+        local clip_id = args.clip_id
 
-        if not clip_id or not original_link_group or #original_link_group == 0 then
+
+        if not clip_id or not args.original_link_group or #args.original_link_group == 0 then
             return true  -- Clip was not linked, nothing to restore
         end
 
         -- Restore the link
         local link_group_id = nil
-        for _, link_info in ipairs(original_link_group) do
+        for _, link_info in ipairs(args.original_link_group) do
             if link_info.clip_id ~= clip_id then
                 -- Find the existing link group ID from another clip
                 local query = db:prepare([[
@@ -155,11 +178,11 @@ function M.register(executors, undoers, db)
         end
 
         -- Re-insert this clip into the link group
-        local role = command:get_parameter("original_role")
-        local time_offset = command:get_parameter("original_time_offset") or 0
+
+        local time_offset = args.original_time_offset
 
         local insert_query = db:prepare([[
-            INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+            INSERT INTO clip_links (link_group_id, clip_id, args.original_role, time_offset, enabled)
             VALUES (?, ?, ?, ?, 1)
         ]])
 
@@ -169,7 +192,7 @@ function M.register(executors, undoers, db)
 
         insert_query:bind_value(1, link_group_id)
         insert_query:bind_value(2, clip_id)
-        insert_query:bind_value(3, role)
+        insert_query:bind_value(3, args.original_role)
         insert_query:bind_value(4, time_offset)
 
         local result = insert_query:exec()
@@ -181,7 +204,11 @@ function M.register(executors, undoers, db)
     executors["UnlinkClips"] = executors["UnlinkClip"]
     undoers["UnlinkClips"] = undoers["UnlinkClip"]
 
-    return {executor = executors["LinkClips"], undoer = undoers["LinkClips"]}
+    return {
+        executor = executor,
+        undoer = undoer,
+        spec = SPEC,
+    }
 end
 
 return M

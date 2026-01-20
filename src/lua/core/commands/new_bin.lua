@@ -14,33 +14,36 @@
 --
 -- @file new_bin.lua
 local M = {}
-local uuid = require("uuid")
 local tag_service = require("core.tag_service")
 local command_helper = require("core.command_helper")
 
-    function M.register(command_executors, command_undoers, db, set_last_error)
+
+local SPEC = {
+    args = {
+        bin_id = { required = true, kind = "string" },
+        name = { kind = "string" },
+        parent_id = { kind = "string" },
+        project_id = { required = true, kind = "string" },
+    },
+    persisted = {
+        bin_definition = {},
+    },
+
+}
+function M.register(command_executors, command_undoers, db, set_last_error)
         command_executors["NewBin"] = function(command)
+            local args = command:get_all_parameters()
             command:set_parameter("__skip_sequence_replay", true)
-            local project_id = command:get_parameter("project_id")
-            if not project_id or project_id == "" then
-                set_last_error("NewBin: missing project_id")
-                return false
-            end
-            local bin_name = command_helper.trim_string(command:get_parameter("name"))
+            local bin_name = command_helper.trim_string(args.name)
             if bin_name == "" then
                 bin_name = "New Bin"
             end
+        local bin_id = args.bin_id
 
-        local bin_id = command:get_parameter("bin_id")
-        if not bin_id or bin_id == "" then
-            bin_id = uuid.generate()
-            command:set_parameter("bin_id", bin_id)
-        end
-
-        local ok, result = tag_service.create_bin(project_id, {
+        local ok, result = tag_service.create_bin(args.project_id, {
             id = bin_id,
             name = bin_name,
-            parent_id = command:get_parameter("parent_id")
+            parent_id = args.parent_id
         })
         if not ok then
             set_last_error("NewBin: " .. tostring(result))
@@ -52,18 +55,9 @@ local command_helper = require("core.command_helper")
     end
 
     command_undoers["NewBin"] = function(command)
-        local project_id = command:get_parameter("project_id")
-        if not project_id or project_id == "" then
-            set_last_error("UndoNewBin: missing project_id")
-            return false
-        end
-        local bin_id = command:get_parameter("bin_id")
-        if not bin_id or bin_id == "" then
-            set_last_error("UndoNewBin: Missing bin_id parameter")
-            return false
-        end
+        local args = command:get_all_parameters()
 
-        local ok, err = tag_service.remove_bin(project_id, bin_id)
+        local ok, err = tag_service.remove_bin(args.project_id, args.bin_id)
         if not ok then
             set_last_error("UndoNewBin: " .. tostring(err))
             return false
@@ -75,6 +69,7 @@ local command_helper = require("core.command_helper")
     return {
         executor = command_executors["NewBin"],
         undoer = command_undoers["NewBin"],
+        spec = SPEC,
     }
 end
 

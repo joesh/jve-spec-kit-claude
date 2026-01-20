@@ -198,8 +198,8 @@ end
 
 -- Parse clip item
 local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info)
-    local rate_num = math.floor(frame_rate * 1000)
-    local rate_den = 1000
+    local fps_numerator = math.floor(frame_rate * 1000)
+    local fps_denominator = 1000
     local clip_info = {
         original_id = get_attr(clipitem_node, "id"),
         id = get_attr(clipitem_node, "id"),
@@ -210,9 +210,9 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         timeline_start = nil,
         timeline_end = nil,
         start_value = nil,
-        duration = Rational.new(0, rate_num, rate_den),
-        source_in = Rational.new(0, rate_num, rate_den),
-        source_out = Rational.new(0, rate_num, rate_den),
+        duration = Rational.new(0, fps_numerator, fps_denominator),
+        source_in = Rational.new(0, fps_numerator, fps_denominator),
+        source_out = Rational.new(0, fps_numerator, fps_denominator),
         enabled = true,
         frame_rate = frame_rate,
         raw_duration = nil
@@ -804,8 +804,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             duration = duration,
             source_in = source_in,
             source_out = source_out,
-            rate_num = fps_num,
-            rate_den = fps_den,
+            fps_numerator = fps_num,
+            fps_denominator = fps_den,
             enabled = clip_info.enabled ~= false,
             offline = clip_info.offline == true
         })
@@ -1000,8 +1000,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             duration = duration,
             source_in = source_in,
             source_out = source_out,
-            rate_num = fps_num,
-            rate_den = fps_den,
+            fps_numerator = fps_num,
+            fps_denominator = fps_den,
             enabled = clip_info.enabled ~= false,
             offline = clip_info.offline == true
         })

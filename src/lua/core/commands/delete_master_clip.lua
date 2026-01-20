@@ -14,12 +14,17 @@
 --
 -- @file delete_master_clip.lua
 local M = {}
+local set_error
 
-local function set_error(set_last_error, message)
-    if set_last_error then
-        set_last_error(message)
-    end
-end
+
+local SPEC = {
+    args = {
+        master_clip_id = { required = true },
+        master_clip_properties = {},
+        master_clip_snapshot = { required = true },
+        project_id = { required = true },
+    }
+}
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     if not command_executors or not command_undoers or not db then
@@ -43,9 +48,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             link_stmt:finalize()
         end
 
-        local clip_obj = Clip.load_optional(clip_id, db)
+        local clip_obj = Clip.load_optional(clip_id)
         if clip_obj then
-            return clip_obj:delete(db)
+            return clip_obj:delete()
         else
             local delete_stmt = db:prepare("DELETE FROM clips WHERE id = ?")
             if delete_stmt then
@@ -59,13 +64,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["DeleteMasterClip"] = function(command)
-        local master_clip_id = command:get_parameter("master_clip_id")
-        if not master_clip_id or master_clip_id == "" then
-            set_error(set_last_error, "DeleteMasterClip: Missing master_clip_id")
-            return false
-        end
+        local args = command:get_all_parameters()
 
-        local clip = Clip.load_optional(master_clip_id, db)
+
+        local clip = Clip.load_optional(args.master_clip_id)
         if not clip then
             set_error(set_last_error, "DeleteMasterClip: Master clip not found")
             return false
@@ -87,7 +89,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 set_error(set_last_error, "DeleteMasterClip: Failed to prepare reference check")
                 return false
             end
-            ref_query:bind_value(1, master_clip_id)
+            ref_query:bind_value(1, args.master_clip_id)
             ref_query:bind_value(2, clip.source_sequence_id)
             local in_use = 0
             if ref_query:exec() and ref_query:next() then
@@ -105,7 +107,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local child_stmt = db:prepare("SELECT id FROM clips WHERE parent_clip_id = ?")
         local child_clip_ids = {}
         if child_stmt then
-            child_stmt:bind_value(1, master_clip_id)
+            child_stmt:bind_value(1, args.master_clip_id)
             if child_stmt:exec() then
                 while child_stmt:next() do
                     table.insert(child_clip_ids, child_stmt:value(0))
@@ -168,7 +170,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local properties = {}
         local prop_query = db:prepare("SELECT id, property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
         if prop_query then
-            prop_query:bind_value(1, master_clip_id)
+            prop_query:bind_value(1, args.master_clip_id)
             if prop_query:exec() then
                 while prop_query:next() do
                     table.insert(properties, {
@@ -185,44 +187,45 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("master_clip_properties", properties)
 
         -- Remove metadata for the master clip itself
-        if not delete_clip_with_metadata(master_clip_id) then
+        if not delete_clip_with_metadata(args.master_clip_id) then
             set_error(set_last_error, "DeleteMasterClip: Failed to delete clip")
             return false
         end
 
-        print(string.format("✅ Deleted master clip %s", clip.name or master_clip_id))
+        print(string.format("✅ Deleted master clip %s", clip.name or args.master_clip_id))
         return true
     end
 
     command_undoers["DeleteMasterClip"] = function(command)
-        local snapshot = command:get_parameter("master_clip_snapshot")
-        if not snapshot then
-            set_error(set_last_error, "UndoDeleteMasterClip: Missing snapshot")
+        local args = command:get_all_parameters()
+
+        if not args.master_clip_snapshot then
+            set_error(set_last_error, "UndoDeleteMasterClip: Missing args.master_clip_snapshot")
             return false
         end
 
-        local restored = Clip.create(snapshot.name or "Master Clip", snapshot.media_id, {
-            id = snapshot.id,
-            project_id = snapshot.project_id,
-            clip_kind = snapshot.clip_kind,
-            track_id = snapshot.track_id,
-            parent_clip_id = snapshot.parent_clip_id,
-            owner_sequence_id = snapshot.owner_sequence_id,
-            source_sequence_id = snapshot.source_sequence_id,
-            start_value = snapshot.start_value,
-            duration = snapshot.duration,
-            source_in = snapshot.source_in,
-            source_out = snapshot.source_out,
-            enabled = snapshot.enabled ~= false,
-            offline = snapshot.offline,
+        local restored = Clip.create(args.master_clip_snapshot.name or "Master Clip", args.master_clip_snapshot.media_id, {
+            id = args.master_clip_snapshot.id,
+            project_id = args.master_clip_snapshot.project_id,
+            clip_kind = args.master_clip_snapshot.clip_kind,
+            track_id = args.master_clip_snapshot.track_id,
+            parent_clip_id = args.master_clip_snapshot.parent_clip_id,
+            owner_sequence_id = args.master_clip_snapshot.owner_sequence_id,
+            source_sequence_id = args.master_clip_snapshot.source_sequence_id,
+            start_value = args.master_clip_snapshot.start_value,
+            duration = args.master_clip_snapshot.duration,
+            source_in = args.master_clip_snapshot.source_in,
+            source_out = args.master_clip_snapshot.source_out,
+            enabled = args.master_clip_snapshot.enabled ~= false,
+            offline = args.master_clip_snapshot.offline,
         })
 
-        if not restored:save(db) then
+        if not restored:save() then
             set_error(set_last_error, "UndoDeleteMasterClip: Failed to restore master clip")
             return false
         end
 
-        local properties = command:get_parameter("master_clip_properties") or {}
+        local properties = args.master_clip_properties or {}
         if #properties > 0 then
             local insert_prop = db:prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)")
             if not insert_prop then
@@ -231,7 +234,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             for _, prop in ipairs(properties) do
                 insert_prop:bind_value(1, prop.id)
-                insert_prop:bind_value(2, snapshot.id)
+                insert_prop:bind_value(2, args.master_clip_snapshot.id)
                 insert_prop:bind_value(3, prop.property_name)
                 insert_prop:bind_value(4, prop.property_value)
                 insert_prop:bind_value(5, prop.property_type)
@@ -245,14 +248,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             insert_prop:finalize()
         end
 
-        print(string.format("UNDO: Restored master clip %s", snapshot.name or snapshot.id))
+        print(string.format("UNDO: Restored master clip %s", args.master_clip_snapshot.name or args.master_clip_snapshot.id))
         return true
     end
 
     return {
         executor = command_executors["DeleteMasterClip"],
         undoer = command_undoers["DeleteMasterClip"],
+        spec = SPEC,
     }
+end
+
+
+set_error = function(set_last_error, message)
+    if set_last_error then
+        set_last_error(message)
+    end
 end
 
 return M

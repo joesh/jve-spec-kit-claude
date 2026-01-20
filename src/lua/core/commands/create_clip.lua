@@ -19,16 +19,41 @@ local Sequence = require('models.sequence') -- Added
 local Rational = require("core.rational") -- Added
 local insert_selected_clip_into_timeline = require("core.clip_insertion")
 
+
+local SPEC = {
+    requires_any = {
+        {"media_id", "master_clip_id"},
+    },
+    args = {
+        clip_id = {},
+        duration = {},
+        duration_frames = {},
+        master_clip_id = {},
+        media_id = {},
+        project_id = { required = true },
+        sequence_id = {},
+        source_in = {},
+        source_in_frame = { kind = "number", default = 0 },
+        source_out = {},
+        source_out_frame = {},
+        start_value = {},
+        timeline_start = {},
+        timeline_start_frame = { kind = "number", default = 0 },
+        track_id = { required = true },
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["CreateClip"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing CreateClip command")
 
-        local track_id = command:get_parameter("track_id")
-        local media_id = command:get_parameter("media_id")
-        local sequence_id = command:get_parameter("sequence_id") -- Fetched sequence_id
+        local track_id = args.track_id
+        local media_id = args.media_id
+        local sequence_id = args.sequence_id -- Fetched sequence_id
         
         -- Load sequence to get its FPS
-        local sequence = Sequence.load(sequence_id, db)
+        local sequence = Sequence.load(sequence_id)
         if not sequence then
             print(string.format("ERROR: CreateClip: Sequence %s not found.", tostring(sequence_id)))
             return false
@@ -47,23 +72,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Get Rational inputs if available
-        local p_start = command:get_parameter("start_value") or command:get_parameter("timeline_start")
-        local p_dur = command:get_parameter("duration")
-        local p_sin = command:get_parameter("source_in")
-        local p_sout = command:get_parameter("source_out")
+        local p_start = args.start_value or args.timeline_start
+
+
+
 
         -- Get raw frame values from command parameters, defaulting to 0 for start/in
-        local raw_timeline_start_frame = extract_frames(p_start) or command:get_parameter("timeline_start_frame") or 0
-        local raw_duration_frames = extract_frames(p_dur) or command:get_parameter("duration_frames")
-        local raw_source_in_frame = extract_frames(p_sin) or command:get_parameter("source_in_frame") or 0
-        local raw_source_out_frame = extract_frames(p_sout) or command:get_parameter("source_out_frame")
-        local master_clip_id = command:get_parameter("master_clip_id")
-        local project_id_param = command:get_parameter("project_id")
+        local raw_timeline_start_frame = extract_frames(p_start) or args.timeline_start_frame
+        local raw_duration_frames = extract_frames(args.duration) or args.duration_frames
+        local raw_source_in_frame = extract_frames(args.source_in) or args.source_in_frame
+        local raw_source_out_frame = extract_frames(args.source_out) or args.source_out_frame
+        local master_clip_id = args.master_clip_id
+
 
         local master_clip = nil
         local copied_properties = {}
         if master_clip_id and master_clip_id ~= "" then
-            master_clip = Clip.load_optional(master_clip_id, db)
+            master_clip = Clip.load_optional(master_clip_id)
             if not master_clip then
                 print(string.format("WARNING: CreateClip: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
                 master_clip_id = nil
@@ -74,8 +99,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             media_id = master_clip.media_id
         end
 
-        if not track_id or track_id == "" or not media_id or media_id == "" then
-            print("WARNING: CreateClip: Missing required parameters (track_id or media_id)")
+        if not media_id or media_id == "" then
+            set_last_error("CreateClip: Missing media_id (and no usable master_clip_id)")
             return false
         end
 
@@ -96,7 +121,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if not raw_duration_frames or raw_duration_frames <= 0 or not raw_source_out_frame or raw_source_out_frame <= raw_source_in_frame then
-            print("WARNING: CreateClip: Missing or invalid duration/source range (after master clip resolution)")
+            set_last_error("CreateClip: Missing or invalid duration/source range (after master clip resolution)")
             return false
         end
                 
@@ -110,7 +135,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             role = "video",
             media_id = media_id,
             master_clip_id = master_clip_id,
-            project_id = project_id_param or (master_clip and master_clip.project_id),
+            project_id = args.project_id or (master_clip and master_clip.project_id),
             duration = duration_rational,
             source_in = source_in_rational,
             source_out = source_out_rational,
@@ -155,8 +180,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 duration = payload.duration,
                 source_in = payload.source_in,
                 source_out = payload.source_out,
-                rate_num = fps_num,
-                rate_den = fps_den,
+                fps_numerator = fps_num,
+                fps_denominator = fps_den,
                 enabled = true,
                 offline = master_clip and master_clip.offline,
             })
@@ -165,13 +190,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if payload.master_clip_id and payload.master_clip_id ~= "" then
                 command:set_parameter("master_clip_id", payload.master_clip_id)
             end
-            if project_id_param then
-                command:set_parameter("project_id", project_id_param)
+            if args.project_id then
+                command:set_parameter("project_id", args.project_id)
             elseif master_clip and master_clip.project_id then
                 command:set_parameter("project_id", master_clip.project_id)
             end
 
-            assert(clip:save(db), "CreateClip: failed to save clip")
+            assert(clip:save(), "CreateClip: failed to save clip")
             return {id = clip.id, role = payload.role, time_offset = 0}
         end
 
@@ -187,12 +212,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             insert_pos = timeline_start_rational
         })
 
-        print(string.format("Created clip with ID: %s on track %s at %s", command:get_parameter("clip_id"), track_id, tostring(timeline_start_rational)))
+        print(string.format("Created clip with ID: %s on track %s at %s", args.clip_id, track_id, tostring(timeline_start_rational)))
         return true
     end
 
     return {
-        executor = command_executors["CreateClip"]
+        executor = command_executors["CreateClip"],
+        spec = SPEC,
     }
 end
 

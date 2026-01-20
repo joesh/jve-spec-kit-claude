@@ -16,14 +16,23 @@
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
 
+
+local SPEC = {
+    args = {
+        dry_run = { kind = "boolean" },
+        project_id = { required = true },
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["DeselectAll"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
             print("Executing DeselectAll command")
         end
 
-        if dry_run then
+        if args.dry_run then
             return true
         end
 
@@ -42,7 +51,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     return {
-        executor = command_executors["DeselectAll"]
+        executor = command_executors["DeselectAll"],
+        spec = SPEC,
     }
 end
 

@@ -14,113 +14,109 @@
 --
 -- @file duplicate_master_clip.lua
 local M = {}
-local uuid = require("uuid")
 local database = require("core.database")
 local Clip = require("models.clip")
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
 
+
+local SPEC = {
+    args = {
+        bin_id = { kind = "string", empty_as_nil = true },
+        clip_snapshot = {
+            required = true,
+            kind = "table",
+            fields = {
+                media_id = { required = true, kind = "string" },
+                fps_numerator = { required = true, kind = "number" },
+                fps_denominator = { required = true, kind = "number" },
+                start_value = { kind = "number", default = 0 },
+                duration_value = { kind = "number" },
+                source_in_value = { kind = "number", default = 0 },
+                source_out_value = { kind = "number" },
+            },
+        },
+        copied_properties = { kind = "table" },
+        name = { kind = "string" },
+        new_clip_id = { required = true, kind = "string" },
+        project_id = { required = true, kind = "string" },
+    }
+}
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["DuplicateMasterClip"] = function(command)
-        local snapshot = command:get_parameter("clip_snapshot")
-        if type(snapshot) ~= "table" then
-            set_last_error("DuplicateMasterClip: Missing clip_snapshot parameter")
-            return false
-        end
+        local args = command:get_all_parameters()
+        local media_id = args.clip_snapshot.media_id
+        local project_id = args.project_id
+        local target_bin_id = args.bin_id
+        local new_clip_id = args.new_clip_id
 
-        local media_id = snapshot.media_id
-        if not media_id or media_id == "" then
-            set_last_error("DuplicateMasterClip: Snapshot missing media_id")
-            return false
-        end
+        local clip_name = args.name or args.clip_snapshot.name or "Master Clip Copy"
+        local timeline_start = Rational.new(args.clip_snapshot.start_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
 
-        local project_id = command:get_parameter("project_id") or snapshot.project_id
-        if not project_id or project_id == "" then
-            set_last_error("DuplicateMasterClip: missing project_id")
-            return false
+        local source_in_value = args.clip_snapshot.source_in_value
+        local source_out_value = args.clip_snapshot.source_out_value
+        local duration_value = args.clip_snapshot.duration_value
+        if duration_value == nil and source_out_value ~= nil then
+            duration_value = source_out_value - source_in_value
         end
-        local target_bin_id = command:get_parameter("bin_id")
-        if target_bin_id == "" then
-            target_bin_id = nil
-        end
+        duration_value = duration_value or 1
 
-        local new_clip_id = command:get_parameter("new_clip_id")
-        if not new_clip_id or new_clip_id == "" then
-            new_clip_id = uuid.generate()
-            command:set_parameter("new_clip_id", new_clip_id)
-        end
-
-        local clip_name = command:get_parameter("name") or snapshot.name or "Master Clip Copy"
-        local rate_num = snapshot.rate_num or snapshot.fps_numerator or 24
-        local rate_den = snapshot.rate_den or snapshot.fps_denominator or 1
-        local timeline_start = Rational.new(snapshot.start_value or 0, rate_num, rate_den)
-        local duration = Rational.new(snapshot.duration_value or snapshot.duration or ((snapshot.source_out_value or snapshot.source_out or 0) - (snapshot.source_in_value or snapshot.source_in or 0)) or 1, rate_num, rate_den)
-        local source_in = Rational.new(snapshot.source_in_value or snapshot.source_in or 0, rate_num, rate_den)
-        local source_out = Rational.new(snapshot.source_out_value or snapshot.source_out or (source_in.frames + duration.frames), rate_num, rate_den)
+        local duration = Rational.new(duration_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
+        local source_in = Rational.new(source_in_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
+        local source_out = Rational.new(source_out_value or (source_in_value + duration_value), args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
 
         local clip_opts = {
             id = new_clip_id,
             project_id = project_id,
             clip_kind = "master",
-            source_sequence_id = snapshot.source_sequence_id,
+            source_sequence_id = args.clip_snapshot.source_sequence_id,
             timeline_start = timeline_start,
             duration = duration,
             source_in = source_in,
             source_out = source_out,
-            rate_num = rate_num,
-            rate_den = rate_den,
-            enabled = snapshot.enabled ~= false,
-            offline = snapshot.offline == true,
+            fps_numerator = args.clip_snapshot.fps_numerator,
+            fps_denominator = args.clip_snapshot.fps_denominator,
+            enabled = args.clip_snapshot.enabled ~= false,
+            offline = args.clip_snapshot.offline == true,
         }
 
         local clip = Clip.create(clip_name, media_id, clip_opts)
         command:set_parameter("project_id", project_id)
 
-        local ok, actions = clip:save(db, {skip_occlusion = true})
+        local ok, actions = clip:save({skip_occlusion = true})
         if not ok then
             set_last_error("DuplicateMasterClip: Failed to save duplicated clip")
             return false
         end
         if actions and #actions > 0 then
-            command:set_parameter("occlusion_actions", actions)
         end
 
-        local copied_properties = command:get_parameter("copied_properties")
-        if type(copied_properties) == "table" and #copied_properties > 0 then
+
+        if type(args.copied_properties) == "table" and #args.copied_properties > 0 then
             command_helper.delete_properties_for_clip(new_clip_id)
-            command_helper.insert_properties_for_clip(new_clip_id, copied_properties)
+            command_helper.insert_properties_for_clip(new_clip_id, args.copied_properties)
         end
 
         if target_bin_id and not database.assign_master_clip_to_bin(project_id, new_clip_id, target_bin_id) then
             print(string.format("WARNING: DuplicateMasterClip: Failed to persist bin assignment for %s", new_clip_id))
         end
 
-        print(string.format("✅ Duplicated master clip '%s' → %s", tostring(snapshot.name or media_id), new_clip_id))
+        print(string.format("✅ Duplicated master clip '%s' → %s", tostring(args.clip_snapshot.name or media_id), new_clip_id))
         return true
     end
 
     command_undoers["DuplicateMasterClip"] = function(command)
-        local clip_id = command:get_parameter("new_clip_id")
-        if not clip_id or clip_id == "" then
-            set_last_error("UndoDuplicateMasterClip: Missing new_clip_id")
-            return false
-        end
-
-        local project_id = command:get_parameter("project_id")
-        if not project_id or project_id == "" then
-            set_last_error("UndoDuplicateMasterClip: missing project_id")
-            return false
-        end
-        local clip = Clip.load_optional(clip_id, db)
+        local args = command:get_all_parameters()
+        local clip = Clip.load_optional(args.new_clip_id)
         if clip then
-            command_helper.delete_properties_for_clip(clip_id)
-            if not clip:delete(db) then
+            command_helper.delete_properties_for_clip(args.new_clip_id)
+            if not clip:delete() then
                 set_last_error("UndoDuplicateMasterClip: Failed to delete duplicated clip")
                 return false
             end
         end
 
-        database.assign_master_clip_to_bin(project_id, clip_id, nil)
+        database.assign_master_clip_to_bin(args.project_id, args.new_clip_id, nil)
 
         return true
     end
@@ -128,6 +124,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     return {
         executor = command_executors["DuplicateMasterClip"],
         undoer = command_undoers["DuplicateMasterClip"],
+        spec = SPEC,
     }
 end
 

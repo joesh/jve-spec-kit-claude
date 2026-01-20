@@ -19,39 +19,50 @@ local uuid = require("uuid")
 local Clip = require("models.clip")
 local command_helper = require("core.command_helper")
 
+
+local SPEC = {
+    args = {
+        clip_id = { required = true },
+        default_value = {},
+        project_id = { required = true },
+        property_name = { required = true },
+        property_type = { required = true },
+        value = {},
+    },
+    persisted = {
+        -- Executor-written undo/redo payload discovered during execution.
+        -- These are outputs on first run (created by DB lookup / uuid generation),
+        -- and inputs on replay/undo. Do not mark them as required caller inputs.
+        previous_type = {},
+        previous_value = {},
+        previous_default = {},
+        property_id = {},
+        created_new = {},
+        executed_with_clip = {},
+    },
+
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetClipProperty"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing SetClipProperty command")
 
-        local clip_id = command:get_parameter("clip_id")
-        local property_name = command:get_parameter("property_name")
-        local new_value = command:get_parameter("value")
-        local property_type = command:get_parameter("property_type")
-        local default_value_param = command:get_parameter("default_value")
+        local clip_id = args.clip_id
+        local property_name = args.property_name
 
-        if not clip_id or clip_id == "" or not property_name or property_name == "" then
-            local message = "SetClipProperty: Missing required parameters"
-            set_last_error(message)
-            print("WARNING: " .. message)
-            return false
-        end
+        local property_type = args.property_type
 
-        if not property_type or property_type == "" then
-            local message = "SetClipProperty: Missing property_type parameter"
-            set_last_error(message)
-            print("WARNING: " .. message)
-            return false
-        end
 
-        local clip = Clip.load_optional(clip_id, db)
+        local clip = Clip.load_optional(clip_id)
         if not clip or clip.id == "" then
-            local executed_with_clip = command:get_parameter("executed_with_clip")
-            if executed_with_clip then
+
+            if args.executed_with_clip then
                 print(string.format("INFO: SetClipProperty: Clip %s missing during replay; property update skipped", clip_id))
                 return true
             end
 
-            if command:get_parameter("previous_value") ~= nil then
+            if args.previous_value ~= nil then
                 print(string.format("INFO: SetClipProperty: Clip %s missing but previous_value present; assuming clip deleted and skipping", clip_id))
                 return true
             end
@@ -101,7 +112,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         select_stmt:finalize()
 
-        local encoded_value, encode_err = json.encode({ value = new_value })
+        local encoded_value, encode_err = json.encode({ value = args.value })
         if not encoded_value then
             local message = "SetClipProperty: Failed to encode property value: " .. tostring(encode_err)
             set_last_error(message)
@@ -111,7 +122,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local default_json = nil
         do
-            local encoded_default, default_err = json.encode({ value = default_value_param })
+            local encoded_default, default_err = json.encode({ value = args.default_value })
             if not encoded_default then
                 local message = "SetClipProperty: Failed to encode default value: " .. tostring(default_err)
                 set_last_error(message)
@@ -121,13 +132,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             default_json = encoded_default
         end
 
-        command:set_parameter("previous_value", previous_value)
-        command:set_parameter("previous_type", previous_type)
-        command:set_parameter("previous_default", previous_default)
-        command:set_parameter("property_id", property_id)
-        command:set_parameter("created_new", not existing_property)
-        command:set_parameter("executed_with_clip", true)
-
+        command:set_parameters({
+            ["previous_value"] = previous_value,
+            ["previous_type"] = previous_type,
+            ["previous_default"] = previous_default,
+            ["property_id"] = property_id,
+            ["created_new"] = not existing_property,
+            ["executed_with_clip"] = true,
+        })
         if existing_property then
             local update_sql
             if default_json ~= nil then
@@ -194,10 +206,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             insert_stmt:finalize()
         end
 
-        clip:set_property(property_name, new_value)
+        clip:set_property(property_name, args.value)
 
-        if clip:save(db) then
-            print(string.format("Set clip property %s to %s for clip %s", property_name, tostring(new_value), clip_id))
+        if clip:save() then
+            print(string.format("Set clip property %s to %s for clip %s", property_name, tostring(args.value), clip_id))
             return true
         else
             local message = "Failed to save clip property change"
@@ -208,18 +220,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["SetClipProperty"] = function(command)
+        local args = command:get_all_parameters()
         print("Undoing SetClipProperty command")
 
-        local clip_id = command:get_parameter("clip_id")
-        local property_name = command:get_parameter("property_name")
-        local property_id = command:get_parameter("property_id")
-        local previous_value = command:get_parameter("previous_value")
-        local previous_type = command:get_parameter("previous_type")
-        local previous_default = command:get_parameter("previous_default")
-        local created_new = command:get_parameter("created_new") and true or false
 
-        if not property_id or property_id == "" then
-            local message = "Undo SetClipProperty: Missing property_id parameter"
+
+
+
+
+
+        local created_new = args.created_new and true or false
+
+        if not args.property_id or args.property_id == "" then
+            local message = "Undo SetClipProperty: Missing args.property_id parameter"
             set_last_error(message)
             print("WARNING: " .. message)
             return false
@@ -233,7 +246,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 print("WARNING: " .. message)
                 return false
             end
-            delete_stmt:bind_value(1, property_id)
+            delete_stmt:bind_value(1, args.property_id)
             if not delete_stmt:exec() then
                 local message = "Undo SetClipProperty: Failed to delete newly created property row"
                 set_last_error(message)
@@ -242,13 +255,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             delete_stmt:finalize()
         else
-            if not previous_type or previous_type == "" then
-                local message = "Undo SetClipProperty: Missing previous_type for existing property restore"
+            if not args.previous_type or args.previous_type == "" then
+                local message = "Undo SetClipProperty: Missing args.previous_type for existing property restore"
                 set_last_error(message)
                 print("WARNING: " .. message)
                 return false
             end
-            local encoded_prev, encode_err = json.encode({ value = previous_value })
+            local encoded_prev, encode_err = json.encode({ value = args.previous_value })
             if not encoded_prev then
                 local message = "Undo SetClipProperty: Failed to encode previous property value: " .. tostring(encode_err)
                 set_last_error(message)
@@ -256,7 +269,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return false
             end
             local update_sql
-            if previous_default ~= nil then
+            if args.previous_default ~= nil then
                 update_sql = "UPDATE properties SET property_value = ?, property_type = ?, default_value = ? WHERE id = ?"
             else
                 update_sql = "UPDATE properties SET property_value = ?, property_type = ? WHERE id = ?"
@@ -269,12 +282,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return false
             end
             update_stmt:bind_value(1, encoded_prev)
-            update_stmt:bind_value(2, previous_type)
-            if previous_default ~= nil then
-                update_stmt:bind_value(3, previous_default)
-                update_stmt:bind_value(4, property_id)
+            update_stmt:bind_value(2, args.previous_type)
+            if args.previous_default ~= nil then
+                update_stmt:bind_value(3, args.previous_default)
+                update_stmt:bind_value(4, args.property_id)
             else
-                update_stmt:bind_value(3, property_id)
+                update_stmt:bind_value(3, args.property_id)
             end
             if not update_stmt:exec() then
                 local message = "Undo SetClipProperty: Failed to restore property row"
@@ -285,10 +298,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             update_stmt:finalize()
         end
 
-        local clip = Clip.load_optional(clip_id, db)
+        local clip = Clip.load_optional(args.clip_id)
         if clip then
-            clip:set_property(property_name, previous_value)
-            clip:save(db)
+            clip:set_property(args.property_name, args.previous_value)
+            clip:save()
         end
 
         return true
@@ -296,7 +309,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["SetClipProperty"],
-        undoer = command_undoers["SetClipProperty"]
+        undoer = command_undoers["SetClipProperty"],
+        spec = SPEC,
     }
 end
 

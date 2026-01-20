@@ -86,6 +86,31 @@ keyboard_shortcuts.MOD = MOD
 -- References to timeline state and other modules
 local timeline_state = nil
 local command_manager = nil
+
+local function execute_command(command_name, params)
+    assert(command_manager, "KeyboardShortcuts: command_manager not initialized")
+
+    if type(command_manager.execute_ui) == "function" then
+        return command_manager.execute_ui(command_name, params)
+    end
+
+    -- Fallback for minimal stubs (e.g. headless tests) where begin/end may not exist.
+    local owns_event = false
+    if type(command_manager.begin_command_event) == "function" and type(command_manager.end_command_event) == "function" then
+        if not command_manager.peek_command_event_origin or command_manager.peek_command_event_origin() == nil then
+            command_manager.begin_command_event("ui")
+            owns_event = true
+        end
+    end
+
+    local result = command_manager.execute(command_name, params)
+
+    if owns_event then
+        command_manager.end_command_event()
+    end
+
+    return result
+end
 local project_browser = nil
 local timeline_panel = nil
 local focus_manager = require("ui.focus_manager")
@@ -289,7 +314,7 @@ local function ensure_browser_shortcuts_registered()
             context = "project_browser",
             handler = function()
                 if command_manager then
-                    local result = command_manager.execute(ACTIVATE_BROWSER_COMMAND)
+                    local result = execute_command(ACTIVATE_BROWSER_COMMAND)
                     if not result.success then
                         print(string.format("⚠️  %s returned error: %s", ACTIVATE_BROWSER_COMMAND, result.error_message or "unknown"))
                     end
@@ -468,7 +493,7 @@ function keyboard_shortcuts.perform_delete_action(opts)
                 params.sequence_id = timeline_state.get_sequence_id()
             end
 
-            local result = command_manager.execute("RippleDeleteSelection", params)
+            local result = execute_command("RippleDeleteSelection", params)
             if not result.success then
                 print(string.format("Failed to ripple delete selection: %s", result.error_message or "unknown error"))
             end
@@ -494,14 +519,20 @@ function keyboard_shortcuts.perform_delete_action(opts)
         end
 
         local commands_json = json.encode(command_specs)
-        local batch_cmd = Command.create("BatchCommand", project_id)
-        batch_cmd:set_parameter("commands_json", commands_json)
+        local batch_cmd_params = {
+            project_id = project_id,
+        }
+        batch_cmd_params.commands_json = commands_json
         if active_sequence_id and active_sequence_id ~= "" then
-            batch_cmd:set_parameter("sequence_id", active_sequence_id)
-            batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+            for key, value in pairs({
+                ["sequence_id"] = active_sequence_id,
+                ["__snapshot_sequence_ids"] = {active_sequence_id},
+            }) do
+                batch_cmd_params[key] = value
+            end
         end
 
-        local result = command_manager.execute(batch_cmd)
+        local result = execute_command("BatchCommand", batch_cmd_params)
         if result.success then
             if timeline_state.set_selection then
                 timeline_state.set_selection({})
@@ -525,7 +556,7 @@ function keyboard_shortcuts.perform_delete_action(opts)
             params.sequence_id = timeline_state.get_sequence_id()
         end
 
-        local result = command_manager.execute("RippleDelete", params)
+        local result = execute_command("RippleDelete", params)
         if result.success then
             if timeline_state.clear_gap_selection then
                 timeline_state.clear_gap_selection()
@@ -541,7 +572,8 @@ function keyboard_shortcuts.perform_delete_action(opts)
 end
 
 -- Global key handler function (called from Qt event filter)
-function keyboard_shortcuts.handle_key(event)
+-- Internal implementation of handle_key (without command event management)
+local function handle_key_impl(event)
     local key = event.key
     local modifiers = event.modifiers
     local text = event.text
@@ -681,7 +713,7 @@ function keyboard_shortcuts.handle_key(event)
     local tilde_without_meta = (key == KEY.Tilde or (key == KEY.Grave and modifier_shift)) and not modifier_meta and not modifier_alt
     if tilde_without_meta then
         if command_manager then
-            command_manager.execute("ToggleMaximizePanel")
+            execute_command("ToggleMaximizePanel")
         else
             panel_manager.toggle_active_panel()
         end
@@ -836,7 +868,7 @@ function keyboard_shortcuts.handle_key(event)
             else
                 command_name = "SelectAll"
             end
-            command_manager.execute(command_name)
+            execute_command(command_name)
         end
         return true
     end
@@ -846,7 +878,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     if key == KEY.Up and command_manager and panel_active_timeline then
-        local result = command_manager.execute("GoToPrevEdit")
+        local result = execute_command("GoToPrevEdit")
         if not result.success then
             print(string.format("⚠️  GoToPrevEdit returned error: %s", result.error_message or "unknown"))
         end
@@ -854,7 +886,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     if key == KEY.Down and command_manager and panel_active_timeline then
-        local result = command_manager.execute("GoToNextEdit")
+        local result = execute_command("GoToNextEdit")
         if not result.success then
             print(string.format("⚠️  GoToNextEdit returned error: %s", result.error_message or "unknown"))
         end
@@ -862,7 +894,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     if key == KEY.Home and command_manager and panel_active_timeline then
-        local result = command_manager.execute("GoToStart")
+        local result = execute_command("GoToStart")
         if not result.success then
             print(string.format("⚠️  GoToStart returned error: %s", result.error_message or "unknown"))
         end
@@ -870,7 +902,7 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     if key == KEY.End and command_manager and panel_active_timeline then
-        local result = command_manager.execute("GoToEnd")
+        local result = execute_command("GoToEnd")
         if not result.success then
             print(string.format("⚠️  GoToEnd returned error: %s", result.error_message or "unknown"))
         end
@@ -933,17 +965,19 @@ function keyboard_shortcuts.handle_key(event)
 
             local result
             if #edge_infos > 1 then
-                local batch_cmd = Command.create("BatchRippleEdit", project_id)
-                batch_cmd:set_parameter("edge_infos", edge_infos)
-                batch_cmd:set_parameter("delta_frames", nudge_ms.frames)
-                batch_cmd:set_parameter("sequence_id", sequence_id)
-                result = command_manager.execute(batch_cmd)
+                result = execute_command("BatchRippleEdit", {
+                    ["edge_infos"] = edge_infos,
+                                        ["delta_frames"] = nudge_ms.frames,
+                                        ["sequence_id"] = sequence_id,
+                    project_id = project_id,
+                })
             elseif #edge_infos == 1 then
-                local ripple_cmd = Command.create("RippleEdit", project_id)
-                ripple_cmd:set_parameter("edge_info", edge_infos[1])
-                ripple_cmd:set_parameter("delta_frames", nudge_ms.frames)
-                ripple_cmd:set_parameter("sequence_id", sequence_id)
-                result = command_manager.execute(ripple_cmd)
+                result = execute_command("RippleEdit", {
+                    ["edge_info"] = edge_infos[1],
+                                        ["delta_frames"] = nudge_ms.frames,
+                                        ["sequence_id"] = sequence_id,
+                    project_id = project_id,
+                })
             end
 
             if result and result.success then
@@ -957,13 +991,12 @@ function keyboard_shortcuts.handle_key(event)
                 table.insert(clip_ids, clip.id)
             end
 
-            local nudge_cmd = Command.create("Nudge", project_id)
-            -- Nudge supports nudge_amount_rat
-            nudge_cmd:set_parameter("nudge_amount_rat", nudge_ms)
-            nudge_cmd:set_parameter("selected_clip_ids", clip_ids)
-            nudge_cmd:set_parameter("sequence_id", sequence_id)
-
-            local result = command_manager.execute(nudge_cmd)
+            local result = execute_command("Nudge", {
+                ["nudge_amount_rat"] = nudge_ms,
+                                ["selected_clip_ids"] = clip_ids,
+                                ["sequence_id"] = sequence_id,
+                project_id = project_id,
+            })
             if result and result.success then
                 print(string.format("Nudged %d clip(s) %s by %d frame(s) (%s)", #selected_clips, direction, frame_count, timecode_str))
             else
@@ -1032,15 +1065,21 @@ function keyboard_shortcuts.handle_key(event)
 
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
             assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: Blade missing active project_id")
-            local batch_cmd = Command.create("BatchCommand", project_id)
-            batch_cmd:set_parameter("commands_json", json.encode(specs))
+            local batch_cmd_params = {
+                project_id = project_id,
+            }
+            batch_cmd_params.commands_json = json.encode(specs)
             local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
             if active_sequence_id and active_sequence_id ~= "" then
-                batch_cmd:set_parameter("sequence_id", active_sequence_id)
-                batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
+                for key, value in pairs({
+                    ["sequence_id"] = active_sequence_id,
+                    ["__snapshot_sequence_ids"] = {active_sequence_id},
+                }) do
+                    batch_cmd_params[key] = value
+                end
             end
 
-            local result = command_manager.execute(batch_cmd)
+            local result = execute_command("BatchCommand", batch_cmd_params)
             if result.success then
                 print(string.format("Blade: Split %d clip(s) at %s", #specs, tostring(playhead_value)))
             else
@@ -1190,6 +1229,31 @@ function keyboard_shortcuts.handle_key(event)
     end
 
     return false  -- Event not handled
+end
+
+-- Public entry point that wraps handle_key_impl with command event management
+function keyboard_shortcuts.handle_key(event)
+    -- Begin command event for all execute() calls in this handler
+    -- (only if one isn't already active - allows calling from within existing event scope)
+    local can_peek = command_manager and type(command_manager.peek_command_event_origin) == "function"
+    local owns_command_event = not command_manager or not can_peek or not command_manager.peek_command_event_origin()
+    if owns_command_event then
+        if command_manager and type(command_manager.begin_command_event) == "function" then command_manager.begin_command_event("ui") end
+    end
+
+    -- Call implementation (pcall ensures cleanup even if there's an error)
+    local success, result = pcall(handle_key_impl, event)
+
+    -- Always cleanup command event
+    if owns_command_event then
+        if command_manager and type(command_manager.end_command_event) == "function" then command_manager.end_command_event() end
+    end
+
+    -- Propagate error or return result
+    if not success then
+        error(result)
+    end
+    return result
 end
 
 return keyboard_shortcuts

@@ -21,6 +21,7 @@ local error_system = require("core.error_system")
 local logger = require("core.logger")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
+local command_manager = require("core.command_manager")
 local frame_utils = require("core.frame_utils")
 local timeline_state = require("ui.timeline.timeline_state")
 local inspectable_factory = require("inspectable")
@@ -1054,7 +1055,9 @@ function M.save_field_value(field_key, explicit_value)
   }
 
   suppress_field_updates()
+  command_manager.begin_command_event("ui")
   local ok, err = inspectable:set(field_key, payload)
+  command_manager.end_command_event()
   if ok then
     if entry.set_mixed then
       entry:set_mixed(false)
@@ -1207,6 +1210,7 @@ local function apply_multi_edit_new()
     end
   end
 
+  command_manager.begin_command_event("ui")
   for _, inspectable in ipairs(M._multi_inspectables) do
     for field_key, value in pairs(pending) do
       local ok, err = inspectable:set(field_key, value)
@@ -1216,6 +1220,7 @@ local function apply_multi_edit_new()
       end
     end
   end
+  command_manager.end_command_event()
 
   for field_key, value in pairs(pending) do
     local entry = M._field_widgets[field_key]

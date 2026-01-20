@@ -20,6 +20,18 @@ local database = require("core.database")
 local ui_constants = require("core.ui_constants")
 local command_helper = require("core.command_helper")
 
+
+local SPEC = {
+    args = {
+        frame_rate = {required = true},
+        height = {},
+        name = { required = true },
+        project_id = { required = true },
+        sequence_id = {},
+        width = {},
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     local MIN_TRACK_HEIGHT = 24
     local DEFAULT_TRACK_HEIGHT = (ui_constants and ui_constants.TIMELINE and ui_constants.TIMELINE.TRACK_HEIGHT) or 50
@@ -57,10 +69,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         for _, def in ipairs(definitions) do
             local track = def.builder(def.label, sequence_id, {
-                index = def.index,
-                db = db
+                index = def.index
             })
-            if not track or not track:save(db) then
+            if not track or not track:save() then
                 return false, string.format("CreateSequence: Failed to create track %s", def.label)
             end
 
@@ -77,32 +88,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["CreateSequence"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing CreateSequence command")
 
-        local name = command:get_parameter("name")
-        local project_id = command:get_parameter("project_id")
-        local frame_rate = command:get_parameter("frame_rate")
-        local width = command:get_parameter("width")
-        local height = command:get_parameter("height")
+        local name = args.name
+        local project_id = args.project_id
 
-        if not name or name == "" or not project_id or project_id == "" or not frame_rate then
-            print("WARNING: CreateSequence: Missing required parameters")
-            return false
-        end
+
+
         
-        if type(frame_rate) == "number" and frame_rate <= 0 then
-            print("WARNING: CreateSequence: Invalid frame rate")
+        if type(args.frame_rate) == "number" and args.frame_rate <= 0 then
+            set_last_error("CreateSequence: Invalid frame rate")
             return false
         end
 
-        local existing_id = command:get_parameter("sequence_id")
-        local sequence = Sequence.create(name, project_id, frame_rate, width, height, {
-            id = existing_id
+
+        local sequence = Sequence.create(name, project_id, args.frame_rate, args.width, args.height, {
+            id = args.sequence_id
         })
 
         command:set_parameter("sequence_id", sequence.id)
 
-        if not sequence:save(db) then
+        if not sequence:save() then
             print(string.format("Failed to save sequence: %s", name))
             return false
         end
@@ -129,33 +136,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["CreateSequence"] = function(command)
+        local args = command:get_all_parameters()
         print("Undoing CreateSequence command")
-        local sequence_id = command:get_parameter("sequence_id")
-        if not sequence_id or sequence_id == "" then
-            print("WARNING: UndoCreateSequence: Missing sequence_id")
-            return false
-        end
+
 
         local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
         if not stmt then
-            print("ERROR: UndoCreateSequence: Failed to prepare delete statement")
+            set_last_error("UndoCreateSequence: Failed to prepare delete statement")
             return false
         end
-        stmt:bind_value(1, sequence_id)
+        stmt:bind_value(1, args.sequence_id)
         local ok = stmt:exec()
         stmt:finalize()
         if not ok then
             print("ERROR: UndoCreateSequence failed: " .. tostring(db:last_error() or "unknown"))
             return false
         end
-        print(string.format("✅ Undo CreateSequence: Removed sequence %s", tostring(sequence_id)))
+        print(string.format("✅ Undo CreateSequence: Removed sequence %s", tostring(args.sequence_id)))
         return true
     end
     command_executors["UndoCreateSequence"] = command_undoers["CreateSequence"]
 
     return {
         executor = command_executors["CreateSequence"],
-        undoer = command_undoers["CreateSequence"]
+        undoer = command_undoers["CreateSequence"],
+        spec = SPEC,
     }
 end
 

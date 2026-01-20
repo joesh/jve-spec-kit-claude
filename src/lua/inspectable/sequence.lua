@@ -61,12 +61,12 @@ function SequenceInspectable:get(field)
 end
 
 function SequenceInspectable:set(field, value)
-    local cmd = Command.create("SetSequenceMetadata", self.project_id)
-    cmd:set_parameter("sequence_id", self.sequence_id)
-    cmd:set_parameter("field", field)
-    cmd:set_parameter("value", value)
-
-    local result = command_manager.execute(cmd)
+    local result = command_manager.execute("SetSequenceMetadata", {
+        ["sequence_id"] = self.sequence_id,
+                ["field"] = field,
+                ["value"] = value,
+        project_id = self.project_id,
+    })
     if not result.success then
         return false, result.error_message or "failed to update sequence"
     end

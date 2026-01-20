@@ -17,20 +17,24 @@
 -- Timeline View Drag Handler
 -- Handles completion of drag operations (executing commands)
 local M = {}
-local Command = require("command")
-local command_manager = require("core.command_manager")
+local core_command_manager = require("core.command_manager")
 local json = require("dkjson")
 local logger = require("core.logger")
 
 function M.handle_release(view, drag_state, modifiers)
+    local command_manager = (view and view.command_manager) or core_command_manager
     local state_module = view.state
     local drag_type = drag_state.type
     local current_y = drag_state.current_y or drag_state.start_y
     local height = select(2, timeline.get_dimensions(view.widget))
     local target_track_id = view.get_track_id_at_y(current_y, height)
-    
+
     -- Begin a command event for all command executions in this handler
-    command_manager.begin_command_event("timeline_drag_release")
+    -- (only if one isn't already active - allows calling from within existing event scope)
+    local owns_command_event = not command_manager.peek_command_event_origin()
+    if owns_command_event then
+        command_manager.begin_command_event("ui")
+    end
 
     if drag_type == "clips" then
         local delta_rat = drag_state.delta_rational
@@ -66,7 +70,7 @@ function M.handle_release(view, drag_state, modifiers)
         end
         if #current_clips == 0 then
             logger.warn("timeline_drag", "Drag release - no current clips found for drag state")
-            return
+            goto cleanup
         end
 
         local all_tracks = state_module.get_all_tracks()
@@ -101,23 +105,22 @@ function M.handle_release(view, drag_state, modifiers)
             end
 
             if target_track_id == reference_clip.track_id and delta_rat.frames == 0 then
-                return
+                goto cleanup
             end
 
             local result = command_manager.execute("DuplicateClips", {
                 ["project_id"] = active_proj,
-                                ["sequence_id"] = active_seq,
-                                ["__snapshot_sequence_ids"] = {active_seq},
-                                ["clip_ids"] = ids,
-                                ["delta_rat"] = delta_rat,
-                                ["target_track_id"] = target_track_id,
-                                ["anchor_clip_id"] = reference_clip.id,
+                ["sequence_id"] = active_seq,
+                ["__snapshot_sequence_ids"] = {active_seq},
+                ["clip_ids"] = ids,
+                ["delta_rat"] = delta_rat,
+                ["target_track_id"] = target_track_id,
+                ["anchor_clip_id"] = reference_clip.id,
             })
             if not result.success then
                 logger.error("timeline_drag", string.format("DuplicateClips failed: %s", result.error_message or "unknown"))
             end
-            command_manager.end_command_event()
-            return
+            goto cleanup
         end
 
         local command_specs = {}
@@ -208,39 +211,33 @@ function M.handle_release(view, drag_state, modifiers)
         end
 
         if #command_specs == 0 then
-            return
+            goto cleanup
         elseif #command_specs == 1 then
             local spec = command_specs[1]
-            local cmd = Command.create(spec.command_type, active_proj)
+            local params = { project_id = active_proj }
             for k, v in pairs(spec.parameters) do
-                cmd:set_parameter(k, v)
+                params[k] = v
             end
-            if active_seq and not cmd:get_parameter("sequence_id") then
-                cmd:set_parameter("sequence_id", active_seq)
+            if active_seq and not params.sequence_id then
+                params.sequence_id = active_seq
             end
-            local result = command_manager.execute(cmd)
+            local result = command_manager.execute(spec.command_type, params)
             if not result.success then
                 logger.error("timeline_drag", string.format("%s failed: %s", spec.command_type, result.error_message or "unknown"))
             end
-            command_manager.end_command_event()
         else
-            local batch_cmd_params = {
+            local params = {
                 project_id = active_proj,
+                commands_json = json.encode(command_specs),
             }
-            batch_cmd_params.commands_json = json.encode(command_specs)
             if active_seq and active_seq ~= "" then
-                for key, value in pairs({
-                    ["sequence_id"] = active_seq,
-                    ["__snapshot_sequence_ids"] = {active_seq},
-                }) do
-                    batch_cmd_params[key] = value
-                end
+                params.sequence_id = active_seq
+                params.__snapshot_sequence_ids = {active_seq}
             end
-            local result = command_manager.execute("BatchCommand", batch_cmd_params)
+            local result = command_manager.execute("BatchCommand", params)
             if not result.success then
                 logger.error("timeline_drag", string.format("Batch drag failed: %s", result.error_message or "unknown"))
             end
-            command_manager.end_command_event()
         end
 
     elseif drag_type == "edges" then
@@ -249,12 +246,12 @@ function M.handle_release(view, drag_state, modifiers)
         local edges = drag_state.edges or {}
         local lead_edge = drag_state.lead_edge
 
-        if #edges == 0 then return end
+        if #edges == 0 then goto cleanup end
 
         local delta_rat = drag_state.preview_clamped_delta or drag_state.delta_rational
         assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta for edge drag")
         if delta_rat.frames == 0 then
-            return
+            goto cleanup
         end
 
         -- Lookup track_id for each edge
@@ -300,40 +297,38 @@ function M.handle_release(view, drag_state, modifiers)
 
         local lead_edge_info = normalize_edge_entry(lead_edge)
 
-        local cmd = Command.create("BatchRippleEdit", active_proj)
-        cmd:set_parameters({
-            ["edge_infos"] = edge_infos,
-            ["delta_frames"] = delta_rat.frames,
-        })
+        local params = {
+            project_id = active_proj,
+            edge_infos = edge_infos,
+            delta_frames = delta_rat.frames,
+            -- UI-only optimization: reuse in-memory timeline clip indices (avoid DB reload)
+            __use_timeline_state_cache = true,
+        }
         if lead_edge_info then
-            cmd:set_parameter("lead_edge", lead_edge_info)
+            params.lead_edge = lead_edge_info
         end
         if active_seq then
-            cmd:set_parameter("sequence_id", active_seq)
-            -- Required by CommandManager snapshotting.
-            cmd:set_parameter("__snapshot_sequence_ids", {active_seq})
+            params.sequence_id = active_seq
+            params.__snapshot_sequence_ids = {active_seq}
         end
-
-        -- UI-only optimization: allow BatchRippleEdit to reuse the already-loaded
-        -- in-memory timeline clip indices during execution (avoid DB reload).
-        cmd:set_parameter("__use_timeline_state_cache", true)
-
         -- Provide the interaction snapshot/region so BatchRippleEdit can avoid
         -- loading the full sequence for roll-only edits.
         if drag_state.preloaded_clip_snapshot then
-            cmd:set_parameter("__preloaded_clip_snapshot", drag_state.preloaded_clip_snapshot)
+            params.__preloaded_clip_snapshot = drag_state.preloaded_clip_snapshot
         end
         if drag_state.timeline_active_region then
-            cmd:set_parameter("__timeline_active_region", drag_state.timeline_active_region)
+            params.__timeline_active_region = drag_state.timeline_active_region
         end
-        local result = command_manager.execute(cmd)
+        local result = command_manager.execute("BatchRippleEdit", params)
         if not result.success then
             logger.error("timeline_drag", string.format("BatchRippleEdit failed: %s", result.error_message or "unknown"))
         end
+    end
+
+    ::cleanup::
+    if owns_command_event then
         command_manager.end_command_event()
     end
-    -- Ensure the command event is ended if no specific command was executed
-    command_manager.end_command_event()
 end
 
 return M

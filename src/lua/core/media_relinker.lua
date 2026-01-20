@@ -551,7 +551,7 @@ function M.find_offline_media(db, project_id)
     if stmt:exec() then
         while stmt:next() do
             local media_id = stmt:value(0)
-            local media = Media.load(media_id, db)
+            local media = Media.load(media_id)
             if media and not file_exists(media.file_path) then
                 table.insert(offline, media)
             end

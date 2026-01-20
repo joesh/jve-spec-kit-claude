@@ -93,14 +93,16 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
 end
 
 -- Load a media item from the database
-function M.load(media_id, db)
+function M.load(media_id)
     if not media_id or media_id == "" then
         logger.warn("media", "Media.load: Invalid media_id")
         return nil
     end
 
+    local database = require("core.database")
+    local db = database.get_connection()
     if not db then
-        logger.warn("media", "Media.load: No database provided")
+        logger.warn("media", "Media.load: No database connection available")
         return nil
     end
 
@@ -154,12 +156,14 @@ function M.load(media_id, db)
 end
 
 -- Save a media item to the database
-function M:save(db)
+function M:save()
+    local database = require("core.database")
+    local db = database.get_connection()
     if not db then
-        logger.warn("media", "Media:save: No database provided")
+        logger.warn("media", "Media:save: No database connection available")
         return false
     end
-    
+
     -- Correctly handle duration (Rational)
     local dur_frames = 0
     if type(self.duration) == "table" and self.duration.frames then

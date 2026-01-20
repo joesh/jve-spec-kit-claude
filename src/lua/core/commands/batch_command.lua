@@ -18,6 +18,21 @@ local json = require("dkjson")
 local Command = require("command")
 local command_helper = require("core.command_helper")
 
+
+local SPEC = {
+    args = {
+        commands_json = {},
+        project_id = { required = true },
+        sequence_id = {},
+    },
+    persisted = {
+        executed_commands_json = {},
+    },
+    requires_any = {
+        { "commands_json", "executed_commands_json" },
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     
     local function deep_copy(value, seen)
@@ -66,11 +81,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["BatchCommand"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing BatchCommand")
 
-        local commands_json = command:get_parameter("executed_commands_json") or command:get_parameter("commands_json")
+        local commands_json = args.executed_commands_json or args.commands_json
         if not commands_json or commands_json == "" then
-            print("ERROR: BatchCommand: No commands provided")
+            set_last_error("BatchCommand: No commands provided")
             return false
         end
 
@@ -80,24 +96,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local batch_project_id = command:get_parameter("project_id") or command.project_id
-        if not batch_project_id or batch_project_id == "" then
-            print("ERROR: BatchCommand: Missing project_id on parent command")
-            return false
-        end
+
 
         local executed_commands = {}
 
         for i, spec in ipairs(command_specs) do
             local child_project_id = spec.project_id
             if not child_project_id or child_project_id == "" then
-                child_project_id = batch_project_id
+                child_project_id = args.project_id
                 spec.project_id = child_project_id
             end
 
-            if command:get_parameter("sequence_id") and (not spec.parameters or not spec.parameters.sequence_id) then
+            if args.sequence_id and (not spec.parameters or not spec.parameters.sequence_id) then
                 spec.parameters = spec.parameters or {}
-                spec.parameters.sequence_id = command:get_parameter("sequence_id")
+                spec.parameters.sequence_id = args.sequence_id
             end
 
             local cmd = Command.create(spec.command_type, child_project_id)
@@ -155,26 +167,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_undoers["BatchCommand"] = function(command)
+        local args = command:get_all_parameters()
         print("Undoing BatchCommand")
 
-        local commands_json = command:get_parameter("executed_commands_json")
-        if not commands_json then
-            print("ERROR: BatchCommand undo: No executed commands found")
+
+        if not args.executed_commands_json then
+            set_last_error("BatchCommand undo: No executed commands found")
             return false
         end
 
-        local command_specs = json.decode(commands_json)
-        local batch_project_id = command:get_parameter("project_id") or command.project_id
-        if not batch_project_id or batch_project_id == "" then
-            print("ERROR: BatchCommand undo: Missing project_id on parent command")
-            return false
-        end
+        local command_specs = json.decode(args.executed_commands_json)
+
 
         for i = #command_specs, 1, -1 do
             local spec = command_specs[i]
             local child_project_id = spec.project_id
             if not child_project_id or child_project_id == "" then
-                child_project_id = batch_project_id
+                child_project_id = args.project_id
                 spec.project_id = child_project_id
             end
 
@@ -208,7 +217,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["BatchCommand"],
-        undoer = command_undoers["BatchCommand"]
+        undoer = command_undoers["BatchCommand"],
+        spec = SPEC,
     }
 end
 

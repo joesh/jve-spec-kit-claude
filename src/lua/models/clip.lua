@@ -51,7 +51,7 @@ local function validate_rational(val, field_name)
     return val
 end
 
-local function load_internal(clip_id, db, raise_errors)
+local function load_internal(clip_id, raise_errors)
     if not clip_id or clip_id == "" then
         if raise_errors then
             error("Clip.load_failed: Invalid clip_id")
@@ -59,9 +59,11 @@ local function load_internal(clip_id, db, raise_errors)
         return nil
     end
 
+    local database = require("core.database")
+    local db = database.get_connection()
     if not db then
         if raise_errors then
-            error("Clip.load_failed: No database provided")
+            error("Clip.load_failed: No database connection available")
         end
         return nil
     end
@@ -106,34 +108,34 @@ local function load_internal(clip_id, db, raise_errors)
     end
 
     local clip_kind = query:value(2)
-    local rate_num = query:value(13)
-    local rate_den = query:value(14)
-    local sequence_rate_num = query:value(17)
-    local sequence_rate_den = query:value(18)
+    local fps_numerator = query:value(13)
+    local fps_denominator = query:value(14)
+    local sequence_fps_numerator = query:value(17)
+    local sequence_fps_denominator = query:value(18)
     
     -- Enforce Rate existence (Strict V5)
-    if not rate_num or rate_num <= 0 then 
+    if not fps_numerator or fps_numerator <= 0 then 
         query:finalize()
-        error(string.format("Clip.load_failed: Clip %s has invalid frame rate (%s)", clip_id, tostring(rate_num)))
+        error(string.format("Clip.load_failed: Clip %s has invalid frame rate (%s)", clip_id, tostring(fps_numerator)))
     end
-    if not rate_den or rate_den <= 0 then
+    if not fps_denominator or fps_denominator <= 0 then
         query:finalize()
-        error(string.format("Clip.load_failed: Clip %s has invalid frame rate denominator (%s)", clip_id, tostring(rate_den)))
+        error(string.format("Clip.load_failed: Clip %s has invalid frame rate denominator (%s)", clip_id, tostring(fps_denominator)))
     end
 
-    local timeline_rate_num = rate_num
-    local timeline_rate_den = rate_den
+    local timeline_fps_numerator = fps_numerator
+    local timeline_fps_denominator = fps_denominator
     if clip_kind ~= "master" then
-        if not sequence_rate_num or not sequence_rate_den then
+        if not sequence_fps_numerator or not sequence_fps_denominator then
             query:finalize()
             error(string.format("Clip.load_failed: Clip %s missing owning sequence frame rate", clip_id))
         end
-        if sequence_rate_num <= 0 or sequence_rate_den <= 0 then
+        if sequence_fps_numerator <= 0 or sequence_fps_denominator <= 0 then
             query:finalize()
-            error(string.format("Clip.load_failed: Clip %s has invalid owning sequence frame rate (%s/%s)", clip_id, tostring(sequence_rate_num), tostring(sequence_rate_den)))
+            error(string.format("Clip.load_failed: Clip %s has invalid owning sequence frame rate (%s/%s)", clip_id, tostring(sequence_fps_numerator), tostring(sequence_fps_denominator)))
         end
-        timeline_rate_num = sequence_rate_num
-        timeline_rate_den = sequence_rate_den
+        timeline_fps_numerator = sequence_fps_numerator
+        timeline_fps_denominator = sequence_fps_denominator
     end
 
     local clip = {
@@ -148,15 +150,15 @@ local function load_internal(clip_id, db, raise_errors)
         owner_sequence_id = query:value(8),
 
         -- NEW: Rational Properties (loaded from frames)
-        timeline_start = Rational.new(assert(query:value(9), "Clip.load: timeline_start_frame is NULL"), timeline_rate_num, timeline_rate_den),
-        duration = Rational.new(assert(query:value(10), "Clip.load: duration_frames is NULL"), timeline_rate_num, timeline_rate_den),
-        source_in = Rational.new(assert(query:value(11), "Clip.load: source_in_frame is NULL"), rate_num, rate_den),
-        source_out = Rational.new(assert(query:value(12), "Clip.load: source_out_frame is NULL"), rate_num, rate_den),
+        timeline_start = Rational.new(assert(query:value(9), "Clip.load: timeline_start_frame is NULL"), timeline_fps_numerator, timeline_fps_denominator),
+        duration = Rational.new(assert(query:value(10), "Clip.load: duration_frames is NULL"), timeline_fps_numerator, timeline_fps_denominator),
+        source_in = Rational.new(assert(query:value(11), "Clip.load: source_in_frame is NULL"), fps_numerator, fps_denominator),
+        source_out = Rational.new(assert(query:value(12), "Clip.load: source_out_frame is NULL"), fps_numerator, fps_denominator),
         
         -- Store rate explicitly
         rate = {
-            fps_numerator = rate_num,
-            fps_denominator = rate_den
+            fps_numerator = fps_numerator,
+            fps_denominator = fps_denominator
         },
 
         enabled = query:value(15) == 1 or query:value(15) == true,
@@ -178,9 +180,9 @@ function M.create(name, media_id, opts)
     local now = os.time()
     
     -- Default Rate
-    local rate_num = opts.rate_num or MIGRATION_FPS_NUM
-    local rate_den = opts.rate_den or MIGRATION_FPS_DEN
-    local default_rate = {fps_numerator = rate_num, fps_denominator = rate_den}
+    local fps_numerator = opts.fps_numerator or MIGRATION_FPS_NUM
+    local fps_denominator = opts.fps_denominator or MIGRATION_FPS_DEN
+    local default_rate = {fps_numerator = fps_numerator, fps_denominator = fps_denominator}
 
     -- FAIL FAST: Check for legacy keys
     if opts.start_value or opts.duration_value or opts.source_in_value or opts.source_out_value then
@@ -203,12 +205,12 @@ function M.create(name, media_id, opts)
         -- Strict Rational Validation
         timeline_start = validate_rational(opts.timeline_start, "timeline_start"),
         duration = validate_rational(opts.duration, "duration"),
-        source_in = validate_rational(opts.source_in or Rational.new(0, rate_num, rate_den), "source_in"),
+        source_in = validate_rational(opts.source_in or Rational.new(0, fps_numerator, fps_denominator), "source_in"),
         source_out = validate_rational(opts.source_out or opts.duration, "source_out"), -- Default source_out = duration if not set, but must be Rational
         
         rate = {
-            fps_numerator = rate_num,
-            fps_denominator = rate_den
+            fps_numerator = fps_numerator,
+            fps_denominator = fps_denominator
         },
         
         enabled = opts.enabled ~= false,
@@ -222,12 +224,62 @@ function M.create(name, media_id, opts)
 end
 
 -- Load clip from database
-function M.load(clip_id, db)
-    return load_internal(clip_id, db, true)
+function M.load(clip_id)
+    return load_internal(clip_id, true)
 end
 
-function M.load_optional(clip_id, db)
-    return load_internal(clip_id, db, false)
+function M.load_optional(clip_id)
+    return load_internal(clip_id, false)
+end
+
+function M.get_sequence_id(clip_id)
+    if not clip_id or clip_id == "" then
+        error("Clip.get_sequence_id: clip_id is required")
+    end
+
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        error("Clip.get_sequence_id: No database connection available")
+    end
+
+    local stmt = db:prepare([[
+        SELECT t.sequence_id
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE c.id = ?
+    ]])
+
+    if not stmt then
+        error("Clip.get_sequence_id: Failed to prepare query")
+    end
+
+    stmt:bind_value(1, clip_id)
+
+    if not stmt:exec() then
+        local err = "unknown error"
+        if stmt.last_error then
+            local ok, msg = pcall(stmt.last_error, stmt)
+            if ok and msg then
+                err = msg
+            end
+        end
+        stmt:finalize()
+        error(string.format("Clip.get_sequence_id: Query execution failed: %s", err))
+    end
+
+    local sequence_id = nil
+    if stmt:next() then
+        sequence_id = stmt:value(0)
+    end
+
+    stmt:finalize()
+
+    if not sequence_id or sequence_id == "" then
+        error(string.format("Clip.get_sequence_id: clip_id=%s not found or has no track", tostring(clip_id)))
+    end
+
+    return sequence_id
 end
 
 local function ensure_project_context(self, db)
@@ -272,9 +324,11 @@ local function ensure_project_context(self, db)
 end
 
 -- Save clip to database (INSERT or UPDATE)
-local function save_internal(self, db, opts)
+local function save_internal(self, opts)
+    local database = require("core.database")
+    local db = database.get_connection()
     if not db then
-        print("WARNING: Clip.save: No database provided")
+        print("WARNING: Clip.save: No database connection available")
         return false
     end
 
@@ -414,18 +468,20 @@ local function save_internal(self, db, opts)
     return true, occlusion_actions
 end
 
-function M:save(db, opts)
-    return save_internal(self, db, opts or {})
+function M:save(opts)
+    return save_internal(self, opts or {})
 end
 
-function M:restore_without_occlusion(db)
-    return save_internal(self, db, {skip_occlusion = true})
+function M:restore_without_occlusion()
+    return save_internal(self, {skip_occlusion = true})
 end
 
 -- Delete clip from database
-function M:delete(db)
+function M:delete()
+    local database = require("core.database")
+    local db = database.get_connection()
     if not db then
-        print("WARNING: Clip.delete: No database provided")
+        print("WARNING: Clip.delete: No database connection available")
         return false
     end
 

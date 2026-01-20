@@ -15,11 +15,13 @@
 -- @file insert.lua
 local M = {}
 local Clip = require('models.clip')
+local Track = require('models.track')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
 local uuid = require("uuid")
 local rational_helpers = require("core.command_rational_helpers")
 local insert_selected_clip_into_timeline = require("core.clip_insertion")
+local logger = require("core.logger")
 local timeline_state
 do
     local status, mod = pcall(require, 'ui.timeline.timeline_state')
@@ -27,52 +29,113 @@ do
 end
 local clip_mutator = require('core.clip_mutator')
 
+
+local SPEC = {
+    args = {
+        advance_playhead = { kind = "boolean" },
+        clip_id = {},
+        clip_name = { kind = "string" },
+        dry_run = { kind = "boolean" },
+        duration = {},
+        duration_value = {},
+        insert_time = { default = 0 },
+        master_clip_id = {},
+        media_id = { required = true },
+        project_id = { required = true },
+        sequence_id = {},
+        source_in = {},
+        source_in_value = {},
+        source_out = {},
+        source_out_value = {},
+        track_id = {},
+    },
+    persisted = {
+        executed_mutations = {},
+    },
+
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["Insert"] = function(command)
-        local dry_run = command:get_parameter("dry_run")
-        if not dry_run then
-            print("Executing Insert command")
+        local args = command:get_all_parameters()
+
+        if not args.dry_run then
+            logger.debug("insert", "Executing Insert command")
         end
 
-        local media_id = command:get_parameter("media_id")
-        local track_id = command:get_parameter("track_id")
-        
-        -- Resolve owning sequence (timeline coordinate space).
-        local sequence_id = command_helper.resolve_sequence_for_track(command:get_parameter("sequence_id"), track_id)
-        if not sequence_id or sequence_id == "" then
-            local msg = "Insert: missing sequence_id (unable to resolve from track_id)"
-            set_last_error(msg)
-            return false, msg
+        local media_id = args.media_id
+        local track_id = args.track_id
+
+        -- If media_id not provided, gather from UI state (project browser selection)
+        if not media_id or media_id == "" then
+            local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+            if ui_state_ok then
+                local project_browser = ui_state.get_project_browser and ui_state.get_project_browser()
+                if project_browser and project_browser.get_selected_master_clip then
+                    local selected_clip = project_browser.get_selected_master_clip()
+                    if selected_clip and selected_clip.media_id then
+                        media_id = selected_clip.media_id
+                        command:set_parameter("media_id", media_id)
+                    end
+                end
+            end
+
+            assert(media_id and media_id ~= "",
+                "Insert command: media_id required but not provided and no media selected in project browser")
         end
+
+        -- Resolve owning sequence (timeline coordinate space).
+        local sequence_id = command_helper.resolve_sequence_for_track(args.sequence_id, track_id)
+        assert(sequence_id and sequence_id ~= "",
+            string.format("Insert command: sequence_id required (track_id=%s)", tostring(track_id)))
         command:set_parameter("sequence_id", sequence_id)
-        if not command:get_parameter("__snapshot_sequence_ids") then
+        if not args.__snapshot_sequence_ids then
             command:set_parameter("__snapshot_sequence_ids", {sequence_id})
+        end
+
+        -- If track_id not provided, use first video track in sequence
+        if not track_id or track_id == "" then
+            local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
+            assert(#video_tracks > 0, string.format(
+                "Insert command: no VIDEO tracks found in sequence_id=%s (sequence has no video tracks)",
+                tostring(sequence_id)
+            ))
+            track_id = video_tracks[1].id
+            command:set_parameter("track_id", track_id)
+        end
+
+        -- If insert_time not provided or 0, use playhead position from timeline state
+        if (not args.insert_time or args.insert_time == 0) and timeline_state then
+            local playhead_pos = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
+            if playhead_pos then
+                command:set_parameter("insert_time", playhead_pos)
+            end
         end
 
         local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
 
-        local insert_time_raw = command:get_parameter("insert_time")
-        local duration_raw = command:get_parameter("duration_value") or command:get_parameter("duration")
-        local source_in_raw = command:get_parameter("source_in_value") or command:get_parameter("source_in")
-        local source_out_raw = command:get_parameter("source_out_value") or command:get_parameter("source_out")
+
+        local duration_raw = args.duration_value or args.duration
+        local source_in_raw = args.source_in_value or args.source_in
+        local source_out_raw = args.source_out_value or args.source_out
         
-        local master_clip_id = command:get_parameter("master_clip_id")
-        local project_id_param = command:get_parameter("project_id")
-        local project_id = command.project_id or project_id_param
+        local master_clip_id = args.master_clip_id
+
+        local project_id = command.project_id or args.project_id
 
         local master_clip = nil
         if master_clip_id and master_clip_id ~= "" then
-            master_clip = Clip.load_optional(master_clip_id, db)
-            if not master_clip then
-                print(string.format("WARNING: Insert: Master clip %s not found; falling back to media only", tostring(master_clip_id)))
-                master_clip_id = nil
-            end
+            master_clip = Clip.load_optional(master_clip_id)
+            assert(master_clip, string.format(
+                "Insert command: master_clip_id=%s not found in database (no fallback - fix caller)",
+                tostring(master_clip_id)
+            ))
         end
 
         local copied_properties = {}
 
         -- Timeline coordinate (sequence rate).
-        local insert_time_rat = rational_helpers.require_rational_in_rate(insert_time_raw or 0, seq_fps_num, seq_fps_den, "insert_time")
+        local insert_time_rat = rational_helpers.require_rational_in_rate(args.insert_time, seq_fps_num, seq_fps_den, "insert_time")
 
         -- Source coordinate + clip metadata (media/master rate).
         local media_fps_num, media_fps_den
@@ -152,8 +215,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, msg
         end
 
-        local clip_name = (master_clip and master_clip.name) or "Inserted Clip"
-        local existing_clip_id = command:get_parameter("clip_id")
+        local clip_name = args.clip_name or (master_clip and master_clip.name) or "Inserted Clip"
+
         local clip_payload = {
             role = "video",
             media_id = media_id,
@@ -163,7 +226,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_in = source_in_rat,
             source_out = source_out_rat,
             clip_name = clip_name,
-            clip_id = existing_clip_id
+            clip_id = args.clip_id
         }
 
         local selected_clip = {
@@ -214,8 +277,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 source_out = payload.source_out,
                 enabled = true,
                 offline = master_clip and master_clip.offline,
-                rate_num = media_fps_num,
-                rate_den = media_fps_den,
+                fps_numerator = media_fps_num,
+                fps_denominator = media_fps_den,
             }
             local clip_to_insert = Clip.create(payload.clip_name or "Inserted Clip", payload.media_id, clip_opts)
             command:set_parameter("clip_id", clip_to_insert.id)
@@ -228,9 +291,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             if #copied_properties > 0 then
                 command_helper.delete_properties_for_clip(clip_to_insert.id)
-                if not command_helper.insert_properties_for_clip(clip_to_insert.id, copied_properties) then
-                    print(string.format("WARNING: Insert: Failed to copy properties from master clip %s", tostring(master_clip_id)))
-                end
+                local props_ok = command_helper.insert_properties_for_clip(clip_to_insert.id, copied_properties)
+                assert(props_ok, string.format(
+                    "Insert command: failed to copy properties from master_clip_id=%s to clip_id=%s",
+                    tostring(master_clip_id), tostring(clip_to_insert.id)
+                ))
             end
 
             return {id = clip_to_insert.id, role = payload.role, time_offset = 0}
@@ -248,47 +313,39 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             insert_pos = insert_time_rat
         })
 
-        local advance_playhead = command:get_parameter("advance_playhead")
-        if advance_playhead and timeline_state then
+
+        if args.advance_playhead and timeline_state then
             timeline_state.set_playhead_position(insert_time_rat + duration_rat)
         end
 
-        print(string.format("✅ Inserted clip at %s (id: %s)",
-            tostring(insert_time_rat), tostring(command:get_parameter("clip_id"))))
+        logger.debug("insert", string.format("Inserted clip at %s (id: %s)",
+            tostring(insert_time_rat), tostring(args.clip_id)))
         return true
     end
 
     command_undoers["Insert"] = function(command)
-        print("Undoing Insert command")
+        local args = command:get_all_parameters()
+        logger.debug("insert", "Undoing Insert command")
 
-        local executed_mutations = command:get_parameter("executed_mutations")
-        local sequence_id = command:get_parameter("sequence_id")
-        
-        if not executed_mutations or #executed_mutations == 0 then
-            print("WARNING: UndoInsert: No executed mutations to undo.")
-            return false
-        end
+        assert(args.executed_mutations and #args.executed_mutations > 0,
+            "UndoInsert: No executed mutations to undo (corrupted command state)")
 
         local started, begin_err = db:begin_transaction()
-        if not started then
-            print("ERROR: UndoInsert: Failed to begin transaction: " .. tostring(begin_err))
-            return false
-        end
+        assert(started, string.format("UndoInsert: Failed to begin transaction: %s", tostring(begin_err)))
 
-        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
+        local ok, err = command_helper.revert_mutations(db, args.executed_mutations, command, args.sequence_id)
         if not ok then
             db:rollback_transaction(started)
-            print("ERROR: UndoInsert: Failed to revert mutations: " .. tostring(err))
-            return false
+            assert(false, string.format("UndoInsert: Failed to revert mutations: %s", tostring(err)))
         end
 
         local ok_commit, commit_err = db:commit_transaction(started)
         if not ok_commit then
             db:rollback_transaction(started)
-            return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+            assert(false, string.format("UndoInsert: Failed to commit transaction: %s", tostring(commit_err)))
         end
 
-        print("✅ Undo Insert: Reverted all changes")
+        logger.debug("insert", "Undo Insert: Reverted all changes")
         return true
     end
 
@@ -297,7 +354,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     return {
         executor = command_executors["Insert"],
-        undoer = command_undoers["Insert"]
+        undoer = command_undoers["Insert"],
+        spec = SPEC,
     }
 end
 

@@ -16,6 +16,17 @@
 local M = {}
 local database = require("core.database")
 
+
+local SPEC = {
+    args = {
+        field = { required = true },
+        previous_value = {},
+        project_id = { required = true },
+        sequence_id = { required = true },
+        value = {},
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     local sequence_metadata_columns = {
         name = {type = "string"},
@@ -50,38 +61,35 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     command_executors["SetSequenceMetadata"] = function(command)
-        local sequence_id = command:get_parameter("sequence_id")
-        local field = command:get_parameter("field")
-        local new_value = command:get_parameter("value")
+        local args = command:get_all_parameters()
 
-        if not sequence_id or sequence_id == "" or not field or field == "" then
-            set_last_error("SetSequenceMetadata: Missing required parameters")
-            return false
-        end
 
-        local column = sequence_metadata_columns[field]
+
+
+        local column = sequence_metadata_columns[args.field]
         if not column then
-            set_last_error("SetSequenceMetadata: Field not allowed: " .. tostring(field))
+            set_last_error("SetSequenceMetadata: Field not allowed: " .. tostring(args.field))
             return false
         end
 
-        local select_stmt = db:prepare("SELECT " .. field .. " FROM sequences WHERE id = ?")
+        local select_stmt = db:prepare("SELECT " .. args.field .. " FROM sequences WHERE id = ?")
         if not select_stmt then
             set_last_error("SetSequenceMetadata: Failed to prepare select statement")
             return false
         end
-        select_stmt:bind_value(1, sequence_id)
+        select_stmt:bind_value(1, args.sequence_id)
         local previous_value = nil
         if select_stmt:exec() and select_stmt:next() then
             previous_value = select_stmt:value(0)
         end
         select_stmt:finalize()
 
-        local normalized_value = normalize_sequence_value(field, new_value)
-        command:set_parameter("previous_value", previous_value)
-        command:set_parameter("normalized_value", normalized_value)
-
-        local update_stmt = db:prepare("UPDATE sequences SET " .. field .. " = ? WHERE id = ?")
+        local normalized_value = normalize_sequence_value(args.field, args.value)
+        command:set_parameters({
+            ["previous_value"] = previous_value,
+            ["normalized_value"] = normalized_value,
+        })
+        local update_stmt = db:prepare("UPDATE sequences SET " .. args.field .. " = ? WHERE id = ?")
         if not update_stmt then
             set_last_error("SetSequenceMetadata: Failed to prepare update statement")
             return false
@@ -96,7 +104,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         else
             update_stmt:bind_value(1, normalized_value)
         end
-        update_stmt:bind_value(2, sequence_id)
+        update_stmt:bind_value(2, args.sequence_id)
 
         local ok = update_stmt:exec()
         update_stmt:finalize()
@@ -106,28 +114,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        print(string.format("Set sequence %s field %s to %s", sequence_id, field, tostring(normalized_value)))
+        print(string.format("Set sequence %s args.field %s to %s", args.sequence_id, args.field, tostring(normalized_value)))
         return true
     end
 
     command_undoers["SetSequenceMetadata"] = function(command)
-        local sequence_id = command:get_parameter("sequence_id")
-        local field = command:get_parameter("field")
-        local previous_value = command:get_parameter("previous_value")
+        local args = command:get_all_parameters()
 
-        if not sequence_id or sequence_id == "" or not field or field == "" then
-            set_last_error("UndoSetSequenceMetadata: Missing parameters")
-            return false
-        end
 
-        local column = sequence_metadata_columns[field]
+
+
+        local column = sequence_metadata_columns[args.field]
         if not column then
-            set_last_error("UndoSetSequenceMetadata: Field not allowed: " .. tostring(field))
+            set_last_error("UndoSetSequenceMetadata: Field not allowed: " .. tostring(args.field))
             return false
         end
 
-        local normalized = normalize_sequence_value(field, previous_value)
-        local stmt = db:prepare("UPDATE sequences SET " .. field .. " = ? WHERE id = ?")
+        local normalized = normalize_sequence_value(args.field, args.previous_value)
+        local stmt = db:prepare("UPDATE sequences SET " .. args.field .. " = ? WHERE id = ?")
         if not stmt then
             set_last_error("UndoSetSequenceMetadata: Failed to prepare update statement")
             return false
@@ -142,7 +146,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         else
             stmt:bind_value(1, normalized)
         end
-        stmt:bind_value(2, sequence_id)
+        stmt:bind_value(2, args.sequence_id)
 
         local ok = stmt:exec()
         stmt:finalize()
@@ -152,13 +156,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        print(string.format("Undo sequence %s field %s to %s", sequence_id, field, tostring(normalized)))
+        print(string.format("Undo sequence %s args.field %s to %s", args.sequence_id, args.field, tostring(normalized)))
         return true
     end
 
     return {
         executor = command_executors["SetSequenceMetadata"],
-        undoer = command_undoers["SetSequenceMetadata"]
+        undoer = command_undoers["SetSequenceMetadata"],
+        spec = SPEC,
     }
 end
 

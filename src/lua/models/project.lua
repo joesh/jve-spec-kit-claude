@@ -128,9 +128,15 @@ function Project:save(db)
     self.modified_at = os.time()
     self.settings = ensure_settings_json(self.settings)
 
+    -- CRITICAL: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
+    -- INSERT OR REPLACE triggers DELETE first, which cascades to delete sequences/clips via foreign keys!
     local stmt = conn:prepare([[
-        INSERT OR REPLACE INTO projects (id, name, created_at, modified_at, settings)
+        INSERT INTO projects (id, name, created_at, modified_at, settings)
         VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            modified_at = excluded.modified_at,
+            settings = excluded.settings
     ]])
 
     if not stmt then

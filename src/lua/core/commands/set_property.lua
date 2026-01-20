@@ -16,34 +16,45 @@
 local M = {}
 local Property = require('models.property')
 
+
+local SPEC = {
+    args = {
+        entity_id = { required = true },
+        entity_type = {required = true},
+        project_id = { required = true },
+        property_name = {required = true},
+        value = {},
+    },
+    persisted = {
+        previous_value = {},
+    },
+}
+
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetProperty"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing SetProperty command")
 
-        local entity_id = command:get_parameter("entity_id")
-        local entity_type = command:get_parameter("entity_type")
-        local property_name = command:get_parameter("property_name")
-        local new_value = command:get_parameter("value")
 
-        if not entity_id or entity_id == "" or not entity_type or entity_type == "" or not property_name or property_name == "" then
-            print("WARNING: SetProperty: Missing required parameters")
-            return false
-        end
 
-        local property = Property.create(property_name, entity_id)
+
+
+
+        local property = Property.create(args.property_name, args.entity_id)
 
         -- Store previous value for undo
         local previous_value = property.value
         command:set_parameter("previous_value", previous_value)
 
         -- Set new value
-        property:set_value(new_value)
+        property:set_value(args.value)
 
         if property:save(db) then
-            print(string.format("Set property %s to %s for %s %s", property_name, tostring(new_value), entity_type, entity_id))
+            print(string.format("Set property %s to %s for %s %s", args.property_name, tostring(args.value), args.entity_type, args.entity_id))
             return true
         else
-            print("WARNING: Failed to save property change")
+            set_last_error("Failed to save property change")
             return false
         end
     end
@@ -52,7 +63,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Assuming symmetry if needed later.
 
     return {
-        executor = command_executors["SetProperty"]
+        executor = command_executors["SetProperty"],
+        spec = SPEC,
     }
 end
 

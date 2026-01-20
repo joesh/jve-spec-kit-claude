@@ -17,8 +17,18 @@ local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
 local project_browser = require('ui.project_browser')
 
+
+local SPEC = {
+    args = {
+        project_id = { required = true },
+        skip_activate = {},
+        skip_focus = {},
+    }
+}
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["MatchFrame"] = function(command)
+        local args = command:get_all_parameters()
         local selected = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
         if not selected or #selected == 0 then
             set_last_error("MatchFrame: No clips selected")
@@ -52,8 +62,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local ok, err = pcall(project_browser.focus_master_clip, target_master_id, {
-            skip_focus = command:get_parameter("skip_focus") == true,
-            skip_activate = command:get_parameter("skip_activate") == true
+            skip_focus = args.skip_focus == true,
+            skip_activate = args.skip_activate == true
         })
         if not ok then
             set_last_error("MatchFrame: " .. tostring(err))
@@ -69,7 +79,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     return {
-        executor = command_executors["MatchFrame"]
+        executor = command_executors["MatchFrame"],
+        spec = SPEC,
     }
 end
 

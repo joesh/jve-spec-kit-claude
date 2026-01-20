@@ -57,78 +57,45 @@ local function deserialize_rational(table_obj)
 end
 
 local function get_active_sequence_rate()
-    local conn = database.get_connection()
-    if not conn then
-        error("clipboard_actions: No database connection for sequence rate detection", 2)
-    end
-
     local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
     if not sequence_id or sequence_id == "" then
         error("clipboard_actions: missing active sequence_id for sequence rate detection", 2)
     end
 
-    local query = conn:prepare([[
-        SELECT fps_numerator, fps_denominator
-        FROM sequences
-        WHERE id = ?
-    ]])
+    local Sequence = require("models.sequence")
+    local sequence = Sequence.load(sequence_id)
 
-    if not query then
-        error("clipboard_actions: Failed to prepare sequence rate query", 2)
+    if not sequence then
+        error("clipboard_actions: active sequence not found: " .. tostring(sequence_id), 2)
     end
 
-    query:bind_value(1, sequence_id)
-    if query:exec() and query:next() then
-        local num = query:value(0)
-        local den = query:value(1)
-        query:finalize()
-
-        -- Validate frame rate values
-        if num and num > 0 and den and den > 0 then
-            return num, den
-        else
-            error(string.format("clipboard_actions: invalid sequence frame rate %s/%s for %s",
-                tostring(num), tostring(den), tostring(sequence_id)), 2)
-        end
+    if not sequence.frame_rate or not sequence.frame_rate.fps_numerator or not sequence.frame_rate.fps_denominator then
+        error(string.format("clipboard_actions: sequence %s missing frame rate", tostring(sequence_id)), 2)
     end
 
-    query:finalize()
-    error("clipboard_actions: active sequence not found: " .. tostring(sequence_id), 2)
+    local num = sequence.frame_rate.fps_numerator
+    local den = sequence.frame_rate.fps_denominator
+
+    -- Validate frame rate values
+    if num and num > 0 and den and den > 0 then
+        return num, den
+    else
+        error(string.format("clipboard_actions: invalid sequence frame rate %s/%s for %s",
+            tostring(num), tostring(den), tostring(sequence_id)), 2)
+    end
 end
 
 local function load_clip_properties(clip_id)
-    local props = {}
     if not clip_id or clip_id == "" then
-        return props
+        return {}
     end
 
-    local conn = database.get_connection()
-    if not conn then
-        return props
+    local Property = require("models.property")
+    local ok, props = pcall(Property.load_for_clip, clip_id)
+    if not ok then
+        return {}
     end
-
-    local stmt = conn:prepare([[
-        SELECT property_name, property_value, property_type, default_value
-        FROM properties
-        WHERE clip_id = ?
-    ]])
-    if not stmt then
-        return props
-    end
-
-    stmt:bind_value(1, clip_id)
-    if stmt:exec() then
-        while stmt:next() do
-            props[#props + 1] = {
-                property_name = stmt:value(0),
-                property_value = stmt:value(1),
-                property_type = stmt:value(2),
-                default_value = stmt:value(3)
-            }
-        end
-    end
-    stmt:finalize()
-    return props
+    return props or {}
 end
 
 local function resolve_clip_entry(entry)
@@ -173,6 +140,8 @@ local function copy_timeline_selection()
                 original_id = clip.id,
                 track_id = clip.track_id,
                 media_id = clip.media_id,
+                        fps_numerator = clip.rate and clip.rate.fps_numerator,
+                        fps_denominator = clip.rate and clip.rate.fps_denominator,
                 parent_clip_id = clip.parent_clip_id,
                 source_sequence_id = clip.source_sequence_id,
                 owner_sequence_id = clip.owner_sequence_id,
@@ -367,19 +336,23 @@ local function paste_timeline(payload)
             local function insert_clip(_, clip_payload, target_track, pos)
                 local clip_id = uuid.generate()
                 local cmd = assert(Command.create("Overwrite", project_id), "clipboard_actions.paste_timeline: failed to create command")
-                cmd:set_parameter("sequence_id", active_sequence_id)
-                cmd:set_parameter("track_id", assert(target_track and target_track.id, "clipboard_actions.paste_timeline: missing track id"))
+                cmd:set_parameters({
+                    ["sequence_id"] = active_sequence_id,
+                    ["track_id"] = assert(target_track and target_track.id, "clipboard_actions.paste_timeline: missing track id"),
+                })
                 assert(clip_payload.media_id or clip_payload.master_clip_id, "clipboard_actions.paste_timeline: missing payload media/master clip id")
                 if clip_payload.media_id then
                     cmd:set_parameter("media_id", clip_payload.media_id)
                 end
-                cmd:set_parameter("master_clip_id", clip_payload.master_clip_id)
-                cmd:set_parameter("overwrite_time", assert(pos, "clipboard_actions.paste_timeline: missing insert position"))
-                cmd:set_parameter("duration", assert(clip_payload.duration, "clipboard_actions.paste_timeline: missing payload duration"))
-                cmd:set_parameter("source_in", assert(clip_payload.source_in, "clipboard_actions.paste_timeline: missing payload source_in"))
-                cmd:set_parameter("source_out", assert(clip_payload.source_out, "clipboard_actions.paste_timeline: missing payload source_out"))
-                cmd:set_parameter("project_id", project_id)
-                cmd:set_parameter("clip_id", clip_id)
+                cmd:set_parameters({
+                    ["master_clip_id"] = clip_payload.master_clip_id,
+                    ["overwrite_time"] = assert(pos, "clipboard_actions.paste_timeline: missing insert position"),
+                    ["duration"] = assert(clip_payload.duration, "clipboard_actions.paste_timeline: missing payload duration"),
+                    ["source_in"] = assert(clip_payload.source_in, "clipboard_actions.paste_timeline: missing payload source_in"),
+                    ["source_out"] = assert(clip_payload.source_out, "clipboard_actions.paste_timeline: missing payload source_out"),
+                    ["project_id"] = project_id,
+                    ["clip_id"] = clip_id,
+                })
                 if clip_payload.clip_name then
                     cmd:set_parameter("clip_name", clip_payload.clip_name)
                 end
@@ -453,7 +426,7 @@ local function copy_browser_selection()
     for _, raw in ipairs(snapshot) do
         local entry = normalize_selection_item(raw)
         if entry and entry.clip_id then
-            local clip = Clip.load(entry.clip_id, database.get_connection())
+            local clip = Clip.load(entry.clip_id)
             if clip then
                 project_id = project_id or clip.project_id or entry.project_id
                 if not project_id or project_id == "" then
@@ -465,6 +438,8 @@ local function copy_browser_selection()
                     snapshot = {
                         name = clip.name,
                         media_id = clip.media_id,
+                        fps_numerator = clip.rate and clip.rate.fps_numerator,
+                        fps_denominator = clip.rate and clip.rate.fps_denominator,
                         duration = clip.duration,
                         source_in = clip.source_in or 0,
                         source_out = clip.source_out or clip.duration,
@@ -546,9 +521,10 @@ local function paste_browser(payload)
     end
 
     local commands_json = json.encode(specs)
-    local batch_cmd = Command.create("BatchCommand", project_id)
-    batch_cmd:set_parameter("commands_json", commands_json)
-    local result = command_manager.execute(batch_cmd)
+    local result = command_manager.execute("BatchCommand", {
+        commands_json = commands_json,
+        project_id = project_id,
+    })
 
     if not result or not result.success then
         local message = (result and result.error_message) or "Paste failed"
