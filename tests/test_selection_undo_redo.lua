@@ -183,7 +183,16 @@ command_manager.register_executor("TestEnsureMedia", function(cmd)
     })
     assert(media, "failed to create media " .. tostring(cmd:get_parameter("media_id")))
     return media:save(db)
-end)
+end, nil, {
+    args = {
+        project_id = { required = true },
+        media_id = {},
+        file_path = {},
+        file_name = {},
+        duration_frames = {},
+        frame_rate = {},
+    }
+})
 
 local ensure_media_cmd = Command.create("TestEnsureMedia", "test_project")
 ensure_media_cmd:set_parameter("media_id", "media_clip")
@@ -201,13 +210,22 @@ command_manager.register_executor("TestSelectClip", function(command)
     return true
 end, function()
     return true
-end)
+end, {
+    args = {
+        project_id = { required = true },
+        clip_id = {},
+    }
+})
 
 command_manager.register_executor("TestNoOp", function()
     return true
 end, function()
     return true
-end)
+end, {
+    args = {
+        project_id = { required = true },
+    }
+})
 
 local timeline_state = require('ui.timeline.timeline_state')
 

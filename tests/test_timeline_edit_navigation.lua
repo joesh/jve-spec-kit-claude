@@ -123,20 +123,20 @@ local function frames(val)
     return val
 end
 
-local result = command_manager.execute("GoToPrevEdit")
+local result = command_manager.execute("GoToPrevEdit", { project_id = "default_project" })
 assert(result.success == true, "GoToPrevEdit should succeed")
 assert(frames(timeline_state.playhead_position) == 2400,
     string.format("GoToPrevEdit expected 2400, got %s", tostring(frames(timeline_state.playhead_position))))
 
 timeline_state.playhead_position = 3200
 
-result = command_manager.execute("GoToNextEdit")
+result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success == true, "GoToNextEdit should succeed")
 assert(frames(timeline_state.playhead_position) == 4500,
     string.format("GoToNextEdit expected 4500, got %s", tostring(frames(timeline_state.playhead_position))))
 
 timeline_state.playhead_position = 6200
-result = command_manager.execute("GoToNextEdit")
+result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success == true, "GoToNextEdit should succeed even at timeline end")
 assert(frames(timeline_state.playhead_position) == 6200,
     string.format("GoToNextEdit at end should stay at 6200, got %s", tostring(frames(timeline_state.playhead_position))))

@@ -59,8 +59,8 @@ local master = Clip.create("Master", media.id, {
     duration = Rational.new(2500, 25, 1),
     source_in = Rational.new(0, 25, 1),
     source_out = Rational.new(2500, 25, 1),
-    rate_num = 25,
-    rate_den = 1,
+    fps_numerator = 25,
+    fps_denominator = 1,
 })
 assert(master:save(db, {skip_occlusion = true}))
 

@@ -69,6 +69,8 @@ command_manager.init(db, 'default_sequence', 'default_project')
 local snapshot = {
     name = "Master Clip",
     media_id = "media_master",
+    fps_numerator = 24,
+    fps_denominator = 1,
     duration_value = 2000,
     source_in_value = 0,
     source_out_value = 2000,

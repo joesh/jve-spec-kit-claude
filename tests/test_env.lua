@@ -163,4 +163,32 @@ end
 M.enforce = enforce
 M.enforce_table = enforce_table
 
+--- Create a command_manager mock that captures executed commands.
+-- Handles both old API (execute(cmd)) and new API (execute(type, params)).
+-- Returns: mock table, executed commands array
+function M.mock_command_manager()
+    local executed = {}
+    local mock = {
+        execute = function(cmd_or_type, params)
+            local captured
+            if type(cmd_or_type) == "string" then
+                captured = {
+                    type = cmd_or_type,
+                    params = params or {},
+                    get_parameter = function(self, k) return self.params[k] end,
+                }
+            else
+                captured = cmd_or_type
+            end
+            table.insert(executed, captured)
+            return { success = true }
+        end,
+        begin_command_event = function() end,
+        end_command_event = function() end,
+        peek_command_event_origin = function() return nil end,
+    }
+    package.loaded["core.command_manager"] = mock
+    return mock, executed
+end
+
 return M

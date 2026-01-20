@@ -8,6 +8,10 @@ require("test_env")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local ripple_layout = require("tests.helpers.ripple_layout")
+local asserts = require("core.asserts")
+
+-- Disable asserts for validation tests (we want graceful error returns, not crashes)
+asserts._set_enabled_for_tests(false)
 
 -- Test 1: Invalid edge_type should fail gracefully
 do

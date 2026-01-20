@@ -115,13 +115,20 @@ local callback = menu_system._test_get_action_callback("Split")
 local ok, err = pcall(callback)
 assert(ok, "Split menu callback errored: " .. tostring(err))
 assert(captured_command, "Split menu did not dispatch a command")
-assert(captured_command.type == "BatchCommand", "Expected BatchCommand, got " .. tostring(captured_command.type))
 
-local payload = captured_command:get_parameter("commands_json")
-assert(payload, "BatchCommand missing commands_json")
-local specs = dkjson.decode(payload)
-assert(type(specs) == "table" and #specs == 1, "Expected one SplitClip spec")
-assert(specs[1].command_type == "SplitClip", "Expected SplitClip command")
-assert(specs[1].parameters.clip_id == clip.id, "SplitClip target clip mismatch")
-
-print("✅ Split menu handles Rational clip fields and dispatches without crash")
+-- With nested execution, menu dispatches "Split" command (string), not BatchCommand object
+-- The Split command internally creates and executes BatchCommand via nested execution
+if type(captured_command) == "string" then
+    assert(captured_command == "Split", "Expected Split command, got " .. tostring(captured_command))
+    print("✅ Split menu handles Rational clip fields and dispatches Split command")
+else
+    -- Legacy path: direct BatchCommand (no longer used with nested execution)
+    assert(captured_command.type == "BatchCommand", "Expected BatchCommand, got " .. tostring(captured_command.type))
+    local payload = captured_command:get_parameter("commands_json")
+    assert(payload, "BatchCommand missing commands_json")
+    local specs = dkjson.decode(payload)
+    assert(type(specs) == "table" and #specs == 1, "Expected one SplitClip spec")
+    assert(specs[1].command_type == "SplitClip", "Expected SplitClip command")
+    assert(specs[1].parameters.clip_id == clip.id, "SplitClip target clip mismatch")
+    print("✅ Split menu handles Rational clip fields and dispatches BatchCommand")
+end

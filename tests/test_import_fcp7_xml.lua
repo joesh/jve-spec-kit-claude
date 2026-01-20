@@ -278,6 +278,9 @@ assert(assigned_count == master_clip_count,
         master_clip_count, expected_master_bin_name, assigned_count))
 
 -- Regression: importing the anamnesis fixture must assign AUDIO/VIDEO track types.
+-- Use a scratch database to validate track types without polluting the main test database.
+-- IMPORTANT: Models use database.get_connection() internally, so we must swap the global
+-- connection to use the scratch_db during the import.
 local anamnesis_fixture = "tests/fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
 local anamnesis_path = resolve_fixture(anamnesis_fixture)
 local scratch_db_path = "/tmp/jve/test_import_fcp7_xml_anamnesis.db"
@@ -285,10 +288,19 @@ os.remove(scratch_db_path)
 local scratch_db = sqlite3.open(scratch_db_path)
 assert(scratch_db, "Failed to open scratch database copy")
 bootstrap_schema(scratch_db)
+
+-- Temporarily swap the global connection to the scratch database
+local original_connection = database.get_connection()
+database.set_connection(scratch_db)
+
 local parsed_anamnesis = fcp7_importer.import_xml(anamnesis_path, "default_project")
 assert(parsed_anamnesis.success, parsed_anamnesis.errors and parsed_anamnesis.errors[1] or "Anamnesis fixture parsing failed")
 local anamnesis_entities = fcp7_importer.create_entities(parsed_anamnesis, scratch_db, "default_project")
 assert(anamnesis_entities.success, anamnesis_entities.error or "Anamnesis fixture entity creation failed")
+
+-- Restore the original connection before cleanup
+database.set_connection(original_connection)
+
 local invalid_track_stmt = scratch_db:prepare([[
     SELECT COUNT(*) FROM tracks
     WHERE track_type IS NULL OR track_type NOT IN ('AUDIO', 'VIDEO')
@@ -382,7 +394,9 @@ local after_nudge_counts = {
     clips = count_rows("clips"),
     media = count_rows("media")
 }
-assert(after_nudge_counts.clips == after_import_counts.clips, "Nudge should not change clip count")
+assert(after_nudge_counts.clips == after_import_counts.clips,
+    string.format("Nudge should not change clip count (was %d, now %d)",
+        after_import_counts.clips, after_nudge_counts.clips))
 
 -- Ensure the import command persisted XML contents for offline replay.
 local args_stmt = db:prepare([[SELECT command_args FROM commands WHERE command_type = 'ImportFCP7XML' ORDER BY sequence_number DESC LIMIT 1]])

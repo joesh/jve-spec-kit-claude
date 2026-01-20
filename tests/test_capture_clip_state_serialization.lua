@@ -54,8 +54,8 @@ local clip = Clip.create("Test Clip", "media_1", {
     duration = Rational.new(48, 24, 1),  -- 2 seconds
     source_in = Rational.new(0, 24, 1),
     source_out = Rational.new(48, 24, 1),
-    rate_num = 24,
-    rate_den = 1,
+    fps_numerator = 24,
+    fps_denominator = 1,
     enabled = true
 })
 assert(clip:save(db), "Failed to save clip")

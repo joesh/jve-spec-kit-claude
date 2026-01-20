@@ -165,6 +165,7 @@ add_clip({id = "clip_delete_test"})
 package.loaded["core.command_manager"] = nil
 local command_manager = require("core.command_manager")
 command_manager.init(db, "default_sequence", "default_project")
+command_manager.begin_command_event("script")
 
 local delete_cmd = Command.create("DeleteClip", "default_project")
 delete_cmd:set_parameter("clip_id", "clip_delete_test")
@@ -197,4 +198,5 @@ assert(has_clip("clip_delete_test"), "Undo should restore clip into timeline cac
 assert(timeline_state.reloaded == false or timeline_state.reloaded == nil or timeline_state.reloaded == "default_sequence",
     "Undo should not fail to refresh timeline; reload may happen but cache must contain clip")
 
+command_manager.end_command_event()
 print("✅ DeleteClip undo restores timeline cache insert mutation")

@@ -56,7 +56,7 @@ local clip = Clip.create("Clip", nil, {
     duration = Rational.new(48, 24, 1),
     source_in = Rational.new(0, 24, 1),
     source_out = Rational.new(48, 24, 1),
-    rate_num = 24, rate_den = 1
+    fps_numerator = 24, fps_denominator = 1
 })
 clip:save(db)
 

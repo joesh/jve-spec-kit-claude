@@ -139,28 +139,58 @@ local project_stmt_mock = {
 
 
 
-local mock_conn = {
-
-    prepare = function(self, sql)
-
-        if sql:find("SELECT playhead_frame") then
-
-            return mock_stmt_sequence
-
-        elseif sql:find("SELECT project_id") then
-
-            return project_stmt_mock
-
+-- Mock for Sequence.load query (SELECT id, project_id, name, kind, fps_numerator, ...)
+local sequence_load_mock = {
+    _next_called = false,
+    bind_value = function(...) end,
+    exec = function() return true end,
+    next = function(self)
+        if not self._next_called then
+            self._next_called = true
+            return true
         end
-
-        return nil -- Fallback for unmocked queries
-
+        return false
     end,
+    value = function(self, idx)
+        -- Sequence.load column order: id, project_id, name, kind, fps_numerator, fps_denominator,
+        -- width, height, playhead_frame, view_start_frame, view_duration_frames,
+        -- mark_in_frame, mark_out_frame, audio_rate, selected_clip_ids, selected_edge_infos
+        local values = {
+            [0] = "default_sequence",  -- id
+            [1] = "default_project",   -- project_id
+            [2] = "Test Sequence",     -- name
+            [3] = "timeline",          -- kind
+            [4] = 24,                  -- fps_numerator
+            [5] = 1,                   -- fps_denominator
+            [6] = 1920,                -- width
+            [7] = 1080,                -- height
+            [8] = 48,                  -- playhead_frame
+            [9] = 0,                   -- view_start_frame
+            [10] = 300,                -- view_duration_frames
+            [11] = nil,                -- mark_in_frame
+            [12] = nil,                -- mark_out_frame
+            [13] = 48000,              -- audio_rate
+            [14] = "[]",               -- selected_clip_ids
+            [15] = "[]",               -- selected_edge_infos
+        }
+        return values[idx]
+    end,
+    finalize = function(self) self._next_called = false end,
+}
 
+local mock_conn = {
+    prepare = function(self, sql)
+        if sql:find("SELECT playhead_frame") then
+            return mock_stmt_sequence
+        elseif sql:find("SELECT project_id") then
+            return project_stmt_mock
+        elseif sql:find("FROM sequences WHERE") then
+            return sequence_load_mock
+        end
+        return nil -- Fallback for unmocked queries
+    end,
     exec = function(sql) return true end,
-
     last_error = function() return "mock error" end,
-
 }
 
 

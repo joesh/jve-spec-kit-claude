@@ -10,10 +10,16 @@ _G.timeline = {
     get_dimensions = function() return 1000, 200 end
 }
 
-local captured_cmd = nil
+local captured_type, captured_params = nil, nil
 local original_execute = command_manager.execute
-command_manager.execute = function(cmd)
-    captured_cmd = cmd
+command_manager.execute = function(cmd_or_type, params)
+    if type(cmd_or_type) == "string" then
+        captured_type = cmd_or_type
+        captured_params = params or {}
+    else
+        captured_type = cmd_or_type.type
+        captured_params = cmd_or_type.parameters or {}
+    end
     return {success = true}
 end
 
@@ -48,8 +54,8 @@ timeline_view_drag_handler.handle_release(view, drag_state, nil)
 
 command_manager.execute = original_execute
 
-assert(captured_cmd, "Expected drag handler to execute BatchRippleEdit")
-local delta_frames = captured_cmd:get_parameter("delta_frames")
+assert(captured_type == "BatchRippleEdit", "Expected drag handler to execute BatchRippleEdit")
+local delta_frames = captured_params.delta_frames
 assert(delta_frames == 60,
     string.format("Expected clamped delta_frames 60, got %s", tostring(delta_frames)))
 

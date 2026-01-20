@@ -183,7 +183,7 @@ timeline_state.set_selection({
     {id = "clip_c"},
 })
 
-local result = command_manager.execute("Cut")
+local result = command_manager.execute("Cut", {project_id = "default_project"})
 assert(result.success, "Cut with selection should succeed")
 assert(not clip_exists("clip_a"), "clip_a should be removed")
 assert(not clip_exists("clip_c"), "clip_c should be removed")
@@ -199,7 +199,7 @@ assert(clip_exists("clip_c"), "clip_c should be restored after undo")
 timeline_state.set_selection({})
 timeline_state.playhead_position = Rational.new(1300, 30, 1)
 local before = clips_snapshot()
-result = command_manager.execute("Cut")
+result = command_manager.execute("Cut", {project_id = "default_project"})
 assert(result.success, "Cut with no selection should still succeed")
 local after = clips_snapshot()
 

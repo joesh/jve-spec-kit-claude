@@ -62,8 +62,8 @@ local function create_clip(id, track_id, start_value, duration_value, media_id)
         duration = Rational.new(duration_value, 30, 1),
         source_in = Rational.new(0, 30, 1),
         source_out = Rational.new(duration_value, 30, 1),
-        rate_num = 30,
-        rate_den = 1,
+        fps_numerator = 30,
+        fps_denominator = 1,
         enabled = true,
         offline = false
     })

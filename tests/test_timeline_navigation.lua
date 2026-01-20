@@ -118,7 +118,7 @@ command_manager.init(db, 'default_sequence', 'default_project')
 
 print("=== Timeline Navigation Command Tests ===\n")
 
-local result = command_manager.execute("GoToStart")
+local result = command_manager.execute("GoToStart", { project_id = "default_project" })
 assert(result.success == true, "GoToStart should succeed")
 local start_pos = timeline_state.get_playhead_position()
 local start_frames = (type(start_pos) == "table" and start_pos.frames) or start_pos
@@ -126,7 +126,7 @@ assert(start_frames == 0, "GoToStart must set playhead to 0")
 
 timeline_state.playhead_position = 321 -- ensure we move again
 
-result = command_manager.execute("GoToEnd")
+result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success == true, "GoToEnd should succeed")
 local end_pos = timeline_state.get_playhead_position()
 local end_frames = (type(end_pos) == "table" and end_pos.frames) or end_pos

@@ -166,10 +166,8 @@ end
 current_test = "Test 6"
 print("\n" .. current_test .. ": Import media to database")
 
--- Mock database that captures save operations
-local mock_db = {
-    saved_media = {}
-}
+-- Shared tracking for mock saves (can be reset between tests)
+local mock_saved_media = {}
 
 -- Mock Media model
 package.loaded["models.media"] = {
@@ -186,20 +184,21 @@ package.loaded["models.media"] = {
             audio_channels = params.audio_channels,
             created_at = params.created_at,
             modified_at = params.modified_at,
-            save = function(self, db)
-                table.insert(db.saved_media, self)
+            save = function(self)
+                table.insert(mock_saved_media, self)
                 return true
             end
         }
     end
 }
 
+local mock_db = {}  -- db parameter is no longer used by save()
 local media_id, import_err = media_reader.import_media(test_video_path, mock_db, "test_project")
 assert_not_nil(media_id, "Media ID returned")
-assert_eq(#mock_db.saved_media, 1, "One media record saved to database")
+assert_eq(#mock_saved_media, 1, "One media record saved to database")
 
-if #mock_db.saved_media > 0 then
-    local saved = mock_db.saved_media[1]
+if #mock_saved_media > 0 then
+    local saved = mock_saved_media[1]
     assert_eq(saved.file_path, test_video_path, "File path stored correctly")
     assert_true(saved.duration > 4000 and saved.duration < 6000, "Duration stored correctly")
     assert_eq(saved.width, 1920, "Width stored correctly")
@@ -212,7 +211,9 @@ end
 current_test = "Test 7"
 print("\n" .. current_test .. ": Batch import multiple files")
 
-local batch_db = {saved_media = {}}
+-- Reset tracking for this test
+mock_saved_media = {}
+local batch_db = {}  -- db parameter is no longer used by save()
 local results = media_reader.batch_import_media(
     {test_video_path, test_audio_path, "/tmp/jve/nonexistent.mp4"},
     batch_db,
@@ -221,7 +222,7 @@ local results = media_reader.batch_import_media(
 
 assert_eq(#results.success, 2, "Two files imported successfully")
 assert_eq(#results.failed, 1, "One file failed")
-assert_eq(#batch_db.saved_media, 2, "Two media records in database")
+assert_eq(#mock_saved_media, 2, "Two media records in database")
 
 -- ============================================================================
 -- Cleanup

@@ -186,12 +186,24 @@ local function create_clip_command(params)
         duration = Rational.new(params.duration, 30, 1),
         source_in = Rational.new(0, 30, 1),
         source_out = Rational.new(params.duration, 30, 1),
-        rate_num = 30,
-        rate_den = 1,
+        fps_numerator = 30,
+        fps_denominator = 1,
         enabled = true
     })
     return clip:save(db, {skip_occlusion = true})
 end
+
+-- Register schema for TestCreateClip test command
+local test_create_clip_spec = {
+    args = {
+        project_id = { kind = "string", required = false },
+        clip_id = { kind = "string", required = true },
+        track_id = { kind = "string", required = true },
+        start_value = { kind = "number", required = true },
+        duration = { kind = "number", required = true },
+        media_id = { kind = "string", required = false },
+    }
+}
 
 command_manager.register_executor("TestCreateClip", function(cmd)
     return create_clip_command({
@@ -201,12 +213,11 @@ command_manager.register_executor("TestCreateClip", function(cmd)
         duration = cmd:get_parameter("duration"),
         media_id = cmd:get_parameter("media_id")
     })
-end)
-command_manager.register_undoer("TestCreateClip", function(cmd)
+end, function(cmd)
     -- Test helper command is not meant to be undone in production; tests should not push it onto undo stack.
     -- Returning false will surface an error if an undo is attempted.
     return false, "TestCreateClip is a setup-only helper and should not be undone"
-end)
+end, test_create_clip_spec)
 
 local clip_specs = {
     {id = "clip_a", start = 0, duration = 1000},

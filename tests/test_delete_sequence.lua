@@ -80,7 +80,7 @@ do
     if not exports or type(exports.executor) ~= "function" then
         error("DeleteSequence executor not available from delete_sequence module")
     end
-    command_manager.register_executor("DeleteSequence", exports.executor, exports.undoer)
+    command_manager.register_executor("DeleteSequence", exports.executor, exports.undoer, exports.spec)
 end
 
 local function scalar(sql, value)

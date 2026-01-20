@@ -52,6 +52,7 @@ assert(
 cm.begin_undo_group("outer")
 
 cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 0,
     duration    = 10,
@@ -61,6 +62,7 @@ cm.execute("InsertGap", {
 cm.begin_undo_group("inner")
 
 cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 10,
     duration    = 5,
@@ -70,6 +72,7 @@ cm.execute("InsertGap", {
 cm.end_undo_group()
 
 cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 15,
     duration    = 3,
@@ -155,6 +158,7 @@ assert(
 ----------------------------------------------------------------
 
 cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 0,
     duration    = 7,

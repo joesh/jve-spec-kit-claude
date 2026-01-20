@@ -20,6 +20,7 @@ local fake_cmd = {
     parameters = {},
     get_parameter = function(self, k) return self.parameters[k] end,
     set_parameter = function(self, k, v) self.parameters[k] = v end,
+    get_all_parameters = function(self) return self.parameters end,
 }
 
 fake_cmd:set_parameter("executed_mutations", {{type="update"}})

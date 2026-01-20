@@ -392,6 +392,7 @@ local function test_split_clip_command_func()
         type = "SplitClip",
         parameters = {
             clip_id = initial_clip_id,
+            project_id = project.id,
             split_value = split_rational,
             sequence_id = sequence.id, -- Passed for mutation bucket
         }
@@ -480,7 +481,7 @@ local function test_ripple_delete_command_func()
         duration = Rational.new(24, 24, 1),
         source_in = Rational.new(0, 24, 1),
         source_out = Rational.new(24, 24, 1),
-        rate_num = 24, rate_den = 1
+        fps_numerator = 24, fps_denominator = 1
     })
     clip1:save(db)
 
@@ -495,7 +496,7 @@ local function test_ripple_delete_command_func()
         duration = Rational.new(24, 24, 1),
         source_in = Rational.new(0, 24, 1),
         source_out = Rational.new(24, 24, 1),
-        rate_num = 24, rate_den = 1
+        fps_numerator = 24, fps_denominator = 1
     })
     clip2:save(db)
 
@@ -507,6 +508,7 @@ local function test_ripple_delete_command_func()
         id = "cmd_ripple_delete",
         type = "RippleDelete",
         parameters = {
+            project_id = project.id,
             track_id = track.id,
             sequence_id = sequence.id,
             gap_start = gap_start,
@@ -570,7 +572,7 @@ local function test_ripple_edit_command_func()
         duration = Rational.new(48, 24, 1),
         source_in = Rational.new(0, 24, 1),
         source_out = Rational.new(48, 24, 1),
-        rate_num = 24, rate_den = 1
+        fps_numerator = 24, fps_denominator = 1
     })
     clip1:save(db)
 
@@ -583,7 +585,7 @@ local function test_ripple_edit_command_func()
         duration = Rational.new(48, 24, 1),
         source_in = Rational.new(0, 24, 1),
         source_out = Rational.new(48, 24, 1),
-        rate_num = 24, rate_den = 1
+        fps_numerator = 24, fps_denominator = 1
     })
     clip2:save(db)
 
@@ -594,6 +596,7 @@ local function test_ripple_edit_command_func()
         id = "cmd_ripple_edit",
         type = "RippleEdit",
         parameters = {
+            project_id = project.id,
             edge_info = {
                 clip_id = clip1.id,
                 edge_type = "out",
@@ -669,7 +672,7 @@ local function test_nudge_command_func()
         duration = Rational.new(48, 24, 1),
         source_in = Rational.new(0, 24, 1),
         source_out = Rational.new(48, 24, 1),
-        rate_num = 24, rate_den = 1
+        fps_numerator = 24, fps_denominator = 1
     })
     clip1:save(db)
 
@@ -679,6 +682,7 @@ local function test_nudge_command_func()
         id = "cmd_nudge_clip",
         type = "Nudge",
         parameters = {
+            project_id = project.id,
             selected_clip_ids = {clip1.id},
             nudge_amount_rat = nudge_amount,
             sequence_id = sequence.id
@@ -708,6 +712,7 @@ local function test_nudge_command_func()
         id = "cmd_nudge_edge",
         type = "Nudge",
         parameters = {
+            project_id = project.id,
             selected_edges = {{clip_id = clip1.id,
                 edge_type = "out",
                 track_id = track.id
@@ -771,7 +776,7 @@ local function test_move_clip_to_track_command_func()
         duration = Rational.new(48, 24, 1),
         source_in = Rational.new(0, 24, 1),
         source_out = Rational.new(48, 24, 1),
-        rate_num = 24, rate_den = 1
+        fps_numerator = 24, fps_denominator = 1
     })
     clip:save(db)
 
@@ -780,6 +785,7 @@ local function test_move_clip_to_track_command_func()
         id = "cmd_move_clip",
         type = "MoveClipToTrack",
         parameters = {
+            project_id = project.id,
             clip_id = clip.id,
             target_track_id = track2.id,
             sequence_id = sequence.id -- Provide sequence_id
@@ -811,6 +817,7 @@ local function test_move_clip_to_track_command_func()
         id = "cmd_move_clip_pending",
         type = "MoveClipToTrack",
         parameters = {
+            project_id = project.id,
             clip_id = clip.id,
             target_track_id = track2.id,
             sequence_id = sequence.id,

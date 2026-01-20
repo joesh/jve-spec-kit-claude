@@ -181,6 +181,9 @@ package.loaded['core.command_manager'] = nil
 command_manager = require('core.command_manager')
 command_manager.init(database.get_connection(), 'default_sequence', 'default_project')
 
+-- Re-establish command event after module reload
+command_manager.begin_command_event("script")
+
 print("Step 4: Attempt redo after restart (should succeed)")
 local redo_result = command_manager.redo()
 assert(redo_result.success, redo_result.error_message or "Redo failed after restart")
@@ -214,6 +217,9 @@ assert(database.init(DB_PATH))
 package.loaded['core.command_manager'] = nil
 command_manager = require('core.command_manager')
 command_manager.init(database.get_connection(), 'default_sequence', 'default_project')
+
+-- Re-establish command event after second module reload
+command_manager.begin_command_event("script")
 
 print("Step 8: Redo full history after restart")
 local redo_first = command_manager.redo()

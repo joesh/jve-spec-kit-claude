@@ -62,8 +62,8 @@ local master = Clip.create("Master", media.id, {
     duration = Rational.new(1000, 30, 1),
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(1000, 30, 1),
-    rate_num = 30,
-    rate_den = 1,
+    fps_numerator = 30,
+    fps_denominator = 1,
 })
 assert(master:save(db, {skip_occlusion = true}))
 
@@ -78,8 +78,8 @@ local t1 = Clip.create("Timeline", media.id, {
     duration = Rational.new(100, 30, 1),
     source_in = Rational.new(5, 30, 1),
     source_out = Rational.new(105, 30, 1),
-    rate_num = 30,
-    rate_den = 1,
+    fps_numerator = 30,
+    fps_denominator = 1,
     offline = true,
 })
 assert(t1:save(db))

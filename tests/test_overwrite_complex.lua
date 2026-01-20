@@ -64,8 +64,8 @@ local clip_a = Clip.create("Clip A", "media_1", {
     source_in = Rational.new(0, 24, 1),
     source_out = Rational.new(100, 24, 1),
     enabled = true,
-    rate_num = 24,
-    rate_den = 1
+    fps_numerator = 24,
+    fps_denominator = 1
 })
 assert(clip_a:save(db), "Failed to save Clip A")
 
@@ -79,8 +79,8 @@ local clip_b = Clip.create("Clip B", "media_1", {
     source_in = Rational.new(100, 24, 1),
     source_out = Rational.new(200, 24, 1),
     enabled = true,
-    rate_num = 24,
-    rate_den = 1
+    fps_numerator = 24,
+    fps_denominator = 1
 })
 assert(clip_b:save(db), "Failed to save Clip B")
 

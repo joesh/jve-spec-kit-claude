@@ -9,6 +9,7 @@ package.loaded["ui.focus_manager"] = {
 }
 
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
+local Command = require("command")
 
 local mock_state = {
     get_selected_clips = function()
@@ -29,7 +30,8 @@ local mock_command_manager = {
         if type(command_or_name) == "table" then
             captured_command = command_or_name
         else
-            captured_command = {type = command_or_name, params = params}
+            -- Create a proper Command object so the test can call :get_parameter()
+            captured_command = Command.create(command_or_name, params.project_id or "project_test", params)
         end
         return {success = true}
     end

@@ -16,7 +16,11 @@ command_manager.init(db, "default_sequence", "default_project")
 -- Register a dummy executor without an undoer to ensure undo fails loudly.
 command_manager.register_executor("NoUndoCommand", function(cmd)
     return true
-end)
+end, nil, {
+    args = {
+        project_id = { required = true },
+    }
+})
 
 local cmd = Command.create("NoUndoCommand", "default_project")
 local result = command_manager.execute(cmd)

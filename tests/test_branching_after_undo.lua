@@ -51,6 +51,12 @@ end
 local executed_labels = {}
 
 local function register_test_command()
+    local test_spec = {
+        args = {
+            project_id = { required = true },
+            label = {},
+        }
+    }
     command_manager.register_executor("TestOp", function(command)
         local label = command:get_parameter("label") or "?"
         table.insert(executed_labels, label)
@@ -58,7 +64,7 @@ local function register_test_command()
     end, function(command)
         -- Undo logic (noop for test state logic, as executed_labels is reset manually in test)
         return true
-    end)
+    end, test_spec)
 end
 
 local function reset_log()

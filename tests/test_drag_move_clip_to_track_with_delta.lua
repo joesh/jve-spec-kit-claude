@@ -4,7 +4,7 @@
 
 package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 
-require("test_env")
+local test_env = require("test_env")
 
 local Rational = require("core.rational")
 local json = require("dkjson")
@@ -13,27 +13,7 @@ _G.timeline = {
     get_dimensions = function() return 1000, 1000 end
 }
 
-local executed = {}
-local cm_stub = {
-    execute = function(cmd)
-        table.insert(executed, cmd)
-        return {success = true}
-    end
-}
-package.loaded["core.command_manager"] = cm_stub
-
--- Minimal Command mock
-package.loaded["command"] = {
-    create = function(command_type, project_id)
-        return {
-            type = command_type,
-            project_id = project_id,
-            params = {},
-            set_parameter = function(self, k, v) self.params[k] = v end,
-            get_parameter = function(self, k) return self.params[k] end,
-        }
-    end
-}
+local _, executed = test_env.mock_command_manager()
 
 local state = {
     get_sequence_id = function() return "seq" end,

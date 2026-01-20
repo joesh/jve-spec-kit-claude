@@ -31,6 +31,19 @@ VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.
     command_manager.init(conn, 'default_sequence', 'default_project')
     timeline_state.init('default_sequence')
 
+    -- Register schema for TestCreateMedia test command
+    local test_create_media_spec = {
+        args = {
+            project_id = { kind = "string", required = false },
+            media_id = { kind = "string", required = true },
+            file_path = { kind = "string", required = true },
+            file_name = { kind = "string", required = false },
+            duration = { kind = "number", required = false },
+            duration_value = { kind = "number", required = false },
+            frame_rate = { kind = "number", required = false },
+        }
+    }
+
     command_manager.register_executor("TestCreateMedia", function(cmd)
         local media = Media.create({
             id = cmd:get_parameter("media_id"),
@@ -49,7 +62,7 @@ VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.
         })
         assert(media, "failed to create media " .. tostring(cmd:get_parameter("media_id")))
         return media:save(conn)
-    end)
+    end, nil, test_create_media_spec)
 
     return conn
 end

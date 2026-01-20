@@ -144,8 +144,11 @@ import_cmd:set_parameter("project_id", "test_project")
 local import_result = command_manager.execute(import_cmd)
 assert(import_result.success, "ImportMedia command failed: " .. tostring(import_result.error_message))
 
-local master_clip_id = import_cmd:get_parameter("master_clip_id")
-assert(master_clip_id and master_clip_id ~= "", "Expected master_clip_id from ImportMedia")
+-- ImportMedia stores arrays of IDs (supports multiple files)
+local master_clip_ids = import_cmd:get_parameter("master_clip_ids")
+assert(master_clip_ids and #master_clip_ids > 0, "Expected master_clip_ids array from ImportMedia")
+local master_clip_id = master_clip_ids[1]
+assert(master_clip_id and master_clip_id ~= "", "Expected valid master_clip_id")
 
 local property_name = "audio:sample_rate"
 

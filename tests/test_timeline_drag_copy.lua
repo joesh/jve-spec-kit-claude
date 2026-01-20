@@ -57,7 +57,7 @@ local clip1 = Clip.create("Clip1", "media1", {
     duration = Rational.new(100, 30, 1),
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(100, 30, 1),
-    rate_num = 30, rate_den = 1
+    fps_numerator = 30, fps_denominator = 1
 })
 clip1:save(db)
 

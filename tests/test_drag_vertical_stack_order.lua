@@ -5,7 +5,7 @@
 
 package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 
-require("test_env")
+local test_env = require("test_env")
 
 local Rational = require("core.rational")
 local json = require("dkjson")
@@ -14,13 +14,7 @@ _G.timeline = {
     get_dimensions = function() return 1000, 1000 end
 }
 
-local executed = {}
-package.loaded["core.command_manager"] = {
-    execute = function(cmd)
-        table.insert(executed, cmd)
-        return {success = true}
-    end
-}
+local _, executed = test_env.mock_command_manager()
 
 local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
 

@@ -155,8 +155,10 @@ import_cmd:set_parameter("project_id", "test_project")
 local import_result = command_manager.execute(import_cmd)
 assert(import_result.success, "ImportMedia command failed: " .. tostring(import_result.error_message))
 
-local master_clip_id = import_cmd:get_parameter("master_clip_id")
-assert(master_clip_id, "ImportMedia did not produce master_clip_id")
+-- Get master_clip_id from command parameters (stored during execution)
+local master_clip_ids = import_cmd:get_parameter("master_clip_ids")
+assert(master_clip_ids and type(master_clip_ids) == "table" and #master_clip_ids > 0, "ImportMedia did not produce master_clip_ids")
+local master_clip_id = master_clip_ids[1]
 
 local set_property_cmd = Command.create("SetClipProperty", "test_project")
 set_property_cmd:set_parameter("clip_id", master_clip_id)

@@ -84,8 +84,8 @@ local base_clip = Clip.create("Existing Clip", "media_existing", {
     duration = Rational.new(5000, 30, 1),
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(5000, 30, 1),
-    rate_num = 30,
-    rate_den = 1,
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = 1
 })
 assert(base_clip and base_clip:save(db))

@@ -7,25 +7,17 @@ package.path = package.path
     .. ";../src/lua/?/init.lua"
     .. ";../tests/?.lua"
 
-require("test_env")
+local test_env = require("test_env")
 
 -- Stub timeline dimensions
 _G.timeline = {
     get_dimensions = function() return 1000, 1000 end
 }
 
--- Capture commands executed
-local executed = {}
-package.loaded["core.command_manager"] = {
-    execute = function(cmd)
-        table.insert(executed, cmd)
-        return {success = true}
-    end
-}
+local _, executed = test_env.mock_command_manager()
 
 local Rational = require("core.rational")
 local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
-local Command = require("command")
 
 local state = {
     get_sequence_id = function() return "seq" end,

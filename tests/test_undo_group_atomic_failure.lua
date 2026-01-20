@@ -60,6 +60,7 @@ cm.begin_undo_group("atomic_failure_test")
 
 -- Execute valid command (should succeed)
 local valid_result = cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 0,
     duration    = 10,
@@ -72,10 +73,15 @@ assert(
 
 -- Execute failing command (missing required parameter)
 -- AddTrack requires track_type, omitting it should cause validation failure
+-- Temporarily disable asserts so validation failure returns error instead of asserting
+local asserts = require("core.asserts")
+asserts._set_enabled_for_tests(false)
 local fail_result = cm.execute("AddTrack", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     -- Missing required parameter: track_type
 })
+asserts._set_enabled_for_tests(true)
 
 assert(
     fail_result.success == false,
@@ -112,6 +118,7 @@ assert(
 
 -- Execute a command outside undo group to verify system state is clean
 local recovery_result = cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 0,
     duration    = 10,

@@ -103,9 +103,9 @@ cmd:set_parameter("drp_path", fixture_path)
 
 local exec_result = command_manager.execute(cmd)
 assert_true("command executed", exec_result and exec_result.success)
-assert_true("command result stored", cmd.result and cmd.result.success)
+assert_true("command result has project_id", exec_result.project_id ~= nil)
 
-local imported_project_id = cmd.result.project_id
+local imported_project_id = exec_result.project_id
 assert_true("imported project id present", imported_project_id ~= nil)
 
 local project_count = scalar(db, "SELECT COUNT(*) FROM projects")

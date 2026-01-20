@@ -80,8 +80,8 @@ local clip_existing = Clip.create("Existing", "media_1", {
     duration = Rational.new(100, 24, 1),
     source_in = Rational.new(0, 24, 1),
     source_out = Rational.new(100, 24, 1),
-    rate_num = 24,
-    rate_den = 1,
+    fps_numerator = 24,
+    fps_denominator = 1,
     enabled = true
 })
 clip_existing:save(db)

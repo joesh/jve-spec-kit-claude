@@ -79,7 +79,15 @@ local function undo_import_media(cmd)
     return true
 end
 
-command_manager.register_executor("ImportMedia", execute_import_media, undo_import_media)
+-- Register test executor with a simple schema
+local import_media_spec = {
+    args = {
+        project_id = { kind = "string", required = false },
+        file_path = { kind = "string", required = true },
+        media_id = { kind = "string", required = false },
+    }
+}
+command_manager.register_executor("ImportMedia", execute_import_media, undo_import_media, import_media_spec)
 
 -- Import first media file
 local import1 = Command.create("ImportMedia", "test_project")

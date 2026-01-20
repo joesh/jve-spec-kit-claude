@@ -10,6 +10,7 @@ local timeline_state = require("ui.timeline.timeline_state")
 local data = require("ui.timeline.state.timeline_state_data")
 local Rational = require("core.rational")
 local dkjson = require("dkjson")
+local Command = require("command")
 
 -- Focus panel needs to be "timeline" for the shortcut to be active.
 local focus_manager = require("ui.focus_manager")
@@ -37,8 +38,13 @@ timeline_state.set_playhead_position(Rational.new(10, 24, 1))
 -- Stub command manager to capture the dispatched command.
 local captured_command = nil
 local mock_command_manager = {
-    execute = function(cmd)
-        captured_command = cmd
+    execute = function(command_or_name, params)
+        if type(command_or_name) == "table" then
+            captured_command = command_or_name
+        else
+            -- Create a proper Command object so the test can call :get_parameter()
+            captured_command = Command.create(command_or_name, params.project_id or "test_project", params)
+        end
         return { success = true }
     end
 }

@@ -4,7 +4,7 @@
 
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
-require("test_env")
+local test_env = require("test_env")
 
 local Rational = require("core.rational")
 
@@ -13,14 +13,7 @@ _G.timeline = {
     get_dimensions = function(_) return 1920, 1080 end
 }
 
--- Capture executed commands
-local executed = {}
-package.loaded["core.command_manager"] = {
-    execute = function(cmd)
-        table.insert(executed, cmd)
-        return { success = true }
-    end
-}
+local _, executed = test_env.mock_command_manager()
 
 -- Minimal Command mock
 package.loaded["command"] = {

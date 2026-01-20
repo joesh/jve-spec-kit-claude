@@ -62,8 +62,8 @@ local function create_clip(params)
         duration = Rational.new(params.duration_value or 0, 30, 1),
         source_in = Rational.new(params.source_in_value or 0, 30, 1),
         source_out = Rational.new(params.source_out_value or params.duration_value or 0, 30, 1),
-        rate_num = 30,
-        rate_den = 1,
+        fps_numerator = 30,
+        fps_denominator = 1,
         parent_clip_id = params.parent_clip_id
     })
     assert(clip and clip:save(db, {skip_occlusion = true}))

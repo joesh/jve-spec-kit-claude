@@ -43,7 +43,11 @@ command_manager.register_executor("TestNoOpListener", function()
     return true
 end, function()
     return true
-end)
+end, {
+    args = {
+        project_id = { required = true },
+    }
+})
 
 local cmd = Command.create("TestNoOpListener", "test_project")
 local exec_result = command_manager.execute(cmd)

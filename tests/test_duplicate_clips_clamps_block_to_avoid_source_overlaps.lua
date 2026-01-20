@@ -53,7 +53,7 @@ local c1 = Clip.create("C1", "media1", {
     duration = Rational.new(10, 30, 1),
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(10, 30, 1),
-    rate_num = 30, rate_den = 1
+    fps_numerator = 30, fps_denominator = 1
 })
 assert(c1:save(db))
 
@@ -66,7 +66,7 @@ local c2 = Clip.create("C2", "media1", {
     duration = Rational.new(10, 30, 1),
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(10, 30, 1),
-    rate_num = 30, rate_den = 1
+    fps_numerator = 30, fps_denominator = 1
 })
 assert(c2:save(db))
 

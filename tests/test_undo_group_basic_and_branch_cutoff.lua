@@ -48,12 +48,14 @@ assert(
 cm.begin_undo_group("group1")
 
 cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 0,
     duration    = 10,
 })
 
 cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 10,
     duration    = 5,
@@ -135,6 +137,7 @@ assert(
 ----------------------------------------------------------------
 
 cm.execute("InsertGap", {
+    project_id  = "proj",
     sequence_id = layout.sequence_id,
     position    = 0,
     duration    = 3,
