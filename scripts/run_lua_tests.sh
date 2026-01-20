@@ -63,7 +63,7 @@ echo "[lua-tests] Running ${#LUA_TESTS[@]} Lua test(s)..."
 for test_file in "${LUA_TESTS[@]}"; do
   test_name="$(basename "${test_file}")"
   echo "[lua-tests] → ${test_name}"
-  (cd "${TEST_DIR}" && luajit "${test_name}")
+  (cd "${TEST_DIR}" && luajit test_harness.lua "${test_name}")
 done
 
 echo "[lua-tests] All Lua tests passed."
