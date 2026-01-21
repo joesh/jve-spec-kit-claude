@@ -82,7 +82,7 @@ timeline_state.reload_clips = function(_) end
 timeline_state.consume_mutation_failure = function() return nil end
 timeline_state.apply_mutations = function(_, _) return true end
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 local ripple_cmd = Command.create("RippleEdit", "default_project")
 ripple_cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})

@@ -31,7 +31,7 @@ db:exec(string.format([[
         24.0, 48000, 1920, 1080, 0, 0, '[]', '[]', 0, 240, NULL);
 ]], now, now))
 
-command_manager.init(db, "timeline_seq", "test_project")
+command_manager.init("timeline_seq", "test_project")
 
 local events = {}
 local listener = function(evt)

@@ -55,7 +55,7 @@ local function setup_db(path)
     timeline_state.get_sequence_frame_rate = function() return 30 end
     timeline_state.get_sequence_id = function() return "default_sequence" end
 
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
     return db
 end
 

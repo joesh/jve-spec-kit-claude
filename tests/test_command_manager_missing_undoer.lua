@@ -11,7 +11,7 @@ os.remove(DB)
 assert(database.init(DB))
 local db = database.get_connection()
 db:exec(require("import_schema"))
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 -- Register a dummy executor without an undoer to ensure undo fails loudly.
 command_manager.register_executor("NoUndoCommand", function(cmd)

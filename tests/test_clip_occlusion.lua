@@ -143,7 +143,7 @@ print("=== Clip Occlusion Tests ===\n")
 
 local db_path = "/tmp/jve/test_clip_occlusion.db"
 local db = setup_db(db_path)
-command_manager.init(db, 'sequence', 'project') -- Initialize command manager
+command_manager.init('sequence', 'project') -- Initialize command manager
 
 ensure_media_record(db, "media_A", 120) -- 4000ms
 ensure_media_record(db, "media_B", 90)  -- 3000ms

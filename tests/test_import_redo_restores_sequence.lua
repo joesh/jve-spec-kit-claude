@@ -176,7 +176,7 @@ install_timeline_stub()
 local tmp_db = "/tmp/jve/test_import_redo_restores_sequence.db"
 local db = init_database(tmp_db)
 
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 command_manager.activate_timeline_stack('default_sequence')
 
 local import_cmd = Command.create("ImportFCP7XML", "default_project")

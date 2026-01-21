@@ -36,7 +36,7 @@ db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
-command_manager.init(db, 'default_sequence', 'test_project')
+command_manager.init('default_sequence', 'test_project')
 
 -- Test 1: Media cleanup during replay
 print("Test 1: Media cleanup during undo/replay")

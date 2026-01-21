@@ -67,7 +67,7 @@ local media = Media.create({
 })
 assert(media:save(db), "failed to save media")
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 timeline_state.init("default_sequence")
 
 local playhead = timeline_state.get_playhead_position()

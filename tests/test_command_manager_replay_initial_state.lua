@@ -78,7 +78,7 @@ if not exec_result then
 end
 
 -- No commands yet, but timeline has existing clip
-command_manager.init(db, "timeline_seq", "test_project")
+command_manager.init("timeline_seq", "test_project")
 command_manager.activate_timeline_stack("timeline_seq")
 
 local initial_clips = database.load_clips("timeline_seq") or {}

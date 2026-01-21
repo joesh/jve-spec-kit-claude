@@ -84,7 +84,7 @@ local function run_test()
     assert(conn:exec(DATA_SQL))
 
     local command_manager = require("core.command_manager")
-    command_manager.init(conn, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
 
     local cmd = Command.create("CreateSequence", "default_project")
     cmd:set_parameter("project_id", "default_project")

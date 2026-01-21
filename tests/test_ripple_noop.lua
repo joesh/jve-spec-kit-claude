@@ -71,7 +71,7 @@ local function setup_db(path)
     ]]))
 
     -- command_impl.register_commands({}, {}, conn)
-    command_manager.init(conn, 'default_sequence', 'default_project')
+    command_manager.init('default_sequence', 'default_project')
 end
 
 local TEST_DB = "/tmp/jve/test_ripple_noop.db"

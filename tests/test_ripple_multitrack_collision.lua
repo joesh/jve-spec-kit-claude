@@ -61,7 +61,7 @@ local function setup()
         now, now      -- clip_v2_right
     )))
 
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
     return db
 end
 

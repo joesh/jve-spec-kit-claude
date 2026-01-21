@@ -60,7 +60,7 @@ local function fetch_clip_start(id)
     return start_val, dur_val
 end
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 -- Move middle clip right by its full duration, overlapping c3 (forces occlusion delete).
 local Command = require("command")

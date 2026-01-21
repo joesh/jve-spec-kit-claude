@@ -22,6 +22,8 @@ package.path = package.path .. ';' .. os.getenv('HOME') .. '/.luarocks/share/lua
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local Project = require("models.project")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
 local logger = require("core.logger")
 local project_open = require("core.project_open")
 
@@ -88,184 +90,33 @@ local active_sequence_id
 -- Initialize command_manager module reference (will be initialized later)
 local command_manager = require("core.command_manager")
 
--- Open database connection
+-- Open database connection (schema is applied automatically by database.init via load_main_schema)
 local db_success = project_open.open_project_database_or_prompt_cleanup(db_module, qt_constants, db_path)
 if not db_success then
     logger.error("layout", "Failed to open database connection; exiting")
     os.exit(1)
 else
     logger.debug("layout", "Database connection established")
-    local db_conn = db_module.get_connection()
-    if not db_conn then
-        error("FATAL: Database connection reported as established but is nil")
-    end
 
-    -- Initialize database schema if needed before querying any tables
-    local schema_check, err = db_conn:prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")
-    if not schema_check then
-        error("FATAL: Failed to prepare schema check query: " .. tostring(err))
-    end
+    -- Ensure default project exists
+    local project = Project.ensure_default()
+    assert(project, "FATAL: Failed to ensure default project")
+    active_project_id = project.id
+    project_display_name = project.name
+    logger.debug("layout", "Using project: " .. project.name)
 
-    local has_schema = false
-    if schema_check:exec() then
-        has_schema = schema_check:next()
-    end
-    schema_check:finalize()
+    -- Ensure default sequence exists
+    local sequence = Sequence.ensure_default(active_project_id)
+    assert(sequence, "FATAL: Failed to ensure default sequence")
+    active_sequence_id = sequence.id
+    logger.debug("layout", "Using sequence: " .. sequence.name)
 
-    if not has_schema then
-        logger.info("layout", "Creating database schema...")
-        local schema_path = layout_dir .. "../schema.sql"
-        local schema_file, ferr = io.open(schema_path, "r")
-        if not schema_file then
-            error("FATAL: Failed to open schema.sql at " .. schema_path .. ": " .. tostring(ferr))
-        end
-        local schema_sql = schema_file:read("*all")
-        schema_file:close()
+    -- Ensure default tracks exist for the sequence
+    local tracks_ok = Track.ensure_defaults_for_sequence(active_sequence_id)
+    assert(tracks_ok, "FATAL: Failed to ensure default tracks")
 
-        local ok, exec_err = db_conn:exec(schema_sql)
-        if not ok then
-            error("FATAL: Failed to apply schema: " .. tostring(exec_err))
-        end
-        logger.info("layout", "Database schema created")
-    end
-
-    local function ensure_default_data()
-        local function table_count(sql)
-            local stmt, stmt_err = db_conn:prepare(sql)
-            if not stmt then
-                error("FATAL: Failed to prepare count query: " .. tostring(stmt_err))
-            end
-            local value = 0
-            if stmt:exec() and stmt:next() then
-                value = tonumber(stmt:value(0)) or 0
-            end
-            stmt:finalize()
-            return value
-        end
-
-        if table_count("SELECT COUNT(*) FROM projects") == 0 then
-            local insert_project = db_conn:prepare([[
-                INSERT INTO projects (id, name, created_at, modified_at, settings)
-                VALUES ('default_project', 'Untitled Project', strftime('%s', 'now'), strftime('%s', 'now'), '{}')
-            ]])
-            if not insert_project then
-                error("FATAL: Failed to prepare default project insert")
-            end
-            insert_project:exec()
-            insert_project:finalize()
-            logger.info("layout", "Inserted default project")
-        end
-
-        local sequence_id = nil
-        if table_count("SELECT COUNT(*) FROM sequences") == 0 then
-            local insert_sequence = db_conn:prepare([[
-                INSERT INTO sequences (
-                    id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
-                    width, height, playhead_frame,
-                    selected_clip_ids, selected_edge_infos, selected_gap_infos,
-                    view_start_frame, view_duration_frames, created_at, modified_at
-                ) VALUES (
-                    'default_sequence', 'default_project', 'Sequence 1', 'timeline', 24, 1, 48000,
-                    1920, 1080, 0,
-                    '[]', '[]', '[]',
-                    0, 240, strftime('%s', 'now'), strftime('%s', 'now')
-                )
-            ]])
-            if not insert_sequence then
-                error("FATAL: Failed to prepare default sequence insert")
-            end
-            local ok_seq = insert_sequence:exec()
-            insert_sequence:finalize()
-            assert(ok_seq ~= false, "FATAL: Failed to insert default sequence")
-            sequence_id = "default_sequence"
-        else
-            local seq_stmt = db_conn:prepare("SELECT id, fps_numerator, fps_denominator, audio_rate FROM sequences LIMIT 1")
-            if not seq_stmt then
-                error("FATAL: Failed to query existing sequence")
-            end
-            local ok = seq_stmt:exec() and seq_stmt:next()
-            if ok then
-                sequence_id = seq_stmt:value(0)
-            end
-            seq_stmt:finalize()
-            assert(sequence_id, "FATAL: Existing sequence missing id")
-        end
-
-        -- Ensure tracks exist for the active sequence
-        local function insert_track(seq_id, id, name, track_type, track_index)
-            local stmt = db_conn:prepare([[
-                INSERT INTO tracks (
-                    id, sequence_id, name, track_type,
-                    track_index, enabled, locked, muted, soloed, volume, pan
-                )
-                VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, 1.0, 0.0)
-            ]])
-            if not stmt then
-                error("FATAL: Failed to prepare default track insert")
-            end
-            stmt:bind_value(1, id)
-            stmt:bind_value(2, seq_id)
-            stmt:bind_value(3, name)
-            stmt:bind_value(4, track_type)
-            stmt:bind_value(5, track_index)
-            local ok = stmt:exec()
-            stmt:finalize()
-            assert(ok ~= false, string.format("FATAL: Failed to insert track %s", tostring(id)))
-        end
-
-        -- Only seed tracks if none exist for the active sequence
-        local track_count_sql = string.format("SELECT COUNT(*) FROM tracks WHERE sequence_id = '%s'", sequence_id)
-        if table_count(track_count_sql) == 0 then
-            insert_track(sequence_id, "video1", "V1", "VIDEO", 1)
-            insert_track(sequence_id, "video2", "V2", "VIDEO", 2)
-            insert_track(sequence_id, "video3", "V3", "VIDEO", 3)
-            insert_track(sequence_id, "audio1", "A1", "AUDIO", 1)
-            insert_track(sequence_id, "audio2", "A2", "AUDIO", 2)
-            insert_track(sequence_id, "audio3", "A3", "AUDIO", 3)
-
-            local insert_media = db_conn:prepare([[
-                INSERT INTO media (
-                    id, project_id, name, file_path,
-                    duration_frames, fps_numerator, fps_denominator,
-                    width, height, audio_channels, codec,
-                    created_at, modified_at, metadata
-                )
-                VALUES (
-                    'media1', 'default_project', 'test.mp4', '/path/to/test.mp4',
-                    2400, 24, 1,
-                    1920, 1080, 2, 'h264',
-                    strftime('%s','now'), strftime('%s','now'), '{}'
-                )
-            ]])
-            if insert_media then
-                insert_media:exec()
-                insert_media:finalize()
-            end
-
-            logger.info("layout", "Inserted default sequence and tracks")
-        end
-
-        return sequence_id
-    end
-
-    active_sequence_id = ensure_default_data()
-    assert(active_sequence_id and active_sequence_id ~= "", "FATAL: Unable to resolve active sequence id after default data init")
-
-    local project_stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
-    assert(project_stmt, "FATAL: Failed to prepare active sequence -> project query")
-    project_stmt:bind_value(1, active_sequence_id)
-    if project_stmt:exec() and project_stmt:next() then
-        active_project_id = project_stmt:value(0)
-    end
-    project_stmt:finalize()
-    assert(active_project_id and active_project_id ~= "", "FATAL: Active sequence missing project_id (sequence_id=" .. tostring(active_sequence_id) .. ")")
-    local project_record = Project.load(active_project_id)
-    assert(project_record and project_record.name and project_record.name ~= "",
-        string.format("Project '%s' missing name", tostring(active_project_id)))
-    project_display_name = project_record.name
-
-    -- Initialize CommandManager with database
-    command_manager.init(db_module.get_connection(), active_sequence_id, active_project_id)
+    -- Initialize CommandManager
+    command_manager.init(active_sequence_id, active_project_id)
     logger.debug("layout", "CommandManager initialized with database")
 
     -- Initialize bug reporter (continuous background capture)

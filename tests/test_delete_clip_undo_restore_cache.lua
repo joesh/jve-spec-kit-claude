@@ -164,7 +164,7 @@ add_clip({id = "clip_delete_test"})
 -- Initialize command manager with stub timeline state
 package.loaded["core.command_manager"] = nil
 local command_manager = require("core.command_manager")
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 command_manager.begin_command_event("script")
 
 local delete_cmd = Command.create("DeleteClip", "default_project")

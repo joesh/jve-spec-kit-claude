@@ -89,7 +89,7 @@ timeline_state.init('default_sequence')
 local executors = {}
 local undoers = {}
 -- command_impl.register_commands(executors, undoers, db)
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 local original_playhead = Rational.new(8888, 30, 1)
 timeline_state.set_playhead_position(original_playhead)

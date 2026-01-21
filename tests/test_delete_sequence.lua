@@ -71,7 +71,7 @@ end
 
 stub_timeline_state()
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 do
     local delete_module = require("core.commands.delete_sequence")
     local temp_executors = {}

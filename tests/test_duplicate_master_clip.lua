@@ -64,7 +64,7 @@ local executors = {}
 local undoers = {}
 command_impl.register_commands(executors, undoers, db)
 assert(type(undoers["DuplicateMasterClip"]) == "function", "DuplicateMasterClip undoer not registered")
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 local snapshot = {
     name = "Master Clip",

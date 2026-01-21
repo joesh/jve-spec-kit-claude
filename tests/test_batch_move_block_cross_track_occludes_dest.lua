@@ -51,7 +51,7 @@ insert_clip("c1", "v1", 0,   100)
 insert_clip("c2", "v1", 150, 100)
 insert_clip("dest", "v2", 0, 120) -- will be occluded by the move
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 local command_specs = {
     {command_type = "MoveClipToTrack", parameters = {clip_id = "c1", target_track_id = "v2"}},

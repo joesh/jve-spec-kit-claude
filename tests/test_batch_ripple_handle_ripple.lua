@@ -42,7 +42,7 @@ end
 insert_clip("ripple_target", 200, 100, 120)
 insert_clip("downstream", 500, 120)
 
-    command_manager.init(db, "seq", "proj")
+    command_manager.init("seq", "proj")
     return db
 end
 

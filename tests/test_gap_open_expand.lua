@@ -47,7 +47,7 @@ local seed = string.format([[
 ]], now, now, now, now, now, now, now, now, now, now)
 assert(db:exec(seed))
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 local gap_target = Clip.load("clip_right", db)
 assert(gap_target.timeline_start.frames == 400, "initial clip start mismatch")

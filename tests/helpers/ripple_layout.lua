@@ -298,7 +298,7 @@ function M.create(opts)
         assert(db:exec(build_clip_sql(cfg, cfg.clips[key])))
     end
 
-    command_manager.init(db, cfg.sequence_id, cfg.project_id)
+    command_manager.init(cfg.sequence_id, cfg.project_id)
 
     local layout = {
         db = db,

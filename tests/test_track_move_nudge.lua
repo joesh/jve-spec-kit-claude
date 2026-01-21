@@ -136,7 +136,7 @@ local executors = {}
 local undoers = {}
 -- command_impl.register_commands(executors, undoers, db)
 
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 print("=== MoveClipToTrack + Nudge Regression ===\n")
 

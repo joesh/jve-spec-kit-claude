@@ -304,4 +304,52 @@ function Track:save()
     return ok
 end
 
+-- Count tracks for a sequence
+function Track.count_for_sequence(sequence_id)
+    if not sequence_id then return 0 end
+
+    local database = require("core.database")
+    local conn = database.get_connection()
+    if not conn then return 0 end
+
+    local stmt = conn:prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?")
+    if not stmt then return 0 end
+
+    stmt:bind_value(1, sequence_id)
+    local count = 0
+    if stmt:exec() and stmt:next() then
+        count = tonumber(stmt:value(0)) or 0
+    end
+    stmt:finalize()
+    return count
+end
+
+-- Ensure default tracks exist for a sequence
+-- Creates V1, V2, V3 video tracks and A1, A2, A3 audio tracks if none exist
+function Track.ensure_defaults_for_sequence(sequence_id)
+    if not sequence_id then return false end
+
+    if Track.count_for_sequence(sequence_id) > 0 then
+        return true  -- Already has tracks
+    end
+
+    -- Create default video tracks
+    for i = 1, 3 do
+        local track = Track.create_video("V" .. i, sequence_id, {index = i})
+        if not track or not track:save() then
+            return false
+        end
+    end
+
+    -- Create default audio tracks
+    for i = 1, 3 do
+        local track = Track.create_audio("A" .. i, sequence_id, {index = i})
+        if not track or not track:save() then
+            return false
+        end
+    end
+
+    return true
+end
+
 return Track

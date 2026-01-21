@@ -148,7 +148,7 @@ do
     stmt:finalize()
 end
 
-command_manager.init(db, 'test_sequence', 'test_project')
+command_manager.init('test_sequence', 'test_project')
 
 -- Test 1: Playhead restoration after undo
 print("Test 1: Undo restores playhead to pre-command position")

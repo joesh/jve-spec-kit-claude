@@ -83,7 +83,7 @@ end
 local TEST_DB = "/tmp/jve/test_split_clip_mutations.db"
 local db = init_database(TEST_DB)
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 command_manager.activate_timeline_stack("default_sequence")
 
 local function reset_timeline_stub()

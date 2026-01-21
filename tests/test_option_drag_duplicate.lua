@@ -36,7 +36,7 @@ local function setup_database(path)
     db = database.get_connection()
     assert(db:exec(SCHEMA_SQL))
     assert(db:exec(BASE_DATA_SQL))
-    command_manager.init(db, 'default_sequence', 'default_project')
+    command_manager.init('default_sequence', 'default_project')
 end
 
 local function create_clip(params)

@@ -62,7 +62,7 @@ selection_state.set_gap_selection({
     }
 })
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 local cmd = Command.create("RippleDelete", "proj")
 cmd:set_parameter("track_id", "v1")

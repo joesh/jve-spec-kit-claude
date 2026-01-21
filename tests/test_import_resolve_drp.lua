@@ -96,7 +96,7 @@ if not seq_ok then
     os.exit(1)
 end
 
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 local cmd = Command.create("ImportResolveProject", "default_project")
 cmd:set_parameter("drp_path", fixture_path)

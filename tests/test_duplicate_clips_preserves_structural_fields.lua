@@ -41,7 +41,7 @@ db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,
         ('v2','seq','V2','VIDEO',2,1,0,0,0,1.0,0.0)
     ]])
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 local media = Media.create({
     id = "media1",

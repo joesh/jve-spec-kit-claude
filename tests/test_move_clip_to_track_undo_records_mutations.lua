@@ -60,7 +60,7 @@ local function fetch_track(id)
     return track_id
 end
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 local move_cmd = Command.create("MoveClipToTrack", "proj")
 move_cmd:set_parameter("sequence_id", "seq")

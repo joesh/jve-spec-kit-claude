@@ -107,7 +107,7 @@ end
 local TEST_DB = "/tmp/jve/test_import_undo_skips_replay.db"
 local db = init_db(TEST_DB)
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 local import_cmd = Command.create("ImportFCP7XML", "default_project")
 import_cmd:set_parameter("project_id", "default_project")

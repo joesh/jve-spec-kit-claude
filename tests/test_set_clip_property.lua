@@ -95,7 +95,7 @@ db:exec(string.format([[
 ]], now, now, now, now))
 
 stub_timeline_state()
-command_manager.init(db, "timeline_seq", "test_project")
+command_manager.init("timeline_seq", "test_project")
 
 local media_reader = require("media.media_reader")
 local original_import = media_reader.import_media

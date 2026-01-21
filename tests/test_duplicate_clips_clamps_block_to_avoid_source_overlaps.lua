@@ -41,7 +41,7 @@ db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,
 db:exec([[INSERT INTO media(id,project_id,name,file_path,duration_frames,fps_numerator,fps_denominator,created_at,modified_at)
           VALUES('media1','proj','Media1','/tmp/test.mov',1000,30,1,0,0)]])
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 -- Two disjoint clips on the same track with a small gap.
 local c1 = Clip.create("C1", "media1", {

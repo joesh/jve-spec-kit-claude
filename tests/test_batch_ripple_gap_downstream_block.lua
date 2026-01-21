@@ -48,7 +48,7 @@ assert(db:exec(string.format([[
 ]], now, now, now, now, now, now, now, now, now, now, now, now, now, now))
 )
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", {

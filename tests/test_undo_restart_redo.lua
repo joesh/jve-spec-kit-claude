@@ -161,7 +161,7 @@ install_timeline_stub()
 local db = init_database(DB_PATH)
 
 local command_manager = require('core.command_manager')
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 print("Step 1: Execute initial command")
 local exec_result = command_manager.execute(create_sequence_command())
@@ -179,7 +179,7 @@ assert(database.init(DB_PATH))
 -- Drop cached command_manager module so init() simulates a fresh run
 package.loaded['core.command_manager'] = nil
 command_manager = require('core.command_manager')
-command_manager.init(database.get_connection(), 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 -- Re-establish command event after module reload
 command_manager.begin_command_event("script")
@@ -216,7 +216,7 @@ print("Step 7: Restart application again")
 assert(database.init(DB_PATH))
 package.loaded['core.command_manager'] = nil
 command_manager = require('core.command_manager')
-command_manager.init(database.get_connection(), 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 -- Re-establish command event after second module reload
 command_manager.begin_command_event("script")

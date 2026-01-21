@@ -50,7 +50,7 @@ insert_clip("c1", 0,   100)
 insert_clip("c2", 150, 100)
 insert_clip("c3", 320, 80) -- unselected; will be overlapped by block move if not resolved
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 _G.timeline = { get_dimensions = function() return 1000, 1000 end }
 

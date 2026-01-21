@@ -290,4 +290,46 @@ function Sequence:save()
     return ok
 end
 
+-- Count all sequences in the database
+function Sequence.count()
+    local database = require("core.database")
+    local conn = database.get_connection()
+    if not conn then
+        return 0
+    end
+
+    local stmt = conn:prepare("SELECT COUNT(*) FROM sequences")
+    if not stmt then
+        return 0
+    end
+
+    local count = 0
+    if stmt:exec() and stmt:next() then
+        count = tonumber(stmt:value(0)) or 0
+    end
+    stmt:finalize()
+    return count
+end
+
+-- Ensure a default sequence exists for a project, creating one if needed
+-- Returns the default sequence (existing or newly created)
+function Sequence.ensure_default(project_id)
+    project_id = project_id or "default_project"
+
+    local existing = Sequence.load("default_sequence")
+    if existing then
+        return existing
+    end
+
+    -- Create default sequence with standard settings
+    local frame_rate = {fps_numerator = 30, fps_denominator = 1}
+    local sequence = Sequence.create("Default Sequence", project_id, frame_rate, 1920, 1080, {
+        id = "default_sequence"
+    })
+    if sequence and sequence:save() then
+        return sequence
+    end
+    return nil
+end
+
 return Sequence

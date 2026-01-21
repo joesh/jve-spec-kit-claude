@@ -56,7 +56,7 @@ local tmp_db = os.tmpname() .. ".db"
 local conn = setup_database(tmp_db)
 assert(conn, "failed to initialize test database")
 
-command_manager.init(conn, "seq_a", "default_project")
+command_manager.init("seq_a", "default_project")
 
 local function track_id(sequence_id, track_type, index)
     local stmt = conn:prepare([[

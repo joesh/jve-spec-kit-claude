@@ -152,7 +152,7 @@ package.loaded['ui.project_browser'] = project_browser
 
 local executors = {}
 local undoers = {}
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 executors = {}
 undoers = {}
 command_impl.register_commands(executors, undoers, db)
@@ -524,7 +524,7 @@ assert(db:exec([[
         strftime('%s','now'), strftime('%s','now')
     );
 ]]), "Failed to clear timeline state before replay")
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 executors = {}
 undoers = {}
 command_impl.register_commands(executors, undoers, db)

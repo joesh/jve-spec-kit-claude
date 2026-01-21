@@ -64,7 +64,7 @@ timeline_state.set_edge_selection = function(_) end
 timeline_state.set_gap_selection = function(_) end
 timeline_state.get_sequence_frame_rate = function() return {fps_numerator = 1000, fps_denominator = 1} end
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 local function fetch_start(clip_id)
     local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")

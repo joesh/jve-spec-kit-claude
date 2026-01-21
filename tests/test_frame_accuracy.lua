@@ -100,7 +100,7 @@ end
 
 local function test_create_clip_command_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
     
     local project = Project.create("Test Project")
     project:save(db)
@@ -176,7 +176,7 @@ end
 
 local function test_insert_clip_to_timeline_command_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
     
     local project = Project.create("Test Project 2")
     project:save(db)
@@ -237,7 +237,7 @@ end
 
 local function test_insert_clip_with_master_clip_rescale_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
     
     local project = Project.create("Test Project 3")
     project:save(db)
@@ -323,7 +323,7 @@ end
 
 local function test_split_clip_command_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
 
     local project = Project.create("Test Project Split")
     project:save(db)
@@ -449,7 +449,7 @@ end
 
 local function test_ripple_delete_command_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
 
     local project = Project.create("Test Project Ripple")
     project:save(db)
@@ -540,7 +540,7 @@ end
 
 local function test_ripple_edit_command_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
 
     local project = Project.create("Test Project RippleEdit")
     project:save(db)
@@ -640,7 +640,7 @@ end
 
 local function test_nudge_command_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
 
     local project = Project.create("Test Project Nudge")
     project:save(db)
@@ -742,7 +742,7 @@ end
 
 local function test_move_clip_to_track_command_func()
     local db = setup_test_db()
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
 
     local project = Project.create("Test Project MoveClip")
     project:save(db)

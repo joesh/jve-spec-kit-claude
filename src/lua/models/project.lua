@@ -159,4 +159,39 @@ function Project:save(db)
     return ok
 end
 
+-- Count all projects in the database
+function Project.count()
+    local conn = database.get_connection()
+    if not conn then
+        return 0
+    end
+
+    local stmt = conn:prepare("SELECT COUNT(*) FROM projects")
+    if not stmt then
+        return 0
+    end
+
+    local count = 0
+    if stmt:exec() and stmt:next() then
+        count = tonumber(stmt:value(0)) or 0
+    end
+    stmt:finalize()
+    return count
+end
+
+-- Ensure a default project exists, creating one if needed
+-- Returns the default project (existing or newly created)
+function Project.ensure_default()
+    local existing = Project.load("default_project")
+    if existing then
+        return existing
+    end
+
+    local project = Project.create("Untitled Project", {id = "default_project"})
+    if project and project:save() then
+        return project
+    end
+    return nil
+end
+
 return Project

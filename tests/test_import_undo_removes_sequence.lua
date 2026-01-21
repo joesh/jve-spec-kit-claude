@@ -90,7 +90,7 @@ exec(db, string.format([[
 
 stub_timeline_state()
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 command_manager.activate_timeline_stack("default_sequence")
 
 local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_timeline_fcp7xml.xml")

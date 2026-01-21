@@ -77,7 +77,7 @@ stub_timeline_state()
 local db_path = "/tmp/jve/test_branching_after_undo.db"
 init_db(db_path)
 
-command_manager.init(database.get_connection(), 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 register_test_command()
 
 -- Execute initial command (acts like the XML import)

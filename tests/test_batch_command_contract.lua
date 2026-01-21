@@ -33,7 +33,7 @@ local function test_batch_command_contract()
     ]], os.time(), os.time()))
 
     -- Initialize Command Manager
-    CommandManager.init(db, "default_sequence", "default_project")
+    CommandManager.init("default_sequence", "default_project")
 
     -- Stub timeline_state
     local timeline_state = require("ui.timeline.timeline_state")

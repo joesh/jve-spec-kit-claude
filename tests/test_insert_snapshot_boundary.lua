@@ -39,7 +39,7 @@ db:exec([[
     VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 1, 1);
 ]])
 
-command_manager.init(db, "sequence", "project")
+command_manager.init("sequence", "project")
 
 -- Register Insert command
 local insert_cmd = require("core.commands.insert")

@@ -541,9 +541,9 @@ function M.shutdown()
     state_mgr.init(nil)
 end
 
--- Initialize CommandManager with database connection
-function M.init(database, sequence_id, project_id)
-    db = database
+-- Initialize CommandManager with sequence and project IDs
+-- Database connection is obtained internally from database.get_connection()
+function M.init(sequence_id, project_id)
     if not sequence_id or sequence_id == "" then
         error("CommandManager.init: sequence_id is required", 2)
     end
@@ -553,11 +553,10 @@ function M.init(database, sequence_id, project_id)
     active_sequence_id = sequence_id
     active_project_id = project_id
 
-    -- Ensure model methods use the same database connection as commands
+    -- Get database connection from the database module
     local db_module = require("core.database")
-    if db_module.set_connection then
-        db_module.set_connection(db)
-    end
+    db = db_module.get_connection()
+    assert(db, "CommandManager.init: database connection not available")
 
     registry.init(db, M.set_last_error)
     history.init(db, sequence_id, project_id)

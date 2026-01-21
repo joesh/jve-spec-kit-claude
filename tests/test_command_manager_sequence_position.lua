@@ -49,7 +49,7 @@ local timeline_state = {
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 assert(not command_manager.can_undo(), "Default sequence should start at fully-undone position")
 

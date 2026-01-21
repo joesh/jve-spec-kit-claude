@@ -51,7 +51,7 @@ local function seed_db(db_path)
         now, now      -- clip_right
     )
     assert(seeded_db:exec(seed))
-    command_manager.init(seeded_db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
     return seeded_db
 end
 

@@ -55,7 +55,7 @@ local function reset_db()
         DELETE FROM projects;
     ]]))
     seed_sequence()
-    command_manager.init(db, "seq", "proj")
+    command_manager.init("seq", "proj")
 end
 
 reset_db()

@@ -48,7 +48,7 @@ end
 
 local TEST_DB = "/tmp/jve/test_roll_drag_undo.db"
 local db = init_database(TEST_DB)
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 command_manager.activate_timeline_stack("default_sequence")
 
 -- Simulate roll selection across clip_a out / clip_b in (adjacent)

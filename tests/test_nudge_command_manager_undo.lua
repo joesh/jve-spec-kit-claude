@@ -47,7 +47,7 @@ end
 
 insert_clip("c1", 0, 100)
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 local cmd = Command.create("Nudge", "proj")
 cmd:set_parameter("sequence_id", "seq")

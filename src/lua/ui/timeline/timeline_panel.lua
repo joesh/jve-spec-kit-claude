@@ -1497,16 +1497,10 @@ function M.load_sequence(sequence_id)
     end
 
     logger.debug("timeline_panel", string.format("Loading sequence %s into timeline panel", sequence_id))
-    local db_conn = database.get_connection()
-    assert(db_conn, "timeline_panel.load_sequence: missing database connection")
-    local project_id = nil
-    local stmt = db_conn:prepare("SELECT project_id FROM sequences WHERE id = ?")
-    assert(stmt, "timeline_panel.load_sequence: failed to prepare sequence project_id query")
-    stmt:bind_value(1, sequence_id)
-    if stmt:exec() and stmt:next() then
-        project_id = stmt:value(0)
-    end
-    stmt:finalize()
+    local Sequence = require("models.sequence")
+    local sequence = Sequence.load(sequence_id)
+    assert(sequence, "timeline_panel.load_sequence: failed to load sequence " .. tostring(sequence_id))
+    local project_id = sequence.project_id
     assert(project_id and project_id ~= "", "timeline_panel.load_sequence: missing project_id for sequence " .. tostring(sequence_id))
     state.init(sequence_id, project_id)
 

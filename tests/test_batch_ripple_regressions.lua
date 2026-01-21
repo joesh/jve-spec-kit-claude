@@ -64,7 +64,7 @@ local function build_manual_timeline(config)
             now, now)))
     end
 
-    command_manager.init(db, "default_sequence", "default_project")
+    command_manager.init("default_sequence", "default_project")
     return {db = db, project_id = "default_project", sequence_id = "default_sequence"}
 end
 -- Scenario 1: gap_before only selection should shrink the gap when dragged left.

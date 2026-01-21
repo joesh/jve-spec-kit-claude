@@ -53,7 +53,7 @@ insert_clip("c1", 0, 100)
 insert_clip("c2", 200, 100)
 insert_clip("c3", 320, 80)
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 local function fetch_starts()
     local q = db:prepare("SELECT id, timeline_start_frame FROM clips WHERE track_id = 'v1'")

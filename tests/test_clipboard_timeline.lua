@@ -128,7 +128,7 @@ local function setup_database(path)
     local executors = {}
     local undoers = {}
     -- command_impl.register_commands(executors, undoers, db) -- Removed
-    command_manager.init(conn, 'default_sequence', 'default_project')
+    command_manager.init('default_sequence', 'default_project')
 
     timeline_state.playhead_position = 0
     timeline_state.selected_clips = {}
@@ -144,7 +144,7 @@ local function reopen_database(path)
     local executors = {}
     local undoers = {}
     -- command_impl.register_commands(executors, undoers, db)
-    command_manager.init(conn, 'default_sequence', 'default_project')
+    command_manager.init('default_sequence', 'default_project')
 
     timeline_state.playhead_position = 0
     timeline_state.selected_clips = {}

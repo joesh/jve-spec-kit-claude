@@ -149,7 +149,7 @@ package.loaded['ui.timeline.timeline_state'] = timeline_state
 local executors = {}
 local undoers = {}
 -- command_impl.register_commands(executors, undoers, db)
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 local function exec_ripple()
     local cmd = Command.create("RippleDelete", "default_project")

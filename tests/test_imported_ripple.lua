@@ -176,7 +176,7 @@ end
 
 local function import_fixture(db_path)
     local db = init_database(db_path)
-    command_manager.init(db, 'default_sequence', 'default_project')
+    command_manager.init('default_sequence', 'default_project')
 
     local import_cmd = Command.create("ImportFCP7XML", "default_project")
     import_cmd:set_parameter("xml_path", test_env.resolve_repo_path("tests/fixtures/resolve/sample_timeline_fcp7xml.xml"))

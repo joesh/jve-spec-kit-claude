@@ -63,7 +63,7 @@ local function fetch_clip(id)
     return track_id, start_val, dur_val
 end
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 -- Execute move to v2 (same start). Should trim/remove c2 via occlusion planner.
 local cmd = Command.create("MoveClipToTrack", "proj")

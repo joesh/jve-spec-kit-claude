@@ -52,7 +52,7 @@ local seed = string.format([[
 ]], now, now, now, now, now, now, now, now, now, now, now, now, now, now)
 assert(db:exec(seed))
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("sequence_id", "default_sequence")

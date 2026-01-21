@@ -182,7 +182,7 @@ end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 local function clip_count(sequence_id)
     local stmt = db:prepare([[

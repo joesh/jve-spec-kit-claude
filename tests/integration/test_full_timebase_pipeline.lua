@@ -97,7 +97,7 @@ local rate = timeline_state.get_sequence_frame_rate()
 assert_true(rate.fps_numerator == fps_num, "Frame rate loaded correctly")
 
 -- Setup Command Manager
-command_manager.init(db_conn, seq_id, proj_id)
+command_manager.init(seq_id, proj_id)
 
 current_test = "Insert Clip"
 -- Create Media

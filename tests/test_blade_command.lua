@@ -117,7 +117,7 @@ local db = setup_db(TEST_DB)
 
 database.init(TEST_DB) -- ensure database module uses this db
 db = database.get_connection()
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 -- Stub timeline state
 timeline_state.get_playhead_position = function() return 0 end

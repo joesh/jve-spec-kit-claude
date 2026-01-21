@@ -64,7 +64,7 @@ local function fetch_clip(id)
     return track_id, start_val, dur_val
 end
 
-command_manager.init(db, "seq", "proj")
+command_manager.init("seq", "proj")
 
 -- Build batch payload similar to drag handler
 local command_specs = {

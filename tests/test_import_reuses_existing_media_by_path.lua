@@ -138,7 +138,7 @@ do
     stmt:finalize()
 end
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 command_manager.activate_timeline_stack("default_sequence")
 
 local import_cmd = Command.create("ImportFCP7XML", "default_project")

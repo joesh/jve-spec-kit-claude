@@ -168,7 +168,7 @@ db:exec(string.format([[
     VALUES ('clip2', 'test_project', 'timeline', '', 'track_test_v1', 'media_clip', 'test_sequence', 4000, 1000, 0, 1000, 1000, 1, 1);
 ]], now, now, now, now, now, now, now, now, now, now))
 
-command_manager.init(db, 'test_sequence', 'test_project')
+command_manager.init('test_sequence', 'test_project')
 
 command_manager.register_executor("TestEnsureMedia", function(cmd)
     local media = Media.create({

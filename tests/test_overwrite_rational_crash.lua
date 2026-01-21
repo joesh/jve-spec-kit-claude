@@ -41,7 +41,7 @@ db:exec([[
     VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 1, 1);
 ]])
 
-command_manager.init(db, 'sequence', 'project')
+command_manager.init('sequence', 'project')
 
 -- Register Overwrite Command
 local registry = require('core.command_registry')

@@ -127,7 +127,7 @@ local executors = {}
 local undoers = {}
 -- command_impl.register_commands(executors, undoers, db)
 
-command_manager.init(db, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 
 -- Helper to create clips using Insert command
 local function create_clip_via_insert(spec)

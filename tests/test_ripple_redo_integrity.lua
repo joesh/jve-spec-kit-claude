@@ -28,7 +28,7 @@ VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.
 
     local executors, undoers = {}, {}
     -- command_impl.register_commands(executors, undoers, conn)
-    command_manager.init(conn, 'default_sequence', 'default_project')
+    command_manager.init('default_sequence', 'default_project')
     timeline_state.init('default_sequence')
 
     -- Register schema for TestCreateMedia test command

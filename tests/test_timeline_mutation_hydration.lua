@@ -52,7 +52,7 @@ local function setup_db()
     ]]))
 
 -- command_impl.register_commands({}, {}, conn)
-command_manager.init(conn, 'default_sequence', 'default_project')
+command_manager.init('default_sequence', 'default_project')
 end
 
 setup_db()

@@ -65,7 +65,7 @@ timeline_state.reload_clips = function(_) end
 timeline_state.consume_mutation_failure = function() return nil end
 timeline_state.apply_mutations = function(_, _) return true end
 
-command_manager.init(db, "default_sequence", "default_project")
+command_manager.init("default_sequence", "default_project")
 
 local function fetch_clip_start(clip_id)
     local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")

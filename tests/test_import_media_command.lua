@@ -53,7 +53,7 @@ db:exec(string.format([[
     VALUES ('default_sequence', 'test_project', 'Default Timeline', 'timeline', 30.0, 1920, 1080, 0, 0, '[]', '[]', 0, 10000, NULL);
 ]], now, now))
 
-command_manager.init(db, "default_sequence", "test_project")
+command_manager.init("default_sequence", "test_project")
 
 -- Stub MediaReader.import_media to avoid ffprobe dependency
 local original_import = media_reader.import_media
