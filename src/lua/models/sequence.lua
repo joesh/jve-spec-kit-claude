@@ -66,6 +66,23 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     opts = opts or {}
     local now = os.time()
 
+    -- Handle playhead from opts (frame number to Rational)
+    local playhead_pos = Rational.new(0, fr.fps_numerator, fr.fps_denominator)
+    if opts.playhead_frame and opts.playhead_frame > 0 then
+        playhead_pos = Rational.new(opts.playhead_frame, fr.fps_numerator, fr.fps_denominator)
+    end
+
+    -- Handle viewport from opts (frame numbers to Rationals)
+    local viewport_start = Rational.new(0, fr.fps_numerator, fr.fps_denominator)
+    if opts.view_start_frame and opts.view_start_frame > 0 then
+        viewport_start = Rational.new(opts.view_start_frame, fr.fps_numerator, fr.fps_denominator)
+    end
+
+    local viewport_dur = Rational.from_seconds(10.0, fr.fps_numerator, fr.fps_denominator)
+    if opts.view_duration_frames and opts.view_duration_frames > 0 then
+        viewport_dur = Rational.new(opts.view_duration_frames, fr.fps_numerator, fr.fps_denominator)
+    end
+
     local sequence = {
         id = opts.id or uuid.generate(),
         project_id = project_id,
@@ -74,17 +91,19 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         frame_rate = fr,
         width = w,
         height = h,
-        
-        -- New Rational Properties
-        -- Removed timecode_start as it's not in schema
-        playhead_position = Rational.new(0, fr.fps_numerator, fr.fps_denominator),
-        viewport_start_time = Rational.new(0, fr.fps_numerator, fr.fps_denominator),
-        
-        -- Default viewport duration: 10 seconds
-        viewport_duration = Rational.from_seconds(10.0, fr.fps_numerator, fr.fps_denominator),
-        
+        audio_sample_rate = opts.audio_rate or 48000,
+
+        -- Rational Properties
+        playhead_position = playhead_pos,
+        viewport_start_time = viewport_start,
+        viewport_duration = viewport_dur,
+
         mark_in = nil,
         mark_out = nil,
+
+        -- Selection state (JSON strings)
+        selected_clip_ids_json = opts.selected_clip_ids_json or "[]",
+        selected_edge_infos_json = opts.selected_edge_infos_json or "[]",
 
         created_at = opts.created_at or now,
         modified_at = opts.modified_at or now

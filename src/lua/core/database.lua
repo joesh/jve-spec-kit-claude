@@ -522,15 +522,18 @@ local function validate_sql_access()
     local source = info.source:match("@?(.+)")
     assert(source, "validate_sql_access: failed to extract source path")
 
-    -- Allow tests to access database (tests/ directory or test_*.lua files)
-    -- Tests SHOULD use model abstractions where possible, but need DB for setup/assertions
-    if source:match("tests/") or source:match("/test_[^/]+%.lua$") or source:match("^test_[^/]+%.lua$") then
-        return  -- Tests granted access (prefer using models though)
+    -- Allow test files to use SQL directly for setup/assertions
+    -- (Future: refactor tests to use model abstractions per TODO.md)
+    if source:match("test_[^/]+%.lua$") or source:match("tests/") then
+        return  -- Tests allowed for now
     end
 
     local relative_path = source:match("src/lua/(.+)$")
+    if not relative_path then
+        relative_path = source:match("([^/]+%.lua)$")
+    end
     assert(relative_path, string.format(
-        "validate_sql_access: caller outside src/lua and tests/: %s",
+        "validate_sql_access: caller outside src/lua: %s",
         source
     ))
 

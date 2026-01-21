@@ -2,8 +2,13 @@ local M = {}
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
-local SCHEMA_SQL = require("import_schema")
 local timeline_state = require("ui.timeline.timeline_state")
+local Rational = require("core.rational")
+local Project = require("models.project")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
+local Media = require("models.media")
+local Clip = require("models.clip")
 
 local function remove_best_effort(path)
     if not path or path == "" then
@@ -256,52 +261,82 @@ function M.create(opts)
     local db_path = opts.db_path or string.format("/tmp/jve/ripple_layout_%d_%d.db", os.time(), math.random(100000))
     remove_project_artifacts(db_path)
     assert(database.init(db_path), "Failed to init database")
-    local db = database.get_connection()
-    assert(db:exec(SCHEMA_SQL))
 
-    local now = os.time()
-    assert(db:exec(string.format([[INSERT INTO projects (id, name, created_at, modified_at)
-        VALUES ('%s', '%s', %d, %d);]], cfg.project_id, cfg.project_name, now, now)))
+    -- Create project using model
+    local project = Project.create(cfg.project_name, {id = cfg.project_id})
+    assert(project and project:save(), "Failed to create project")
 
-    local sequence_sql = [[INSERT INTO sequences (
-        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
-        width, height, view_start_frame, view_duration_frames, playhead_frame,
-        created_at, modified_at, selected_edge_infos)
-        VALUES ('%s', '%s', '%s', 'timeline', %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %s);]]
-    local selected_edge_json = cfg.selected_edge_infos and string.format("'%s'", cfg.selected_edge_infos) or "NULL"
-    assert(db:exec(string.format(sequence_sql,
-        cfg.sequence_id,
-        cfg.project_id,
-        cfg.sequence_name,
-        cfg.fps_numerator,
-        cfg.fps_denominator,
-        cfg.audio_rate,
-        cfg.width,
-        cfg.height,
-        cfg.view_start_frame,
-        cfg.view_duration_frames,
-        cfg.playhead_frame,
-        now,
-        now,
-        selected_edge_json
-    )))
+    -- Create sequence using model
+    local frame_rate = {fps_numerator = cfg.fps_numerator, fps_denominator = cfg.fps_denominator}
+    local sequence = Sequence.create(cfg.sequence_name, cfg.project_id, frame_rate, cfg.width, cfg.height, {
+        id = cfg.sequence_id,
+        audio_rate = cfg.audio_rate,
+        view_start_frame = cfg.view_start_frame,
+        view_duration_frames = cfg.view_duration_frames,
+        playhead_frame = cfg.playhead_frame,
+        selected_edge_infos_json = cfg.selected_edge_infos
+    })
+    assert(sequence and sequence:save(), "Failed to create sequence")
 
+    -- Create tracks using model
     for _, key in ipairs(cfg.tracks.order or {}) do
-        assert(db:exec(build_track_sql(cfg, cfg.tracks[key])))
+        local t = cfg.tracks[key]
+        local track
+        if t.track_type == "VIDEO" then
+            track = Track.create_video(t.name, cfg.sequence_id, {id = t.id, index = t.track_index})
+        else
+            track = Track.create_audio(t.name, cfg.sequence_id, {id = t.id, index = t.track_index})
+        end
+        track.enabled = t.enabled == 1
+        assert(track and track:save(), "Failed to create track: " .. t.id)
     end
 
+    -- Create media using model
     for _, key in ipairs(cfg.media.order or {}) do
-        assert(db:exec(build_media_sql(cfg, cfg.media[key])))
+        local m = cfg.media[key]
+        local media = Media.create({
+            id = m.id,
+            project_id = cfg.project_id,
+            name = m.name,
+            file_path = m.file_path,
+            duration_frames = m.duration_frames,
+            fps_numerator = m.fps_numerator,
+            fps_denominator = m.fps_denominator,
+            width = m.width,
+            height = m.height,
+            audio_channels = m.audio_channels,
+            codec = m.codec
+        })
+        assert(media and media:save(), "Failed to create media: " .. m.id)
     end
 
+    -- Create clips using model
     for _, key in ipairs(cfg.clips.order or {}) do
-        assert(db:exec(build_clip_sql(cfg, cfg.clips[key])))
+        local c = cfg.clips[key]
+        local track = cfg.tracks[c.track_key]
+        local media_cfg = cfg.media[c.media_key]
+        local fps_num = c.fps_numerator or cfg.fps_numerator
+        local fps_den = c.fps_denominator or cfg.fps_denominator
+        local clip = Clip.create(c.name, media_cfg.id, {
+            id = c.id,
+            project_id = cfg.project_id,
+            clip_kind = "timeline",
+            track_id = track.id,
+            owner_sequence_id = cfg.sequence_id,
+            timeline_start = Rational.new(c.timeline_start, fps_num, fps_den),
+            duration = Rational.new(c.duration, fps_num, fps_den),
+            source_in = Rational.new(c.source_in, fps_num, fps_den),
+            source_out = Rational.new(c.source_in + c.duration, fps_num, fps_den),
+            fps_numerator = fps_num,
+            fps_denominator = fps_den
+        })
+        assert(clip and clip:save({skip_occlusion = true}), "Failed to create clip: " .. c.id)
     end
 
     command_manager.init(cfg.sequence_id, cfg.project_id)
 
     local layout = {
-        db = db,
+        db = database.get_connection(),  -- Exposed for tests that need raw SQL
         db_path = db_path,
         project_id = cfg.project_id,
         sequence_id = cfg.sequence_id,
