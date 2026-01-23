@@ -22,6 +22,7 @@ local SPEC = {
     args = {
         panel_id = {},
         project_id = { required = true },
+        sequence_id = {},
     }
 }
 
