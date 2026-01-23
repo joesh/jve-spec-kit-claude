@@ -18,6 +18,7 @@ local timeline_state = require('ui.timeline.timeline_state')
 
 
 local SPEC = {
+    undoable = false,
     args = {
         dry_run = { kind = "boolean" },
         project_id = { required = true },

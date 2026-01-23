@@ -19,6 +19,7 @@ local M = {}
 
 
 local SPEC = {
+    undoable = false,
     args = {
         panel_id = {},
         project_id = { required = true },

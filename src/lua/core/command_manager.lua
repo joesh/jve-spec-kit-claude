@@ -122,18 +122,6 @@ local state_mgr = require("core.command_state")
 local active_sequence_id = nil
 local active_project_id = nil
 
-local non_recording_commands = {
-    SelectAll = true,
-    DeselectAll = true,
-    GoToStart = true,
-    GoToEnd = true,
-    GoToPrevEdit = true,
-    GoToNextEdit = true,
-    ActivateBrowserSelection = true,
-    ToggleMaximizePanel = true,
-    MatchFrame = true,
-    RevealInFilesystem = true
-    }
 
 local command_event_listeners = {}
 
@@ -723,6 +711,7 @@ function M.execute(command_or_name, params)
     local suppress_noop_after, post_hash, saved
     local timeline_state, capture_manager
     local explicit_group
+    local spec
 
     exec_scope = profile_scope.begin("command_manager.execute", {
         details_fn = function()
@@ -810,7 +799,8 @@ function M.execute(command_or_name, params)
         goto cleanup
     end
 
-    if non_recording_commands[command.type] then
+    spec = registry.get_spec(command.type)
+    if spec and spec.undoable == false then
         result = execute_non_recording(command)
         exec_scope:finish("non_recording")
         goto cleanup

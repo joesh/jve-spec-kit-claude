@@ -20,6 +20,7 @@ local Rational = require('core.rational')
 
 
 local SPEC = {
+    undoable = false,
     args = {
         dry_run = { kind = "boolean" },
         project_id = { required = true },

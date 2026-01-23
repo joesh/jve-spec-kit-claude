@@ -19,6 +19,7 @@ local project_browser = require('ui.project_browser')
 
 
 local SPEC = {
+    undoable = false,
     args = {
         project_id = { required = true },
         sequence_id = {},
