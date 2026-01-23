@@ -88,6 +88,17 @@ function M.get_selected_edges()
     return data.state.selected_edges
 end
 
+--- Set edge selection with normalization and validation.
+--- @param edges table Array of {clip_id, edge_type, trim_type} entries
+--- @param opts table|nil Options: {normalize=true, notify=true, clear_clips=true, clear_gaps=true}
+--- @param persist_callback function|nil Called after selection is set (for DB persistence)
+---
+--- Use this for user-initiated selections (clicks, drags) where the edge list may contain:
+--- - Duplicate entries (same clip_id + edge_type)
+--- - References to clips that no longer exist (deleted during the operation)
+---
+--- Normalization deduplicates entries and removes references to missing clips.
+--- For undo/redo restoration of known-good selections, use set_edge_selection_raw instead.
 function M.set_edge_selection(edges, opts, persist_callback)
     opts = opts or {
         normalize = true,
@@ -105,6 +116,17 @@ function M.set_edge_selection(edges, opts, persist_callback)
     if persist_callback then persist_callback() end
 end
 
+--- Set edge selection without normalization.
+--- @param edges table Array of {clip_id, edge_type, trim_type} entries
+--- @param opts table|nil Options passed to set_edge_selection (normalize forced to false)
+--- @param persist_callback function|nil Called after selection is set
+---
+--- Use this for undo/redo restoration where:
+--- - The edges were previously validated and persisted
+--- - The clips are known to exist (just restored by the undo operation)
+--- - Normalization would be redundant and waste cycles on clip lookups
+---
+--- For user-initiated selections, use set_edge_selection instead.
 function M.set_edge_selection_raw(edges, opts, persist_callback)
     opts = opts or {}
     opts.normalize = false
