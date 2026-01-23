@@ -138,7 +138,8 @@ local function parse_file(file_node, frame_rate)
         frame_rate = frame_rate,
         width = 1920,
         height = 1080,
-        audio_channels = 0
+        audio_channels = 0,
+        is_compound = false,  -- True if contains nested sequence (compound clip)
     }
 
     local children = collect_children(file_node)
@@ -156,10 +157,13 @@ local function parse_file(file_node, frame_rate)
         elseif name == "rate" then
             media_info.frame_rate = extract_frame_rate(child)
         elseif name == "media" then
-            -- Parse video characteristics
+            -- Parse video/audio characteristics and detect compound clips
             local media_children = collect_children(child)
             for _, media_child in ipairs(media_children) do
-                if media_child:name() == "video" then
+                if media_child:name() == "sequence" then
+                    -- Nested sequence = compound clip
+                    media_info.is_compound = true
+                elseif media_child:name() == "video" then
                     local video_children = collect_children(media_child)
                     for _, video_child in ipairs(video_children) do
                         if video_child:name() == "samplecharacteristics" then
@@ -915,8 +919,16 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
         local file_path = media_info.path
         if not file_path or file_path == "" then
-            file_path = string.format("synthetic://%s", tostring(key or media_info.id or uuid.generate()))
-            logger.warn("import_fcp7", string.format("create_entities: missing file path for media %s; using placeholder %s", tostring(key), tostring(file_path)))
+            local placeholder_name = tostring(key or media_info.id or uuid.generate())
+            if media_info.is_compound then
+                -- Compound clip (nested sequence) - no file exists, this is expected
+                file_path = string.format("compound://%s", placeholder_name)
+                logger.info("import_fcp7", string.format("create_entities: compound clip %s", placeholder_name))
+            else
+                -- Missing file path - likely offline media
+                file_path = string.format("synthetic://%s", placeholder_name)
+                logger.warn("import_fcp7", string.format("create_entities: missing file path for media %s; using placeholder %s", tostring(key), tostring(file_path)))
+            end
         end
 
         local existing_id = find_existing_media_id(file_path)
