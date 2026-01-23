@@ -326,6 +326,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Accumulate mutations across all clip insertions (video + audio)
         local all_executed_mutations = {}
 
+        -- Extract clip IDs from previous execution (for redo - reuse same IDs)
+        local redo_clip_ids = {}
+        if args.executed_mutations then
+            for _, mut in ipairs(args.executed_mutations) do
+                if mut.type == "insert" and mut.clip_id then
+                    table.insert(redo_clip_ids, mut.clip_id)
+                end
+            end
+        end
+        local redo_clip_index = 1
+
         local function insert_clip(_, payload, target_track, pos)
             local insert_time = assert(pos, "Insert: missing insert position")
             local insert_track_id = assert(target_track and target_track.id, "Insert: missing target track id")
@@ -336,8 +347,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             })
             assert(ok_occ, string.format("Insert: resolve_ripple failed: %s", tostring(err_occ)))
 
+            -- Use explicit clip_id if provided, else reuse from redo, else generate new
+            -- Always advance redo_clip_index to keep queue synchronized
+            local clip_id = payload.clip_id
+            if clip_id then
+                -- Explicit clip_id provided - still advance queue to stay in sync
+                if redo_clip_index <= #redo_clip_ids then
+                    redo_clip_index = redo_clip_index + 1
+                end
+            elseif redo_clip_index <= #redo_clip_ids then
+                clip_id = redo_clip_ids[redo_clip_index]
+                redo_clip_index = redo_clip_index + 1
+            else
+                clip_id = uuid.generate()
+            end
+
             local clip_opts = {
-                id = payload.clip_id or uuid.generate(),
+                id = clip_id,
                 project_id = payload.project_id,
                 track_id = insert_track_id,
                 owner_sequence_id = sequence_id,
