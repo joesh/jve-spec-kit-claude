@@ -99,7 +99,8 @@ int lua_show_confirm_dialog(lua_State* L)
     }
 
     QMessageBox msgBox(icon, title, message, QMessageBox::NoButton, parent);
-    msgBox.setWindowModality(Qt::WindowModal);
+    // Use ApplicationModal when no parent (e.g., during startup before main window exists)
+    msgBox.setWindowModality(parent ? Qt::WindowModal : Qt::ApplicationModal);
     if (!informativeText.isEmpty()) msgBox.setInformativeText(informativeText);
     if (!detailText.isEmpty()) msgBox.setDetailedText(detailText);
 
