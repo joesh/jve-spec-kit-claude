@@ -15,6 +15,7 @@
 -- @file insert.lua
 local M = {}
 local Clip = require('models.clip')
+local Media = require('models.media')
 local Track = require('models.track')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
@@ -195,6 +196,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_in_rat = Rational.new(0, media_fps_num, media_fps_den)
         end
 
+        -- Load media for duration and audio channel info
+        local media = nil
+        if media_id and media_id ~= "" then
+            media = Media.load(media_id)
+        end
+
+        -- If no duration yet and we have media, get duration from it
+        if (not duration_frames or duration_frames <= 0) and media then
+            if media.duration and media.duration.frames and media.duration.frames > 0 then
+                duration_frames = media.duration.frames
+            end
+        end
+
         if source_out_rat and (not duration_frames or duration_frames <= 0) then
             duration_frames = source_out_rat.frames - source_in_rat.frames
         end
@@ -217,6 +231,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local clip_name = args.clip_name or (master_clip and master_clip.name) or "Inserted Clip"
 
+        -- Determine audio channel count from media
+        local audio_channels = 0
+        if media and media.audio_channels then
+            audio_channels = media.audio_channels
+        end
+
         local clip_payload = {
             role = "video",
             media_id = media_id,
@@ -238,11 +258,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         function selected_clip:has_audio()
-            return false
+            return audio_channels > 0
         end
 
         function selected_clip:audio_channel_count()
-            return 0
+            return audio_channels
+        end
+
+        function selected_clip:audio(ch)
+            assert(ch >= 0 and ch < audio_channels, "Insert: invalid audio channel index " .. tostring(ch))
+            return {
+                role = "audio",
+                media_id = media_id,
+                master_clip_id = master_clip_id,
+                project_id = project_id,
+                duration = duration_rat,
+                source_in = source_in_rat,
+                source_out = source_out_rat,
+                clip_name = clip_name .. " (Audio)",
+                channel = ch
+            }
         end
 
         local function target_video_track(_, index)
@@ -250,9 +285,46 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return {id = track_id}
         end
 
-        local function target_audio_track(_, index)
-            assert(false, "Insert: unexpected audio track index " .. tostring(index))
+        -- Get or create audio tracks for audio clip insertion
+        local audio_tracks = {}
+        if timeline_state and timeline_state.get_audio_tracks then
+            audio_tracks = timeline_state.get_audio_tracks() or {}
+        else
+            -- Fallback: query database for audio tracks
+            audio_tracks = Track.find_by_sequence(sequence_id, "AUDIO") or {}
         end
+
+        local function target_audio_track(_, index)
+            assert(index >= 0, "Insert: invalid audio track index " .. tostring(index))
+            if index < #audio_tracks then
+                return audio_tracks[index + 1]  -- Lua is 1-indexed
+            end
+            -- Need to create audio track - first refresh the track list from DB
+            -- (handles redo case where tracks exist but weren't in our initial list)
+            local fresh_tracks = Track.find_by_sequence(sequence_id, "AUDIO") or {}
+            if #fresh_tracks > #audio_tracks then
+                audio_tracks = fresh_tracks
+                if index < #audio_tracks then
+                    return audio_tracks[index + 1]
+                end
+            end
+            -- Still need to create - find the max existing track index
+            local max_index = 0
+            for _, t in ipairs(audio_tracks) do
+                if t.track_index and t.track_index > max_index then
+                    max_index = t.track_index
+                end
+            end
+            local new_index = max_index + 1 + (index - #audio_tracks)
+            local track_name = string.format("A%d", new_index)
+            local new_track = Track.create_audio(track_name, sequence_id, {index = new_index})
+            assert(new_track:save(), "Insert: failed to create audio track")
+            audio_tracks[#audio_tracks + 1] = new_track
+            return new_track
+        end
+
+        -- Accumulate mutations across all clip insertions (video + audio)
+        local all_executed_mutations = {}
 
         local function insert_clip(_, payload, target_track, pos)
             local insert_time = assert(pos, "Insert: missing insert position")
@@ -281,13 +353,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 fps_denominator = media_fps_den,
             }
             local clip_to_insert = Clip.create(payload.clip_name or "Inserted Clip", payload.media_id, clip_opts)
-            command:set_parameter("clip_id", clip_to_insert.id)
+            -- Only set clip_id for video (primary) clip - audio clips are linked
+            if payload.role == "video" then
+                command:set_parameter("clip_id", clip_to_insert.id)
+            end
             table.insert(planned_mutations, clip_mutator.plan_insert(clip_to_insert))
 
             local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
             assert(ok_apply, "Failed to apply clip_mutator actions: " .. tostring(apply_err))
 
-            command:set_parameter("executed_mutations", planned_mutations)
+            -- Accumulate mutations for undo (don't overwrite)
+            for _, mut in ipairs(planned_mutations) do
+                table.insert(all_executed_mutations, mut)
+            end
+            command:set_parameter("executed_mutations", all_executed_mutations)
 
             if #copied_properties > 0 then
                 command_helper.delete_properties_for_clip(clip_to_insert.id)

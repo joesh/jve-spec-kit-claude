@@ -514,17 +514,17 @@ function ClipMutator.resolve_ripple(db, params)
             local split_point = insert_time
             local left_dur = split_point - clip_start
             local left_dur_source = left_dur:rescale_floor(row_fps_num, row_fps_den)
-            
+
             row.duration = left_dur
             row.source_out = row.source_in + left_dur_source
-            
+
             table.insert(actions, plan_update(row, original))
-            
+
             -- Right Part: Starts at insert_time + shift_amount
             local right_start = split_point + shift_amount
             local right_dur = clip_end - split_point
             local right_src_in = row.source_in + left_dur_source
-            
+
             local right_clip = {
                 id = uuid.generate(),
                 project_id = row.project_id,
@@ -549,7 +549,29 @@ function ClipMutator.resolve_ripple(db, params)
             table.insert(actions, plan_insert(right_clip))
         end
     end
-    
+
+    -- For positive shifts (inserting), reverse the update order so rightmost clips
+    -- move first, preventing overlap errors when cascading updates
+    if shift_amount.frames > 0 then
+        local updates = {}
+        local non_updates = {}
+        for _, action in ipairs(actions) do
+            if action.type == "update" then
+                table.insert(updates, 1, action)  -- prepend to reverse order
+            else
+                table.insert(non_updates, action)
+            end
+        end
+        -- Put reversed updates first, then inserts
+        actions = {}
+        for _, u in ipairs(updates) do
+            table.insert(actions, u)
+        end
+        for _, n in ipairs(non_updates) do
+            table.insert(actions, n)
+        end
+    end
+
     return true, nil, actions
 end
 

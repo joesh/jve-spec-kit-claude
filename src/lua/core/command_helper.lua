@@ -124,14 +124,26 @@ function M.clip_update_payload(source, fallback_sequence_id)
     if not rate and source.fps_numerator and source.fps_denominator then
         rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
     end
+
+    -- Helper to extract frame value from Rational or number
+    local function to_frames(val)
+        if type(val) == "table" and val.frames ~= nil then
+            return val.frames
+        elseif type(val) == "number" then
+            return val
+        end
+        return nil
+    end
+
+    -- Use _value suffix field names that apply_mutations expects
     return {
         clip_id = source.id,
         track_id = source.track_id,
         track_sequence_id = track_sequence_id,
-        timeline_start = source.timeline_start,
-        duration = source.duration,
-        source_in = source.source_in,
-        source_out = source.source_out,
+        start_value = to_frames(source.timeline_start),
+        duration_value = to_frames(source.duration),
+        source_in_value = to_frames(source.source_in),
+        source_out_value = to_frames(source.source_out),
         rate = rate,
         fps_numerator = rate and rate.fps_numerator or nil,
         fps_denominator = rate and rate.fps_denominator or nil,
@@ -469,7 +481,20 @@ function M.insert_properties_for_clip(clip_id, properties)
         return true
     end
 
-    local ok, result = pcall(Property.save_for_clip, clip_id, properties)
+    -- Generate fresh UUIDs for each property to avoid UPSERT conflicts
+    -- when the same copied_properties list is used for multiple clips
+    local properties_with_new_ids = {}
+    for _, prop in ipairs(properties) do
+        table.insert(properties_with_new_ids, {
+            id = uuid.generate(),
+            property_name = prop.property_name,
+            property_value = prop.property_value,
+            property_type = prop.property_type,
+            default_value = prop.default_value
+        })
+    end
+
+    local ok, result = pcall(Property.save_for_clip, clip_id, properties_with_new_ids)
     return ok
 end
 
