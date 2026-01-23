@@ -1,125 +1,353 @@
 #!/usr/bin/env luajit
 
-require("test_env")
+-- Test DeleteSequence command - comprehensive coverage
+-- Tests: basic delete, undo/redo, default sequence protection, master sequence protection
 
-local database = require("core.database")
-local command_manager = require("core.command_manager")
-local command_impl = require("core.command_implementations")
-local timeline_state = require("ui.timeline.timeline_state")
-local Command = require("command")
+package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
+require('test_env')
 
-local TEST_DB = "/tmp/jve/test_delete_sequence.db"
-os.remove(TEST_DB)
+local database = require('core.database')
+local Clip = require('models.clip')
+local Media = require('models.media')
+local Sequence = require('models.sequence')
+local Track = require('models.track')
+local command_manager = require('core.command_manager')
+local Rational = require('core.rational')
+local asserts = require('core.asserts')
 
-assert(database.init(TEST_DB))
+-- Mock Qt timer
+_G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end
+
+print("=== DeleteSequence Command Tests ===\n")
+
+-- Setup DB
+local db_path = "/tmp/jve/test_delete_sequence.db"
+os.remove(db_path)
+os.execute("mkdir -p /tmp/jve")
+database.init(db_path)
 local db = database.get_connection()
+db:exec(require('import_schema'))
 
-assert(db:exec(require('import_schema')))
-
+-- Insert Project and default sequence
 local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('project', 'Test Project', %d, %d);
+]], now, now))
+db:exec(string.format([[
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    VALUES ('default_sequence', 'project', 'Default Sequence', 'timeline', 30, 1, 48000, 1920, 1080, %d, %d);
+]], now, now))
+db:exec([[
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+    VALUES ('default_track', 'default_sequence', 'V1', 'VIDEO', 1, 1);
+]])
 
-local seed_sql = string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', %d, %d);
+command_manager.init('default_sequence', 'project')
 
-    INSERT INTO sequences (
-        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
-        view_start_frame, view_duration_frames, playhead_frame,
-        mark_in_frame, mark_out_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
-        current_sequence_number, created_at, modified_at
-    )
-    VALUES
-    ('default_sequence', 'default_project', 'Primary Timeline', 'timeline', 30, 1, 48000, 1920, 1080,
-     0, 240, 0, NULL, NULL, '[]', '[]', '[]', 0, %d, %d),
-    ('sequence_to_delete', 'default_project', 'Temp Timeline', 'timeline', 24, 1, 48000, 1280, 720,
-     0, 240, 0, NULL, NULL, '[]', '[]', '[]', 5, %d, %d);
+-- Create Media
+local media = Media.create({
+    id = "media_ds",
+    project_id = "project",
+    file_path = "/tmp/jve/ds_video.mov",
+    name = "DS Video",
+    duration_frames = 500,
+    fps_numerator = 30,
+    fps_denominator = 1
+})
+media:save(db)
 
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES ('track_video_1', 'sequence_to_delete', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-
-    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
-    VALUES ('media_1', 'default_project', 'Clip Media', '/tmp/jve/clip.mov', 24000, 24, 1, 1280, 720, 2, 'h264', '{}', %d, %d);
-
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                       timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator,
-                       enabled, offline, created_at, modified_at)
-    VALUES ('clip_1', 'default_project', 'timeline', 'Temp Clip', 'track_video_1', 'media_1', 'sequence_to_delete',
-            0, 24000, 0, 24000, 24, 1, 1, 0, %d, %d);
-
-]], now, now, now, now, now, now, now, now, now, now, now)
-
-assert(db:exec(seed_sql))
-
-local function stub_timeline_state()
-    timeline_state.capture_viewport = function()
-        return {start_value = 0, duration = 10000}
-    end
-    timeline_state.push_viewport_guard = function() end
-    timeline_state.pop_viewport_guard = function() end
-    timeline_state.restore_viewport = function(_) end
-    timeline_state.set_selection = function(_) end
-    timeline_state.set_edge_selection = function(_) end
-    timeline_state.set_gap_selection = function(_) end
-    timeline_state.get_selected_clips = function() return {} end
-    timeline_state.get_selected_edges = function() return {} end
-    timeline_state.set_playhead_position = function(_) end
-    timeline_state.get_playhead_position = function() return 0 end
-    timeline_state.get_project_id = function() return "default_project" end
-    timeline_state.get_sequence_id = function() return "default_sequence" end
-timeline_state.reload_clips = function(_) end
-end
-
-stub_timeline_state()
-
-command_manager.init("default_sequence", "default_project")
-do
-    local delete_module = require("core.commands.delete_sequence")
-    local temp_executors = {}
-    local temp_undoers = {}
-    local exports = delete_module.register(temp_executors, temp_undoers, db, command_manager.set_last_error)
-    if not exports or type(exports.executor) ~= "function" then
-        error("DeleteSequence executor not available from delete_sequence module")
-    end
-    command_manager.register_executor("DeleteSequence", exports.executor, exports.undoer, exports.spec)
-end
-
-local function scalar(sql, value)
-    local stmt = db:prepare(sql)
-    assert(stmt, "Failed to prepare statement: " .. sql)
-    if value ~= nil then
-        stmt:bind_value(1, value)
-    end
-    local result = 0
-    if stmt:exec() and stmt:next() then
-        result = tonumber(stmt:value(0)) or 0
-    end
-    stmt:finalize()
+-- Helper: execute command with proper event wrapping
+local function execute_command(name, params)
+    command_manager.begin_command_event("script")
+    local result = command_manager.execute(name, params)
+    command_manager.end_command_event()
     return result
 end
 
-local delete_cmd = Command.create("DeleteSequence", "default_project")
-delete_cmd:set_parameter("sequence_id", "sequence_to_delete")
+-- Helper: undo/redo with proper event wrapping
+local function undo()
+    command_manager.begin_command_event("script")
+    local result = command_manager.undo()
+    command_manager.end_command_event()
+    return result
+end
 
-local exec_result = command_manager.execute(delete_cmd)
-assert(exec_result.success, exec_result.error_message or "delete sequence failed")
+local function redo()
+    command_manager.begin_command_event("script")
+    local result = command_manager.redo()
+    command_manager.end_command_event()
+    return result
+end
 
-assert(scalar("SELECT COUNT(*) FROM sequences WHERE id = ?", "sequence_to_delete") == 0, "Sequence should be deleted")
-assert(scalar("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?", "sequence_to_delete") == 0, "Tracks should cascade delete")
-assert(scalar("SELECT COUNT(*) FROM clips WHERE owner_sequence_id = ?", "sequence_to_delete") == 0, "Clips should cascade delete")
+-- Helper: create a timeline sequence with tracks and clips
+local function create_test_sequence(id, name)
+    local seq = Sequence.create(name, "project",
+        {fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
+        {id = id, kind = "timeline"})
+    assert(seq:save(), "Failed to save sequence " .. id)
 
-local undo_result = command_manager.undo()
-assert(undo_result.success, undo_result.error_message or "Undo failed")
+    local track = Track.create_video("V1", id, {id = id .. "_track", index = 1})
+    assert(track:save(), "Failed to save track")
 
-assert(scalar("SELECT COUNT(*) FROM sequences WHERE id = ?", "sequence_to_delete") == 1, "Sequence should be restored on undo")
-assert(scalar("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?", "sequence_to_delete") == 1, "Track should be restored on undo")
-assert(scalar("SELECT COUNT(*) FROM clips WHERE owner_sequence_id = ?", "sequence_to_delete") == 1, "Clip should be restored on undo")
+    local clip = Clip.create("Test Clip", "media_ds", {
+        id = id .. "_clip",
+        project_id = "project",
+        track_id = track.id,
+        owner_sequence_id = id,
+        timeline_start = Rational.new(0, 30, 1),
+        duration = Rational.new(100, 30, 1),
+        source_in = Rational.new(0, 30, 1),
+        source_out = Rational.new(100, 30, 1),
+        enabled = true,
+        fps_numerator = 30,
+        fps_denominator = 1
+    })
+    assert(clip:save(db), "Failed to save clip")
 
-local redo_result = command_manager.redo()
-assert(redo_result.success, redo_result.error_message or "Redo failed")
+    return seq
+end
 
-assert(scalar("SELECT COUNT(*) FROM sequences WHERE id = ?", "sequence_to_delete") == 0, "Sequence should be deleted after redo")
-assert(scalar("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?", "sequence_to_delete") == 0, "Tracks should be removed after redo")
-assert(scalar("SELECT COUNT(*) FROM clips WHERE owner_sequence_id = ?", "sequence_to_delete") == 0, "Clips should be removed after redo")
+-- Helper: check if sequence exists
+local function sequence_exists(seq_id)
+    local stmt = db:prepare("SELECT COUNT(*) FROM sequences WHERE id = ?")
+    stmt:bind_value(1, seq_id)
+    stmt:exec()
+    stmt:next()
+    local count = stmt:value(0)
+    stmt:finalize()
+    return count > 0
+end
 
-os.remove(TEST_DB)
-print("✅ DeleteSequence command deletes and restores timeline state correctly")
+-- Helper: check if track exists
+local function track_exists(track_id)
+    local stmt = db:prepare("SELECT COUNT(*) FROM tracks WHERE id = ?")
+    stmt:bind_value(1, track_id)
+    stmt:exec()
+    stmt:next()
+    local count = stmt:value(0)
+    stmt:finalize()
+    return count > 0
+end
+
+-- Helper: check if clip exists
+local function clip_exists(clip_id)
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
+    stmt:bind_value(1, clip_id)
+    stmt:exec()
+    stmt:next()
+    local count = stmt:value(0)
+    stmt:finalize()
+    return count > 0
+end
+
+-- Helper: reset test sequences (keep default_sequence)
+local function reset_test_sequences()
+    db:exec("DELETE FROM clips WHERE owner_sequence_id != 'default_sequence'")
+    db:exec("DELETE FROM tracks WHERE sequence_id != 'default_sequence'")
+    db:exec("DELETE FROM sequences WHERE id != 'default_sequence'")
+end
+
+-- =============================================================================
+-- TEST 1: Basic delete sequence
+-- =============================================================================
+print("Test 1: Basic delete sequence")
+reset_test_sequences()
+create_test_sequence("seq_1", "Test Sequence 1")
+
+-- Verify exists before delete
+assert(sequence_exists("seq_1"), "Sequence should exist before delete")
+assert(track_exists("seq_1_track"), "Track should exist before delete")
+assert(clip_exists("seq_1_clip"), "Clip should exist before delete")
+
+local result = execute_command("DeleteSequence", {
+    project_id = "project",
+    sequence_id = "seq_1"
+})
+assert(result.success, "DeleteSequence should succeed: " .. tostring(result.error_message))
+
+-- Verify all deleted
+assert(not sequence_exists("seq_1"), "Sequence should be deleted")
+assert(not track_exists("seq_1_track"), "Track should be deleted")
+assert(not clip_exists("seq_1_clip"), "Clip should be deleted")
+
+-- =============================================================================
+-- TEST 2: Undo restores sequence
+-- =============================================================================
+print("Test 2: Undo restores sequence")
+local undo_result = undo()
+assert(undo_result.success, "Undo should succeed: " .. tostring(undo_result.error_message))
+
+-- Verify restored
+assert(sequence_exists("seq_1"), "Sequence should be restored")
+assert(track_exists("seq_1_track"), "Track should be restored")
+assert(clip_exists("seq_1_clip"), "Clip should be restored")
+
+-- =============================================================================
+-- TEST 3: Redo re-deletes sequence
+-- =============================================================================
+print("Test 3: Redo re-deletes sequence")
+local redo_result = redo()
+assert(redo_result.success, "Redo should succeed: " .. tostring(redo_result.error_message))
+
+-- Verify deleted again
+assert(not sequence_exists("seq_1"), "Sequence should be deleted after redo")
+
+-- =============================================================================
+-- TEST 4: Cannot delete default_sequence
+-- =============================================================================
+print("Test 4: Cannot delete default_sequence")
+asserts._set_enabled_for_tests(false)
+result = execute_command("DeleteSequence", {
+    project_id = "project",
+    sequence_id = "default_sequence"
+})
+asserts._set_enabled_for_tests(true)
+assert(not result.success, "DeleteSequence should fail for default_sequence")
+
+-- default_sequence should still exist
+assert(sequence_exists("default_sequence"), "Default sequence should not be deleted")
+
+-- =============================================================================
+-- TEST 5: Cannot delete master sequence
+-- =============================================================================
+print("Test 5: Cannot delete master sequence")
+reset_test_sequences()
+
+-- Create a master sequence
+local master_seq = Sequence.create("Master Sequence", "project",
+    {fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
+    {id = "master_seq", kind = "master"})
+assert(master_seq:save(), "Failed to save master sequence")
+
+asserts._set_enabled_for_tests(false)
+result = execute_command("DeleteSequence", {
+    project_id = "project",
+    sequence_id = "master_seq"
+})
+asserts._set_enabled_for_tests(true)
+assert(not result.success, "DeleteSequence should fail for master sequence")
+
+-- Master sequence should still exist
+assert(sequence_exists("master_seq"), "Master sequence should not be deleted")
+
+-- =============================================================================
+-- TEST 6: Cannot delete nonexistent sequence
+-- =============================================================================
+print("Test 6: Cannot delete nonexistent sequence")
+asserts._set_enabled_for_tests(false)
+result = execute_command("DeleteSequence", {
+    project_id = "project",
+    sequence_id = "nonexistent_seq"
+})
+asserts._set_enabled_for_tests(true)
+assert(not result.success, "DeleteSequence should fail for nonexistent sequence")
+
+-- =============================================================================
+-- TEST 7: Delete sequence with multiple tracks and clips
+-- =============================================================================
+print("Test 7: Delete sequence with multiple tracks and clips")
+reset_test_sequences()
+
+-- Create sequence with multiple tracks
+local seq = Sequence.create("Multi Track Seq", "project",
+    {fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
+    {id = "multi_seq", kind = "timeline"})
+assert(seq:save(), "Failed to save sequence")
+
+-- Create multiple video tracks
+for i = 1, 3 do
+    local track = Track.create_video("V" .. i, "multi_seq", {id = "multi_track_" .. i, index = i})
+    assert(track:save(), "Failed to save track " .. i)
+
+    -- Create clips on each track
+    for j = 1, 2 do
+        local clip = Clip.create("Clip " .. i .. "-" .. j, "media_ds", {
+            id = "multi_clip_" .. i .. "_" .. j,
+            project_id = "project",
+            track_id = "multi_track_" .. i,
+            owner_sequence_id = "multi_seq",
+            timeline_start = Rational.new((j-1) * 100, 30, 1),
+            duration = Rational.new(100, 30, 1),
+            source_in = Rational.new(0, 30, 1),
+            source_out = Rational.new(100, 30, 1),
+            enabled = true,
+            fps_numerator = 30,
+            fps_denominator = 1
+        })
+        assert(clip:save(db), "Failed to save clip")
+    end
+end
+
+-- Verify setup
+assert(sequence_exists("multi_seq"), "Multi sequence should exist")
+
+-- Count tracks and clips before
+local stmt = db:prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = 'multi_seq'")
+stmt:exec(); stmt:next()
+local tracks_before = stmt:value(0)
+stmt:finalize()
+assert(tracks_before == 3, string.format("Should have 3 tracks, got %d", tracks_before))
+
+-- Delete
+result = execute_command("DeleteSequence", {
+    project_id = "project",
+    sequence_id = "multi_seq"
+})
+assert(result.success, "DeleteSequence should succeed")
+
+-- Verify all deleted
+assert(not sequence_exists("multi_seq"), "Sequence should be deleted")
+
+stmt = db:prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = 'multi_seq'")
+stmt:exec(); stmt:next()
+local tracks_after = stmt:value(0)
+stmt:finalize()
+assert(tracks_after == 0, "All tracks should be deleted")
+
+-- =============================================================================
+-- TEST 8: Error case - missing sequence_id
+-- =============================================================================
+print("Test 8: Missing sequence_id fails")
+asserts._set_enabled_for_tests(false)
+result = execute_command("DeleteSequence", {
+    project_id = "project"
+    -- No sequence_id
+})
+asserts._set_enabled_for_tests(true)
+assert(not result.success, "DeleteSequence without sequence_id should fail")
+
+-- =============================================================================
+-- TEST 9: Delete multiple sequences in sequence
+-- =============================================================================
+print("Test 9: Delete multiple sequences")
+reset_test_sequences()
+create_test_sequence("seq_a", "Sequence A")
+create_test_sequence("seq_b", "Sequence B")
+create_test_sequence("seq_c", "Sequence C")
+
+-- Delete all three
+for _, id in ipairs({"seq_a", "seq_b", "seq_c"}) do
+    result = execute_command("DeleteSequence", {
+        project_id = "project",
+        sequence_id = id
+    })
+    assert(result.success, "DeleteSequence should succeed for " .. id)
+end
+
+-- Verify all deleted
+assert(not sequence_exists("seq_a"), "seq_a should be deleted")
+assert(not sequence_exists("seq_b"), "seq_b should be deleted")
+assert(not sequence_exists("seq_c"), "seq_c should be deleted")
+
+-- Undo all three
+for i = 1, 3 do
+    undo_result = undo()
+    assert(undo_result.success, "Undo " .. i .. " should succeed")
+end
+
+-- Verify all restored
+assert(sequence_exists("seq_a"), "seq_a should be restored")
+assert(sequence_exists("seq_b"), "seq_b should be restored")
+assert(sequence_exists("seq_c"), "seq_c should be restored")
+
+print("\n✅ DeleteSequence command tests passed")
