@@ -71,7 +71,7 @@
 - [ ] Document and/or consolidate the `timeline_state.set_edge_selection` vs `set_edge_selection_raw` APIs so callers know when raw mode is required.
 - [x] Fix ripple clamp attribution so implied gap closures report the blocking gap edge and renderer color logic only highlights the actual limiter (Rule 8.5).
 - [x] (done) Insert menu command failure: Added snapshot target seeding in `core.commands.insert` and regression `tests/test_insert_snapshot_boundary.lua`; verified working.
-- [ ] (in_progress) Investigate timeline keyboard shortcuts regression (e.g., cmd+b split clip no longer works); added regressions (`tests/test_keyboard_split_shortcut.lua`, `tests/test_menu_split_rational.lua`, `tests/test_timeline_view_renderer_missing_clip_fields.lua`, `tests/test_edge_picker_hydration.lua`, `tests/test_clip_state_get_all_hydrates.lua`) and patched Split/menu/renderer/edge_picker/clip_state hydration (awaiting user confirmation).
+- [x] (done) Investigate timeline keyboard shortcuts regression (e.g., cmd+b split clip no longer works); added regressions (`tests/test_keyboard_split_shortcut.lua`, `tests/test_menu_split_rational.lua`, `tests/test_timeline_view_renderer_missing_clip_fields.lua`, `tests/test_edge_picker_hydration.lua`, `tests/test_clip_state_get_all_hydrates.lua`) and patched Split/menu/renderer/edge_picker/clip_state hydration; user confirmed working.
 - [x] Added regression `tests/test_revert_mutations_nudge_overlap.lua` and fixed `command_helper.revert_mutations` ordering so undo moves nudged clips back before restoring occluded deletes (prevents VIDEO_OVERLAP on undo).
 - [x] (done) Fix `capture_clip_state` JSON serialization bug: Rational objects lost fps metadata after command parameter round-trip, causing UndoNudge crash. Now explicitly captures fps_numerator/fps_denominator; added regression `tests/test_capture_clip_state_serialization.lua`. Old mutations need history reset.
 - [x] (done) Run `make -j4` to capture the current failure: Lua suite stops in `test_asymmetric_ripple_gap_clip.lua` because `core.commands.batch_ripple_edit` has a syntax error (`<eof>` near `end`).
@@ -341,18 +341,14 @@ Note: Not all commands need undo/redo (use `undoable = false`), but they still n
 
 ### Known Violations
 
-**1. Project Browser - Tag Service Writes (HIGH)**
-- `src/lua/ui/project_browser.lua:1445` - `tag_service.save_hierarchy(project_id, M.bins)`
-- `src/lua/ui/project_browser.lua:1481` - `tag_service.assign_master_clips(project_id, changed_ids, target_bin_id)`
-- Context: Called from `handle_tree_drop()` during drag-drop operations
-- Needed commands: `MoveBinToParent`, `AssignClipsToBin`
+**1. Project Browser - Tag Service Writes (FIXED 2026-01-23)**
+- ~~`tag_service.save_hierarchy()` / `tag_service.assign_master_clips()`~~
+- Fixed: Now uses unified `MoveToBin` command for both bins and clips
 
-**2. Timeline Core State - Direct Persistence (MEDIUM)**
-- `src/lua/ui/timeline/state/timeline_core_state.lua:152` - `sequence:save()`
-- `src/lua/ui/timeline/state/timeline_core_state.lua:156, 169` - `db.set_sequence_track_heights()`
-- `src/lua/ui/timeline/state/timeline_core_state.lua:298` - `db.set_project_setting()`
-- Context: Called from `flush_state_to_db()` for viewport/track height persistence
-- Needed commands: `SetTrackHeight`, `SetViewportState` (non-undoable but scriptable)
+**2. Timeline Core State - Direct Persistence (PARTIALLY FIXED 2026-01-23)**
+- ~~`db.set_sequence_track_heights()` / `db.set_project_setting()`~~
+- Fixed: Now uses `SetTrackHeights` and `SetProjectSetting` commands
+- Remaining: `sequence:save()` for selection state (playhead, selected clips/edges)
 
 **3. Clip State - Direct Mutations (NEEDS ANALYSIS)**
 - `src/lua/ui/timeline/state/clip_state.lua:301, 323, 363-391`
