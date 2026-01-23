@@ -1426,25 +1426,33 @@ handle_tree_drop = function(event)
 
     if #dragged_bins > 0 then
         local new_parent_id = resolve_bin_parent(target_info, position)
-        local changed = false
+        local project_id = M.project_id or db.get_current_project_id()
+
+        -- Collect bins that actually need moving (with validation)
+        local bins_to_move = {}
         for _, bin_info in ipairs(dragged_bins) do
             if bin_info.id ~= new_parent_id then
                 if is_descendant(new_parent_id, bin_info.id) then
                     logger.warn("project_browser", "Cannot move a bin inside one of its descendants")
-                elseif set_bin_parent(bin_info.id, new_parent_id) then
-                    changed = true
+                else
+                    table.insert(bins_to_move, bin_info.id)
                 end
             end
         end
 
-        if not changed then
+        if #bins_to_move == 0 then
             return true
         end
 
-        local project_id = M.project_id or db.get_current_project_id()
-        local ok, err = tag_service.save_hierarchy(project_id, M.bins)
-        if not ok then
-            logger.warn("project_browser", string.format("Failed to save bin hierarchy after drag/drop: %s", tostring(err or "unknown error")))
+        -- Execute via unified MoveToBin command
+        local cmd = Command.create("MoveToBin", project_id)
+        cmd:set_parameter("project_id", project_id)
+        cmd:set_parameter("entity_ids", bins_to_move)
+        cmd:set_parameter("target_bin_id", new_parent_id)
+        local result = command_manager.execute(cmd)
+
+        if not result.success then
+            logger.warn("project_browser", string.format("Failed to move bin(s): %s", tostring(result.error_message or "unknown error")))
             return true
         end
 
@@ -1460,15 +1468,12 @@ handle_tree_drop = function(event)
 
     if #dragged_clips > 0 then
         local target_bin_id = resolve_bin_parent(target_info, position)
+        local project_id = M.project_id or db.get_current_project_id()
+
+        -- Collect clip_ids that actually need reassignment
         local changed_ids = {}
         for _, clip_info in ipairs(dragged_clips) do
             if clip_info.bin_id ~= target_bin_id then
-                clip_info.bin_id = target_bin_id
-                if target_bin_id then
-                    M.media_bin_map[clip_info.clip_id] = target_bin_id
-                else
-                    M.media_bin_map[clip_info.clip_id] = nil
-                end
                 table.insert(changed_ids, clip_info.clip_id)
             end
         end
@@ -1477,16 +1482,19 @@ handle_tree_drop = function(event)
             return true
         end
 
-        local project_id = M.project_id or db.get_current_project_id()
-        local ok, assign_err = tag_service.assign_master_clips(project_id, changed_ids, target_bin_id)
-        if not ok then
-            logger.warn("project_browser", string.format("Failed to persist media-bin assignments: %s", tostring(assign_err or "unknown error")))
-            M.media_bin_map = tag_service.list_master_clip_assignments(project_id)
+        -- Execute via unified MoveToBin command
+        local cmd = Command.create("MoveToBin", project_id)
+        cmd:set_parameter("project_id", project_id)
+        cmd:set_parameter("entity_ids", changed_ids)
+        cmd:set_parameter("target_bin_id", target_bin_id)
+        local result = command_manager.execute(cmd)
+
+        if not result.success then
+            logger.warn("project_browser", string.format("Failed to move clips to bin: %s", tostring(result.error_message or "unknown error")))
         end
 
         defer_to_ui(function()
             local first_clip = dragged_clips[1]
-            local focus_item = nil
             M.refresh()
             if target_bin_id then
                 M.focus_bin(target_bin_id, {skip_activate = true})

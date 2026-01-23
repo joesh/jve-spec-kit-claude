@@ -329,3 +329,74 @@ Each test needs to be updated to:
 - All models now have `.create()`, `.load()`, `.save()`, `.delete()` methods
 - For test fixtures that need custom setup, consider creating additional helper modules
 
+## Command Isolation Enforcement (2026-01-23)
+
+**Goal**: All state-mutating operations should go through the command system so they are:
+- Scriptable (automation, macros)
+- Assignable to keyboard shortcuts
+- Assignable to menu items
+- Observable (hooks, logging)
+
+Note: Not all commands need undo/redo (use `undoable = false`), but they still need to be commands for scriptability.
+
+### Known Violations
+
+**1. Project Browser - Tag Service Writes (HIGH)**
+- `src/lua/ui/project_browser.lua:1445` - `tag_service.save_hierarchy(project_id, M.bins)`
+- `src/lua/ui/project_browser.lua:1481` - `tag_service.assign_master_clips(project_id, changed_ids, target_bin_id)`
+- Context: Called from `handle_tree_drop()` during drag-drop operations
+- Needed commands: `MoveBinToParent`, `AssignClipsToBin`
+
+**2. Timeline Core State - Direct Persistence (MEDIUM)**
+- `src/lua/ui/timeline/state/timeline_core_state.lua:152` - `sequence:save()`
+- `src/lua/ui/timeline/state/timeline_core_state.lua:156, 169` - `db.set_sequence_track_heights()`
+- `src/lua/ui/timeline/state/timeline_core_state.lua:298` - `db.set_project_setting()`
+- Context: Called from `flush_state_to_db()` for viewport/track height persistence
+- Needed commands: `SetTrackHeight`, `SetViewportState` (non-undoable but scriptable)
+
+**3. Clip State - Direct Mutations (NEEDS ANALYSIS)**
+- `src/lua/ui/timeline/state/clip_state.lua:301, 323, 363-391`
+- Context: `apply_mutations()` bulk clip mutations
+- May be internal implementation detail of existing commands - needs investigation
+
+### Enforcement Approaches Considered
+
+**A. Static Analysis Validator (like SQL isolation)**
+- Pros: Catches all violations at build time
+- Cons: Requires explicit forbidden-pattern list; fragile to aliasing (`local x = fn; x()`); high maintenance
+
+**B. Runtime Context Guard**
+```lua
+function M.save_hierarchy(...)
+    assert(command_scope.is_active(), "must be called from command")
+    ...
+end
+```
+- Pros: Immediate feedback; self-documenting
+- Cons: Opt-in - developers can forget to add guards; doesn't catch omissions
+
+**C. Module-level require() Blocking**
+- UI files cannot `require('core.tag_service')` - only command files can
+- Pros: Architecturally impossible to violate
+- Cons: Needs custom require() wrapper; may be too restrictive for read-only queries
+
+**D. Command-only Service Pattern**
+- Mutating services have no public mutating functions
+- Read-only: `tag_service.queries.*`
+- Mutations: only via command implementations that call private internals
+- Pros: Clean separation
+- Cons: Significant refactor; unclear how to share code between commands
+
+### Open Questions
+1. How to handle read-only vs write operations? (Some UI legitimately needs to query)
+2. How strict should enforcement be? (Build failure vs warning vs code review)
+3. Is there a Lua pattern for "friend" access (commands can call internals, UI cannot)?
+4. Should UI state (panel focus, collapsed sections) also be commands for full scriptability?
+
+### Next Steps
+- [ ] Decide on enforcement approach
+- [ ] Create commands for tag_service operations (MoveBinToParent, AssignClipsToBin)
+- [ ] Create commands for track height/viewport persistence
+- [ ] Update project_browser.lua to use commands instead of direct calls
+- [ ] Update timeline_core_state.lua to use commands instead of direct calls
+

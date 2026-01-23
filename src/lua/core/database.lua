@@ -1573,8 +1573,8 @@ function M.get_tag_namespaces()
 end
 
 local function build_bin_lookup(bins)
-    local ordered = {}
     local lookup = {}
+    local all_entries = {}
     for index, bin in ipairs(bins or {}) do
         if type(bin) == "table" then
             local id = bin.id
@@ -1590,13 +1590,32 @@ local function build_bin_lookup(bins)
                     parent_id = parent_id
                 }
                 lookup[id] = entry
-                table.insert(ordered, entry)
+                table.insert(all_entries, entry)
             end
         end
     end
-    table.sort(ordered, function(a, b)
+
+    -- Sort alphabetically first (for consistent sort_index within same level)
+    table.sort(all_entries, function(a, b)
         return a.name:lower() < b.name:lower()
     end)
+
+    -- Topological sort: parents must come before children for FK constraints
+    local ordered = {}
+    local inserted = {}
+    local function insert_with_parents(entry)
+        if inserted[entry.id] then return end
+        -- Insert parent first if it exists
+        if entry.parent_id and lookup[entry.parent_id] and not inserted[entry.parent_id] then
+            insert_with_parents(lookup[entry.parent_id])
+        end
+        table.insert(ordered, entry)
+        inserted[entry.id] = true
+    end
+    for _, entry in ipairs(all_entries) do
+        insert_with_parents(entry)
+    end
+
     for sort_index, entry in ipairs(ordered) do
         entry.sort_index = sort_index
     end
@@ -1729,6 +1748,27 @@ function M.save_bins(project_id, bins, opts)
         return false, reason
     end
 
+    -- Save existing tag_assignments before deleting bins (to survive ON DELETE CASCADE)
+    local saved_assignments = {}
+    local save_stmt = db_connection:prepare([[
+        SELECT tag_id, entity_type, entity_id FROM tag_assignments
+        WHERE project_id = ? AND namespace_id = ?
+    ]])
+    if save_stmt then
+        save_stmt:bind_value(1, project_id)
+        save_stmt:bind_value(2, namespace_id)
+        if save_stmt:exec() then
+            while save_stmt:next() do
+                table.insert(saved_assignments, {
+                    tag_id = save_stmt:value(0),
+                    entity_type = save_stmt:value(1),
+                    entity_id = save_stmt:value(2)
+                })
+            end
+        end
+        save_stmt:finalize()
+    end
+
     local purge_stmt = db_connection:prepare([[
         DELETE FROM tags
         WHERE project_id = ? AND namespace_id = ?
@@ -1838,6 +1878,35 @@ function M.save_bins(project_id, bins, opts)
             end
         end
         delete_stmt:finalize()
+    end
+
+    -- Restore saved tag_assignments (only for bins that still exist)
+    if #saved_assignments > 0 then
+        local restore_stmt = db_connection:prepare([[
+            INSERT OR IGNORE INTO tag_assignments (tag_id, project_id, namespace_id, entity_type, entity_id)
+            VALUES (?, ?, ?, ?, ?)
+        ]])
+        if restore_stmt then
+            for _, assignment in ipairs(saved_assignments) do
+                -- Only restore if the bin still exists
+                if inserted[assignment.tag_id] then
+                    -- Reset statement before reuse (like upsert_stmt does)
+                    if restore_stmt.reset then
+                        restore_stmt:reset()
+                    end
+                    restore_stmt:bind_value(1, assignment.tag_id)
+                    restore_stmt:bind_value(2, project_id)
+                    restore_stmt:bind_value(3, namespace_id)
+                    restore_stmt:bind_value(4, assignment.entity_type)
+                    restore_stmt:bind_value(5, assignment.entity_id)
+                    restore_stmt:exec()
+                    restore_stmt:clear_bindings()
+                end
+            end
+            restore_stmt:finalize()
+        else
+            logger.warn("database", "save_bins: failed to prepare restore statement")
+        end
     end
 
     if not commit_transaction(started, "save_bins") then

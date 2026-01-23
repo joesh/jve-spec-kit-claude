@@ -24,6 +24,8 @@ local selection_state = require("ui.timeline.state.selection_state")
 local db = require("core.database")
 local json = require("dkjson")
 local ui_constants = require("core.ui_constants")
+local command_manager = require("core.command_manager")
+local Command = require("command")
 
 local persist_timer = nil
 local persist_dirty = false
@@ -151,23 +153,29 @@ local function flush_state_to_db()
     -- Save updated sequence
     sequence:save()
 
-    if track_state.is_layout_dirty() and db.set_sequence_track_heights then
+    if track_state.is_layout_dirty() then
         local height_map = build_track_height_map()
-        db.set_sequence_track_heights(sequence_id, height_map)
-        track_state.clear_layout_dirty()
-    end
+        local project_id = data.state.project_id
+        assert(project_id and project_id ~= "", "timeline_core_state.flush_state_to_db: missing project_id")
 
-    -- Template persistence (could be moved to track_state, but centralized here for now)
-    -- Need a dirty flag for template? track_state doesn't expose it. Assuming layout dirty implies template check?
-    -- Original code had `track_template_dirty`.
-    -- For simplicity, we save template if layout changed.
-    if db.set_project_setting then
+        -- Persist track heights via command (scriptable, non-undoable)
+        local heights_cmd = Command.create("SetTrackHeights", project_id)
+        heights_cmd:set_parameter("project_id", project_id)
+        heights_cmd:set_parameter("sequence_id", sequence_id)
+        heights_cmd:set_parameter("track_heights", height_map)
+        command_manager.execute(heights_cmd)
+
+        -- Template persistence via command
         local template = build_track_height_template()
         if template then
-            local project_id = data.state.project_id
-            assert(project_id and project_id ~= "", "timeline_core_state.flush_state_to_db: missing project_id")
-            db.set_project_setting(project_id, TRACK_HEIGHT_TEMPLATE_KEY, template)
+            local template_cmd = Command.create("SetProjectSetting", project_id)
+            template_cmd:set_parameter("project_id", project_id)
+            template_cmd:set_parameter("key", TRACK_HEIGHT_TEMPLATE_KEY)
+            template_cmd:set_parameter("value", template)
+            command_manager.execute(template_cmd)
         end
+
+        track_state.clear_layout_dirty()
     end
 end
 
