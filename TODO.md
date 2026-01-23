@@ -391,9 +391,8 @@ end
 4. Should UI state (panel focus, collapsed sections) also be commands for full scriptability?
 
 ### Next Steps
-- [ ] Decide on enforcement approach
-- [ ] Create commands for tag_service operations (MoveBinToParent, AssignClipsToBin)
-- [ ] Create commands for track height/viewport persistence
-- [ ] Update project_browser.lua to use commands instead of direct calls
-- [ ] Update timeline_core_state.lua to use commands instead of direct calls
+- [x] (done) Create MoveToBin command for tag_service operations
+- [x] (done) Create SetTrackHeights and SetProjectSetting commands
+- [x] (done) Create SetPlayhead, SetViewport, SetSelection, SetMarks commands for UI state persistence
+- [ ] Decide on enforcement approach for future violations
 

@@ -122,6 +122,13 @@ local state_mgr = require("core.command_state")
 local active_sequence_id = nil
 local active_project_id = nil
 
+-- Undo/redo context flag - when true, UI state persistence should be skipped
+-- to avoid executing new commands during undo/redo operations
+local undo_redo_in_progress = false
+
+function M.is_undo_redo_in_progress()
+    return undo_redo_in_progress
+end
 
 local command_event_listeners = {}
 
@@ -727,6 +734,14 @@ function M.execute(command_or_name, params)
     -- Nested execution: record to DB but skip transaction/commit/UI refresh (root handles)
     -- This enables automatic undo grouping - all nested commands share root's undo_group_id
     if is_nested then
+        -- Check for non-undoable commands - execute without recording, even when nested
+        spec = registry.get_spec(command.type)
+        if spec and spec.undoable == false then
+            result = execute_non_recording(command)
+            exec_scope:finish("non_recording_nested")
+            goto cleanup
+        end
+
         -- Assign sequence number and link to parent
         sequence_number = history.increment_sequence_number()
         command.sequence_number = sequence_number
@@ -1478,20 +1493,26 @@ end
 local function execute_redo_command(cmd)
     assert(cmd, "execute_redo_command requires cmd")
 
+    -- Set flag to prevent UI persistence commands from executing during redo
+    undo_redo_in_progress = true
+
     local executor = registry.get_executor(cmd.type)
     if not executor then
+        undo_redo_in_progress = false
         return { success = false, error_message = "No executor for redo command: " .. tostring(cmd.type) }
     end
 
     local ok, exec_result = pcall(executor, cmd)
     if not ok then
         last_error_message = tostring(exec_result)
+        undo_redo_in_progress = false
         return { success = false, error_message = last_error_message }
     end
 
     local success, err_msg = normalize_executor_result(exec_result)
     if not success then
         last_error_message = err_msg or "Redo executor returned false"
+        undo_redo_in_progress = false
         return { success = false, error_message = last_error_message }
     end
 
@@ -1532,6 +1553,9 @@ local function execute_redo_command(cmd)
         project_id = cmd.project_id,
         sequence_number = cmd.sequence_number
     })
+
+    -- Clear redo-in-progress flag
+    undo_redo_in_progress = false
 
     return { success = true }
 end
@@ -1611,7 +1635,10 @@ end
 
 function M.execute_undo(original_command)
     logger.debug("command_manager", string.format("Executing undo for command: %s", tostring(original_command.type)))
-    
+
+    -- Set flag to prevent UI persistence commands from executing during undo
+    undo_redo_in_progress = true
+
     local undo_command = original_command:create_undo()
     
     -- Get undoer if explicitly registered (overrides command:create_undo logic if needed)
@@ -1691,6 +1718,9 @@ function M.execute_undo(original_command)
         result.error_message = last_error_message or "Undo execution failed"
         logger.error("command_manager", "Undo failed: " .. tostring(result.error_message))
     end
+
+    -- Clear undo-in-progress flag
+    undo_redo_in_progress = false
 
     return result
 end

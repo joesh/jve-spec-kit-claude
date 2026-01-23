@@ -8,6 +8,7 @@ require('test_env')
 
 local database = require('core.database')
 local timeline_state = require('ui.timeline.timeline_state')
+local command_manager = require('core.command_manager')
 local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_timeline_viewport_persistence.db"
@@ -33,6 +34,7 @@ db:exec([[
 
 -- First init uses defaults from DB
 assert(timeline_state.init('default_sequence'))
+command_manager.init('default_sequence', 'default_project')
 
 local start_before = timeline_state.get_viewport_start_time()
 local dur_before = timeline_state.get_viewport_duration()
