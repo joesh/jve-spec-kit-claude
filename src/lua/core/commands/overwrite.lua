@@ -83,6 +83,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("__snapshot_sequence_ids", {sequence_id})
         end
 
+        -- Get overwrite position from playhead when invoked from UI
+        if not args.overwrite_time and timeline_state then
+            local playhead_pos = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
+            if playhead_pos then
+                command:set_parameter("overwrite_time", playhead_pos)
+                args.overwrite_time = playhead_pos
+            end
+        end
+
         local master_clip = nil
         local copied_properties = {}
         if master_clip_id and master_clip_id ~= "" then
