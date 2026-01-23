@@ -26,9 +26,12 @@ local SPEC = {
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["CreateProject"] = function(command)
+        local args = command:get_all_parameters()
         print("Executing CreateProject command")
 
-        local project = Project.create(name)
+        local name = args.name
+        local project_id = args.project_id
+        local project = Project.create(name, {id = project_id})
 
         command:set_parameter("project_id", project.id)
 

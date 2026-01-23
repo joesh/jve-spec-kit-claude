@@ -43,19 +43,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        -- Store previous args.settings for undo
-        local previous_settings = project.args.settings
+        -- Store previous settings for undo
+        local previous_settings = project.settings
         command:set_parameter("previous_settings", previous_settings)
 
-        -- Apply new args.settings
+        -- Apply new settings
         local settings_json = json.encode(args.settings)
-        project:set_settings(settings_json)
+        project.settings = settings_json
 
         if project:save(db) then
-            print(string.format("Applied args.settings to project: %s", args.project_id))
+            print(string.format("Applied settings to project: %s", args.project_id))
             return true
         else
-            set_last_error("Failed to save project args.settings")
+            set_last_error("Failed to save project settings")
             return false
         end
     end

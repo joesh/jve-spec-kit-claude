@@ -158,12 +158,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_sequence_id = clip.source_sequence_id,
             parent_clip_id = clip.parent_clip_id,
             owner_sequence_id = clip.owner_sequence_id,
-            start_value = clip.start_value,
+            timeline_start = clip.timeline_start,
             duration = clip.duration,
             source_in = clip.source_in,
             source_out = clip.source_out,
             enabled = clip.enabled,
             offline = clip.offline,
+            fps_numerator = clip.fps_numerator or 30,
+            fps_denominator = clip.fps_denominator or 1,
         }
         command:set_parameter("master_clip_snapshot", snapshot)
 
@@ -212,12 +214,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             parent_clip_id = args.master_clip_snapshot.parent_clip_id,
             owner_sequence_id = args.master_clip_snapshot.owner_sequence_id,
             source_sequence_id = args.master_clip_snapshot.source_sequence_id,
-            start_value = args.master_clip_snapshot.start_value,
+            timeline_start = args.master_clip_snapshot.timeline_start,
             duration = args.master_clip_snapshot.duration,
             source_in = args.master_clip_snapshot.source_in,
             source_out = args.master_clip_snapshot.source_out,
             enabled = args.master_clip_snapshot.enabled ~= false,
             offline = args.master_clip_snapshot.offline,
+            fps_numerator = args.master_clip_snapshot.fps_numerator or 30,
+            fps_denominator = args.master_clip_snapshot.fps_denominator or 1,
         })
 
         if not restored:save() then
