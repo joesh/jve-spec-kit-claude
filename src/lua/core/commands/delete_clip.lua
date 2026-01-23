@@ -67,8 +67,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        if args.sequence_id then
-            command_helper.add_delete_mutation(command, args.sequence_id, clip.id)
+        if sequence_id then
+            command_helper.add_delete_mutation(command, sequence_id, clip.id)
         end
 
         print(string.format("✅ Deleted clip %s from timeline", args.clip_id))

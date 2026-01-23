@@ -28,6 +28,7 @@ local logger = require("core.logger")
 local SPEC = {
     args = {
         project_id = { required = true },
+        sequence_id = {},  -- Optional, may be passed from UI context
         interactive = { kind = "boolean" },  -- If true, show file picker dialog
         file_paths = {},  -- Array of file paths (or gathered from dialog)
         file_path = {},   -- Single file for backward compatibility

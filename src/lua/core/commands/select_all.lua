@@ -21,6 +21,7 @@ local SPEC = {
     args = {
         dry_run = { kind = "boolean" },
         project_id = { required = true },
+        sequence_id = {},
     }
 }
 
