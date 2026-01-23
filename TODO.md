@@ -56,7 +56,7 @@
 - [x] (done) Fix BatchRippleEdit timeline drag VIDEO_OVERLAP failure on video tracks (clip 0500ccf9-eb33-4363-a6b7-a7371829abee); regression covers clamped delta execution (user confirmed fix).
 - [x] (done) Remove millisecond-based deltas from timeline edge drag handling; keep drag math in Rational frames with regression coverage.
 - [x] (done) Fix BatchRipple gap lead clamp/negation bugs and extend regression tests.
-- [ ] Edit history UI: verify entries render + jumping works on real app data; ensure Undo/Redo labels match the menu text and stay in sync with branching history.
+- [x] (done) Edit history UI: verify entries render + jumping works on real app data; ensure Undo/Redo labels match the menu text and stay in sync with branching history. Fixed missing EditHistory command and forward-reference bug in list_history_entries.
 - [x] (done) Timeline gap edge selections should render handles just like clip edges; regression surfaced while restoring ripple handle semantics.
 - [x] (done) Re-align per-track ripple shift signs so opposing bracket clip selections move in the correct directions while gap edges retain their bracket mapping (multi-track regression restored).
 - [x] (done) Update timeline edit-zone cursors so the three zones show ], ]|[, and [ glyphs instead of generic trim arrows (custom cursors in `src/lua/qt_bindings/misc_bindings.cpp`).
