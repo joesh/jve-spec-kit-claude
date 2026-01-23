@@ -363,6 +363,11 @@ function M.apply_mutations(mutations, persist_callback)
                         clip.track_id = update.track_id
                         needs_resort = true; changed = true
                     end
+                    -- Apply fps info from update before using it for source_in/source_out
+                    if update.fps_numerator and update.fps_denominator then
+                        clip.fps_numerator = update.fps_numerator
+                        clip.fps_denominator = update.fps_denominator
+                    end
                     local sequence_rate = assert_rate(data.state.sequence_frame_rate, "sequence")
                     if update.start_value and (not clip.timeline_start or update.start_value ~= clip.timeline_start.frames) then
                         clip.timeline_start = Rational.new(update.start_value, sequence_rate.fps_numerator, sequence_rate.fps_denominator)

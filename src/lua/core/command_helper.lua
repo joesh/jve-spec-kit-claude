@@ -954,6 +954,15 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     local function require_rate(prev, context)
         local fps_num = prev and (prev.fps_numerator or (prev.rate and prev.rate.fps_numerator))
         local fps_den = prev and (prev.fps_denominator or (prev.rate and prev.rate.fps_denominator))
+        -- Also extract from source_in/source_out Rationals (consistent with clip_state.get_clip_rate)
+        if (not fps_num or not fps_den) and prev and prev.source_in and type(prev.source_in) == "table" then
+            fps_num = fps_num or prev.source_in.fps_numerator
+            fps_den = fps_den or prev.source_in.fps_denominator
+        end
+        if (not fps_num or not fps_den) and prev and prev.source_out and type(prev.source_out) == "table" then
+            fps_num = fps_num or prev.source_out.fps_numerator
+            fps_den = fps_den or prev.source_out.fps_denominator
+        end
         if not fps_num or not fps_den then
             error(string.format("%s: missing fps for clip %s", context or "undo", tostring(prev and prev.id)), 2)
         end
@@ -990,6 +999,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
 
         if command then
             -- Include full clip state for UI cache update (not just clip_id)
+            local fps_num, fps_den = require_rate(prev, "undo update")
             M.add_update_mutation(command, sequence_id, {
                 clip_id = prev.id,
                 track_id = prev.track_id,
@@ -997,6 +1007,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 duration_value = val_frames(prev.duration, "duration"),
                 source_in_value = val_frames(prev.source_in, "source_in"),
                 source_out_value = val_frames(prev.source_out, "source_out"),
+                fps_numerator = fps_num,
+                fps_denominator = fps_den,
                 enabled = prev.enabled
             })
         end

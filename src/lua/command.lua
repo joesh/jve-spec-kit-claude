@@ -334,6 +334,21 @@ function M:save(db)
     if db_playhead_value == nil or playhead_rate_val <= 0 then
         error("FATAL: Command.save requires playhead_value and valid playhead_rate")
     end
+
+    -- Post-execution playhead (optional - only captured for commands that advance playhead)
+    local db_playhead_value_post = nil
+    if type(self.playhead_value_post) == "number" then
+        db_playhead_value_post = self.playhead_value_post
+    elseif type(self.playhead_value_post) == "table" and self.playhead_value_post.frames ~= nil then
+        db_playhead_value_post = self.playhead_value_post.frames
+    end
+
+    local playhead_rate_post_val = 0
+    if type(self.playhead_rate_post) == "number" then
+        playhead_rate_post_val = self.playhead_rate_post
+    elseif type(self.playhead_rate_post) == "table" and self.playhead_rate_post.fps_numerator then
+        playhead_rate_post_val = self.playhead_rate_post.fps_numerator / (self.playhead_rate_post.fps_denominator or 1)
+    end
     if not self.executed_at then
         error("FATAL: Command.save requires executed_at")
     end
@@ -346,7 +361,8 @@ function M:save(db)
             SET command_type = ?, sequence_number = ?, command_args = ?,
                 pre_hash = ?, post_hash = ?, timestamp = ?, playhead_value = ?, playhead_rate = ?,
                 selected_clip_ids = ?, selected_edge_infos = ?, selected_gap_infos = ?,
-                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?, undo_group_id = ?
+                selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?, undo_group_id = ?,
+                playhead_value_post = ?, playhead_rate_post = ?
             WHERE id = ?
         ]])
         if not query then
@@ -373,12 +389,14 @@ function M:save(db)
         query:bind_value(13, selected_edge_infos_pre_json)
         query:bind_value(14, selected_gap_infos_pre_json)
         query:bind_value(15, self.undo_group_id)
-        query:bind_value(16, self.id)
+        query:bind_value(16, db_playhead_value_post)
+        query:bind_value(17, playhead_rate_post_val)
+        query:bind_value(18, self.id)
     else
         -- INSERT
         query = db:prepare([[
-            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id, playhead_value_post, playhead_rate_post)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not query then
             local err = "unknown error"
@@ -407,6 +425,8 @@ function M:save(db)
         query:bind_value(15, selected_edge_infos_pre_json)
         query:bind_value(16, selected_gap_infos_pre_json)
         query:bind_value(17, self.undo_group_id)
+        query:bind_value(18, db_playhead_value_post)
+        query:bind_value(19, playhead_rate_post_val)
     end
 
     if not query:exec() then

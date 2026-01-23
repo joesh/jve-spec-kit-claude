@@ -195,8 +195,10 @@ CREATE TABLE IF NOT EXISTS commands (
     timestamp INTEGER NOT NULL,
 
     -- Snapshot State (for fast restores)
-    playhead_value REAL,
+    playhead_value REAL,           -- Pre-execution playhead (restored on undo)
     playhead_rate REAL,
+    playhead_value_post REAL,      -- Post-execution playhead (restored on redo)
+    playhead_rate_post REAL,
 
     selected_clip_ids TEXT,
     selected_edge_infos TEXT,

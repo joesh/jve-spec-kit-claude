@@ -950,6 +950,10 @@ function M.execute(command_or_name, params)
             capture_post_selection_for_command(command)
         end
 
+        -- Capture post-execution playhead position (restored on redo)
+        command.playhead_value_post = timeline_state.get_playhead_position()
+        command.playhead_rate_post = timeline_state.get_sequence_frame_rate()
+
         suppress_noop_after = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
         if suppress_noop_after and not needs_state_hash then
             -- Executor decided this command is a no-op, but the flag was set during execution,
@@ -1347,7 +1351,8 @@ function M.get_command_at_sequence(seq_num, project_id)
     local query = db:prepare([[
         SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_value, playhead_rate,
                selected_clip_ids, selected_edge_infos, selected_gap_infos,
-               selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id
+               selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id,
+               playhead_value_post, playhead_rate_post
         FROM commands
         WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
     ]])
@@ -1375,7 +1380,9 @@ function M.get_command_at_sequence(seq_num, project_id)
             selected_clip_ids_pre = query:value(13) or "[]",
             selected_edge_infos_pre = query:value(14) or "[]",
             selected_gap_infos_pre = query:value(15) or "[]",
-            undo_group_id = query:value(16)
+            undo_group_id = query:value(16),
+            playhead_value_post = query:value(17),
+            playhead_rate_post = query:value(18)
     }
         
         local command_args_json = query:value(2)
@@ -1512,6 +1519,11 @@ local function execute_redo_command(cmd)
 
     if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
         timeline_state.reload_clips(reload_sequence_id)
+    end
+
+    -- Restore post-execution playhead position (mirrors undo restoring pre-execution)
+    if cmd.playhead_value_post ~= nil and timeline_state.set_playhead_position then
+        timeline_state.set_playhead_position(cmd.playhead_value_post)
     end
 
     notify_command_event({

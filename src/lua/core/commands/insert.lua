@@ -1,35 +1,24 @@
---- TODO: one-line summary (human review required)
+--- Insert command - inserts clip at playhead, rippling downstream clips
 --
 -- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~239 LOC
--- Volatility: unknown
+-- - Insert video and audio clips at specified position
+-- - Ripple (shift) downstream clips to make room
+-- - Support undo/redo with clip ID preservation
 --
 -- @file insert.lua
+
 local M = {}
 local Clip = require('models.clip')
 local Media = require('models.media')
 local Track = require('models.track')
-local command_helper = require("core.command_helper")
-local Rational = require("core.rational")
-local uuid = require("uuid")
-local rational_helpers = require("core.command_rational_helpers")
-local insert_selected_clip_into_timeline = require("core.clip_insertion")
-local logger = require("core.logger")
-local timeline_state
-do
-    local status, mod = pcall(require, 'ui.timeline.timeline_state')
-    if status then timeline_state = mod end
-end
+local Rational = require('core.rational')
+local uuid = require('uuid')
+local command_helper = require('core.command_helper')
+local rational_helpers = require('core.command_rational_helpers')
 local clip_mutator = require('core.clip_mutator')
-
+local clip_edit_helper = require('core.clip_edit_helper')
+local insert_selected_clip_into_timeline = require('core.clip_insertion')
+local logger = require('core.logger')
 
 local SPEC = {
     args = {
@@ -53,277 +42,141 @@ local SPEC = {
     persisted = {
         executed_mutations = {},
     },
-
 }
+
+local function get_timeline_state()
+    local ok, mod = pcall(require, 'ui.timeline.timeline_state')
+    return ok and mod or nil
+end
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["Insert"] = function(command)
         local args = command:get_all_parameters()
+        local timeline_state = get_timeline_state()
 
         if not args.dry_run then
             logger.debug("insert", "Executing Insert command")
         end
 
-        local media_id = args.media_id
+        -- Resolve parameters from UI context if not provided
+        local media_id = clip_edit_helper.resolve_media_id_from_ui(args.media_id, command)
         local track_id = args.track_id
 
-        -- If media_id not provided, gather from UI state (project browser selection)
-        if not media_id or media_id == "" then
-            local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
-            if ui_state_ok then
-                local project_browser = ui_state.get_project_browser and ui_state.get_project_browser()
-                if project_browser and project_browser.get_selected_master_clip then
-                    local selected_clip = project_browser.get_selected_master_clip()
-                    if selected_clip and selected_clip.media_id then
-                        media_id = selected_clip.media_id
-                        command:set_parameter("media_id", media_id)
-                    end
-                end
-            end
+        assert(media_id and media_id ~= "",
+            "Insert command: media_id required but not provided and no media selected in project browser")
 
-            assert(media_id and media_id ~= "",
-                "Insert command: media_id required but not provided and no media selected in project browser")
-        end
-
-        -- Resolve owning sequence (timeline coordinate space).
-        local sequence_id = command_helper.resolve_sequence_for_track(args.sequence_id, track_id)
+        -- Resolve sequence_id
+        local sequence_id = clip_edit_helper.resolve_sequence_id(args, track_id, command)
         assert(sequence_id and sequence_id ~= "",
             string.format("Insert command: sequence_id required (track_id=%s)", tostring(track_id)))
-        command:set_parameter("sequence_id", sequence_id)
-        if not args.__snapshot_sequence_ids then
-            command:set_parameter("__snapshot_sequence_ids", {sequence_id})
-        end
 
-        -- If track_id not provided, use first video track in sequence
-        if not track_id or track_id == "" then
-            local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
-            assert(#video_tracks > 0, string.format(
-                "Insert command: no VIDEO tracks found in sequence_id=%s (sequence has no video tracks)",
-                tostring(sequence_id)
-            ))
-            track_id = video_tracks[1].id
-            command:set_parameter("track_id", track_id)
-        end
+        -- Resolve track_id
+        local track_err
+        track_id, track_err = clip_edit_helper.resolve_track_id(track_id, sequence_id, command)
+        assert(track_id, string.format("Insert command: %s", track_err or "failed to resolve track"))
 
-        -- If insert_time not provided or 0, use playhead position from timeline state
-        if (not args.insert_time or args.insert_time == 0) and timeline_state then
-            local playhead_pos = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
-            if playhead_pos then
-                command:set_parameter("insert_time", playhead_pos)
-            end
-        end
+        -- Resolve insert_time from playhead
+        local insert_time = clip_edit_helper.resolve_edit_time(args.insert_time, command, "insert_time")
 
+        -- Get sequence FPS
         local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
 
-
-        local duration_raw = args.duration_value or args.duration
-        local source_in_raw = args.source_in_value or args.source_in
-        local source_out_raw = args.source_out_value or args.source_out
-        
+        -- Load master clip if specified
         local master_clip_id = args.master_clip_id
-
-        local project_id = command.project_id or args.project_id
-
         local master_clip = nil
         if master_clip_id and master_clip_id ~= "" then
             master_clip = Clip.load_optional(master_clip_id)
             assert(master_clip, string.format(
-                "Insert command: master_clip_id=%s not found in database (no fallback - fix caller)",
+                "Insert command: master_clip_id=%s not found in database",
                 tostring(master_clip_id)
             ))
         end
 
-        local copied_properties = {}
-
-        -- Timeline coordinate (sequence rate).
-        local insert_time_rat = rational_helpers.require_rational_in_rate(args.insert_time, seq_fps_num, seq_fps_den, "insert_time")
-
-        -- Source coordinate + clip metadata (media/master rate).
-        local media_fps_num, media_fps_den
-        if master_clip then
-            media_fps_num, media_fps_den = rational_helpers.require_master_clip_rate(master_clip)
-        elseif media_id and media_id ~= "" then
-            media_fps_num, media_fps_den = rational_helpers.require_media_rate(db, media_id)
-        else
-            -- Fallback when no media context exists.
-            media_fps_num, media_fps_den = seq_fps_num, seq_fps_den
-        end
-
-        local source_in_rat = rational_helpers.optional_rational_in_rate(source_in_raw, media_fps_num, media_fps_den)
-        local source_out_rat = rational_helpers.optional_rational_in_rate(source_out_raw, media_fps_num, media_fps_den)
-        local duration_frames = nil
-        do
-            local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
-            if duration_rat and duration_rat.frames and duration_rat.frames > 0 then
-                duration_frames = duration_rat.frames
-            end
-        end
-
+        -- Get project_id
+        local project_id = command.project_id or args.project_id
         if master_clip then
             project_id = project_id or master_clip.project_id
             if (not media_id or media_id == "") and master_clip.media_id then
                 media_id = master_clip.media_id
             end
-            
-            if not source_in_rat then
-                source_in_rat = master_clip.source_in or Rational.new(0, media_fps_num, media_fps_den)
-            end
-            if (not duration_frames or duration_frames <= 0) and master_clip.duration and master_clip.duration.frames and master_clip.duration.frames > 0 then
-                duration_frames = master_clip.duration.frames
-            end
-            if not source_out_rat and (not duration_frames or duration_frames <= 0) and master_clip.source_out then
-                source_out_rat = master_clip.source_out
-            end
-
-            copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
-        if not media_id or media_id == "" or not track_id or track_id == "" then
-            local msg = string.format("Insert: missing required ids (media_id=%s track_id=%s)", tostring(media_id), tostring(track_id))
+        -- Validate required IDs
+        if not media_id or media_id == "" then
+            local msg = "Insert: no media selected - select a clip in the project browser first"
+            set_last_error(msg)
+            return false, msg
+        end
+        if not track_id or track_id == "" then
+            local msg = "Insert: no track available - sequence must have at least one video track"
             set_last_error(msg)
             return false, msg
         end
 
         if not project_id or project_id == "" then
-            local msg = "Insert: missing project_id (command.project_id/parameter/master_clip.project_id all empty)"
-            set_last_error(msg)
-            return false, msg
+            set_last_error("Insert: missing project_id")
+            return false, "Insert: missing project_id"
         end
         command:set_parameter("project_id", project_id)
         command.project_id = project_id
 
-        if not source_in_rat then
-            source_in_rat = Rational.new(0, media_fps_num, media_fps_den)
-        end
+        -- Get media FPS
+        local media_fps_num, media_fps_den = clip_edit_helper.get_media_fps(db, master_clip, media_id, seq_fps_num, seq_fps_den)
 
         -- Load media for duration and audio channel info
-        local media = nil
-        if media_id and media_id ~= "" then
-            media = Media.load(media_id)
+        local media = Media.load(media_id)
+
+        -- Resolve timing parameters
+        local timing, timing_err = clip_edit_helper.resolve_timing(
+            args, master_clip, media,
+            seq_fps_num, seq_fps_den,
+            media_fps_num, media_fps_den
+        )
+        if not timing then
+            set_last_error("Insert: " .. timing_err)
+            return false, "Insert: " .. timing_err
         end
 
-        -- If no duration yet and we have media, get duration from it
-        if (not duration_frames or duration_frames <= 0) and media then
-            if media.duration and media.duration.frames and media.duration.frames > 0 then
-                duration_frames = media.duration.frames
-            end
-        end
+        -- Get insert time as Rational
+        local insert_time_rat = rational_helpers.require_rational_in_rate(insert_time, seq_fps_num, seq_fps_den, "insert_time")
 
-        if source_out_rat and (not duration_frames or duration_frames <= 0) then
-            duration_frames = source_out_rat.frames - source_in_rat.frames
-        end
-        if not source_out_rat and duration_frames and duration_frames > 0 then
-            source_out_rat = Rational.new(source_in_rat.frames + duration_frames, media_fps_num, media_fps_den)
-        end
-        if not duration_frames or duration_frames <= 0 then
-            local msg = string.format("Insert: invalid duration_frames=%s", tostring(duration_frames))
-            set_last_error(msg)
-            return false, msg
-        end
-        local duration_rat = Rational.new(duration_frames, seq_fps_num, seq_fps_den)
-
-        if not insert_time_rat or duration_rat.frames <= 0 or not source_out_rat then
+        -- Validate timing
+        if not insert_time_rat or timing.duration_rat.frames <= 0 or not timing.source_out_rat then
             local msg = string.format("Insert: invalid timing params (time=%s dur=%s out=%s)",
-                tostring(insert_time_rat), tostring(duration_rat), tostring(source_out_rat))
+                tostring(insert_time_rat), tostring(timing.duration_rat), tostring(timing.source_out_rat))
             set_last_error(msg)
             return false, msg
         end
 
-        local clip_name = args.clip_name or (master_clip and master_clip.name) or "Inserted Clip"
+        -- Resolve clip name
+        local clip_name = clip_edit_helper.resolve_clip_name(args, master_clip, media, "Inserted Clip")
 
-        -- Determine audio channel count from media
-        local audio_channels = 0
-        if media and media.audio_channels then
-            audio_channels = media.audio_channels
+        -- Get audio channel count
+        local audio_channels = (media and media.audio_channels) or 0
+
+        -- Handle copied properties from master clip
+        local copied_properties = {}
+        if master_clip_id and master_clip_id ~= "" then
+            copied_properties = command_helper.ensure_copied_properties(command, master_clip_id)
         end
 
-        local clip_payload = {
-            role = "video",
+        -- Create selected_clip object
+        local selected_clip = clip_edit_helper.create_selected_clip({
             media_id = media_id,
             master_clip_id = master_clip_id,
             project_id = project_id,
-            duration = duration_rat,
-            source_in = source_in_rat,
-            source_out = source_out_rat,
+            duration_rat = timing.duration_rat,
+            source_in_rat = timing.source_in_rat,
+            source_out_rat = timing.source_out_rat,
             clip_name = clip_name,
-            clip_id = args.clip_id
-        }
+            clip_id = args.clip_id,
+            audio_channels = audio_channels
+        })
 
-        local selected_clip = {
-            video = clip_payload
-        }
+        -- Create sequence object with track resolvers and insert callback
+        local target_audio_track = clip_edit_helper.create_audio_track_resolver(sequence_id, db)
 
-        function selected_clip:has_video()
-            return true
-        end
-
-        function selected_clip:has_audio()
-            return audio_channels > 0
-        end
-
-        function selected_clip:audio_channel_count()
-            return audio_channels
-        end
-
-        function selected_clip:audio(ch)
-            assert(ch >= 0 and ch < audio_channels, "Insert: invalid audio channel index " .. tostring(ch))
-            return {
-                role = "audio",
-                media_id = media_id,
-                master_clip_id = master_clip_id,
-                project_id = project_id,
-                duration = duration_rat,
-                source_in = source_in_rat,
-                source_out = source_out_rat,
-                clip_name = clip_name .. " (Audio)",
-                channel = ch
-            }
-        end
-
-        local function target_video_track(_, index)
-            assert(index == 0, "Insert: unexpected video track index")
-            return {id = track_id}
-        end
-
-        -- Get or create audio tracks for audio clip insertion
-        local audio_tracks = {}
-        if timeline_state and timeline_state.get_audio_tracks then
-            audio_tracks = timeline_state.get_audio_tracks() or {}
-        else
-            -- Fallback: query database for audio tracks
-            audio_tracks = Track.find_by_sequence(sequence_id, "AUDIO") or {}
-        end
-
-        local function target_audio_track(_, index)
-            assert(index >= 0, "Insert: invalid audio track index " .. tostring(index))
-            if index < #audio_tracks then
-                return audio_tracks[index + 1]  -- Lua is 1-indexed
-            end
-            -- Need to create audio track - first refresh the track list from DB
-            -- (handles redo case where tracks exist but weren't in our initial list)
-            local fresh_tracks = Track.find_by_sequence(sequence_id, "AUDIO") or {}
-            if #fresh_tracks > #audio_tracks then
-                audio_tracks = fresh_tracks
-                if index < #audio_tracks then
-                    return audio_tracks[index + 1]
-                end
-            end
-            -- Still need to create - find the max existing track index
-            local max_index = 0
-            for _, t in ipairs(audio_tracks) do
-                if t.track_index and t.track_index > max_index then
-                    max_index = t.track_index
-                end
-            end
-            local new_index = max_index + 1 + (index - #audio_tracks)
-            local track_name = string.format("A%d", new_index)
-            local new_track = Track.create_audio(track_name, sequence_id, {index = new_index})
-            assert(new_track:save(), "Insert: failed to create audio track")
-            audio_tracks[#audio_tracks + 1] = new_track
-            return new_track
-        end
-
-        -- Accumulate mutations across all clip insertions (video + audio)
+        -- Accumulate mutations across all clip insertions
         local all_executed_mutations = {}
 
         -- Extract clip IDs from previous execution (for redo - reuse same IDs)
@@ -337,21 +190,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         local redo_clip_index = 1
 
+        local function target_video_track(_, index)
+            assert(index == 0, "Insert: unexpected video track index")
+            return {id = track_id}
+        end
+
         local function insert_clip(_, payload, target_track, pos)
-            local insert_time = assert(pos, "Insert: missing insert position")
+            local insert_pos = assert(pos, "Insert: missing insert position")
             local insert_track_id = assert(target_track and target_track.id, "Insert: missing target track id")
-            local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_ripple(db, {
+
+            -- Ripple downstream clips
+            local ok_ripple, err_ripple, planned_mutations = clip_mutator.resolve_ripple(db, {
                 track_id = insert_track_id,
-                insert_time = insert_time,
+                insert_time = insert_pos,
                 shift_amount = payload.duration
             })
-            assert(ok_occ, string.format("Insert: resolve_ripple failed: %s", tostring(err_occ)))
+            assert(ok_ripple, string.format("Insert: resolve_ripple failed: %s", tostring(err_ripple)))
 
-            -- Use explicit clip_id if provided, else reuse from redo, else generate new
-            -- Always advance redo_clip_index to keep queue synchronized
+            -- Determine clip_id
             local clip_id = payload.clip_id
             if clip_id then
-                -- Explicit clip_id provided - still advance queue to stay in sync
                 if redo_clip_index <= #redo_clip_ids then
                     redo_clip_index = redo_clip_index + 1
                 end
@@ -362,6 +220,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clip_id = uuid.generate()
             end
 
+            -- Create clip
             local clip_opts = {
                 id = clip_id,
                 project_id = payload.project_id,
@@ -369,7 +228,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 owner_sequence_id = sequence_id,
                 parent_clip_id = payload.master_clip_id,
                 source_sequence_id = master_clip and master_clip.source_sequence_id,
-                timeline_start = insert_time,
+                timeline_start = insert_pos,
                 duration = payload.duration,
                 source_in = payload.source_in,
                 source_out = payload.source_out,
@@ -379,16 +238,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 fps_denominator = media_fps_den,
             }
             local clip_to_insert = Clip.create(payload.clip_name or "Inserted Clip", payload.media_id, clip_opts)
-            -- Only set clip_id for video (primary) clip - audio clips are linked
+
             if payload.role == "video" then
                 command:set_parameter("clip_id", clip_to_insert.id)
             end
+
             table.insert(planned_mutations, clip_mutator.plan_insert(clip_to_insert))
 
             local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
             assert(ok_apply, "Failed to apply clip_mutator actions: " .. tostring(apply_err))
 
-            -- Accumulate mutations for undo (don't overwrite)
             for _, mut in ipairs(planned_mutations) do
                 table.insert(all_executed_mutations, mut)
             end
@@ -418,9 +277,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             insert_pos = insert_time_rat
         })
 
-
-        if args.advance_playhead and timeline_state then
-            timeline_state.set_playhead_position(insert_time_rat + duration_rat)
+        -- Advance playhead to end of inserted clip (default true for UI-invoked commands)
+        local advance_playhead = args.advance_playhead
+        if advance_playhead == nil then
+            advance_playhead = true  -- Default to advancing playhead for interactive use
+        end
+        if advance_playhead and timeline_state then
+            timeline_state.set_playhead_position(insert_time_rat + timing.duration_rat)
         end
 
         logger.debug("insert", string.format("Inserted clip at %s (id: %s)",
