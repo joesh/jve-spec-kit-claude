@@ -1,0 +1,14 @@
+/mnt/data/v9r/lua/core/commands/batch_command.lua:119:            if not cmd:get_parameter("project_id") or cmd:get_parameter("project_id") == "" then
+/mnt/data/v9r/lua/core/commands/batch_command.lua:155:            merge_timeline_mutations(command, cmd:get_parameter("__timeline_mutations"))
+/mnt/data/v9r/lua/core/commands/batch_command.lua:194:            if not cmd:get_parameter("project_id") or cmd:get_parameter("project_id") == "" then
+/mnt/data/v9r/lua/core/commands/batch_command.lua:206:            merge_timeline_mutations(command, cmd:get_parameter("__timeline_mutations"))
+/mnt/data/v9r/lua/core/commands/batch_ripple_edit.lua:1090:        if ctx.command:get_parameter('__force_conflict_delta') then
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:213:                cmd:set_parameter(k, v)
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:216:                cmd:set_parameter("sequence_id", active_seq)
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:304:            cmd:set_parameter("lead_edge", lead_edge_info)
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:307:            cmd:set_parameter("sequence_id", active_seq)
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:309:            cmd:set_parameter("__snapshot_sequence_ids", {active_seq})
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:314:        cmd:set_parameter("__use_timeline_state_cache", true)
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:319:            cmd:set_parameter("__preloaded_clip_snapshot", drag_state.preloaded_clip_snapshot)
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_drag_handler.lua:322:            cmd:set_parameter("__timeline_active_region", drag_state.timeline_active_region)
+/mnt/data/v9r/lua/ui/timeline/view/timeline_view_renderer.lua:554:        cmd:set_parameter("lead_edge", normalized_lead)
