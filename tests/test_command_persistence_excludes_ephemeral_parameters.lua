@@ -21,6 +21,8 @@ assert(db:exec([[
         undo_group_id INTEGER,
         playhead_value INTEGER DEFAULT 0,
         playhead_rate REAL DEFAULT 0,
+        playhead_value_post REAL,
+        playhead_rate_post REAL,
         selected_clip_ids TEXT DEFAULT '[]',
         selected_edge_infos TEXT DEFAULT '[]',
         selected_gap_infos TEXT DEFAULT '[]',

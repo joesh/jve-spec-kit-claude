@@ -219,9 +219,6 @@ local function insert_clip(start_value, duration, source_in)
     exec(cmd)
 end
 
-insert_clip(0, 1713800, 0)
-insert_clip(1713800, 2332838, 1713800)
-
 local function fetch_clips_ordered()
     local stmt = db:prepare([[
         SELECT id, timeline_start_frame, duration_frames
@@ -241,6 +238,9 @@ local function fetch_clips_ordered()
     stmt:finalize()
     return clips
 end
+
+insert_clip(0, 1713800, 0)
+insert_clip(1713800, 2332838, 1713800)
 
 local initial_clips = fetch_clips_ordered()
 assert(#initial_clips == 2, string.format("expected two clips before ripple, got %d", #initial_clips))

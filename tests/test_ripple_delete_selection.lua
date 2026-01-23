@@ -393,4 +393,208 @@ assert(restored_v2.start_value == 2000,
     string.format("Undo should restore downstream clip position on other tracks (expected 2000, got %d)",
         restored_v2.start_value))
 
+-- ============================================================================
+-- ERROR HANDLING AND EDGE CASE TESTS
+-- ============================================================================
+
+-- Test: Empty clip_ids array should fail
+print("Testing empty clip_ids (expect 'No clips selected' warning)")
+reset_timeline_state()
+local cmd_empty = Command.create("RippleDeleteSelection", "default_project")
+cmd_empty:set_parameter("clip_ids", {})
+cmd_empty:set_parameter("sequence_id", "default_sequence")
+local result_empty = command_manager.execute(cmd_empty)
+assert(not result_empty.success, "Empty clip_ids should fail")
+
+-- Test: All nonexistent clip_ids should fail
+print("Testing nonexistent clip_ids (expect 'Clip not found' warnings)")
+reset_timeline_state()
+local cmd_ghost = Command.create("RippleDeleteSelection", "default_project")
+cmd_ghost:set_parameter("clip_ids", {"ghost_clip_1", "ghost_clip_2"})
+cmd_ghost:set_parameter("sequence_id", "default_sequence")
+local result_ghost = command_manager.execute(cmd_ghost)
+assert(not result_ghost.success, "All nonexistent clip_ids should fail")
+
+-- Test: Mixed valid/invalid clip_ids - should succeed processing valid ones
+print("Testing mixed valid/invalid clip_ids (expect one 'not found' warning)")
+reset_timeline_state()
+for _, spec in ipairs({
+    {id = "mix_a", start = 0, duration = 500},
+    {id = "mix_b", start = 500, duration = 500},
+    {id = "mix_c", start = 1000, duration = 500},
+}) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+reload_state_clips()
+timeline_state.selected_clips = {{id = "mix_b"}}
+
+local cmd_mixed = Command.create("RippleDeleteSelection", "default_project")
+cmd_mixed:set_parameter("clip_ids", {"mix_b", "nonexistent_clip"})
+cmd_mixed:set_parameter("sequence_id", "default_sequence")
+local result_mixed = command_manager.execute(cmd_mixed)
+assert(result_mixed.success, "Mixed clip_ids should succeed for valid clips: " .. tostring(result_mixed.error_message))
+assert(#clips_snapshot() == 2, "Expected 2 clips after mixed delete")
+assert(not find_clip("mix_b"), "mix_b should be deleted")
+assert(find_clip("mix_a") and find_clip("mix_c"), "mix_a and mix_c should remain")
+
+-- Test: Delete first clip only (no upstream clips to preserve)
+reset_timeline_state()
+for _, spec in ipairs({
+    {id = "first_a", start = 0, duration = 500},
+    {id = "first_b", start = 500, duration = 500},
+    {id = "first_c", start = 1000, duration = 500},
+}) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+reload_state_clips()
+timeline_state.selected_clips = {{id = "first_a"}}
+
+local cmd_first = Command.create("RippleDeleteSelection", "default_project")
+cmd_first:set_parameter("clip_ids", {"first_a"})
+cmd_first:set_parameter("sequence_id", "default_sequence")
+local result_first = command_manager.execute(cmd_first)
+assert(result_first.success, "Delete first clip should succeed: " .. tostring(result_first.error_message))
+
+local after_first = clips_snapshot()
+assert(#after_first == 2, "Expected 2 clips after deleting first")
+assert(after_first[1].id == "first_b", "first_b should now be first")
+assert(after_first[1].start_value == 0, "first_b should shift to position 0")
+assert(after_first[2].id == "first_c", "first_c should be second")
+assert(after_first[2].start_value == 500, "first_c should shift to position 500")
+assert_no_overlaps()
+
+-- Test: Delete last clip only (no downstream clips to shift)
+reset_timeline_state()
+for _, spec in ipairs({
+    {id = "last_a", start = 0, duration = 500},
+    {id = "last_b", start = 500, duration = 500},
+    {id = "last_c", start = 1000, duration = 500},
+}) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+reload_state_clips()
+timeline_state.selected_clips = {{id = "last_c"}}
+
+local cmd_last = Command.create("RippleDeleteSelection", "default_project")
+cmd_last:set_parameter("clip_ids", {"last_c"})
+cmd_last:set_parameter("sequence_id", "default_sequence")
+local result_last = command_manager.execute(cmd_last)
+assert(result_last.success, "Delete last clip should succeed: " .. tostring(result_last.error_message))
+
+local after_last = clips_snapshot()
+assert(#after_last == 2, "Expected 2 clips after deleting last")
+assert(after_last[1].id == "last_a" and after_last[1].start_value == 0, "last_a unchanged")
+assert(after_last[2].id == "last_b" and after_last[2].start_value == 500, "last_b unchanged")
+assert_no_overlaps()
+
+-- Test: Delete all clips
+reset_timeline_state()
+for _, spec in ipairs({
+    {id = "all_a", start = 0, duration = 500},
+    {id = "all_b", start = 500, duration = 500},
+}) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+reload_state_clips()
+timeline_state.selected_clips = {{id = "all_a"}, {id = "all_b"}}
+
+local cmd_all = Command.create("RippleDeleteSelection", "default_project")
+cmd_all:set_parameter("clip_ids", {"all_a", "all_b"})
+cmd_all:set_parameter("sequence_id", "default_sequence")
+local result_all = command_manager.execute(cmd_all)
+assert(result_all.success, "Delete all clips should succeed: " .. tostring(result_all.error_message))
+assert(#clips_snapshot() == 0, "Expected 0 clips after deleting all")
+
+-- Undo should restore all clips
+local undo_all = command_manager.undo()
+assert(undo_all.success, "Undo delete all should succeed")
+assert(#clips_snapshot() == 2, "Undo should restore both clips")
+assert_no_overlaps()
+
+-- Test: Multiple undo/redo cycles maintain integrity
+reset_timeline_state()
+for _, spec in ipairs({
+    {id = "cycle_a", start = 0, duration = 500},
+    {id = "cycle_b", start = 500, duration = 500},
+    {id = "cycle_c", start = 1000, duration = 500},
+}) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+reload_state_clips()
+timeline_state.selected_clips = {{id = "cycle_b"}}
+
+local cmd_cycle = Command.create("RippleDeleteSelection", "default_project")
+cmd_cycle:set_parameter("clip_ids", {"cycle_b"})
+cmd_cycle:set_parameter("sequence_id", "default_sequence")
+assert(command_manager.execute(cmd_cycle).success)
+
+-- Cycle through undo/redo multiple times
+for i = 1, 3 do
+    assert(command_manager.undo().success, "Undo cycle " .. i .. " failed")
+    assert(#clips_snapshot() == 3, "After undo cycle " .. i .. " expected 3 clips")
+    assert(find_clip("cycle_b"), "cycle_b should exist after undo cycle " .. i)
+    assert_no_overlaps()
+
+    assert(command_manager.redo().success, "Redo cycle " .. i .. " failed")
+    assert(#clips_snapshot() == 2, "After redo cycle " .. i .. " expected 2 clips")
+    assert(not find_clip("cycle_b"), "cycle_b should be gone after redo cycle " .. i)
+    assert_no_overlaps()
+end
+
+-- Test: Clips with gaps between them
+reset_timeline_state()
+for _, spec in ipairs({
+    {id = "gap_a", start = 0, duration = 500},
+    {id = "gap_b", start = 1000, duration = 500},  -- 500 frame gap before this
+    {id = "gap_c", start = 2000, duration = 500},  -- 500 frame gap before this
+}) do
+    local cmd = Command.create("TestCreateClip", "default_project")
+    cmd:set_parameter("clip_id", spec.id)
+    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    assert(command_manager.execute(cmd).success)
+end
+reload_state_clips()
+timeline_state.selected_clips = {{id = "gap_b"}}
+
+local cmd_gap = Command.create("RippleDeleteSelection", "default_project")
+cmd_gap:set_parameter("clip_ids", {"gap_b"})
+cmd_gap:set_parameter("sequence_id", "default_sequence")
+local result_gap = command_manager.execute(cmd_gap)
+assert(result_gap.success, "Delete clip with gaps should succeed: " .. tostring(result_gap.error_message))
+
+local after_gap = clips_snapshot()
+assert(#after_gap == 2, "Expected 2 clips after gap delete")
+assert(after_gap[1].id == "gap_a" and after_gap[1].start_value == 0, "gap_a unchanged")
+-- gap_c should shift left by gap_b's duration (500), keeping the gap before it
+assert(after_gap[2].id == "gap_c", "gap_c should remain")
+assert(after_gap[2].start_value == 1500, string.format("gap_c expected at 1500, got %d", after_gap[2].start_value))
+assert_no_overlaps()
+
 print("✅ test_ripple_delete_selection.lua passed")

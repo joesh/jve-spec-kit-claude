@@ -184,6 +184,59 @@ assert(row_after_redo, "Property row missing after redo")
 local decoded_after_redo = JSON_decode(row_after_redo.property_value)
 assert(decoded_after_redo.value == "48000", "Redo restored incorrect property value: " .. tostring(decoded_after_redo.value))
 
+print("Test 4: Updating existing property stores previous value for undo")
+local update_cmd = Command.create("SetClipProperty", "test_project")
+update_cmd:set_parameter("clip_id", master_clip_id)
+update_cmd:set_parameter("property_name", property_name)
+update_cmd:set_parameter("value", "96000")
+update_cmd:set_parameter("property_type", "STRING")
+
+local update_result = command_manager.execute(update_cmd)
+assert(update_result.success, "Update SetClipProperty failed: " .. tostring(update_result.error_message))
+
+local row_after_update = query_property(db, master_clip_id, property_name)
+local decoded_after_update = JSON_decode(row_after_update.property_value)
+assert(decoded_after_update.value == "96000", "Expected 96000, got " .. tostring(decoded_after_update.value))
+
+print("Test 5: Undo update restores previous value")
+local undo_update_result = command_manager.undo()
+assert(undo_update_result.success, "Undo update failed: " .. tostring(undo_update_result.error_message))
+
+local row_after_undo_update = query_property(db, master_clip_id, property_name)
+local decoded_after_undo_update = JSON_decode(row_after_undo_update.property_value)
+assert(decoded_after_undo_update.value == "48000", "Undo should restore 48000, got " .. tostring(decoded_after_undo_update.value))
+
+print("Test 6: Multiple undo/redo cycles maintain integrity")
+-- Redo the update we undid
+local redo_update = command_manager.redo()
+assert(redo_update.success, "Redo update failed")
+local row_check = query_property(db, master_clip_id, property_name)
+local decoded_check = JSON_decode(row_check.property_value)
+assert(decoded_check.value == "96000", "After redo, expected 96000")
+
+-- Cycle through a few more times
+for i = 1, 2 do
+    local u = command_manager.undo()
+    assert(u.success, "Undo cycle " .. i .. " failed")
+    local r = command_manager.redo()
+    assert(r.success, "Redo cycle " .. i .. " failed")
+end
+
+local final_row = query_property(db, master_clip_id, property_name)
+local final_decoded = JSON_decode(final_row.property_value)
+assert(final_decoded.value == "96000", "Final value should be 96000 after cycles")
+
+print("Test 7: Setting property on nonexistent clip (expect warning, command skips gracefully)")
+local ghost_cmd = Command.create("SetClipProperty", "test_project")
+ghost_cmd:set_parameter("clip_id", "nonexistent_clip_id")
+ghost_cmd:set_parameter("property_name", "test_property")
+ghost_cmd:set_parameter("value", "test_value")
+ghost_cmd:set_parameter("property_type", "STRING")
+
+-- Note: SetClipProperty returns true even for missing clips (logs warning and skips)
+local ghost_result = command_manager.execute(ghost_cmd)
+assert(ghost_result.success, "SetClipProperty on missing clip should succeed (skip gracefully)")
+
 print("✅ All SetClipProperty tests passed")
 
 media_reader.import_media = original_import

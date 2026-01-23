@@ -29,8 +29,41 @@ tests/
 make -j4            # Builds with warnings, LuaJIT linking issues
 make clean          # Clean build artifacts
 
-# Run the application  
+# Run the application
 ./build/bin/JVEEditor      # Launches, shows 3-panel layout, timeline panel
+
+## Running Tests
+```bash
+# Run all Lua tests
+./tests/run_lua_tests_all.sh
+
+# Run a single test (from tests/ directory)
+cd tests && luajit test_harness.lua test_example.lua
+
+# Test output goes to test-errors.txt for failures
+```
+
+Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
+- Starts with `require('test_env')` to set up paths and utilities
+- Creates its own test database in `/tmp/jve/`
+- Uses `command_manager.execute()`, `command_manager.undo()`, `command_manager.redo()` directly
+- Uses `print()` for test output (tests don't use logger module)
+- Ends with `print("✅ test_name.lua passed")` on success
+
+## Logger Usage
+Use the logger module for all informational output (never bare `print`):
+
+```lua
+local logger = require("core.logger")
+
+logger.info("component_name", "Message here")
+logger.debug("component_name", "Debug details")
+logger.warn("component_name", "Warning message")
+logger.error("component_name", "Error message")
+logger.trace("component_name", "Verbose tracing")
+```
+
+The first argument is always the component/subsystem name (e.g., "command_manager", "test", "ripple_delete"). Log levels from lowest to highest priority: TRACE, DEBUG, INFO, WARN, ERROR, FATAL.
 
 ## CRITICAL: Main Engineering Principles to ALWAYS keep in mind:
 
