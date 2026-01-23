@@ -17,6 +17,7 @@
 -- Clip Links: A/V sync relationships between clips
 -- Manages linked clip groups for synchronized editing operations
 local uuid = require("uuid")
+local database = require("core.database")
 
 local M = {}
 
@@ -132,6 +133,50 @@ function M.create_link_group(clips, db)
 
     insert_query:finalize()
     return link_group_id
+end
+
+-- Link two clips together (convenience method for clip_insertion)
+-- Creates a new link group if left clip isn't linked, otherwise adds right to left's group
+-- left/right: {id, role, time_offset} - id can be in 'id' or 'clip_id' field
+function M.link_two_clips(left, right)
+    local db = assert(database.get_connection(), "link_two_clips: missing db connection")
+    local left_id = assert(left and (left.id or left.clip_id), "link_two_clips: missing left clip id")
+    local right_id = assert(right and (right.id or right.clip_id), "link_two_clips: missing right clip id")
+
+    local left_group = M.get_link_group_id(left_id, db)
+    local right_group = M.get_link_group_id(right_id, db)
+    assert(not right_group or right_group == left_group, "link_two_clips: clip already linked to another group")
+
+    if not left_group then
+        local link_group_id, error_msg = M.create_link_group({
+            {
+                clip_id = left_id,
+                role = left.role or "video",
+                time_offset = left.time_offset or 0
+            },
+            {
+                clip_id = right_id,
+                role = right.role or "audio",
+                time_offset = right.time_offset or 0
+            }
+        }, db)
+        assert(link_group_id, error_msg or "link_two_clips: failed to create link group")
+        return link_group_id
+    end
+
+    -- Add right clip to existing left group
+    local insert_query = assert(db:prepare([[
+        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+        VALUES (?, ?, ?, ?, 1)
+    ]]), "link_two_clips: failed to prepare insert")
+    insert_query:bind_value(1, left_group)
+    insert_query:bind_value(2, right_id)
+    insert_query:bind_value(3, right.role or "audio")
+    insert_query:bind_value(4, right.time_offset or 0)
+    local ok = insert_query:exec()
+    insert_query:finalize()
+    assert(ok, "link_two_clips: failed to insert clip link")
+    return left_group
 end
 
 -- Remove a clip from its link group

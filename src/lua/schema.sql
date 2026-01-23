@@ -156,6 +156,20 @@ CREATE TABLE IF NOT EXISTS clips (
     modified_at INTEGER NOT NULL
 );
 
+-- Clip Links: A/V sync relationships between clips
+-- Manages linked clip groups for synchronized editing operations
+CREATE TABLE IF NOT EXISTS clip_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    link_group_id TEXT NOT NULL,
+    clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'video', -- 'video', 'audio'
+    time_offset INTEGER NOT NULL DEFAULT 0, -- Offset in frames from group anchor
+    enabled BOOLEAN NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_clip_links_group ON clip_links(link_group_id);
+CREATE INDEX IF NOT EXISTS idx_clip_links_clip ON clip_links(clip_id);
+
 -- ============================================================================
 -- UI & AUXILIARY
 -- ============================================================================

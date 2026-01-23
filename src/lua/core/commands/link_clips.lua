@@ -54,7 +54,7 @@ function M.register(executors, undoers, db)
             return true  -- Preview is valid
         end
 
-        local clip_links = require('core.clip_links')
+        local clip_links = require('models.clip_link')
         local link_group_id, error_msg = clip_links.create_link_group(args.clips, db)
 
         if not link_group_id then
@@ -111,7 +111,7 @@ function M.register(executors, undoers, db)
             return true
         end
 
-        local clip_links = require('core.clip_links')
+        local clip_links = require('models.clip_link')
 
         -- Save original link info for undo
         local link_group = clip_links.get_link_group(args.clip_id, db)
