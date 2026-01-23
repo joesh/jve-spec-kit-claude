@@ -105,7 +105,8 @@ end
 -- @param param_name string Parameter name ("insert_time" or "overwrite_time")
 -- @return number|table Resolved edit time
 function M.resolve_edit_time(edit_time, command, param_name)
-    if not edit_time or edit_time == 0 then
+    -- Note: edit_time == 0 is a valid position (start of timeline), only fall back to playhead when nil
+    if edit_time == nil then
         local timeline_state = get_timeline_state()
         if timeline_state then
             local playhead_pos = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
