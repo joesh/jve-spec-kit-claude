@@ -53,8 +53,17 @@ local asserts_module = require("core.asserts")
 --- @role internal
 --- @idiom Only used by command_schema validation to allow ephemeral ("__*") keys in packets.
 
+-- Keys allowed on all commands (auto-injected by menu system, command_manager, etc.)
+local GLOBAL_ALLOWED_KEYS = {
+    sequence_id = true,  -- Auto-passed by menu system to all commands
+}
+
 local function is_ephemeral_key(k)
     return type(k) == "string" and k:sub(1, 2) == "__"
+end
+
+local function is_globally_allowed(k)
+    return GLOBAL_ALLOWED_KEYS[k] == true
 end
 
 
@@ -189,9 +198,9 @@ function M.validate_and_normalize(command_name, spec, params, opts)
     register_keys(args)
     register_keys(persisted)
 
-    -- Unknown keys (except ephemeral)
+    -- Unknown keys (except ephemeral and globally allowed)
     for k, _ in pairs(params) do
-        if (not is_ephemeral_key(k)) and (not allowed_keys[k]) then
+        if (not is_ephemeral_key(k)) and (not is_globally_allowed(k)) and (not allowed_keys[k]) then
             return fail(string.format("Command '%s' has unknown param '%s'", tostring(command_name), tostring(k)))
         end
     end

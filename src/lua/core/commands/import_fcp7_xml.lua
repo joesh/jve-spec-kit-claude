@@ -22,6 +22,7 @@ local command_helper = require("core.command_helper")
 local SPEC = {
     args = {
         project_id = { required = true },
+        sequence_id = {},    -- Auto-passed by menu system
         interactive = { kind = "boolean" },  -- If true, show file picker dialog
         xml_path = {},       -- Path to XML file (or gathered from dialog)
         xml_contents = {},   -- Optional: XML string for tests
