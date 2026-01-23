@@ -16,7 +16,7 @@ timeline_state.set_edge_selection = function(edges)
     last_edge_selection = edges
     current_edges = edges
 end
-timeline_state.set_edge_selection_raw = function(edges)
+timeline_state.restore_edge_selection = function(edges)
     last_edge_selection = edges
     current_edges = edges
 end

@@ -22,7 +22,7 @@ local gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
 local gap_end = clips.v1_right.timeline_start
 local gap_id = string.format("temp_gap_%s_%d_%d", tracks.v1.id, gap_start, gap_end)
 
-timeline_state.set_edge_selection_raw({
+timeline_state.restore_edge_selection({
     {clip_id = gap_id, edge_type = "gap_after", trim_type = "ripple"}
 })
 

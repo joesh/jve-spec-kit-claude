@@ -180,8 +180,8 @@ M.set_edge_selection = function(edges, opts)
     selection.set_edge_selection(edges, opts, persist_selection_state)
 end
 
-M.set_edge_selection_raw = function(edges, opts)
-    selection.set_edge_selection_raw(edges, opts, persist_selection_state)
+M.restore_edge_selection = function(edges, opts)
+    selection.restore_edge_selection(edges, opts, persist_selection_state)
 end
 
 M.toggle_edge_selection = function(clip_id, edge_type, trim_type)

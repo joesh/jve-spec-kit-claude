@@ -283,10 +283,10 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
 
         if #restored_edges > 0 then
             if bypass_persist then
-                selection_state.set_edge_selection_raw(restored_edges, {normalize = false}, nil)
+                selection_state.restore_edge_selection(restored_edges, {normalize = false}, nil)
             else
-                if timeline_state.set_edge_selection_raw then
-                    timeline_state.set_edge_selection_raw(restored_edges, {normalize = false})
+                if timeline_state.restore_edge_selection then
+                    timeline_state.restore_edge_selection(restored_edges, {normalize = false})
                 else
                     timeline_state.set_edge_selection(restored_edges)
                 end

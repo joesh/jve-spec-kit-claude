@@ -59,7 +59,7 @@ local last_edge_selection = nil
 timeline_state.set_edge_selection = function(edges)
     last_edge_selection = edges
 end
-timeline_state.set_edge_selection_raw = function(edges)
+timeline_state.restore_edge_selection = function(edges)
     last_edge_selection = edges
 end
 timeline_state.set_gap_selection = function(_) end

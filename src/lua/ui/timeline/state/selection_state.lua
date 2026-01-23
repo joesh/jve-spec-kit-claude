@@ -98,7 +98,7 @@ end
 --- - References to clips that no longer exist (deleted during the operation)
 ---
 --- Normalization deduplicates entries and removes references to missing clips.
---- For undo/redo restoration of known-good selections, use set_edge_selection_raw instead.
+--- For undo/redo restoration of known-good selections, use restore_edge_selection instead.
 function M.set_edge_selection(edges, opts, persist_callback)
     opts = opts or {
         normalize = true,
@@ -116,7 +116,7 @@ function M.set_edge_selection(edges, opts, persist_callback)
     if persist_callback then persist_callback() end
 end
 
---- Set edge selection without normalization.
+--- Restore edge selection without normalization (for undo/redo).
 --- @param edges table Array of {clip_id, edge_type, trim_type} entries
 --- @param opts table|nil Options passed to set_edge_selection (normalize forced to false)
 --- @param persist_callback function|nil Called after selection is set
@@ -127,7 +127,7 @@ end
 --- - Normalization would be redundant and waste cycles on clip lookups
 ---
 --- For user-initiated selections, use set_edge_selection instead.
-function M.set_edge_selection_raw(edges, opts, persist_callback)
+function M.restore_edge_selection(edges, opts, persist_callback)
     opts = opts or {}
     opts.normalize = false
     return M.set_edge_selection(edges, opts, persist_callback)

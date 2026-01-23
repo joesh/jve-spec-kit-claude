@@ -68,7 +68,7 @@
 - [x] (done) Standardize command error returns (BatchRippleEdit/Nudge) so they all return `{success=false,error_message=...}` instead of bare `false`. RippleEdit was already using the correct pattern.
 - [x] Add docstrings for the public helpers touched in the ripple stack (`create_temp_gap_clip`, `apply_edge_ripple`, `pick_edges_for_track`, etc.) describing parameters/edge cases.
 - [x] (done) Add regression coverage for rolling edits when one side of the edit is a gap (Rule 10) so gap rolls don't regress silently (`tests/test_edge_picker_gap_roll.lua`, `tests/test_edge_picker_gap_ripple.lua`, `tests/test_edge_picker_gap_zones.lua`).
-- [x] (done) Document `timeline_state.set_edge_selection` vs `set_edge_selection_raw` APIs. Raw mode skips normalization and is for undo/redo restoration of known-good selections.
+- [x] (done) Document and rename edge selection APIs: `set_edge_selection` (user actions, validates) vs `restore_edge_selection` (undo/redo, skips normalization).
 - [x] Fix ripple clamp attribution so implied gap closures report the blocking gap edge and renderer color logic only highlights the actual limiter (Rule 8.5).
 - [x] (done) Insert menu command failure: Added snapshot target seeding in `core.commands.insert` and regression `tests/test_insert_snapshot_boundary.lua`; verified working.
 - [x] (done) Investigate timeline keyboard shortcuts regression (e.g., cmd+b split clip no longer works); added regressions (`tests/test_keyboard_split_shortcut.lua`, `tests/test_menu_split_rational.lua`, `tests/test_timeline_view_renderer_missing_clip_fields.lua`, `tests/test_edge_picker_hydration.lua`, `tests/test_clip_state_get_all_hydrates.lua`) and patched Split/menu/renderer/edge_picker/clip_state hydration; user confirmed working.
