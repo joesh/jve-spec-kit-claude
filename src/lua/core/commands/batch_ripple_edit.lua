@@ -1852,12 +1852,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if not ctx.edge_infos or #ctx.edge_infos == 0 then
             logger.error("ripple", "BatchRippleEdit missing edge_infos")
-            return false
+            return { success = false, error_message = "BatchRippleEdit missing edge_infos" }
         end
 
         if not ctx.delta_frames and not ctx.delta_ms then
             logger.error("ripple", "BatchRippleEdit missing delta")
-            return false
+            return { success = false, error_message = "BatchRippleEdit missing delta" }
         end
 
         if not ctx.dry_run then
@@ -1900,7 +1900,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		                started = nil
 		            else
 		                logger.error("ripple", "UndoBatchRippleEdit: Failed to begin transaction: " .. tostring(begin_err))
-		                return false, begin_err
+		                return { success = false, error_message = "Failed to begin transaction: " .. tostring(begin_err) }
 		            end
 		        end
 
@@ -1908,24 +1908,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		        if not ok then
 		            if started then db:rollback_transaction(started) end
 		            logger.error("ripple", "UndoBatchRippleEdit: Failed to revert mutations: " .. tostring(success))
-		            return false, success
+		            return { success = false, error_message = "Failed to revert mutations: " .. tostring(success) }
 		        end
 		        if success ~= true then
 		            if started then db:rollback_transaction(started) end
 		            logger.error("ripple", "UndoBatchRippleEdit: Failed to revert mutations: " .. tostring(err))
-		            return false, err
+		            return { success = false, error_message = "Failed to revert mutations: " .. tostring(err) }
 		        end
-		        
+
 		        if started then
 		            local ok_commit, commit_err = db:commit_transaction(started)
 		            if not ok_commit then
 		                db:rollback_transaction(started)
-		                return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+		                return { success = false, error_message = "Failed to commit undo transaction: " .. tostring(commit_err) }
 		            end
 		        end
 
 	        logger.info("ripple", "Undo Batch ripple: Reverted all changes")
-	        return true
+	        return { success = true }
 	    end
 
     command_executors["UndoBatchRippleEdit"] = command_undoers["BatchRippleEdit"]

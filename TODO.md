@@ -65,7 +65,7 @@
 - [x] (done) BatchRippleEdit refactor/test coverage follow-up per latest review (helper split, constant extraction, new regression tests).
 - [x] Split `timeline_view_renderer.render` edge-preview block into small helpers so bracket geometry, preview clip lookup, and rectangle drawing each live in their own functions (Rule 2.26). Added helper decomposition plus regression `tests/test_timeline_preview_shift_rect.lua` to cover shift-only preview payloads.
 - [x] Consolidate the duplicated gap-closure constraint logic in `batch_ripple_edit.lua` by routing every caller through `compute_gap_close_constraint` so changes stay in one place.
-- [ ] Standardize command error returns (BatchRippleEdit/RippleEdit/etc.) so they all return `{success=false,error_message=...}` instead of sometimes `false`.
+- [x] (done) Standardize command error returns (BatchRippleEdit/Nudge) so they all return `{success=false,error_message=...}` instead of bare `false`. RippleEdit was already using the correct pattern.
 - [x] Add docstrings for the public helpers touched in the ripple stack (`create_temp_gap_clip`, `apply_edge_ripple`, `pick_edges_for_track`, etc.) describing parameters/edge cases.
 - [x] (done) Add regression coverage for rolling edits when one side of the edit is a gap (Rule 10) so gap rolls don't regress silently (`tests/test_edge_picker_gap_roll.lua`, `tests/test_edge_picker_gap_ripple.lua`, `tests/test_edge_picker_gap_zones.lua`).
 - [ ] Document and/or consolidate the `timeline_state.set_edge_selection` vs `set_edge_selection_raw` APIs so callers know when raw mode is required.
@@ -350,10 +350,11 @@ Note: Not all commands need undo/redo (use `undoable = false`), but they still n
 - Fixed: Now uses `SetTrackHeights` and `SetProjectSetting` commands
 - Remaining: `sequence:save()` for selection state (playhead, selected clips/edges)
 
-**3. Clip State - Direct Mutations (NEEDS ANALYSIS)**
-- `src/lua/ui/timeline/state/clip_state.lua:301, 323, 363-391`
-- Context: `apply_mutations()` bulk clip mutations
-- May be internal implementation detail of existing commands - needs investigation
+**3. Clip State - Direct Mutations (NOT A VIOLATION ✅)**
+- `clip_state.apply_mutations()` updates the **in-memory view model**, not the database
+- Called by command_manager after commands execute to sync UI state with DB changes
+- Actual DB writes happen through `command_helper.apply_mutations(db, mutations)` in command executors
+- This is proper MVC separation: commands write to DB, UI layer syncs view model
 
 ### Enforcement Approaches Considered
 

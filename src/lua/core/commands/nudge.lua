@@ -529,7 +529,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         
         if not args.executed_mutations then
              set_last_error("UndoNudge: No executed mutations found (legacy command?)")
-             return false
+             return { success = false, error_message = "UndoNudge: No executed mutations found (legacy command?)" }
         end
 
         local started, begin_err = db:begin_transaction()
@@ -545,19 +545,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if ts_ok and ts_mod and ts_mod.reload_clips and args.sequence_id and args.sequence_id ~= "" then
                 ts_mod.reload_clips(args.sequence_id)
             end
-            return false
+            return { success = false, error_message = "UndoNudge: Failed to revert mutations: " .. tostring(err) }
         end
-        
+
         if started then
             local ok_commit, commit_err = db:commit_transaction(started)
             if not ok_commit then
                 db:rollback_transaction(started)
-                return false, "Failed to commit undo transaction: " .. tostring(commit_err)
+                return { success = false, error_message = "Failed to commit undo transaction: " .. tostring(commit_err) }
             end
         end
 
         print("✅ Restored nudged clips and occlusions")
-        return true
+        return { success = true }
     end
 
     command_executors["UndoNudge"] = command_undoers["UndoNudge"]
