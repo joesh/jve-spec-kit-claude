@@ -87,8 +87,17 @@ local result = command_manager.execute(insert_cmd)
 assert(result.success, result.error_message or "Insert failed")
 
 local clips = database.load_clips("default_sequence")
-assert(clips and #clips == 1, "expected exactly one clip after insert")
-local clip = clips[1]
+-- Expect 1 video clip + 2 audio clips (one per audio channel)
+assert(clips and #clips == 3, string.format("expected 3 clips (1 video + 2 audio), got %d", clips and #clips or 0))
+-- Find the video clip (on video1 track)
+local clip
+for _, c in ipairs(clips) do
+    if c.track_id == "video1" then
+        clip = c
+        break
+    end
+end
+assert(clip, "video clip not found")
 
 assert(clip.timeline_start.frames == 0, string.format("clip should start at frame 0, got %s", tostring(clip.timeline_start.frames)))
 

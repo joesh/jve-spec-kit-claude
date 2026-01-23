@@ -56,7 +56,7 @@ VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.
             frame_rate = cmd:get_parameter("frame_rate") or 30.0,
             width = 1920,
             height = 1080,
-            audio_channels = 2,
+            audio_channels = 0,  -- Video-only for this test
             audio_sample_rate = 48000,
             metadata = "{}"
         })
