@@ -35,62 +35,25 @@ function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, proj
     assert(db_module and db_module.set_path, "project_open: db_module.set_path is required")
     assert(type(project_path) == "string" and project_path ~= "", "project_open: project_path is required")
 
-    -- Check for stale sidecars BEFORE trying to open (sqlite3_open can hang with stale WAL locks)
-    local list_ok, list_result = pcall(db_module.list_wal_sidecars, project_path)
-    if list_ok and type(list_result) == "table" then
-        local sidecars = list_result
-        local has_sidecars = sidecars and (sidecars.wal or sidecars.shm)
-
-        if has_sidecars then
-            -- Check if sidecars are actively locked by another process
-            local shm_locked = sidecars.shm and is_file_locked(sidecars.shm)
-            local wal_locked = sidecars.wal and is_file_locked(sidecars.wal)
-
-            if not shm_locked and not wal_locked then
-                -- Sidecars exist but no process holds them - they're stale
-                logger.warn("project_open", "Stale WAL/SHM sidecar files detected (not locked by any process)")
-
-                if not qt_constants or not qt_constants.DIALOG or not qt_constants.DIALOG.SHOW_CONFIRM then
-                    logger.error("project_open", "Stale sidecars exist but confirm dialog bindings are unavailable")
-                    return false
-                end
-
-                local existing = {}
-                if sidecars.wal then table.insert(existing, sidecars.wal) end
-                if sidecars.shm then table.insert(existing, sidecars.shm) end
-
-                local suffix = "stale-" .. time_utils.human_datestamp_for_filename(os.time())
-                local accepted = qt_constants.DIALOG.SHOW_CONFIRM({
-                    parent = parent_window,
-                    title = "Stale Database Lock Files Found",
-                    message = "SQLite sidecar files from a previous session were found.",
-                    informative_text = "These files are not locked by any process, suggesting they're from a crash or unclean shutdown. Moving them aside allows the database to open safely.\n\nMoving aside preserves the old files in case they contain recent edits.",
-                    detail_text = "Project file:\n" .. tostring(project_path) .. "\n\nSidecar files:\n" .. table.concat(existing, "\n") .. "\n\nMove aside suffix:\n" .. suffix,
-                    confirm_text = "Move Aside and Continue",
-                    cancel_text = "Cancel",
-                    icon = "warning",
-                    default_button = "confirm",
-                })
-
-                if not accepted then
-                    return false
-                end
-
-                local moved_ok, moved_or_err = pcall(function()
-                    return db_module.move_aside_wal_sidecars(project_path, suffix)
-                end)
-                if not moved_ok then
-                    logger.error("project_open", "Failed to move aside sidecars: " .. tostring(moved_or_err))
-                    return false
-                end
-                logger.info("project_open", "Moved aside stale WAL/SHM sidecars")
-            else
-                logger.debug("project_open", "WAL/SHM sidecars are actively locked - proceeding with open")
-            end
+    -- Check for stale SHM file BEFORE trying to open (sqlite3_open can hang with stale SHM locks)
+    -- Note: WAL file contains actual transaction data and must NOT be deleted - SQLite will recover it.
+    -- SHM file is just a shared memory index/cache - safe to delete, SQLite recreates it.
+    local shm_path = project_path .. "-shm"
+    local shm_file = io.open(shm_path, "rb")
+    if shm_file then
+        shm_file:close()
+        -- SHM exists - check if it's locked by another process
+        if not is_file_locked(shm_path) then
+            -- Stale SHM: no process holds it, safe to delete
+            -- This allows SQLite to open and recover the WAL properly
+            logger.info("project_open", "Removing stale SHM file (WAL will be recovered): " .. shm_path)
+            os.remove(shm_path)
+        else
+            logger.debug("project_open", "SHM file is actively locked - proceeding with open")
         end
     end
 
-    -- Now try to open the database (stale sidecars have been moved if they existed)
+    -- Now try to open the database (SQLite will recover WAL if present)
     local ok = db_module.set_path(project_path)
     if ok then
         return true
