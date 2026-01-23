@@ -1185,6 +1185,20 @@ function M:list_history_entries()
     end
     query:finalize()
 
+    local function latest_child_of(seq)
+        local list = children[seq]
+        if not list or #list == 0 then
+            return nil
+        end
+        local best = nil
+        for _, child_seq in ipairs(list) do
+            if not best or child_seq > best then
+                best = child_seq
+            end
+        end
+        return best
+    end
+
     if current_seq == 0 then
         local out = {{sequence_number = 0, command_type = "Start", timestamp = nil, parent_sequence_number = nil}}
         local cursor = 0
@@ -1212,20 +1226,6 @@ function M:list_history_entries()
     local path = {}
     for i = #path_rev, 1, -1 do
         table.insert(path, path_rev[i])
-    end
-
-    local function latest_child_of(seq)
-        local list = children[seq]
-        if not list or #list == 0 then
-            return nil
-        end
-        local best = nil
-        for _, child_seq in ipairs(list) do
-            if not best or child_seq > best then
-                best = child_seq
-            end
-        end
-        return best
     end
 
     local redo_chain = {}
