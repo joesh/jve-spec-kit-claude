@@ -358,15 +358,21 @@ function M.find_latest_child_command(parent_sequence)
 end
 
 -- Undo group management (Emacs-style)
-function M.begin_undo_group(label)
-    last_undo_group_id = last_undo_group_id + 1
+-- group_id is optional - if not provided, a unique ID is generated
+-- When called from within a command executor, pass the parent command's sequence_number
+function M.begin_undo_group(label, group_id)
+    if not group_id then
+        -- Generate a unique group ID when not provided
+        last_undo_group_id = last_undo_group_id + 1
+        group_id = "explicit_group_" .. last_undo_group_id
+    end
     table.insert(undo_group_stack, {
-        id = last_undo_group_id,
-        label = label or ("group_" .. last_undo_group_id),
+        id = group_id,
+        label = label or ("group_" .. tostring(group_id)),
         cursor_on_entry = current_sequence_number  -- Save cursor for rollback
     })
-    logger.debug("command_history", string.format("Begin undo group %d: %s", last_undo_group_id, label or ""))
-    return last_undo_group_id
+    logger.debug("command_history", string.format("Begin undo group %s: %s", tostring(group_id), label or ""))
+    return group_id
 end
 
 function M.end_undo_group()
@@ -375,7 +381,7 @@ function M.end_undo_group()
         return nil
     end
     local group = table.remove(undo_group_stack)
-    logger.debug("command_history", string.format("End undo group %d: %s", group.id, group.label))
+    logger.debug("command_history", string.format("End undo group %s: %s", tostring(group.id), group.label))
     return group.id
 end
 

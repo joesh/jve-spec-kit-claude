@@ -40,8 +40,15 @@ local command_event_depth = 0
 
 -- Execution depth tracking for nested command execution
 -- Depth 0 = top-level execution (full ceremony: transaction, history, DB save)
--- Depth > 0 = nested execution (just run executor, no ceremony)
+-- Depth > 0 = nested execution (record to DB but skip transaction/UI refresh)
 local execution_depth = 0
+
+-- Root command tracking for automatic undo grouping
+-- When a command executes nested commands, they all share the root's sequence_number as undo_group_id
+-- Nested commands also inherit the root's playhead context (same user action, same playhead position)
+local root_command_sequence_number = nil
+local root_playhead_value = nil
+local root_playhead_rate = nil
 
 
 
@@ -715,6 +722,7 @@ function M.execute(command_or_name, params)
     local exec_result, execution_success, execution_error_message, execution_result_data
     local suppress_noop_after, post_hash, saved
     local timeline_state, capture_manager
+    local explicit_group
 
     exec_scope = profile_scope.begin("command_manager.execute", {
         details_fn = function()
@@ -727,8 +735,19 @@ function M.execute(command_or_name, params)
         result_data = ""
     }
 
-    -- Nested execution: skip ceremony, just execute and return
+    -- Nested execution: record to DB but skip transaction/commit/UI refresh (root handles)
+    -- This enables automatic undo grouping - all nested commands share root's undo_group_id
     if is_nested then
+        -- Assign sequence number and link to parent
+        sequence_number = history.increment_sequence_number()
+        command.sequence_number = sequence_number
+        command.parent_sequence_number = history.get_current_sequence_number()
+
+        -- Inherit undo group: explicit group takes precedence over automatic grouping
+        explicit_group = history.get_current_undo_group_id()
+        command.undo_group_id = explicit_group or root_command_sequence_number
+
+        -- Execute the command
         exec_result = execute_command_implementation(command)
         execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
 
@@ -745,6 +764,32 @@ function M.execute(command_or_name, params)
                     result[key] = value
                 end
             end
+        end
+
+        if execution_success then
+            command.status = "Executed"
+            command.executed_at = os.time()
+
+            -- Inherit playhead context from root (same user action, same playhead position)
+            command.playhead_value = root_playhead_value
+            command.playhead_rate = root_playhead_rate
+
+            -- Save nested command to DB (shares root's transaction)
+            local saved = command:save(db)
+            if saved then
+                -- Advance cursor so next nested command chains correctly
+                history.set_current_sequence_number(sequence_number)
+                logger.debug("command_manager", string.format(
+                    "Nested command %s (seq=%d) saved, group=%s",
+                    command.type, sequence_number, tostring(root_command_sequence_number)))
+            else
+                result.success = false
+                result.error_message = "Failed to save nested command to database"
+                execution_success = false
+            end
+        else
+            command.status = "Failed"
+            history.decrement_sequence_number()
         end
 
         exec_scope:finish(execution_success and "success_nested" or "failure_nested")
@@ -842,7 +887,17 @@ function M.execute(command_or_name, params)
     sequence_number = history.increment_sequence_number()
     command.sequence_number = sequence_number
     command.parent_sequence_number = history.get_current_sequence_number()
-    command.undo_group_id = history.get_current_undo_group_id()
+
+    -- Automatic undo grouping: root command becomes the group, nested commands inherit
+    -- If there's an explicit undo group active (from begin_undo_group), use that instead
+    explicit_group = history.get_current_undo_group_id()
+    if explicit_group then
+        command.undo_group_id = explicit_group
+    else
+        -- Root command: set itself as the undo group for any nested commands
+        command.undo_group_id = sequence_number
+    end
+    root_command_sequence_number = sequence_number
 
     -- Validation logic
     if not command.parent_sequence_number then
@@ -863,6 +918,10 @@ function M.execute(command_or_name, params)
     timeline_state = require('ui.timeline.timeline_state')
     command.playhead_value = timeline_state.get_playhead_position()
     command.playhead_rate = timeline_state.get_sequence_frame_rate()
+
+    -- Store for nested commands to inherit (they share the same user action context)
+    root_playhead_value = command.playhead_value
+    root_playhead_rate = command.playhead_rate
     skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
     if not skip_selection_snapshot then
         capture_pre_selection_for_command(command)
@@ -937,8 +996,14 @@ function M.execute(command_or_name, params)
             result.success = true
             result.result_data = command:serialize()
 
-            -- Move HEAD
-            history.set_current_sequence_number(sequence_number)
+            -- Move HEAD - but only if nested commands haven't already advanced past us
+            -- (nested commands chain their parent_sequence_number through the cursor)
+            local current_cursor = history.get_current_sequence_number()
+            if not current_cursor or current_cursor < sequence_number then
+                -- No nested commands ran, or we're the highest - advance normally
+                history.set_current_sequence_number(sequence_number)
+            end
+            -- else: nested commands advanced cursor past us, keep it there
             history.save_undo_position()
 
             -- Snapshotting
@@ -1046,6 +1111,12 @@ function M.execute(command_or_name, params)
 
 ::cleanup::
     execution_depth = execution_depth - 1
+    -- Clear root tracking when top-level command finishes
+    if execution_depth == 0 then
+        root_command_sequence_number = nil
+        root_playhead_value = nil
+        root_playhead_rate = nil
+    end
     return result, command
 end
 
