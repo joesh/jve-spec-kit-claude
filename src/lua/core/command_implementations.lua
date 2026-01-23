@@ -31,7 +31,7 @@ local command_modules = {
     "add_clip", "add_track", "batch_command", "batch_ripple_edit",
     "create_clip", "create_project", "create_sequence", "cut", "delete_bin", "delete_clip",
     "delete_master_clip", "delete_sequence", "deselect_all", "duplicate_master_clip",
-    "go_to_end", "go_to_next_edit", "go_to_prev_edit", "go_to_start",
+    "edit_history", "go_to_end", "go_to_next_edit", "go_to_prev_edit", "go_to_start",
     "import_fcp7_xml", "import_media", "import_resolve_project", "insert",
     "insert_clip_to_timeline", "link_clips", "load_project", "match_frame",
     "modify_property", "move_clip_to_track", "move_to_bin", "new_bin", "nudge", "overwrite",
