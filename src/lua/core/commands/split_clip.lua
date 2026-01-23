@@ -17,6 +17,7 @@ local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local Rational = require("core.rational")
+local logger = require("core.logger")
 
 
 local SPEC = {
@@ -260,67 +261,122 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return {success = false, error_message = "Split: playhead position unavailable"}
         end
 
-        local selected_clips = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
-        if #selected_clips == 0 then
-            return {success = false, error_message = "Split: no clips selected"}
-        end
-
         local Rational = require("core.rational")
         local json = require("dkjson")
         local Command = require("command")
-        local specs = {}
 
-        for _, clip in ipairs(selected_clips) do
-            local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
-            if not rate or not rate.fps_numerator or not rate.fps_denominator then
-                return {success = false, error_message = "Split: sequence frame rate unavailable"}
-            end
-            local start_value = Rational.hydrate(clip.timeline_start or clip.start_value, rate.fps_numerator, rate.fps_denominator)
-            local duration_value = Rational.hydrate(clip.duration or clip.duration_value, rate.fps_numerator, rate.fps_denominator)
-            local playhead_rt = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator)
+        local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
+        if not rate or not rate.fps_numerator or not rate.fps_denominator then
+            return {success = false, error_message = "Split: sequence frame rate unavailable"}
+        end
 
-            if start_value and duration_value and duration_value.frames > 0 and playhead_rt then
-                local end_time = start_value + duration_value
-                if playhead_rt > start_value and playhead_rt < end_time then
-                    table.insert(specs, {
-                        command_type = "SplitClip",
-                        parameters = {
-                            clip_id = clip.id,
-                            split_time = playhead_rt
-                        }
-                    })
+        local playhead_rt = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator)
+        if not playhead_rt then
+            return {success = false, error_message = "Split: could not hydrate playhead position"}
+        end
+
+        -- Get all clips under the playhead
+        local clips_at_playhead = timeline_state.get_clips_at_time and timeline_state.get_clips_at_time(playhead_rt) or {}
+
+        if #clips_at_playhead == 0 then
+            local all_clips = timeline_state.get_clips and timeline_state.get_clips() or {}
+            return {success = false, error_message = string.format(
+                "Split: no clips under playhead (playhead=%s frames, total=%d)",
+                tostring(playhead_rt.frames), #all_clips)}
+        end
+
+        -- Check if there's a selection that overlaps with clips at playhead
+        local selected_clips = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
+        local clips_to_split
+
+        if #selected_clips > 0 then
+            -- Build lookup of selected clip IDs
+            local selected_ids = {}
+            for _, sel in ipairs(selected_clips) do
+                if sel and sel.id then
+                    selected_ids[sel.id] = true
                 end
             end
+            -- Filter clips at playhead to only those that are selected
+            local selected_at_playhead = {}
+            for _, clip in ipairs(clips_at_playhead) do
+                if selected_ids[clip.id] then
+                    table.insert(selected_at_playhead, clip)
+                end
+            end
+            -- If any selected clips are under playhead, split only those
+            -- Otherwise, ignore selection and split all clips under playhead
+            if #selected_at_playhead > 0 then
+                clips_to_split = selected_at_playhead
+            else
+                clips_to_split = clips_at_playhead
+            end
+        else
+            -- No selection: use all clips under playhead
+            clips_to_split = clips_at_playhead
         end
 
-        if #specs == 0 then
-            return {success = false, error_message = "Split: no valid clips to split at current playhead position"}
+        local specs = {}
+        for _, clip in ipairs(clips_to_split) do
+            table.insert(specs, {
+                command_type = "SplitClip",
+                parameters = {
+                    clip_id = clip.id,
+                    split_value = playhead_rt
+                }
+            })
         end
 
-        -- Create BatchCommand internally
         local project_id = args.project_id or (timeline_state.get_project_id and timeline_state.get_project_id())
         if not project_id or project_id == "" then
             return {success = false, error_message = "Split: project_id unavailable"}
         end
 
-        local batch_cmd = Command.create("BatchCommand", project_id)
-        batch_cmd:set_parameter("commands_json", json.encode(specs))
-
         local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
-        if active_sequence_id and active_sequence_id ~= "" then
-            batch_cmd:set_parameter("sequence_id", active_sequence_id)
-            batch_cmd:set_parameter("__snapshot_sequence_ids", {active_sequence_id})
-        end
-
-        -- Execute the batch command
         local command_manager = require("core.command_manager")
-        local result = command_manager.execute(batch_cmd)
 
-        if result.success then
-            print(string.format("Split %d clip(s) at playhead", #specs))
+        -- No explicit undo grouping needed - command_manager.execute() automatically
+        -- groups nested commands with their parent via undo_group_id
+
+        local success_count = 0
+        local any_failed = false
+
+        for _, spec in ipairs(specs) do
+            local split_cmd = Command.create("SplitClip", project_id)
+            split_cmd:set_parameter("clip_id", spec.parameters.clip_id)
+            split_cmd:set_parameter("split_value", spec.parameters.split_value)
+            if active_sequence_id then
+                split_cmd:set_parameter("sequence_id", active_sequence_id)
+            end
+
+            local result = command_manager.execute(split_cmd)
+            if result.success then
+                success_count = success_count + 1
+            else
+                logger.error("split", string.format("Split: SplitClip failed for clip %s: %s",
+                    spec.parameters.clip_id, result.error_message or "unknown"))
+                any_failed = true
+            end
         end
 
-        return result
+        if any_failed and success_count == 0 then
+            return {success = false, error_message = "Split: all SplitClip commands failed"}
+        end
+
+        logger.debug("split", string.format("Split %d clip(s) at playhead", success_count))
+        return true
+    end
+
+    -- Split undoer: delegate to SplitClip undoers (automatic via undo_group)
+    -- The Split command doesn't need a custom undoer - when undo() is called,
+    -- it will find the last command (a SplitClip) which shares Split's undo_group_id,
+    -- and undo_group will undo all SplitClips plus Split together.
+    --
+    -- However, if Split itself is the last command (no clips to split), we need an undoer.
+    command_undoers["Split"] = function(command)
+        -- Split with no nested SplitClip commands is a no-op, nothing to undo
+        logger.debug("split", "Undo Split: no-op (automatic undo handles nested commands)")
+        return true
     end
 
     return {
@@ -331,8 +387,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         },
         ["Split"] = {
             executor = command_executors["Split"],
-            undoer = nil, -- Undo handled by BatchCommand
-            spec = {args = {project_id = {required = true}}},
+            undoer = command_undoers["Split"],
+            spec = {args = {project_id = {required = true}, sequence_id = {}}},
         },
     }
 end

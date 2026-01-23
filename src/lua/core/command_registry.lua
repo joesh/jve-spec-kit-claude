@@ -35,6 +35,10 @@ local module_aliases = {
 
     -- Project open
     OpenProject = "core.commands.open_project",
+
+    -- Split lives in split_clip.lua (registers both Split and SplitClip)
+    Split = "core.commands.split_clip",
+    SplitClip = "core.commands.split_clip",
 }
 function M.init(database, set_last_error_fn)
     db = database
