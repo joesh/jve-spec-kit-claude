@@ -10,6 +10,7 @@ local SPEC = {
     undoable = false,
     args = {
         project_id = { required = true },
+        sequence_id = {},  -- auto-passed by menu system
     }
 }
 
