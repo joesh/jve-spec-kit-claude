@@ -1543,7 +1543,10 @@ local function execute_redo_command(cmd)
     end
 
     -- Restore post-execution playhead position (mirrors undo restoring pre-execution)
-    if cmd.playhead_value_post ~= nil and timeline_state.set_playhead_position then
+    -- Skip for commands that manage their own view state restoration (e.g., ImportFCP7XML).
+    -- These commands set __skip_sequence_replay_on_undo and restore playhead via sequence_view_states.
+    local skip_playhead_restore = cmd:get_parameter("__skip_sequence_replay_on_undo")
+    if cmd.playhead_value_post ~= nil and timeline_state.set_playhead_position and not skip_playhead_restore then
         timeline_state.set_playhead_position(cmd.playhead_value_post)
     end
 

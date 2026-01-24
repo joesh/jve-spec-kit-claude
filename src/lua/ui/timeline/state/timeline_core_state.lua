@@ -132,6 +132,16 @@ local function flush_state_to_db()
         return
     end
 
+    -- Skip persistence if the sequence no longer exists in the database.
+    -- This can happen after undo of an import - timeline_state has stale cached values
+    -- for a deleted sequence. Persisting those would overwrite correct values when
+    -- the sequence is recreated by redo.
+    local Sequence = require("models.sequence")
+    local sequence = Sequence.load(sequence_id)
+    if not sequence then
+        return
+    end
+
     -- Persist playhead
     local playhead_cmd = Command.create("SetPlayhead", project_id)
     playhead_cmd:set_parameters({
@@ -247,8 +257,15 @@ function M.persist_state_to_db(force)
 end
 
 function M.init(sequence_id, project_id)
-    -- Persist pending state before switching
-    if persist_dirty then M.persist_state_to_db(true) end
+    -- Persist pending state before switching to a DIFFERENT sequence.
+    -- Skip persist if re-initializing the SAME sequence - our cached values may be stale
+    -- (e.g., after undo deleted the sequence and redo recreated it with fresh values).
+    local is_same_sequence = data.state.sequence_id == sequence_id
+    if persist_dirty and not is_same_sequence then
+        M.persist_state_to_db(true)
+    end
+    -- Clear dirty flag when switching or re-initializing - we're about to load fresh data
+    persist_dirty = false
 
     assert(sequence_id and sequence_id ~= "", "timeline_core_state.init: sequence_id is required")
     data.state.sequence_id = sequence_id

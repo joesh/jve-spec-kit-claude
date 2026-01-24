@@ -41,7 +41,7 @@ local function fresh_state()
         clips = {},
         project_id = nil,
         sequence_id = nil,
-        
+
         -- Rate
         sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 },
         sequence_audio_rate = 48000,
@@ -49,7 +49,7 @@ local function fresh_state()
 
         -- Viewport (Rational)
         viewport_start_time = Rational.new(0, 1, 1),
-        viewport_duration = Rational.new(300, 1, 1), 
+        viewport_duration = Rational.new(300, 1, 1),
 
         -- Playhead (Rational)
         playhead_position = Rational.new(0, 1, 1),
