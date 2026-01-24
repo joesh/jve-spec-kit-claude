@@ -490,12 +490,28 @@ local function should_compute_state_hash(command)
         or os.getenv("JVE_FORCE_STATE_HASH") == "1"
 end
 
-local function finish_as_noop(db_conn, history_mod, exec_scope, result)
-    db_conn:exec("ROLLBACK")
+-- Finish command execution without persisting (no-op or cancelled)
+-- @param db_conn: Database connection
+-- @param history_mod: History module
+-- @param exec_scope: Execution scope for logging
+-- @param result: Result table to update
+-- @param opts: Optional { skip_rollback = true } for nested commands, { cancelled = true } for cancelled
+local function finish_as_noop(db_conn, history_mod, exec_scope, result, opts)
+    opts = opts or {}
+    if not opts.skip_rollback then
+        db_conn:exec("ROLLBACK")
+    end
     history_mod.decrement_sequence_number()
     result.success = true
     result.result_data = ""
-    exec_scope:finish("no_state_change")
+    if opts.cancelled then
+        result.cancelled = true
+    end
+    local scope_reason = opts.cancelled and "cancelled" or "no_state_change"
+    if opts.skip_rollback then
+        scope_reason = scope_reason .. "_nested"
+    end
+    exec_scope:finish(scope_reason)
     return result
 end
 
@@ -770,6 +786,12 @@ function M.execute(command_or_name, params)
             end
         end
 
+        -- Handle user cancellation in nested command
+        if type(exec_result) == "table" and exec_result.cancelled then
+            result = finish_as_noop(db, history, exec_scope, result, { skip_rollback = true, cancelled = true })
+            goto cleanup
+        end
+
         if execution_success then
             command.status = "Executed"
             command.executed_at = os.time()
@@ -955,6 +977,12 @@ function M.execute(command_or_name, params)
                 result[key] = value
             end
         end
+    end
+
+    -- Handle user cancellation (e.g., file dialog dismissed) - no persistence needed
+    if type(exec_result) == "table" and exec_result.cancelled then
+        result = finish_as_noop(db, history, exec_scope, result, { cancelled = true })
+        goto cleanup
     end
 
     if execution_success then

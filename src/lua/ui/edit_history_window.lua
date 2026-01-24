@@ -18,6 +18,9 @@ local M = {}
 local qt_constants = require("core.qt_constants")
 local logger = require("core.logger")
 local command_labels = require("core.command_labels")
+local db_module = require("core.database")
+
+local GEOMETRY_KEY = "edit_history_window_geometry"
 
 local window_state = {
     window = nil,
@@ -28,12 +31,38 @@ local window_state = {
     listener_token = nil,
     updating_selection = false,
     command_manager = nil,
+    geometry_ready = false,  -- Prevent saving during initial layout
 }
+
+local function save_window_geometry()
+    if not window_state.window or not window_state.geometry_ready then
+        return
+    end
+    local project_id = db_module.get_current_project_id()
+    if not project_id then
+        return
+    end
+    local x, y, w, h = qt_constants.PROPERTIES.GET_GEOMETRY(window_state.window)
+    if w < 100 or h < 100 then
+        return
+    end
+    db_module.set_project_setting(project_id, GEOMETRY_KEY, {
+        x = x, y = y, width = w, height = h
+    })
+end
 
 local function create_window()
     local window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
     qt_constants.PROPERTIES.SET_TITLE(window, "Edit History")
-    qt_constants.PROPERTIES.SET_SIZE(window, 520, 640)
+
+    -- Restore saved geometry or use defaults
+    local project_id = db_module.get_current_project_id()
+    local saved_geo = project_id and db_module.get_project_setting(project_id, GEOMETRY_KEY)
+    if saved_geo and saved_geo.width and saved_geo.width > 100 and saved_geo.height and saved_geo.height > 100 then
+        qt_constants.PROPERTIES.SET_GEOMETRY(window, saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height)
+    else
+        qt_constants.PROPERTIES.SET_SIZE(window, 520, 640)
+    end
 
     local content = qt_constants.WIDGET.CREATE()
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
@@ -51,6 +80,12 @@ local function create_window()
     qt_constants.LAYOUT.ADD_WIDGET(layout, tree)
     qt_constants.LAYOUT.SET_ON_WIDGET(content, layout)
     qt_constants.LAYOUT.SET_CENTRAL_WIDGET(window, content)
+
+    -- Install geometry change handler to persist position
+    _G["__edit_history_save_geometry"] = save_window_geometry
+    if qt_constants.SIGNAL and qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER then
+        qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER(window, "__edit_history_save_geometry")
+    end
 
     return window, content, tree
 end
@@ -219,6 +254,11 @@ function M.show(command_manager, parent_window)
     qt_constants.DISPLAY.SHOW(window_state.window)
     qt_constants.DISPLAY.RAISE(window_state.window)
     qt_constants.DISPLAY.ACTIVATE(window_state.window)
+
+    -- Enable geometry persistence after layout settles
+    qt_create_single_shot_timer(50, function()
+        window_state.geometry_ready = true
+    end)
 end
 
 return M
