@@ -131,6 +131,7 @@ int lua_set_button_click_handler(lua_State* L);
 	int lua_set_focus_handler(lua_State* L);
 	int lua_set_focus_policy(lua_State* L);
 	int lua_set_focus(lua_State* L);
+	int lua_set_geometry_change_handler(lua_State* L);
 
 // Layout styling functions
 int lua_set_layout_spacing(lua_State* L);

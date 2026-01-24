@@ -458,3 +458,43 @@ int lua_set_scroll_area_anchor_bottom(lua_State* L) {
     }
     return 0;
 }
+
+// Event filter for window geometry changes (resize and move)
+class GeometryChangeFilter : public QObject
+{
+public:
+    GeometryChangeFilter(lua_State* L_ptr, const std::string& handler, QWidget* widget)
+        : QObject(widget), lua_state(L_ptr), handler_name(handler) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if ((event->type() == QEvent::Resize || event->type() == QEvent::Move) && lua_state) {
+            lua_getglobal(lua_state, handler_name.c_str());
+            if (lua_isfunction(lua_state, -1)) {
+                if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
+                    qWarning() << "Error in geometry change handler:" << lua_tostring(lua_state, -1);
+                    lua_pop(lua_state, 1);
+                }
+            } else {
+                lua_pop(lua_state, 1);
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    lua_State* lua_state;
+    std::string handler_name;
+};
+
+// Window geometry change handler - fires on resize or move
+int lua_set_geometry_change_handler(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    const char* handler_name = luaL_checkstring(L, 2);
+    if (!widget || !handler_name) return 0;
+
+    std::string handler(handler_name);
+    GeometryChangeFilter* filter = new GeometryChangeFilter(L, handler, widget);
+    widget->installEventFilter(filter);
+    return 0;
+}

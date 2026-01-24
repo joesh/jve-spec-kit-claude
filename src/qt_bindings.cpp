@@ -253,6 +253,11 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_file_dialog_directory); lua_setfield(L, -2, "OPEN_DIRECTORY");
     lua_setfield(L, -2, "FILE_DIALOG");
 
+    // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_set_geometry_change_handler); lua_setfield(L, -2, "SET_GEOMETRY_CHANGE_HANDLER");
+    lua_setfield(L, -2, "SIGNAL");
+
     // Set the 'qt_constants' global table
     lua_setglobal(L, "qt_constants");
 }

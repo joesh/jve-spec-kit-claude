@@ -62,20 +62,7 @@ function M.init(opts)
     state.main_splitter = opts.main_splitter
     state.top_splitter = opts.top_splitter
     state.focus_manager = opts.focus_manager
-
-    local function attach_splitter_handler(splitter, name)
-        if not splitter or not qt_set_splitter_moved_handler or not state.focus_manager or not state.focus_manager.refresh_all_highlights then
-            return
-        end
-        local handler_name = string.format("__panel_manager_splitter_%s_%s", name or "unknown", tostring(splitter))
-        _G[handler_name] = function()
-            state.focus_manager.refresh_all_highlights()
-        end
-        qt_set_splitter_moved_handler(splitter, handler_name)
-    end
-
-    attach_splitter_handler(state.main_splitter, "main")
-    attach_splitter_handler(state.top_splitter, "top")
+    -- Note: Panel highlights auto-refresh via geometry change handlers in focus_manager
 end
 
 local function normalize_sizes(sizes, fallback)
@@ -178,26 +165,15 @@ function M.toggle_maximize(panel_id)
     if state.maximized then
         if not panel_id or state.maximized.panel_id == target_panel then
             local restored = restore_layout()
-            if restored and state.focus_manager and state.focus_manager.refresh_highlight then
-                state.focus_manager.refresh_highlight(target_panel)
-            end
             return restored, nil
         end
         restore_layout()
     end
 
     if target_panel == "timeline" then
-        local ok, err = maximize_timeline()
-        if ok and state.focus_manager and state.focus_manager.refresh_highlight then
-            state.focus_manager.refresh_highlight(target_panel)
-        end
-        return ok, err
+        return maximize_timeline()
     else
-        local ok, err = maximize_top_panel(target_panel)
-        if ok and state.focus_manager and state.focus_manager.refresh_highlight then
-            state.focus_manager.refresh_highlight(target_panel)
-        end
-        return ok, err
+        return maximize_top_panel(target_panel)
     end
 end
 

@@ -26,6 +26,11 @@ local Sequence = require("models.sequence")
 local Track = require("models.track")
 local logger = require("core.logger")
 local project_open = require("core.project_open")
+local dkjson = require("dkjson")
+
+-- Project settings keys for window state persistence
+local WINDOW_GEOMETRY_KEY = "window_geometry"
+local SPLITTER_SIZES_KEY = "splitter_sizes"
 
 -- Enable strict nil error handling - calling nil will raise an error with proper stack trace
 debug.setmetatable(nil, {
@@ -149,7 +154,24 @@ if qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE then
 else
     logger.warn("layout", "Window appearance binding unavailable; title bar color may remain default")
 end
-qt_constants.PROPERTIES.SET_SIZE(main_window, 1600, 900)
+
+-- Window geometry: restore saved or use defaults
+-- Note: Don't persist on first launch - geometry isn't valid until after show()
+local saved_geo = db_module.get_project_setting(active_project_id, WINDOW_GEOMETRY_KEY)
+if saved_geo and saved_geo.width and saved_geo.width > 100 and saved_geo.height and saved_geo.height > 100 then
+    -- Restore saved geometry (with sanity check on dimensions)
+    qt_constants.PROPERTIES.SET_GEOMETRY(main_window,
+        saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height)
+    logger.debug("layout", string.format("Window geometry restored: %d,%d %dx%d",
+        saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height))
+else
+    -- First launch or corrupt data: just set size, let OS position window
+    qt_constants.PROPERTIES.SET_SIZE(main_window, 1600, 900)
+    logger.debug("layout", "Window geometry set to default size 1600x900")
+end
+
+-- Flag to prevent saving during initial layout (before window is fully shown)
+local window_ready_to_save = false
 
 -- Main vertical splitter (Top row | Timeline)
 local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
@@ -299,20 +321,13 @@ qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, viewer_panel)
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
 
--- Set top splitter proportions (equal thirds)
-qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {533, 533, 534})
-
 -- Add top row and timeline to main splitter
 qt_constants.LAYOUT.ADD_WIDGET(main_splitter, top_splitter)
 qt_constants.LAYOUT.ADD_WIDGET(main_splitter, timeline_panel)
 
--- Set main splitter proportions (top: 50%, timeline: 50%)
-qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {450, 450})
-
 -- Set as central widget
 qt_constants.LAYOUT.SET_CENTRAL_WIDGET(main_window, main_splitter)
 
--- Apply dark theme
 -- Install global keyboard shortcut handler (skip in test mode to avoid crashes)
 local test_mode_flag = os.getenv("JVE_TEST_MODE")
 local is_test_mode = test_mode_flag == "1" or test_mode_flag == "true"
@@ -327,9 +342,70 @@ else
     logger.warn("layout", "Keyboard shortcuts disabled (JVE_TEST_MODE set)")
 end
 
+-- Save window state function (saves geometry + splitter sizes)
+local function save_window_state()
+    if not active_project_id then return end
+    if not window_ready_to_save then return end  -- Skip during initial layout
+
+    local x, y, w, h = qt_constants.PROPERTIES.GET_GEOMETRY(main_window)
+    -- Sanity check: don't save invalid geometry
+    if w < 100 or h < 100 then return end
+
+    db_module.set_project_setting(active_project_id, WINDOW_GEOMETRY_KEY, {
+        x = x, y = y, width = w, height = h
+    })
+
+    local top_sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(top_splitter)
+    local main_sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(main_splitter)
+    db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, {
+        top = top_sizes, main = main_sizes
+    })
+
+    logger.trace("layout", string.format("Window state saved: geo=%d,%d %dx%d, splitters top=%s main=%s",
+        x, y, w, h, dkjson.encode(top_sizes), dkjson.encode(main_sizes)))
+end
+
+-- Register save-on-change handlers (persists even if app is killed)
+_G["__jve_save_window_state"] = save_window_state
+if not is_test_mode then
+    qt_set_splitter_moved_handler(top_splitter, "__jve_save_window_state")
+    qt_set_splitter_moved_handler(main_splitter, "__jve_save_window_state")
+    qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER(main_window, "__jve_save_window_state")
+    logger.debug("layout", "Window state save handlers registered (geometry + splitters)")
+end
+
 -- Show window
 qt_constants.DISPLAY.SHOW(main_window)
 logger.info("layout", "Correct layout created: 3 panels top, timeline bottom")
+
+-- Restore splitter sizes AFTER window is shown (Qt needs layout to be computed first)
+-- Use a short timer to let the layout settle before applying saved sizes
+local saved_splitters = db_module.get_project_setting(active_project_id, SPLITTER_SIZES_KEY)
+qt_create_single_shot_timer(50, function()
+    if not saved_splitters then
+        -- First launch: set defaults and persist
+        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {533, 533, 534})
+        qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {450, 450})
+        db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, {
+            top = {533, 533, 534}, main = {450, 450}
+        })
+        logger.debug("layout", "Splitter sizes initialized to defaults")
+    else
+        -- Subsequent launches: assert valid and restore
+        assert(saved_splitters.top and #saved_splitters.top == 3,
+            string.format("layout: splitter_sizes.top corrupt, got: %s", dkjson.encode(saved_splitters)))
+        assert(saved_splitters.main and #saved_splitters.main == 2,
+            string.format("layout: splitter_sizes.main corrupt, got: %s", dkjson.encode(saved_splitters)))
+        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, saved_splitters.top)
+        qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, saved_splitters.main)
+        logger.debug("layout", string.format("Splitter sizes restored: top=%s, main=%s",
+            dkjson.encode(saved_splitters.top), dkjson.encode(saved_splitters.main)))
+    end
+
+    -- Now that layout is settled, enable save-on-change
+    window_ready_to_save = true
+    logger.debug("layout", "Window state persistence enabled")
+end)
 
 -- Debug: Check actual widget sizes after window is shown
 local window_w, window_h = qt_constants.PROPERTIES.GET_SIZE(main_window)

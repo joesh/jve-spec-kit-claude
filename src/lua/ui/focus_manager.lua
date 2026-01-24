@@ -120,6 +120,15 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
         highlight_widget = highlight_widget,
     }
 
+    -- Install resize handler to keep highlight sized correctly when panel resizes
+    local resize_handler_name = string.format("__focus_resize_%s", sanitized_id)
+    _G[resize_handler_name] = function()
+        M.refresh_highlight(panel_id)
+    end
+    if qt_constants.SIGNAL and qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER then
+        qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER(widget, resize_handler_name)
+    end
+
     -- Install focus event handlers for all focusable widgets associated with this panel
     for index, focus_widget in ipairs(focus_widgets) do
         if focus_widget then
