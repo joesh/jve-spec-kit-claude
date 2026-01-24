@@ -280,14 +280,31 @@ function M.create(widget, state_module)
         if playhead_rt >= viewport_start_rt and playhead_rt <= viewport_end_rt then
             local playhead_x = state_module.time_to_pixel(playhead_rt, width)
 
-            -- Small triangle at playhead position
-            local handle_size = 8
-            local handle_y = 0
-            local tip_y = handle_y + handle_size
+            -- DEBUG: Log ruler width and playhead position
+            if os.getenv("JVE_DEBUG_PLAYHEAD") == "1" then
+                local logger = require("core.logger")
+                logger.debug("playhead_debug", string.format(
+                    "RULER: width=%d playhead_x=%d playhead_frames=%d",
+                    width, playhead_x, playhead_rt.frames or -1
+                ))
+            end
 
-            timeline.add_line(ruler.widget, playhead_x - handle_size/2, handle_y, playhead_x, tip_y, "#ff6b6b", 2)
-            timeline.add_line(ruler.widget, playhead_x, tip_y, playhead_x + handle_size/2, handle_y, "#ff6b6b", 2)
-            timeline.add_line(ruler.widget, playhead_x - handle_size/2, handle_y, playhead_x + handle_size/2, handle_y, "#ff6b6b", 2)
+            -- Filled triangle caret at playhead position
+            local handle_width = 14   -- width of triangle base
+            local handle_height = 8   -- height from top to tip
+            local handle_y = 0
+            local tip_y = handle_y + handle_height
+            local playhead_color = "#ff6b6b"
+
+            -- Draw filled triangle (points: top-left, top-right, bottom-tip)
+            timeline.add_triangle(ruler.widget,
+                playhead_x - handle_width/2, handle_y,   -- top-left
+                playhead_x + handle_width/2, handle_y,   -- top-right
+                playhead_x, tip_y,                        -- bottom tip
+                playhead_color)
+
+            -- Vertical line from caret tip to bottom of ruler (connects to timeline playhead line)
+            timeline.add_line(ruler.widget, playhead_x, tip_y, playhead_x, M.RULER_HEIGHT, playhead_color, 2)
         end
 
         -- Trigger Qt repaint

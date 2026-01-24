@@ -4,6 +4,7 @@
 #include <QResizeEvent>
 #include <QApplication>
 #include <QWheelEvent>
+#include <QPolygon>
 #include <QtDebug>
 
 namespace JVE {
@@ -19,9 +20,12 @@ TimelineRenderer::TimelineRenderer(const std::string& widget_id, QWidget* parent
 
 QSize TimelineRenderer::sizeHint() const
 {
-    // Return QWIDGETSIZE_MAX for width so layout gives us maximum space
+    // Return a reasonable default size. The Expanding size policy will cause
+    // layouts to give us available space. Using QWIDGETSIZE_MAX caused issues
+    // with scroll areas sizing the widget larger than the viewport.
+    // Width: 800px default (reasonable minimum)
     // Height: 150px default (3 tracks @ 50px each)
-    return QSize(QWIDGETSIZE_MAX, 150);
+    return QSize(800, 150);
 }
 
 void TimelineRenderer::clearCommands()
@@ -62,6 +66,20 @@ void TimelineRenderer::addLine(int x1, int y1, int x2, int y2, const QString& co
     cmd.y2 = y2;
     cmd.color = QColor(color);
     cmd.line_width = width;
+    drawing_commands_.push_back(cmd);
+}
+
+void TimelineRenderer::addTriangle(int x1, int y1, int x2, int y2, int x3, int y3, const QString& color)
+{
+    DrawCommand cmd;
+    cmd.type = DrawCommand::TRIANGLE;
+    cmd.x = x1;
+    cmd.y = y1;
+    cmd.x2 = x2;
+    cmd.y2 = y2;
+    cmd.x3 = x3;
+    cmd.y3 = y3;
+    cmd.color = QColor(color);
     drawing_commands_.push_back(cmd);
 }
 
@@ -136,6 +154,17 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                 painter.setPen(QPen(cmd.color, cmd.line_width));
                 painter.drawLine(cmd.x, cmd.y, cmd.x2, cmd.y2);
                 break;
+
+            case DrawCommand::TRIANGLE: {
+                QPolygon triangle;
+                triangle << QPoint(cmd.x, cmd.y)
+                         << QPoint(cmd.x2, cmd.y2)
+                         << QPoint(cmd.x3, cmd.y3);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(cmd.color);
+                painter.drawPolygon(triangle);
+                break;
+            }
         }
     }
 }
@@ -471,6 +500,9 @@ void registerTimelineBindings(lua_State* L)
     lua_pushcfunction(L, lua_timeline_add_line);
     lua_setfield(L, -2, "add_line");
 
+    lua_pushcfunction(L, lua_timeline_add_triangle);
+    lua_setfield(L, -2, "add_triangle");
+
     lua_pushcfunction(L, lua_timeline_get_dimensions);
     lua_setfield(L, -2, "get_dimensions");
 
@@ -558,6 +590,26 @@ int lua_timeline_add_line(lua_State* L)
 
     if (timeline && color) {
         timeline->addLine(x1, y1, x2, y2, QString(color), width);
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_add_triangle(lua_State* L)
+{
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
+    int x1 = lua_tointeger(L, 2);
+    int y1 = lua_tointeger(L, 3);
+    int x2 = lua_tointeger(L, 4);
+    int y2 = lua_tointeger(L, 5);
+    int x3 = lua_tointeger(L, 6);
+    int y3 = lua_tointeger(L, 7);
+    const char* color = lua_tostring(L, 8);
+
+    if (timeline && color) {
+        timeline->addTriangle(x1, y1, x2, y2, x3, y3, QString(color));
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);

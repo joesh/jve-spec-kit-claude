@@ -1136,6 +1136,10 @@ function M.create(opts)
     local timeline_video_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_video_scroll, video_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_video_scroll, "Expanding", "Expanding")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_video_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_video_scroll, "AlwaysOff")
+    -- Remove scroll area frame/border so content width matches ruler width exactly
+    qt_constants.PROPERTIES.SET_STYLE(timeline_video_scroll, "QScrollArea { border: none; }")
     qt_set_scroll_area_anchor_bottom(timeline_video_scroll, true)  -- V1 stays visible when shrinking
 
     -- Register video widget → scroll area mapping for coordinate conversion
@@ -1162,6 +1166,10 @@ function M.create(opts)
     local timeline_audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_audio_scroll, audio_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_audio_scroll, "Expanding", "Expanding")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_audio_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_audio_scroll, "AlwaysOff")
+    -- Remove scroll area frame/border so content width matches ruler width exactly
+    qt_constants.PROPERTIES.SET_STYLE(timeline_audio_scroll, "QScrollArea { border: none; }")
 
     -- Register audio widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[audio_widget] = timeline_audio_scroll

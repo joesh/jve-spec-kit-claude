@@ -9,11 +9,61 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QFile>
+#include <iostream>
+#include <cstring>
 
 #include "simple_lua_engine.h"
 #include "resource_paths.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
+
+static void printHelp(const char* programName)
+{
+    std::cout << "JVE Editor - Professional Video Editor\n";
+    std::cout << "Usage: " << programName << " [options] [project.jvp]\n";
+    std::cout << "\n";
+    std::cout << "Options:\n";
+    std::cout << "  --help, -h          Show this help message and exit\n";
+    std::cout << "  --version, -v       Show version information and exit\n";
+    std::cout << "\n";
+    std::cout << "Arguments:\n";
+    std::cout << "  project.jvp         Path to project file (created if doesn't exist)\n";
+    std::cout << "                      Default: ~/Documents/JVE Projects/Untitled Project.jvp\n";
+    std::cout << "\n";
+    std::cout << "Debug Environment Variables:\n";
+    std::cout << "  JVE_DEBUG_STARTUP=1\n";
+    std::cout << "      Enable verbose Qt logging during startup.\n";
+    std::cout << "      Shows debug/info messages from all jve.* logging categories.\n";
+    std::cout << "\n";
+    std::cout << "  JVE_DEBUG_PLAYHEAD=1\n";
+    std::cout << "      Log playhead rendering dimensions to diagnose ruler/timeline alignment.\n";
+    std::cout << "      Shows width values used for time-to-pixel calculations.\n";
+    std::cout << "\n";
+    std::cout << "  JVE_DEBUG_FOCUS=1\n";
+    std::cout << "      Log focus management events (focus changes, widget tracking).\n";
+    std::cout << "\n";
+    std::cout << "  JVE_DEBUG_COMMAND_PERF=1\n";
+    std::cout << "      Log command execution performance timings.\n";
+    std::cout << "\n";
+    std::cout << "  JVE_DEBUG_SNAPPING=1\n";
+    std::cout << "      Log magnetic snapping calculations during edge dragging.\n";
+    std::cout << "\n";
+    std::cout << "  JVE_DEBUG_EDGE_PREVIEW=1\n";
+    std::cout << "      Log edge preview calculations during trim/ripple operations.\n";
+    std::cout << "\n";
+    std::cout << "  JVE_DEBUG_RIPPLE_DELETE_SELECTION=1\n";
+    std::cout << "      Log ripple delete selection command details.\n";
+    std::cout << "\n";
+    std::cout << "Example:\n";
+    std::cout << "  JVE_DEBUG_PLAYHEAD=1 " << programName << " myproject.jvp\n";
+    std::cout << "\n";
+}
+
+static void printVersion()
+{
+    std::cout << "JVE Editor version 1.0.0\n";
+    std::cout << "Built with Qt " << QT_VERSION_STR << "\n";
+}
 
 static void configureLogging()
 {
@@ -44,6 +94,18 @@ static void configureLogging()
 
 int main(int argc, char *argv[])
 {
+    // Handle --help and --version before creating QApplication
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+            printHelp(argv[0]);
+            return 0;
+        }
+        if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
+            printVersion();
+            return 0;
+        }
+    }
+
     // Note: High DPI scaling is enabled by default in Qt 6
     // Qt::AA_EnableHighDpiScaling and Qt::AA_UseHighDpiPixmaps are deprecated
 

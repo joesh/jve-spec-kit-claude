@@ -125,13 +125,6 @@ local function flush_state_to_db()
         return
     end
 
-    -- Persistence commands require an active command event. If none exists,
-    -- skip to avoid failures in test environments without full UI setup.
-    local event_origin = command_manager.peek_command_event_origin and command_manager.peek_command_event_origin()
-    if not event_origin then
-        return
-    end
-
     -- Skip persistence if the sequence no longer exists in the database.
     -- This can happen after undo of an import - timeline_state has stale cached values
     -- for a deleted sequence. Persisting those would overwrite correct values when
@@ -142,7 +135,14 @@ local function flush_state_to_db()
         return
     end
 
-    -- Persist playhead
+    -- Begin command event context for UI-driven persistence.
+    -- All persistence commands below are non-undoable "scriptable" commands,
+    -- but they still require an active command event to execute.
+    command_manager.begin_command_event("ui")
+
+    -- Use pcall to ensure we always end the command event even if commands fail
+    local ok, err = pcall(function()
+        -- Persist playhead
     local playhead_cmd = Command.create("SetPlayhead", project_id)
     playhead_cmd:set_parameters({
         project_id = project_id,
@@ -208,8 +208,6 @@ local function flush_state_to_db()
 
     if track_state.is_layout_dirty() then
         local height_map = build_track_height_map()
-        local project_id = data.state.project_id
-        assert(project_id and project_id ~= "", "timeline_core_state.flush_state_to_db: missing project_id")
 
         -- Persist track heights via command (scriptable, non-undoable)
         local heights_cmd = Command.create("SetTrackHeights", project_id)
@@ -229,6 +227,15 @@ local function flush_state_to_db()
         end
 
         track_state.clear_layout_dirty()
+    end
+    end) -- end pcall
+
+    -- Always end the command event, even if persistence failed
+    command_manager.end_command_event()
+
+    -- Re-raise any error that occurred during persistence
+    if not ok then
+        error(err)
     end
 end
 

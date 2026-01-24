@@ -1081,6 +1081,16 @@ function M.render(view)
     -- Playhead
     if playhead_position_rational >= viewport_start_rational and playhead_position_rational <= viewport_end_rational then
         local px = state_module.time_to_pixel(playhead_position_rational, width)
+
+        -- DEBUG: Log timeline view width and playhead position
+        if os.getenv("JVE_DEBUG_PLAYHEAD") == "1" then
+            local logger = require("core.logger")
+            logger.debug("playhead_debug", string.format(
+                "TIMELINE[%s]: width=%d playhead_x=%d playhead_frames=%d",
+                view.debug_id or "?", width, px, playhead_position_rational.frames or -1
+            ))
+        end
+
         timeline.add_line(view.widget, px, 0, px, height, state_module.colors.playhead, 2)
     end
 
