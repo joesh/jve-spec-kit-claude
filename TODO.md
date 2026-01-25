@@ -110,10 +110,7 @@
   - Removed `get_conn()` helper function (no longer needed)
 - [x] (done) Update database isolation validator to allow test files (`test_*.lua`)
 - [x] (done) Verify all tests pass with SQL isolation active (0 violations)
-- [ ] Investigate `test_batch_move_clip_to_track_undo.lua:95` failure (unrelated to SQL)
-  - Error: "c1 not restored after batch undo"
-  - This is a test logic issue, not SQL isolation related
-  - All other tests passing (17 tests run before hitting this failure)
+- [x] (fixed) `test_batch_move_clip_to_track_undo.lua` - now passes
 
 ## Architectural Cleanup Notes
 The SQL isolation boundary is now fully enforced:
@@ -145,19 +142,8 @@ All violations in `core/command_helper.lua`, `core/clipboard_actions.lua`, `core
 - **After**: 205 passed, 22 failed (0 SQL violations ✅)
 - **Improvement**: +6 tests now passing, all SQL violations resolved
 
-### Remaining Test Failures (Non-SQL Related)
-All 22 remaining failures are test logic issues unrelated to SQL isolation:
-- test_batch_move_clip_to_track_undo.lua - Batch undo restoration logic
-- test_blade_command.lua - Blade command clip detection
-- test_command_state_gap_selection.lua - Gap selection resolution
-- test_cut_command.lua - Cut/undo test logic (not SQL)
-- test_delete_clip_capture_restore.lua - Clip persistence
-- test_import_fcp7_xml.lua - FCP7 import
-- test_schema_sql_portability.lua - Schema file path issue
-- test_timeline_reload_gap_selection.lua - Gap selection persistence
-- test_timeline_state_rational.lua - Timeline state initialization
-- test_track_height_persistence.lua - Track height storage
-- Several ripple/batch command undo integration tests
+### Test Status
+All 252 Lua tests now passing (as of 2026-01-23).
 
 ### Architectural Impact
 **SQL isolation boundary fully enforced:**

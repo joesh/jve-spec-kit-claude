@@ -204,14 +204,6 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         if qt_set_focus then pcall(qt_set_focus, view.widget) end
         if button == RIGHT_MOUSE_BUTTON then return end -- Context menu handled separately
 
-        -- Playhead
-        local playhead_value = state.get_playhead_position()
-        local playhead_x = state.time_to_pixel(playhead_value, width)
-        if math.abs(x - playhead_x) < 5 then
-            state.set_dragging_playhead(true)
-            return
-        end
-
         local track_id = view.get_track_id_at_y(y, height)
         local picked_edges = pick_edges_for_track(state, track_id, x, width)
         if picked_edges and picked_edges.selection and #picked_edges.selection > 0 then
@@ -319,7 +311,17 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     initial_gap = gap,
                     command_modifier = modifiers and modifiers.command or false
                 }
+                -- Gap click pending - don't fall through to playhead
+                return
             end
+        end
+
+        -- Playhead (lowest priority - only if no edge, clip, or gap was clicked)
+        local playhead_value = state.get_playhead_position()
+        local playhead_x = state.time_to_pixel(playhead_value, width)
+        if math.abs(x - playhead_x) < 5 then
+            state.set_dragging_playhead(true)
+            return
         end
 
         -- Empty space drag (Rubber band)
@@ -454,6 +456,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.panel_drag_move(view.widget, x, y)
         else
             -- Hover cursor update
+            -- IMPORTANT: Cursor MUST reflect what will happen on click.
+            -- Base cursor on the actual selected edge type, not on zone position.
             local cursor = "arrow"
 
             local track_id = view.get_track_id_at_y and view.get_track_id_at_y(y, height)
@@ -463,15 +467,17 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     if hover_pick.roll_used and #hover_pick.selection >= 2 then
                         cursor = "split_h"
                     else
+                        -- Single edge selection: cursor based on edge type
+                        -- From misc_bindings.cpp: trim_left = ] bracket, trim_right = [ bracket
+                        -- Must match renderer logic (timeline_view_renderer.lua:429):
+                        --   is_in = (normalized_edge == "in") or (raw_edge_type == "gap_after")
+                        -- So: "in" or "gap_after" → [ bracket → trim_right
+                        --     "out" or "gap_before" → ] bracket → trim_left
                         local sel = hover_pick.selection[1]
-                        if hover_pick.zone == "left" then
-                            cursor = "trim_left"
-                        elseif hover_pick.zone == "right" then
+                        if sel and (sel.edge_type == "in" or sel.edge_type == "gap_after") then
                             cursor = "trim_right"
-                        elseif sel and (sel.edge_type == "in" or sel.edge_type == "gap_after") then
-                            cursor = "trim_left"
                         else
-                            cursor = "trim_right"
+                            cursor = "trim_left"
                         end
                     end
                 end
