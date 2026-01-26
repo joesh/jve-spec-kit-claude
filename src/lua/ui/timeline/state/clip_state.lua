@@ -343,6 +343,23 @@ function M.apply_mutations(mutations, persist_callback)
                     break
                 end
             end
+            -- Also remove from selection to keep selection consistent with clip list
+            if data.state.selected_clips then
+                for i = #data.state.selected_clips, 1, -1 do
+                    local sel = data.state.selected_clips[i]
+                    if sel and sel.id == clip_id then
+                        table.remove(data.state.selected_clips, i)
+                    end
+                end
+            end
+            if data.state.selected_edges then
+                for i = #data.state.selected_edges, 1, -1 do
+                    local edge = data.state.selected_edges[i]
+                    if edge and edge.clip_id == clip_id then
+                        table.remove(data.state.selected_edges, i)
+                    end
+                end
+            end
         end
     end
 
