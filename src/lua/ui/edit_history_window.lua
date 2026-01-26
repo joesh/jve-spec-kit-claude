@@ -127,7 +127,7 @@ local function refresh_tree()
     for _, entry in ipairs(entries) do
         local seq = entry.sequence_number or 0
         local marker = (seq == current_number) and "▶" or ""
-        local action_label = command_labels.label_for_type(entry.command_type or "")
+        local action_label = entry.label or command_labels.label_for_type(entry.command_type or "")
         local item_id = qt_constants.CONTROL.ADD_TREE_ITEM(window_state.tree, {marker, format_seq(seq), action_label})
         if item_id and item_id ~= -1 then
             qt_constants.CONTROL.SET_TREE_ITEM_DATA(window_state.tree, item_id, "sequence_number", tostring(seq))

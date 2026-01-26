@@ -162,6 +162,39 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         command:set_parameter("executed_commands_json", json.encode(command_specs))
 
+        -- Generate descriptive label based on child commands
+        local command_labels = require("core.command_labels")
+        local function generate_label()
+            if #command_specs == 0 then
+                return nil
+            end
+            -- Single child: use its label
+            if #command_specs == 1 then
+                return command_labels.label_for_type(command_specs[1].command_type)
+            end
+            -- Multiple children of same type: "Delete Clip (3)"
+            local type_counts = {}
+            for _, spec in ipairs(command_specs) do
+                local t = spec.command_type or "Unknown"
+                type_counts[t] = (type_counts[t] or 0) + 1
+            end
+            local unique_type, unique_count = nil, 0
+            for t, count in pairs(type_counts) do
+                if unique_type == nil then
+                    unique_type, unique_count = t, count
+                else
+                    unique_type = nil
+                    break
+                end
+            end
+            if unique_type then
+                return command_labels.label_for_type(unique_type) .. " (" .. unique_count .. ")"
+            end
+            -- Mixed types
+            return "Batch (" .. #command_specs .. ")"
+        end
+        command:set_parameter("display_label", generate_label())
+
         print(string.format("BatchCommand: Executed %d commands successfully", #executed_commands))
         return true
     end
