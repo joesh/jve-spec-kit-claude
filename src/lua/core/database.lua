@@ -512,7 +512,10 @@ end
 local ALLOWED_SQL_CALLERS = {
     ["models/"] = true,
     ["core/database.lua"] = true,
-    ["core/command_manager.lua"] = true,  -- Transaction management only
+    ["command.lua"] = true,  -- Command model (loads itself from DB)
+    -- command_manager.lua needs connection access ONLY to pass to sub-modules (registry, history, state)
+    -- during init(). It does NOT execute raw SQL itself - all queries go through model methods.
+    ["core/command_manager.lua"] = true,
 }
 
 local function validate_sql_access()
@@ -558,6 +561,12 @@ function M.set_connection(conn)
     db_connection = conn
 end
 
+-- Check if database connection exists (no SQL access granted, just a boolean check)
+-- Use this instead of get_connection() when you only need to verify connectivity
+function M.has_connection()
+    return db_connection ~= nil
+end
+
 function M.get_connection()
     assert(db_connection, "database.get_connection: no active database connection")
 
@@ -565,6 +574,70 @@ function M.get_connection()
     validate_sql_access()
 
     return db_connection
+end
+
+-- Transaction management API
+function M.begin_transaction()
+    assert(db_connection, "database.begin_transaction: no connection")
+    local stmt = db_connection:prepare("BEGIN TRANSACTION")
+    if not stmt then return false end
+    local ok = stmt:exec()
+    stmt:finalize()
+    return ok
+end
+
+function M.commit()
+    assert(db_connection, "database.commit: no connection")
+    return db_connection:exec("COMMIT")
+end
+
+function M.rollback()
+    assert(db_connection, "database.rollback: no connection")
+    return db_connection:exec("ROLLBACK")
+end
+
+function M.savepoint(name)
+    assert(db_connection, "database.savepoint: no connection")
+    assert(name and name ~= "", "database.savepoint: name required")
+    return db_connection:exec("SAVEPOINT " .. name)
+end
+
+function M.release_savepoint(name)
+    assert(db_connection, "database.release_savepoint: no connection")
+    assert(name and name ~= "", "database.release_savepoint: name required")
+    return db_connection:exec("RELEASE SAVEPOINT " .. name)
+end
+
+function M.rollback_to_savepoint(name)
+    assert(db_connection, "database.rollback_to_savepoint: no connection")
+    assert(name and name ~= "", "database.rollback_to_savepoint: name required")
+    return db_connection:exec("ROLLBACK TO SAVEPOINT " .. name)
+end
+
+-- Schema migration: ensure commands table has all required columns
+function M.ensure_commands_table_columns()
+    if not db_connection then return end
+
+    local needed = {
+        selected_clip_ids_pre = true,
+        selected_edge_infos_pre = true,
+        selected_gap_infos = true,
+        selected_gap_infos_pre = true
+    }
+
+    local pragma = db_connection:prepare("PRAGMA table_info(commands)")
+    if not pragma then return end
+
+    if pragma:exec() then
+        while pragma:next() do
+            needed[pragma:value(1)] = nil
+        end
+    end
+    pragma:finalize()
+
+    for col, _ in pairs(needed) do
+        db_connection:exec("ALTER TABLE commands ADD COLUMN " .. col .. " TEXT DEFAULT '[]'")
+    end
 end
 
 function M.shutdown(opts)

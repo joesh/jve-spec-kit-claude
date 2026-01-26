@@ -137,6 +137,183 @@ function M.parse_from_query(query, project_id)
     return command
 end
 
+-- Load command history for edit history display.
+-- Returns list of Command objects that can compute their own labels.
+function M.load_history()
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        return {}
+    end
+
+    local query = db:prepare([[
+        SELECT * FROM commands
+        WHERE command_type NOT LIKE 'Undo%'
+        ORDER BY sequence_number ASC
+    ]])
+    if not query then
+        return {}
+    end
+
+    local commands = {}
+    if query:exec() then
+        while query:next() do
+            local cmd = M.parse_from_query(query, nil)
+            if cmd then
+                table.insert(commands, cmd)
+            end
+        end
+    end
+    query:finalize()
+
+    return commands
+end
+
+-- Load command at specific sequence number
+function M.load_at_sequence(seq_num, project_id)
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db or not seq_num then
+        return nil
+    end
+
+    local query = db:prepare([[
+        SELECT id, command_type, command_args, sequence_number, parent_sequence_number,
+               pre_hash, post_hash, timestamp, playhead_value, playhead_rate,
+               selected_clip_ids, selected_edge_infos, selected_gap_infos,
+               selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre,
+               undo_group_id, playhead_value_post, playhead_rate_post
+        FROM commands
+        WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
+    ]])
+    if not query then
+        return nil
+    end
+
+    query:bind_value(1, seq_num)
+    if not query:exec() or not query:next() then
+        query:finalize()
+        return nil
+    end
+
+    -- Build command directly (explicit column order, not parse_from_query)
+    local command_args_json = query:value(2)
+    local params = {}
+    if command_args_json and command_args_json ~= "" and command_args_json ~= "{}" then
+        local success, decoded = pcall(json.decode, command_args_json)
+        if success and decoded then
+            params = decoded
+        end
+    end
+
+    local command = {
+        id = query:value(0),
+        type = query:value(1),
+        project_id = project_id,
+        sequence_number = query:value(3) or 0,
+        parent_sequence_number = query:value(4),
+        status = "Executed",
+        parameters = params,
+        pre_hash = query:value(5) or "",
+        post_hash = query:value(6) or "",
+        created_at = query:value(7) or os.time(),
+        executed_at = query:value(7),
+        playhead_value = query:value(8),
+        playhead_rate = query:value(9),
+        selected_clip_ids = query:value(10) or "[]",
+        selected_edge_infos = query:value(11) or "[]",
+        selected_gap_infos = query:value(12) or "[]",
+        selected_clip_ids_pre = query:value(13) or "[]",
+        selected_edge_infos_pre = query:value(14) or "[]",
+        selected_gap_infos_pre = query:value(15) or "[]",
+        undo_group_id = query:value(16),
+        playhead_value_post = query:value(17),
+        playhead_rate_post = query:value(18)
+    }
+
+    setmetatable(command, {__index = M})
+    query:finalize()
+    return command
+end
+
+-- Load commands from sequence number onwards (for replay)
+function M.load_from_sequence(start_seq, project_id)
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        return {}
+    end
+
+    local query = db:prepare("SELECT * FROM commands WHERE sequence_number >= ? ORDER BY sequence_number")
+    if not query then
+        return {}
+    end
+
+    query:bind_value(1, start_seq)
+    local commands = {}
+    if query:exec() then
+        while query:next() do
+            local cmd = M.parse_from_query(query, project_id)
+            if cmd then
+                table.insert(commands, cmd)
+            end
+        end
+    end
+    query:finalize()
+    return commands
+end
+
+-- Mark commands after sequence number as undone
+function M.mark_undone_after(seq_num)
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        return false
+    end
+
+    local query = db:prepare("UPDATE commands SET status = 'Undone' WHERE sequence_number > ?")
+    if not query then
+        return false
+    end
+
+    query:bind_value(1, seq_num)
+    local ok = query:exec()
+    query:finalize()
+    return ok
+end
+
+-- Load parent tree structure (for history branching)
+-- Returns table mapping sequence_number -> parent_sequence_number
+function M.load_parent_tree()
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        return {}, {}
+    end
+
+    local query = db:prepare([[
+        SELECT sequence_number, parent_sequence_number
+        FROM commands
+        WHERE command_type NOT LIKE 'Undo%'
+    ]])
+    if not query then
+        return {}, {}
+    end
+
+    local parent_of = {}
+    local exists = {}
+    if query:exec() then
+        while query:next() do
+            local seq = query:value(0) or 0
+            local parent = query:value(1) or 0
+            parent_of[seq] = parent
+            exists[seq] = true
+        end
+    end
+    query:finalize()
+    return parent_of, exists
+end
+
 -- Deserialize a command from a JSON string
 function M.deserialize(json_string)
     if not json_string or json_string == "" then
@@ -212,6 +389,16 @@ function M:get_persistable_parameters()
     return persistable
 end
 
+-- Return human-readable label for this command.
+-- Commands can override by setting display_label parameter.
+function M:label()
+    local custom = self.parameters and self.parameters.display_label
+    if custom and custom ~= "" then
+        return custom
+    end
+    return command_labels.label_for_type(self.type)
+end
+
 -- Serialize command to JSON string
 function M:serialize()
     local playhead_rate_val = 0
@@ -274,9 +461,14 @@ function M:create_undo()
 end
 
 -- Save command to database
+-- db parameter is optional - will get connection from database module if not provided
 function M:save(db)
     if not db then
-        logger.warn("command", "Command.save: No database provided")
+        local database = require("core.database")
+        db = database.get_connection()
+    end
+    if not db then
+        logger.warn("command", "Command.save: No database connection available")
         return false
     end
     -- Serialize parameters to JSON

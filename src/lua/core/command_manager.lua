@@ -18,7 +18,10 @@
 -- Refactored to delegate to CommandRegistry, CommandHistory, and CommandState
 local M = {}
 
--- Database connection (set externally)
+-- Database module for connection checks and transaction management
+-- Note: command_manager does NOT execute raw SQL - all queries go through model methods.
+-- The db variable is only used to pass to sub-modules (registry, history, state) during init.
+local db_module = require("core.database")
 local db = nil
 
 -- State tracking
@@ -228,13 +231,12 @@ end
 
 -- SAVEPOINT-aware rollback for undo groups
 local function rollback_transaction()
-    assert(db, "rollback_transaction: no database connection")
+    assert(db_module.has_connection(), "rollback_transaction: no database connection")
     local group_id = history.get_current_undo_group_id()
     if group_id then
         -- Inside undo group - rollback to savepoint
         local savepoint_name = "undo_group_" .. group_id
-        local rollback_sql = "ROLLBACK TO SAVEPOINT " .. savepoint_name
-        db:exec(rollback_sql)
+        db_module.rollback_to_savepoint(savepoint_name)
 
         -- INVARIANT:
         -- In-memory history cursor must always point to a durable DB state.
@@ -247,7 +249,7 @@ local function rollback_transaction()
         history.save_undo_position()
     else
         -- No undo group - full rollback
-        db:exec("ROLLBACK")
+        db_module.rollback()
     end
 end
 
@@ -402,27 +404,8 @@ local function normalize_executor_result(exec_result, command)
 end
 
 local function ensure_command_selection_columns()
-    -- Delegated to database schema management in ideal world, keeping here for now
-    -- but minimized.
-    if not db then return end
-    local pragma = db:prepare("PRAGMA table_info(commands)")
-    if not pragma then return end
-
-    local needed = {
-        selected_clip_ids_pre = true, selected_edge_infos_pre = true,
-        selected_gap_infos = true, selected_gap_infos_pre = true
-    }
-    
-    if pragma:exec() then
-        while pragma:next() do
-            needed[pragma:value(1)] = nil
-        end
-    end
-    pragma:finalize()
-
-    for col, _ in pairs(needed) do
-        db:exec("ALTER TABLE commands ADD COLUMN " .. col .. " TEXT DEFAULT '[]'")
-    end
+    local db_module = require("core.database")
+    db_module.ensure_commands_table_columns()
 end
 
 local function command_flag(command, property, param_key)
@@ -491,7 +474,7 @@ local function should_compute_state_hash(command)
 end
 
 -- Finish command execution without persisting (no-op or cancelled)
--- @param db_conn: Database connection
+-- @param db_conn: Database connection (unused, kept for signature compatibility)
 -- @param history_mod: History module
 -- @param exec_scope: Execution scope for logging
 -- @param result: Result table to update
@@ -499,7 +482,8 @@ end
 local function finish_as_noop(db_conn, history_mod, exec_scope, result, opts)
     opts = opts or {}
     if not opts.skip_rollback then
-        db_conn:exec("ROLLBACK")
+        local db_module = require("core.database")
+        db_module.rollback()
     end
     history_mod.decrement_sequence_number()
     result.success = true
@@ -571,8 +555,8 @@ function M.init(sequence_id, project_id)
     active_sequence_id = sequence_id
     active_project_id = project_id
 
-    -- Get database connection from the database module
-    local db_module = require("core.database")
+    -- Get database connection to pass to sub-modules
+    -- Note: command_manager itself does NOT execute SQL - only sub-modules do
     db = db_module.get_connection()
     assert(db, "CommandManager.init: database connection not available")
 
@@ -581,28 +565,15 @@ function M.init(sequence_id, project_id)
     state_mgr.init(db)
 
     -- Keep timeline_state IDs initialized so selection persistence doesn't assert during headless tests.
-    -- Only do this when the shared `core.database` connection matches this manager's DB handle.
-    local ok_db, db_mod = pcall(require, "core.database")
-    local shared_conn = ok_db and db_mod and db_mod.get_connection and db_mod.get_connection() or nil
-    if shared_conn and shared_conn == db then
-        local seq_stmt = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
-        if seq_stmt then
-            seq_stmt:bind_value(1, sequence_id)
-            local found_project_id = nil
-            if seq_stmt:exec() and seq_stmt:next() then
-                found_project_id = seq_stmt:value(0)
-            end
-            seq_stmt:finalize()
-
-            if found_project_id and found_project_id ~= "" then
-                assert(found_project_id == project_id,
-                    "CommandManager.init: provided project_id does not match sequences.project_id (sequence_id="
-                        .. tostring(sequence_id) .. ", provided=" .. tostring(project_id) .. ", db=" .. tostring(found_project_id) .. ")")
-                local ok_ts, timeline_state = pcall(require, "ui.timeline.timeline_state")
-                if ok_ts and timeline_state and type(timeline_state.init) == "function" then
-                    timeline_state.init(sequence_id, project_id)
-                end
-            end
+    local Sequence = require("models.sequence")
+    local seq = Sequence.load(sequence_id)
+    if seq and seq.project_id and seq.project_id ~= "" then
+        assert(seq.project_id == project_id,
+            "CommandManager.init: provided project_id does not match sequences.project_id (sequence_id="
+                .. tostring(sequence_id) .. ", provided=" .. tostring(project_id) .. ", db=" .. tostring(seq.project_id) .. ")")
+        local ok_ts, timeline_state = pcall(require, "ui.timeline.timeline_state")
+        if ok_ts and timeline_state and type(timeline_state.init) == "function" then
+            timeline_state.init(sequence_id, project_id)
         end
     end
     
@@ -886,14 +857,12 @@ function M.execute(command_or_name, params)
     -- BEGIN TRANSACTION (skip if undo group is active - savepoint already started transaction)
     undo_group_active = history.get_current_undo_group_id() ~= nil
     if not undo_group_active then
-        begin_tx = db:prepare("BEGIN TRANSACTION")
-        if not (begin_tx and begin_tx:exec()) then
-            if begin_tx then begin_tx:finalize() end
+        local db_module = require("core.database")
+        if not db_module.begin_transaction() then
             result.error_message = "Failed to begin transaction"
             exec_scope:finish("begin_tx_failed")
             goto cleanup
         end
-        begin_tx:finalize()
     end
 
     perf = create_command_perf_tracker(command)
@@ -1065,7 +1034,8 @@ function M.execute(command_or_name, params)
 
             -- COMMIT (skip if undo group is active - savepoint will handle commit)
             if not undo_group_active then
-                db:exec("COMMIT")
+                local db_module = require("core.database")
+                db_module.commit()
             end
             if perf.enabled then
                 perf.log("db_commit")
@@ -1178,20 +1148,9 @@ function M.get_current_sequence_number()
 end
 
 function M:list_history_entries()
-    if not db then
-        return {}
-    end
-
-    local query = db:prepare([[
-        SELECT sequence_number, command_type, timestamp, parent_sequence_number
-        FROM commands
-        WHERE command_type NOT LIKE 'Undo%'
-        ORDER BY sequence_number ASC
-    ]])
-
-    if not query then
-        return {}
-    end
+    -- Load Command objects - they know how to label themselves
+    local Command = require("command")
+    local commands = Command.load_history()
 
     local current_seq = history.get_current_sequence_number() or 0
 
@@ -1208,25 +1167,21 @@ function M:list_history_entries()
         table.insert(list, child_seq)
     end
 
-    if query:exec() then
-        while query:next() do
-            local seq = query:value(0) or 0
-            local command_type = query:value(1) or ""
-            local timestamp = query:value(2)
-            local parent = query:value(3)
-            local parent_seq = parent or 0
+    -- Build tree structure from Command objects
+    for _, cmd in ipairs(commands) do
+        local seq = cmd.sequence_number or 0
+        local parent_seq = cmd.parent_sequence_number or 0
 
-            nodes[seq] = {
-                sequence_number = seq,
-                command_type = command_type,
-                timestamp = timestamp,
-                parent_sequence_number = parent
-    }
-            parent_of[seq] = parent_seq
-            add_child(parent_seq, seq)
-        end
+        nodes[seq] = {
+            sequence_number = seq,
+            command_type = cmd.type,
+            timestamp = cmd.created_at,
+            parent_sequence_number = cmd.parent_sequence_number,
+            label = cmd:label(),  -- Command computes its own label
+        }
+        parent_of[seq] = parent_seq
+        add_child(parent_seq, seq)
     end
-    query:finalize()
 
     local function latest_child_of(seq)
         local list = children[seq]
@@ -1308,25 +1263,9 @@ function M:jump_to_sequence_number(target_sequence_number)
         return false, "No database connection"
     end
 
-    local parent_of = {}
-    local exists = {}
-    local query = db:prepare([[
-        SELECT sequence_number, parent_sequence_number
-        FROM commands
-        WHERE command_type NOT LIKE 'Undo%'
-    ]])
-    if not query then
-        return false, "Failed to prepare command parent query"
-    end
-    if query:exec() then
-        while query:next() do
-            local seq = query:value(0) or 0
-            local parent = query:value(1)
-            exists[seq] = true
-            parent_of[seq] = parent or 0
-        end
-    end
-    query:finalize()
+    -- Load parent tree via Command model (no raw SQL in command_manager)
+    local Command = require("command")
+    local parent_of, exists = Command.load_parent_tree()
 
     if target_sequence_number ~= 0 and not exists[target_sequence_number] then
         return false, "Unknown sequence number: " .. tostring(target_sequence_number)
@@ -1390,57 +1329,9 @@ end
 -- Helper to fetch specific command (restored from DB)
 function M.get_command_at_sequence(seq_num, project_id)
     if not db or not seq_num then return nil end
-    
-    local query = db:prepare([[
-        SELECT id, command_type, command_args, sequence_number, parent_sequence_number, pre_hash, post_hash, timestamp, playhead_value, playhead_rate,
-               selected_clip_ids, selected_edge_infos, selected_gap_infos,
-               selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id,
-               playhead_value_post, playhead_rate_post
-        FROM commands
-        WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
-    ]])
-    if not query then return nil end
-    query:bind_value(1, seq_num)
-
-    if query:exec() and query:next() then
-        local command = {
-            id = query:value(0),
-            type = query:value(1),
-            project_id = project_id,
-            sequence_number = query:value(3) or 0,
-            parent_sequence_number = query:value(4),
-            status = "Executed",
-            parameters = {},
-            pre_hash = query:value(5) or "",
-            post_hash = query:value(6) or "",
-            created_at = query:value(7) or os.time(),
-            executed_at = query:value(7),
-            playhead_value = query:value(8),
-            playhead_rate = query:value(9),
-            selected_clip_ids = query:value(10) or "[]",
-            selected_edge_infos = query:value(11) or "[]",
-            selected_gap_infos = query:value(12) or "[]",
-            selected_clip_ids_pre = query:value(13) or "[]",
-            selected_edge_infos_pre = query:value(14) or "[]",
-            selected_gap_infos_pre = query:value(15) or "[]",
-            undo_group_id = query:value(16),
-            playhead_value_post = query:value(17),
-            playhead_rate_post = query:value(18)
-    }
-        
-        local command_args_json = query:value(2)
-        if command_args_json and command_args_json ~= "" and command_args_json ~= "{}" then
-            local success, params = pcall(json.decode, command_args_json)
-            if success and params then command.parameters = params end
-        end
-
-        local Command = require('command')
-        setmetatable(command, {__index = Command})
-        query:finalize()
-        return command
-    end
-    query:finalize()
-    return nil
+    -- Delegate to Command model (no raw SQL in command_manager)
+    local Command = require("command")
+    return Command.load_at_sequence(seq_num, project_id)
 end
 
 function M.can_undo()
@@ -1787,13 +1678,13 @@ end
 -- Revert to sequence (Debug/Dev tool)
 function M.revert_to_sequence(sequence_number)
     logger.info("command_manager", string.format("Reverting to sequence: %d", sequence_number))
-    local query = db:prepare("UPDATE commands SET status = 'Undone' WHERE sequence_number > ?")
-    query:bind_value(1, sequence_number)
-    if not query:exec() then
-        logger.error("command_manager", string.format("Failed to revert commands: %s", tostring(query:last_error())))
+    -- Delegate to Command model (no raw SQL in command_manager)
+    local Command = require("command")
+    if not Command.mark_undone_after(sequence_number) then
+        logger.error("command_manager", "Failed to revert commands")
         return
     end
-    history.init(db, active_sequence_id, active_project_id) 
+    history.init(db, active_sequence_id, active_project_id)
 end
 
 -- Get project state
@@ -1833,17 +1724,10 @@ function M.replay_events(sequence_id, target_sequence_number)
     end
 
     -- Gracefully handle missing sequence rows (e.g., after deletes)
-    local has_sequence = false
-    local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
-    if seq_query then
-        seq_query:bind_value(1, seq_id)
-        if seq_query:exec() and seq_query:next() then
-            has_sequence = true
-        end
-        seq_query:finalize()
-    end
-
-    if not has_sequence then
+    -- Use Sequence model (no raw SQL in command_manager)
+    local Sequence = require("models.sequence")
+    local seq_record = Sequence.load(seq_id)
+    if not seq_record then
         logger.warn("command_manager", string.format("replay_events: sequence '%s' missing; skipping replay", tostring(seq_id)))
         return true
     end
@@ -1913,19 +1797,9 @@ function M.replay_from_sequence(start_sequence_number)
         failed_commands = {}
     }
 
-    local query = db:prepare("SELECT * FROM commands WHERE sequence_number >= ? ORDER BY sequence_number")
-    query:bind_value(1, start_sequence_number)
-    
-    local commands = {}
-    if query:exec() then
-        while query:next() do
-            local command = require('command').parse_from_query(query, active_project_id)
-            if command and command.id ~= "" then
-                table.insert(commands, command)
-            end
-        end
-    end
-    query:finalize()
+    -- Load commands via Command model (no raw SQL in command_manager)
+    local Command = require("command")
+    local commands = Command.load_from_sequence(start_sequence_number, active_project_id)
 
     for _, command in ipairs(commands) do
         -- Reset status and re-execute
@@ -2022,24 +1896,22 @@ end
 function M.begin_undo_group(label)
     local group_id = history.begin_undo_group(label)
     -- Open savepoint for transaction (nested transactions use savepoints)
-    if db then
-        local savepoint_name = "undo_group_" .. group_id
-        local savepoint_sql = "SAVEPOINT " .. savepoint_name
-        local ok = db:exec(savepoint_sql)
-        if not ok then
-            logger.warn("command_manager", "Failed to create savepoint for undo group: " .. savepoint_name)
-        end
+    local db_module = require("core.database")
+    local savepoint_name = "undo_group_" .. group_id
+    local ok = db_module.savepoint(savepoint_name)
+    if not ok then
+        logger.warn("command_manager", "Failed to create savepoint for undo group: " .. savepoint_name)
     end
     return group_id
 end
 
 function M.end_undo_group()
     local group_id = history.end_undo_group()
-    if group_id and db then
+    if group_id then
+        local db_module = require("core.database")
         local savepoint_name = "undo_group_" .. group_id
-        local release_sql = "RELEASE SAVEPOINT " .. savepoint_name
         local ok, err = pcall(function()
-            db:exec(release_sql)
+            db_module.release_savepoint(savepoint_name)
         end)
         if not ok then
             logger.error("command_manager", string.format("Failed to release savepoint %s: %s", savepoint_name, tostring(err)))
@@ -2049,7 +1921,7 @@ function M.end_undo_group()
         -- Only commit once the outermost undo group closes.
         if not history.get_current_undo_group_id() then
             local commit_ok, commit_err = pcall(function()
-                db:exec("COMMIT")
+                db_module.commit()
             end)
             if not commit_ok then
                 logger.error("command_manager", string.format("Failed to commit undo group transaction: %s", tostring(commit_err)))
