@@ -4,8 +4,12 @@ package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua"
 
 -- Preserve original modules/functions so other tests remain unaffected.
 local original_sqlite3 = package.loaded["core.sqlite3"]
+local original_database = package.loaded["core.database"]
 local original_os_remove = os.remove
 local original_io_popen = io.popen
+
+-- Unload database so we get a fresh instance that uses our mock sqlite3
+package.loaded["core.database"] = nil
 
 local open_calls = 0
 local removed_paths = {}
@@ -73,3 +77,4 @@ print("✅ database.set_path does not perform implicit WAL/SHM cleanup fallbacks
 os.remove = original_os_remove
 io.popen = original_io_popen
 package.loaded["core.sqlite3"] = original_sqlite3
+package.loaded["core.database"] = original_database
