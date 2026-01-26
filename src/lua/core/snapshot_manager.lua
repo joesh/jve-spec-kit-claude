@@ -305,8 +305,10 @@ local function deserialize_snapshot_payload(json_str)
             require_field("deserialize_snapshot_payload", "clip", "id", data.id)
             require_field("deserialize_snapshot_payload", "clip", "clip_kind", data.clip_kind)
             
-            local num = data.fps_numerator or 30
-            local den = data.fps_denominator or 1
+            assert(data.fps_numerator, "deserialize_snapshot_payload: clip " .. data.id .. " missing fps_numerator")
+            assert(data.fps_denominator, "deserialize_snapshot_payload: clip " .. data.id .. " missing fps_denominator")
+            local num = data.fps_numerator
+            local den = data.fps_denominator
             
             clips[#clips + 1] = {
                 id = data.id,

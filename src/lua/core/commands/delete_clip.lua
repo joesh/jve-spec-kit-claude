@@ -111,6 +111,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 duration = args.deleted_clip_state.duration,
                 source_in = args.deleted_clip_state.source_in,
                 source_out = args.deleted_clip_state.source_out,
+                fps_numerator = args.deleted_clip_state.fps_numerator,
+                fps_denominator = args.deleted_clip_state.fps_denominator,
                 enabled = args.deleted_clip_state.enabled ~= false
             }, seq_id)
             target_seq = target_seq or args.deleted_clip_state.owner_sequence_id or args.deleted_clip_state.track_sequence_id or seq_id

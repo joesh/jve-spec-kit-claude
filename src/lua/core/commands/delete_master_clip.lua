@@ -164,9 +164,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_out = clip.source_out,
             enabled = clip.enabled,
             offline = clip.offline,
-            fps_numerator = clip.fps_numerator or 30,
-            fps_denominator = clip.fps_denominator or 1,
+            fps_numerator = clip.rate and clip.rate.fps_numerator,
+            fps_denominator = clip.rate and clip.rate.fps_denominator,
         }
+        -- FAIL FAST: fps is required for proper undo
+        assert(snapshot.fps_numerator, "DeleteMasterClip: clip " .. clip.id .. " missing rate.fps_numerator")
+        assert(snapshot.fps_denominator, "DeleteMasterClip: clip " .. clip.id .. " missing rate.fps_denominator")
         command:set_parameter("master_clip_snapshot", snapshot)
 
         local properties = {}
@@ -206,6 +209,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
+        -- FAIL FAST: fps is required for Clip.create
+        assert(args.master_clip_snapshot.fps_numerator, "UndoDeleteMasterClip: snapshot missing fps_numerator")
+        assert(args.master_clip_snapshot.fps_denominator, "UndoDeleteMasterClip: snapshot missing fps_denominator")
+
         local restored = Clip.create(args.master_clip_snapshot.name or "Master Clip", args.master_clip_snapshot.media_id, {
             id = args.master_clip_snapshot.id,
             project_id = args.master_clip_snapshot.project_id,
@@ -220,8 +227,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_out = args.master_clip_snapshot.source_out,
             enabled = args.master_clip_snapshot.enabled ~= false,
             offline = args.master_clip_snapshot.offline,
-            fps_numerator = args.master_clip_snapshot.fps_numerator or 30,
-            fps_denominator = args.master_clip_snapshot.fps_denominator or 1,
+            fps_numerator = args.master_clip_snapshot.fps_numerator,
+            fps_denominator = args.master_clip_snapshot.fps_denominator,
         })
 
         if not restored:save() then

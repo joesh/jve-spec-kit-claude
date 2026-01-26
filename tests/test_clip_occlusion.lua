@@ -162,6 +162,8 @@ local clip_a = Clip.create("A", "media_A", {
     duration = Rational.new(120, 30, 1), -- 4000ms
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(120, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(clip_a:save(db), "failed saving clip A")
@@ -175,6 +177,8 @@ local clip_b = Clip.create("B", "media_B", {
     duration = Rational.new(90, 30, 1), -- 3000ms
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(90, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(clip_b:save(db), "failed saving clip B")
@@ -192,6 +196,8 @@ local mover_clip = Clip.create("Mover", "media_C", {
     duration = Rational.new(120, 30, 1), -- 4000ms
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(120, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(mover_clip:save(db), "failed saving mover clip")
@@ -233,6 +239,8 @@ local base_left = Clip.create("Base Left", "media_C", {
     duration = Rational.new(90, 30, 1), -- 3000ms
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(90, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(base_left:save(db), "failed saving base_left clip")
@@ -246,6 +254,8 @@ local base_right = Clip.create("Base Right", "media_C", {
     duration = Rational.new(90, 30, 1), -- 3000ms
     source_in = Rational.new(90, 30, 1),
     source_out = Rational.new(180, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(base_right:save(db), "failed saving base_right clip")
@@ -259,6 +269,8 @@ local mover_for_nudge = Clip.create("Mover Nudge", "media_C", {
     duration = Rational.new(120, 30, 1), -- 4000ms
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(120, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(mover_for_nudge:save(db), "failed saving mover clip for nudge test")
@@ -313,6 +325,8 @@ local ripple_clip = Clip.create("Ripple Clip", "media_ripple", {
     duration = Rational.new(120, 30, 1),
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(120, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(ripple_clip:save(db), "failed saving ripple clip")
@@ -343,6 +357,8 @@ local base_clip = Clip.create("Base Split", "media_split_base", {
     duration = Rational.new(180, 30, 1), -- 6000ms
     source_in = Rational.new(0, 30, 1),
     source_out = Rational.new(180, 30, 1),
+    fps_numerator = 30,
+    fps_denominator = 1,
     enabled = true
 })
 assert(base_clip:save(db), "failed saving base clip for split test")

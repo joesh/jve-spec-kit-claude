@@ -25,10 +25,6 @@ local M = {}
 
 local DEFAULT_CLIP_KIND = "timeline"
 
--- Temporary defaults for migration (will be removed in Phase 4)
-local MIGRATION_FPS_NUM = 30
-local MIGRATION_FPS_DEN = 1
-
 local function derive_display_name(id, existing_name)
     if existing_name and existing_name ~= "" then
         return existing_name
@@ -178,10 +174,12 @@ function M.create(name, media_id, opts)
     opts = opts or {}
 
     local now = os.time()
-    
-    -- Default Rate
-    local fps_numerator = opts.fps_numerator or MIGRATION_FPS_NUM
-    local fps_denominator = opts.fps_denominator or MIGRATION_FPS_DEN
+
+    -- FAIL FAST: fps is required - no silent fallbacks that hide bugs
+    assert(opts.fps_numerator, "Clip.create: fps_numerator is required")
+    assert(opts.fps_denominator, "Clip.create: fps_denominator is required")
+    local fps_numerator = opts.fps_numerator
+    local fps_denominator = opts.fps_denominator
     local default_rate = {fps_numerator = fps_numerator, fps_denominator = fps_denominator}
 
     -- FAIL FAST: Check for legacy keys

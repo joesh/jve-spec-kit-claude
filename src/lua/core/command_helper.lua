@@ -394,6 +394,10 @@ function M.restore_clip_state(state)
             source_in = state.source_in,
             source_out = state.source_out,
 
+            -- Frame rate must match original clip for SQLite overlap triggers
+            fps_numerator = state.fps_numerator,
+            fps_denominator = state.fps_denominator,
+
             enabled = state.enabled ~= false,
             offline = state.offline,
         })

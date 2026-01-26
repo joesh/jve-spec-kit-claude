@@ -228,7 +228,9 @@ function M.register(executors, undoers, db)
                                 timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
-                                source_out = source_out
+                                source_out = source_out,
+                                fps_numerator = fps_num,
+                                fps_denominator = fps_den,
                             })
 
                             if clip:save() then
@@ -472,7 +474,9 @@ function M.register(executors, undoers, db)
                                 timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
-                                source_out = source_out
+                                source_out = source_out,
+                                fps_numerator = fps_num,
+                                fps_denominator = fps_den,
                             })
 
                             if clip:save() then

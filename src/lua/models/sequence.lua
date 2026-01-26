@@ -23,9 +23,6 @@ local Rational = require("core.rational")
 local Sequence = {}
 Sequence.__index = Sequence
 
-local MIGRATION_FPS_NUM = 30
-local MIGRATION_FPS_DEN = 1
-
 local function resolve_db()
     local conn = database.get_connection()
     if not conn then
@@ -41,8 +38,8 @@ local function validate_frame_rate(val)
     if type(val) == "table" and val.fps_numerator and val.fps_denominator then
         return val
     end
-    -- Default 30 fps
-    return { fps_numerator = 30, fps_denominator = 1 }
+    -- FAIL FAST: No silent fallbacks - frame rate is required
+    error("Sequence: frame_rate is required (got " .. type(val) .. ")")
 end
 
 function Sequence.create(name, project_id, frame_rate, width, height, opts)
