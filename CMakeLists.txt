@@ -100,11 +100,13 @@ if(APPLE)
     find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
     find_library(METAL_FRAMEWORK Metal REQUIRED)
     find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+    find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)  # vImage for YUV→RGB
 
     target_link_libraries(EditorMediaPlatform
         ${VIDEOTOOLBOX_FRAMEWORK}
         ${COREMEDIA_FRAMEWORK}
         ${COREVIDEO_FRAMEWORK}
+        ${ACCELERATE_FRAMEWORK}
     )
 
     target_compile_definitions(EditorMediaPlatform PRIVATE EMP_HAS_VIDEOTOOLBOX)
