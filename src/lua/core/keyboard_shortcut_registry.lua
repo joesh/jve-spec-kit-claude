@@ -335,9 +335,14 @@ function M.handle_key_event(key, modifiers, context)
 
     local command = M.commands[command_id]
 
-    -- Check context match
-    if command.context and command.context ~= context then
-        return false
+    -- Check context match (supports single context or array of contexts)
+    if command.context then
+        local contexts = type(command.context) == "table" and command.context or {command.context}
+        local matched = false
+        for _, ctx in ipairs(contexts) do
+            if ctx == context then matched = true; break end
+        end
+        if not matched then return false end
     end
 
     -- Execute handler
