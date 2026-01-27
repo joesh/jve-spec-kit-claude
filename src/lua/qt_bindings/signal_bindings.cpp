@@ -114,6 +114,28 @@ protected:
                 lua_pop(lua_state, 1);
             }
         }
+        // Handle key release for K held state (JKL shuttle)
+        else if (event->type() == QEvent::KeyRelease && lua_state) {
+            QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+
+            lua_getglobal(lua_state, "global_key_release_handler");
+            if (lua_isfunction(lua_state, -1)) {
+                lua_newtable(lua_state);
+
+                lua_pushstring(lua_state, "key");
+                lua_pushinteger(lua_state, keyEvent->key());
+                lua_settable(lua_state, -3);
+
+                if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
+                    qWarning() << "Error in global key release handler:" << lua_tostring(lua_state, -1);
+                    lua_pop(lua_state, 1);
+                } else {
+                    lua_pop(lua_state, 1);  // Pop return value
+                }
+            } else {
+                lua_pop(lua_state, 1);
+            }
+        }
         return QObject::eventFilter(obj, event);
     }
 
