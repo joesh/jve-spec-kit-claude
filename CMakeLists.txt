@@ -21,12 +21,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Find required packages
-find_package(Qt6 REQUIRED COMPONENTS 
-    Core 
-    Widgets 
-    Sql 
+find_package(Qt6 REQUIRED COMPONENTS
+    Core
+    Widgets
+    Sql
     Test
     Gui
+    Multimedia
 )
 
 # Find SQLite (usually comes with Qt6::Sql)
@@ -37,6 +38,15 @@ find_package(nlohmann_json REQUIRED)
 # LuaJIT for scripting
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LUAJIT REQUIRED luajit)
+
+# FFmpeg for Editor Media Platform
+pkg_check_modules(FFMPEG REQUIRED
+    libavformat
+    libavcodec
+    libavutil
+    libswscale
+    libswresample
+)
 
 # Compiler flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
@@ -49,32 +59,89 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/include
 )
 
+# ============================================================================
+# Editor Media Platform (EMP) Library - FFmpeg-backed video decoding
+# ============================================================================
+set(EMP_SOURCES
+    src/editor_media_platform/src/emp_asset.cpp
+    src/editor_media_platform/src/emp_reader.cpp
+    src/editor_media_platform/src/emp_frame.cpp
+    src/editor_media_platform/src/emp_pcm_chunk.cpp
+    src/editor_media_platform/src/impl/ffmpeg_context.cpp
+    src/editor_media_platform/src/impl/ffmpeg_decode.cpp
+    src/editor_media_platform/src/impl/ffmpeg_seek.cpp
+    src/editor_media_platform/src/impl/ffmpeg_convert.cpp
+    src/editor_media_platform/src/impl/ffmpeg_hwaccel.cpp
+    src/editor_media_platform/src/impl/ffmpeg_resample.cpp
+)
+
+add_library(EditorMediaPlatform STATIC ${EMP_SOURCES})
+
+target_include_directories(EditorMediaPlatform
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/src/editor_media_platform/include
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/editor_media_platform/src
+        ${FFMPEG_INCLUDE_DIRS}
+)
+
+target_link_libraries(EditorMediaPlatform
+    ${FFMPEG_LIBRARIES}
+)
+
+target_link_directories(EditorMediaPlatform PUBLIC
+    ${FFMPEG_LIBRARY_DIRS}
+)
+
+# Hardware acceleration support (macOS VideoToolbox)
+if(APPLE)
+    find_library(VIDEOTOOLBOX_FRAMEWORK VideoToolbox REQUIRED)
+    find_library(COREMEDIA_FRAMEWORK CoreMedia REQUIRED)
+    find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    find_library(METAL_FRAMEWORK Metal REQUIRED)
+    find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+
+    target_link_libraries(EditorMediaPlatform
+        ${VIDEOTOOLBOX_FRAMEWORK}
+        ${COREMEDIA_FRAMEWORK}
+        ${COREVIDEO_FRAMEWORK}
+    )
+
+    target_compile_definitions(EditorMediaPlatform PRIVATE EMP_HAS_VIDEOTOOLBOX)
+endif()
+
+# Ensure FFmpeg headers only in impl/ (enforced by code structure, not CMake)
+
 # Source files organization
 set(CORE_SOURCES
     src/resource_paths.cpp
     src/simple_lua_engine.cpp
     src/qt_bindings.cpp
+    src/assert_handler.cpp
 
     # Bug reporter system
     src/bug_reporter/gesture_logger.cpp
     src/bug_reporter/qt_bindings_bug_reporter.cpp
+
+    # Audio Output Platform
+    src/audio_output_platform/aop.cpp
+
+    # Scrub Stretch Engine (WSOLA time stretch)
+    src/scrub_stretch_engine/sse.cpp
 )
 
 set(UI_SOURCES
     src/timeline_renderer.cpp
-    # Removed C++ UI implementations that violate architecture (should be Lua):
-    # src/ui/keyboard_customization_dialog.cpp  (MOVED TO LUA - src/lua/ui/)
-    # src/ui/selection/selection_manager.cpp
-    # src/ui/timeline/timeline_panel.cpp
-    # src/ui/input/keyboard_shortcuts.cpp
-    # src/ui/common/context_menu_manager.cpp
-    # src/ui/common/ui_command_bridge.cpp
-    # src/ui/common/selection_visualizer.cpp
-    # src/ui/common/drag_drop_manager.cpp
-    # src/ui/common/ui_state_manager.cpp
-    # src/ui/common/theme_manager.cpp
-    # src/ui/common/performance_monitor.cpp
+    src/cpu_video_surface.cpp
 )
+
+# GPU video surface (macOS only, Objective-C++ Metal)
+if(APPLE)
+    list(APPEND UI_SOURCES src/gpu_video_surface.mm)
+    set_source_files_properties(src/gpu_video_surface.mm PROPERTIES
+        COMPILE_FLAGS "-x objective-c++"
+    )
+endif()
 
 # Core library (for testing and CLI tools)
 add_library(JVECore STATIC
@@ -92,9 +159,21 @@ target_link_libraries(JVECore
     Qt6::Widgets
     Qt6::Sql
     Qt6::Gui
+    Qt6::Multimedia
     SQLite::SQLite3
     ${LUAJIT_LIBRARIES}
+    EditorMediaPlatform
 )
+
+# Metal video surface dependencies (macOS)
+if(APPLE)
+    target_link_libraries(JVECore
+        ${METAL_FRAMEWORK}
+        ${QUARTZCORE_FRAMEWORK}
+        ${COREVIDEO_FRAMEWORK}
+    )
+    target_compile_definitions(JVECore PRIVATE EMP_HAS_VIDEOTOOLBOX)
+endif()
 
 target_include_directories(JVECore PUBLIC
     ${CMAKE_SOURCE_DIR}/src
@@ -197,6 +276,115 @@ set_target_properties(test_qt_bindings PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 add_test(NAME test_qt_bindings COMMAND test_qt_bindings)
+
+# EMP Core test (Asset, Reader, Frame, HW accel)
+add_executable(test_emp_core
+    tests/unit/test_emp_core.cpp
+)
+target_link_libraries(test_emp_core
+    JVECore
+    EditorMediaPlatform
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_emp_core PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/editor_media_platform/include
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_emp_core PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_emp_core PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+if(APPLE)
+    target_compile_definitions(test_emp_core PRIVATE EMP_HAS_VIDEOTOOLBOX)
+endif()
+add_test(NAME test_emp_core COMMAND test_emp_core)
+
+# Video Surface test (VideoSurfaceWidget, MetalVideoSurface)
+add_executable(test_video_surface
+    tests/unit/test_video_surface.cpp
+)
+target_link_libraries(test_video_surface
+    JVECore
+    EditorMediaPlatform
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_video_surface PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/editor_media_platform/include
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_video_surface PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_video_surface PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+if(APPLE)
+    target_compile_definitions(test_video_surface PRIVATE EMP_HAS_VIDEOTOOLBOX)
+endif()
+add_test(NAME test_video_surface COMMAND test_video_surface)
+
+# SSE Core test (Scrub Stretch Engine)
+add_executable(test_sse_core
+    tests/unit/test_sse_core.cpp
+)
+target_link_libraries(test_sse_core
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_sse_core PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_sse_core PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_sse_core PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_sse_core COMMAND test_sse_core)
+
+# SSE Decimate test (>4x speeds)
+add_executable(test_sse_decimate
+    tests/unit/test_sse_decimate.cpp
+)
+target_link_libraries(test_sse_decimate
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_sse_decimate PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_sse_decimate PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_sse_decimate PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_sse_decimate COMMAND test_sse_decimate)
 
 add_custom_target(lua_tests ALL
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
