@@ -26,7 +26,7 @@ public:
     CVMetalTextureCacheRef textureCache = nullptr;
     CAMetalLayer* metalLayer = nil;
 
-    // NV12 bi-planar textures (Y plane + UV plane)
+    // Bi-planar textures (Y plane + UV plane) - supports NV12 (8-bit) and P010 (10-bit)
     CVMetalTextureRef textureY = nullptr;
     CVMetalTextureRef textureUV = nullptr;
     id<MTLTexture> metalTextureY = nil;
@@ -76,7 +76,8 @@ vertex VertexOut vertexShader(VertexIn in [[stage_in]]) {
     return out;
 }
 
-// NV12 YUV to RGB conversion (BT.709 for HD content)
+// NV12/P010 YUV to RGB conversion (BT.709 for HD content)
+// Works for both 8-bit (NV12) and 10-bit (P010) - texture formats handle normalization
 fragment float4 fragmentShader(VertexOut in [[stage_in]],
                                texture2d<float> texY [[texture(0)]],
                                texture2d<float> texUV [[texture(1)]]) {
@@ -85,14 +86,16 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     float y = texY.sample(s, in.texCoord).r;
     float2 uv = texUV.sample(s, in.texCoord).rg;
 
-    // BT.709 YUV to RGB (video range 16-235)
-    y = (y - 0.0625) * 1.164;
+    // BT.709 YUV to RGB (video range: Y 16-235, UV 16-240)
+    // For normalized textures, video range is 16/255 to 235/255
+    y = (y - 0.0627) * 1.164;  // (y - 16/255) * 255/219
     float u = uv.x - 0.5;
     float v = uv.y - 0.5;
 
-    float r = y + 1.793 * v;
-    float g = y - 0.213 * u - 0.533 * v;
-    float b = y + 2.112 * u;
+    // BT.709 coefficients
+    float r = y + 1.5748 * v;
+    float g = y - 0.1873 * u - 0.4681 * v;
+    float b = y + 1.8556 * u;
 
     return float4(saturate(float3(r, g, b)), 1.0);
 }
@@ -204,28 +207,78 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
     @autoreleasepool {
         CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)hw_buffer;
 
-        // Verify bi-planar format (NV12: 420v or 420f)
+        // Verify bi-planar format
         size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
-        JVE_ASSERT(planeCount == 2, "Expected bi-planar NV12 format from VideoToolbox");
+        JVE_ASSERT(planeCount == 2, "Expected bi-planar format from VideoToolbox");
+
+        // Detect pixel format to choose correct Metal texture formats
+        OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
+
+        MTLPixelFormat yFormat = MTLPixelFormatR8Unorm;
+        MTLPixelFormat uvFormat = MTLPixelFormatRG8Unorm;
+        switch (pixelFormat) {
+            case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+            case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+                // NV12 (8-bit): R8 for Y, RG8 for UV
+                yFormat = MTLPixelFormatR8Unorm;
+                uvFormat = MTLPixelFormatRG8Unorm;
+                break;
+
+            case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
+            case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+                // P010 (10-bit 4:2:0): R16 for Y, RG16 for UV
+                // Note: P010 stores 10-bit data in upper bits of 16-bit values
+                // Metal's R16Unorm normalizes to [0,1] which works correctly
+                yFormat = MTLPixelFormatR16Unorm;
+                uvFormat = MTLPixelFormatRG16Unorm;
+                break;
+
+            case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
+            case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
+                // ProRes 10-bit 4:2:2: R16 for Y, RG16 for UV
+                // UV plane is half width but FULL height (unlike 4:2:0)
+                yFormat = MTLPixelFormatR16Unorm;
+                uvFormat = MTLPixelFormatRG16Unorm;
+                break;
+
+            case kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:
+            case kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:
+                // 8-bit 4:2:2: R8 for Y, RG8 for UV
+                yFormat = MTLPixelFormatR8Unorm;
+                uvFormat = MTLPixelFormatRG8Unorm;
+                break;
+
+            default: {
+                // Debug: print unknown format
+                char fmt_str[5] = {0};
+                fmt_str[0] = (pixelFormat >> 24) & 0xFF;
+                fmt_str[1] = (pixelFormat >> 16) & 0xFF;
+                fmt_str[2] = (pixelFormat >> 8) & 0xFF;
+                fmt_str[3] = pixelFormat & 0xFF;
+                qWarning() << "GPUVideoSurface: Unknown pixel format" << QString::fromLatin1(fmt_str)
+                           << "(" << QString::number(pixelFormat, 16) << ")";
+                JVE_FAIL("Unsupported CVPixelBuffer format for GPU rendering");
+            }
+        }
 
         m_impl->releaseTextures();
 
-        // Y plane (full resolution, R8)
+        // Y plane (full resolution)
         size_t yWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0);
         size_t yHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0);
 
         CVReturn ret = CVMetalTextureCacheCreateTextureFromImage(
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
-            MTLPixelFormatR8Unorm, yWidth, yHeight, 0, &m_impl->textureY);
+            yFormat, yWidth, yHeight, 0, &m_impl->textureY);
         JVE_ASSERT(ret == kCVReturnSuccess && m_impl->textureY, "Failed to create Y texture");
 
-        // UV plane (half resolution, RG8)
+        // UV plane (half resolution for 420)
         size_t uvWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
         size_t uvHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
 
         ret = CVMetalTextureCacheCreateTextureFromImage(
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
-            MTLPixelFormatRG8Unorm, uvWidth, uvHeight, 1, &m_impl->textureUV);
+            uvFormat, uvWidth, uvHeight, 1, &m_impl->textureUV);
         JVE_ASSERT(ret == kCVReturnSuccess && m_impl->textureUV, "Failed to create UV texture");
 
         m_impl->metalTextureY = CVMetalTextureGetTexture(m_impl->textureY);

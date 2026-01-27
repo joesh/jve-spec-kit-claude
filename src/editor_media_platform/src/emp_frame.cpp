@@ -170,12 +170,8 @@ void FrameImpl::ensure_cpu_buffer() {
 
             assert(y_plane && uv_plane && "FrameImpl::ensure_cpu_buffer: P010 plane address is null");
 
-            // BT.709 coefficients for YUV→RGB
-            // R = Y + 1.5748 * (Cr - 128)
-            // G = Y - 0.1873 * (Cb - 128) - 0.4681 * (Cr - 128)
-            // B = Y + 1.8556 * (Cb - 128)
-            const float kr = 0.2126f, kb = 0.0722f;
-            const float kg = 1.0f - kr - kb;
+            // BT.709 YUV→RGB conversion coefficients
+            (void)full_range;  // TODO: Apply video range scaling if needed
 
             for (size_t row = 0; row < height; ++row) {
                 uint8_t* dst_row = m_cpu_buffer.data() + row * dst_stride;
