@@ -336,6 +336,9 @@ if not is_test_mode then
     _G.global_key_handler = function(event)
         return keyboard_shortcuts.handle_key(event)
     end
+    _G.global_key_release_handler = function(event)
+        return keyboard_shortcuts.handle_key_release(event)
+    end
     qt_set_global_key_handler(main_window, "global_key_handler")
     logger.debug("layout", "Keyboard shortcuts installed")
 else

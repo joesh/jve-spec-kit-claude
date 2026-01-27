@@ -13,6 +13,9 @@
 #include "lua/qt_bindings/menu_bindings.cpp"
 #include "lua/qt_bindings/dialog_bindings.cpp"
 #include "lua/qt_bindings/misc_bindings.cpp"
+#include "lua/qt_bindings/emp_bindings.cpp"
+#include "lua/qt_bindings/aop_bindings.cpp"
+#include "lua/qt_bindings/sse_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
@@ -245,6 +248,15 @@ void registerQtBindings(lua_State* L)
     lua_newtable(L);
     lua_pushcfunction(L, lua_show_confirm_dialog); lua_setfield(L, -2, "SHOW_CONFIRM");
     lua_setfield(L, -2, "DIALOG");
+
+    // Populate 'qt_constants.EMP' subtable (Editor Media Platform - video decoding)
+    register_emp_bindings(L);
+
+    // Populate 'qt_constants.AOP' subtable (Audio Output Platform)
+    register_aop_bindings(L);
+
+    // Populate 'qt_constants.SSE' subtable (Scrub Stretch Engine)
+    register_sse_bindings(L);
 
     // Populate 'qt_constants.FILE_DIALOG' subtable
     lua_newtable(L);
