@@ -22,6 +22,109 @@ local shortcut_registry = require("core.keyboard_shortcut_registry")
 local panel_manager = require("ui.panel_manager")
 local Rational = require("core.rational")
 
+-- Playback controller for JKL shuttle (lazy loaded to avoid circular deps)
+local playback_controller = nil
+local function get_playback_controller()
+    if not playback_controller then
+        playback_controller = require("ui.playback_controller")
+    end
+    return playback_controller
+end
+
+-- K key held state for K+J/K+L slow playback
+local k_held = false
+
+-- JKL handler functions (called by registry)
+
+-- Initialize playback controller from viewer_panel (shared by J/L handlers)
+local function ensure_playback_initialized()
+    local pc = get_playback_controller()
+    if pc.total_frames > 0 then
+        return true  -- Already initialized
+    end
+
+    local viewer_panel = require("ui.viewer_panel")
+    if not viewer_panel.has_media() then
+        print("JKL: No media loaded in viewer")
+        return false
+    end
+
+    local total = viewer_panel.get_total_frames()
+    local fps = viewer_panel.get_fps()
+    assert(total > 0, string.format("handle_jkl: viewer has media but total_frames=%d", total))
+    assert(fps > 0, string.format("handle_jkl: viewer has media but fps=%s", tostring(fps)))
+
+    pc.init(viewer_panel)
+    pc.set_source(total, fps)
+    pc.frame = viewer_panel.get_current_frame()
+    return true
+end
+
+local function handle_jkl_forward()
+    if not ensure_playback_initialized() then return end
+    local pc = get_playback_controller()
+    if k_held then
+        pc.slow_play(1)   -- K+L = slow forward
+    else
+        pc.shuttle(1)     -- L = forward shuttle
+    end
+end
+
+local function handle_jkl_reverse()
+    if not ensure_playback_initialized() then return end
+    local pc = get_playback_controller()
+    if k_held then
+        pc.slow_play(-1)  -- K+J = slow reverse
+    else
+        pc.shuttle(-1)    -- J = reverse shuttle
+    end
+end
+
+local function handle_jkl_stop()
+    k_held = true
+    local pc = get_playback_controller()
+    pc.stop()
+end
+
+-- Register JKL commands with the shortcut registry (idempotent)
+local function register_jkl_commands()
+    -- Skip if already registered
+    if shortcut_registry.commands["playback.forward"] then
+        return
+    end
+    shortcut_registry.register_command({
+        id = "playback.forward",
+        category = "Playback",
+        name = "Play Forward / Speed Up",
+        description = "Start forward playback or increase speed",
+        default_shortcuts = {"L"},
+        context = {"timeline", "viewer"},
+        handler = handle_jkl_forward
+    })
+    shortcut_registry.register_command({
+        id = "playback.reverse",
+        category = "Playback",
+        name = "Play Reverse / Speed Up",
+        description = "Start reverse playback or increase speed",
+        default_shortcuts = {"J"},
+        context = {"timeline", "viewer"},
+        handler = handle_jkl_reverse
+    })
+    shortcut_registry.register_command({
+        id = "playback.stop",
+        category = "Playback",
+        name = "Stop Playback",
+        description = "Stop playback and mark K held for slow-play combo",
+        default_shortcuts = {"K"},
+        context = {"timeline", "viewer"},
+        handler = handle_jkl_stop
+    })
+    -- Assign shortcuts
+    shortcut_registry.assign_shortcut("playback.forward", "L")
+    shortcut_registry.assign_shortcut("playback.reverse", "J")
+    shortcut_registry.assign_shortcut("playback.stop", "K")
+end
+
 -- Qt key constants (from Qt::Key enum)
 local KEY = {
     Space = 32,
@@ -379,6 +482,7 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     redo_toggle_state = nil
     zoom_fit_toggle_state = nil
     ensure_browser_shortcuts_registered()
+    register_jkl_commands()
 end
 
 -- Get effective snapping state (baseline XOR drag_inverted)
@@ -1089,19 +1193,7 @@ local function handle_key_impl(event)
         return true
     end
 
-    -- J/K/L: Playback controls (industry standard)
-    if key == KEY.J and panel_active_timeline then
-        print("Reverse playback (not implemented yet)")
-        return true
-    end
-    if key == KEY.K and panel_active_timeline then
-        print("Pause (not implemented yet)")
-        return true
-    end
-    if key == KEY.L and panel_active_timeline then
-        print("Forward playback (not implemented yet)")
-        return true
-    end
+    -- JKL handled by registry (registered in register_jkl_commands)
 
     -- Q/W/E/R/T: Tool switching
     if key == KEY.Q and panel_active_timeline then
@@ -1254,6 +1346,15 @@ function keyboard_shortcuts.handle_key(event)
         error(result)
     end
     return result
+end
+
+-- Handle key release events (for K held state tracking)
+function keyboard_shortcuts.handle_key_release(event)
+    local key = event.key
+    if key == KEY.K then
+        k_held = false
+    end
+    return false  -- Key release is not "handled" - let it propagate
 end
 
 return keyboard_shortcuts
