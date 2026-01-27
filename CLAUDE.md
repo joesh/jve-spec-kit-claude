@@ -65,6 +65,9 @@ logger.trace("component_name", "Verbose tracing")
 
 The first argument is always the component/subsystem name (e.g., "command_manager", "test", "ripple_delete"). Log levels from lowest to highest priority: TRACE, DEBUG, INFO, WARN, ERROR, FATAL.
 
+For short-term debug prints that will immediately be removed you may use print.
+
+
 ## CRITICAL: Main Engineering Principles to ALWAYS keep in mind:
 
 ### **1.14 FAIL-FAST ASSERT POLICY (Development Phase)**
@@ -102,4 +105,4 @@ The first argument is always the component/subsystem name (e.g., "command_manage
 4. **Verify** → Confirm no competing implementations created
 
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
-- When asked to fix a bug, first add a regression test that fails. Only after demonstrating the failure may you implement the fix and verify the test passes.
+- When asked to write new code or fix a bug, first add a regression test that fails. Only after demonstrating the failure may you implement the fix and verify the test passes.
