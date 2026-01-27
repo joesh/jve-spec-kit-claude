@@ -14,6 +14,7 @@
 
 #include "simple_lua_engine.h"
 #include "resource_paths.h"
+#include "assert_handler.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
 
@@ -94,6 +95,9 @@ static void configureLogging()
 
 int main(int argc, char *argv[])
 {
+    // Install abort handler early to catch all assert()/abort() with stack traces
+    jve_install_abort_handler();
+
     // Handle --help and --version before creating QApplication
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
