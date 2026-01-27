@@ -1,91 +1,100 @@
---- TODO: one-line summary (human review required)
+--- Viewer Panel Module
 --
 -- Responsibilities:
--- - TODO
+-- - Displays video frames via GPUVideoSurface
+-- - Manages source clip viewing
+-- - Coordinates with media_cache for frame access
 --
 -- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~282 LOC
--- Volatility: unknown
+-- - Does not own EMP resources (delegated to media_cache)
+-- - Does not handle playback timing (delegated to playback_controller)
 --
 -- @file viewer_panel.lua
--- Original intent (unreviewed):
--- Viewer Panel Module
--- Provides simple Source/Timeline viewer placeholder that other systems can update.
+
 local qt_constants = require("core.qt_constants")
-local frame_utils = require("core.frame_utils")
-local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 local json = require("dkjson")
 local inspectable_factory = require("inspectable")
+local logger = require("core.logger")
+local media_cache = require("ui.media_cache")
+local audio_playback = require("ui.audio_playback")
+local playback_controller = require("ui.playback_controller")
 
 local M = {}
 
 local viewer_widget = nil
 local title_label = nil
-local content_label = nil
 local content_container = nil
+local video_surface = nil      -- GPUVideoSurface for video display
 
-local DEFAULT_MESSAGE = "Double-click a clip in the Project Browser to load it here."
-local get_fps_float = frame_utils.get_fps_float
+-- Current display state (frame comes from media_cache, we just track index)
+local current_frame_idx = 0
+
+-- Clean up resources
+local function cleanup()
+    -- Shutdown audio playback first
+    if audio_playback.initialized then
+        audio_playback.shutdown()
+    end
+
+    -- Unload media cache (releases all EMP resources)
+    media_cache.unload()
+
+    current_frame_idx = 0
+end
+
+-- Load and display a video frame from file path
+-- Asserts on failure - no fallbacks
+local function load_video_frame(file_path)
+    assert(qt_constants.EMP, "viewer_panel.load_video_frame: EMP bindings not available")
+    assert(video_surface, "viewer_panel.load_video_frame: video_surface not created")
+
+    -- Clean up previous resources
+    cleanup()
+
+    -- Load via media_cache (opens dual assets for video/audio isolation)
+    local info = media_cache.load(file_path)
+
+    -- Get and display frame 0
+    local frame = media_cache.get_video_frame(0)
+    qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+    current_frame_idx = 0
+
+    logger.info("viewer_panel", string.format("Loaded video: %dx%d @ %d/%d fps",
+        info.width, info.height, info.fps_num, info.fps_den))
+
+    -- Initialize audio playback if asset has audio
+    if info.has_audio and qt_constants.SSE and qt_constants.AOP then
+        local ok, err = audio_playback.init(media_cache)
+        if ok then
+            -- Wire playback_controller to audio
+            playback_controller.init_audio(audio_playback)
+            logger.info("viewer_panel", string.format("Audio initialized: %dHz %dch",
+                info.audio_sample_rate, info.audio_channels))
+        else
+            logger.warn("viewer_panel", "Failed to initialize audio: " .. tostring(err))
+        end
+    end
+
+    -- Set playback source (frame count and rational fps)
+    local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
+    playback_controller.set_source(total_frames, info.fps_num, info.fps_den)
+
+    return info
+end
+
+-- Clear video surface
+local function clear_video_surface()
+    cleanup()
+    if video_surface and qt_constants.EMP and qt_constants.EMP.SURFACE_SET_FRAME then
+        qt_constants.EMP.SURFACE_SET_FRAME(video_surface, nil)
+    end
+end
 
 local function ensure_created()
     if not viewer_widget then
         error("viewer_panel: create() must be called before using viewer functions")
     end
-end
-
-local function format_resolution(media)
-    if media.width and media.height and media.width > 0 and media.height > 0 then
-        return string.format("%dx%d", media.width, media.height)
-    end
-    return nil
-end
-
-local function format_duration(media)
-    if not media.duration then
-        return nil
-    end
-    -- Handle Rational comparison for duration > 0
-    local is_positive = false
-    if type(media.duration) == "table" and media.duration.frames then
-        is_positive = media.duration.frames > 0
-    elseif type(media.duration) == "number" then
-        is_positive = media.duration > 0
-    end
-    
-    if not is_positive then
-        return nil
-    end
-
-    local frame_rate = media.frame_rate or frame_utils.default_frame_rate
-    local ok, result = pcall(frame_utils.format_timecode, media.duration, frame_rate)
-    if ok and result then
-        return result
-    end
-    return "00:00:00:00"
-end
-
-local function render_text(lines)
-    ensure_created()
-    local PROP = qt_constants.PROPERTIES
-    local text = table.concat(lines, "\n")
-    if PROP.SET_TEXT then
-        PROP.SET_TEXT(content_label, text)
-    end
-end
-
-local function soft_wrap_path(path)
-    if not path or path == "" then
-        return nil
-    end
-    -- Insert zero-width break opportunities after path separators so QLabel can wrap
-    local zwsp = utf8 and utf8.char(0x200B) or "\226\128\139"  -- U+200B ZERO WIDTH SPACE
-    return path:gsub("/", "/" .. zwsp)
 end
 
 local function normalize_metadata(meta)
@@ -150,32 +159,23 @@ function M.create()
         pcall(qt_constants.LAYOUT.SET_SPACING, content_layout, 0)
     end
 
-    content_label = qt_constants.WIDGET.CREATE_LABEL(DEFAULT_MESSAGE)
-    qt_constants.PROPERTIES.SET_STYLE(content_label, string.format([[
-        QLabel {
-            background: transparent;
-            color: %s;
-            padding: 16px;
-            font-size: 13px;
-        }
-    ]], ui_constants.COLORS and (ui_constants.COLORS.TEXT_PRIMARY or "#d0d0d0") or "#d0d0d0"))
-    if qt_constants.PROPERTIES.SET_ALIGNMENT then
-        qt_constants.PROPERTIES.SET_ALIGNMENT(content_label, qt_constants.PROPERTIES.ALIGN_CENTER)
-    end
+    -- Create GPU video surface (hw accelerated)
+    -- No fallback to CPU - assert on failure during development
+    assert(qt_constants.WIDGET.CREATE_GPU_VIDEO_SURFACE,
+           "viewer_panel.create: CREATE_GPU_VIDEO_SURFACE not available")
+    video_surface = qt_constants.WIDGET.CREATE_GPU_VIDEO_SURFACE()
+    assert(video_surface, "viewer_panel.create: CREATE_GPU_VIDEO_SURFACE returned nil")
     if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
-        -- Expand to fill the viewer area while keeping text centered
-        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content_label, "Expanding", "Expanding")
+        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, video_surface, "Expanding", "Expanding")
     end
-    if qt_constants.PROPERTIES.SET_MINIMUM_WIDTH then
-        pcall(qt_constants.PROPERTIES.SET_MINIMUM_WIDTH, content_label, 0)
-    end
-    if qt_constants.PROPERTIES.SET_WORD_WRAP then
-        qt_constants.PROPERTIES.SET_WORD_WRAP(content_label, true)
-    end
-    qt_constants.LAYOUT.ADD_WIDGET(content_layout, content_label)
+    qt_constants.LAYOUT.ADD_WIDGET(content_layout, video_surface)
     if qt_constants.LAYOUT.SET_STRETCH_FACTOR then
-        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, content_layout, content_label, 1)
+        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, content_layout, video_surface, 1)
     end
+    logger.info("viewer_panel", "Video surface created for frame display")
+
+    -- Initialize playback controller with this viewer panel
+    playback_controller.init(M)
 
     qt_constants.LAYOUT.SET_ON_WIDGET(content_container, content_layout)
     qt_constants.LAYOUT.ADD_WIDGET(layout, content_container)
@@ -200,9 +200,7 @@ end
 
 function M.clear()
     ensure_created()
-    if qt_constants.PROPERTIES.SET_TEXT then
-        qt_constants.PROPERTIES.SET_TEXT(content_label, DEFAULT_MESSAGE)
-    end
+    clear_video_surface()
     if qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Source Viewer")
     end
@@ -211,44 +209,15 @@ end
 
 function M.show_source_clip(media)
     ensure_created()
-    if not media then
-        M.clear()
-        return
-    end
+    assert(media, "viewer_panel.show_source_clip: media is nil")
+    assert(media.file_path, "viewer_panel.show_source_clip: media.file_path is nil")
 
     if qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Source Viewer")
     end
 
-    local lines = {}
-    table.insert(lines, string.format("Clip: %s", media.name or media.file_name or media.id or "Untitled"))
-
-    local duration = format_duration(media)
-    if duration then
-        table.insert(lines, "Duration: " .. duration)
-    end
-
-    local resolution = format_resolution(media)
-    if resolution then
-        table.insert(lines, "Resolution: " .. resolution)
-    end
-
-    local fps_val = get_fps_float(media.frame_rate)
-    if fps_val > 0 then
-        table.insert(lines, string.format("Frame Rate: %.2f fps", fps_val))
-    end
-
-    if media.codec and media.codec ~= "" then
-        table.insert(lines, "Codec: " .. media.codec)
-    end
-
-    local wrapped_path = soft_wrap_path(media.file_path)
-    if wrapped_path and wrapped_path ~= "" then
-        table.insert(lines, "")
-        table.insert(lines, wrapped_path)
-    end
-
-    render_text(lines)
+    -- Load and display video frame (asserts on failure)
+    load_video_frame(media.file_path)
 
     local inspectable = nil
     if media.clip_id or media.id then
@@ -281,30 +250,64 @@ function M.show_source_clip(media)
     }})
 end
 
+-- Display a specific frame by index (for playback scrubbing)
+-- Frame comes from media_cache (cache owns the frame, we just display it)
+function M.show_frame(frame_idx)
+    assert(media_cache.is_loaded(), "viewer_panel.show_frame: no media loaded")
+    assert(frame_idx, "viewer_panel.show_frame: frame_idx is nil")
+    assert(frame_idx >= 0, string.format(
+        "viewer_panel.show_frame: frame_idx must be >= 0, got %d", frame_idx))
+
+    -- Get frame from cache (cache handles decode and lifecycle)
+    local frame = media_cache.get_video_frame(frame_idx)
+
+    current_frame_idx = frame_idx
+    qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+end
+
+-- Get current asset info (for playback controller)
+function M.get_asset_info()
+    return media_cache.get_asset_info()
+end
+
+-- Get total frame count of current media
+-- Computed from duration_us and fps
+function M.get_total_frames()
+    local info = media_cache.get_asset_info()
+    if not info then return 0 end
+    if not info.duration_us or info.fps_den == 0 then return 0 end
+    return math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
+end
+
+-- Get fps of current media
+function M.get_fps()
+    local info = media_cache.get_asset_info()
+    if not info then return 0 end
+    if info.fps_den == 0 then return 0 end
+    return info.fps_num / info.fps_den
+end
+
+-- Get current frame index
+function M.get_current_frame()
+    return current_frame_idx
+end
+
+-- Check if media is loaded
+function M.has_media()
+    return media_cache.is_loaded()
+end
+
 function M.show_timeline(sequence)
     ensure_created()
+    assert(sequence, "viewer_panel.show_timeline: sequence is nil")
+
     if qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Timeline Viewer")
     end
 
-    if not sequence then
-        render_text({"No timeline loaded."})
-        return
-    end
-
-    local lines = {}
-    table.insert(lines, string.format("Timeline: %s", sequence.name or sequence.id or "Untitled"))
-
-    local fps_val = get_fps_float(sequence.frame_rate)
-    if fps_val > 0 then
-        table.insert(lines, string.format("Frame Rate: %.2f fps", fps_val))
-    end
-
-    if sequence.width and sequence.height and sequence.width > 0 and sequence.height > 0 then
-        table.insert(lines, string.format("Resolution: %dx%d", sequence.width, sequence.height))
-    end
-
-    render_text(lines)
+    -- TODO: Timeline viewer should decode frame at playhead from sequence clips
+    -- For now, just clear the surface and update selection
+    clear_video_surface()
 
     if sequence then
         local inspectable = nil
