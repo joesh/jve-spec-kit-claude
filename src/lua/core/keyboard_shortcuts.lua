@@ -26,7 +26,7 @@ local Rational = require("core.rational")
 local playback_controller = nil
 local function get_playback_controller()
     if not playback_controller then
-        playback_controller = require("ui.playback_controller")
+        playback_controller = require("core.playback.playback_controller")
     end
     return playback_controller
 end
@@ -86,12 +86,36 @@ local function handle_jkl_stop()
     pc.stop()
 end
 
+-- Toggle play/pause handler (Spacebar)
+local function handle_play_toggle()
+    if not ensure_playback_initialized() then return end
+    local pc = get_playback_controller()
+    if pc.is_playing() then
+        pc.stop()
+    else
+        pc.play()
+    end
+end
+
 -- Register JKL commands with the shortcut registry (idempotent)
 local function register_jkl_commands()
     -- Skip if already registered
     if shortcut_registry.commands["playback.forward"] then
         return
     end
+
+    -- Spacebar play/pause toggle
+    shortcut_registry.register_command({
+        id = "playback.toggle",
+        category = "Playback",
+        name = "Play/Pause",
+        description = "Toggle playback (play at 1x or stop)",
+        default_shortcuts = {"Space"},
+        context = {"timeline", "viewer"},
+        handler = handle_play_toggle
+    })
+    shortcut_registry.assign_shortcut("playback.toggle", "Space")
+
     shortcut_registry.register_command({
         id = "playback.forward",
         category = "Playback",

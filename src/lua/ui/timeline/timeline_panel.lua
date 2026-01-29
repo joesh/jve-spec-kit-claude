@@ -1490,6 +1490,47 @@ function M.create(opts)
         ))
     end
 
+    -- Wire playback sync callback for timeline playback mode
+    local playback_controller = require("core.playback.playback_controller")
+    local Rational = require("core.rational")
+
+    -- Set timeline sync callback: updates playhead and handles page-scroll
+    playback_controller.set_timeline_sync_callback(function(frame_idx)
+        local rate = state.get_sequence_frame_rate()
+        if not rate or not rate.fps_numerator or not rate.fps_denominator then
+            return  -- No rate available yet
+        end
+
+        -- Convert frame index to Rational playhead position
+        local playhead_rat = Rational.new(math.floor(frame_idx), rate.fps_numerator, rate.fps_denominator)
+        state.set_playhead_position(playhead_rat)
+
+        -- Page-scroll: jump viewport when playhead exits visible area
+        local vp_start = state.get_viewport_start_time()
+        local vp_duration = state.get_viewport_duration()
+        local vp_end = vp_start + vp_duration
+
+        if playhead_rat < vp_start or playhead_rat >= vp_end then
+            -- Playhead outside viewport - page to follow it
+            local new_start
+            if playhead_rat < vp_start then
+                -- Scrolling backward: put playhead at 75% of viewport
+                new_start = playhead_rat - vp_duration * Rational.new(75, 100, 1)
+            else
+                -- Scrolling forward: put playhead at 25% of viewport
+                new_start = playhead_rat - vp_duration * Rational.new(25, 100, 1)
+            end
+            -- Clamp to 0
+            if new_start.frames < 0 then
+                new_start = Rational.new(0, new_start.fps_numerator, new_start.fps_denominator)
+            end
+            state.set_viewport_start_time(new_start)
+        end
+    end)
+
+    -- Enable timeline mode in playback_controller for this sequence
+    playback_controller.set_timeline_mode(true, initial_sequence_id)
+
     return container
 end
 

@@ -16,9 +16,9 @@ local selection_hub = require("ui.selection_hub")
 local json = require("dkjson")
 local inspectable_factory = require("inspectable")
 local logger = require("core.logger")
-local media_cache = require("ui.media_cache")
-local audio_playback = require("ui.audio_playback")
-local playback_controller = require("ui.playback_controller")
+local media_cache = require("core.media.media_cache")
+local audio_playback = require("core.media.audio_playback")
+local playback_controller = require("core.playback.playback_controller")
 
 local M = {}
 
@@ -338,6 +338,76 @@ function M.show_timeline(sequence)
     else
         selection_hub.update_selection("viewer", {})
     end
+end
+
+--------------------------------------------------------------------------------
+-- Timeline Playback Mode Functions
+--------------------------------------------------------------------------------
+
+-- Track current timeline source path for change detection
+local timeline_source_path = nil
+
+--- Set source for timeline playback mode
+-- Called by playback_controller when clip changes during timeline playback
+-- @param media_path string: File path of the media to display
+function M.set_source_for_timeline(media_path)
+    ensure_created()
+    assert(media_path and media_path ~= "",
+        "viewer_panel.set_source_for_timeline: media_path is required")
+
+    -- Skip if same source already loaded
+    if media_path == timeline_source_path then
+        return
+    end
+
+    timeline_source_path = media_path
+
+    -- Load the media without reinitializing playback_controller
+    -- (playback_controller manages its own state in timeline mode)
+    assert(qt_constants.EMP, "viewer_panel.set_source_for_timeline: EMP bindings not available")
+    assert(video_surface, "viewer_panel.set_source_for_timeline: video_surface not created")
+
+    -- Load via media_cache (opens dual assets for video/audio isolation)
+    media_cache.load(media_path)
+
+    logger.debug("viewer_panel", string.format("Timeline source set: %s", media_path))
+end
+
+--- Show frame at a specific source time (microseconds)
+-- Used for timeline playback to show the correct source position
+-- @param source_time_us number: Source time in microseconds
+function M.show_frame_at_time(source_time_us)
+    assert(media_cache.is_loaded(), "viewer_panel.show_frame_at_time: no media loaded")
+    assert(source_time_us ~= nil, "viewer_panel.show_frame_at_time: source_time_us is nil")
+    assert(source_time_us >= 0, string.format(
+        "viewer_panel.show_frame_at_time: source_time_us must be >= 0, got %d", source_time_us))
+
+    -- Convert time to frame index using media info
+    local info = media_cache.get_asset_info()
+    assert(info and info.fps_num and info.fps_den and info.fps_den > 0,
+        "viewer_panel.show_frame_at_time: invalid media info")
+
+    local frame_idx = math.floor(source_time_us * info.fps_num / info.fps_den / 1000000)
+
+    -- Clamp to valid range
+    local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
+    frame_idx = math.max(0, math.min(frame_idx, total_frames - 1))
+
+    -- Get and display frame
+    local frame = media_cache.get_video_frame(frame_idx)
+    qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+    current_frame_idx = frame_idx
+end
+
+--- Show gap (black frame) when playhead is at a gap in timeline
+function M.show_gap()
+    ensure_created()
+    -- Clear the video surface to show black
+    if video_surface and qt_constants.EMP and qt_constants.EMP.SURFACE_SET_FRAME then
+        qt_constants.EMP.SURFACE_SET_FRAME(video_surface, nil)
+    end
+    timeline_source_path = nil  -- Reset so next clip will load
+    logger.debug("viewer_panel", "Showing gap (black)")
 end
 
 return M

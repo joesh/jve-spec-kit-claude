@@ -507,4 +507,53 @@ function M:set_property(property_name, value)
     self[property_name] = value
 end
 
+--- Find a clip on a track that contains a given timeline time
+-- A clip contains time T if: timeline_start <= T < timeline_start + duration
+-- @param track_id string: Track ID to search
+-- @param time_rat Rational: Timeline time to check
+-- @return Clip or nil: First enabled clip containing the time, or nil
+function M.find_at_time(track_id, time_rat)
+    assert(track_id and track_id ~= "", "Clip.find_at_time: track_id is required")
+    assert(time_rat and time_rat.frames ~= nil, "Clip.find_at_time: time_rat must be a Rational")
+
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        logger.warn("clip", "Clip.find_at_time: No database connection available")
+        return nil
+    end
+
+    local time_frames = time_rat.frames
+
+    local stmt = db:prepare([[
+        SELECT id FROM clips
+        WHERE track_id = ?
+          AND timeline_start_frame <= ?
+          AND (timeline_start_frame + duration_frames) > ?
+          AND enabled = 1
+        LIMIT 1
+    ]])
+
+    if not stmt then
+        logger.warn("clip", "Clip.find_at_time: Failed to prepare query")
+        return nil
+    end
+
+    stmt:bind_value(1, track_id)
+    stmt:bind_value(2, time_frames)
+    stmt:bind_value(3, time_frames)
+
+    local clip_id = nil
+    if stmt:exec() and stmt:next() then
+        clip_id = stmt:value(0)
+    end
+    stmt:finalize()
+
+    if not clip_id then
+        return nil
+    end
+
+    return M.load(clip_id)
+end
+
 return M
