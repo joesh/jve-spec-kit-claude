@@ -32,6 +32,11 @@ local M = {
         frames = {},           -- { [frame_idx] = emp_frame }
         window_size = 150,     -- total frames to cache (±75 from playhead = ±2.5s at 30fps)
         center_idx = 0,        -- current center of cache window
+        reverse_window_start = nil,
+        reverse_window_end = nil,
+        bulk_keep_min = nil,
+        bulk_keep_max = nil,
+        reverse_decode_budget = 60,
     },
 
     -- Audio PCM cache (single chunk around playhead)
@@ -42,6 +47,9 @@ local M = {
         data_ptr = nil,        -- pointer to PCM data for SSE
         frames = 0,            -- sample frames in cache
     },
+
+    -- Prefetch state (background decode thread)
+    last_prefetch_direction = 0,  -- Track direction changes
 }
 
 --------------------------------------------------------------------------------
@@ -148,6 +156,13 @@ end
 
 --- Unload all resources
 function M.unload()
+    -- Stop prefetch thread first (before closing reader)
+    if M.video_reader then
+        qt_constants.EMP.READER_STOP_PREFETCH(M.video_reader)
+    end
+    M.last_prefetch_direction = 0
+    M.playhead_direction = nil
+
     -- Release cached video frames
     for idx, frame in pairs(M.video_cache.frames) do
         if frame then
@@ -197,9 +212,9 @@ end
 -- Video Frame Access
 --------------------------------------------------------------------------------
 
---- Get video frame by index (from cache or decode)
+--- Get video frame by index (from C++ cache or decode)
 -- @param frame_idx Frame index to retrieve
--- @return EMP frame handle (caller must NOT release - cache owns it)
+-- @return EMP frame handle
 function M.get_video_frame(frame_idx)
     assert(M.video_reader, "media_cache.get_video_frame: not loaded (video_reader is nil)")
     assert(frame_idx, "media_cache.get_video_frame: frame_idx is nil")
@@ -208,13 +223,8 @@ function M.get_video_frame(frame_idx)
     assert(frame_idx >= 0, string.format(
         "media_cache.get_video_frame: frame_idx must be >= 0, got %d", frame_idx))
 
-    -- Check cache first
-    local cached = M.video_cache.frames[frame_idx]
-    if cached then
-        return cached
-    end
-
-    -- Decode frame
+    -- Let C++ handle caching (prefetch thread fills cache, DecodeAtUS checks cache first)
+    -- Don't double-cache in Lua - causes stale handle issues when C++ evicts
     local frame, err = qt_constants.EMP.READER_DECODE_FRAME(
         M.video_reader,
         frame_idx,
@@ -225,9 +235,6 @@ function M.get_video_frame(frame_idx)
         "media_cache.get_video_frame: READER_DECODE_FRAME failed at frame %d: %s",
         frame_idx, err and err.msg or "unknown error"))
 
-    -- Store in cache (evict old frames if needed)
-    M._cache_video_frame(frame_idx, frame)
-
     return frame
 end
 
@@ -236,9 +243,15 @@ function M._cache_video_frame(frame_idx, frame)
     M.video_cache.frames[frame_idx] = frame
 
     -- Evict frames outside window
-    local half_window = math.floor(M.video_cache.window_size / 2)
-    local min_keep = frame_idx - half_window
-    local max_keep = frame_idx + half_window
+    local min_keep, max_keep
+    if M.video_cache.bulk_keep_min and M.video_cache.bulk_keep_max then
+        min_keep = M.video_cache.bulk_keep_min
+        max_keep = M.video_cache.bulk_keep_max
+    else
+        local half_window = math.floor(M.video_cache.window_size / 2)
+        min_keep = frame_idx - half_window
+        max_keep = frame_idx + half_window
+    end
 
     for idx, cached_frame in pairs(M.video_cache.frames) do
         if idx < min_keep or idx > max_keep then
@@ -248,6 +261,47 @@ function M._cache_video_frame(frame_idx, frame)
     end
 
     M.video_cache.center_idx = frame_idx
+end
+
+--- Internal: decode a contiguous window ending at end_frame_idx, avoiding per-frame reverse seeks
+function M._ensure_reverse_window(end_frame_idx, backfill_count)
+    if not M.video_reader then
+        return
+    end
+
+    local want = backfill_count or M.video_cache.window_size
+    if want < 1 then want = 1 end
+    if want > M.video_cache.window_size then want = M.video_cache.window_size end
+
+    local start_frame_idx = end_frame_idx - want
+    if start_frame_idx < 0 then start_frame_idx = 0 end
+
+    -- Fast path: already have the current end frame and the cached window still covers it
+    if M.video_cache.reverse_window_start ~= nil and M.video_cache.reverse_window_end ~= nil then
+        if end_frame_idx >= M.video_cache.reverse_window_start and end_frame_idx <= M.video_cache.reverse_window_end then
+            if M.video_cache.frames[end_frame_idx] then
+                return
+            end
+        end
+    end
+
+    M.video_cache.reverse_window_start = start_frame_idx
+    M.video_cache.reverse_window_end = end_frame_idx
+
+    M.video_cache.bulk_keep_min = start_frame_idx
+    M.video_cache.bulk_keep_max = end_frame_idx
+
+    for i = start_frame_idx, end_frame_idx do
+        if not M.video_cache.frames[i] then
+            local frame = qt_constants.EMP.READER_DECODE_FRAME(M.video_reader, i, M.asset_info.fps_num, M.asset_info.fps_den)
+            if frame then
+                M._cache_video_frame(i, frame)
+            end
+        end
+    end
+
+    M.video_cache.bulk_keep_min = nil
+    M.video_cache.bulk_keep_max = nil
 end
 
 --------------------------------------------------------------------------------
@@ -340,41 +394,31 @@ function M.set_playhead(frame_idx, direction, speed)
     assert(speed, "media_cache.set_playhead: speed is nil")
     assert(M.is_loaded(), "media_cache.set_playhead: not loaded (call load() first)")
 
-    -- Prefetch video frames in travel direction
-    -- Reverse needs more prefetch because H.264 decode requires seeking to keyframe
-    if direction ~= 0 then
-        -- Reverse gets more aggressive prefetch (GOP decode is expensive)
-        local base_prefetch = (direction < 0) and 30 or 15
-        local prefetch_count = math.min(math.ceil(speed * 5) + base_prefetch, 60)
+    -- Store direction for reverse window logic
+    M.playhead_direction = direction
 
-        -- Limit decodes per tick to avoid blocking too long
-        local decoded_this_tick = 0
-        local max_decodes_per_tick = 5
-
-        for i = 1, prefetch_count do
-            if decoded_this_tick >= max_decodes_per_tick then break end
-
-            local prefetch_idx = frame_idx + (direction * i)
-            if prefetch_idx >= 0 and not M.video_cache.frames[prefetch_idx] then
-                -- Decode and cache (prefetch failure is non-fatal but logged)
-                local ok, frame_or_err = pcall(function()
-                    return qt_constants.EMP.READER_DECODE_FRAME(
-                        M.video_reader,
-                        prefetch_idx,
-                        M.asset_info.fps_num,
-                        M.asset_info.fps_den
-                    )
-                end)
-                if ok and frame_or_err then
-                    M._cache_video_frame(prefetch_idx, frame_or_err)
-                    decoded_this_tick = decoded_this_tick + 1
-                elseif not ok then
-                    -- Prefetch failure - log but don't crash (will decode on-demand later)
-                    logger.warn("media_cache", string.format(
-                        "Prefetch decode failed at frame %d: %s", prefetch_idx, tostring(frame_or_err)))
-                end
-            end
+    -- Manage background prefetch thread (now has separate decoder - works for both directions)
+    if direction ~= M.last_prefetch_direction then
+        if direction == 0 then
+            -- Stopped: stop prefetch thread
+            qt_constants.EMP.READER_STOP_PREFETCH(M.video_reader)
+            logger.debug("media_cache", "Prefetch stopped")
+        else
+            -- Playing: start prefetch (forward or reverse)
+            qt_constants.EMP.READER_START_PREFETCH(M.video_reader, direction)
+            logger.debug("media_cache", string.format("Prefetch started: direction=%d", direction))
         end
+        M.last_prefetch_direction = direction
+    end
+
+    -- Update prefetch target (tells background thread where to decode ahead)
+    if direction ~= 0 then
+        qt_constants.EMP.READER_UPDATE_PREFETCH_TARGET(
+            M.video_reader,
+            frame_idx,
+            M.asset_info.fps_num,
+            M.asset_info.fps_den
+        )
     end
 
     -- Update cache center

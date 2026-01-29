@@ -64,6 +64,8 @@ local function load_video_frame(file_path)
         info.width, info.height, info.fps_num, info.fps_den))
 
     -- Initialize audio playback if asset has audio
+    logger.info("viewer_panel", string.format("Audio check: has_audio=%s SSE=%s AOP=%s",
+        tostring(info.has_audio), tostring(qt_constants.SSE ~= nil), tostring(qt_constants.AOP ~= nil)))
     if info.has_audio and qt_constants.SSE and qt_constants.AOP then
         local ok, err = audio_playback.init(media_cache)
         if ok then

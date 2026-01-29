@@ -158,28 +158,34 @@ void FrameImpl::ensure_cpu_buffer() {
         }
 
         case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
-        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange: {
-            // P010 format (10-bit): Y plane + interleaved UV plane (16-bit per component)
-            // Used for HDR content and 10-bit ProRes
-            bool full_range = (pixel_format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange);
+        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+        case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
+        case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange: {
+            // 10-bit biplanar formats: Y plane + interleaved UV plane (16-bit per component)
+            // 4:2:0 (P010): UV subsampled 2x2 - used for HDR H.264/HEVC
+            // 4:2:2: UV subsampled 2x1 (horizontal only) - used for ProRes 4:2:2
+            bool full_range = (pixel_format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange ||
+                               pixel_format == kCVPixelFormatType_422YpCbCr10BiPlanarFullRange);
+            bool is_422 = (pixel_format == kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange ||
+                           pixel_format == kCVPixelFormatType_422YpCbCr10BiPlanarFullRange);
 
             uint16_t* y_plane = static_cast<uint16_t*>(CVPixelBufferGetBaseAddressOfPlane(m_hw_buffer, 0));
             uint16_t* uv_plane = static_cast<uint16_t*>(CVPixelBufferGetBaseAddressOfPlane(m_hw_buffer, 1));
             size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(m_hw_buffer, 0);
             size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(m_hw_buffer, 1);
 
-            assert(y_plane && uv_plane && "FrameImpl::ensure_cpu_buffer: P010 plane address is null");
-
-            // BT.709 YUV→RGB conversion coefficients
-            (void)full_range;  // TODO: Apply video range scaling if needed
+            assert(y_plane && uv_plane && "FrameImpl::ensure_cpu_buffer: 10-bit plane address is null");
 
             for (size_t row = 0; row < height; ++row) {
                 uint8_t* dst_row = m_cpu_buffer.data() + row * dst_stride;
                 uint16_t* y_row = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(y_plane) + row * y_stride);
-                uint16_t* uv_row = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(uv_plane) + (row / 2) * uv_stride);
+                // 4:2:0: UV rows are shared between 2 luma rows (row / 2)
+                // 4:2:2: UV rows match luma rows 1:1 (row)
+                size_t uv_row_idx = is_422 ? row : (row / 2);
+                uint16_t* uv_row = reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(uv_plane) + uv_row_idx * uv_stride);
 
                 for (size_t col = 0; col < width; ++col) {
-                    // P010: data is in upper 10 bits of 16-bit value
+                    // 10-bit: data is in upper 10 bits of 16-bit value
                     float y_val = (y_row[col] >> 6) / 1023.0f;
                     float cb_val = (uv_row[(col / 2) * 2] >> 6) / 1023.0f - 0.5f;
                     float cr_val = (uv_row[(col / 2) * 2 + 1] >> 6) / 1023.0f - 0.5f;
@@ -212,7 +218,17 @@ void FrameImpl::ensure_cpu_buffer() {
         }
 
         default: {
-            // Unknown format - fail fast with details
+            // Unknown format - fail fast with format code for diagnosis
+            // Format is FourCC: print as 4 chars
+            char fourcc[5] = {
+                static_cast<char>((pixel_format >> 24) & 0xFF),
+                static_cast<char>((pixel_format >> 16) & 0xFF),
+                static_cast<char>((pixel_format >> 8) & 0xFF),
+                static_cast<char>(pixel_format & 0xFF),
+                '\0'
+            };
+            fprintf(stderr, "FrameImpl::ensure_cpu_buffer: unsupported CVPixelBuffer format: "
+                    "'%s' (0x%08X)\n", fourcc, pixel_format);
             assert(false && "FrameImpl::ensure_cpu_buffer: unsupported CVPixelBuffer format");
             break;
         }

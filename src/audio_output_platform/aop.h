@@ -63,6 +63,12 @@ public:
     // Flush buffer (for seeking)
     void Flush();
 
+    // Get actual sample rate (may differ from requested if device doesn't support it)
+    int32_t SampleRate() const;
+
+    // Get actual channel count
+    int32_t Channels() const;
+
     // Internal constructor (public but impl is opaque)
     explicit AudioOutput(std::unique_ptr<AudioOutputImpl> impl);
 

@@ -253,13 +253,13 @@ assert(mock_frames_decoded[1].frame_idx == 99, "Should decode frame 99")
 assert(viewer_panel.get_current_frame() == 99, "Current frame should be 99")
 print("  ✓ show_frame(99) works")
 
-print("\nTest 4.7: show_frame returns cached frame without decoding")
--- Frame 99 was just cached above; ask for it again
-mock_frames_decoded = {}
+print("\nTest 4.7: show_frame can display same frame repeatedly")
+-- Frame 99 was just displayed above; display it again
+-- Note: Caching is now handled by C++ Reader, so READER_DECODE_FRAME is always called
+-- but the C++ side returns cached frames without re-decoding
 viewer_panel.show_frame(99)
-assert(#mock_frames_decoded == 0, "Should NOT decode frame 99 (already cached)")
 assert(viewer_panel.get_current_frame() == 99, "Current frame should be 99")
-print("  ✓ show_frame uses cache (no redundant decode)")
+print("  ✓ show_frame(99) works repeatedly")
 
 print("\n--- Section 5: Edge Cases ---")
 

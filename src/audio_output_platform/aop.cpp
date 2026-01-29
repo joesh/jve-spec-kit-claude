@@ -281,6 +281,9 @@ public:
         m_io_device.clear_underrun();
     }
 
+    int sample_rate() const { return m_sample_rate; }
+    int channels() const { return m_channels; }
+
 private:
     int m_sample_rate;
     int m_channels;
@@ -362,6 +365,14 @@ bool AudioOutput::IsPlaying() const {
 
 void AudioOutput::Flush() {
     m_impl->flush();
+}
+
+int32_t AudioOutput::SampleRate() const {
+    return m_impl->sample_rate();
+}
+
+int32_t AudioOutput::Channels() const {
+    return m_impl->channels();
 }
 
 } // namespace aop

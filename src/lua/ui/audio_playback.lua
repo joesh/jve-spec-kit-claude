@@ -210,7 +210,8 @@ function M.init(cache)
     M.media_cache = cache
     M.has_audio = true
     M.sample_rate = info.audio_sample_rate
-    M.channels = info.audio_channels
+    -- EMP resampler always outputs stereo regardless of source (see ffmpeg_resample.h)
+    M.channels = 2
     M.duration_us = info.duration_us
     M.fps_num = info.fps_num
     M.fps_den = info.fps_den
@@ -225,7 +226,24 @@ function M.init(cache)
     end
     M.aop = aop
 
-    -- Create SSE engine
+    -- Check actual sample rate (device may not support requested rate)
+    -- Guard for tests that mock AOP without SAMPLE_RATE
+    if qt_constants.AOP.SAMPLE_RATE then
+        local actual_rate = qt_constants.AOP.SAMPLE_RATE(aop)
+        local actual_channels = qt_constants.AOP.CHANNELS(aop)
+        if actual_rate ~= M.sample_rate then
+            logger.warn("audio_playback", string.format(
+                "Sample rate mismatch! Requested %d, got %d. Audio will play at wrong speed!",
+                M.sample_rate, actual_rate))
+            -- TODO: Resample in SSE or use actual rate for time calculations
+        end
+        logger.info("audio_playback", string.format(
+            "AOP opened: %dHz %dch (requested: %dHz %dch)",
+            actual_rate, actual_channels, M.sample_rate, M.channels))
+    end
+
+    -- Create SSE engine (using MEDIA sample rate, not device rate)
+    -- This is intentional - SSE time-tracks media position
     local sse = qt_constants.SSE.CREATE({
         sample_rate = M.sample_rate,
         channels = M.channels,
@@ -337,8 +355,8 @@ function M.start()
     M._start_pump()
 
     logger.info("audio_playback", string.format(
-        "Started at %.3fs, speed=%.2f",
-        M.media_anchor_us / 1000000, M.speed))
+        "Started at %.3fs, speed=%.2f, quality=Q%d, sample_rate=%d",
+        M.media_anchor_us / 1000000, M.speed, M.quality_mode, M.sample_rate))
 end
 
 --- Stop audio playback (transport event)
@@ -626,7 +644,12 @@ function M._pump_tick()
                     :format(produced, frames_needed))
 
             if produced > 0 then
-                qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
+                local written = qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
+                -- Log first few pumps for debugging
+                logger.debug("audio_playback", string.format(
+                    "Pump: needed=%d produced=%d written=%d SSE_time=%.3fs",
+                    frames_needed, produced, written,
+                    qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
             end
 
             -- SSE starvation logging (NSF: always log, never silently clear)

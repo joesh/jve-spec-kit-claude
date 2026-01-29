@@ -44,6 +44,26 @@ public:
     Result<std::shared_ptr<PcmChunk>> DecodeAudioRangeUS(TimeUS t0_us, TimeUS t1_us,
                                                           const AudioFormat& out);
 
+    // =========================================================================
+    // Background Prefetch API - for smooth playback
+    // =========================================================================
+
+    // Start/update background prefetch thread
+    // direction: 1 = forward, -1 = reverse, 0 = stop (same as StopPrefetch)
+    // Prefetch thread will decode ahead in the specified direction
+    void StartPrefetch(int direction);
+
+    // Stop background prefetch (safe to call even if not running)
+    void StopPrefetch();
+
+    // Update prefetch target position (call from playback tick)
+    // Prefetch thread will decode ahead of this position
+    void UpdatePrefetchTarget(TimeUS t_us);
+
+    // Non-blocking cache lookup - returns nullptr on miss
+    // Use this for display path; falls back to DecodeAtUS on miss
+    std::shared_ptr<Frame> GetCachedFrame(TimeUS t_us);
+
     // Get the underlying asset
     std::shared_ptr<Asset> asset() const;
 
@@ -53,6 +73,9 @@ public:
 private:
     std::unique_ptr<ReaderImpl> m_impl;
     std::shared_ptr<Asset> m_asset;
+
+    // Prefetch worker thread function
+    void prefetch_worker();
 };
 
 } // namespace emp

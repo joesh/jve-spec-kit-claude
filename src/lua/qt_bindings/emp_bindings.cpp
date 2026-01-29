@@ -220,6 +220,78 @@ static int lua_emp_reader_decode_frame(lua_State* L) {
     return 1;
 }
 
+// EMP.READER_START_PREFETCH(reader, direction)
+// direction: 1=forward, -1=reverse, 0=stop
+static int lua_emp_reader_start_prefetch(lua_State* L) {
+    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    auto it = g_readers.find(key);
+    if (it == g_readers.end()) {
+        return luaL_error(L, "READER_START_PREFETCH: invalid reader handle");
+    }
+
+    int direction = static_cast<int>(luaL_checkinteger(L, 2));
+    if (direction < -1 || direction > 1) {
+        return luaL_error(L, "READER_START_PREFETCH: direction must be -1, 0, or 1");
+    }
+
+    it->second->StartPrefetch(direction);
+    return 0;
+}
+
+// EMP.READER_STOP_PREFETCH(reader)
+static int lua_emp_reader_stop_prefetch(lua_State* L) {
+    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    auto it = g_readers.find(key);
+    if (it == g_readers.end()) {
+        return luaL_error(L, "READER_STOP_PREFETCH: invalid reader handle");
+    }
+
+    it->second->StopPrefetch();
+    return 0;
+}
+
+// EMP.READER_UPDATE_PREFETCH_TARGET(reader, frame_idx, rate_num, rate_den)
+static int lua_emp_reader_update_prefetch_target(lua_State* L) {
+    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    auto it = g_readers.find(key);
+    if (it == g_readers.end()) {
+        return luaL_error(L, "READER_UPDATE_PREFETCH_TARGET: invalid reader handle");
+    }
+
+    int64_t frame_idx = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int32_t rate_num = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    int32_t rate_den = static_cast<int32_t>(luaL_checkinteger(L, 4));
+
+    emp::FrameTime ft = emp::FrameTime::from_frame(frame_idx, {rate_num, rate_den});
+    it->second->UpdatePrefetchTarget(ft.to_us());
+    return 0;
+}
+
+// EMP.READER_GET_CACHED_FRAME(reader, frame_idx, rate_num, rate_den) -> frame | nil
+static int lua_emp_reader_get_cached_frame(lua_State* L) {
+    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    auto it = g_readers.find(key);
+    if (it == g_readers.end()) {
+        return luaL_error(L, "READER_GET_CACHED_FRAME: invalid reader handle");
+    }
+
+    int64_t frame_idx = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int32_t rate_num = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    int32_t rate_den = static_cast<int32_t>(luaL_checkinteger(L, 4));
+
+    emp::FrameTime ft = emp::FrameTime::from_frame(frame_idx, {rate_num, rate_den});
+    auto frame = it->second->GetCachedFrame(ft.to_us());
+
+    if (!frame) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    void* frame_key = push_userdata(L, frame, EMP_FRAME_METATABLE);
+    g_frames[frame_key] = frame;
+    return 1;
+}
+
 // Reader __gc metamethod
 static int lua_emp_reader_gc(lua_State* L) {
     void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
@@ -493,6 +565,16 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "READER_SEEK_FRAME");
     lua_pushcfunction(L, lua_emp_reader_decode_frame);
     lua_setfield(L, -2, "READER_DECODE_FRAME");
+
+    // Prefetch functions (background decode thread)
+    lua_pushcfunction(L, lua_emp_reader_start_prefetch);
+    lua_setfield(L, -2, "READER_START_PREFETCH");
+    lua_pushcfunction(L, lua_emp_reader_stop_prefetch);
+    lua_setfield(L, -2, "READER_STOP_PREFETCH");
+    lua_pushcfunction(L, lua_emp_reader_update_prefetch_target);
+    lua_setfield(L, -2, "READER_UPDATE_PREFETCH_TARGET");
+    lua_pushcfunction(L, lua_emp_reader_get_cached_frame);
+    lua_setfield(L, -2, "READER_GET_CACHED_FRAME");
 
     // Frame functions
     lua_pushcfunction(L, lua_emp_frame_info);

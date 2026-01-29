@@ -193,6 +193,28 @@ static int lua_aop_write_f32(lua_State* L) {
 // Requires emp_bindings to be included first for PcmChunk access
 static int lua_aop_write_pcm(lua_State* L);  // Forward declaration, implemented below
 
+// AOP.SAMPLE_RATE(aop) -> int
+// Returns actual sample rate (may differ from requested if device doesn't support it)
+static int lua_aop_sample_rate(lua_State* L) {
+    aop::AudioOutput* output = get_aop_userdata(L, 1);
+    if (!output) {
+        return luaL_error(L, "AOP.SAMPLE_RATE: invalid aop handle");
+    }
+    lua_pushinteger(L, output->SampleRate());
+    return 1;
+}
+
+// AOP.CHANNELS(aop) -> int
+// Returns actual channel count
+static int lua_aop_channels(lua_State* L) {
+    aop::AudioOutput* output = get_aop_userdata(L, 1);
+    if (!output) {
+        return luaL_error(L, "AOP.CHANNELS: invalid aop handle");
+    }
+    lua_pushinteger(L, output->Channels());
+    return 1;
+}
+
 // AOP __gc metamethod
 static int lua_aop_gc(lua_State* L) {
     void** ud = static_cast<void**>(luaL_checkudata(L, 1, AOP_METATABLE));
@@ -242,6 +264,10 @@ void register_aop_bindings(lua_State* L) {
     lua_setfield(L, -2, "CLEAR_UNDERRUN");
     lua_pushcfunction(L, lua_aop_write_f32);
     lua_setfield(L, -2, "WRITE_F32");
+    lua_pushcfunction(L, lua_aop_sample_rate);
+    lua_setfield(L, -2, "SAMPLE_RATE");
+    lua_pushcfunction(L, lua_aop_channels);
+    lua_setfield(L, -2, "CHANNELS");
 
     lua_setfield(L, -2, "AOP");
 }

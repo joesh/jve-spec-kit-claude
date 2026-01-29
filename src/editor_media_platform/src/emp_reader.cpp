@@ -6,6 +6,30 @@
 #include "impl/pcm_chunk_impl.h"
 #include <cassert>
 #include <vector>
+#include <map>
+#include <memory>
+#include <chrono>
+#include <cstdio>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+
+// Simple logging - check EMP_LOG_LEVEL env var at runtime
+// 0=none (default), 1=warn, 2=debug
+namespace {
+inline int emp_log_level() {
+    static int level = -1;
+    if (level < 0) {
+        const char* env = std::getenv("EMP_LOG_LEVEL");
+        level = env ? std::atoi(env) : 0;
+    }
+    return level;
+}
+} // namespace
+
+#define EMP_LOG_WARN(...) do { if (emp_log_level() >= 1) { fprintf(stderr, "[EMP WARN] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while(0)
+#define EMP_LOG_DEBUG(...) do { if (emp_log_level() >= 2) { fprintf(stderr, "[EMP] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while(0)
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
 #include <CoreVideo/CVPixelBuffer.h>
@@ -27,6 +51,16 @@ bool need_seek(TimeUS current_pts_us, TimeUS target_us, bool have_current);
 std::vector<uint8_t> allocate_bgra_buffer(int width, int height, int* out_stride);
 void convert_frame_to_bgra(FFmpegScaleContext& scale_ctx, AVFrame* frame,
                             uint8_t* dst_data, int dst_stride);
+
+// Decoded frame with its PTS
+struct DecodedFrame {
+    AVFrame* frame;
+    TimeUS pts_us;
+};
+Result<std::vector<DecodedFrame>> decode_frames_batch(
+    AVCodecContext* codec_ctx, AVFormatContext* fmt_ctx,
+    AVStream* stream, int stream_idx,
+    TimeUS target_us, AVPacket* pkt, AVFrame* temp_frame);
 }
 
 // ReaderImpl holds FFmpeg decode state
@@ -35,31 +69,66 @@ public:
     ReaderImpl() {
         m_pkt = av_packet_alloc();
         m_frame = av_frame_alloc();
-        m_best_frame = av_frame_alloc();
         m_audio_pkt = av_packet_alloc();
         m_audio_frame = av_frame_alloc();
-        assert(m_pkt && m_frame && m_best_frame);
+        m_prefetch_pkt = av_packet_alloc();
+        m_prefetch_frame = av_frame_alloc();
+        assert(m_pkt && m_frame);
         assert(m_audio_pkt && m_audio_frame);
+        assert(m_prefetch_pkt && m_prefetch_frame);
     }
 
     ~ReaderImpl() {
+        // Stop prefetch thread if running (Reader::~Reader calls StopPrefetch,
+        // but be defensive)
+        prefetch_running.store(false);
+        prefetch_cv.notify_all();
+        if (prefetch_thread.joinable()) {
+            prefetch_thread.join();
+        }
+
         av_packet_free(&m_pkt);
         av_frame_free(&m_frame);
-        av_frame_free(&m_best_frame);
         av_packet_free(&m_audio_pkt);
         av_frame_free(&m_audio_frame);
+        av_packet_free(&m_prefetch_pkt);
+        av_frame_free(&m_prefetch_frame);
     }
 
-    // Video decode state
+    // Video decode state (main thread)
     impl::FFmpegCodecContext codec_ctx;
     impl::FFmpegScaleContext scale_ctx;
     AVPacket* m_pkt = nullptr;
     AVFrame* m_frame = nullptr;
-    AVFrame* m_best_frame = nullptr;
 
-    // Current video decoder state
-    bool have_current_pts = false;
-    TimeUS current_pts_us = 0;
+    // Frame cache: stores ALL decoded frames by PTS
+    // Key: PTS in microseconds, Value: shared_ptr<Frame>
+    // This captures ALL decoder output to avoid B-frame reordering losses
+    std::map<TimeUS, std::shared_ptr<Frame>> frame_cache;
+    TimeUS cache_min_pts = INT64_MAX;
+    TimeUS cache_max_pts = INT64_MIN;
+    static constexpr size_t MAX_CACHE_FRAMES = 120;  // ~5s at 24fps - larger for reverse
+
+    // Thread-safety for frame cache (shared between main and prefetch threads)
+    mutable std::mutex cache_mutex;
+
+    // =========================================================================
+    // Prefetch thread state - has its OWN decoder to avoid contention
+    // =========================================================================
+    std::thread prefetch_thread;
+    std::atomic<bool> prefetch_running{false};
+    std::atomic<TimeUS> prefetch_target{0};
+    std::atomic<int> prefetch_direction{0};  // 0=stopped, 1=forward, -1=reverse
+    std::condition_variable prefetch_cv;
+    std::mutex prefetch_mutex;  // For condition variable
+
+    // Prefetch thread's own decoder (initialized lazily on first StartPrefetch)
+    impl::FFmpegFormatContext prefetch_fmt_ctx;  // Separate format context!
+    impl::FFmpegCodecContext prefetch_codec_ctx;
+    impl::FFmpegScaleContext prefetch_scale_ctx;
+    AVPacket* m_prefetch_pkt = nullptr;
+    AVFrame* m_prefetch_frame = nullptr;
+    bool prefetch_decoder_initialized = false;
 
     // Audio decode state
     impl::FFmpegCodecContext audio_codec_ctx;
@@ -79,7 +148,10 @@ Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<Asset> asset)
     assert(m_impl && m_asset && "Reader impl/asset cannot be null");
 }
 
-Reader::~Reader() = default;
+Reader::~Reader() {
+    // Stop prefetch thread before destroying impl
+    StopPrefetch();
+}
 
 std::shared_ptr<Asset> Reader::asset() const {
     return m_asset;
@@ -148,10 +220,9 @@ Result<void> Reader::SeekUS(TimeUS t_us) {
         t_us
     );
 
-    if (result.is_ok()) {
-        m_impl->have_current_pts = false;
-        m_impl->current_pts_us = 0;
-    }
+    // Note: We don't clear the frame cache on seek. The cached frames are still valid
+    // (they hold BGRA data, not decoder state). Clearing would invalidate any handles
+    // held by Lua. Natural eviction will remove old frames as new ones are decoded.
 
     return result;
 }
@@ -160,84 +231,211 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAt(FrameTime t) {
     return DecodeAtUS(t.to_us());
 }
 
+// Helper: Convert AVFrame to emp::Frame (handles both hw and sw paths)
+static std::shared_ptr<Frame> avframe_to_emp_frame(
+    AVFrame* av_frame, TimeUS pts_us,
+    impl::FFmpegScaleContext& scale_ctx,
+    [[maybe_unused]] impl::FFmpegCodecContext& codec_ctx)
+{
+#ifdef EMP_HAS_VIDEOTOOLBOX
+    if (av_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+        CVPixelBufferRef pixel_buffer = (CVPixelBufferRef)av_frame->data[3];
+        assert(pixel_buffer && "VideoToolbox frame missing CVPixelBuffer");
+
+        int stride = ((av_frame->width * 4) + 31) & ~31;
+
+        auto frame_impl = std::make_unique<FrameImpl>(
+            av_frame->width, av_frame->height, stride, pts_us, pixel_buffer
+        );
+        return std::make_shared<Frame>(std::move(frame_impl));
+    }
+#endif
+
+    // Software decode path
+    int stride;
+    auto buffer = impl::allocate_bgra_buffer(av_frame->width, av_frame->height, &stride);
+    impl::convert_frame_to_bgra(scale_ctx, av_frame, buffer.data(), stride);
+
+    auto frame_impl = std::make_unique<FrameImpl>(
+        av_frame->width, av_frame->height, stride, pts_us, std::move(buffer)
+    );
+    return std::make_shared<Frame>(std::move(frame_impl));
+}
+
+// Helper: Evict oldest frames from cache when exceeding limit
+static void evict_cache_frames(
+    std::map<TimeUS, std::shared_ptr<Frame>>& cache,
+    TimeUS& cache_min_pts, TimeUS& cache_max_pts,
+    TimeUS keep_around_pts, size_t max_frames)
+{
+    while (cache.size() > max_frames) {
+        // Evict frame furthest from keep_around_pts
+        auto it_first = cache.begin();
+        auto it_last = std::prev(cache.end());
+
+        TimeUS dist_first = (keep_around_pts > it_first->first)
+            ? (keep_around_pts - it_first->first)
+            : (it_first->first - keep_around_pts);
+        TimeUS dist_last = (keep_around_pts > it_last->first)
+            ? (keep_around_pts - it_last->first)
+            : (it_last->first - keep_around_pts);
+
+        if (dist_first >= dist_last) {
+            cache.erase(it_first);
+        } else {
+            cache.erase(it_last);
+        }
+    }
+
+    // Update bounds
+    if (cache.empty()) {
+        cache_min_pts = INT64_MAX;
+        cache_max_pts = INT64_MIN;
+    } else {
+        cache_min_pts = cache.begin()->first;
+        cache_max_pts = cache.rbegin()->first;
+    }
+}
+
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     AssetImpl* asset_impl = m_asset->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
     int stream_idx = asset_impl->fmt_ctx.video_stream_index();
 
-    // Check if we need to seek
-    if (impl::need_seek(m_impl->current_pts_us, t_us, m_impl->have_current_pts)) {
+    static int cache_hits = 0, cache_misses = 0;
+    static auto last_log = std::chrono::steady_clock::now();
+
+    // 1. Check cache first (fast path) - thread-safe lookup
+    {
+        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+        if (!m_impl->frame_cache.empty() && t_us <= m_impl->cache_max_pts) {
+            auto it = m_impl->frame_cache.upper_bound(t_us);
+            if (it != m_impl->frame_cache.begin()) {
+                --it;  // Now points to largest pts <= t_us
+                cache_hits++;
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_log).count() >= 2) {
+                    EMP_LOG_DEBUG("Cache: %d hits, %d misses (%.1f%% hit rate), size=%zu",
+                            cache_hits, cache_misses,
+                            100.0 * cache_hits / (cache_hits + cache_misses + 1),
+                            m_impl->frame_cache.size());
+                    last_log = now;
+                }
+                return it->second;
+            }
+        }
+    }
+
+    // If prefetch is running, wait briefly for it to catch up
+    if (m_impl->prefetch_direction.load() != 0) {
+        for (int i = 0; i < 10; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            auto cached = GetCachedFrame(t_us);
+            if (cached) {
+                cache_hits++;
+                return cached;
+            }
+        }
+    }
+
+    cache_misses++;
+    auto decode_start = std::chrono::steady_clock::now();
+
+    // 2. Synchronous decode fallback (scrub, seek, initial load)
+    //    Main thread uses its own decoder - no lock needed (prefetch has separate decoder)
+    std::shared_ptr<Frame> result_frame;
+
+    // Check cache state under lock
+    bool need_seek_backward = false;
+    bool cache_empty = false;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+        cache_empty = m_impl->frame_cache.empty();
+        need_seek_backward = (t_us < m_impl->cache_min_pts && m_impl->cache_min_pts != INT64_MAX);
+    }
+
+    if (need_seek_backward) {
         auto seek_result = impl::seek_with_backoff(
             fmt_ctx, stream, m_impl->codec_ctx.get(), t_us
         );
         if (seek_result.is_error()) {
             return seek_result.error();
         }
-        m_impl->have_current_pts = false;
     }
 
-    // Decode until we find floor frame
-    auto decode_result = impl::decode_until_target(
-        m_impl->codec_ctx.get(),
-        fmt_ctx,
-        stream,
-        stream_idx,
-        t_us,
-        m_impl->m_pkt,
-        m_impl->m_frame,
-        m_impl->m_best_frame
+    if (cache_empty) {
+        auto seek_result = impl::seek_with_backoff(
+            fmt_ctx, stream, m_impl->codec_ctx.get(), t_us
+        );
+        if (seek_result.is_error()) {
+            return seek_result.error();
+        }
+    }
+
+    // 3. Decode frames until we find one at/past target
+    auto batch_result = impl::decode_frames_batch(
+        m_impl->codec_ctx.get(), fmt_ctx, stream, stream_idx,
+        t_us, m_impl->m_pkt, m_impl->m_frame
     );
 
-    if (decode_result.is_error()) {
-        return decode_result.error();
+    if (batch_result.is_error()) {
+        return batch_result.error();
     }
 
-    AVFrame* result_frame = decode_result.value();
+    // 4. Convert and add to shared cache (under cache lock)
+    auto& decoded_frames = batch_result.value();
 
-    // Update current position
-    m_impl->current_pts_us = impl::stream_pts_to_us(result_frame->pts, stream);
-    m_impl->have_current_pts = true;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
 
-#ifdef EMP_HAS_VIDEOTOOLBOX
-    // Check if this is a hardware-accelerated frame (VideoToolbox)
-    if (result_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-        // Extract CVPixelBuffer from AVFrame
-        // For VideoToolbox, data[3] contains the CVPixelBufferRef
-        CVPixelBufferRef pixel_buffer = (CVPixelBufferRef)result_frame->data[3];
-        assert(pixel_buffer && "VideoToolbox frame missing CVPixelBuffer");
+        for (auto& df : decoded_frames) {
+            if (m_impl->frame_cache.find(df.pts_us) == m_impl->frame_cache.end()) {
+                auto emp_frame = avframe_to_emp_frame(
+                    df.frame, df.pts_us, m_impl->scale_ctx, m_impl->codec_ctx
+                );
+                m_impl->frame_cache[df.pts_us] = emp_frame;
 
-        // Calculate stride for when lazy CPU transfer happens
-        int stride = ((result_frame->width * 4) + 31) & ~31;
+                if (df.pts_us < m_impl->cache_min_pts) {
+                    m_impl->cache_min_pts = df.pts_us;
+                }
+                if (df.pts_us > m_impl->cache_max_pts) {
+                    m_impl->cache_max_pts = df.pts_us;
+                }
+            }
+            av_frame_free(&df.frame);
+        }
 
-        // Create Frame with hw buffer (lazy CPU transfer)
-        auto frame_impl = std::make_unique<FrameImpl>(
-            result_frame->width,
-            result_frame->height,
-            stride,
-            m_impl->current_pts_us,
-            pixel_buffer  // FrameImpl will retain this
+        auto decode_end = std::chrono::steady_clock::now();
+        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(decode_end - decode_start).count();
+        if (decode_ms > 10) {
+            EMP_LOG_DEBUG("Decode batch: %zu frames in %lldms (%.1fms/frame)",
+                    decoded_frames.size(), static_cast<long long>(decode_ms),
+                    decoded_frames.size() > 0 ? (double)decode_ms / decoded_frames.size() : 0);
+        }
+
+        // Evict old frames
+        evict_cache_frames(
+            m_impl->frame_cache,
+            m_impl->cache_min_pts, m_impl->cache_max_pts,
+            t_us, ReaderImpl::MAX_CACHE_FRAMES
         );
 
-        return std::make_shared<Frame>(std::move(frame_impl));
+        // Return floor frame from cache
+        auto it = m_impl->frame_cache.upper_bound(t_us);
+        if (it != m_impl->frame_cache.begin()) {
+            --it;
+            result_frame = it->second;
+        } else if (!m_impl->frame_cache.empty()) {
+            result_frame = m_impl->frame_cache.begin()->second;
+        }
     }
-#endif
 
-    // Software decode path: convert to BGRA32 immediately
-    int stride;
-    auto buffer = impl::allocate_bgra_buffer(result_frame->width, result_frame->height, &stride);
-    impl::convert_frame_to_bgra(m_impl->scale_ctx, result_frame, buffer.data(), stride);
+    if (result_frame) {
+        return result_frame;
+    }
 
-    // Create Frame with CPU buffer
-    auto frame_impl = std::make_unique<FrameImpl>(
-        result_frame->width,
-        result_frame->height,
-        stride,
-        m_impl->current_pts_us,
-        std::move(buffer)
-    );
-
-    return std::make_shared<Frame>(std::move(frame_impl));
+    return Error::internal("DecodeAtUS: no frames decoded");
 }
 
 Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRange(FrameTime t0, FrameTime t1,
@@ -247,6 +445,10 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRange(FrameTime t0, FrameTi
 
 Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeUS t1_us,
                                                               const AudioFormat& out) {
+    // Resampler ALWAYS outputs stereo (2 channels) regardless of source format
+    // See ffmpeg_resample.h: "Converts any input format to float32 stereo"
+    constexpr int RESAMPLER_OUTPUT_CHANNELS = 2;
+
     // Validate
     if (!m_asset->info().has_audio) {
         return Error::unsupported("Asset has no audio stream");
@@ -285,7 +487,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     int64_t max_samples = expected_samples + 1024;
 
     std::vector<float> pcm_buffer;
-    pcm_buffer.reserve(static_cast<size_t>(max_samples * out.channels));
+    pcm_buffer.reserve(static_cast<size_t>(max_samples * RESAMPLER_OUTPUT_CHANNELS));
 
     // Seek to start position in audio stream
     int64_t seek_pts = impl::us_to_stream_pts(t0_us, audio_stream);
@@ -362,7 +564,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
             // Resample this frame
             int64_t out_samples_needed = m_impl->resample_ctx.get_out_samples(frame_samples);
             size_t current_size = pcm_buffer.size();
-            pcm_buffer.resize(current_size + static_cast<size_t>(out_samples_needed * out.channels));
+            pcm_buffer.resize(current_size + static_cast<size_t>(out_samples_needed * RESAMPLER_OUTPUT_CHANNELS));
 
             int64_t out_samples = m_impl->resample_ctx.convert(
                 m_impl->m_audio_frame->data,
@@ -372,7 +574,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
             );
 
             // Adjust buffer to actual output size
-            pcm_buffer.resize(current_size + static_cast<size_t>(out_samples * out.channels));
+            pcm_buffer.resize(current_size + static_cast<size_t>(out_samples * RESAMPLER_OUTPUT_CHANNELS));
             total_output_samples += out_samples;
 
             av_frame_unref(m_impl->m_audio_frame);
@@ -388,7 +590,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
 done:
     // Flush any remaining samples from resampler
     if (total_output_samples > 0) {
-        size_t flush_buffer_size = 1024 * out.channels;
+        size_t flush_buffer_size = 1024 * RESAMPLER_OUTPUT_CHANNELS;
         size_t current_size = pcm_buffer.size();
         pcm_buffer.resize(current_size + flush_buffer_size);
 
@@ -397,7 +599,7 @@ done:
             1024
         );
 
-        pcm_buffer.resize(current_size + static_cast<size_t>(flushed * out.channels));
+        pcm_buffer.resize(current_size + static_cast<size_t>(flushed * RESAMPLER_OUTPUT_CHANNELS));
         total_output_samples += flushed;
     }
 
@@ -407,15 +609,255 @@ done:
     }
 
     // Create PcmChunk
+    // Note: Resampler always outputs stereo (2 channels) regardless of source
+    // See ffmpeg_resample.h - "Converts any input format to float32 stereo"
     auto chunk_impl = std::make_unique<PcmChunkImpl>(
         out.sample_rate,
-        out.channels,
+        2,  // Resampler always outputs stereo
         out.fmt,
         decoded_start_us,
         std::move(pcm_buffer)
     );
 
     return std::make_shared<PcmChunk>(std::move(chunk_impl));
+}
+
+// =============================================================================
+// Prefetch Thread Implementation
+// =============================================================================
+
+void Reader::StartPrefetch(int direction) {
+    assert(direction >= -1 && direction <= 1 && "direction must be -1, 0, or 1");
+
+    if (direction == 0) {
+        StopPrefetch();
+        return;
+    }
+
+    // Initialize prefetch decoder if not already done (lazy init)
+    if (!m_impl->prefetch_decoder_initialized) {
+        const std::string& path = m_asset->info().path;
+
+        // Open separate format context for prefetch thread
+        auto fmt_result = m_impl->prefetch_fmt_ctx.open(path);
+        if (fmt_result.is_error()) {
+            EMP_LOG_WARN("Failed to open format ctx: %s",
+                    fmt_result.error().message.c_str());
+            return;  // Can't prefetch without decoder
+        }
+
+        auto stream_result = m_impl->prefetch_fmt_ctx.find_video_stream();
+        if (stream_result.is_error()) {
+            EMP_LOG_WARN("Failed to find video stream");
+            return;
+        }
+
+        AVCodecParameters* params = m_impl->prefetch_fmt_ctx.video_codec_params();
+        auto codec_result = m_impl->prefetch_codec_ctx.init(params);
+        if (codec_result.is_error()) {
+            EMP_LOG_WARN("Failed to init codec: %s",
+                    codec_result.error().message.c_str());
+            return;
+        }
+
+        // Initialize scaler if software decode
+        if (!m_impl->prefetch_codec_ctx.is_hw_accelerated()) {
+            auto scale_result = m_impl->prefetch_scale_ctx.init(
+                params->width, params->height,
+                static_cast<AVPixelFormat>(params->format),
+                params->width, params->height
+            );
+            if (scale_result.is_error()) {
+                EMP_LOG_WARN("Failed to init scaler");
+                return;
+            }
+        }
+
+        m_impl->prefetch_decoder_initialized = true;
+        EMP_LOG_DEBUG("Decoder initialized (hw=%d)",
+                m_impl->prefetch_codec_ctx.is_hw_accelerated());
+    }
+
+    // Update direction (wakes thread if already running)
+    m_impl->prefetch_direction.store(direction);
+    m_impl->prefetch_cv.notify_one();
+
+    // Start thread if not already running
+    if (!m_impl->prefetch_running.load()) {
+        m_impl->prefetch_running.store(true);
+
+        // Join any previous thread first
+        if (m_impl->prefetch_thread.joinable()) {
+            m_impl->prefetch_thread.join();
+        }
+
+        m_impl->prefetch_thread = std::thread([this]() {
+            prefetch_worker();
+        });
+    }
+}
+
+void Reader::StopPrefetch() {
+    m_impl->prefetch_direction.store(0);
+    m_impl->prefetch_running.store(false);
+    m_impl->prefetch_cv.notify_all();
+
+    if (m_impl->prefetch_thread.joinable()) {
+        m_impl->prefetch_thread.join();
+    }
+}
+
+void Reader::UpdatePrefetchTarget(TimeUS t_us) {
+    m_impl->prefetch_target.store(t_us);
+    m_impl->prefetch_cv.notify_one();
+}
+
+std::shared_ptr<Frame> Reader::GetCachedFrame(TimeUS t_us) {
+    std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+
+    if (m_impl->frame_cache.empty()) {
+        return nullptr;
+    }
+
+    // Only return from cache if target is within cached range
+    if (t_us > m_impl->cache_max_pts) {
+        return nullptr;  // Target is beyond cache - miss
+    }
+
+    auto it = m_impl->frame_cache.upper_bound(t_us);
+    if (it != m_impl->frame_cache.begin()) {
+        --it;  // Now points to largest pts <= t_us
+        return it->second;
+    }
+
+    // t_us is before all cached frames
+    return nullptr;
+}
+
+void Reader::prefetch_worker() {
+    // Prefetch thread uses its OWN decoder resources - no contention with main thread!
+    // Both threads share only the frame cache (protected by cache_mutex).
+
+    // Use prefetch thread's own format context, codec context, etc.
+    AVFormatContext* fmt_ctx = m_impl->prefetch_fmt_ctx.get();
+    AVStream* stream = m_impl->prefetch_fmt_ctx.video_stream();
+    int stream_idx = m_impl->prefetch_fmt_ctx.video_stream_index();
+
+    // Lookahead amount in microseconds
+    constexpr TimeUS LOOKAHEAD_US = 500000;  // 0.5 seconds
+
+    EMP_LOG_DEBUG("Thread started (separate decoder)");
+
+    while (m_impl->prefetch_running.load()) {
+        int dir = m_impl->prefetch_direction.load();
+
+        if (dir == 0) {
+            // Stopped - wait for signal
+            std::unique_lock<std::mutex> lock(m_impl->prefetch_mutex);
+            m_impl->prefetch_cv.wait_for(lock, std::chrono::milliseconds(50));
+            continue;
+        }
+
+        TimeUS target = m_impl->prefetch_target.load();
+        TimeUS lookahead = (dir > 0) ? LOOKAHEAD_US : -LOOKAHEAD_US;
+        TimeUS prefetch_to = target + lookahead;
+
+        // Clamp to valid range
+        if (prefetch_to < 0) prefetch_to = 0;
+        TimeUS duration = m_asset->info().duration_us;
+        if (prefetch_to > duration) prefetch_to = duration;
+
+        // Check if we need to decode (check under lock)
+        bool need_decode = false;
+        {
+            std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+            if (m_impl->frame_cache.empty()) {
+                need_decode = true;
+            } else if (dir > 0) {
+                // Forward: need to decode if prefetch target is past cache max
+                need_decode = (prefetch_to > m_impl->cache_max_pts);
+            } else {
+                // Reverse: need to decode if prefetch target is before cache min
+                need_decode = (prefetch_to < m_impl->cache_min_pts);
+            }
+        }
+
+        if (need_decode) {
+            auto decode_start = std::chrono::steady_clock::now();
+            // No decode_mutex needed - we have our own decoder!
+
+            // For reverse, we need to seek backward first
+            if (dir < 0 && prefetch_to < m_impl->cache_min_pts) {
+                auto seek_result = impl::seek_with_backoff(
+                    fmt_ctx, stream, m_impl->prefetch_codec_ctx.get(), prefetch_to
+                );
+                if (seek_result.is_error()) {
+                    EMP_LOG_DEBUG("Seek failed: %s",
+                            seek_result.error().message.c_str());
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+            }
+
+            // Decode batch using prefetch thread's own decoder
+            auto batch_result = impl::decode_frames_batch(
+                m_impl->prefetch_codec_ctx.get(), fmt_ctx, stream, stream_idx,
+                prefetch_to, m_impl->m_prefetch_pkt, m_impl->m_prefetch_frame
+            );
+
+            if (batch_result.is_error()) {
+                if (batch_result.error().code == ErrorCode::EOFReached) {
+                    EMP_LOG_DEBUG("Reached EOF");
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            }
+
+            // Convert and add to shared cache (under cache lock only)
+            auto& decoded_frames = batch_result.value();
+            {
+                std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+
+                for (auto& df : decoded_frames) {
+                    if (m_impl->frame_cache.find(df.pts_us) == m_impl->frame_cache.end()) {
+                        // Use prefetch thread's scale context
+                        auto emp_frame = avframe_to_emp_frame(
+                            df.frame, df.pts_us,
+                            m_impl->prefetch_scale_ctx, m_impl->prefetch_codec_ctx
+                        );
+                        m_impl->frame_cache[df.pts_us] = emp_frame;
+
+                        if (df.pts_us < m_impl->cache_min_pts) {
+                            m_impl->cache_min_pts = df.pts_us;
+                        }
+                        if (df.pts_us > m_impl->cache_max_pts) {
+                            m_impl->cache_max_pts = df.pts_us;
+                        }
+                    }
+                    av_frame_free(&df.frame);
+                }
+
+                // Evict old frames
+                evict_cache_frames(
+                    m_impl->frame_cache,
+                    m_impl->cache_min_pts, m_impl->cache_max_pts,
+                    target, ReaderImpl::MAX_CACHE_FRAMES
+                );
+            }
+
+            auto decode_end = std::chrono::steady_clock::now();
+            auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                decode_end - decode_start).count();
+            EMP_LOG_DEBUG("Decoded %zu frames in %lldms, cache=%zu",
+                    decoded_frames.size(), static_cast<long long>(decode_ms),
+                    m_impl->frame_cache.size());
+        } else {
+            // Cache is ahead - sleep briefly
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+
+    EMP_LOG_DEBUG("Thread stopped");
 }
 
 } // namespace emp

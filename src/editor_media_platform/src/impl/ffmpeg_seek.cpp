@@ -4,7 +4,7 @@
 namespace emp {
 namespace impl {
 
-// Seek backoff window: 2 seconds (conservative for FFmpeg edge cases)
+// Seek backoff window: 2 seconds (ensures keyframe before target for H.264 GOP)
 constexpr TimeUS SEEK_BACKOFF_US = 2000000;
 
 // Seek to keyframe before target with 2-second backoff
