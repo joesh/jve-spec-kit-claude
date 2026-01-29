@@ -28,7 +28,7 @@ local SPEC = {
         dry_run = { kind = "boolean" },
         duration = {},
         duration_value = {},
-        insert_time = { default = 0 },
+        insert_time = {},
         master_clip_id = {},
         media_id = { required = true },
         project_id = { required = true },

@@ -29,7 +29,7 @@ local SPEC = {
         duration_value = {},
         master_clip_id = {},
         media_id = { required = true },
-        overwrite_time = { default = 0 },
+        overwrite_time = {},
         project_id = { required = true },
         sequence_id = {},
         source_in = {},
