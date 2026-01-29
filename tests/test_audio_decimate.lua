@@ -77,7 +77,7 @@ local mock_cache = {
 
 -- Load audio_playback fresh
 package.loaded["ui.audio_playback"] = nil
-local audio_playback = require("ui.audio_playback")
+local audio_playback = require("core.media.audio_playback")
 
 print("=== Test audio decimate mode ===")
 
@@ -177,7 +177,7 @@ print("\n--- Section 3: Reanchor on mode transition ---")
 -- Reset
 audio_playback.shutdown()
 package.loaded["ui.audio_playback"] = nil
-audio_playback = require("ui.audio_playback")
+audio_playback = require("core.media.audio_playback")
 audio_playback.init(mock_cache)
 audio_playback.set_max_media_time(10000000)
 audio_playback.media_time_us = 1000000  -- Start at 1 second

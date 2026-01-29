@@ -48,7 +48,7 @@ end
 
 -- Load playback_controller
 package.loaded["ui.playback_controller"] = nil
-local playback_controller = require("ui.playback_controller")
+local playback_controller = require("core.playback.playback_controller")
 
 -- Initialize
 playback_controller.init(mock_viewer)

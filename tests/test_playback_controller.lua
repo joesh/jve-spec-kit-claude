@@ -69,8 +69,8 @@ local function expect_assert(fn, msg)
 end
 
 -- Load playback controller fresh
-package.loaded["ui.playback_controller"] = nil
-local playback = require("ui.playback_controller")
+package.loaded["core.playback.playback_controller"] = nil
+local playback = require("core.playback.playback_controller")
 
 print("=== Test playback_controller.lua (comprehensive) ===")
 
@@ -150,8 +150,8 @@ print("  ✓ calc_frame_from_time_us(nil) asserts correctly")
 
 print("\nTest 2.5c: calc_frame_from_time_us() without fps set asserts")
 -- Reset fps to nil to test validation
-package.loaded["ui.playback_controller"] = nil
-local playback_fresh = require("ui.playback_controller")
+package.loaded["core.playback.playback_controller"] = nil
+local playback_fresh = require("core.playback.playback_controller")
 playback_fresh.fps_num = nil
 playback_fresh.fps_den = nil
 err = expect_assert(function()
@@ -160,8 +160,8 @@ end, "calc_frame_from_time_us without fps should assert")
 assert(err:match("fps not set"), "Error should mention fps not set")
 print("  ✓ calc_frame_from_time_us without fps asserts correctly")
 -- Restore playback for remaining tests
-package.loaded["ui.playback_controller"] = nil
-playback = require("ui.playback_controller")
+package.loaded["core.playback.playback_controller"] = nil
+playback = require("core.playback.playback_controller")
 playback.init(mock_viewer)
 
 print("\nTest 2.5d: calc_frame_from_time_us() computes correct frames")
@@ -581,9 +581,12 @@ assert(frames_shown[2] == 51, "Should display 51")
 print("  ✓ Fractional frame positions handled correctly")
 
 print("\nTest 9.3: _tick() with no viewer_panel asserts (fail-fast)")
--- Temporarily clear viewer
-package.loaded["ui.playback_controller"] = nil
-local playback2 = require("ui.playback_controller")
+-- Temporarily clear all playback modules to get fresh state without viewer_panel
+package.loaded["core.playback.playback_controller"] = nil
+package.loaded["core.playback.source_playback"] = nil
+package.loaded["core.playback.timeline_playback"] = nil
+package.loaded["core.playback.playback_helpers"] = nil
+local playback2 = require("core.playback.playback_controller")
 -- Don't call init, so viewer_panel is nil
 playback2.set_source = function(t, fn, fd)
     playback2.total_frames = t
@@ -604,9 +607,12 @@ assert(not ok, "Should assert when no viewer")
 assert(err2:match("viewer_panel not set"), "Should mention viewer_panel")
 print("  ✓ _tick asserts when viewer_panel missing (fail-fast)")
 
--- Restore for remaining tests
-package.loaded["ui.playback_controller"] = nil
-playback = require("ui.playback_controller")
+-- Restore for remaining tests (clear all playback modules again for fresh state)
+package.loaded["core.playback.playback_controller"] = nil
+package.loaded["core.playback.source_playback"] = nil
+package.loaded["core.playback.timeline_playback"] = nil
+package.loaded["core.playback.playback_helpers"] = nil
+playback = require("core.playback.playback_controller")
 playback.init(mock_viewer)
 playback.set_source(100, 30, 1)
 
@@ -636,8 +642,8 @@ playback.stop()
 print("\n--- Section 10: Audio Integration ---")
 
 -- Reload module to get fresh state
-package.loaded["ui.playback_controller"] = nil
-local pc = require("ui.playback_controller")
+package.loaded["core.playback.playback_controller"] = nil
+local pc = require("core.playback.playback_controller")
 pc.init(mock_viewer)
 pc.set_source(100, 30, 1)
 

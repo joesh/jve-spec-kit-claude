@@ -97,7 +97,7 @@ local mock_media_cache = {
 
 -- Fresh load
 package.loaded["ui.audio_playback"] = nil
-local audio_playback = require("ui.audio_playback")
+local audio_playback = require("core.media.audio_playback")
 
 -- Initialize
 local ok = audio_playback.init(mock_media_cache)

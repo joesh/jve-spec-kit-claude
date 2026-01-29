@@ -1,13 +1,20 @@
---- JKL Shuttle Playback Controller
+--- JKL Shuttle Playback Controller (Coordinator)
 --
 -- Responsibilities:
 -- - Manages playback state (playing/stopped, direction, speed)
 -- - Implements JKL shuttle behavior with speed ramping
 -- - Schedules frame display via timer
+-- - Coordinates source_playback and timeline_playback sub-modules
 --
 -- **VIDEO FOLLOWS AUDIO.** During playback, video queries audio_playback.get_media_time_us()
 -- to determine which frame to display. Video NEVER pushes time into audio.
 -- sync_audio() is called ONLY on transport events (start, shuttle, slow_play, seek).
+--
+-- Architecture:
+-- - playback_controller (this file): coordinator, owns state, routes to sub-modules
+-- - source_playback: source-mode tick logic, latch/unlatch, media_cache prefetch
+-- - timeline_playback: timeline-mode tick logic, clip resolution, source switching
+-- - playback_helpers: shared utilities (time conversion, audio control)
 --
 -- Non-goals:
 -- - Does not own video decoding (delegates to viewer_panel)
@@ -16,7 +23,10 @@
 -- @file playback_controller.lua
 
 local logger = require("core.logger")
-local media_cache = require("ui.media_cache")
+local media_cache = require("core.media.media_cache")
+local source_playback = require("core.playback.source_playback")
+local timeline_playback = require("core.playback.timeline_playback")
+local helpers = require("core.playback.playback_helpers")
 
 local M = {
     state = "stopped",  -- "stopped" | "playing"
@@ -39,9 +49,15 @@ local M = {
     -- "play"    = spacebar play (stops at boundaries)
     transport_mode = "none",
 
-    -- Boundary latch state
+    -- Boundary latch state (source mode only)
     latched = false,
     latched_boundary = nil,  -- "start" | "end" | nil
+
+    -- Timeline playback mode state
+    timeline_mode = false,      -- true = playing timeline, false = playing source
+    sequence_id = nil,          -- active sequence when in timeline mode
+    current_clip_id = nil,      -- track which clip is currently playing for switch detection
+    timeline_sync_callback = nil, -- callback(frame_idx) called during _tick for playhead sync
 }
 
 -- Viewer panel reference (set via init)
@@ -64,70 +80,37 @@ function M.init_audio(ap)
 end
 
 --------------------------------------------------------------------------------
--- Frame/Time Conversion (rational arithmetic)
+-- Frame/Time Conversion (delegates to helpers, but exposed for backward compat)
 --------------------------------------------------------------------------------
 
 --- Calculate frame index from media time (microseconds)
--- Uses rational fps for precision (localized for future int64 swap).
 -- @param t_us Media time in microseconds
 -- @return Frame index (integer)
 function M.calc_frame_from_time_us(t_us)
-    assert(type(t_us) == "number", "playback_controller.calc_frame_from_time_us: t_us must be number")
     assert(M.fps_num and M.fps_den, "playback_controller.calc_frame_from_time_us: fps not set")
-    -- frame = t_us * fps_num / (1000000 * fps_den)
-    return math.floor(t_us * M.fps_num / (1000000 * M.fps_den))
+    return helpers.calc_frame_from_time_us(t_us, M.fps_num, M.fps_den)
 end
 
---- Calculate media time (microseconds) from frame index
--- @param frame Frame index
--- @return Media time in microseconds
+--- Calculate media time (microseconds) from frame index (internal use)
 local function calc_time_us_from_frame(frame)
     assert(M.fps_num and M.fps_den, "playback_controller.calc_time_us_from_frame: fps not set")
-    -- t_us = frame * 1000000 * fps_den / fps_num
-    return math.floor(frame * 1000000 * M.fps_den / M.fps_num)
+    return helpers.calc_time_us_from_frame(frame, M.fps_num, M.fps_den)
 end
 
 --------------------------------------------------------------------------------
--- Audio Sync (ONLY on transport events)
+-- Audio Sync (delegates to helpers)
 --------------------------------------------------------------------------------
 
---- Sync audio state with video (ONLY call on transport events, NOT from _tick)
--- Transport events: start, shuttle, slow_play, seek
 local function sync_audio()
-    if not audio_playback then return end
-    if not audio_playback.initialized then return end
-
-    -- Speed convention invariants
-    assert(M.speed >= 0, "playback_controller: speed must be non-negative (magnitude)")
-    assert(M.direction == 1 or M.direction == -1 or M.direction == 0,
-        "playback_controller: direction must be -1, 0, or 1")
-
-    -- Calculate signed speed (direction * magnitude)
-    local signed_speed = M.direction * M.speed
-    audio_playback.set_speed(signed_speed)
+    helpers.sync_audio(audio_playback, M.direction, M.speed)
 end
 
---- Start audio playback (transport event)
 local function start_audio()
-    if not audio_playback then return end
-    if not audio_playback.initialized then return end
-
-    -- Sync speed first (transport event)
-    sync_audio()
-
-    -- Sync position from current frame
-    local media_time_us = calc_time_us_from_frame(M.frame)
-    audio_playback.seek(media_time_us)
-
-    audio_playback.start()
+    helpers.start_audio(audio_playback, M.frame, M.fps_num, M.fps_den, M.direction, M.speed)
 end
 
---- Stop audio playback
 local function stop_audio()
-    if not audio_playback then return end
-    if not audio_playback.initialized then return end
-
-    audio_playback.stop()
+    helpers.stop_audio(audio_playback)
 end
 
 --------------------------------------------------------------------------------
@@ -153,7 +136,6 @@ function M.set_source(total_frames, fps_num, fps_den)
     M.frame = 0
 
     -- Compute max media time for audio clamp (frame-derived, not container metadata)
-    -- Last valid frame is total_frames - 1
     M.max_media_time_us = calc_time_us_from_frame(total_frames - 1)
 
     -- Inform audio of max time (required before start)
@@ -179,67 +161,59 @@ function M.shuttle(dir)
 
     -- Handle unlatch: opposite direction while latched resumes playback
     if M.latched then
-        -- Check if direction change is away from boundary
         local at_start = (M.latched_boundary == "start")
         local at_end = (M.latched_boundary == "end")
         local moving_away = (at_start and dir == 1) or (at_end and dir == -1)
 
         if moving_away then
-            -- Unlatch and start in new direction
             M.direction = dir
             M.speed = 1
-            M._unlatch_resume()
+            source_playback.unlatch_resume(M, audio_playback)
             M._schedule_tick()
             return
         else
-            -- Same direction as boundary, stay latched (no-op)
-            return
+            return  -- Same direction as boundary, stay latched (no-op)
         end
     end
 
     local was_stopped = (M.state == "stopped")
 
     if M.state == "stopped" then
-        -- Start at 1x in requested direction
         M.direction = dir
         M.speed = 1
         M.state = "playing"
         M.transport_mode = "shuttle"
         logger.debug("playback_controller", string.format("Started shuttle %s at 1x", dir == 1 and "forward" or "reverse"))
     elseif M.direction == dir then
-        -- Same direction: speed up (max 8x)
         if M.speed < 8 then
             M.speed = M.speed * 2
             logger.debug("playback_controller", string.format("Speed up to %dx", M.speed))
         end
     else
-        -- Opposite direction: slow down first (unwind)
         if M.speed > 1 then
             M.speed = M.speed / 2
             logger.debug("playback_controller", string.format("Slowing to %dx", M.speed))
         elseif M.speed == 1 then
-            -- At 1x, stop (next press will start opposite direction)
             M.stop()
             logger.debug("playback_controller", "Stopped (unwound to 0)")
             return
         elseif M.speed == 0.5 then
-            -- At 0.5x, stop
             M.stop()
             return
         end
     end
 
-    -- Set transport mode (shuttle latches at boundaries)
     M.transport_mode = "shuttle"
 
     -- Notify media_cache of playhead change (triggers prefetch)
-    media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+    if media_cache.is_loaded() then
+        media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+    end
 
-    -- Sync audio (transport event)
     if was_stopped then
         start_audio()
     else
-        sync_audio()  -- Speed change = transport event
+        sync_audio()
     end
 
     M._schedule_tick()
@@ -252,17 +226,17 @@ function M.slow_play(dir)
     M.direction = dir
     M.speed = 0.5
     M.state = "playing"
-    M.transport_mode = "shuttle"  -- slow_play latches at boundaries like shuttle
+    M.transport_mode = "shuttle"
     logger.debug("playback_controller", string.format("Slow play %s at 0.5x", dir == 1 and "forward" or "reverse"))
 
-    -- Notify media_cache of playhead change (triggers prefetch)
-    media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+    if media_cache.is_loaded() then
+        media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+    end
 
-    -- Sync audio (transport event)
     if was_stopped then
         start_audio()
     else
-        sync_audio()  -- Speed change = transport event
+        sync_audio()
     end
 
     M._schedule_tick()
@@ -274,83 +248,121 @@ function M.stop()
     M.direction = 0
     M.speed = 1
     M.transport_mode = "none"
-    M._clear_latch()
+    source_playback.clear_latch(M)
 
-    -- Stop audio
     stop_audio()
 
     logger.debug("playback_controller", "Stopped")
 end
 
---------------------------------------------------------------------------------
--- Boundary Latch (shuttle mode only)
---------------------------------------------------------------------------------
+--- Play forward at 1x speed (Spacebar play)
+function M.play()
+    if M.state == "playing" then
+        return
+    end
 
---- Clear latch state without side effects
-function M._clear_latch()
-    M.latched = false
-    M.latched_boundary = nil
+    M.direction = 1
+    M.speed = 1
+    M.state = "playing"
+    M.transport_mode = "play"
+    source_playback.clear_latch(M)
+
+    if not M.timeline_mode and media_cache.is_loaded() then
+        media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+    end
+
+    if not M.timeline_mode then
+        start_audio()
+    end
+
+    M._schedule_tick()
+    logger.debug("playback_controller", "Play started at 1x forward")
 end
 
---- Latch at boundary (transport event)
--- PIN: One-shot, side-effect controlled, computes boundary time from frame.
--- PIN: Latch time is frame-derived, NOT sampled from AOP.
-function M._latch(boundary_frame)
-    if M.latched then return end
+--------------------------------------------------------------------------------
+-- Timeline Playback Mode
+--------------------------------------------------------------------------------
 
-    assert(M.fps_num > 0 and M.fps_den > 0,
-        "playback_controller._latch: fps must be set")
+--- Enable or disable timeline playback mode
+function M.set_timeline_mode(enabled, sequence_id, sequence_info)
+    M.timeline_mode = enabled and true or false
+    if enabled then
+        assert(sequence_id and sequence_id ~= "",
+            "playback_controller.set_timeline_mode: sequence_id required when enabling timeline mode")
+        M.sequence_id = sequence_id
+        M.current_clip_id = nil
 
-    M.latched = true
-    M.latched_boundary = (boundary_frame == 0) and "start" or "end"
-    M.frame = boundary_frame
+        local fps_num, fps_den, total_frames
+        if sequence_info then
+            fps_num = sequence_info.fps_num
+            fps_den = sequence_info.fps_den
+            total_frames = sequence_info.total_frames
+        else
+            local timeline_state = require("ui.timeline.timeline_state")
+            local rate = timeline_state.get_sequence_frame_rate()
+            if rate and rate.fps_numerator and rate.fps_denominator then
+                fps_num = rate.fps_numerator
+                fps_den = rate.fps_denominator
+                total_frames = 86400 * fps_num / fps_den  -- 1 hour worth
+            end
+        end
 
-    -- Deterministic time for boundary frame (rational math)
-    local t_us = math.floor(boundary_frame * 1000000 * M.fps_den / M.fps_num)
-
-    -- Clamp to valid media range
-    if audio_playback and audio_playback.max_media_time_us then
-        t_us = math.max(0, math.min(t_us, audio_playback.max_media_time_us))
+        if fps_num and fps_den and fps_num > 0 and fps_den > 0 then
+            M.set_source(total_frames or 86400, fps_num, fps_den)
+            logger.debug("playback_controller",
+                string.format("Timeline mode enabled for sequence %s (fps=%d/%d)", sequence_id, fps_num, fps_den))
+        else
+            logger.warn("playback_controller",
+                string.format("Timeline mode enabled but no fps available for sequence %s", sequence_id))
+        end
     else
-        t_us = math.max(0, t_us)
+        M.sequence_id = nil
+        M.current_clip_id = nil
+        logger.debug("playback_controller", "Timeline mode disabled")
     end
-
-    -- Transport event: freeze audio at boundary time
-    if audio_playback and audio_playback.initialized and audio_playback.latch then
-        audio_playback.latch(t_us)
-    end
-
-    if viewer_panel then
-        viewer_panel.show_frame(M.frame)
-    end
-
-    logger.debug("playback_controller", string.format(
-        "Latched at %s boundary (frame %d, t=%.3fs)",
-        M.latched_boundary, boundary_frame, t_us / 1000000))
 end
 
---- Unlatch and resume playback (transport event)
--- Called when user changes direction while latched.
+--- Set callback for timeline sync
+function M.set_timeline_sync_callback(callback)
+    M.timeline_sync_callback = callback
+end
+
+--- Seek to a Rational time position
+function M.seek_to_rational(time_rat)
+    assert(time_rat and time_rat.frames ~= nil,
+        "playback_controller.seek_to_rational: time_rat must be a Rational")
+    assert(M.fps_num and M.fps_den,
+        "playback_controller.seek_to_rational: fps not set (call set_source first)")
+
+    local frame_idx = helpers.rational_to_frame_clamped(time_rat, M.fps_num, M.fps_den, M.total_frames)
+    M.seek(frame_idx)
+end
+
+--- Check if playback source is loaded
+function M.has_source()
+    return M.total_frames > 0 and M.fps_num and M.fps_num > 0
+end
+
+--- Convert frame index to Rational time
+function M.frame_to_rational(frame_idx)
+    assert(M.fps_num and M.fps_den, "playback_controller.frame_to_rational: fps not set")
+    return helpers.frame_to_rational(frame_idx, M.fps_num, M.fps_den)
+end
+
+--------------------------------------------------------------------------------
+-- Boundary Latch (source mode only - delegates to source_playback)
+--------------------------------------------------------------------------------
+
+function M._clear_latch()
+    source_playback.clear_latch(M)
+end
+
+function M._latch(boundary_frame)
+    source_playback.latch(M, boundary_frame, audio_playback, viewer_panel)
+end
+
 function M._unlatch_resume()
-    if not M.latched then return end
-
-    -- Get current media time (while not playing, this is M.media_time_us)
-    local t_us = 0
-    if audio_playback and audio_playback.initialized then
-        t_us = audio_playback.get_media_time_us()
-    end
-
-    M._clear_latch()
-
-    -- Transport event sequence: seek, sync speed, start
-    if audio_playback and audio_playback.initialized then
-        audio_playback.seek(t_us)
-        local signed_speed = M.direction * M.speed
-        audio_playback.set_speed(signed_speed)
-        audio_playback.start()
-    end
-
-    logger.debug("playback_controller", "Unlatched and resumed")
+    source_playback.unlatch_resume(M, audio_playback)
 end
 
 --- Check if currently playing
@@ -363,18 +375,15 @@ function M.seek(frame_idx)
     assert(frame_idx, "playback_controller.seek: frame_idx is nil")
     assert(frame_idx >= 0, "playback_controller.seek: frame_idx must be >= 0")
 
-    -- Clear latch on seek (seek takes over)
-    M._clear_latch()
+    source_playback.clear_latch(M)
 
     M.frame = math.min(frame_idx, M.total_frames - 1)
 
-    -- Sync audio position (transport event)
     if audio_playback and audio_playback.initialized then
         local media_time_us = calc_time_us_from_frame(M.frame)
         audio_playback.seek(media_time_us)
     end
 
-    -- Display frame if we have viewer
     if viewer_panel then
         viewer_panel.show_frame(math.floor(M.frame))
     end
@@ -392,71 +401,32 @@ function M.get_status()
 end
 
 --------------------------------------------------------------------------------
--- Video Tick (follows audio)
+-- Video Tick (coordinator - routes to source_playback or timeline_playback)
 --------------------------------------------------------------------------------
 
 --- Internal: tick function called by timer
--- VIDEO FOLLOWS AUDIO: queries audio_playback.get_media_time_us() for current time.
--- Never pushes time into audio.
 function M._tick()
     if M.state ~= "playing" then return end
     assert(viewer_panel, "playback_controller._tick: viewer_panel not set")
     assert(M.fps_num and M.fps_num > 0 and M.fps_den and M.fps_den > 0,
         "playback_controller._tick: fps must be set and positive")
 
-    -- Early return while latched (no advancement, just keep ticking)
-    if M.latched then
-        viewer_panel.show_frame(M.frame)
-        M._schedule_tick()
-        return
-    end
+    local should_continue
 
-    -- Frame advancement: video ALWAYS follows audio when audio is active (Rule V1)
-    -- Transport mode only affects boundary behavior, not time source.
-    if audio_playback and audio_playback.initialized and audio_playback.playing then
-        -- AUDIO ACTIVE: Video follows audio time (spec Rule V1)
-        local t_vid_us = audio_playback.get_media_time_us()
-        M.frame = M.calc_frame_from_time_us(t_vid_us)
+    if M.timeline_mode and M.sequence_id then
+        -- Timeline mode: delegate to timeline_playback
+        should_continue = timeline_playback.tick(M, audio_playback, viewer_panel)
     else
-        -- NO AUDIO: Advance frame independently (fallback only)
-        M.frame = M.frame + (M.direction * M.speed)
+        -- Source mode: delegate to source_playback
+        should_continue = source_playback.tick(M, audio_playback, viewer_panel)
     end
 
-    -- Clamp to valid range
-    M.frame = math.max(0, math.min(M.frame, M.total_frames - 1))
-
-    -- Boundary detection
-    local hit_start = (M.direction < 0 and M.frame <= 0)
-    local hit_end = (M.direction > 0 and M.frame >= M.total_frames - 1)
-
-    if hit_start or hit_end then
-        local boundary_frame = hit_start and 0 or (M.total_frames - 1)
-        M.frame = boundary_frame
-
-        if M.transport_mode == "shuttle" then
-            -- Shuttle mode: latch at boundary, continue ticking
-            M._latch(boundary_frame)
-            M._schedule_tick()
-            return
-        else
-            -- Normal play mode: stop at boundary
-            M.stop()
-            logger.debug("playback_controller", hit_start and "Hit start boundary" or "Hit end boundary")
-            return
-        end
+    if should_continue then
+        M._schedule_tick()
+    else
+        -- Sub-module says stop
+        M.stop()
     end
-
-    -- Display frame
-    local frame_idx = math.floor(M.frame)
-    viewer_panel.show_frame(frame_idx)
-
-    -- Notify media_cache of playhead change (triggers prefetch in travel direction)
-    media_cache.set_playhead(frame_idx, M.direction, M.speed)
-
-    -- DO NOT call audio_playback.set_media_time() - video follows audio, not vice versa
-
-    -- Schedule next tick
-    M._schedule_tick()
 end
 
 --- Internal: schedule next timer tick
@@ -464,21 +434,15 @@ function M._schedule_tick()
     if M.state ~= "playing" then return end
     assert(M.fps and M.fps > 0, "playback_controller._schedule_tick: fps not set")
 
-    -- Base interval is 1 frame duration
     local base_interval = math.floor(1000 / M.fps)
     local interval
 
     if M.speed < 1 then
-        -- Slower than 1x: show each frame for longer
-        -- At 0.5x, show each frame for 2x the normal duration
         interval = math.floor(base_interval / M.speed)
     else
-        -- 1x or faster: use base interval
-        -- At 2x we skip frames, not shorten interval
         interval = base_interval
     end
 
-    -- Minimum interval to avoid runaway
     interval = math.max(interval, 16)  -- ~60fps max
 
     qt_create_single_shot_timer(interval, function()

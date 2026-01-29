@@ -117,7 +117,7 @@ package.loaded["core.logger"] = {
 
 -- Load audio_playback fresh
 package.loaded["ui.audio_playback"] = nil
-local audio_playback = require("ui.audio_playback")
+local audio_playback = require("core.media.audio_playback")
 
 --------------------------------------------------------------------------------
 -- Test 1: Init should not push PCM

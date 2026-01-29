@@ -12,7 +12,7 @@
 
 require('test_env')
 
-local audio_playback = require("ui.audio_playback")
+local audio_playback = require("core.media.audio_playback")
 
 print("=== Test audio_playback module ===")
 print()

@@ -104,7 +104,7 @@ local function advance_time(us) mock_audio._elapsed_us = mock_audio._elapsed_us 
 
 -- Load playback controller
 package.loaded["ui.playback_controller"] = nil
-local pc = require("ui.playback_controller")
+local pc = require("core.playback.playback_controller")
 pc.init(mock_viewer)
 pc.init_audio(mock_audio)
 

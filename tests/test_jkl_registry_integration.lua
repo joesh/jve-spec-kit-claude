@@ -71,8 +71,8 @@ local mock_pc = {
     slow_play = function(dir) table.insert(playback_calls, "slow_play:" .. tostring(dir)) end,
 }
 
--- Mock playback_controller
-package.loaded["ui.playback_controller"] = mock_pc
+-- Mock playback_controller (at new location)
+package.loaded["core.playback.playback_controller"] = mock_pc
 
 -- Mock viewer_panel
 package.loaded["ui.viewer_panel"] = {

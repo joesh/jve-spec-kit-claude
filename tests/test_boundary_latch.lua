@@ -84,7 +84,7 @@ end
 
 -- Load playback controller fresh
 package.loaded["ui.playback_controller"] = nil
-local pc = require("ui.playback_controller")
+local pc = require("core.playback.playback_controller")
 pc.init(mock_viewer)
 pc.init_audio(mock_audio)
 

@@ -27,7 +27,7 @@ local mock_qt_constants = {
 _G.qt_constants = mock_qt_constants
 package.loaded["core.qt_constants"] = mock_qt_constants
 
-local media_cache = require("ui.media_cache")
+local media_cache = require("core.media.media_cache")
 
 print("=== Test media_cache module ===")
 print()
