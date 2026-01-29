@@ -180,7 +180,12 @@ public:
         // Detect direction change
         int new_direction = (speed >= 0) ? 1 : -1;
         if (m_last_direction != 0 && new_direction != m_last_direction) {
-            // Direction flip - initiate crossfade
+            // Direction flip - clear synthesis state to prevent stale window artifacts
+            // The synthesis buffer holds residual from the previous window (chronologically
+            // "later" in media time for reverse), which would bleed via overlap-add.
+            std::fill(m_synthesis_buffer.begin(), m_synthesis_buffer.end(), 0.0f);
+
+            // Initiate crossfade to smooth the transition
             m_xfade_remaining = m_xfade_frames;
             std::copy(m_output_buffer.begin(), m_output_buffer.end(), m_xfade_buffer.begin());
         }
@@ -256,9 +261,19 @@ public:
             int64_t frames_needed = std::min(out_frames - frames_produced,
                                              static_cast<int64_t>(m_hop_frames));
 
+            // Calculate fetch position - for reverse, we need to look back in time
+            // to get the samples we'll reverse and output
+            int64_t fetch_time_us = m_current_time_us;
+            if (m_speed < 0) {
+                // For reverse: fetch from (current - window_duration) so after reversing,
+                // the first sample corresponds to current_time
+                int64_t window_duration_us = (m_analysis_frames * 1000000LL) / m_config.sample_rate;
+                fetch_time_us = m_current_time_us - window_duration_us;
+            }
+
             // Try to get source samples
             bool have_source = m_source_buffer.get_samples(
-                m_current_time_us, m_config.sample_rate,
+                fetch_time_us, m_config.sample_rate,
                 m_analysis_buffer.data(), m_analysis_frames
             );
 
@@ -268,6 +283,11 @@ public:
                 std::memset(out + frames_produced * m_config.channels, 0,
                             (out_frames - frames_produced) * m_config.channels * sizeof(float));
                 return out_frames;
+            }
+
+            // For reverse playback, reverse the samples so they play backwards
+            if (m_speed < 0) {
+                reverse_interleaved(m_analysis_buffer.data(), m_analysis_frames);
             }
 
             // WSOLA synthesis
@@ -358,6 +378,17 @@ public:
     int64_t current_time_us() const { return m_current_time_us; }
 
 private:
+    // Reverse interleaved audio samples in-place
+    void reverse_interleaved(float* data, int64_t frames) {
+        int channels = m_config.channels;
+        for (int64_t i = 0; i < frames / 2; i++) {
+            int64_t j = frames - 1 - i;
+            for (int ch = 0; ch < channels; ch++) {
+                std::swap(data[i * channels + ch], data[j * channels + ch]);
+            }
+        }
+    }
+
     void process_wsola_frame(int64_t hop_out_frames) {
         float abs_speed = std::abs(m_speed);
 

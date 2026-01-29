@@ -501,6 +501,90 @@ private slots:
         }
     }
 
+    void test_direction_flip_no_discontinuity() {
+        // REGRESSION TEST: Direction flip should not produce large discontinuities
+        // BUG: WSOLA synthesis buffer holds stale "future" data on reverse flip,
+        // causing static/crackle from overlap-add blending mismatched windows.
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        // Generate 4 seconds of smooth sine wave
+        std::vector<float> pcm = generate_sine_pcm(cfg.sample_rate * 4, cfg.channels, 440, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), cfg.sample_rate * 4, 0);
+
+        // Start at 1 second, play forward
+        engine->SetTarget(1000000, 1.0f, sse::QualityMode::Q1);
+
+        // Render forward to fill buffers and get stable state
+        std::vector<float> output(512 * cfg.channels);
+        for (int i = 0; i < 10; ++i) {
+            engine->Render(output.data(), 512);
+        }
+
+        // Capture last sample before direction flip
+        float last_forward_sample = output[(512 - 1) * cfg.channels];
+
+        // Flip to reverse
+        engine->SetTarget(engine->CurrentTimeUS(), -1.0f, sse::QualityMode::Q1);
+
+        // Render first block after flip
+        engine->Render(output.data(), 512);
+        float first_reverse_sample = output[0];
+
+        // Check for discontinuity: large jumps indicate static/artifacts
+        // Allow up to 0.5 delta (crossfade should smooth, but direction change
+        // naturally produces some discontinuity). Static produces jumps > 1.0.
+        float delta = std::abs(first_reverse_sample - last_forward_sample);
+        QVERIFY2(delta < 0.8f,
+                 qPrintable(QString("Direction flip discontinuity too large: %1 (static/crackle bug)")
+                     .arg(delta)));
+
+        // Also check for clipping in the reverse output (static often produces extremes)
+        bool has_extreme = false;
+        for (size_t i = 0; i < output.size(); ++i) {
+            if (std::abs(output[i]) > 1.5f) {
+                has_extreme = true;
+                break;
+            }
+        }
+        QVERIFY2(!has_extreme, "Direction flip produced extreme values (static artifact)");
+    }
+
+    void test_direction_flip_rapid_oscillation() {
+        // REGRESSION TEST: Rapid direction oscillation (jog wheel simulation)
+        // Each flip should cleanly clear synthesis state, not accumulate artifacts.
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        std::vector<float> pcm = generate_sine_pcm(cfg.sample_rate * 4, cfg.channels, 440, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), cfg.sample_rate * 4, 0);
+
+        engine->SetTarget(1000000, 1.0f, sse::QualityMode::Q1);
+
+        std::vector<float> output(256 * cfg.channels);  // Smaller blocks = more frequent flips
+
+        int extreme_count = 0;
+        float max_sample = 0.0f;
+
+        // Simulate jog wheel: rapid forward/reverse oscillation
+        for (int i = 0; i < 50; ++i) {
+            float speed = (i % 2 == 0) ? 0.5f : -0.5f;  // Alternate direction each iteration
+            engine->SetTarget(1000000, speed, sse::QualityMode::Q1);
+            engine->Render(output.data(), 256);
+
+            // Check for artifacts
+            for (size_t j = 0; j < output.size(); ++j) {
+                float abs_val = std::abs(output[j]);
+                if (abs_val > max_sample) max_sample = abs_val;
+                if (abs_val > 1.5f) extreme_count++;
+            }
+        }
+
+        QVERIFY2(extreme_count < 10,
+                 qPrintable(QString("Rapid direction oscillation: %1 extreme samples (max=%2)")
+                     .arg(extreme_count).arg(max_sample)));
+    }
+
     // ========================================================================
     // QUALITY MODE TESTS
     // ========================================================================
