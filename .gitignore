@@ -97,3 +97,9 @@ tests/**/captures/
 tests/temp/
 tests/tests/
 .aider*
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Test output
+test-errors.txt
