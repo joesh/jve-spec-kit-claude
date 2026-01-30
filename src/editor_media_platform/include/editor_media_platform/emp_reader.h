@@ -82,6 +82,10 @@ public:
     // (e.g., active+playing=120, active+scrubbing=8, pooled=1).
     void SetMaxCacheFrames(size_t max_frames);
 
+    // Diagnostics: total frames decoded by prefetch since last StartPrefetch.
+    // Used by tests to verify seek-vs-forward-decode behavior.
+    int64_t PrefetchFramesDecoded() const;
+
     // Get the underlying asset
     std::shared_ptr<Asset> asset() const;
 

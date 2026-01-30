@@ -141,10 +141,12 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
     std::vector<DecodedFrame> frames;
     bool found_target_or_past = false;
 
-    // B-frame lookahead: keep decoding after seeing frame past target.
-    // Trade-off: larger = fewer decode calls but longer stalls
-    //            smaller = more decode calls but shorter stalls
-    // At ~6ms/frame decode, 8 frames = ~50ms stall (barely perceptible)
+    // Count frames with PTS >= target. Once we have BFRAME_LOOKAHEAD such
+    // frames, the cache has contiguous PTS coverage past the target.
+    // CRITICAL: do NOT reset this counter when late B-frames (PTS < target)
+    // arrive from the decoder pipeline — they are expected reorder output,
+    // not a signal to restart counting. Resetting caused premature batch
+    // return with PTS holes → stale-cache rejection → stutter.
     constexpr int BFRAME_LOOKAHEAD = 8;
     int frames_past_target = 0;
 
@@ -176,15 +178,14 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
             TimeUS pts_us = stream_pts_to_us(new_frame->pts, stream);
             frames.push_back({new_frame, pts_us});
 
-            // Track if we've found target
+            // Count only frames with PTS >= target toward completion.
+            // Late B-frames (PTS < target) are collected but don't advance
+            // or reset the counter — they're normal reorder pipeline output.
             if (pts_us >= target_us) {
                 frames_past_target++;
                 if (frames_past_target >= BFRAME_LOOKAHEAD) {
                     found_target_or_past = true;
                 }
-            } else {
-                // Found frame before target - reset counter (B-frame reordering)
-                frames_past_target = 0;
             }
         }
 

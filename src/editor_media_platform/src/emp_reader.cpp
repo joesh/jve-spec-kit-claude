@@ -163,6 +163,11 @@ public:
     std::atomic<TimeUS> prefetch_decode_pts{INT64_MIN};
     std::atomic<bool> have_prefetch_pos{false};
 
+    // Diagnostics: total frames decoded by prefetch since last StartPrefetch.
+    // Reset in StartPrefetch, incremented in prefetch_worker.  Exposed via
+    // Reader::PrefetchFramesDecoded() for testing seek-vs-forward-decode.
+    std::atomic<int64_t> prefetch_frames_decoded{0};
+
     // Audio decode state
     impl::FFmpegCodecContext audio_codec_ctx;
     impl::FFmpegResampleContext resample_ctx;
@@ -354,6 +359,10 @@ void Reader::SetMaxCacheFrames(size_t max_frames) {
     EMP_LOG_DEBUG("SetMaxCacheFrames: %zu", max_frames);
 }
 
+int64_t Reader::PrefetchFramesDecoded() const {
+    return m_impl->prefetch_frames_decoded.load();
+}
+
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     AssetImpl* asset_impl = m_asset->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
@@ -363,25 +372,47 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     static int cache_hits = 0, cache_misses = 0;
     static auto last_log = std::chrono::steady_clock::now();
 
+    // Keep the prefetch target in sync with the main-thread playhead.
+    // Without this, the prefetch relies entirely on Lua calling
+    // UpdatePrefetchTarget, which happens AFTER DecodeAtUS returns.
+    // On clip switch the sequence is:
+    //   1. activate() → stops old prefetch
+    //   2. show_frame_at_time() → DecodeAtUS (94ms sync batch)
+    //   3. set_playhead() → StartPrefetch + UpdatePrefetchTarget
+    // The prefetch starts in step 3 with target still at the PREVIOUS
+    // session's position.  It computes prefetch_to = stale + 500ms, sees
+    // cache_max_pts (from step 2's batch) is already past that, and sleeps
+    // instead of decoding ahead.  Storing t_us here ensures the prefetch
+    // uses the correct target from its very first iteration.
+    m_impl->prefetch_target.store(t_us);
+
     // 0. Mode transition: Park/Scrub→Play clears scattered cache.
     //    Scattered park frames cause stale floor matches during sequential play
     //    and fool the prefetch into thinking the cache is already ahead.
     DecodeMode mode = GetDecodeMode();
     if (mode == DecodeMode::Play && m_impl->last_mode != DecodeMode::Play) {
         std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
-        m_impl->frame_cache.clear();
-        m_impl->cache_min_pts = INT64_MAX;
-        m_impl->cache_max_pts = INT64_MIN;
-        m_impl->have_decode_pos = false;
-        m_impl->have_prefetch_pos.store(false);
-        EMP_LOG_DEBUG("Cache cleared on %s→Play transition",
-                m_impl->last_mode == DecodeMode::Park ? "Park" : "Scrub");
+        if (!m_impl->frame_cache.empty()) {
+            // Scattered Park/Scrub frames poison sequential Play via stale
+            // floor matches. Clear only when there's something to clear —
+            // freshly-activated readers (empty cache, stale last_mode from
+            // pool) skip this harmlessly.
+            m_impl->frame_cache.clear();
+            m_impl->cache_min_pts = INT64_MAX;
+            m_impl->cache_max_pts = INT64_MIN;
+            m_impl->have_decode_pos = false;
+            m_impl->have_prefetch_pos.store(false);
+            EMP_LOG_DEBUG("Cache cleared on %s→Play transition",
+                    m_impl->last_mode == DecodeMode::Park ? "Park" : "Scrub");
+        }
     }
     m_impl->last_mode = mode;
 
     // Max gap between floor match and target before treating as cache miss.
-    // 2 frame durations at 24fps ≈ 83ms. Use stream's actual frame rate.
-    // Avoids returning stale frames from a sparse/scattered cache.
+    // 2 frame durations: tight enough to reject scattered Park frames while
+    // allowing for PTS rounding and off-by-one at frame boundaries.
+    // (decode_frames_batch now properly drains the decoder's B-frame buffer,
+    // so cache should have contiguous PTS coverage — no need for large gaps.)
     // Ceiling division avoids off-by-one: e.g. 24000/1001 → floor gives 41708,
     // but actual PTS gaps can be 41709 due to av_rescale_q rounding.
     TimeUS frame_dur_us = (stream->avg_frame_rate.num > 0)
@@ -802,6 +833,22 @@ void Reader::StartPrefetch(int direction) {
         return;
     }
 
+    // Sync last_mode to current global mode so prefetch output doesn't get
+    // cleared by a phantom mode transition on the next main-thread decode.
+    m_impl->last_mode = GetDecodeMode();
+
+    // Reset decode counter for diagnostics/testing.
+    m_impl->prefetch_frames_decoded.store(0);
+
+    // Force prefetch to seek on restart.  Without this, have_prefetch_pos
+    // retains the stale prefetch_decode_pts from the previous session.
+    // If that position is within 2s of the new target, need_seek() returns
+    // false and the prefetch tries to decode forward from the old format-
+    // context read position — potentially hundreds of frames behind the
+    // playhead.  The entire clip plays with zero prefetch output, causing
+    // stale-cache rejections on every frame past the initial batch.
+    m_impl->have_prefetch_pos.store(false);
+
     // Initialize prefetch decoder if not already done (lazy init)
     if (!m_impl->prefetch_decoder_initialized) {
         const std::string& path = m_asset->info().path;
@@ -944,18 +991,40 @@ void Reader::prefetch_worker() {
         TimeUS duration = m_asset->info().duration_us;
         if (prefetch_to > duration) prefetch_to = duration;
 
-        // Check if we need to decode (check under lock)
+        // Check if we need to decode by looking for the LOCAL cache frontier
+        // near prefetch_to — not global cache_max_pts.  A pooled reader
+        // retains cached frames from a previous session at a distant position.
+        // cache_max_pts reflects those distant frames, fooling the old check
+        // `prefetch_to > cache_max_pts` into returning false → prefetch sleeps
+        // → zero output → stale-cache rejections → stutter on every frame.
+        //
+        // Fix: find the highest cached PTS <= prefetch_to and check if it's
+        // (a) from the current session (>= target) and (b) close to
+        // prefetch_to (within ~1 frame).  Stale frames from a previous
+        // session at a distant position fail check (a) or (b).
         bool need_decode = false;
         {
             std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
             if (m_impl->frame_cache.empty()) {
                 need_decode = true;
             } else if (dir > 0) {
-                // Forward: need to decode if prefetch target is past cache max
-                need_decode = (prefetch_to > m_impl->cache_max_pts);
+                auto it = m_impl->frame_cache.upper_bound(prefetch_to);
+                if (it == m_impl->frame_cache.begin()) {
+                    need_decode = true;
+                } else {
+                    --it;  // Highest cached PTS <= prefetch_to
+                    // Stale if before current target or too far from frontier
+                    need_decode = (it->first < target ||
+                                   prefetch_to - it->first > LOOKAHEAD_US / 10);
+                }
             } else {
-                // Reverse: need to decode if prefetch target is before cache min
-                need_decode = (prefetch_to < m_impl->cache_min_pts);
+                auto it = m_impl->frame_cache.lower_bound(prefetch_to);
+                if (it == m_impl->frame_cache.end()) {
+                    need_decode = true;
+                } else {
+                    need_decode = (it->first > target ||
+                                   it->first - prefetch_to > LOOKAHEAD_US / 10);
+                }
             }
         }
 
@@ -963,17 +1032,20 @@ void Reader::prefetch_worker() {
             auto decode_start = std::chrono::steady_clock::now();
             // No decode_mutex needed - we have our own decoder!
 
-            // Seek target: continue from where the cache ends, not from
-            // the playhead. The main thread already cached frames near the
-            // playhead; the prefetch's job is to fill AHEAD of that.
-            // Seeking to cache_max_pts lands on the keyframe just before
-            // the cache edge, re-decodes a few frames (harmless duplicates),
-            // and then fills forward contiguously.
+            // Seek target: continue from the LOCAL cache frontier near the
+            // target, not global cache_max_pts (stale from previous session).
+            // Find the highest cached PTS in [target, prefetch_to].
             TimeUS seek_target = target;
             {
                 std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
-                if (!m_impl->frame_cache.empty() && m_impl->cache_max_pts > seek_target) {
-                    seek_target = m_impl->cache_max_pts;
+                if (!m_impl->frame_cache.empty()) {
+                    auto it = m_impl->frame_cache.upper_bound(prefetch_to);
+                    if (it != m_impl->frame_cache.begin()) {
+                        --it;
+                        if (it->first >= target && it->first > seek_target) {
+                            seek_target = it->first;
+                        }
+                    }
                 }
             }
 
@@ -982,6 +1054,8 @@ void Reader::prefetch_worker() {
                 seek_target,
                 m_impl->have_prefetch_pos.load()
             );
+            EMP_LOG_DEBUG("Prefetch: need_decode=1 seek=%d target=%lldus seek_to=%lldus prefetch_to=%lldus",
+                    do_seek, (long long)target, (long long)seek_target, (long long)prefetch_to);
             if (do_seek) {
                 auto seek_result = impl::seek_with_backoff(
                     fmt_ctx, stream, m_impl->prefetch_codec_ctx.get(), seek_target, 0
@@ -994,6 +1068,8 @@ void Reader::prefetch_worker() {
                 }
             }
 
+            EMP_LOG_DEBUG("Prefetch: decoding batch (target=%lldus)...", (long long)prefetch_to);
+
             // Decode batch using prefetch thread's own decoder
             auto batch_result = impl::decode_frames_batch(
                 m_impl->prefetch_codec_ctx.get(), fmt_ctx, stream, stream_idx,
@@ -1002,7 +1078,10 @@ void Reader::prefetch_worker() {
 
             if (batch_result.is_error()) {
                 if (batch_result.error().code == ErrorCode::EOFReached) {
-                    EMP_LOG_DEBUG("Reached EOF");
+                    EMP_LOG_DEBUG("Prefetch: reached EOF");
+                } else {
+                    EMP_LOG_WARN("Prefetch decode failed: %s",
+                            batch_result.error().message.c_str());
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
@@ -1011,7 +1090,9 @@ void Reader::prefetch_worker() {
             // Convert and add to shared cache (under cache lock only)
             auto& decoded_frames = batch_result.value();
 
-            // Track prefetch decoder position (before frames are freed)
+            // Track prefetch decode count + decoder position
+            m_impl->prefetch_frames_decoded.fetch_add(
+                static_cast<int64_t>(decoded_frames.size()));
             if (!decoded_frames.empty()) {
                 TimeUS pf_max = decoded_frames[0].pts_us;
                 for (const auto& df : decoded_frames) {

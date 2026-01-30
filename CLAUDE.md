@@ -25,6 +25,13 @@ build/
 tests/
 ```
 
+## Project Database
+- Location: `~/Documents/JVE Projects/Untitled Project.jvp` (SQLite)
+- **Before any DB access**: check for running JVEEditor process. If none, `rm` the `-shm` file (stale shared memory). Leave the `-wal` file — it will be replayed on next launch.
+```bash
+pgrep -x JVEEditor || rm -f "$HOME/Documents/JVE Projects/Untitled Project.jvp-shm"
+```
+
 ## Commands
 make -j4            # Builds with warnings, LuaJIT linking issues
 make clean          # Clean build artifacts

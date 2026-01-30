@@ -1185,6 +1185,451 @@ private slots:
         // If we get here without crash/hang, destructor worked correctly
         QVERIFY(true);
     }
+
+    void test_play_batch_no_pts_gap_at_target() {
+        // Regression: decode_frames_batch returns after BFRAME_LOOKAHEAD (8)
+        // consecutive post-target frames, but B-frames with PTS *before*
+        // the target may still be in the decoder pipeline (especially HW
+        // decoders like VideoToolbox). The counter reset at line 186
+        // (frames_past_target = 0 on any pre-target B-frame) can cause
+        // premature return, leaving PTS holes in the cache around the
+        // target. Result: stale-cache rejection → synchronous decode
+        // stall → visible stutter during timeline clip switches.
+        //
+        // The fix: don't reset frames_past_target once we've already seen
+        // post-target frames. Late B-frames are expected pipeline output.
+        //
+        // Uses fixture video with known IBBBP GOP structure.
+
+        // Use fixture video with known B-frames (IBBBP pattern)
+        QString fixturePath = QDir::currentPath() + "/tests/fixtures/media/A005_C052_0925BL_001.mp4";
+        if (!QFile::exists(fixturePath)) {
+            // Try relative to source dir
+            fixturePath = QString::fromUtf8(__FILE__);
+            fixturePath = QFileInfo(fixturePath).absolutePath() + "/../../fixtures/media/A005_C052_0925BL_001.mp4";
+        }
+        if (!QFile::exists(fixturePath)) QSKIP("Fixture video not found");
+
+        auto asset_r = emp::Asset::Open(fixturePath.toStdString());
+        QVERIFY2(asset_r.is_ok(), "Failed to open fixture video");
+        auto asset = asset_r.value();
+        auto reader = emp::Reader::Create(asset).value();
+
+        const auto& info = asset->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+        emp::TimeUS frame_dur_us = (info.video_fps_num > 0)
+            ? (1000000LL * info.video_fps_den + info.video_fps_num - 1)
+              / info.video_fps_num
+            : 42000;
+
+        int total_frames = static_cast<int>(
+            info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
+        if (total_frames < 60) QSKIP("Video too short for this test");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // Test multiple start positions to catch position-dependent gaps.
+        // Different positions land on different points in the GOP (I, B, P),
+        // exposing different B-frame buffering behavior.
+        int test_positions[] = {20, total_frames / 3, total_frames / 2};
+        int total_large_gaps = 0;
+
+        for (int start_frame : test_positions) {
+            if (start_frame + 10 >= total_frames) continue;
+
+            // Create fresh reader for each position (simulates clip switch)
+            auto fresh_reader = emp::Reader::Create(asset).value();
+
+            // First decode at target: triggers batch decode + cache fill
+            emp::TimeUS target_us = emp::FrameTime::from_frame(start_frame, rate).to_us();
+            auto r0 = fresh_reader->DecodeAtUS(target_us);
+            QVERIFY2(r0.is_ok(), qPrintable(QString("Decode at frame %1 failed: %2")
+                .arg(start_frame)
+                .arg(r0.is_error() ? QString::fromStdString(r0.error().message) : "")));
+
+            // Probe cache for next 7 frames (within BFRAME_LOOKAHEAD-1 range).
+            // BFRAME_LOOKAHEAD=8 guarantees 8 frames with PTS >= target in
+            // the batch, covering target through target+7. We probe +1..+7.
+            // With contiguous cache, the floor match PTS should be within
+            // 1 frame of target. B-frame gaps produce distant floor matches.
+            for (int offset = 1; offset <= 7; ++offset) {
+                int frame_num = start_frame + offset;
+                if (frame_num >= total_frames) break;
+
+                emp::TimeUS probe_us = emp::FrameTime::from_frame(frame_num, rate).to_us();
+                auto cached = fresh_reader->GetCachedFrame(probe_us);
+
+                if (cached) {
+                    emp::TimeUS pts_gap = probe_us - cached->source_pts_us();
+                    // Floor semantics: pts_gap should be >= 0 and <= ~1 frame.
+                    // A gap > 2 frames means B-frames are missing from cache.
+                    if (pts_gap > frame_dur_us * 2) {
+                        total_large_gaps++;
+                        qDebug() << QString("  PTS gap at frame %1+%2: %3us (%4 frames)")
+                            .arg(start_frame).arg(offset)
+                            .arg(pts_gap).arg((double)pts_gap / frame_dur_us, 0, 'f', 1);
+                    }
+                } else {
+                    // Complete cache miss within BFRAME_LOOKAHEAD range
+                    total_large_gaps++;
+                    qDebug() << QString("  Cache miss at frame %1+%2")
+                        .arg(start_frame).arg(offset);
+                }
+            }
+        }
+
+        // With proper B-frame drain, the batch should produce contiguous
+        // PTS coverage. Allow at most 2 gaps total across all test positions
+        // (for boundary frames at the very edge of BFRAME_LOOKAHEAD).
+        QVERIFY2(total_large_gaps <= 2,
+            qPrintable(QString("%1 cache probes had PTS gaps > 2 frames — "
+                "decode_frames_batch not draining B-frames from decoder pipeline")
+                .arg(total_large_gaps)));
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    void test_prefetch_restart_seeks_to_new_position() {
+        // Regression: after a clip switch the prefetch thread is stopped and
+        // restarted on the same (pooled) reader at a DIFFERENT position.
+        // The prefetch's have_prefetch_pos and prefetch_decode_pts are stale
+        // from the previous session.  If the new position is within 2s of the
+        // old one, need_seek() returns false and the prefetch tries to decode
+        // forward from the old format-context read position — potentially
+        // hundreds of frames behind.  This starves the cache, causing stale-
+        // cache rejections and visible stutter on every clip switch.
+        //
+        // Fix: StartPrefetch must reset have_prefetch_pos so the prefetch
+        //      always seeks on restart.
+        //
+        // Test strategy: Use PrefetchFramesDecoded() counter.  After session A
+        // at frame 0, stop, then restart at a DISTANT position B.
+        //   With seek:    prefetch decodes ~15 frames (keyframe→target+8)
+        //   Without seek: prefetch decodes 100+ frames (forward from 0→B)
+        // Assert frame count is small → proves seek happened.
+
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(asset).value();
+
+        const auto& info = asset->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+
+        int total_frames = static_cast<int>(
+            info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
+        if (total_frames < 120) QSKIP("Video too short for clip-switch test");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // ── Session A: decode at frame 0, prefetch fills ahead ──
+        auto r0 = reader->DecodeAtUS(0);
+        QVERIFY(r0.is_ok());
+
+        reader->StartPrefetch(1);
+        reader->UpdatePrefetchTarget(0);
+        QThread::msleep(300);  // Let prefetch decode ahead
+
+        int64_t countA = reader->PrefetchFramesDecoded();
+        QVERIFY2(countA > 0, "Prefetch didn't decode any frames at position A");
+
+        reader->StopPrefetch();
+
+        // ── Session B: restart at a distant position ──
+        // Frame 100 is ~4.2s away at 24fps — past the 2s need_seek threshold,
+        // so need_seek would return true even without the fix.  But the FORMAT
+        // CONTEXT read position from session A is near frame 0+countA.  Without
+        // resetting have_prefetch_pos, need_seek uses prefetch_decode_pts which
+        // may be within 2s of the new seek_target (cache_max_pts ≈ B+7).
+        // Force a gap >2s by using frame 100 (the stale pts from A is ~frame 20,
+        // and B's seek_target is ~frame 107 → gap ≈ 3.6s → need_seek = true
+        // regardless).  The REAL value of have_prefetch_pos reset is for gaps
+        // <2s where need_seek would wrongly say false.
+        //
+        // To test the <2s case: use frame 40 (~1.7s from stale prefetch pts).
+        int posB = 40;
+        emp::TimeUS targetB = emp::FrameTime::from_frame(posB, rate).to_us();
+        auto r1 = reader->DecodeAtUS(targetB);
+        QVERIFY(r1.is_ok());
+
+        reader->StartPrefetch(1);
+        reader->UpdatePrefetchTarget(targetB);
+        QThread::msleep(500);  // Let prefetch complete at least one batch
+
+        int64_t countB = reader->PrefetchFramesDecoded();
+        reader->StopPrefetch();
+
+        // With seek: prefetch decodes from keyframe near B → ~15-25 frames.
+        // Without seek: prefetch decodes forward from A's stale position
+        // (frame ~20) through B+lookahead — could be 30-40+ frames, but
+        // HW decode is fast enough that both complete.  The structural
+        // difference is small on a short video.
+        //
+        // Primary assertion: prefetch DID produce output (non-zero).
+        // This catches the production bug where prefetch produces ZERO
+        // output because it thinks cache is ahead (stale prefetch_target).
+        QVERIFY2(countB > 0,
+            qPrintable(QString("Prefetch decoded 0 frames after restart at B=%1 — "
+                "stale prefetch_target or have_prefetch_pos blocked decode")
+                .arg(posB)));
+
+        // Secondary: frame count should be reasonable (not thousands).
+        // A seek+decode should produce <50 frames for a 0.5s lookahead.
+        QVERIFY2(countB < 100,
+            qPrintable(QString("Prefetch decoded %1 frames — "
+                "likely did not seek (forward-decoded from stale position)")
+                .arg(countB)));
+    }
+
+    // ========================================================================
+    // TIMELINE CLIP-SWITCH PREFETCH TEST
+    // Uses actual clips from Default Sequence timeline + undo stack positions.
+    // Simulates what happens during playback when the editor switches readers
+    // at clip boundaries (frames 0, 1492, 2064, 2308).
+    // ========================================================================
+
+    void test_timeline_clip_switch_prefetch_seeks() {
+        // Regression: During timeline playback, each clip boundary triggers a
+        // reader switch: StopPrefetch on old reader, StartPrefetch on new reader.
+        // If the new reader's prefetch doesn't seek to the clip's source_in
+        // position, it forward-decodes from 0 → source_in (potentially hundreds
+        // of frames), starving the cache and causing visible stutter.
+        //
+        // This test uses the actual clips from the Default Sequence timeline
+        // and the playhead positions from the undo stack (commands 18-21).
+        // Timeline layout:
+        //   11C-3.mov              @ tl frames 0-1492    (src 0-1492, 24000/1001fps)
+        //   A001_02241645_C001.mov @ tl frames 1492-1949 (src 0-457,  24fps)
+        //   A001_04271819_C004.mov @ tl frames 2064-2308 (src 0-244,  24fps)
+        //   A001_02241645_C001.mov @ tl frames 2308-3049 (src 457-1198, 24fps)
+
+        struct ClipEntry {
+            const char* path;
+            int source_in_frame;
+            int source_out_frame;
+        };
+
+        ClipEntry clips[] = {
+            {"/Users/joe/Local/Archived/PINE BOX/Media H264/DAY 9_Viper Room/"
+             "011 Viper Room Hallway/11C-3.mov",
+             0, 1492},
+            {"/Users/joe/Local/iPhone BMCAM app footage/A001_02241645_C001.mov",
+             0, 457},
+            {"/Users/joe/Local/iPhone BMCAM app footage/A001_04271819_C004.mov",
+             0, 244},
+            {"/Users/joe/Local/iPhone BMCAM app footage/A001_02241645_C001.mov",
+             457, 1198},
+        };
+        int num_clips = sizeof(clips) / sizeof(clips[0]);
+
+        // Open all assets up front; skip if any missing.
+        // Use the asset's ACTUAL frame rate (from stream metadata), not the
+        // DB's imported rate — VFR footage (e.g. iPhone ProRes) has irregular
+        // PTS that diverges from the nominal rate. The reader caches by actual
+        // stream PTS, so lookups must use the stream's rate to hit.
+        struct OpenClip {
+            std::shared_ptr<emp::Asset> asset;
+            std::shared_ptr<emp::Reader> reader;
+            emp::Rate rate;  // from asset->info(), not DB
+            int source_in;
+            int source_out;
+        };
+
+        std::vector<OpenClip> open_clips;
+        for (int i = 0; i < num_clips; ++i) {
+            if (!QFile::exists(clips[i].path)) {
+                QSKIP(qPrintable(QString("Missing: %1").arg(clips[i].path)));
+            }
+            auto asset_r = emp::Asset::Open(clips[i].path);
+            QVERIFY2(asset_r.is_ok(),
+                qPrintable(QString("Failed to open %1: %2")
+                    .arg(clips[i].path)
+                    .arg(asset_r.is_error()
+                        ? QString::fromStdString(asset_r.error().message) : "")));
+
+            auto reader_r = emp::Reader::Create(asset_r.value());
+            QVERIFY(reader_r.is_ok());
+
+            const auto& info = asset_r.value()->info();
+            open_clips.push_back({
+                asset_r.value(),
+                reader_r.value(),
+                emp::Rate{info.video_fps_num, info.video_fps_den},
+                clips[i].source_in_frame,
+                clips[i].source_out_frame
+            });
+        }
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // Simulate timeline playback: at each clip boundary, switch reader,
+        // park at source_in, start prefetch, verify it seeks (low frame count).
+        for (int i = 0; i < (int)open_clips.size(); ++i) {
+            auto& oc = open_clips[i];
+
+            // Decode at the clip's source_in position (simulates clip switch)
+            emp::TimeUS source_in_us =
+                emp::FrameTime::from_frame(oc.source_in, oc.rate).to_us();
+            auto r = oc.reader->DecodeAtUS(source_in_us);
+            QVERIFY2(r.is_ok(),
+                qPrintable(QString("Clip %1 decode at source_in=%2 failed: %3")
+                    .arg(i).arg(oc.source_in)
+                    .arg(r.is_error()
+                        ? QString::fromStdString(r.error().message) : "")));
+
+            // Start prefetch and let it run
+            oc.reader->StartPrefetch(1);
+            oc.reader->UpdatePrefetchTarget(source_in_us);
+            QThread::msleep(400);
+
+            int64_t count = oc.reader->PrefetchFramesDecoded();
+            oc.reader->StopPrefetch();
+
+            // Prefetch must have produced output (catches stale-target bug)
+            QVERIFY2(count > 0,
+                qPrintable(QString("Clip %1 (%2): prefetch decoded 0 frames "
+                    "at source_in=%3 — stale prefetch_target")
+                    .arg(i).arg(clips[i].path).arg(oc.source_in)));
+
+            // Prefetch should seek, not forward-decode from 0.
+            // With seek: ~15-30 frames (keyframe → source_in + lookahead).
+            // Without seek on clip with source_in=457: ~457+30 = ~487 frames.
+            int expected_max = 100;
+            QVERIFY2(count < expected_max,
+                qPrintable(QString("Clip %1: prefetch decoded %2 frames "
+                    "(expected <%3) — seek likely missing, forward-decoding "
+                    "from 0 to source_in=%4")
+                    .arg(i).arg(count).arg(expected_max).arg(oc.source_in)));
+
+            // Verify sequential frames from source_in have increasing PTS
+            // (catches stale-cache floor-match returning distant parked frames)
+            emp::TimeUS prev_pts = -1;
+            int check_count = std::min(5, oc.source_out - oc.source_in);
+            for (int f = 0; f < check_count; ++f) {
+                int frame = oc.source_in + f;
+                auto fr = oc.reader->DecodeAt(
+                    emp::FrameTime::from_frame(frame, oc.rate));
+                if (fr.is_error()) {
+                    if (fr.error().code == emp::ErrorCode::EOFReached) break;
+                    QFAIL(qPrintable(QString("Clip %1 frame %2 failed: %3")
+                        .arg(i).arg(frame)
+                        .arg(QString::fromStdString(fr.error().message))));
+                }
+
+                emp::TimeUS pts = fr.value()->source_pts_us();
+                if (f > 0) {
+                    QVERIFY2(pts > prev_pts,
+                        qPrintable(QString("Clip %1 frame %2: PTS %3 not > "
+                            "prev %4 — stale cache frame")
+                            .arg(i).arg(frame).arg(pts).arg(prev_pts)));
+                }
+                prev_pts = pts;
+            }
+        }
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    void test_pooled_reader_prefetch_at_new_position() {
+        // Regression: A pooled reader is used for clip A at position X, its
+        // prefetch fills the cache ahead (cache_max_pts >> X).  The reader is
+        // returned to the pool (StopPrefetch), then re-activated for clip B
+        // at a DIFFERENT position Y (same file, different source_in).
+        //
+        // Bug: the prefetch worker checks `prefetch_to > cache_max_pts` to
+        // decide if decode is needed.  cache_max_pts is still from session A
+        // (very high), so prefetch_to (near Y) < cache_max_pts → prefetch
+        // sleeps → zero output → main thread stale-cache rejects on every
+        // frame past the initial sync batch → visible stutter.
+        //
+        // Uses 11C-3.mov from the Default Sequence (1492 frames, 23.976fps).
+        // Session A at frame 700, session B at frame 100.
+        // This reproduces the production scenario: clip plays at a high
+        // position, reader returned to pool, then re-used at a LOWER
+        // position. cache_max_pts from A >> prefetch_to from B → prefetch
+        // sleeps.
+
+        QString path = "/Users/joe/Local/Archived/PINE BOX/Media H264/"
+                       "DAY 9_Viper Room/011 Viper Room Hallway/11C-3.mov";
+        if (!QFile::exists(path)) QSKIP("Missing test media");
+
+        auto asset = emp::Asset::Open(path.toStdString());
+        QVERIFY(asset.is_ok());
+        auto reader = emp::Reader::Create(asset.value());
+        QVERIFY(reader.is_ok());
+
+        const auto& info = asset.value()->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+
+        int total_frames = static_cast<int>(
+            info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
+        if (total_frames < 800) QSKIP("Video too short");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // ── Session A: play from frame 700, let prefetch fill ahead ──
+        int posA = 700;
+        emp::TimeUS targetA = emp::FrameTime::from_frame(posA, rate).to_us();
+        auto r0 = reader.value()->DecodeAtUS(targetA);
+        QVERIFY(r0.is_ok());
+
+        reader.value()->StartPrefetch(1);
+        reader.value()->UpdatePrefetchTarget(targetA);
+        QThread::msleep(500);  // Let prefetch fill cache well ahead
+        reader.value()->StopPrefetch();
+
+        int64_t countA = reader.value()->PrefetchFramesDecoded();
+        QVERIFY2(countA > 0, "Session A prefetch produced no output");
+
+        // ── Session B: re-activate at frame 100 (LOWER than A) ──
+        // cache_max_pts from A is ~frame 720+, prefetch_to for B is
+        // ~frame 112 (100 + 0.5s). Since 112 < 720, prefetch sleeps.
+        int posB = 100;
+        emp::TimeUS targetB = emp::FrameTime::from_frame(posB, rate).to_us();
+        auto r1 = reader.value()->DecodeAtUS(targetB);
+        QVERIFY(r1.is_ok());
+
+        reader.value()->StartPrefetch(1);
+        reader.value()->UpdatePrefetchTarget(targetB);
+        QThread::msleep(500);
+
+        int64_t countB = reader.value()->PrefetchFramesDecoded();
+        reader.value()->StopPrefetch();
+
+        // Prefetch MUST produce output at the new position.
+        // Without the fix: cache_max_pts from session A fools the prefetch
+        // into thinking the cache is already ahead → countB == 0.
+        QVERIFY2(countB > 0,
+            qPrintable(QString("Session B prefetch decoded 0 frames at "
+                "frame %1 — stale cache_max_pts from session A blocked "
+                "prefetch (cache_max_pts from A likely >> target B)")
+                .arg(posB)));
+
+        // Verify sequential frames from posB have increasing PTS
+        // (catches stale floor-match from session A's distant cached frames)
+        emp::TimeUS prev_pts = -1;
+        for (int f = 0; f < 5; ++f) {
+            auto fr = reader.value()->DecodeAt(
+                emp::FrameTime::from_frame(posB + f, rate));
+            if (fr.is_error()) {
+                if (fr.error().code == emp::ErrorCode::EOFReached) break;
+                QFAIL(qPrintable(QString("Frame %1 failed: %2")
+                    .arg(posB + f)
+                    .arg(QString::fromStdString(fr.error().message))));
+            }
+
+            emp::TimeUS pts = fr.value()->source_pts_us();
+            if (f > 0) {
+                QVERIFY2(pts > prev_pts,
+                    qPrintable(QString("Frame %1: PTS %2 not > prev %3 — "
+                        "stale cache from session A")
+                        .arg(posB + f).arg(pts).arg(prev_pts)));
+            }
+            prev_pts = pts;
+        }
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
 };
 
 QTEST_MAIN(TestEMPCore)

@@ -26,9 +26,12 @@ struct FrameTime {
     int64_t frame;
     Rate rate;
 
-    // Convert to microseconds: T(n) = floor(n * 1_000_000 * rate.den / rate.num)
+    // Convert to microseconds using round-half-up (matches av_rescale_q).
+    // Floor division disagrees with FFmpeg's PTS by 1μs on every 3rd frame
+    // for 24000/1001 (and similar non-integer rates), causing cache misses.
     TimeUS to_us() const {
-        return (frame * 1000000LL * rate.den) / rate.num;
+        int64_t num = frame * 1000000LL * rate.den;
+        return (num + rate.num / 2) / rate.num;
     }
 
     // Create from frame index and rate
