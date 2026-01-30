@@ -1630,6 +1630,90 @@ private slots:
 
         emp::SetDecodeMode(emp::DecodeMode::Play);
     }
+
+    void test_cache_not_cleared_on_small_seek() {
+        // Verify that seeking within 1s preserves cached frames.
+        // The stale-session detection (STALE_THRESHOLD_US = 1s) must NOT
+        // clear the cache when the target is close to the cached range.
+        // Without this guarantee, normal playback (frame-to-frame) would
+        // constantly flush the cache.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(asset).value();
+
+        const auto& info = asset->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+
+        int total_frames = static_cast<int>(
+            info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
+        if (total_frames < 60) QSKIP("Video too short");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // Decode frame 50 — fills cache with batch around frame 50
+        emp::TimeUS t50 = emp::FrameTime::from_frame(50, rate).to_us();
+        auto r0 = reader->DecodeAtUS(t50);
+        QVERIFY(r0.is_ok());
+
+        // Decode frame 55 — within 1s, cache must NOT be cleared
+        emp::TimeUS t55 = emp::FrameTime::from_frame(55, rate).to_us();
+        auto r1 = reader->DecodeAtUS(t55);
+        QVERIFY(r1.is_ok());
+
+        // Frame 50 should still be in cache (batch from first decode)
+        auto cached = reader->GetCachedFrame(t50);
+        QVERIFY2(cached != nullptr,
+            "Cache cleared on small seek (within 1s) — "
+            "stale-session threshold too aggressive");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    void test_direction_change_preserves_cache() {
+        // Verify that changing prefetch direction does not clear cached
+        // frames. The stale-session detection triggers only on DecodeAtUS
+        // with a target far outside the cached range — direction changes
+        // at the same position must preserve the cache.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(asset).value();
+
+        const auto& info = asset->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+
+        int total_frames = static_cast<int>(
+            info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
+        if (total_frames < 60) QSKIP("Video too short");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // Decode frame 50 to populate cache
+        emp::TimeUS t50 = emp::FrameTime::from_frame(50, rate).to_us();
+        auto r0 = reader->DecodeAtUS(t50);
+        QVERIFY(r0.is_ok());
+
+        // Start forward prefetch, let it run briefly
+        reader->StartPrefetch(1);
+        reader->UpdatePrefetchTarget(t50);
+        QThread::msleep(200);
+        reader->StopPrefetch();
+
+        // Switch to reverse prefetch
+        reader->StartPrefetch(-1);
+        reader->UpdatePrefetchTarget(t50);
+        QThread::msleep(100);
+        reader->StopPrefetch();
+
+        // Frame 50 must still be cached
+        auto cached = reader->GetCachedFrame(t50);
+        QVERIFY2(cached != nullptr,
+            "Cache lost frame 50 after direction change — "
+            "direction switch should not clear cache");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
 };
 
 QTEST_MAIN(TestEMPCore)

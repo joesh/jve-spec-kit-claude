@@ -386,6 +386,28 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     // uses the correct target from its very first iteration.
     m_impl->prefetch_target.store(t_us);
 
+    // Stale session: target far outside cached range → cache is from a
+    // previous session (pooled reader reactivation, large seek). Clear.
+    {
+        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+        if (!m_impl->frame_cache.empty()) {
+            constexpr TimeUS STALE_THRESHOLD_US = 1000000;  // 1s
+            bool outside = (t_us > m_impl->cache_max_pts + STALE_THRESHOLD_US) ||
+                           (t_us < m_impl->cache_min_pts - STALE_THRESHOLD_US);
+            if (outside) {
+                EMP_LOG_DEBUG("Stale session cleared: target=%lldus outside [%lld,%lld]+1s",
+                        (long long)t_us,
+                        (long long)m_impl->cache_min_pts,
+                        (long long)m_impl->cache_max_pts);
+                m_impl->frame_cache.clear();
+                m_impl->cache_min_pts = INT64_MAX;
+                m_impl->cache_max_pts = INT64_MIN;
+                m_impl->have_decode_pos = false;
+                m_impl->have_prefetch_pos.store(false);
+            }
+        }
+    }
+
     // 0. Mode transition: Park/Scrub→Play clears scattered cache.
     //    Scattered park frames cause stale floor matches during sequential play
     //    and fool the prefetch into thinking the cache is already ahead.
@@ -991,40 +1013,19 @@ void Reader::prefetch_worker() {
         TimeUS duration = m_asset->info().duration_us;
         if (prefetch_to > duration) prefetch_to = duration;
 
-        // Check if we need to decode by looking for the LOCAL cache frontier
-        // near prefetch_to — not global cache_max_pts.  A pooled reader
-        // retains cached frames from a previous session at a distant position.
-        // cache_max_pts reflects those distant frames, fooling the old check
-        // `prefetch_to > cache_max_pts` into returning false → prefetch sleeps
-        // → zero output → stale-cache rejections → stutter on every frame.
-        //
-        // Fix: find the highest cached PTS <= prefetch_to and check if it's
-        // (a) from the current session (>= target) and (b) close to
-        // prefetch_to (within ~1 frame).  Stale frames from a previous
-        // session at a distant position fail check (a) or (b).
+        // Check if we need to decode (simple bounds check).
+        // Stale sessions are already handled by DecodeAtUS's stale-session
+        // detection (clears cache when target is >1s outside cached range),
+        // so cache_max_pts/cache_min_pts are always from the current session.
         bool need_decode = false;
         {
             std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
             if (m_impl->frame_cache.empty()) {
                 need_decode = true;
             } else if (dir > 0) {
-                auto it = m_impl->frame_cache.upper_bound(prefetch_to);
-                if (it == m_impl->frame_cache.begin()) {
-                    need_decode = true;
-                } else {
-                    --it;  // Highest cached PTS <= prefetch_to
-                    // Stale if before current target or too far from frontier
-                    need_decode = (it->first < target ||
-                                   prefetch_to - it->first > LOOKAHEAD_US / 10);
-                }
+                need_decode = (prefetch_to > m_impl->cache_max_pts);
             } else {
-                auto it = m_impl->frame_cache.lower_bound(prefetch_to);
-                if (it == m_impl->frame_cache.end()) {
-                    need_decode = true;
-                } else {
-                    need_decode = (it->first > target ||
-                                   it->first - prefetch_to > LOOKAHEAD_US / 10);
-                }
+                need_decode = (prefetch_to < m_impl->cache_min_pts);
             }
         }
 
@@ -1032,20 +1033,14 @@ void Reader::prefetch_worker() {
             auto decode_start = std::chrono::steady_clock::now();
             // No decode_mutex needed - we have our own decoder!
 
-            // Seek target: continue from the LOCAL cache frontier near the
-            // target, not global cache_max_pts (stale from previous session).
-            // Find the highest cached PTS in [target, prefetch_to].
+            // Seek target: continue from where the cache ends.
+            // Stale sessions are already cleared by DecodeAtUS, so
+            // cache_max_pts is always from the current session.
             TimeUS seek_target = target;
             {
                 std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
-                if (!m_impl->frame_cache.empty()) {
-                    auto it = m_impl->frame_cache.upper_bound(prefetch_to);
-                    if (it != m_impl->frame_cache.begin()) {
-                        --it;
-                        if (it->first >= target && it->first > seek_target) {
-                            seek_target = it->first;
-                        }
-                    }
+                if (!m_impl->frame_cache.empty() && m_impl->cache_max_pts > seek_target) {
+                    seek_target = m_impl->cache_max_pts;
                 }
             }
 
