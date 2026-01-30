@@ -1,12 +1,17 @@
---- Unified Media Cache with Dual Assets
+--- Multi-Reader LRU Media Cache
 --
 -- Responsibilities:
--- - Opens media file TWICE (separate AVFormatContexts) for independent video/audio
--- - Maintains sliding window cache for video frames
--- - Maintains PCM cache for audio around playhead
--- - Provides unified interface for viewer_panel and audio_playback
+-- - Maintains LRU pool of open readers (max 4 simultaneously open media files)
+-- - Each reader has dual AVFormatContexts (video + audio) for seek isolation
+-- - activate(path) makes a reader "active" — pool lookup, open if miss, LRU evict if full
+-- - Provides video frame decode and audio PCM access for the active reader
 --
--- Why dual assets:
+-- Why LRU pool:
+-- Timeline scrubbing clicks between clips on different media files. Without a pool,
+-- every clip switch does: unload all → open file ×2 → create reader ×2 (~15-30ms).
+-- With the pool, re-activating a recently used file is a table lookup (~0µs).
+--
+-- Why dual assets per reader:
 -- AVFormatContext is NOT thread-safe for seeking. When audio seeks to decode
 -- PCM while video is decoding frames, the shared demuxer state corrupts both.
 -- Opening twice gives each domain its own demuxer/decoder state.
@@ -17,13 +22,20 @@ local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
 
 local M = {
-    -- Dual assets (independent AVFormatContexts)
+    -- LRU reader pool: { [file_path] = pool_entry }
+    -- pool_entry = { video_asset, video_reader, audio_asset, audio_reader, info, last_used }
+    reader_pool = {},
+    max_readers = 4,
+
+    -- Currently active reader path (for get_video_frame/get_audio_pcm)
+    active_path = nil,
+
+    -- Legacy fields kept for backward compatibility with callers that read these directly
+    -- These proxy to the active pool entry
     video_asset = nil,
     video_reader = nil,
     audio_asset = nil,
     audio_reader = nil,
-
-    -- Cached asset info (from video_asset)
     asset_info = nil,
     file_path = nil,
 
@@ -49,15 +61,193 @@ local M = {
     },
 
     -- Prefetch state (background decode thread)
-    last_prefetch_direction = 0,  -- Track direction changes
+    last_prefetch_direction = 0,
 }
+
+--------------------------------------------------------------------------------
+-- Internal: Sync legacy fields from active pool entry
+--------------------------------------------------------------------------------
+
+local function sync_active_fields()
+    if M.active_path and M.reader_pool[M.active_path] then
+        local entry = M.reader_pool[M.active_path]
+        M.video_asset = entry.video_asset
+        M.video_reader = entry.video_reader
+        M.audio_asset = entry.audio_asset
+        M.audio_reader = entry.audio_reader
+        M.asset_info = entry.info
+        M.file_path = M.active_path
+    else
+        M.video_asset = nil
+        M.video_reader = nil
+        M.audio_asset = nil
+        M.audio_reader = nil
+        M.asset_info = nil
+        M.file_path = nil
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Internal: Open a new reader pair for a file path
+--------------------------------------------------------------------------------
+
+local function open_reader(file_path)
+    assert(qt_constants, "media_cache.open_reader: qt_constants not available")
+    assert(qt_constants.EMP, "media_cache.open_reader: EMP bindings not available")
+
+    -- Open VIDEO asset (format context A)
+    local video_asset, err = qt_constants.EMP.ASSET_OPEN(file_path)
+    assert(video_asset, string.format(
+        "media_cache.open_reader: ASSET_OPEN failed for video '%s': %s",
+        file_path, err and err.msg or "unknown error"))
+
+    local info = qt_constants.EMP.ASSET_INFO(video_asset)
+    assert(info, string.format(
+        "media_cache.open_reader: ASSET_INFO failed for '%s'", file_path))
+    assert(info.has_video, string.format(
+        "media_cache.open_reader: no video stream in '%s'", file_path))
+
+    -- Create video reader
+    local video_reader, reader_err = qt_constants.EMP.READER_CREATE(video_asset)
+    assert(video_reader, string.format(
+        "media_cache.open_reader: READER_CREATE failed for video: %s",
+        reader_err and reader_err.msg or "unknown error"))
+
+    local entry = {
+        video_asset = video_asset,
+        video_reader = video_reader,
+        audio_asset = nil,
+        audio_reader = nil,
+        info = info,
+        last_used = os.clock(),
+    }
+
+    -- Open AUDIO asset (format context B) - SEPARATE from video
+    if info.has_audio then
+        local audio_asset, audio_err = qt_constants.EMP.ASSET_OPEN(file_path)
+        assert(audio_asset, string.format(
+            "media_cache.open_reader: ASSET_OPEN failed for audio '%s': %s",
+            file_path, audio_err and audio_err.msg or "unknown error"))
+
+        local audio_reader, areader_err = qt_constants.EMP.READER_CREATE(audio_asset)
+        assert(audio_reader, string.format(
+            "media_cache.open_reader: READER_CREATE failed for audio: %s",
+            areader_err and areader_err.msg or "unknown error"))
+
+        entry.audio_asset = audio_asset
+        entry.audio_reader = audio_reader
+
+        logger.info("media_cache", string.format(
+            "Opened dual assets: video + audio for '%s'", file_path))
+    else
+        logger.info("media_cache", string.format(
+            "Opened single asset (no audio) for '%s'", file_path))
+    end
+
+    logger.info("media_cache", string.format(
+        "Media: %dx%d @ %d/%d fps, duration=%.2fs, has_audio=%s",
+        info.width, info.height, info.fps_num, info.fps_den,
+        info.duration_us / 1000000, tostring(info.has_audio)))
+
+    return entry
+end
+
+--------------------------------------------------------------------------------
+-- Internal: Close a pool entry (release all its resources)
+--------------------------------------------------------------------------------
+
+local function close_entry(entry)
+    -- Stop prefetch thread first
+    if entry.video_reader then
+        qt_constants.EMP.READER_STOP_PREFETCH(entry.video_reader)
+    end
+
+    -- Close video reader and asset
+    if entry.video_reader then
+        qt_constants.EMP.READER_CLOSE(entry.video_reader)
+        entry.video_reader = nil
+    end
+    if entry.video_asset then
+        qt_constants.EMP.ASSET_CLOSE(entry.video_asset)
+        entry.video_asset = nil
+    end
+
+    -- Close audio reader and asset
+    if entry.audio_reader then
+        qt_constants.EMP.READER_CLOSE(entry.audio_reader)
+        entry.audio_reader = nil
+    end
+    if entry.audio_asset then
+        qt_constants.EMP.ASSET_CLOSE(entry.audio_asset)
+        entry.audio_asset = nil
+    end
+
+    entry.info = nil
+end
+
+--------------------------------------------------------------------------------
+-- Internal: Find and evict the LRU entry from the pool
+--------------------------------------------------------------------------------
+
+local function evict_lru()
+    local oldest_path = nil
+    local oldest_time = math.huge
+
+    for path, entry in pairs(M.reader_pool) do
+        -- Never evict the active reader
+        if path ~= M.active_path and entry.last_used < oldest_time then
+            oldest_time = entry.last_used
+            oldest_path = path
+        end
+    end
+
+    assert(oldest_path, "media_cache.evict_lru: no evictable entry (all are active?)")
+
+    local entry = M.reader_pool[oldest_path]
+    close_entry(entry)
+    M.reader_pool[oldest_path] = nil
+
+    logger.debug("media_cache", string.format("Evicted LRU reader: %s", oldest_path))
+end
+
+--------------------------------------------------------------------------------
+-- Internal: Release Lua-side caches (video frames, audio PCM)
+-- Called when switching active reader so stale frames aren't displayed.
+--------------------------------------------------------------------------------
+
+local function release_lua_caches()
+    -- Release cached video frames
+    for idx, frame in pairs(M.video_cache.frames) do
+        if frame then
+            qt_constants.EMP.FRAME_RELEASE(frame)
+        end
+    end
+    M.video_cache.frames = {}
+    M.video_cache.center_idx = 0
+    M.video_cache.reverse_window_start = nil
+    M.video_cache.reverse_window_end = nil
+
+    -- Release cached PCM
+    if M.audio_cache.pcm then
+        qt_constants.EMP.PCM_RELEASE(M.audio_cache.pcm)
+        M.audio_cache.pcm = nil
+        M.audio_cache.data_ptr = nil
+        M.audio_cache.start_us = 0
+        M.audio_cache.end_us = 0
+        M.audio_cache.frames = 0
+    end
+
+    -- Reset prefetch state
+    M.last_prefetch_direction = 0
+    M.playhead_direction = nil
+end
 
 --------------------------------------------------------------------------------
 -- Query Functions
 --------------------------------------------------------------------------------
 
 function M.is_loaded()
-    return M.video_asset ~= nil and M.video_reader ~= nil
+    return M.active_path ~= nil and M.reader_pool[M.active_path] ~= nil
 end
 
 function M.get_video_asset()
@@ -85,127 +275,98 @@ function M.get_file_path()
 end
 
 --------------------------------------------------------------------------------
--- Lifecycle
+-- Lifecycle: Pool-based activate / cleanup
 --------------------------------------------------------------------------------
 
---- Load media file with dual assets
+--- Activate a media file as the current source.
+-- If already in the pool, promote to active (no I/O).
+-- If not in pool, open and add. LRU-evict if pool full.
 -- @param file_path Path to media file
--- @return asset_info on success
-function M.load(file_path)
-    assert(file_path, "media_cache.load: file_path is nil")
+-- @return asset_info
+function M.activate(file_path)
+    assert(file_path, "media_cache.activate: file_path is nil")
     assert(type(file_path) == "string", string.format(
-        "media_cache.load: file_path must be string, got %s", type(file_path)))
-    assert(qt_constants, "media_cache.load: qt_constants not available")
-    assert(qt_constants.EMP, "media_cache.load: EMP bindings not available")
+        "media_cache.activate: file_path must be string, got %s", type(file_path)))
 
-    -- Clean up any previous load
-    M.unload()
-
-    -- Open VIDEO asset (format context A)
-    local video_asset, err = qt_constants.EMP.ASSET_OPEN(file_path)
-    assert(video_asset, string.format(
-        "media_cache.load: ASSET_OPEN failed for video '%s': %s",
-        file_path, err and err.msg or "unknown error"))
-
-    local info = qt_constants.EMP.ASSET_INFO(video_asset)
-    assert(info, string.format(
-        "media_cache.load: ASSET_INFO failed for '%s'", file_path))
-    assert(info.has_video, string.format(
-        "media_cache.load: no video stream in '%s'", file_path))
-
-    -- Create video reader
-    local video_reader, reader_err = qt_constants.EMP.READER_CREATE(video_asset)
-    assert(video_reader, string.format(
-        "media_cache.load: READER_CREATE failed for video: %s",
-        reader_err and reader_err.msg or "unknown error"))
-
-    M.video_asset = video_asset
-    M.video_reader = video_reader
-    M.asset_info = info
-    M.file_path = file_path
-
-    -- Open AUDIO asset (format context B) - SEPARATE from video
-    if info.has_audio then
-        local audio_asset, audio_err = qt_constants.EMP.ASSET_OPEN(file_path)
-        assert(audio_asset, string.format(
-            "media_cache.load: ASSET_OPEN failed for audio '%s': %s",
-            file_path, audio_err and audio_err.msg or "unknown error"))
-
-        local audio_reader, areader_err = qt_constants.EMP.READER_CREATE(audio_asset)
-        assert(audio_reader, string.format(
-            "media_cache.load: READER_CREATE failed for audio: %s",
-            areader_err and areader_err.msg or "unknown error"))
-
-        M.audio_asset = audio_asset
-        M.audio_reader = audio_reader
-
-        logger.info("media_cache", string.format(
-            "Loaded dual assets: video + audio for '%s'", file_path))
-    else
-        logger.info("media_cache", string.format(
-            "Loaded single asset (no audio) for '%s'", file_path))
+    -- Fast path: already active
+    if file_path == M.active_path then
+        local entry = M.reader_pool[file_path]
+        assert(entry, "media_cache.activate: active_path in pool but entry missing")
+        entry.last_used = os.clock()
+        return entry.info
     end
 
-    logger.info("media_cache", string.format(
-        "Media: %dx%d @ %d/%d fps, duration=%.2fs, has_audio=%s",
-        info.width, info.height, info.fps_num, info.fps_den,
-        info.duration_us / 1000000, tostring(info.has_audio)))
-
-    return info
-end
-
---- Unload all resources
-function M.unload()
-    -- Stop prefetch thread first (before closing reader)
-    if M.video_reader then
+    -- Stop old reader's prefetch thread before switching.
+    -- release_lua_caches resets Lua-side last_prefetch_direction but doesn't
+    -- stop the C++ thread — leaving it decoding at a stale position.
+    if M.active_path and M.video_reader and M.last_prefetch_direction ~= 0 then
         qt_constants.EMP.READER_STOP_PREFETCH(M.video_reader)
     end
-    M.last_prefetch_direction = 0
-    M.playhead_direction = nil
 
-    -- Release cached video frames
-    for idx, frame in pairs(M.video_cache.frames) do
-        if frame then
-            qt_constants.EMP.FRAME_RELEASE(frame)
-        end
-    end
-    M.video_cache.frames = {}
-    M.video_cache.center_idx = 0
-
-    -- Release cached PCM
-    if M.audio_cache.pcm then
-        qt_constants.EMP.PCM_RELEASE(M.audio_cache.pcm)
-        M.audio_cache.pcm = nil
-        M.audio_cache.data_ptr = nil
-        M.audio_cache.start_us = 0
-        M.audio_cache.end_us = 0
-        M.audio_cache.frames = 0
+    -- Release Lua-side caches from old active reader
+    if M.active_path then
+        release_lua_caches()
     end
 
-    -- Close video reader and asset
-    if M.video_reader then
-        qt_constants.EMP.READER_CLOSE(M.video_reader)
-        M.video_reader = nil
-    end
-    if M.video_asset then
-        qt_constants.EMP.ASSET_CLOSE(M.video_asset)
-        M.video_asset = nil
-    end
-
-    -- Close audio reader and asset (separate handles)
-    if M.audio_reader then
-        qt_constants.EMP.READER_CLOSE(M.audio_reader)
-        M.audio_reader = nil
-    end
-    if M.audio_asset then
-        qt_constants.EMP.ASSET_CLOSE(M.audio_asset)
-        M.audio_asset = nil
+    -- Check pool for existing entry
+    local entry = M.reader_pool[file_path]
+    if entry then
+        -- Pool hit — promote to active
+        entry.last_used = os.clock()
+        M.active_path = file_path
+        sync_active_fields()
+        logger.debug("media_cache", string.format("Pool hit: %s", file_path))
+        return entry.info
     end
 
-    M.asset_info = nil
-    M.file_path = nil
+    -- Pool miss — need to open. Evict if full.
+    local pool_count = 0
+    for _ in pairs(M.reader_pool) do pool_count = pool_count + 1 end
+    if pool_count >= M.max_readers then
+        evict_lru()
+    end
 
-    logger.debug("media_cache", "Unloaded all resources")
+    -- Open new reader pair
+    entry = open_reader(file_path)
+    M.reader_pool[file_path] = entry
+    M.active_path = file_path
+    sync_active_fields()
+
+    logger.debug("media_cache", string.format("Pool miss, opened: %s (pool size=%d)",
+        file_path, pool_count + 1))
+
+    return entry.info
+end
+
+--- Legacy load() — calls activate() for backward compat with source-mode callers.
+-- @param file_path Path to media file
+-- @return asset_info
+function M.load(file_path)
+    return M.activate(file_path)
+end
+
+--- Legacy unload() — releases the active reader's Lua caches but keeps it pooled.
+-- For full cleanup, use M.cleanup().
+function M.unload()
+    release_lua_caches()
+    -- Note: does NOT remove from pool — that's the whole point of the LRU cache.
+    -- Active path stays set so is_loaded() returns true.
+    logger.debug("media_cache", "Unloaded Lua caches (reader stays pooled)")
+end
+
+--- Release ALL pooled readers and reset state.
+-- Called on application exit or when switching projects.
+function M.cleanup()
+    release_lua_caches()
+
+    for path, entry in pairs(M.reader_pool) do
+        close_entry(entry)
+    end
+    M.reader_pool = {}
+    M.active_path = nil
+    sync_active_fields()
+
+    logger.debug("media_cache", "Cleaned up all pooled readers")
 end
 
 --------------------------------------------------------------------------------
@@ -392,7 +553,7 @@ function M.set_playhead(frame_idx, direction, speed)
     assert(frame_idx, "media_cache.set_playhead: frame_idx is nil")
     assert(direction, "media_cache.set_playhead: direction is nil")
     assert(speed, "media_cache.set_playhead: speed is nil")
-    assert(M.is_loaded(), "media_cache.set_playhead: not loaded (call load() first)")
+    assert(M.is_loaded(), "media_cache.set_playhead: not loaded (call activate() first)")
 
     -- Store direction for reverse window logic
     M.playhead_direction = direction

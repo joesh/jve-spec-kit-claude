@@ -52,8 +52,8 @@ local function load_video_frame(file_path)
     -- Clean up previous resources
     cleanup()
 
-    -- Load via media_cache (opens dual assets for video/audio isolation)
-    local info = media_cache.load(file_path)
+    -- Activate via media_cache pool (opens dual assets, or pool-hit if cached)
+    local info = media_cache.activate(file_path)
 
     -- Get and display frame 0
     local frame = media_cache.get_video_frame(0)
@@ -307,9 +307,9 @@ function M.show_timeline(sequence)
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Timeline Viewer")
     end
 
-    -- TODO: Timeline viewer should decode frame at playhead from sequence clips
-    -- For now, just clear the surface and update selection
-    clear_video_surface()
+    -- Don't clear the video surface — the playhead listener in timeline_panel
+    -- will resolve and display the correct frame via resolve_and_display().
+    -- Clearing here would cause a black flash before the listener fires.
 
     if sequence then
         local inspectable = nil
@@ -344,35 +344,6 @@ end
 -- Timeline Playback Mode Functions
 --------------------------------------------------------------------------------
 
--- Track current timeline source path for change detection
-local timeline_source_path = nil
-
---- Set source for timeline playback mode
--- Called by playback_controller when clip changes during timeline playback
--- @param media_path string: File path of the media to display
-function M.set_source_for_timeline(media_path)
-    ensure_created()
-    assert(media_path and media_path ~= "",
-        "viewer_panel.set_source_for_timeline: media_path is required")
-
-    -- Skip if same source already loaded
-    if media_path == timeline_source_path then
-        return
-    end
-
-    timeline_source_path = media_path
-
-    -- Load the media without reinitializing playback_controller
-    -- (playback_controller manages its own state in timeline mode)
-    assert(qt_constants.EMP, "viewer_panel.set_source_for_timeline: EMP bindings not available")
-    assert(video_surface, "viewer_panel.set_source_for_timeline: video_surface not created")
-
-    -- Load via media_cache (opens dual assets for video/audio isolation)
-    media_cache.load(media_path)
-
-    logger.debug("viewer_panel", string.format("Timeline source set: %s", media_path))
-end
-
 --- Show frame at a specific source time (microseconds)
 -- Used for timeline playback to show the correct source position
 -- @param source_time_us number: Source time in microseconds
@@ -406,7 +377,6 @@ function M.show_gap()
     if video_surface and qt_constants.EMP and qt_constants.EMP.SURFACE_SET_FRAME then
         qt_constants.EMP.SURFACE_SET_FRAME(video_surface, nil)
     end
-    timeline_source_path = nil  -- Reset so next clip will load
     logger.debug("viewer_panel", "Showing gap (black)")
 end
 

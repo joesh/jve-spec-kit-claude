@@ -17,6 +17,7 @@
 #include <memory>
 #include <unordered_map>
 #include <cstdint>
+#include <cstring>
 
 // Forward declaration from binding_macros.h
 extern const char* WIDGET_METATABLE;
@@ -477,6 +478,41 @@ static int lua_create_cpu_video_surface(lua_State* L) {
     return 1;
 }
 
+// EMP.SET_DECODE_MODE(mode_string)
+// mode_string: "play", "scrub", or "park"
+static int lua_emp_set_decode_mode(lua_State* L) {
+    const char* mode_str = luaL_checkstring(L, 1);
+
+    if (strcmp(mode_str, "play") == 0) {
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    } else if (strcmp(mode_str, "scrub") == 0) {
+        emp::SetDecodeMode(emp::DecodeMode::Scrub);
+    } else if (strcmp(mode_str, "park") == 0) {
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+    } else {
+        return luaL_error(L, "SET_DECODE_MODE: invalid mode '%s' (expected play/scrub/park)", mode_str);
+    }
+
+    return 0;
+}
+
+// EMP.READER_SET_MAX_CACHE(reader, max_frames)
+static int lua_emp_reader_set_max_cache(lua_State* L) {
+    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    auto it = g_readers.find(key);
+    if (it == g_readers.end()) {
+        return luaL_error(L, "READER_SET_MAX_CACHE: invalid reader handle");
+    }
+
+    int max_frames = static_cast<int>(luaL_checkinteger(L, 2));
+    if (max_frames < 0) {
+        return luaL_error(L, "READER_SET_MAX_CACHE: max_frames must be >= 0, got %d", max_frames);
+    }
+
+    it->second->SetMaxCacheFrames(static_cast<size_t>(max_frames));
+    return 0;
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -575,6 +611,12 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "READER_UPDATE_PREFETCH_TARGET");
     lua_pushcfunction(L, lua_emp_reader_get_cached_frame);
     lua_setfield(L, -2, "READER_GET_CACHED_FRAME");
+
+    // Decode mode and cache control
+    lua_pushcfunction(L, lua_emp_set_decode_mode);
+    lua_setfield(L, -2, "SET_DECODE_MODE");
+    lua_pushcfunction(L, lua_emp_reader_set_max_cache);
+    lua_setfield(L, -2, "READER_SET_MAX_CACHE");
 
     // Frame functions
     lua_pushcfunction(L, lua_emp_frame_info);

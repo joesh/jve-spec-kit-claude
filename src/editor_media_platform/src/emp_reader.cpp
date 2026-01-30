@@ -37,6 +37,20 @@ inline int emp_log_level() {
 
 namespace emp {
 
+// Global decode mode (thread-safe atomic)
+static std::atomic<DecodeMode> g_decode_mode{DecodeMode::Play};
+
+void SetDecodeMode(DecodeMode mode) {
+    g_decode_mode.store(mode, std::memory_order_release);
+    EMP_LOG_DEBUG("DecodeMode set to %s",
+        mode == DecodeMode::Play ? "Play" :
+        mode == DecodeMode::Scrub ? "Scrub" : "Park");
+}
+
+DecodeMode GetDecodeMode() {
+    return g_decode_mode.load(std::memory_order_acquire);
+}
+
 // Forward declarations from impl files
 namespace impl {
 Result<AVFrame*> decode_next_frame(AVCodecContext* codec_ctx, AVFormatContext* fmt_ctx,
@@ -45,8 +59,11 @@ Result<AVFrame*> decode_until_target(AVCodecContext* codec_ctx, AVFormatContext*
                                       AVStream* stream, int stream_idx,
                                       TimeUS target_us,
                                       AVPacket* pkt, AVFrame* frame, AVFrame* best_frame);
+// backoff_us: how far before target to seek. Always pass 0 — AVSEEK_FLAG_BACKWARD
+// already lands on the keyframe at or before the target.
 Result<void> seek_with_backoff(AVFormatContext* fmt_ctx, AVStream* stream,
-                                AVCodecContext* codec_ctx, TimeUS target_us);
+                                AVCodecContext* codec_ctx, TimeUS target_us,
+                                TimeUS backoff_us);
 bool need_seek(TimeUS current_pts_us, TimeUS target_us, bool have_current);
 std::vector<uint8_t> allocate_bgra_buffer(int width, int height, int* out_stride);
 void convert_frame_to_bgra(FFmpegScaleContext& scale_ctx, AVFrame* frame,
@@ -101,13 +118,24 @@ public:
     AVPacket* m_pkt = nullptr;
     AVFrame* m_frame = nullptr;
 
+    // Tracks where the main-thread decoder was last positioned (PTS of last
+    // decoded frame). Used by Play path to detect gaps after Park/Scrub seek.
+    TimeUS last_decode_pts = INT64_MIN;
+    bool have_decode_pos = false;
+
+    // Tracks previous decode mode for transition detection.
+    // Park/Scrub→Play transition must clear cache (scattered park frames
+    // poison sequential playback via stale floor matches).
+    DecodeMode last_mode = DecodeMode::Park;
+
     // Frame cache: stores ALL decoded frames by PTS
     // Key: PTS in microseconds, Value: shared_ptr<Frame>
     // This captures ALL decoder output to avoid B-frame reordering losses
     std::map<TimeUS, std::shared_ptr<Frame>> frame_cache;
     TimeUS cache_min_pts = INT64_MAX;
     TimeUS cache_max_pts = INT64_MIN;
-    static constexpr size_t MAX_CACHE_FRAMES = 120;  // ~5s at 24fps - larger for reverse
+    static constexpr size_t DEFAULT_MAX_CACHE_FRAMES = 120;  // ~5s at 24fps - larger for reverse
+    size_t max_cache_frames = DEFAULT_MAX_CACHE_FRAMES;
 
     // Thread-safety for frame cache (shared between main and prefetch threads)
     mutable std::mutex cache_mutex;
@@ -130,6 +158,11 @@ public:
     AVFrame* m_prefetch_frame = nullptr;
     bool prefetch_decoder_initialized = false;
 
+    // Prefetch decoder position tracking — used to detect when the prefetch
+    // decoder is far from the target and needs a forward seek.
+    std::atomic<TimeUS> prefetch_decode_pts{INT64_MIN};
+    std::atomic<bool> have_prefetch_pos{false};
+
     // Audio decode state
     impl::FFmpegCodecContext audio_codec_ctx;
     impl::FFmpegResampleContext resample_ctx;
@@ -141,6 +174,11 @@ public:
     // Audio decoder state
     bool have_audio_pts = false;
     TimeUS audio_pts_us = 0;
+
+    // Stale cache rejection threshold: max gap between floor match and target
+    // before treating as cache miss. Computed from stream frame rate in DecodeAtUS,
+    // shared with GetCachedFrame (which doesn't have stream access).
+    std::atomic<TimeUS> max_floor_gap_us{84000};  // conservative default ~2 frames @ 24fps
 };
 
 Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<Asset> asset)
@@ -217,7 +255,7 @@ Result<void> Reader::SeekUS(TimeUS t_us) {
         asset_impl->fmt_ctx.get(),
         stream,
         m_impl->codec_ctx.get(),
-        t_us
+        t_us, 0
     );
 
     // Note: We don't clear the frame cache on seek. The cached frames are still valid
@@ -297,6 +335,25 @@ static void evict_cache_frames(
     }
 }
 
+void Reader::SetMaxCacheFrames(size_t max_frames) {
+    {
+        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+        m_impl->max_cache_frames = max_frames;
+
+        // Evict immediately if over new limit
+        if (m_impl->frame_cache.size() > max_frames) {
+            TimeUS center = m_impl->prefetch_target.load();
+            evict_cache_frames(
+                m_impl->frame_cache,
+                m_impl->cache_min_pts, m_impl->cache_max_pts,
+                center, max_frames
+            );
+        }
+    }
+
+    EMP_LOG_DEBUG("SetMaxCacheFrames: %zu", max_frames);
+}
+
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     AssetImpl* asset_impl = m_asset->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
@@ -306,6 +363,34 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     static int cache_hits = 0, cache_misses = 0;
     static auto last_log = std::chrono::steady_clock::now();
 
+    // 0. Mode transition: Park/Scrub→Play clears scattered cache.
+    //    Scattered park frames cause stale floor matches during sequential play
+    //    and fool the prefetch into thinking the cache is already ahead.
+    DecodeMode mode = GetDecodeMode();
+    if (mode == DecodeMode::Play && m_impl->last_mode != DecodeMode::Play) {
+        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+        m_impl->frame_cache.clear();
+        m_impl->cache_min_pts = INT64_MAX;
+        m_impl->cache_max_pts = INT64_MIN;
+        m_impl->have_decode_pos = false;
+        m_impl->have_prefetch_pos.store(false);
+        EMP_LOG_DEBUG("Cache cleared on %s→Play transition",
+                m_impl->last_mode == DecodeMode::Park ? "Park" : "Scrub");
+    }
+    m_impl->last_mode = mode;
+
+    // Max gap between floor match and target before treating as cache miss.
+    // 2 frame durations at 24fps ≈ 83ms. Use stream's actual frame rate.
+    // Avoids returning stale frames from a sparse/scattered cache.
+    // Ceiling division avoids off-by-one: e.g. 24000/1001 → floor gives 41708,
+    // but actual PTS gaps can be 41709 due to av_rescale_q rounding.
+    TimeUS frame_dur_us = (stream->avg_frame_rate.num > 0)
+        ? (1000000LL * stream->avg_frame_rate.den + stream->avg_frame_rate.num - 1)
+          / stream->avg_frame_rate.num
+        : 42000;  // ~24fps fallback only if stream has no rate (shouldn't happen)
+    TimeUS max_floor_gap_us = frame_dur_us * 2;
+    m_impl->max_floor_gap_us.store(max_floor_gap_us);
+
     // 1. Check cache first (fast path) - thread-safe lookup
     {
         std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
@@ -313,16 +398,28 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
             auto it = m_impl->frame_cache.upper_bound(t_us);
             if (it != m_impl->frame_cache.begin()) {
                 --it;  // Now points to largest pts <= t_us
-                cache_hits++;
-                auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_log).count() >= 2) {
-                    EMP_LOG_DEBUG("Cache: %d hits, %d misses (%.1f%% hit rate), size=%zu",
-                            cache_hits, cache_misses,
-                            100.0 * cache_hits / (cache_hits + cache_misses + 1),
-                            m_impl->frame_cache.size());
-                    last_log = now;
+                TimeUS gap = t_us - it->first;
+
+                // Stale floor match: cache has frames but none near the target.
+                // Treat as miss so decode path fills the gap.
+                if (gap > max_floor_gap_us) {
+                    EMP_LOG_DEBUG("Stale cache hit rejected: gap=%lldus (max=%lldus), "
+                            "floor_pts=%lld target=%lld",
+                            (long long)gap, (long long)max_floor_gap_us,
+                            (long long)it->first, (long long)t_us);
+                    // Fall through to decode path
+                } else {
+                    cache_hits++;
+                    auto now = std::chrono::steady_clock::now();
+                    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_log).count() >= 2) {
+                        EMP_LOG_DEBUG("Cache: %d hits, %d misses (%.1f%% hit rate), size=%zu",
+                                cache_hits, cache_misses,
+                                100.0 * cache_hits / (cache_hits + cache_misses + 1),
+                                m_impl->frame_cache.size());
+                        last_log = now;
+                    }
+                    return it->second;
                 }
-                return it->second;
             }
         }
     }
@@ -346,88 +443,159 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     //    Main thread uses its own decoder - no lock needed (prefetch has separate decoder)
     std::shared_ptr<Frame> result_frame;
 
-    // Check cache state under lock
-    bool need_seek_backward = false;
-    bool cache_empty = false;
-    {
-        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
-        cache_empty = m_impl->frame_cache.empty();
-        need_seek_backward = (t_us < m_impl->cache_min_pts && m_impl->cache_min_pts != INT64_MAX);
-    }
-
-    if (need_seek_backward) {
+    if (mode == DecodeMode::Scrub || mode == DecodeMode::Park) {
+        // Park/Scrub: always seek to nearest keyframe for minimum latency.
+        // Zero backoff — AVSEEK_FLAG_BACKWARD already lands on the keyframe
+        // at or before target. No need to overshoot backward by 2 seconds.
         auto seek_result = impl::seek_with_backoff(
-            fmt_ctx, stream, m_impl->codec_ctx.get(), t_us
+            fmt_ctx, stream, m_impl->codec_ctx.get(), t_us, 0
         );
         if (seek_result.is_error()) {
             return seek_result.error();
         }
-    }
-
-    if (cache_empty) {
-        auto seek_result = impl::seek_with_backoff(
-            fmt_ctx, stream, m_impl->codec_ctx.get(), t_us
-        );
-        if (seek_result.is_error()) {
-            return seek_result.error();
-        }
-    }
-
-    // 3. Decode frames until we find one at/past target
-    auto batch_result = impl::decode_frames_batch(
-        m_impl->codec_ctx.get(), fmt_ctx, stream, stream_idx,
-        t_us, m_impl->m_pkt, m_impl->m_frame
-    );
-
-    if (batch_result.is_error()) {
-        return batch_result.error();
-    }
-
-    // 4. Convert and add to shared cache (under cache lock)
-    auto& decoded_frames = batch_result.value();
-
-    {
-        std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
-
-        for (auto& df : decoded_frames) {
-            if (m_impl->frame_cache.find(df.pts_us) == m_impl->frame_cache.end()) {
-                auto emp_frame = avframe_to_emp_frame(
-                    df.frame, df.pts_us, m_impl->scale_ctx, m_impl->codec_ctx
-                );
-                m_impl->frame_cache[df.pts_us] = emp_frame;
-
-                if (df.pts_us < m_impl->cache_min_pts) {
-                    m_impl->cache_min_pts = df.pts_us;
-                }
-                if (df.pts_us > m_impl->cache_max_pts) {
-                    m_impl->cache_max_pts = df.pts_us;
-                }
+    } else {
+        // Play: seek when decoder can't produce target by sequential decode.
+        // need_seek checks: no position, backward, or >2s gap.
+        // Do NOT clear the cache here — the prefetch may have filled it with
+        // good frames even though the main decoder hasn't run in a while.
+        // Park→Play transition (above) handles genuinely stale caches.
+        if (impl::need_seek(m_impl->last_decode_pts, t_us, m_impl->have_decode_pos)) {
+            auto seek_result = impl::seek_with_backoff(
+                fmt_ctx, stream, m_impl->codec_ctx.get(), t_us, 0
+            );
+            if (seek_result.is_error()) {
+                return seek_result.error();
             }
-            av_frame_free(&df.frame);
+        }
+    }
+
+    if (mode == DecodeMode::Scrub || mode == DecodeMode::Park) {
+        // =====================================================================
+        // Scrub/Park path: decode-and-discard intermediates, keep only the
+        // floor frame. Uses decode_until_target which reuses two AVFrames
+        // (no per-frame allocation, no vector).
+        // =====================================================================
+        AVFrame* best_frame = av_frame_alloc();
+        assert(best_frame && "av_frame_alloc failed");
+
+        auto target_result = impl::decode_until_target(
+            m_impl->codec_ctx.get(), fmt_ctx, stream, stream_idx,
+            t_us, m_impl->m_pkt, m_impl->m_frame, best_frame
+        );
+
+        if (target_result.is_error()) {
+            av_frame_free(&best_frame);
+            return target_result.error();
+        }
+
+        // Convert the single floor frame to BGRA
+        AVFrame* floor_frame = target_result.value();
+        TimeUS floor_pts = impl::stream_pts_to_us(floor_frame->pts, stream);
+        result_frame = avframe_to_emp_frame(
+            floor_frame, floor_pts, m_impl->scale_ctx, m_impl->codec_ctx
+        );
+        av_frame_free(&best_frame);
+
+        // Decoder position is indeterminate after B-frame lookahead drain.
+        // Force Play to seek on next mode switch.
+        m_impl->have_decode_pos = false;
+
+        // Cache the result
+        {
+            std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+            m_impl->frame_cache[floor_pts] = result_frame;
+            if (floor_pts < m_impl->cache_min_pts) m_impl->cache_min_pts = floor_pts;
+            if (floor_pts > m_impl->cache_max_pts) m_impl->cache_max_pts = floor_pts;
+
+            evict_cache_frames(
+                m_impl->frame_cache,
+                m_impl->cache_min_pts, m_impl->cache_max_pts,
+                t_us, m_impl->max_cache_frames
+            );
         }
 
         auto decode_end = std::chrono::steady_clock::now();
-        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(decode_end - decode_start).count();
+        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            decode_end - decode_start).count();
         if (decode_ms > 10) {
-            EMP_LOG_DEBUG("Decode batch: %zu frames in %lldms (%.1fms/frame)",
-                    decoded_frames.size(), static_cast<long long>(decode_ms),
-                    decoded_frames.size() > 0 ? (double)decode_ms / decoded_frames.size() : 0);
+            EMP_LOG_DEBUG("Decode target: %lldms mode=%s",
+                    static_cast<long long>(decode_ms),
+                    mode == DecodeMode::Scrub ? "scrub" : "park");
         }
-
-        // Evict old frames
-        evict_cache_frames(
-            m_impl->frame_cache,
-            m_impl->cache_min_pts, m_impl->cache_max_pts,
-            t_us, ReaderImpl::MAX_CACHE_FRAMES
+    } else {
+        // =====================================================================
+        // Play path: decode batch, BGRA-convert ALL frames, cache for
+        // sequential access and prefetch.
+        // =====================================================================
+        auto batch_result = impl::decode_frames_batch(
+            m_impl->codec_ctx.get(), fmt_ctx, stream, stream_idx,
+            t_us, m_impl->m_pkt, m_impl->m_frame
         );
 
-        // Return floor frame from cache
-        auto it = m_impl->frame_cache.upper_bound(t_us);
-        if (it != m_impl->frame_cache.begin()) {
-            --it;
-            result_frame = it->second;
-        } else if (!m_impl->frame_cache.empty()) {
-            result_frame = m_impl->frame_cache.begin()->second;
+        if (batch_result.is_error()) {
+            return batch_result.error();
+        }
+
+        auto& decoded_frames = batch_result.value();
+
+        // Track main-thread decoder position as max PTS of THIS batch.
+        // Must NOT use cache_max_pts — it includes prefetch frames from
+        // a separate decoder. Using it would make need_seek() think the
+        // main decoder is further ahead than it actually is.
+        // Computed before av_frame_free loop (pts_us is a value copy, but
+        // keeping it here makes the data dependency obvious).
+        if (!decoded_frames.empty()) {
+            TimeUS batch_max_pts = decoded_frames[0].pts_us;
+            for (const auto& df : decoded_frames) {
+                if (df.pts_us > batch_max_pts) batch_max_pts = df.pts_us;
+            }
+            m_impl->last_decode_pts = batch_max_pts;
+            m_impl->have_decode_pos = true;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+
+            for (auto& df : decoded_frames) {
+                if (m_impl->frame_cache.find(df.pts_us) == m_impl->frame_cache.end()) {
+                    auto emp_frame = avframe_to_emp_frame(
+                        df.frame, df.pts_us, m_impl->scale_ctx, m_impl->codec_ctx
+                    );
+                    m_impl->frame_cache[df.pts_us] = emp_frame;
+
+                    if (df.pts_us < m_impl->cache_min_pts) {
+                        m_impl->cache_min_pts = df.pts_us;
+                    }
+                    if (df.pts_us > m_impl->cache_max_pts) {
+                        m_impl->cache_max_pts = df.pts_us;
+                    }
+                }
+                av_frame_free(&df.frame);
+            }
+
+            auto decode_end = std::chrono::steady_clock::now();
+            auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                decode_end - decode_start).count();
+            if (decode_ms > 10) {
+                EMP_LOG_DEBUG("Decode batch: %zu frames in %lldms (%.1fms/frame) mode=play",
+                        decoded_frames.size(), static_cast<long long>(decode_ms),
+                        decoded_frames.size() > 0 ? (double)decode_ms / decoded_frames.size() : 0);
+            }
+
+            evict_cache_frames(
+                m_impl->frame_cache,
+                m_impl->cache_min_pts, m_impl->cache_max_pts,
+                t_us, m_impl->max_cache_frames
+            );
+
+            // Return floor frame from cache
+            auto it = m_impl->frame_cache.upper_bound(t_us);
+            if (it != m_impl->frame_cache.begin()) {
+                --it;
+                result_frame = it->second;
+            } else if (!m_impl->frame_cache.empty()) {
+                result_frame = m_impl->frame_cache.begin()->second;
+            }
         }
     }
 
@@ -727,6 +895,15 @@ std::shared_ptr<Frame> Reader::GetCachedFrame(TimeUS t_us) {
     auto it = m_impl->frame_cache.upper_bound(t_us);
     if (it != m_impl->frame_cache.begin()) {
         --it;  // Now points to largest pts <= t_us
+
+        // Reject stale floor matches — if the nearest cached frame is more
+        // than 2 frame durations away, this is a sparse cache gap, not a hit.
+        // Without this check, scattered Park frames silently freeze playback.
+        TimeUS gap = t_us - it->first;
+        if (gap > m_impl->max_floor_gap_us.load()) {
+            return nullptr;
+        }
+
         return it->second;
     }
 
@@ -786,13 +963,31 @@ void Reader::prefetch_worker() {
             auto decode_start = std::chrono::steady_clock::now();
             // No decode_mutex needed - we have our own decoder!
 
-            // For reverse, we need to seek backward first
-            if (dir < 0 && prefetch_to < m_impl->cache_min_pts) {
+            // Seek target: continue from where the cache ends, not from
+            // the playhead. The main thread already cached frames near the
+            // playhead; the prefetch's job is to fill AHEAD of that.
+            // Seeking to cache_max_pts lands on the keyframe just before
+            // the cache edge, re-decodes a few frames (harmless duplicates),
+            // and then fills forward contiguously.
+            TimeUS seek_target = target;
+            {
+                std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+                if (!m_impl->frame_cache.empty() && m_impl->cache_max_pts > seek_target) {
+                    seek_target = m_impl->cache_max_pts;
+                }
+            }
+
+            bool do_seek = impl::need_seek(
+                m_impl->prefetch_decode_pts.load(),
+                seek_target,
+                m_impl->have_prefetch_pos.load()
+            );
+            if (do_seek) {
                 auto seek_result = impl::seek_with_backoff(
-                    fmt_ctx, stream, m_impl->prefetch_codec_ctx.get(), prefetch_to
+                    fmt_ctx, stream, m_impl->prefetch_codec_ctx.get(), seek_target, 0
                 );
                 if (seek_result.is_error()) {
-                    EMP_LOG_DEBUG("Seek failed: %s",
+                    EMP_LOG_DEBUG("Prefetch seek failed: %s",
                             seek_result.error().message.c_str());
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     continue;
@@ -815,6 +1010,17 @@ void Reader::prefetch_worker() {
 
             // Convert and add to shared cache (under cache lock only)
             auto& decoded_frames = batch_result.value();
+
+            // Track prefetch decoder position (before frames are freed)
+            if (!decoded_frames.empty()) {
+                TimeUS pf_max = decoded_frames[0].pts_us;
+                for (const auto& df : decoded_frames) {
+                    if (df.pts_us > pf_max) pf_max = df.pts_us;
+                }
+                m_impl->prefetch_decode_pts.store(pf_max);
+                m_impl->have_prefetch_pos.store(true);
+            }
+
             {
                 std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
 
@@ -841,7 +1047,7 @@ void Reader::prefetch_worker() {
                 evict_cache_frames(
                     m_impl->frame_cache,
                     m_impl->cache_min_pts, m_impl->cache_max_pts,
-                    target, ReaderImpl::MAX_CACHE_FRAMES
+                    target, m_impl->max_cache_frames
                 );
             }
 

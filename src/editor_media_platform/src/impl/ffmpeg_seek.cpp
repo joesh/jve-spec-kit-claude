@@ -4,15 +4,19 @@
 namespace emp {
 namespace impl {
 
-// Seek backoff window: 2 seconds (ensures keyframe before target for H.264 GOP)
+// Gap threshold: if decoder is >2s from target, seek rather than decode forward.
 constexpr TimeUS SEEK_BACKOFF_US = 2000000;
 
-// Seek to keyframe before target with 2-second backoff
+// Seek to keyframe at or before (target_us - backoff_us).
+// backoff_us is always 0 in practice — AVSEEK_FLAG_BACKWARD already lands on
+// the keyframe at or before the seek target, so extra backoff just forces
+// decoding through unnecessary frames.
 Result<void> seek_with_backoff(AVFormatContext* fmt_ctx, AVStream* stream,
-                                AVCodecContext* codec_ctx, TimeUS target_us) {
+                                AVCodecContext* codec_ctx, TimeUS target_us,
+                                TimeUS backoff_us) {
     // Calculate seek target with backoff
     TimeUS stream_start_us = stream_pts_to_us(stream->start_time, stream);
-    TimeUS seek_target_us = target_us - SEEK_BACKOFF_US;
+    TimeUS seek_target_us = target_us - backoff_us;
     if (seek_target_us < stream_start_us) {
         seek_target_us = stream_start_us;
     }

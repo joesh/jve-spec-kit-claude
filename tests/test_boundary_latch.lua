@@ -131,7 +131,7 @@ mock_audio.latched = false
 
 print("\nTest 2.1: Shuttle forward to end latches (does not stop)")
 -- Position near end
-pc.frame = 98
+pc.set_position(98)
 mock_audio.media_time_us = math.floor(98 * 1000000 * 1 / 30)  -- frame 98 time
 pc.shuttle(1)
 clear_timers()
@@ -144,16 +144,16 @@ pc._tick()
 assert(pc.state == "playing", "state should remain 'playing' (latched, not stopped)")
 assert(pc.latched == true, "latched should be true")
 assert(pc.latched_boundary == "end", "latched_boundary should be 'end'")
-assert(pc.frame == 99, "frame should be at end (99)")
+assert(pc.get_position() == 99, "frame should be at end (99)")
 assert(mock_audio.latched == true, "audio should be latched")
 print("  ok shuttled to end, latched at frame 99")
 
 print("\nTest 2.2: While latched, ticks don't advance frame")
-local frame_before = pc.frame
+local frame_before = pc.get_position()
 pc._tick()
 pc._tick()
 pc._tick()
-assert(pc.frame == frame_before, "frame should not advance while latched")
+assert(pc.get_position() == frame_before, "frame should not advance while latched")
 assert(pc.state == "playing", "should still be playing (latched)")
 print("  ok frame constant while latched")
 
@@ -176,7 +176,7 @@ clear_timers()
 mock_audio.latched = false
 
 print("\nTest 3.1: Shuttle reverse to start latches")
-pc.frame = 1
+pc.set_position(1)
 mock_audio.media_time_us = math.floor(1 * 1000000 * 1 / 30)
 pc.shuttle(-1)
 clear_timers()
@@ -188,7 +188,7 @@ pc._tick()
 assert(pc.state == "playing", "state should remain 'playing'")
 assert(pc.latched == true, "should be latched")
 assert(pc.latched_boundary == "start", "latched_boundary should be 'start'")
-assert(pc.frame == 0, "frame should be at start (0)")
+assert(pc.get_position() == 0, "frame should be at start (0)")
 print("  ok shuttled reverse to start, latched at frame 0")
 
 print("\nTest 3.2: L (forward) while latched at start unlatches")
@@ -205,7 +205,7 @@ print("\n--- Section 4: Seek clears latch ---")
 
 print("\nTest 4.1: Seek while latched clears latch")
 pc.set_source(100, 30, 1)
-pc.frame = 98
+pc.set_position(98)
 mock_audio.media_time_us = math.floor(98 * 1000000 * 1 / 30)
 pc.shuttle(1)
 clear_timers()
@@ -218,7 +218,7 @@ assert(pc.latched == true, "should be latched at end")
 -- Seek
 pc.seek(50)
 assert(pc.latched == false, "seek should clear latch")
-assert(pc.frame == 50, "frame should be 50")
+assert(pc.get_position() == 50, "frame should be 50")
 print("  ok seek clears latch")
 pc.stop()
 
@@ -232,7 +232,7 @@ print("\nTest 5.1: Play mode (transport_mode='play') stops at end, does not latc
 -- Skip if play() doesn't exist yet
 if pc.play then
     pc.set_source(100, 30, 1)
-    pc.frame = 98
+    pc.set_position(98)
     mock_audio.media_time_us = math.floor(98 * 1000000 * 1 / 30)
     pc.play()  -- Normal play
     clear_timers()
@@ -254,7 +254,7 @@ print("\n--- Section 6: Latch time is frame-derived ---")
 
 print("\nTest 6.1: Latch time computed from frame, not sampled from AOP")
 pc.set_source(100, 30, 1)
-pc.frame = 98
+pc.set_position(98)
 mock_audio.media_time_us = math.floor(98 * 1000000 * 1 / 30)
 pc.shuttle(1)
 clear_timers()

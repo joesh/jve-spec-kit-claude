@@ -311,15 +311,20 @@ function M.create(widget, state_module)
         timeline.update(ruler.widget)
     end
 
+    -- Track whether we've entered scrub mode during this drag
+    local scrub_mode_active = false
+
     -- Mouse event handler for playhead dragging
     local function on_mouse_event(event_type, x, y, button, modifiers)
         local width = select(1, timeline.get_dimensions(ruler.widget))
         local frame_rate = get_frame_rate()
 
-        -- Lazy-load playback_controller to avoid circular dependency
-        local playback_controller = require("core.playback.playback_controller")
-
         if event_type == "press" then
+            -- Don't set scrub mode yet — a click (press+release) should use
+            -- Play mode so the cache populates with nearby frames.
+            -- Scrub mode activates on first drag move.
+            scrub_mode_active = false
+
             -- Check if clicking on playhead
             local playhead_rat = state_module.get_playhead_position()
             local playhead_x = state_module.time_to_pixel(playhead_rat, width)
@@ -330,29 +335,44 @@ function M.create(widget, state_module)
                 -- Click anywhere on ruler to set playhead (snap to frame)
                 local time_rat = state_module.pixel_to_time(x, width)
                 local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
-                state_module.set_playhead_value(snapped_rat)
+                state_module.set_playhead_position(snapped_rat)
                 state_module.set_dragging_playhead(true)
-
-                -- Also seek playback controller if source is loaded
-                if playback_controller.has_source and playback_controller.has_source() then
-                    playback_controller.seek_to_rational(snapped_rat)
-                end
             end
 
         elseif event_type == "move" then
             if state_module.is_dragging_playhead() then
+                -- Activate scrub mode on first drag move (not click)
+                if not scrub_mode_active then
+                    local qt_c = require("core.qt_constants")
+                    if qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
+                        qt_c.EMP.SET_DECODE_MODE("scrub")
+                    end
+                    scrub_mode_active = true
+                end
+
                 local time_rat = state_module.pixel_to_time(x, width)
                 local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
-                state_module.set_playhead_value(snapped_rat)
-
-                -- Also seek playback controller during drag
-                if playback_controller.has_source and playback_controller.has_source() then
-                    playback_controller.seek_to_rational(snapped_rat)
-                end
+                state_module.set_playhead_position(snapped_rat)
             end
 
         elseif event_type == "release" then
             state_module.set_dragging_playhead(false)
+
+            -- Restore decode mode after drag: Play if playback is active,
+            -- Park otherwise. Previously always set Park, which left the
+            -- decoder in single-frame mode during active playback.
+            if scrub_mode_active then
+                local qt_c = require("core.qt_constants")
+                if qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
+                    local pc = require("core.playback.playback_controller")
+                    if pc.is_playing() then
+                        qt_c.EMP.SET_DECODE_MODE("play")
+                    else
+                        qt_c.EMP.SET_DECODE_MODE("park")
+                    end
+                end
+                scrub_mode_active = false
+            end
         end
 
         render()

@@ -83,7 +83,7 @@ print("\nTest 1.1: Initial state values")
 assert(playback.state == "stopped", "Should start stopped")
 assert(playback.direction == 0, "Direction should be 0")
 assert(playback.speed == 1, "Speed should be 1")
-assert(playback.frame == 0, "Frame should be 0")
+assert(playback.get_position() == 0, "Frame should be 0")
 assert(playback.total_frames == 0, "Total frames should be 0")
 -- fps, fps_num, fps_den are nil until set_source is called (no silent defaults)
 assert(playback.fps == nil, "fps should be nil before set_source")
@@ -384,48 +384,48 @@ clear_frames()
 
 print("\nTest 7.1: _tick() when stopped is no-op")
 playback.state = "stopped"
-local frame_before = playback.frame
+local frame_before = playback.get_position()
 playback._tick()
-assert(playback.frame == frame_before, "Frame should not change")
+assert(playback.get_position() == frame_before, "Frame should not change")
 assert(#frames_shown == 0, "No frames should be shown")
 print("  ✓ _tick() when stopped does nothing")
 
 print("\nTest 7.2: _tick() advances frame forward at 1x")
-playback.frame = 50
+playback.set_position(50)
 playback.shuttle(1)  -- 1x forward
 clear_timers()
 clear_frames()
 
 playback._tick()
-assert(playback.frame == 51, "Frame should be 51")
+assert(playback.get_position() == 51, "Frame should be 51")
 assert(#frames_shown == 1, "Should show 1 frame")
 assert(frames_shown[1] == 51, "Should show frame 51")
 print("  ✓ Frame advances by 1 at 1x")
 
 print("\nTest 7.3: _tick() advances frame by speed at 2x")
 playback.stop()
-playback.frame = 50
+playback.set_position(50)
 playback.shuttle(1)
 playback.shuttle(1)  -- 2x
 clear_frames()
 
 playback._tick()
-assert(playback.frame == 52, "Frame should be 52 (advanced by 2)")
+assert(playback.get_position() == 52, "Frame should be 52 (advanced by 2)")
 print("  ✓ Frame advances by 2 at 2x")
 
 print("\nTest 7.4: _tick() advances reverse")
 playback.stop()
-playback.frame = 50
+playback.set_position(50)
 playback.shuttle(-1)  -- 1x reverse
 clear_frames()
 
 playback._tick()
-assert(playback.frame == 49, "Frame should be 49")
+assert(playback.get_position() == 49, "Frame should be 49")
 print("  ✓ Frame decrements in reverse")
 
 print("\nTest 7.5: Timer interval at 1x = ~33ms (1000/30)")
 playback.stop()
-playback.frame = 50
+playback.set_position(50)
 playback.shuttle(1)
 clear_timers()
 playback._schedule_tick()
@@ -435,7 +435,7 @@ print("  ✓ Timer interval correct at 1x")
 
 print("\nTest 7.6: Timer interval at 0.5x = ~66ms (longer for slow)")
 playback.stop()
-playback.frame = 50
+playback.set_position(50)
 playback.slow_play(1)  -- 0.5x
 timer_intervals = {}
 playback._schedule_tick()
@@ -444,7 +444,7 @@ print("  ✓ Timer interval longer at 0.5x")
 
 print("\nTest 7.7: Timer interval at 2x = ~33ms (same interval, skip frames)")
 playback.stop()
-playback.frame = 50
+playback.set_position(50)
 playback.shuttle(1)
 playback.shuttle(1)  -- 2x
 timer_intervals = {}
@@ -455,7 +455,7 @@ print("  ✓ Timer interval same at 2x (we skip frames instead)")
 print("\nTest 7.8: Timer minimum interval is 16ms")
 playback.stop()
 playback.fps = 1000  -- Artificially high fps
-playback.frame = 50
+playback.set_position(50)
 playback.shuttle(1)
 timer_intervals = {}
 playback._schedule_tick()
@@ -477,7 +477,7 @@ clear_frames()
 -- instead of stopping. This is the new JKL shuttle behavior.
 
 print("\nTest 8.1: Latch at end boundary (frame 99)")
-playback.frame = 98
+playback.set_position(98)
 playback.shuttle(1)
 clear_timers()
 
@@ -485,67 +485,67 @@ playback._tick()  -- 99
 -- Shuttle mode latches at boundary (stays playing but frozen)
 assert(playback.state == "playing", "Shuttle should stay playing (latched)")
 assert(playback.latched == true, "Should be latched at boundary")
-assert(playback.frame == 99, "Frame should be 99")
+assert(playback.get_position() == 99, "Frame should be 99")
 print("  ✓ Latched at end boundary")
 playback.stop()
 
 print("\nTest 8.2: Latch at start boundary (frame 0)")
-playback.frame = 1
+playback.set_position(1)
 playback.shuttle(-1)  -- reverse
 clear_timers()
 
 playback._tick()  -- 0
 assert(playback.state == "playing", "Shuttle should stay playing (latched)")
 assert(playback.latched == true, "Should be latched at boundary")
-assert(playback.frame == 0, "Frame should be 0")
+assert(playback.get_position() == 0, "Frame should be 0")
 print("  ✓ Latched at start boundary")
 playback.stop()
 
 print("\nTest 8.3: Frame clamped when overshooting end at high speed")
-playback.frame = 97
+playback.set_position(97)
 playback.shuttle(1)
 playback.shuttle(1)
 playback.shuttle(1)  -- 4x forward
 clear_timers()
 
 playback._tick()  -- Would be 101, clamped to 99
-assert(playback.frame == 99, "Frame should be clamped to 99")
+assert(playback.get_position() == 99, "Frame should be clamped to 99")
 assert(playback.latched == true, "Should latch at boundary")
 print("  ✓ Frame clamped at end when overshooting")
 playback.stop()
 
 print("\nTest 8.4: Frame clamped when overshooting start at high speed")
-playback.frame = 3
+playback.set_position(3)
 playback.shuttle(-1)
 playback.shuttle(-1)
 playback.shuttle(-1)  -- 4x reverse
 clear_timers()
 
 playback._tick()  -- Would be -1, clamped to 0
-assert(playback.frame == 0, "Frame should be clamped to 0")
+assert(playback.get_position() == 0, "Frame should be clamped to 0")
 assert(playback.latched == true, "Should latch at boundary")
 print("  ✓ Frame clamped at start when overshooting")
 playback.stop()
 
 print("\nTest 8.5: Starting exactly at frame 0 in reverse latches immediately")
-playback.frame = 0
+playback.set_position(0)
 playback.shuttle(-1)
 clear_timers()
 
 playback._tick()  -- Can't go below 0
 assert(playback.latched == true, "Should latch immediately")
-assert(playback.frame == 0, "Frame should stay 0")
+assert(playback.get_position() == 0, "Frame should stay 0")
 print("  ✓ Reverse from frame 0 latches immediately")
 playback.stop()
 
 print("\nTest 8.6: Starting exactly at last frame forward latches immediately")
-playback.frame = 99
+playback.set_position(99)
 playback.shuttle(1)
 clear_timers()
 
 playback._tick()  -- Already at end
 assert(playback.latched == true, "Should latch immediately")
-assert(playback.frame == 99, "Frame should stay 99")
+assert(playback.get_position() == 99, "Frame should stay 99")
 print("  ✓ Forward from last frame latches immediately")
 playback.stop()
 
@@ -555,28 +555,28 @@ playback.stop()
 print("\n--- Section 9: Edge Cases ---")
 
 print("\nTest 9.1: set_source resets state")
-playback.frame = 50
+playback.set_position(50)
 playback.shuttle(1)
 playback.shuttle(1)  -- 2x forward
 playback.set_source(200, 24, 1)  -- New source
 assert(playback.state == "stopped", "Should be stopped after set_source")
-assert(playback.frame == 0, "Frame should be 0")
+assert(playback.get_position() == 0, "Frame should be 0")
 assert(playback.total_frames == 200, "Total frames should be 200")
 assert(playback.fps == 24, "FPS should be 24")
 print("  ✓ set_source resets all state")
 
 print("\nTest 9.2: Fractional frame position with 0.5x speed")
 playback.set_source(100, 30, 1)
-playback.frame = 50.0
+playback.set_position(50.0)
 playback.slow_play(1)  -- 0.5x forward
 clear_frames()
 
 playback._tick()  -- 50.5
-assert(playback.frame == 50.5, "Frame should be 50.5")
+assert(playback.get_position() == 50.5, "Frame should be 50.5")
 assert(frames_shown[1] == 50, "Should display floor(50.5) = 50")
 
 playback._tick()  -- 51.0
-assert(playback.frame == 51.0, "Frame should be 51.0")
+assert(playback.get_position() == 51.0, "Frame should be 51.0")
 assert(frames_shown[2] == 51, "Should display 51")
 print("  ✓ Fractional frame positions handled correctly")
 
@@ -593,13 +593,13 @@ playback2.set_source = function(t, fn, fd)
     playback2.fps_num = fn
     playback2.fps_den = fd
     playback2.fps = fn / fd
-    playback2.frame = 0
+    playback2._position = 0
 end
 playback2.set_source(100, 30, 1)
 playback2.state = "playing"
 playback2.direction = 1
 playback2.speed = 1
-playback2.frame = 50
+playback2._position = 50
 
 -- _tick should assert when viewer_panel is nil (fail-fast policy)
 local ok, err2 = pcall(function() playback2._tick() end)
@@ -625,13 +625,13 @@ print("  ✓ _schedule_tick no-op when stopped")
 
 print("\nTest 9.5: Single frame media (total_frames = 1)")
 playback.set_source(1, 30, 1)
-playback.frame = 0
+playback.set_position(0)
 playback.shuttle(1)
 clear_timers()
 playback._tick()
 -- Single frame with shuttle mode: latches at boundary (already at end)
 assert(playback.latched == true, "Should latch immediately with 1 frame")
-assert(playback.frame == 0, "Frame should stay 0")
+assert(playback.get_position() == 0, "Frame should stay 0")
 print("  ✓ Single frame media handled (latches)")
 
 playback.stop()
@@ -728,7 +728,7 @@ print("  ✓ seek syncs audio position")
 
 print("\nTest 10.7: _tick queries audio time (video follows audio)")
 -- NEW ARCHITECTURE: video QUERIES audio for time, doesn't push to it
-pc.frame = 10
+pc.set_position(10)
 pc.state = "playing"
 pc.direction = 1
 pc.speed = 1
@@ -739,7 +739,7 @@ clear_frames()
 pc._tick()
 -- Video should have read audio time and calculated frame from it
 -- 500000us at 30fps = frame 15
-assert(pc.frame == 15, "Frame should follow audio time (15), got: " .. pc.frame)
+assert(pc.get_position() == 15, "Frame should follow audio time (15), got: " .. pc.get_position())
 assert(#frames_shown >= 1, "Should show frame")
 assert(frames_shown[1] == 15, "Should display frame 15")
 print("  ✓ _tick queries audio time, video follows audio")

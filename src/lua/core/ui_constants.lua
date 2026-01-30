@@ -296,6 +296,7 @@ ui_constants.TIMELINE = {
     TRACK_HEADER_WIDTH = 150,    -- Width of track header labels in pixels
     DRAG_THRESHOLD = 5,          -- Pixels of movement before starting drag operation
     NOTIFY_DEBOUNCE_MS = 16,     -- Milliseconds (~60fps) for state change debouncing
+    VIEWER_SEEK_DEFER_MS = 1,    -- Defer viewer decode after state listeners so timeline paints first
     EDGE_ZONE_PX = 7,            -- Pixels from boundary on each side (7px each side = 14px total edge zone)
     ROLL_ZONE_PX = 7,            -- Pixels centered on edit point that trigger roll selection/preview
     MIN_EDGE_SELECTABLE_WIDTH_PX = 17, -- Minimum element width for edge selection

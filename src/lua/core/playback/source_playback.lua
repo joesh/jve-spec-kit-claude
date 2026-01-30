@@ -43,7 +43,7 @@ function M.latch(state, boundary_frame, audio_playback, viewer_panel)
 
     state.latched = true
     state.latched_boundary = (boundary_frame == 0) and "start" or "end"
-    state.frame = boundary_frame
+    state.set_position(boundary_frame)
 
     -- Deterministic time for boundary frame (rational math)
     local t_us = helpers.calc_time_us_from_frame(boundary_frame, state.fps_num, state.fps_den)
@@ -61,7 +61,7 @@ function M.latch(state, boundary_frame, audio_playback, viewer_panel)
     end
 
     if viewer_panel then
-        viewer_panel.show_frame(state.frame)
+        viewer_panel.show_frame(boundary_frame)
     end
 
     logger.debug("source_playback", string.format(
@@ -111,30 +111,30 @@ function M.tick(state, audio_playback, viewer_panel)
 
     -- Early return while latched (no advancement, just keep ticking)
     if state.latched then
-        viewer_panel.show_frame(state.frame)
+        viewer_panel.show_frame(state.get_position())
         return true  -- continue ticking
     end
 
     -- Frame advancement: video ALWAYS follows audio when audio is active (Rule V1)
+    local pos
     if audio_playback and audio_playback.initialized and audio_playback.playing then
         -- AUDIO ACTIVE: Video follows audio time (spec Rule V1)
         local t_vid_us = audio_playback.get_media_time_us()
-        state.frame = helpers.calc_frame_from_time_us(t_vid_us, state.fps_num, state.fps_den)
+        pos = helpers.calc_frame_from_time_us(t_vid_us, state.fps_num, state.fps_den)
     else
         -- NO AUDIO: Advance frame independently (fallback only)
-        state.frame = state.frame + (state.direction * state.speed)
+        pos = state.get_position() + (state.direction * state.speed)
     end
 
     -- Clamp to valid range
-    state.frame = math.max(0, math.min(state.frame, state.total_frames - 1))
+    pos = math.max(0, math.min(pos, state.total_frames - 1))
 
     -- Boundary detection
-    local hit_start = (state.direction < 0 and state.frame <= 0)
-    local hit_end = (state.direction > 0 and state.frame >= state.total_frames - 1)
+    local hit_start = (state.direction < 0 and pos <= 0)
+    local hit_end = (state.direction > 0 and pos >= state.total_frames - 1)
 
     if hit_start or hit_end then
         local boundary_frame = hit_start and 0 or (state.total_frames - 1)
-        state.frame = boundary_frame
 
         if state.transport_mode == "shuttle" then
             -- Shuttle mode: latch at boundary, continue ticking
@@ -142,13 +142,15 @@ function M.tick(state, audio_playback, viewer_panel)
             return true  -- continue ticking while latched
         else
             -- Normal play mode: stop at boundary
+            state.set_position(boundary_frame)
             logger.debug("source_playback", hit_start and "Hit start boundary" or "Hit end boundary")
             return false  -- stop playback
         end
     end
 
-    -- Display frame
-    local frame_idx = math.floor(state.frame)
+    -- Commit position and display frame
+    state.set_position(pos)
+    local frame_idx = math.floor(pos)
     viewer_panel.show_frame(frame_idx)
 
     -- Notify media_cache of playhead change (triggers prefetch in travel direction)

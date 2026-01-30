@@ -1032,6 +1032,143 @@ private slots:
         QVERIFY(frame.is_ok());
     }
 
+    void test_scattered_park_then_play_no_stale_frames() {
+        // Regression: Park/Scrub at scattered positions fills cache with
+        // distant frames. cache_max_pts reflects the latest park position.
+        // When Play starts, the fast-path check (t_us <= cache_max_pts) hits
+        // and floor-lookup returns a stale frame. Prefetch also thinks cache
+        // is ahead (prefetch_to < cache_max_pts) and does nothing.
+        // Result: image freezes while playhead advances.
+        //
+        // Fix: cache must be invalidated on mode transition to Play so that
+        // scattered Park frames don't poison sequential playback.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(asset).value();
+
+        const auto& info = asset->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+        int total_frames = static_cast<int>(
+            info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
+
+        // Park at scattered positions to fill cache with distant frames
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+        int park_positions[] = {10, 200, 50, 400, 100};
+        for (int f : park_positions) {
+            if (f >= total_frames) continue;
+            auto r = reader->DecodeAt(emp::FrameTime::from_frame(f, rate));
+            QVERIFY2(r.is_ok() || r.error().code == emp::ErrorCode::EOFReached,
+                qPrintable(QString("Park at %1 failed: %2")
+                    .arg(f).arg(r.is_error() ? QString::fromStdString(r.error().message) : "")));
+        }
+
+        // Switch to Play and verify 10 sequential frames from frame 50
+        // have strictly increasing PTS (not stale floor matches)
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+        int play_start = 50;
+        emp::TimeUS prev_pts = -1;
+        for (int i = play_start; i < play_start + 10 && i < total_frames; ++i) {
+            auto r = reader->DecodeAt(emp::FrameTime::from_frame(i, rate));
+            if (r.is_error()) {
+                if (r.error().code == emp::ErrorCode::EOFReached) break;
+                QFAIL(qPrintable(QString("Play frame %1 failed: %2")
+                    .arg(i).arg(QString::fromStdString(r.error().message))));
+            }
+
+            auto this_pts = r.value()->source_pts_us();
+            if (i > play_start) {
+                QVERIFY2(this_pts > prev_pts,
+                    qPrintable(QString("Frame %1: PTS %2 not > prev %3 — stale cache frame")
+                        .arg(i).arg(this_pts).arg(prev_pts)));
+            }
+            prev_pts = this_pts;
+        }
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    void test_park_then_play_no_frame_gap() {
+        // Regression: after Park seeks + decode_until_target, decoder is
+        // positioned past the parked frame (B-frame lookahead). Switching to
+        // Play must seek to cover the gap, otherwise frames between the park
+        // target and decoder position are never decoded → stale frames returned.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(asset).value();
+
+        const auto& info = asset->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+
+        // Park at frame 50
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+        auto r0 = reader->DecodeAt(emp::FrameTime::from_frame(50, rate));
+        QVERIFY(r0.is_ok());
+        auto park_pts = r0.value()->source_pts_us();
+
+        // Switch to Play, decode frames 51-55
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+        emp::TimeUS prev_pts = park_pts;
+        for (int i = 51; i <= 55; ++i) {
+            auto r = reader->DecodeAt(emp::FrameTime::from_frame(i, rate));
+            if (r.is_error()) {
+                if (r.error().code == emp::ErrorCode::EOFReached) QSKIP("Video too short");
+                QFAIL(qPrintable(QString("Frame %1 failed: %2")
+                    .arg(i).arg(QString::fromStdString(r.error().message))));
+            }
+
+            auto this_pts = r.value()->source_pts_us();
+            QVERIFY2(this_pts > prev_pts,
+                qPrintable(QString("Frame %1: PTS %2 not > prev %3 (stale frame returned)")
+                    .arg(i).arg(this_pts).arg(prev_pts)));
+            prev_pts = this_pts;
+        }
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    void test_park_mode_forward_seek_performance() {
+        // Regression test: Park/Scrub mode must always seek before decode.
+        // Without the fix, a forward jump in Park mode decodes sequentially
+        // from the last decoder position (potentially hundreds of frames).
+        // With the fix, it seeks to nearest keyframe first (≤GOP frames).
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(asset).value();
+
+        const auto& info = asset->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+
+        // Decode frame 0 to initialize decoder position
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+        auto r0 = reader->DecodeAt(emp::FrameTime::from_frame(0, rate));
+        QVERIFY(r0.is_ok());
+
+        // Jump forward ~300 frames in Park mode — must seek, not decode sequentially
+        int jump_frame = 300;
+        QElapsedTimer timer;
+        timer.start();
+
+        auto r1 = reader->DecodeAt(emp::FrameTime::from_frame(jump_frame, rate));
+        qint64 elapsed = timer.elapsed();
+
+        if (r1.is_error() && r1.error().code == emp::ErrorCode::EOFReached) {
+            QSKIP("Video too short for forward seek test");
+        }
+        QVERIFY(r1.is_ok());
+
+        // With seek: ~50-200ms. Without seek: potentially >1000ms.
+        // Use generous threshold (500ms) to avoid flaky tests.
+        QVERIFY2(elapsed < 500,
+            qPrintable(QString("Park forward jump took %1ms — seek likely missing")
+                .arg(elapsed)));
+
+        // Restore default mode
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
     void test_prefetch_reader_destruction_with_active_thread() {
         // Test that Reader destruction properly stops prefetch thread
         if (!m_hasTestVideo) QSKIP("No test video");

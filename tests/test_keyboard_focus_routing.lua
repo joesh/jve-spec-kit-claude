@@ -48,10 +48,6 @@ function timeline_state.set_playhead_position(value)
     table.insert(timeline_moves, numeric)
 end
 
-function timeline_state.set_playhead_value(value)
-    return timeline_state.set_playhead_position(value)
-end
-
 function timeline_state.get_mark_in()
     return timeline_marks.last_in
 end

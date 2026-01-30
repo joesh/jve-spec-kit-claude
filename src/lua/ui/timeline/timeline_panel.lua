@@ -1494,16 +1494,15 @@ function M.create(opts)
     local playback_controller = require("core.playback.playback_controller")
     local Rational = require("core.rational")
 
-    -- Set timeline sync callback: updates playhead and handles page-scroll
+    -- Set timeline sync callback: handles page-scroll only.
+    -- Playhead position is already updated by set_position() in the playback tick.
     playback_controller.set_timeline_sync_callback(function(frame_idx)
         local rate = state.get_sequence_frame_rate()
         if not rate or not rate.fps_numerator or not rate.fps_denominator then
-            return  -- No rate available yet
+            return
         end
 
-        -- Convert frame index to Rational playhead position
         local playhead_rat = Rational.new(math.floor(frame_idx), rate.fps_numerator, rate.fps_denominator)
-        state.set_playhead_position(playhead_rat)
 
         -- Page-scroll: jump viewport when playhead exits visible area
         local vp_start = state.get_viewport_start_time()
@@ -1530,6 +1529,38 @@ function M.create(opts)
 
     -- Enable timeline mode in playback_controller for this sequence
     playback_controller.set_timeline_mode(true, initial_sequence_id)
+
+    -- Viewer follows playhead: when parked, any playhead change resolves and displays the frame.
+    -- Commands (navigation, edits, timecode, undo/redo) just call state.set_playhead_position();
+    -- this listener propagates that to the viewer without commands knowing about the viewer.
+    --
+    -- Decimation: only one decode in flight at a time. If a new playhead arrives while
+    -- decoding, the stale request is skipped and the latest position wins.
+    -- Deferred via 0ms timer so timeline repaints aren't blocked by frame decode.
+    local last_viewer_playhead = nil
+    local viewer_seek_pending = false
+    local viewer_seek_target = nil
+    local VIEWER_SEEK_DEFER_MS = ui_constants.TIMELINE.VIEWER_SEEK_DEFER_MS or 1
+    state.add_listener(function()
+        if not playback_controller.is_playing() and playback_controller.timeline_mode then
+            if playback_controller.has_source() then
+                local playhead = state.get_playhead_position()
+                if playhead == last_viewer_playhead then return end
+                viewer_seek_target = playhead
+                if viewer_seek_pending then return end
+                viewer_seek_pending = true
+                -- Deferred: let timeline view paint the new playhead position
+                -- before the potentially-blocking frame decode starts.
+                qt_create_single_shot_timer(VIEWER_SEEK_DEFER_MS, function()
+                    viewer_seek_pending = false
+                    local target = viewer_seek_target
+                    if target == last_viewer_playhead then return end
+                    last_viewer_playhead = target
+                    playback_controller.seek_to_rational(target)
+                end)
+            end
+        end
+    end)
 
     return container
 end

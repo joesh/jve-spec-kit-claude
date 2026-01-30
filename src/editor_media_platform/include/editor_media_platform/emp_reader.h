@@ -6,8 +6,21 @@
 #include "emp_errors.h"
 #include "emp_time.h"
 #include <memory>
+#include <atomic>
 
 namespace emp {
+
+// Global decode mode — controls how readers handle intermediate frames.
+// Set by the transport layer (playback controller, ruler drag) via Lua bindings.
+//
+// Play:  BGRA-convert ALL intermediates, cache for sequential access, prefetch active
+// Scrub: Decode from keyframe through B-frames, only BGRA-convert target frame
+// Park:  Same as Scrub (single frame decode, no expectation of further requests)
+enum class DecodeMode { Play, Scrub, Park };
+
+// Global decode mode accessors (thread-safe)
+void SetDecodeMode(DecodeMode mode);
+DecodeMode GetDecodeMode();
 
 // Forward declaration for implementation
 class ReaderImpl;
@@ -63,6 +76,11 @@ public:
     // Non-blocking cache lookup - returns nullptr on miss
     // Use this for display path; falls back to DecodeAtUS on miss
     std::shared_ptr<Frame> GetCachedFrame(TimeUS t_us);
+
+    // Set maximum cached BGRA frames. Reader evicts down to new limit immediately.
+    // Used by Lua to control per-reader cache size based on state
+    // (e.g., active+playing=120, active+scrubbing=8, pooled=1).
+    void SetMaxCacheFrames(size_t max_frames);
 
     // Get the underlying asset
     std::shared_ptr<Asset> asset() const;

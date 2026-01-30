@@ -32,7 +32,8 @@ local M = {
     state = "stopped",  -- "stopped" | "playing"
     direction = 0,      -- -1=reverse, 0=stopped, 1=forward
     speed = 1,          -- magnitude: 0.5, 1, 2, 4, 8
-    frame = 0,          -- current fractional frame position
+    _position = 0,      -- current fractional frame position (source mode only;
+                        -- in timeline mode, get_position() reads timeline_state)
     total_frames = 0,
 
     -- Rational FPS (no float-only storage)
@@ -65,6 +66,35 @@ local viewer_panel = nil
 
 -- Audio playback module (optional, set via init_audio)
 local audio_playback = nil
+
+-- Timeline state reference (set when entering timeline mode)
+local timeline_state_ref = nil
+
+--------------------------------------------------------------------------------
+-- Position Accessors (single source of truth)
+--------------------------------------------------------------------------------
+
+--- Get current frame position.
+-- In timeline mode, reads from timeline_state (Rational→int).
+-- In source mode, returns local _position.
+function M.get_position()
+    if M.timeline_mode and timeline_state_ref then
+        local rat = timeline_state_ref.get_playhead_position()
+        return helpers.rational_to_frame_clamped(rat, M.fps_num, M.fps_den, M.total_frames)
+    end
+    return M._position
+end
+
+--- Set current frame position.
+-- In timeline mode, writes through to timeline_state (int→Rational).
+-- Always updates local _position for source mode.
+function M.set_position(v)
+    if M.timeline_mode and timeline_state_ref then
+        local rat = helpers.frame_to_rational(math.floor(v), M.fps_num, M.fps_den)
+        timeline_state_ref.set_playhead_position(rat)
+    end
+    M._position = v
+end
 
 -- Initialize with viewer panel reference
 function M.init(vp)
@@ -106,7 +136,7 @@ local function sync_audio()
 end
 
 local function start_audio()
-    helpers.start_audio(audio_playback, M.frame, M.fps_num, M.fps_den, M.direction, M.speed)
+    helpers.start_audio(audio_playback, M.get_position(), M.fps_num, M.fps_den, M.direction, M.speed)
 end
 
 local function stop_audio()
@@ -133,7 +163,7 @@ function M.set_source(total_frames, fps_num, fps_den)
     M.fps_num = fps_num
     M.fps_den = fps_den
     M.fps = fps_num / fps_den  -- for display/interval only
-    M.frame = 0
+    M._position = 0
 
     -- Compute max media time for audio clamp (frame-derived, not container metadata)
     M.max_media_time_us = calc_time_us_from_frame(total_frames - 1)
@@ -183,6 +213,13 @@ function M.shuttle(dir)
         M.speed = 1
         M.state = "playing"
         M.transport_mode = "shuttle"
+
+        -- Play mode for shuttle: full BGRA caching for sequential access
+        local qt_c = package.loaded["core.qt_constants"]
+        if type(qt_c) == "table" and qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
+            qt_c.EMP.SET_DECODE_MODE("play")
+        end
+
         logger.debug("playback_controller", string.format("Started shuttle %s at 1x", dir == 1 and "forward" or "reverse"))
     elseif M.direction == dir then
         if M.speed < 8 then
@@ -207,7 +244,7 @@ function M.shuttle(dir)
 
     -- Notify media_cache of playhead change (triggers prefetch)
     if media_cache.is_loaded() then
-        media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
     end
 
     if was_stopped then
@@ -230,7 +267,7 @@ function M.slow_play(dir)
     logger.debug("playback_controller", string.format("Slow play %s at 0.5x", dir == 1 and "forward" or "reverse"))
 
     if media_cache.is_loaded() then
-        media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
     end
 
     if was_stopped then
@@ -252,6 +289,12 @@ function M.stop()
 
     stop_audio()
 
+    -- Park mode: only BGRA-convert the target frame, skip intermediates
+    local qt_c = package.loaded["core.qt_constants"]
+    if type(qt_c) == "table" and qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
+        qt_c.EMP.SET_DECODE_MODE("park")
+    end
+
     logger.debug("playback_controller", "Stopped")
 end
 
@@ -267,8 +310,14 @@ function M.play()
     M.transport_mode = "play"
     source_playback.clear_latch(M)
 
+    -- Play mode: BGRA-convert all intermediates for sequential cache
+    local qt_c = package.loaded["core.qt_constants"]
+    if type(qt_c) == "table" and qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
+        qt_c.EMP.SET_DECODE_MODE("play")
+    end
+
     if not M.timeline_mode and media_cache.is_loaded() then
-        media_cache.set_playhead(math.floor(M.frame), M.direction, M.speed)
+        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
     end
 
     if not M.timeline_mode then
@@ -292,14 +341,16 @@ function M.set_timeline_mode(enabled, sequence_id, sequence_info)
         M.sequence_id = sequence_id
         M.current_clip_id = nil
 
+        -- Store timeline_state ref for get_position/set_position
+        timeline_state_ref = require("ui.timeline.timeline_state")
+
         local fps_num, fps_den, total_frames
         if sequence_info then
             fps_num = sequence_info.fps_num
             fps_den = sequence_info.fps_den
             total_frames = sequence_info.total_frames
         else
-            local timeline_state = require("ui.timeline.timeline_state")
-            local rate = timeline_state.get_sequence_frame_rate()
+            local rate = timeline_state_ref.get_sequence_frame_rate()
             if rate and rate.fps_numerator and rate.fps_denominator then
                 fps_num = rate.fps_numerator
                 fps_den = rate.fps_denominator
@@ -318,6 +369,7 @@ function M.set_timeline_mode(enabled, sequence_id, sequence_info)
     else
         M.sequence_id = nil
         M.current_clip_id = nil
+        timeline_state_ref = nil
         logger.debug("playback_controller", "Timeline mode disabled")
     end
 end
@@ -377,18 +429,31 @@ function M.seek(frame_idx)
 
     source_playback.clear_latch(M)
 
-    M.frame = math.min(frame_idx, M.total_frames - 1)
+    local clamped = math.min(frame_idx, M.total_frames - 1)
+    -- Set local position directly (no set_position) to avoid re-entrant
+    -- listener fire. In timeline mode, the caller already set
+    -- timeline_state.playhead_position; in source mode, no listeners to fire.
+    M._position = clamped
 
-    if audio_playback and audio_playback.initialized then
-        local media_time_us = calc_time_us_from_frame(M.frame)
-        audio_playback.seek(media_time_us)
+    if M.timeline_mode and M.sequence_id then
+        -- Timeline mode: resolve clip at position and display correct source frame
+        if viewer_panel then
+            timeline_playback.resolve_and_display(M, viewer_panel, math.floor(clamped))
+        end
+        -- Skip audio seek when parked — timeline audio scrub is separate
+    else
+        -- Source mode: direct frame display
+        if audio_playback and audio_playback.initialized then
+            local media_time_us = calc_time_us_from_frame(clamped)
+            audio_playback.seek(media_time_us)
+        end
+
+        if viewer_panel then
+            viewer_panel.show_frame(math.floor(clamped))
+        end
     end
 
-    if viewer_panel then
-        viewer_panel.show_frame(math.floor(M.frame))
-    end
-
-    logger.debug("playback_controller", string.format("Seek to frame %d", math.floor(M.frame)))
+    logger.debug("playback_controller", string.format("Seek to frame %d", math.floor(clamped)))
 end
 
 --- Get current playback info for display

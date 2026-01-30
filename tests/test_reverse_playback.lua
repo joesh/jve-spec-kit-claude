@@ -115,7 +115,7 @@ print("\n--- Test 1: Direction changes sign of time delta ---")
 
 pc.set_source(300, 30, 1)
 mock_audio.seek(5000000)  -- 5 seconds
-pc.frame = 150
+pc.set_position(150)
 
 -- Forward 1x
 pc.shuttle(1)
@@ -127,7 +127,7 @@ pc.stop()
 
 -- Reverse 1x
 mock_audio.seek(5000000)
-pc.frame = 150
+pc.set_position(150)
 pc.shuttle(-1)
 local t0_rev = mock_audio.get_media_time_us()
 advance_time(100000)  -- Same 100ms
@@ -152,7 +152,7 @@ print("\n--- Test 2: Higher speed = larger delta ---")
 local function measure_delta(speed_magnitude, direction)
     clear_state()
     mock_audio.seek(5000000)
-    pc.frame = 150
+    pc.set_position(150)
 
     -- Set speed by repeated shuttle presses
     pc.shuttle(direction)
@@ -188,7 +188,7 @@ print("\n--- Test 3: Frames decrease in reverse ---")
 clear_state()
 pc.set_source(300, 30, 1)
 mock_audio.seek(5000000)
-pc.frame = 150
+pc.set_position(150)
 pc.shuttle(-1)
 
 frames_shown = {}
@@ -223,7 +223,7 @@ print("\n--- Test 4: Continuous frame changes (no stalling) ---")
 
 clear_state()
 mock_audio.seek(8000000)  -- 8 seconds
-pc.frame = 240
+pc.set_position(240)
 pc.shuttle(-1)
 
 frames_shown = {}
@@ -264,7 +264,7 @@ print("\n--- Test 5: Reverse to start latches ---")
 
 clear_state()
 mock_audio.seek(500000)  -- 0.5 seconds from start
-pc.frame = 15
+pc.set_position(15)
 pc.shuttle(-1)
 
 local latched = false
@@ -275,7 +275,7 @@ for i = 1, 50 do
 end
 
 assert(latched, "Should latch at start boundary")
-assert(pc.frame == 0, "Should be at frame 0")
+assert(pc.get_position() == 0, "Should be at frame 0")
 assert(pc.latched_boundary == "start", "Should be 'start' boundary")
 print("  ✓ Latched at start (frame 0)")
 
@@ -288,7 +288,7 @@ print("\n--- Test 6: Time monotonically decreasing ---")
 
 clear_state()
 mock_audio.seek(5000000)
-pc.frame = 150
+pc.set_position(150)
 pc.shuttle(-1)
 
 local times = {}

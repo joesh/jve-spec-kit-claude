@@ -56,7 +56,7 @@ local function ensure_playback_initialized()
 
     pc.init(viewer_panel)
     pc.set_source(total, fps)
-    pc.frame = viewer_panel.get_current_frame()
+    pc.set_position(viewer_panel.get_current_frame())
     return true
 end
 
@@ -887,7 +887,7 @@ local function handle_key_impl(event)
             end
             
             local new_time = frame_utils.frame_to_time(current_frame, frame_rate)
-            timeline_state.set_playhead_value(new_time)
+            timeline_state.set_playhead_position(new_time)
             return true
         end
     end
@@ -898,7 +898,7 @@ local function handle_key_impl(event)
             if modifier_shift then
                 local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
                 if mark_in then
-                    timeline_state.set_playhead_value(mark_in)
+                    timeline_state.set_playhead_position(mark_in)
                 end
             else
                 local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
@@ -913,7 +913,7 @@ local function handle_key_impl(event)
             if modifier_shift then
                 local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
                 if mark_out then
-                    timeline_state.set_playhead_value(mark_out)
+                    timeline_state.set_playhead_position(mark_out)
                 end
             else
                 local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
