@@ -11,6 +11,7 @@ local mock_qt_constants = {
         READER_DECODE_FRAME = function() return nil, { msg = "mock" } end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
+        SET_DECODE_MODE = function() end,
     },
 }
 _G.qt_constants = mock_qt_constants

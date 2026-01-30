@@ -23,6 +23,7 @@
 -- @file playback_controller.lua
 
 local logger = require("core.logger")
+local qt_constants = require("core.qt_constants")
 local media_cache = require("core.media.media_cache")
 local source_playback = require("core.playback.source_playback")
 local timeline_playback = require("core.playback.timeline_playback")
@@ -85,14 +86,21 @@ function M.get_position()
     return M._position
 end
 
---- Set current frame position.
+--- Set current frame position (fires timeline_state listeners in timeline mode).
 -- In timeline mode, writes through to timeline_state (int→Rational).
--- Always updates local _position for source mode.
+-- Always updates local _position.
 function M.set_position(v)
     if M.timeline_mode and timeline_state_ref then
         local rat = helpers.frame_to_rational(math.floor(v), M.fps_num, M.fps_den)
         timeline_state_ref.set_playhead_position(rat)
     end
+    M._position = v
+end
+
+--- Set position without firing timeline_state listeners.
+-- Use when the caller has already updated timeline_state (e.g. seek from
+-- timeline panel click) and re-firing would cause re-entrant listener loops.
+function M.set_position_silent(v)
     M._position = v
 end
 
@@ -163,7 +171,7 @@ function M.set_source(total_frames, fps_num, fps_den)
     M.fps_num = fps_num
     M.fps_den = fps_den
     M.fps = fps_num / fps_den  -- for display/interval only
-    M._position = 0
+    M.set_position_silent(0)
 
     -- Compute max media time for audio clamp (frame-derived, not container metadata)
     M.max_media_time_us = calc_time_us_from_frame(total_frames - 1)
@@ -198,7 +206,15 @@ function M.shuttle(dir)
         if moving_away then
             M.direction = dir
             M.speed = 1
-            source_playback.unlatch_resume(M, audio_playback)
+            -- Get resume time, clear latch, restart audio
+            local t_us = source_playback.get_unlatch_resume_time(audio_playback)
+            M._clear_latch()
+            if audio_playback and audio_playback.initialized then
+                audio_playback.seek(t_us)
+                audio_playback.set_speed(M.direction * M.speed)
+                audio_playback.start()
+            end
+            logger.debug("playback_controller", "Unlatched and resumed")
             M._schedule_tick()
             return
         else
@@ -215,10 +231,7 @@ function M.shuttle(dir)
         M.transport_mode = "shuttle"
 
         -- Play mode for shuttle: full BGRA caching for sequential access
-        local qt_c = package.loaded["core.qt_constants"]
-        if type(qt_c) == "table" and qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
-            qt_c.EMP.SET_DECODE_MODE("play")
-        end
+        qt_constants.EMP.SET_DECODE_MODE("play")
 
         logger.debug("playback_controller", string.format("Started shuttle %s at 1x", dir == 1 and "forward" or "reverse"))
     elseif M.direction == dir then
@@ -285,15 +298,12 @@ function M.stop()
     M.direction = 0
     M.speed = 1
     M.transport_mode = "none"
-    source_playback.clear_latch(M)
+    M._clear_latch()
 
     stop_audio()
 
     -- Park mode: only BGRA-convert the target frame, skip intermediates
-    local qt_c = package.loaded["core.qt_constants"]
-    if type(qt_c) == "table" and qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
-        qt_c.EMP.SET_DECODE_MODE("park")
-    end
+    qt_constants.EMP.SET_DECODE_MODE("park")
 
     logger.debug("playback_controller", "Stopped")
 end
@@ -308,13 +318,10 @@ function M.play()
     M.speed = 1
     M.state = "playing"
     M.transport_mode = "play"
-    source_playback.clear_latch(M)
+    M._clear_latch()
 
     -- Play mode: BGRA-convert all intermediates for sequential cache
-    local qt_c = package.loaded["core.qt_constants"]
-    if type(qt_c) == "table" and qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
-        qt_c.EMP.SET_DECODE_MODE("play")
-    end
+    qt_constants.EMP.SET_DECODE_MODE("play")
 
     if not M.timeline_mode and media_cache.is_loaded() then
         media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
@@ -402,19 +409,12 @@ function M.frame_to_rational(frame_idx)
 end
 
 --------------------------------------------------------------------------------
--- Boundary Latch (source mode only - delegates to source_playback)
+-- Boundary Latch (source mode only - controller owns latch state)
 --------------------------------------------------------------------------------
 
 function M._clear_latch()
-    source_playback.clear_latch(M)
-end
-
-function M._latch(boundary_frame)
-    source_playback.latch(M, boundary_frame, audio_playback, viewer_panel)
-end
-
-function M._unlatch_resume()
-    source_playback.unlatch_resume(M, audio_playback)
+    M.latched = false
+    M.latched_boundary = nil
 end
 
 --- Check if currently playing
@@ -427,18 +427,19 @@ function M.seek(frame_idx)
     assert(frame_idx, "playback_controller.seek: frame_idx is nil")
     assert(frame_idx >= 0, "playback_controller.seek: frame_idx must be >= 0")
 
-    source_playback.clear_latch(M)
+    M._clear_latch()
 
     local clamped = math.min(frame_idx, M.total_frames - 1)
-    -- Set local position directly (no set_position) to avoid re-entrant
-    -- listener fire. In timeline mode, the caller already set
+    -- Silent: in timeline mode, the caller already set
     -- timeline_state.playhead_position; in source mode, no listeners to fire.
-    M._position = clamped
+    M.set_position_silent(clamped)
 
     if M.timeline_mode and M.sequence_id then
         -- Timeline mode: resolve clip at position and display correct source frame
         if viewer_panel then
-            timeline_playback.resolve_and_display(M, viewer_panel, math.floor(clamped))
+            M.current_clip_id = timeline_playback.resolve_and_display(
+                M.fps_num, M.fps_den, M.sequence_id, M.current_clip_id,
+                nil, nil, viewer_panel, nil, math.floor(clamped))
         end
         -- Skip audio seek when parked — timeline audio scrub is separate
     else
@@ -469,28 +470,66 @@ end
 -- Video Tick (coordinator - routes to source_playback or timeline_playback)
 --------------------------------------------------------------------------------
 
---- Internal: tick function called by timer
+--- Internal: tick function called by timer.
+-- Builds tick_in snapshot, delegates to sub-module, commits result.
+-- Controller owns all state mutations and the ordering invariant.
 function M._tick()
     if M.state ~= "playing" then return end
     assert(viewer_panel, "playback_controller._tick: viewer_panel not set")
     assert(M.fps_num and M.fps_num > 0 and M.fps_den and M.fps_den > 0,
         "playback_controller._tick: fps must be set and positive")
 
-    local should_continue
-
     if M.timeline_mode and M.sequence_id then
-        -- Timeline mode: delegate to timeline_playback
-        should_continue = timeline_playback.tick(M, audio_playback, viewer_panel)
-    else
-        -- Source mode: delegate to source_playback
-        should_continue = source_playback.tick(M, audio_playback, viewer_panel)
-    end
+        -- Timeline mode: build tick_in, call tick, own the ordering
+        local tick_in = {
+            pos = M.get_position(),
+            direction = M.direction,
+            speed = M.speed,
+            fps_num = M.fps_num,
+            fps_den = M.fps_den,
+            total_frames = M.total_frames,
+            sequence_id = M.sequence_id,
+            current_clip_id = M.current_clip_id,
+        }
+        local result = timeline_playback.tick(tick_in, audio_playback, viewer_panel)
 
-    if should_continue then
-        M._schedule_tick()
+        -- Controller commits state
+        M.current_clip_id = result.current_clip_id
+        if result.continue then
+            -- Ordering invariant: resolve already done inside tick → now commit position → sync
+            M.set_position(result.new_pos)
+            if M.timeline_sync_callback then
+                M.timeline_sync_callback(result.frame_idx)
+            end
+            M._schedule_tick()
+        else
+            M.set_position(result.new_pos)
+            M.stop()
+        end
     else
-        -- Sub-module says stop
-        M.stop()
+        -- Source mode: build tick_in, call tick, commit result
+        local tick_in = {
+            pos = M.get_position(),
+            direction = M.direction,
+            speed = M.speed,
+            fps_num = M.fps_num,
+            fps_den = M.fps_den,
+            total_frames = M.total_frames,
+            transport_mode = M.transport_mode,
+            latched = M.latched,
+            latched_boundary = M.latched_boundary,
+        }
+        local result = source_playback.tick(tick_in, audio_playback, viewer_panel)
+
+        -- Controller commits state
+        M.set_position(result.new_pos)
+        M.latched = result.latched
+        M.latched_boundary = result.latched_boundary
+        if result.continue then
+            M._schedule_tick()
+        else
+            M.stop()
+        end
     end
 end
 

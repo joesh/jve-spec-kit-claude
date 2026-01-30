@@ -102,14 +102,11 @@ end
 local function test_clip_at_playhead()
     activate_calls = {}
     local viewer = make_mock_viewer()
-    local state = {
-        fps_num = 24, fps_den = 1,
-        sequence_id = "seq",
-        current_clip_id = nil,
-    }
 
     -- Frame 10 is inside clip_a (0-48)
-    timeline_playback.resolve_and_display(state, viewer, 10)
+    local new_clip_id = timeline_playback.resolve_and_display(
+        24, 1, "seq", nil,
+        nil, nil, viewer, nil, 10)
 
     -- media_cache.activate() should be called for clip switch
     assert(#activate_calls == 1,
@@ -128,9 +125,9 @@ local function test_clip_at_playhead()
     assert(math.abs(viewer.calls[1].source_time_us - expected_us) < 1000,
         string.format("source_time_us: expected ~%d, got %d", expected_us, viewer.calls[1].source_time_us))
 
-    -- State should track current clip
-    assert(state.current_clip_id == "clip_a",
-        "current_clip_id should be clip_a, got " .. tostring(state.current_clip_id))
+    -- Returned clip id should track current clip
+    assert(new_clip_id == "clip_a",
+        "new_clip_id should be clip_a, got " .. tostring(new_clip_id))
 
     print("  test_clip_at_playhead passed")
 end
@@ -141,14 +138,11 @@ end
 local function test_gap_at_playhead()
     activate_calls = {}
     local viewer = make_mock_viewer()
-    local state = {
-        fps_num = 24, fps_den = 1,
-        sequence_id = "seq",
-        current_clip_id = "clip_a",  -- was on a clip before
-    }
 
     -- Frame 60 is in the gap (clip_a ends at 48, clip_b starts at 72)
-    timeline_playback.resolve_and_display(state, viewer, 60)
+    local new_clip_id = timeline_playback.resolve_and_display(
+        24, 1, "seq", "clip_a",
+        nil, nil, viewer, nil, 60)
 
     -- No activate calls for gap
     assert(#activate_calls == 0,
@@ -159,9 +153,9 @@ local function test_gap_at_playhead()
     assert(viewer.calls[1].fn == "show_gap",
         "Call should be show_gap, got " .. viewer.calls[1].fn)
 
-    -- current_clip_id should be cleared for gap
-    assert(state.current_clip_id == nil,
-        "current_clip_id should be nil after gap, got " .. tostring(state.current_clip_id))
+    -- returned clip id should be nil for gap
+    assert(new_clip_id == nil,
+        "new_clip_id should be nil after gap, got " .. tostring(new_clip_id))
 
     print("  test_gap_at_playhead passed")
 end
@@ -172,14 +166,11 @@ end
 local function test_same_clip_skips_source_switch()
     activate_calls = {}
     local viewer = make_mock_viewer()
-    local state = {
-        fps_num = 24, fps_den = 1,
-        sequence_id = "seq",
-        current_clip_id = "clip_a",  -- already on this clip
-    }
 
     -- Frame 20 is still in clip_a (0-48)
-    timeline_playback.resolve_and_display(state, viewer, 20)
+    local new_clip_id = timeline_playback.resolve_and_display(
+        24, 1, "seq", "clip_a",
+        nil, nil, viewer, nil, 20)
 
     -- No activate call when same clip
     assert(#activate_calls == 0,
@@ -190,6 +181,8 @@ local function test_same_clip_skips_source_switch()
     assert(viewer.calls[1].fn == "show_frame_at_time",
         "Call should be show_frame_at_time, got " .. viewer.calls[1].fn)
 
+    assert(new_clip_id == "clip_a", "should remain clip_a")
+
     print("  test_same_clip_skips_source_switch passed")
 end
 
@@ -199,14 +192,11 @@ end
 local function test_clip_switch_triggers_source_change()
     activate_calls = {}
     local viewer = make_mock_viewer()
-    local state = {
-        fps_num = 24, fps_den = 1,
-        sequence_id = "seq",
-        current_clip_id = "clip_a",  -- was on clip_a
-    }
 
     -- Frame 80 is in clip_b (72-120, source_in=10)
-    timeline_playback.resolve_and_display(state, viewer, 80)
+    local new_clip_id = timeline_playback.resolve_and_display(
+        24, 1, "seq", "clip_a",
+        nil, nil, viewer, nil, 80)
 
     -- activate() should be called for new clip
     assert(#activate_calls == 1,
@@ -223,8 +213,8 @@ local function test_clip_switch_triggers_source_change()
     assert(math.abs(viewer.calls[1].source_time_us - expected_us) < 1000,
         string.format("source_time_us: expected ~%d, got %d", expected_us, viewer.calls[1].source_time_us))
 
-    assert(state.current_clip_id == "clip_b",
-        "current_clip_id should be clip_b, got " .. tostring(state.current_clip_id))
+    assert(new_clip_id == "clip_b",
+        "new_clip_id should be clip_b, got " .. tostring(new_clip_id))
 
     print("  test_clip_switch_triggers_source_change passed")
 end

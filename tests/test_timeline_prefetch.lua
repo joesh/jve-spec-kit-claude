@@ -107,7 +107,9 @@ local function test_resolve_updates_prefetch()
     }
 
     -- Frame 10 is inside clip_a (source_in=0, so source_frame=10)
-    timeline_playback.resolve_and_display(state, viewer, 10)
+    timeline_playback.resolve_and_display(
+        state.fps_num, state.fps_den, state.sequence_id, state.current_clip_id,
+        state.direction, state.speed, viewer, nil, 10)
 
     assert(#set_playhead_calls == 1,
         string.format("Expected 1 set_playhead call, got %d", #set_playhead_calls))
@@ -142,7 +144,9 @@ local function test_clip_switch_updates_prefetch()
 
     -- Frame 50 is in clip_b (timeline_start=48, source_in=10)
     -- offset = 50 - 48 = 2, source_frame = 10 + 2 = 12
-    timeline_playback.resolve_and_display(state, viewer, 50)
+    timeline_playback.resolve_and_display(
+        state.fps_num, state.fps_den, state.sequence_id, state.current_clip_id,
+        state.direction, state.speed, viewer, nil, 50)
 
     assert(#set_playhead_calls == 1,
         string.format("Expected 1 set_playhead call after clip switch, got %d", #set_playhead_calls))
@@ -167,7 +171,9 @@ local function test_parked_seek_no_prefetch()
         -- No direction/speed fields — parked seek context
     }
 
-    timeline_playback.resolve_and_display(state, viewer, 10)
+    timeline_playback.resolve_and_display(
+        state.fps_num, state.fps_den, state.sequence_id, state.current_clip_id,
+        state.direction, state.speed, viewer, nil, 10)
 
     assert(#set_playhead_calls == 0,
         string.format("Expected 0 set_playhead calls when parked, got %d", #set_playhead_calls))
@@ -189,7 +195,9 @@ local function test_reverse_direction_prefetch()
         speed = 2,
     }
 
-    timeline_playback.resolve_and_display(state, viewer, 10)
+    timeline_playback.resolve_and_display(
+        state.fps_num, state.fps_den, state.sequence_id, state.current_clip_id,
+        state.direction, state.speed, viewer, nil, 10)
 
     assert(#set_playhead_calls == 1,
         string.format("Expected 1 set_playhead call, got %d", #set_playhead_calls))
@@ -220,7 +228,9 @@ local function test_gap_no_prefetch()
     }
 
     -- Frame 200 is beyond all clips → gap
-    timeline_playback.resolve_and_display(state, viewer, 200)
+    timeline_playback.resolve_and_display(
+        state.fps_num, state.fps_den, state.sequence_id, state.current_clip_id,
+        state.direction, state.speed, viewer, nil, 200)
 
     assert(#set_playhead_calls == 0,
         string.format("Expected 0 set_playhead calls at gap, got %d", #set_playhead_calls))

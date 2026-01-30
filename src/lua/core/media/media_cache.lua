@@ -30,15 +30,6 @@ local M = {
     -- Currently active reader path (for get_video_frame/get_audio_pcm)
     active_path = nil,
 
-    -- Legacy fields kept for backward compatibility with callers that read these directly
-    -- These proxy to the active pool entry
-    video_asset = nil,
-    video_reader = nil,
-    audio_asset = nil,
-    audio_reader = nil,
-    asset_info = nil,
-    file_path = nil,
-
     -- Video frame cache (sliding window around playhead)
     video_cache = {
         frames = {},           -- { [frame_idx] = emp_frame }
@@ -65,26 +56,15 @@ local M = {
 }
 
 --------------------------------------------------------------------------------
--- Internal: Sync legacy fields from active pool entry
+-- Internal: Get the active pool entry (asserts if none active)
 --------------------------------------------------------------------------------
 
-local function sync_active_fields()
-    if M.active_path and M.reader_pool[M.active_path] then
-        local entry = M.reader_pool[M.active_path]
-        M.video_asset = entry.video_asset
-        M.video_reader = entry.video_reader
-        M.audio_asset = entry.audio_asset
-        M.audio_reader = entry.audio_reader
-        M.asset_info = entry.info
-        M.file_path = M.active_path
-    else
-        M.video_asset = nil
-        M.video_reader = nil
-        M.audio_asset = nil
-        M.audio_reader = nil
-        M.asset_info = nil
-        M.file_path = nil
-    end
+local function active_entry()
+    assert(M.active_path, "media_cache: no active reader (call activate() first)")
+    local entry = M.reader_pool[M.active_path]
+    assert(entry, string.format(
+        "media_cache: active_path '%s' not in pool", M.active_path))
+    return entry
 end
 
 --------------------------------------------------------------------------------
@@ -251,27 +231,32 @@ function M.is_loaded()
 end
 
 function M.get_video_asset()
-    return M.video_asset
+    if not M.is_loaded() then return nil end
+    return active_entry().video_asset
 end
 
 function M.get_audio_asset()
-    return M.audio_asset
+    if not M.is_loaded() then return nil end
+    return active_entry().audio_asset
 end
 
 function M.get_video_reader()
-    return M.video_reader
+    if not M.is_loaded() then return nil end
+    return active_entry().video_reader
 end
 
 function M.get_audio_reader()
-    return M.audio_reader
+    if not M.is_loaded() then return nil end
+    return active_entry().audio_reader
 end
 
 function M.get_asset_info()
-    return M.asset_info
+    if not M.is_loaded() then return nil end
+    return active_entry().info
 end
 
 function M.get_file_path()
-    return M.file_path
+    return M.active_path
 end
 
 --------------------------------------------------------------------------------
@@ -299,8 +284,11 @@ function M.activate(file_path)
     -- Stop old reader's prefetch thread before switching.
     -- release_lua_caches resets Lua-side last_prefetch_direction but doesn't
     -- stop the C++ thread — leaving it decoding at a stale position.
-    if M.active_path and M.video_reader and M.last_prefetch_direction ~= 0 then
-        qt_constants.EMP.READER_STOP_PREFETCH(M.video_reader)
+    if M.active_path and M.last_prefetch_direction ~= 0 then
+        local old_entry = M.reader_pool[M.active_path]
+        if old_entry and old_entry.video_reader then
+            qt_constants.EMP.READER_STOP_PREFETCH(old_entry.video_reader)
+        end
     end
 
     -- Release Lua-side caches from old active reader
@@ -314,7 +302,6 @@ function M.activate(file_path)
         -- Pool hit — promote to active
         entry.last_used = os.clock()
         M.active_path = file_path
-        sync_active_fields()
         logger.debug("media_cache", string.format("Pool hit: %s", file_path))
         return entry.info
     end
@@ -330,7 +317,6 @@ function M.activate(file_path)
     entry = open_reader(file_path)
     M.reader_pool[file_path] = entry
     M.active_path = file_path
-    sync_active_fields()
 
     logger.debug("media_cache", string.format("Pool miss, opened: %s (pool size=%d)",
         file_path, pool_count + 1))
@@ -364,7 +350,6 @@ function M.cleanup()
     end
     M.reader_pool = {}
     M.active_path = nil
-    sync_active_fields()
 
     logger.debug("media_cache", "Cleaned up all pooled readers")
 end
@@ -377,20 +362,22 @@ end
 -- @param frame_idx Frame index to retrieve
 -- @return EMP frame handle
 function M.get_video_frame(frame_idx)
-    assert(M.video_reader, "media_cache.get_video_frame: not loaded (video_reader is nil)")
+    assert(M.is_loaded(), "media_cache.get_video_frame: not loaded (call activate() first)")
     assert(frame_idx, "media_cache.get_video_frame: frame_idx is nil")
     assert(type(frame_idx) == "number", string.format(
         "media_cache.get_video_frame: frame_idx must be number, got %s", type(frame_idx)))
     assert(frame_idx >= 0, string.format(
         "media_cache.get_video_frame: frame_idx must be >= 0, got %d", frame_idx))
 
+    local entry = active_entry()
+
     -- Let C++ handle caching (prefetch thread fills cache, DecodeAtUS checks cache first)
     -- Don't double-cache in Lua - causes stale handle issues when C++ evicts
     local frame, err = qt_constants.EMP.READER_DECODE_FRAME(
-        M.video_reader,
+        entry.video_reader,
         frame_idx,
-        M.asset_info.fps_num,
-        M.asset_info.fps_den
+        entry.info.fps_num,
+        entry.info.fps_den
     )
     assert(frame, string.format(
         "media_cache.get_video_frame: READER_DECODE_FRAME failed at frame %d: %s",
@@ -426,10 +413,11 @@ end
 
 --- Internal: decode a contiguous window ending at end_frame_idx, avoiding per-frame reverse seeks
 function M._ensure_reverse_window(end_frame_idx, backfill_count)
-    if not M.video_reader then
+    if not M.is_loaded() then
         return
     end
 
+    local entry = active_entry()
     local want = backfill_count or M.video_cache.window_size
     if want < 1 then want = 1 end
     if want > M.video_cache.window_size then want = M.video_cache.window_size end
@@ -454,7 +442,8 @@ function M._ensure_reverse_window(end_frame_idx, backfill_count)
 
     for i = start_frame_idx, end_frame_idx do
         if not M.video_cache.frames[i] then
-            local frame = qt_constants.EMP.READER_DECODE_FRAME(M.video_reader, i, M.asset_info.fps_num, M.asset_info.fps_den)
+            local frame = qt_constants.EMP.READER_DECODE_FRAME(
+                entry.video_reader, i, entry.info.fps_num, entry.info.fps_den)
             if frame then
                 M._cache_video_frame(i, frame)
             end
@@ -474,7 +463,10 @@ end
 -- @param end_us End time in microseconds
 -- @return pcm_data_ptr, frames, actual_start_us
 function M.get_audio_pcm(start_us, end_us)
-    assert(M.audio_reader, "media_cache.get_audio_pcm: not loaded (audio_reader is nil)")
+    assert(M.is_loaded(), "media_cache.get_audio_pcm: not loaded (call activate() first)")
+    local entry = active_entry()
+    assert(entry.audio_reader,
+        "media_cache.get_audio_pcm: active reader has no audio_reader")
     assert(start_us, "media_cache.get_audio_pcm: start_us is nil")
     assert(end_us, "media_cache.get_audio_pcm: end_us is nil")
     assert(type(start_us) == "number", string.format(
@@ -498,19 +490,19 @@ function M.get_audio_pcm(start_us, end_us)
     end
 
     -- Convert time to frames for EMP API
-    local us_per_frame = (M.asset_info.fps_den * 1000000) / M.asset_info.fps_num
+    local us_per_frame = (entry.info.fps_den * 1000000) / entry.info.fps_num
     local frame_start = math.floor(start_us / us_per_frame)
     local frame_end = math.ceil(end_us / us_per_frame)
 
     -- Decode audio range
     local pcm, err = qt_constants.EMP.READER_DECODE_AUDIO_RANGE(
-        M.audio_reader,
+        entry.audio_reader,
         frame_start,
         frame_end,
-        M.asset_info.fps_num,
-        M.asset_info.fps_den,
-        M.asset_info.audio_sample_rate,
-        M.asset_info.audio_channels
+        entry.info.fps_num,
+        entry.info.fps_den,
+        entry.info.audio_sample_rate,
+        entry.info.audio_channels
     )
     assert(pcm, string.format(
         "media_cache.get_audio_pcm: READER_DECODE_AUDIO_RANGE failed [%d-%d]: %s",
@@ -520,7 +512,7 @@ function M.get_audio_pcm(start_us, end_us)
     local info = qt_constants.EMP.PCM_INFO(pcm)
     M.audio_cache.pcm = pcm
     M.audio_cache.start_us = info.start_time_us
-    M.audio_cache.end_us = info.start_time_us + (info.frames * 1000000 / M.asset_info.audio_sample_rate)
+    M.audio_cache.end_us = info.start_time_us + (info.frames * 1000000 / entry.info.audio_sample_rate)
     M.audio_cache.data_ptr = qt_constants.EMP.PCM_DATA_PTR(pcm)
     M.audio_cache.frames = info.frames
 
@@ -555,6 +547,8 @@ function M.set_playhead(frame_idx, direction, speed)
     assert(speed, "media_cache.set_playhead: speed is nil")
     assert(M.is_loaded(), "media_cache.set_playhead: not loaded (call activate() first)")
 
+    local entry = active_entry()
+
     -- Store direction for reverse window logic
     M.playhead_direction = direction
 
@@ -562,11 +556,11 @@ function M.set_playhead(frame_idx, direction, speed)
     if direction ~= M.last_prefetch_direction then
         if direction == 0 then
             -- Stopped: stop prefetch thread
-            qt_constants.EMP.READER_STOP_PREFETCH(M.video_reader)
+            qt_constants.EMP.READER_STOP_PREFETCH(entry.video_reader)
             logger.debug("media_cache", "Prefetch stopped")
         else
             -- Playing: start prefetch (forward or reverse)
-            qt_constants.EMP.READER_START_PREFETCH(M.video_reader, direction)
+            qt_constants.EMP.READER_START_PREFETCH(entry.video_reader, direction)
             logger.debug("media_cache", string.format("Prefetch started: direction=%d", direction))
         end
         M.last_prefetch_direction = direction
@@ -575,10 +569,10 @@ function M.set_playhead(frame_idx, direction, speed)
     -- Update prefetch target (tells background thread where to decode ahead)
     if direction ~= 0 then
         qt_constants.EMP.READER_UPDATE_PREFETCH_TARGET(
-            M.video_reader,
+            entry.video_reader,
             frame_idx,
-            M.asset_info.fps_num,
-            M.asset_info.fps_den
+            entry.info.fps_num,
+            entry.info.fps_den
         )
     end
 

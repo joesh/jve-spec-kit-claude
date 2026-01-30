@@ -46,6 +46,11 @@ local mock_emp = {
     SURFACE_SET_FRAME = function(surface, frame)
         -- no-op
     end,
+    SET_DECODE_MODE = function() end,
+    READER_STOP_PREFETCH = function() end,
+    READER_START_PREFETCH = function() end,
+    READER_UPDATE_PREFETCH_TARGET = function() end,
+    PCM_RELEASE = function() end,
 }
 
 -- Mock qt_constants (both package.loaded and global for media_cache compatibility)

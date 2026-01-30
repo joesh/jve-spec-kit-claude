@@ -9,6 +9,23 @@
 
 require("test_env")
 
+-- Mock qt_constants (required by playback_controller and media_cache)
+local mock_qt_constants = {
+    EMP = {
+        ASSET_OPEN = function() return nil, { msg = "mock" } end,
+        ASSET_INFO = function() return nil end,
+        ASSET_CLOSE = function() end,
+        READER_CREATE = function() return nil, { msg = "mock" } end,
+        READER_CLOSE = function() end,
+        READER_DECODE_FRAME = function() return nil, { msg = "mock" } end,
+        FRAME_RELEASE = function() end,
+        PCM_RELEASE = function() end,
+        SET_DECODE_MODE = function() end,
+    },
+}
+_G.qt_constants = mock_qt_constants
+package.loaded["core.qt_constants"] = mock_qt_constants
+
 print("=== test_video_follows_audio_in_shuttle.lua ===")
 
 -- Mock audio_playback with controlled time
@@ -36,9 +53,11 @@ local mock_viewer = {
 
 -- Mock media_cache
 local mock_media_cache = {
+    is_loaded = function() return true end,
     set_playhead = function() end,
+    get_asset_info = function() return { fps_num = 25, fps_den = 1 } end,
 }
-package.loaded["ui.media_cache"] = mock_media_cache
+package.loaded["core.media.media_cache"] = mock_media_cache
 
 -- Prevent timer recursion
 local timer_callbacks = {}
