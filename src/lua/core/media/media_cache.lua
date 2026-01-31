@@ -461,8 +461,10 @@ end
 --- Get audio PCM for time range (from cache or decode)
 -- @param start_us Start time in microseconds
 -- @param end_us End time in microseconds
+-- @param out_sample_rate Output sample rate (nil = source native rate). Pass
+--   session_sample_rate so EMP resamples to AOP's expected rate regardless of source.
 -- @return pcm_data_ptr, frames, actual_start_us
-function M.get_audio_pcm(start_us, end_us)
+function M.get_audio_pcm(start_us, end_us, out_sample_rate)
     assert(M.is_loaded(), "media_cache.get_audio_pcm: not loaded (call activate() first)")
     local entry = active_entry()
     assert(entry.audio_reader,
@@ -494,14 +496,15 @@ function M.get_audio_pcm(start_us, end_us)
     local frame_start = math.floor(start_us / us_per_frame)
     local frame_end = math.ceil(end_us / us_per_frame)
 
-    -- Decode audio range
+    -- Decode audio range (resample to out_sample_rate if provided)
+    local decode_rate = out_sample_rate or entry.info.audio_sample_rate
     local pcm, err = qt_constants.EMP.READER_DECODE_AUDIO_RANGE(
         entry.audio_reader,
         frame_start,
         frame_end,
         entry.info.fps_num,
         entry.info.fps_den,
-        entry.info.audio_sample_rate,
+        decode_rate,
         entry.info.audio_channels
     )
     assert(pcm, string.format(
@@ -512,7 +515,7 @@ function M.get_audio_pcm(start_us, end_us)
     local info = qt_constants.EMP.PCM_INFO(pcm)
     M.audio_cache.pcm = pcm
     M.audio_cache.start_us = info.start_time_us
-    M.audio_cache.end_us = info.start_time_us + (info.frames * 1000000 / entry.info.audio_sample_rate)
+    M.audio_cache.end_us = info.start_time_us + (info.frames * 1000000 / decode_rate)
     M.audio_cache.data_ptr = qt_constants.EMP.PCM_DATA_PTR(pcm)
     M.audio_cache.frames = info.frames
 

@@ -55,7 +55,9 @@ end
 
 -- Mock audio with simulated time tracking (matches real audio_playback behavior)
 local mock_audio = {
-    initialized = true,
+    session_initialized = true,
+    source_loaded = true,
+    has_audio = true,
     playing = false,
     media_time_us = 0,
     max_media_time_us = 10000000,
@@ -63,6 +65,9 @@ local mock_audio = {
     _anchor_us = 0,
     _elapsed_us = 0,
 }
+
+function mock_audio.is_ready() return mock_audio.session_initialized and mock_audio.source_loaded and mock_audio.has_audio end
+function mock_audio.shutdown_session() mock_audio.session_initialized = false; mock_audio.source_loaded = false end
 
 function mock_audio.start()
     mock_audio.playing = true

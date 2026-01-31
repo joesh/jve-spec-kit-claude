@@ -86,7 +86,7 @@ local function apply_latch_effects(boundary_frame, fps_num, fps_den, audio_playb
     end
 
     -- Transport event: freeze audio at boundary time
-    if audio_playback and audio_playback.initialized and audio_playback.latch then
+    if audio_playback and audio_playback.is_ready() and audio_playback.latch then
         audio_playback.latch(t_us)
     end
 
@@ -101,7 +101,7 @@ end
 -- @param audio_playback Audio playback module reference
 -- @return resume_time_us number
 function M.get_unlatch_resume_time(audio_playback)
-    if audio_playback and audio_playback.initialized then
+    if audio_playback and audio_playback.is_ready() then
         return audio_playback.get_media_time_us()
     end
     return 0
@@ -135,7 +135,7 @@ function M.tick(tick_in, audio_playback, viewer_panel)
 
     -- Frame advancement: video ALWAYS follows audio when audio is active (Rule V1)
     local pos
-    if audio_playback and audio_playback.initialized and audio_playback.playing then
+    if audio_playback and audio_playback.is_ready() and audio_playback.playing then
         -- AUDIO ACTIVE: Video follows audio time (spec Rule V1)
         local t_vid_us = audio_playback.get_media_time_us()
         pos = helpers.calc_frame_from_time_us(t_vid_us, tick_in.fps_num, tick_in.fps_den)

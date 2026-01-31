@@ -35,7 +35,8 @@ end
 
 -- Helper: reset module state between tests
 local function reset_module_state()
-    audio_playback.initialized = false
+    audio_playback.session_initialized = false
+    audio_playback.source_loaded = false
     audio_playback.playing = false
     audio_playback.has_audio = false
     audio_playback.aop = nil
@@ -47,9 +48,12 @@ local function reset_module_state()
     audio_playback.max_media_time_us = 0
     audio_playback.speed = 1.0
     audio_playback.quality_mode = 1
-    audio_playback.sample_rate = 48000
-    audio_playback.channels = 2
+    audio_playback.sample_rate = 0
+    audio_playback.session_sample_rate = 0
+    audio_playback.session_channels = 0
     audio_playback.duration_us = 0
+    audio_playback.fps_num = 0
+    audio_playback.fps_den = 1
 end
 
 --------------------------------------------------------------------------------
@@ -58,8 +62,10 @@ end
 print("--- Section 1: Module Interface ---")
 
 print("\nTest 1.1: All expected functions present")
-assert(audio_playback.init, "audio_playback.init missing")
-assert(audio_playback.shutdown, "audio_playback.shutdown missing")
+assert(audio_playback.init_session, "audio_playback.init_session missing")
+assert(audio_playback.switch_source, "audio_playback.switch_source missing")
+assert(audio_playback.shutdown_session, "audio_playback.shutdown_session missing")
+assert(audio_playback.is_ready, "audio_playback.is_ready missing")
 assert(audio_playback.start, "audio_playback.start missing")
 assert(audio_playback.stop, "audio_playback.stop missing")
 assert(audio_playback.seek, "audio_playback.seek missing")
@@ -69,6 +75,8 @@ assert(audio_playback.set_max_media_time, "audio_playback.set_max_media_time mis
 assert(audio_playback.get_playhead_us, "audio_playback.get_playhead_us missing")
 assert(audio_playback.had_underrun, "audio_playback.had_underrun missing")
 assert(audio_playback.clear_underrun, "audio_playback.clear_underrun missing")
+assert(audio_playback.init == nil, "audio_playback.init should be removed")
+assert(audio_playback.shutdown == nil, "audio_playback.shutdown should be removed")
 print("  ✓ All public functions present")
 
 print("\nTest 1.2: Internal functions present")
@@ -85,7 +93,8 @@ print("\n--- Section 2: Initial State ---")
 reset_module_state()
 
 print("\nTest 2.1: Initial state values")
-assert(audio_playback.initialized == false, "Should start uninitialized")
+assert(audio_playback.session_initialized == false, "Should start with no session")
+assert(audio_playback.source_loaded == false, "Should start with no source")
 assert(audio_playback.playing == false, "Should start not playing")
 assert(audio_playback.has_audio == false, "Should start with no audio")
 assert(audio_playback.aop == nil, "aop should be nil")
@@ -93,48 +102,53 @@ assert(audio_playback.sse == nil, "sse should be nil")
 print("  ✓ Initial state correct")
 
 --------------------------------------------------------------------------------
--- SECTION 3: init() Validation
+-- SECTION 3: init_session() / switch_source() Validation
 --------------------------------------------------------------------------------
-print("\n--- Section 3: init() Validation ---")
+print("\n--- Section 3: init_session/switch_source Validation ---")
 
 reset_module_state()
 
-print("\nTest 3.1: init(nil) asserts")
+print("\nTest 3.1: switch_source(nil) asserts")
+-- First need a session to test switch_source validation
+audio_playback.session_initialized = true  -- fake session for validation tests
+audio_playback.aop = "fake_aop"
+audio_playback.sse = "fake_sse"
 expect_assert(
-    function() audio_playback.init(nil) end,
+    function() audio_playback.switch_source(nil) end,
     "cache.*nil",
-    "init(nil)"
+    "switch_source(nil)"
 )
-print("  ✓ init(nil) asserts with context")
+print("  ✓ switch_source(nil) asserts with context")
 
-print("\nTest 3.2: init with cache missing get_asset_info asserts")
+print("\nTest 3.2: switch_source with cache missing get_asset_info asserts")
 expect_assert(
-    function() audio_playback.init({ get_audio_reader = function() end }) end,
+    function() audio_playback.switch_source({ get_audio_reader = function() end }) end,
     "get_asset_info",
-    "init without get_asset_info"
+    "switch_source without get_asset_info"
 )
-print("  ✓ init validates cache.get_asset_info")
+print("  ✓ switch_source validates cache.get_asset_info")
 
-print("\nTest 3.3: init with cache missing get_audio_reader asserts")
+print("\nTest 3.3: switch_source with cache missing get_audio_reader asserts")
 expect_assert(
-    function() audio_playback.init({ get_asset_info = function() end }) end,
+    function() audio_playback.switch_source({ get_asset_info = function() end }) end,
     "get_audio_reader",
-    "init without get_audio_reader"
+    "switch_source without get_audio_reader"
 )
-print("  ✓ init validates cache.get_audio_reader")
+print("  ✓ switch_source validates cache.get_audio_reader")
 
-print("\nTest 3.4: init with cache.get_asset_info returning nil asserts")
+print("\nTest 3.4: switch_source with cache.get_asset_info returning nil asserts")
 expect_assert(
     function()
-        audio_playback.init({
+        audio_playback.switch_source({
             get_asset_info = function() return nil end,
             get_audio_reader = function() end
         })
     end,
     "returned nil",
-    "init with nil asset_info"
+    "switch_source with nil asset_info"
 )
-print("  ✓ init validates asset_info not nil")
+print("  ✓ switch_source validates asset_info not nil")
+reset_module_state()
 
 --------------------------------------------------------------------------------
 -- SECTION 4: set_max_media_time() Validation
@@ -272,17 +286,18 @@ expect_assert(
 )
 print("  ✓ seek(string) asserts")
 
-print("\nTest 6.3: seek when not initialized updates media_time_us only")
+print("\nTest 6.3: seek when no session updates media_time_us only")
 reset_module_state()
 audio_playback.max_media_time_us = 1000000
-audio_playback.initialized = false
+audio_playback.session_initialized = false
 audio_playback.seek(500000)
 assert(audio_playback.media_time_us == 500000, "media_time_us should be 500000")
-print("  ✓ seek when not initialized stores time")
+print("  ✓ seek when no session stores time")
 
-print("\nTest 6.4: seek when initialized but not playing updates stopped state")
+print("\nTest 6.4: seek when session active but not playing updates stopped state")
 reset_module_state()
-audio_playback.initialized = true
+audio_playback.session_initialized = true
+audio_playback.source_loaded = true
 audio_playback.has_audio = true
 audio_playback.playing = false
 audio_playback.max_media_time_us = 1000000
@@ -298,15 +313,15 @@ print("\n--- Section 7: get_media_time_us() Behavior ---")
 
 reset_module_state()
 
-print("\nTest 7.1: get_media_time_us when not initialized returns media_time_us")
-audio_playback.initialized = false
+print("\nTest 7.1: get_media_time_us when no session returns media_time_us")
+audio_playback.session_initialized = false
 audio_playback.media_time_us = 123456
 local t = audio_playback.get_media_time_us()
-assert(t == 123456, "Should return media_time_us when not initialized")
-print("  ✓ Returns media_time_us when not initialized")
+assert(t == 123456, "Should return media_time_us when no session")
+print("  ✓ Returns media_time_us when no session")
 
 print("\nTest 7.2: get_media_time_us when not playing returns media_time_us")
-audio_playback.initialized = true
+audio_playback.session_initialized = true
 audio_playback.playing = false
 audio_playback.media_time_us = 789000
 t = audio_playback.get_media_time_us()
@@ -314,7 +329,7 @@ assert(t == 789000, "Should return media_time_us when not playing")
 print("  ✓ Returns media_time_us when not playing")
 
 print("\nTest 7.3: get_media_time_us with nil media_time_us asserts")
-audio_playback.initialized = false
+audio_playback.session_initialized = false
 audio_playback.media_time_us = nil
 expect_assert(
     function() audio_playback.get_media_time_us() end,
@@ -331,32 +346,36 @@ print("\n--- Section 8: start()/stop() State Guards ---")
 
 reset_module_state()
 
-print("\nTest 8.1: start when not initialized is no-op")
-audio_playback.initialized = false
-audio_playback.start()  -- Should not throw
-assert(audio_playback.playing == false, "Should not start when not initialized")
-print("  ✓ start() no-op when not initialized")
+print("\nTest 8.1: start when no session asserts")
+audio_playback.session_initialized = false
+expect_assert(
+    function() audio_playback.start() end,
+    "session not initialized",
+    "start without session"
+)
+print("  ✓ start() asserts when no session")
 
 print("\nTest 8.2: start when no audio is no-op")
-audio_playback.initialized = true
+audio_playback.session_initialized = true
+audio_playback.source_loaded = true
 audio_playback.has_audio = false
 audio_playback.start()  -- Should not throw
 assert(audio_playback.playing == false, "Should not start when no audio")
 print("  ✓ start() no-op when no audio")
 
-print("\nTest 8.3: stop when not initialized is no-op")
-audio_playback.initialized = false
+print("\nTest 8.3: stop when no session is no-op")
+audio_playback.session_initialized = false
 audio_playback.stop()  -- Should not throw
-print("  ✓ stop() no-op when not initialized")
+print("  ✓ stop() no-op when no session")
 
 print("\nTest 8.4: stop when not playing is no-op")
-audio_playback.initialized = true
+audio_playback.session_initialized = true
 audio_playback.playing = false
 audio_playback.stop()  -- Should not throw
 print("  ✓ stop() no-op when not playing")
 
 print("\nTest 8.5: Multiple stops are idempotent")
-audio_playback.initialized = true
+audio_playback.session_initialized = true
 audio_playback.playing = false
 audio_playback.stop()
 audio_playback.stop()
@@ -377,16 +396,16 @@ local function expect_assert(fn, msg)
     return err
 end
 
-print("\nTest 9.1: get_playhead_us when not initialized ASSERTS (NSF)")
-audio_playback.initialized = false
+print("\nTest 9.1: get_playhead_us when no session ASSERTS (NSF)")
+audio_playback.session_initialized = false
 local err = expect_assert(function()
     audio_playback.get_playhead_us()
-end, "get_playhead_us should assert when not initialized")
-assert(err:match("not initialized"), "Error should mention 'not initialized'")
-print("  ✓ get_playhead_us asserts when not initialized (NSF)")
+end, "get_playhead_us should assert when no session")
+assert(err:match("session not initialized"), "Error should mention 'session not initialized'")
+print("  ✓ get_playhead_us asserts when no session (NSF)")
 
 print("\nTest 9.2: get_playhead_us when no aop ASSERTS (NSF)")
-audio_playback.initialized = true
+audio_playback.session_initialized = true
 audio_playback.aop = nil
 err = expect_assert(function()
     audio_playback.get_playhead_us()
@@ -394,16 +413,16 @@ end, "get_playhead_us should assert when no aop")
 assert(err:match("aop is nil"), "Error should mention 'aop is nil'")
 print("  ✓ get_playhead_us asserts when no aop (NSF)")
 
-print("\nTest 9.3: had_underrun when not initialized ASSERTS (NSF)")
-audio_playback.initialized = false
+print("\nTest 9.3: had_underrun when no session ASSERTS (NSF)")
+audio_playback.session_initialized = false
 err = expect_assert(function()
     audio_playback.had_underrun()
-end, "had_underrun should assert when not initialized")
-assert(err:match("not initialized"), "Error should mention 'not initialized'")
-print("  ✓ had_underrun asserts when not initialized (NSF)")
+end, "had_underrun should assert when no session")
+assert(err:match("session not initialized"), "Error should mention 'session not initialized'")
+print("  ✓ had_underrun asserts when no session (NSF)")
 
 print("\nTest 9.4: had_underrun when no aop ASSERTS (NSF)")
-audio_playback.initialized = true
+audio_playback.session_initialized = true
 audio_playback.aop = nil
 err = expect_assert(function()
     audio_playback.had_underrun()
@@ -411,16 +430,16 @@ end, "had_underrun should assert when no aop")
 assert(err:match("aop is nil"), "Error should mention 'aop is nil'")
 print("  ✓ had_underrun asserts when no aop (NSF)")
 
-print("\nTest 9.5: clear_underrun when not initialized ASSERTS (NSF)")
-audio_playback.initialized = false
+print("\nTest 9.5: clear_underrun when no session ASSERTS (NSF)")
+audio_playback.session_initialized = false
 err = expect_assert(function()
     audio_playback.clear_underrun()
-end, "clear_underrun should assert when not initialized")
-assert(err:match("not initialized"), "Error should mention 'not initialized'")
-print("  ✓ clear_underrun asserts when not initialized (NSF)")
+end, "clear_underrun should assert when no session")
+assert(err:match("session not initialized"), "Error should mention 'session not initialized'")
+print("  ✓ clear_underrun asserts when no session (NSF)")
 
 print("\nTest 9.6: clear_underrun when no aop ASSERTS (NSF)")
-audio_playback.initialized = true
+audio_playback.session_initialized = true
 audio_playback.aop = nil
 err = expect_assert(function()
     audio_playback.clear_underrun()

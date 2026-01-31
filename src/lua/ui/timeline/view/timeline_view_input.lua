@@ -320,6 +320,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         local playhead_value = state.get_playhead_position()
         local playhead_x = state.time_to_pixel(playhead_value, width)
         if math.abs(x - playhead_x) < 5 then
+            -- Stop playback on click (standard NLE: click-to-park)
+            local pc = require("core.playback.playback_controller")
+            if pc.is_playing() then
+                pc.stop()
+            end
             state.set_dragging_playhead(true)
             return
         end

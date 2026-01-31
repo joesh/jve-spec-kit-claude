@@ -63,7 +63,7 @@ end
 -- @param speed magnitude: 0.5, 1, 2, 4, 8
 function M.sync_audio(audio_playback, direction, speed)
     if not audio_playback then return end
-    if not audio_playback.initialized then return end
+    if not audio_playback.is_ready() then return end
 
     -- Speed convention invariants
     assert(speed >= 0, "playback_helpers.sync_audio: speed must be non-negative (magnitude)")
@@ -84,7 +84,7 @@ end
 -- @param speed magnitude: 0.5, 1, 2, 4, 8
 function M.start_audio(audio_playback, frame, fps_num, fps_den, direction, speed)
     if not audio_playback then return end
-    if not audio_playback.initialized then return end
+    if not audio_playback.is_ready() then return end
 
     -- Sync speed first (transport event)
     M.sync_audio(audio_playback, direction, speed)
@@ -100,7 +100,7 @@ end
 -- @param audio_playback audio_playback module reference
 function M.stop_audio(audio_playback)
     if not audio_playback then return end
-    if not audio_playback.initialized then return end
+    if not audio_playback.is_ready() then return end
 
     audio_playback.stop()
 end

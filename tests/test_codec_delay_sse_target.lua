@@ -96,12 +96,12 @@ local mock_media_cache = {
 }
 
 -- Fresh load
-package.loaded["ui.audio_playback"] = nil
+package.loaded["core.media.audio_playback"] = nil
 local audio_playback = require("core.media.audio_playback")
 
--- Initialize
-local ok = audio_playback.init(mock_media_cache)
-assert(ok, "init failed")
+-- Initialize (session + source)
+audio_playback.init_session(48000, 2)
+audio_playback.switch_source(mock_media_cache)
 audio_playback.set_max_media_time(10000000)
 
 -- Seek to time 0 (where codec delay will cause gap)
@@ -127,6 +127,6 @@ assert(final_sse_target >= CODEC_DELAY_US,
         final_sse_target, CODEC_DELAY_US))
 
 -- Cleanup
-audio_playback.shutdown()
+audio_playback.shutdown_session()
 
 print("✅ test_codec_delay_sse_target.lua passed")

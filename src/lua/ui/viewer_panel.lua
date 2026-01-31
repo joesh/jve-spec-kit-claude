@@ -17,10 +17,12 @@ local json = require("dkjson")
 local inspectable_factory = require("inspectable")
 local logger = require("core.logger")
 local media_cache = require("core.media.media_cache")
-local audio_playback = require("core.media.audio_playback")
 local playback_controller = require("core.playback.playback_controller")
 
 local M = {}
+
+-- DEBUG: skip video decode+display to isolate audio debugging
+local SKIP_VIDEO = false
 
 local viewer_widget = nil
 local title_label = nil
@@ -32,10 +34,8 @@ local current_frame_idx = 0
 
 -- Clean up resources
 local function cleanup()
-    -- Shutdown audio playback first
-    if audio_playback.initialized then
-        audio_playback.shutdown()
-    end
+    -- Shutdown audio session via controller (owns audio lifecycle)
+    playback_controller.shutdown_audio_session()
 
     -- Unload media cache (releases all EMP resources)
     media_cache.unload()
@@ -56,27 +56,17 @@ local function load_video_frame(file_path)
     local info = media_cache.activate(file_path)
 
     -- Get and display frame 0
-    local frame = media_cache.get_video_frame(0)
-    qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+    if not SKIP_VIDEO then
+        local frame = media_cache.get_video_frame(0)
+        qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+    end
     current_frame_idx = 0
 
     logger.info("viewer_panel", string.format("Loaded video: %dx%d @ %d/%d fps",
         info.width, info.height, info.fps_num, info.fps_den))
 
-    -- Initialize audio playback if asset has audio
-    logger.info("viewer_panel", string.format("Audio check: has_audio=%s SSE=%s AOP=%s",
-        tostring(info.has_audio), tostring(qt_constants.SSE ~= nil), tostring(qt_constants.AOP ~= nil)))
-    if info.has_audio and qt_constants.SSE and qt_constants.AOP then
-        local ok, err = audio_playback.init(media_cache)
-        if ok then
-            -- Wire playback_controller to audio
-            playback_controller.init_audio(audio_playback)
-            logger.info("viewer_panel", string.format("Audio initialized: %dHz %dch",
-                info.audio_sample_rate, info.audio_channels))
-        else
-            logger.warn("viewer_panel", "Failed to initialize audio: " .. tostring(err))
-        end
-    end
+    -- Initialize audio via shared path (handles both source and timeline modes)
+    playback_controller.init_audio_for_active_media()
 
     -- Set playback source (frame count and rational fps)
     local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
@@ -260,11 +250,12 @@ function M.show_frame(frame_idx)
     assert(frame_idx >= 0, string.format(
         "viewer_panel.show_frame: frame_idx must be >= 0, got %d", frame_idx))
 
-    -- Get frame from cache (cache handles decode and lifecycle)
-    local frame = media_cache.get_video_frame(frame_idx)
-
+    if not SKIP_VIDEO then
+        -- Get frame from cache (cache handles decode and lifecycle)
+        local frame = media_cache.get_video_frame(frame_idx)
+        qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+    end
     current_frame_idx = frame_idx
-    qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
 end
 
 -- Get current asset info (for playback controller)
@@ -365,8 +356,10 @@ function M.show_frame_at_time(source_time_us)
     frame_idx = math.max(0, math.min(frame_idx, total_frames - 1))
 
     -- Get and display frame
-    local frame = media_cache.get_video_frame(frame_idx)
-    qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+    if not SKIP_VIDEO then
+        local frame = media_cache.get_video_frame(frame_idx)
+        qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
+    end
     current_frame_idx = frame_idx
 end
 

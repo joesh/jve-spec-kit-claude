@@ -116,7 +116,7 @@ package.loaded["core.logger"] = {
 }
 
 -- Load audio_playback fresh
-package.loaded["ui.audio_playback"] = nil
+package.loaded["core.media.audio_playback"] = nil
 local audio_playback = require("core.media.audio_playback")
 
 --------------------------------------------------------------------------------
@@ -127,12 +127,13 @@ print("Test 1: Init does not push PCM")
 push_pcm_calls = {}
 media_cache_fetch_count = 0
 
-local ok = audio_playback.init(mock_media_cache)
-assert(ok, "init should succeed")
+audio_playback.init_session(48000, 2)
+audio_playback.switch_source(mock_media_cache)
+assert(audio_playback.is_ready(), "should be ready after init_session + switch_source")
 assert(#push_pcm_calls == 0, string.format(
     "init should NOT push PCM, but got %d calls", #push_pcm_calls))
 
-print("  ✓ init() does not call PUSH_PCM")
+print("  ✓ init_session + switch_source does not call PUSH_PCM")
 
 --------------------------------------------------------------------------------
 -- Test 2: start() should push PCM exactly once
@@ -278,7 +279,7 @@ end
 --------------------------------------------------------------------------------
 -- Cleanup
 --------------------------------------------------------------------------------
-audio_playback.shutdown()
+audio_playback.shutdown_session()
 
 --------------------------------------------------------------------------------
 print()

@@ -58,7 +58,9 @@ local function clear_frames() frames_shown = {} end
 
 -- Mock audio_playback module with latch support
 local mock_audio = {
-    initialized = true,
+    session_initialized = true,
+    source_loaded = true,
+    has_audio = true,
     playing = false,
     media_time_us = 0,
     max_media_time_us = 0,
@@ -67,6 +69,8 @@ local mock_audio = {
     latch_time_us = nil,
 }
 
+function mock_audio.is_ready() return mock_audio.session_initialized and mock_audio.source_loaded and mock_audio.has_audio end
+function mock_audio.shutdown_session() mock_audio.session_initialized = false; mock_audio.source_loaded = false end
 function mock_audio.start() mock_audio.playing = true end
 function mock_audio.stop() mock_audio.playing = false end
 function mock_audio.set_speed(speed) mock_audio.speed = speed end

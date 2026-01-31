@@ -31,11 +31,15 @@ print("=== test_video_follows_audio_in_shuttle.lua ===")
 -- Mock audio_playback with controlled time
 local mock_audio_time_us = 0
 local mock_audio = {
-    initialized = true,
+    session_initialized = true,
+    source_loaded = true,
+    has_audio = true,
     playing = true,
     get_media_time_us = function()
         return mock_audio_time_us
     end,
+    is_ready = function() return true end,
+    shutdown_session = function() end,
     set_max_media_time = function(max_us) end,
     seek = function(time_us) end,
     set_speed = function(speed) end,

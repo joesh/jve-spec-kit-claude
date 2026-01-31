@@ -651,7 +651,9 @@ pc.set_source(100, 30, 1)
 -- Create mock audio_playback module
 -- NOTE: New architecture - video QUERIES audio time, doesn't push to it
 local mock_audio = {
-    initialized = true,
+    session_initialized = true,
+    source_loaded = true,
+    has_audio = true,
     playing = false,
     speed = 0,
     media_time_us = 0,
@@ -660,6 +662,9 @@ local mock_audio = {
     stop_count = 0,
     seek_count = 0,
 }
+
+function mock_audio.is_ready() return mock_audio.session_initialized and mock_audio.source_loaded and mock_audio.has_audio end
+function mock_audio.shutdown_session() mock_audio.session_initialized = false; mock_audio.source_loaded = false end
 
 function mock_audio.start()
     mock_audio.playing = true

@@ -124,8 +124,9 @@ print("  ok MAX_SPEED_DECIMATE = 16.0")
 --------------------------------------------------------------------------------
 print("\n--- Section 2: Mode selection ---")
 
--- Initialize audio
-audio_playback.init(mock_cache)
+-- Initialize audio (session + source)
+audio_playback.init_session(48000, 2)
+audio_playback.switch_source(mock_cache)
 audio_playback.set_max_media_time(10000000)
 clear_sse_calls()
 
@@ -175,10 +176,11 @@ print("  ok 0.15x -> Q2")
 print("\n--- Section 3: Reanchor on mode transition ---")
 
 -- Reset
-audio_playback.shutdown()
-package.loaded["ui.audio_playback"] = nil
+audio_playback.shutdown_session()
+package.loaded["core.media.audio_playback"] = nil
 audio_playback = require("core.media.audio_playback")
-audio_playback.init(mock_cache)
+audio_playback.init_session(48000, 2)
+audio_playback.switch_source(mock_cache)
 audio_playback.set_max_media_time(10000000)
 audio_playback.media_time_us = 1000000  -- Start at 1 second
 clear_sse_calls()
@@ -231,6 +233,6 @@ assert(err:match("exceeds MAX_SPEED_DECIMATE") or err:match("16"),
 print("  ok 20x asserts")
 
 audio_playback.stop()
-audio_playback.shutdown()
+audio_playback.shutdown_session()
 
 print("\n ok test_audio_decimate.lua passed")

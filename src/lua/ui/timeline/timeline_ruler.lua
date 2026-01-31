@@ -325,6 +325,14 @@ function M.create(widget, state_module)
             -- Scrub mode activates on first drag move.
             scrub_mode_active = false
 
+            -- Stop playback on click (standard NLE behavior: click-to-park).
+            -- Controller must stop BEFORE writing to model so the parked-mode
+            -- listener handles the seek (View → Controller → Model).
+            local pc = require("core.playback.playback_controller")
+            if pc.is_playing() then
+                pc.stop()
+            end
+
             -- Check if clicking on playhead
             local playhead_rat = state_module.get_playhead_position()
             local playhead_x = state_module.time_to_pixel(playhead_rat, width)

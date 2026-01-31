@@ -96,10 +96,6 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
             current_clip_id = resolved.clip.id
             -- Activate reader in pool (pool lookup, no I/O if cached)
             media_cache.activate(resolved.media_path)
-            -- Also update audio source during playback
-            if audio_playback and audio_playback.set_source then
-                audio_playback.set_source(resolved.media_path)
-            end
             logger.debug("timeline_playback",
                 string.format("Switched to clip %s at media %s",
                     resolved.clip.id:sub(1,8), resolved.media_path))
@@ -125,7 +121,8 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
         current_clip_id = nil
     end
 
-    return current_clip_id
+    local source_time_us = resolved and resolved.source_time_us or nil
+    return current_clip_id, source_time_us
 end
 
 --------------------------------------------------------------------------------
@@ -145,10 +142,12 @@ function M.tick(tick_in, audio_playback, viewer_panel)
 
     -- Frame advancement: video ALWAYS follows audio when audio is active (Rule V1)
     local pos
-    if audio_playback and audio_playback.initialized and audio_playback.playing then
+    if audio_playback and audio_playback.is_ready() and audio_playback.playing then
         -- AUDIO ACTIVE: Video follows audio time (spec Rule V1)
-        local t_vid_us = audio_playback.get_media_time_us()
-        pos = helpers.calc_frame_from_time_us(t_vid_us, tick_in.fps_num, tick_in.fps_den)
+        -- Audio runs in source time; convert to timeline time via offset.
+        local source_time_us = audio_playback.get_media_time_us()
+        local timeline_time_us = source_time_us + (tick_in.audio_to_timeline_offset_us or 0)
+        pos = helpers.calc_frame_from_time_us(timeline_time_us, tick_in.fps_num, tick_in.fps_den)
     else
         -- NO AUDIO: Advance frame independently (fallback only)
         pos = tick_in.pos + (tick_in.direction * tick_in.speed)
@@ -175,7 +174,7 @@ function M.tick(tick_in, audio_playback, viewer_panel)
     -- Resolve and display FIRST so decode completes before controller commits
     -- position (which fires listener notifications → UI repaints).
     local frame_idx = math.floor(pos)
-    local new_clip_id = M.resolve_and_display(
+    local new_clip_id, source_time_us = M.resolve_and_display(
         tick_in.fps_num, tick_in.fps_den, tick_in.sequence_id, tick_in.current_clip_id,
         tick_in.direction, tick_in.speed, viewer_panel, audio_playback, frame_idx)
 
@@ -184,6 +183,7 @@ function M.tick(tick_in, audio_playback, viewer_panel)
         new_pos = pos,
         current_clip_id = new_clip_id,
         frame_idx = frame_idx,
+        source_time_us = source_time_us,
     }
 end
 

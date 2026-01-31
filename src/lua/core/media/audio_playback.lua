@@ -13,6 +13,11 @@
 -- NOTE: Audio decoding uses a SEPARATE EMP asset/reader from video
 -- (managed by media_cache) to prevent seek conflicts corrupting h264 decoder.
 --
+-- LIFECYCLE:
+--   SESSION (long-lived): init_session(rate, ch) opens AOP+SSE once.
+--   SOURCE  (per-clip):   switch_source(cache) sets media info, lightweight.
+--   TRANSPORT (per-event): start/stop/seek/set_speed as before.
+--
 -- @file audio_playback.lua
 
 local logger = require("core.logger")
@@ -48,24 +53,24 @@ local CFG = {
 }
 
 local M = {
-    -- State
-    initialized = false,
-    playing = false,
+    -- SESSION state (long-lived, opened once)
+    session_initialized = false,
+    aop = nil,              -- AOP device handle
+    sse = nil,              -- SSE engine handle
+    session_sample_rate = 0, -- rate AOP was opened at (e.g. 48000)
+    session_channels = 0,    -- channels AOP was opened at (2)
 
-    -- Handles
-    aop = nil,          -- AOP device handle
-    sse = nil,          -- SSE engine handle
-    media_cache = nil,  -- Reference to media_cache (owns audio asset/reader)
-
-    -- Media info
+    -- SOURCE state (per-clip, lightweight switch)
+    source_loaded = false,
+    media_cache = nil,      -- Reference to media_cache (owns audio asset/reader)
     has_audio = false,
-    sample_rate = 48000,
-    channels = 2,
+    sample_rate = 0,        -- current source native sample rate
     duration_us = 0,
-    fps_num = 30,
+    fps_num = 0,
     fps_den = 1,
 
-    -- Transport state (signed speed: negative = reverse)
+    -- TRANSPORT state (per-event, unchanged)
+    playing = false,
     media_time_us = 0,      -- Current position when stopped
     speed = 1.0,            -- Signed speed (negative = reverse)
     quality_mode = Q1,      -- 1=Q1, 2=Q2, 3=Q3_DECIMATE
@@ -108,7 +113,7 @@ end
 -- Includes output latency compensation so video matches what user actually hears.
 -- @return Current media time in microseconds
 function M.get_media_time_us()
-    if not M.initialized or not M.playing then
+    if not M.session_initialized or not M.playing then
         assert(M.media_time_us ~= nil, "audio_playback.get_media_time_us: missing media_time_us")
         return M.media_time_us
     end
@@ -183,88 +188,129 @@ local function reanchor(new_media_time_us, new_signed_speed, new_quality_mode)
 end
 
 --------------------------------------------------------------------------------
--- Initialization
+-- Session Lifecycle (long-lived, opened once)
 --------------------------------------------------------------------------------
 
---- Initialize audio playback with media_cache
--- @param cache media_cache module reference (has separate audio asset/reader)
--- @return true on success, nil + error on failure
-function M.init(cache)
-    assert(cache, "audio_playback.init: cache (media_cache) is nil")
-    assert(cache.get_asset_info, "audio_playback.init: cache missing get_asset_info")
-    assert(cache.get_audio_reader, "audio_playback.init: cache missing get_audio_reader")
-
-    local info = cache.get_asset_info()
-    assert(info, "audio_playback.init: cache.get_asset_info() returned nil")
-
-    if not info.has_audio then
-        logger.info("audio_playback", "Asset has no audio track")
-        M.has_audio = false
-        return true
-    end
-
-    -- Verify audio reader exists (created by media_cache with separate asset)
-    local audio_reader = cache.get_audio_reader()
-    assert(audio_reader, "audio_playback.init: media_cache has no audio_reader")
-
-    M.media_cache = cache
-    M.has_audio = true
-    M.sample_rate = info.audio_sample_rate
-    -- EMP resampler always outputs stereo regardless of source (see ffmpeg_resample.h)
-    M.channels = 2
-    M.duration_us = info.duration_us
-    M.fps_num = info.fps_num
-    M.fps_den = info.fps_den
-
-    logger.info("audio_playback", "Using media_cache audio reader (separate format context)")
+--- Initialize audio session: opens AOP device + SSE engine.
+-- Call once at startup or on first audio source. Persists across clip switches.
+-- @param sample_rate Sample rate to open AOP at (e.g. 48000)
+-- @param channels Channel count (e.g. 2)
+function M.init_session(sample_rate, channels)
+    assert(not M.session_initialized,
+        "audio_playback.init_session: already session_initialized (call shutdown_session first)")
+    assert(type(sample_rate) == "number" and sample_rate > 0,
+        "audio_playback.init_session: sample_rate must be positive number")
+    assert(type(channels) == "number" and channels > 0,
+        "audio_playback.init_session: channels must be positive number")
 
     -- Open AOP device
-    local aop, err = qt_constants.AOP.OPEN(M.sample_rate, M.channels, CFG.TARGET_BUFFER_MS)
-    if not aop then
-        logger.error("audio_playback", "Failed to open audio device: " .. tostring(err))
-        return nil, err
-    end
+    local aop, err = qt_constants.AOP.OPEN(sample_rate, channels, CFG.TARGET_BUFFER_MS)
+    assert(aop, "audio_playback.init_session: AOP.OPEN failed: " .. tostring(err))
     M.aop = aop
 
     -- Check actual sample rate (device may not support requested rate)
-    -- Guard for tests that mock AOP without SAMPLE_RATE
     if qt_constants.AOP.SAMPLE_RATE then
         local actual_rate = qt_constants.AOP.SAMPLE_RATE(aop)
         local actual_channels = qt_constants.AOP.CHANNELS(aop)
-        if actual_rate ~= M.sample_rate then
+        if actual_rate ~= sample_rate then
             logger.warn("audio_playback", string.format(
-                "Sample rate mismatch! Requested %d, got %d. Audio will play at wrong speed!",
-                M.sample_rate, actual_rate))
-            -- TODO: Resample in SSE or use actual rate for time calculations
+                "Sample rate mismatch! Requested %d, got %d.",
+                sample_rate, actual_rate))
         end
         logger.info("audio_playback", string.format(
             "AOP opened: %dHz %dch (requested: %dHz %dch)",
-            actual_rate, actual_channels, M.sample_rate, M.channels))
+            actual_rate, actual_channels, sample_rate, channels))
     end
 
-    -- Create SSE engine (using MEDIA sample rate, not device rate)
-    -- This is intentional - SSE time-tracks media position
+    -- Create SSE engine at session rate
     local sse = qt_constants.SSE.CREATE({
-        sample_rate = M.sample_rate,
-        channels = M.channels,
+        sample_rate = sample_rate,
+        channels = channels,
         block_frames = 512,  -- WSOLA processing block
     })
-    assert(sse, "audio_playback.init: SSE.CREATE returned nil")
+    assert(sse, "audio_playback.init_session: SSE.CREATE returned nil")
     M.sse = sse
 
-    M.initialized = true
-    M.media_time_us = 0
-    M.media_anchor_us = 0
+    M.session_sample_rate = sample_rate
+    M.session_channels = channels
+    M.session_initialized = true
+
+    -- Reset transport defaults
     M.aop_epoch_playhead_us = 0
     M.speed = 1.0
     M.quality_mode = Q1
 
     logger.info("audio_playback", string.format(
-        "Initialized: %dHz %dch, duration=%.2fs",
-        M.sample_rate, M.channels, M.duration_us / 1000000
-    ))
+        "Session initialized: %dHz %dch", sample_rate, channels))
+end
 
-    return true
+--------------------------------------------------------------------------------
+-- Source Lifecycle (per-clip, lightweight switch)
+--------------------------------------------------------------------------------
+
+--- Switch to a new audio source. Lightweight — reuses session AOP+SSE.
+-- If playing, stops playback first. Reads source info from cache.
+-- @param cache media_cache module reference (has separate audio asset/reader)
+function M.switch_source(cache)
+    assert(M.session_initialized,
+        "audio_playback.switch_source: session_initialized is false (call init_session first)")
+    assert(cache, "audio_playback.switch_source: cache is nil")
+    assert(cache.get_asset_info, "audio_playback.switch_source: cache missing get_asset_info")
+    assert(cache.get_audio_reader, "audio_playback.switch_source: cache missing get_audio_reader")
+
+    -- If playing, stop pump and flush
+    if M.playing then
+        M.playing = false
+        M._cancel_pump()
+        qt_constants.AOP.STOP(M.aop)
+        qt_constants.AOP.FLUSH(M.aop)
+    end
+
+    local info = cache.get_asset_info()
+    assert(info, "audio_playback.switch_source: cache.get_asset_info() returned nil")
+
+    if not info.has_audio then
+        logger.info("audio_playback", "Source has no audio track")
+        M.has_audio = false
+        M.source_loaded = true
+        M.media_cache = nil
+        return
+    end
+
+    -- Verify audio reader exists
+    local audio_reader = cache.get_audio_reader()
+    assert(audio_reader, "audio_playback.switch_source: cache has no audio_reader")
+
+    M.media_cache = cache
+    M.has_audio = true
+    M.sample_rate = info.audio_sample_rate
+    M.duration_us = info.duration_us
+    M.fps_num = info.fps_num
+    M.fps_den = info.fps_den
+
+    -- Derive max_media_time_us from source (frame-aligned, not container metadata)
+    local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
+    M.max_media_time_us = math.floor((total_frames - 1) * 1000000 * info.fps_den / info.fps_num)
+
+    -- Clear PCM cache (stale data from previous source)
+    last_pcm_range = { start_us = 0, end_us = 0 }
+
+    -- Reset SSE (clear buffered audio, keep engine alive)
+    qt_constants.SSE.RESET(M.sse)
+
+    M.source_loaded = true
+
+    logger.info("audio_playback", string.format(
+        "Source switched: %dHz, duration=%.2fs (session=%dHz)",
+        M.sample_rate, M.duration_us / 1000000, M.session_sample_rate))
+end
+
+--- Check if fully ready for playback (session + source with audio).
+-- Use for query guards (e.g. "should video follow audio time?").
+-- NOT for silently skipping transport calls — those assert session_initialized.
+-- @return boolean
+function M.is_ready()
+    return M.session_initialized and M.source_loaded and M.has_audio
 end
 
 --- Set max media time (called by playback_controller after set_source)
@@ -277,8 +323,9 @@ function M.set_max_media_time(max_us)
     logger.debug("audio_playback", ("max_media_time_us set to %.3fs"):format(max_us / 1000000))
 end
 
---- Shutdown audio playback
-function M.shutdown()
+--- Shutdown audio session. Closes AOP+SSE, clears all state.
+-- Housekeeping — OS reclaims resources on kill anyway.
+function M.shutdown_session()
     M.stop()
 
     if M.aop then
@@ -291,14 +338,21 @@ function M.shutdown()
         M.sse = nil
     end
 
-    -- Clear local state (media_cache owns the audio reader, we don't close it)
+    -- Clear ALL state
     last_pcm_range = { start_us = 0, end_us = 0 }
     pumping = false
     M.media_cache = nil
     M.has_audio = false
-    M.initialized = false
+    M.session_initialized = false
+    M.source_loaded = false
+    M.session_sample_rate = 0
+    M.session_channels = 0
+    M.sample_rate = 0
+    M.duration_us = 0
+    M.fps_num = 0
+    M.fps_den = 1
 
-    logger.info("audio_playback", "Shutdown")
+    logger.info("audio_playback", "Session shutdown")
 end
 
 --------------------------------------------------------------------------------
@@ -307,10 +361,8 @@ end
 
 --- Start audio playback (transport event)
 function M.start()
-    if not M.initialized then
-        logger.warn("audio_playback", "start() called but not initialized - skipping")
-        return
-    end
+    assert(M.session_initialized,
+        "audio_playback.start: session not initialized")
     if not M.has_audio then
         logger.debug("audio_playback", "start() called but no audio track - skipping")
         return
@@ -341,7 +393,7 @@ function M.start()
     end
 
     -- Pre-render some audio to AOP buffer before starting device
-    local target_frames = (M.sample_rate * CFG.TARGET_BUFFER_MS) / 1000
+    local target_frames = (M.session_sample_rate * CFG.TARGET_BUFFER_MS) / 1000
     local prefill_frames = math.min(target_frames, CFG.MAX_RENDER_FRAMES)
     local pcm, produced = qt_constants.SSE.RENDER_ALLOC(M.sse, prefill_frames)
     if produced > 0 then
@@ -355,14 +407,15 @@ function M.start()
     M._start_pump()
 
     logger.info("audio_playback", string.format(
-        "Started at %.3fs, speed=%.2f, quality=Q%d, sample_rate=%d",
-        M.media_anchor_us / 1000000, M.speed, M.quality_mode, M.sample_rate))
+        "Started at %.3fs, speed=%.2f, quality=Q%d, session_rate=%d, source_rate=%d",
+        M.media_anchor_us / 1000000, M.speed, M.quality_mode,
+        M.session_sample_rate, M.sample_rate))
 end
 
 --- Stop audio playback (transport event)
 function M.stop()
-    if not M.initialized then
-        logger.debug("audio_playback", "stop() called but not initialized - skipping")
+    if not M.session_initialized then
+        logger.debug("audio_playback", "stop() called but no session - skipping")
         return
     end
     if not M.playing then
@@ -392,8 +445,8 @@ end
 function M.seek(time_us)
     assert(type(time_us) == "number", "audio_playback.seek: time_us must be number")
 
-    if not M.initialized then
-        logger.debug("audio_playback", "seek() called but not initialized - storing time only")
+    if not M.session_initialized then
+        logger.debug("audio_playback", "seek() called but no session - storing time only")
         M.media_time_us = time_us
         return
     end
@@ -419,15 +472,9 @@ end
 
 --- Latch at boundary (transport event)
 -- Freezes audio output at specified time. Called when shuttle hits boundary.
--- PIN: Side-effect limited - defined effects:
--- 1. Stop audio output (device or callback silenced)
--- 2. Cancel pump scheduling
--- 3. Flush AOP
--- 4. Set playing = false
--- 5. Set media_time_us = time_us
 -- @param time_us Media time to freeze at (frame-derived, not sampled)
 function M.latch(time_us)
-    assert(M.initialized, "audio_playback.latch: not initialized")
+    assert(M.session_initialized, "audio_playback.latch: session not initialized")
     assert(type(time_us) == "number" and time_us >= 0,
         ("audio_playback.latch: invalid time_us=%s"):format(tostring(time_us)))
 
@@ -491,26 +538,25 @@ function M.set_speed(new_signed_speed)
 end
 
 --- Get current playhead time from AOP (for diagnostics)
--- @return time_us (NSF: asserts if not initialized)
+-- @return time_us
 function M.get_playhead_us()
-    assert(M.initialized and M.aop,
-        "audio_playback.get_playhead_us: not initialized or aop is nil")
+    assert(M.session_initialized and M.aop,
+        "audio_playback.get_playhead_us: session not initialized or aop is nil")
     return qt_constants.AOP.PLAYHEAD_US(M.aop)
 end
 
 --- Check if had underrun
--- @return boolean (NSF: asserts if not initialized)
+-- @return boolean
 function M.had_underrun()
-    assert(M.initialized and M.aop,
-        "audio_playback.had_underrun: not initialized or aop is nil")
+    assert(M.session_initialized and M.aop,
+        "audio_playback.had_underrun: session not initialized or aop is nil")
     return qt_constants.AOP.HAD_UNDERRUN(M.aop)
 end
 
 --- Clear underrun flag
--- NSF: asserts if not initialized
 function M.clear_underrun()
-    assert(M.initialized and M.aop,
-        "audio_playback.clear_underrun: not initialized or aop is nil")
+    assert(M.session_initialized and M.aop,
+        "audio_playback.clear_underrun: session not initialized or aop is nil")
     qt_constants.AOP.CLEAR_UNDERRUN(M.aop)
 end
 
@@ -584,7 +630,9 @@ function M._ensure_pcm_cache()
     ))
 
     -- Get PCM from media_cache (uses dedicated audio reader)
-    local pcm_ptr, frames, actual_start = M.media_cache.get_audio_pcm(cache_start, cache_end)
+    -- Pass session_sample_rate so EMP resamples to AOP's expected rate
+    local pcm_ptr, frames, actual_start = M.media_cache.get_audio_pcm(
+        cache_start, cache_end, M.session_sample_rate)
 
     -- NSF: PCM fetch must succeed
     assert(pcm_ptr, string.format(
@@ -595,9 +643,10 @@ function M._ensure_pcm_cache()
         tostring(frames), cache_start / 1000000, cache_end / 1000000))
 
     -- Update our tracking of what we have
+    -- Use session_sample_rate for time calculation since PCM is resampled
     last_pcm_range = {
         start_us = actual_start,
-        end_us = actual_start + (frames * 1000000 / M.sample_rate),
+        end_us = actual_start + (frames * 1000000 / M.session_sample_rate),
         pcm_ptr = pcm_ptr,
         frames = frames,
     }
@@ -631,7 +680,7 @@ function M._pump_tick()
 
         -- Check buffer level and render if needed
         local buffered0 = qt_constants.AOP.BUFFERED_FRAMES(M.aop)
-        local target_frames = (M.sample_rate * CFG.TARGET_BUFFER_MS) / 1000
+        local target_frames = (M.session_sample_rate * CFG.TARGET_BUFFER_MS) / 1000
         local frames_needed = math.max(0, target_frames - buffered0)
         frames_needed = math.min(frames_needed, CFG.MAX_RENDER_FRAMES)
 
