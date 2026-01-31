@@ -139,11 +139,17 @@ static int lua_sse_push_pcm(lua_State* L) {
         return luaL_error(L, "SSE.PUSH_PCM: invalid sse handle");
     }
 
-    if (!lua_islightuserdata(L, 2)) {
-        return luaL_error(L, "SSE.PUSH_PCM: expected lightuserdata for pcm_data_ptr");
+    const float* data = nullptr;
+    if (lua_islightuserdata(L, 2)) {
+        data = static_cast<const float*>(lua_touserdata(L, 2));
+    } else if (lua_type(L, 2) == 10) { // LUA_TCDATA (LuaJIT FFI cdata)
+        data = static_cast<const float*>(lua_topointer(L, 2));
+    } else {
+        return luaL_error(L, "SSE.PUSH_PCM: expected lightuserdata or cdata for pcm_data_ptr");
     }
-
-    const float* data = static_cast<const float*>(lua_touserdata(L, 2));
+    if (!data) {
+        return luaL_error(L, "SSE.PUSH_PCM: null pcm_data_ptr");
+    }
     int64_t frames = static_cast<int64_t>(luaL_checkinteger(L, 3));
     int64_t start_time_us = static_cast<int64_t>(luaL_checkinteger(L, 4));
 

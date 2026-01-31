@@ -93,6 +93,16 @@ local mock_media_cache = {
         local frames = math.floor((end_us - actual_start) * 48000 / 1000000)
         return "mock_pcm_ptr", frames, actual_start
     end,
+    get_audio_pcm_for_path = function(path, start_us, end_us)
+        local actual_start = start_us
+        if start_us < CODEC_DELAY_US then
+            actual_start = CODEC_DELAY_US
+        end
+        local frames = math.floor((end_us - actual_start) * 48000 / 1000000)
+        return "mock_pcm_ptr", frames, actual_start
+    end,
+    get_file_path = function() return "/mock/codec_delay_test.mov" end,
+    ensure_audio_pooled = function() end,
 }
 
 -- Fresh load

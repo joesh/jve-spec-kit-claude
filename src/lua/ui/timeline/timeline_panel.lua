@@ -29,6 +29,7 @@ local profile_scope = require("core.profile_scope")
 local logger = require("core.logger")
 local timecode = require("core.timecode")
 local timecode_input = require("core.timecode_input")
+local Track = require("models.track")
 
 -- luacheck: globals qt_line_edit_select_all
 
@@ -609,16 +610,70 @@ end
 
 local function build_track_header_stylesheet(background_color)
     return string.format([[
-        QLabel {
+        QWidget {
             background: %s;
-            color: #cccccc;
-            padding-left: 10px;
             border-left: 1px solid #222232;
             border-right: 1px solid #222232;
             border-top: 0px;
             border-bottom: 0px;
         }
     ]], background_color or "#111111")
+end
+
+local function build_track_header_label_stylesheet()
+    return [[
+        QLabel {
+            background: transparent;
+            color: #cccccc;
+            padding: 0 2px;
+        }
+    ]]
+end
+
+local function build_track_header_btn_stylesheet(active, active_color)
+    if active and active_color then
+        return string.format([[
+            QPushButton {
+                background: %s;
+                color: #ffffff;
+                border: 1px solid #333333;
+                padding: 1px 3px;
+                font-size: 10px;
+                font-weight: bold;
+                min-width: 16px;
+                max-width: 16px;
+                min-height: 16px;
+                max-height: 16px;
+            }
+        ]], active_color)
+    end
+    return [[
+        QPushButton {
+            background: #2a2a2a;
+            color: #888888;
+            border: 1px solid #333333;
+            padding: 1px 3px;
+            font-size: 10px;
+            min-width: 16px;
+            max-width: 16px;
+            min-height: 16px;
+            max-height: 16px;
+        }
+        QPushButton:hover {
+            background: #3a3a3a;
+            color: #cccccc;
+        }
+    ]]
+end
+
+local track_btn_handler_seq = 0
+local function register_track_btn_handler(callback)
+    track_btn_handler_seq = track_btn_handler_seq + 1
+    local name = "__track_btn_handler_" .. tostring(track_btn_handler_seq)
+    _G[name] = function(...)
+        callback(...)
+    end
+    return name
 end
 
 -- Helper function to create video headers with splitters
@@ -644,15 +699,42 @@ local function create_video_headers()
     local video_header_heights = {}
     for i = #video_tracks, 1, -1 do
         local track = video_tracks[i]
-        local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
         local track_height = clamp_track_height(state.get_track_height and state.get_track_height(track.id) or DEFAULT_TRACK_HEIGHT)
         local header_height = content_to_header(track_height)
+
+        -- Container widget with HBox layout for buttons
+        local header = qt_constants.WIDGET.CREATE()
+        local header_layout = qt_constants.LAYOUT.CREATE_HBOX()
+        qt_constants.LAYOUT.SET_ON_WIDGET(header, header_layout)
+        qt_constants.CONTROL.SET_LAYOUT_SPACING(header_layout, 2)
+        qt_constants.CONTROL.SET_LAYOUT_MARGINS(header_layout, 4, 0, 4, 0)
 
         qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.video_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
         qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
+
+        -- Lock button (inert)
+        local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("L")
+        qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(false))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
+
+        -- Track name label
+        local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(name_label, build_track_header_label_stylesheet())
+        qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
+
+        -- Patch bay button (inert)
+        local patch_btn = qt_constants.WIDGET.CREATE_BUTTON("P")
+        qt_constants.PROPERTIES.SET_STYLE(patch_btn, build_track_header_btn_stylesheet(false))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, patch_btn)
+
+        -- Visibility button (inert)
+        local vis_btn = qt_constants.WIDGET.CREATE_BUTTON("V")
+        qt_constants.PROPERTIES.SET_STYLE(vis_btn, build_track_header_btn_stylesheet(false))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, vis_btn)
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
         video_headers[i] = header
@@ -795,15 +877,79 @@ local function create_audio_headers()
     -- Add tracks in normal order (A1, A2, A3)
     local audio_header_heights = {}
     for i, track in ipairs(audio_tracks) do
-        local header = qt_constants.WIDGET.CREATE_LABEL(track.name)
         local track_height = clamp_track_height(state.get_track_height and state.get_track_height(track.id) or DEFAULT_TRACK_HEIGHT)
         local header_height = content_to_header(track_height)
+
+        -- Container widget with HBox layout for buttons
+        local header = qt_constants.WIDGET.CREATE()
+        local header_layout = qt_constants.LAYOUT.CREATE_HBOX()
+        qt_constants.LAYOUT.SET_ON_WIDGET(header, header_layout)
+        qt_constants.CONTROL.SET_LAYOUT_SPACING(header_layout, 2)
+        qt_constants.CONTROL.SET_LAYOUT_MARGINS(header_layout, 4, 0, 4, 0)
 
         qt_constants.PROPERTIES.SET_STYLE(header, build_track_header_stylesheet(timeline_state.colors.audio_track_header))
         qt_constants.PROPERTIES.SET_MIN_WIDTH(header, timeline_state.dimensions.track_header_width)
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(header, "Fixed", "Expanding")
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
         qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
+
+        -- Lock button (inert)
+        local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("L")
+        qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(false))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
+
+        -- Track name label
+        local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(name_label, build_track_header_label_stylesheet())
+        qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
+
+        -- Patch bay button (inert)
+        local patch_btn = qt_constants.WIDGET.CREATE_BUTTON("P")
+        qt_constants.PROPERTIES.SET_STYLE(patch_btn, build_track_header_btn_stylesheet(false))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, patch_btn)
+
+        -- Mute button (wired)
+        local mute_btn = qt_constants.WIDGET.CREATE_BUTTON("M")
+        qt_constants.PROPERTIES.SET_STYLE(mute_btn,
+            build_track_header_btn_stylesheet(track.muted, "#cc3333"))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, mute_btn)
+
+        -- Wire mute toggle
+        local captured_track_id = track.id
+        local captured_mute_btn = mute_btn
+        local mute_handler = register_track_btn_handler(function()
+            local t = Track.load(captured_track_id)
+            assert(t, "Mute handler: track not found: " .. tostring(captured_track_id))
+            t.muted = not t.muted
+            t:save()
+            qt_constants.PROPERTIES.SET_STYLE(captured_mute_btn,
+                build_track_header_btn_stylesheet(t.muted, "#cc3333"))
+        end)
+        qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(mute_btn, mute_handler)
+
+        -- Solo button (wired)
+        local solo_btn = qt_constants.WIDGET.CREATE_BUTTON("S")
+        qt_constants.PROPERTIES.SET_STYLE(solo_btn,
+            build_track_header_btn_stylesheet(track.soloed, "#ccaa00"))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, solo_btn)
+
+        -- Wire solo toggle
+        local captured_solo_btn = solo_btn
+        local solo_handler = register_track_btn_handler(function()
+            local t = Track.load(captured_track_id)
+            assert(t, "Solo handler: track not found: " .. tostring(captured_track_id))
+            t.soloed = not t.soloed
+            t:save()
+            qt_constants.PROPERTIES.SET_STYLE(captured_solo_btn,
+                build_track_header_btn_stylesheet(t.soloed, "#ccaa00"))
+        end)
+        qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(solo_btn, solo_handler)
+
+        -- Record arm button (inert)
+        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("R")
+        qt_constants.PROPERTIES.SET_STYLE(rec_btn, build_track_header_btn_stylesheet(false))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
         audio_headers[i] = header

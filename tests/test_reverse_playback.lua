@@ -104,6 +104,9 @@ function mock_audio.seek(time_us)
 end
 
 function mock_audio.set_max_media_time(max_us) mock_audio.max_media_time_us = max_us end
+function mock_audio.set_max_time(max_us) mock_audio.max_media_time_us = max_us end
+function mock_audio.set_audio_sources() end
+mock_audio.get_time_us = mock_audio.get_media_time_us
 function mock_audio.latch(time_us) mock_audio.playing = false; mock_audio.media_time_us = time_us end
 
 local function advance_time(us) mock_audio._elapsed_us = mock_audio._elapsed_us + us end

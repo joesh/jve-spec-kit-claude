@@ -4,7 +4,7 @@
 -- Verifies:
 -- 1. init_session opens AOP+SSE once; switch_source reuses them
 -- 2. switch_source clears PCM cache
--- 3. switch_source to no-audio source sets has_audio=false, source_loaded=true
+-- 3. switch_source to no-audio source sets has_audio=false
 -- 4. Mixed-rate: 48kHz session + 44.1kHz source works (EMP resamples)
 -- 5. switch_source during playback stops pump, flushes AOP, resets SSE
 
@@ -114,6 +114,13 @@ local function make_mock_cache(opts)
             local frames = math.floor((end_us - start_us) * rate / 1000000)
             return "mock_pcm_ptr", frames, start_us
         end,
+        get_audio_pcm_for_path = function(path, start_us, end_us, out_sample_rate)
+            local rate = out_sample_rate or opts.sample_rate or 48000
+            local frames = math.floor((end_us - start_us) * rate / 1000000)
+            return "mock_pcm_ptr", frames, start_us
+        end,
+        get_file_path = function() return "/mock/test_" .. (opts.sample_rate or 48000) .. ".mov" end,
+        ensure_audio_pooled = function() end,
     }
 end
 
@@ -158,7 +165,6 @@ assert(audio_playback.session_initialized, "session should be initialized")
 
 -- Switch to source A
 audio_playback.switch_source(cache_a)
-assert(audio_playback.source_loaded, "source_loaded after switch A")
 assert(audio_playback.has_audio, "has_audio after switch A")
 
 -- Switch to source B — session handles must NOT be recreated
@@ -169,7 +175,7 @@ assert(aop_open_count == 0, "AOP should NOT be reopened on source switch")
 assert(sse_create_count == 0, "SSE should NOT be recreated on source switch")
 assert(audio_playback.aop == mock_aop_handle, "AOP handle should be same object")
 assert(audio_playback.sse == mock_sse_handle, "SSE handle should be same object")
-assert(audio_playback.source_loaded, "source_loaded after switch B")
+assert(audio_playback.has_audio, "has_audio after switch B")
 
 print("  ok session handles preserved across source switches")
 
@@ -190,7 +196,7 @@ audio_playback.switch_source(cache_a)
 -- (it would skip if cache was still valid)
 -- We can't directly inspect last_pcm_range, but we can verify
 -- the module accepted the switch without error
-assert(audio_playback.source_loaded, "source_loaded after re-switch")
+assert(audio_playback.has_audio, "has_audio after re-switch")
 
 print("  ok switch_source accepted (PCM cache cleared)")
 
@@ -201,11 +207,10 @@ print("Test 3: switch_source to no-audio source")
 
 audio_playback.switch_source(cache_no_audio)
 
-assert(audio_playback.source_loaded, "source_loaded should be true even without audio")
 assert(not audio_playback.has_audio, "has_audio should be false for no-audio source")
 assert(not audio_playback.is_ready(), "is_ready() should be false without audio")
 
-print("  ok no-audio source: source_loaded=true, has_audio=false, is_ready=false")
+print("  ok no-audio source: has_audio=false, is_ready=false")
 
 --------------------------------------------------------------------------------
 -- Test 4: switch_source with different sample rate (44.1kHz source, 48kHz session)
@@ -214,9 +219,7 @@ print("Test 4: mixed-rate (48kHz session + 44.1kHz source)")
 
 audio_playback.switch_source(cache_44k)
 
-assert(audio_playback.source_loaded, "source_loaded with 44.1kHz source")
 assert(audio_playback.has_audio, "has_audio with 44.1kHz source")
-assert(audio_playback.sample_rate == 44100, "native sample_rate should be 44100")
 assert(audio_playback.session_sample_rate == 48000, "session_sample_rate should still be 48000")
 assert(audio_playback.is_ready(), "is_ready() should be true")
 
@@ -239,13 +242,15 @@ assert(audio_playback.playing, "should be playing after start")
 reset_counters()
 audio_playback.switch_source(cache_b)
 
-assert(not audio_playback.playing, "playing should be false after switch during playback")
-assert(aop_stop_count >= 1, "AOP.STOP should be called on switch during playback")
-assert(aop_flush_count >= 1, "AOP.FLUSH should be called on switch during playback")
-assert(sse_reset_count >= 1, "SSE.RESET should be called on switch during playback")
-assert(audio_playback.source_loaded, "source_loaded after switch during playback")
+-- Hot swap: nothing is stopped/flushed/reset — pump keeps running,
+-- next tick fetches from new sources and SSE replaces overlapping chunks
+assert(aop_stop_count == 0, "AOP.STOP should NOT be called (hot swap keeps AOP running)")
+assert(aop_flush_count == 0, "AOP.FLUSH should NOT be called (hot swap preserves AOP buffer)")
+assert(sse_reset_count == 0, "SSE.RESET should NOT be called (push replaces overlapping chunks)")
+assert(audio_playback.has_audio, "has_audio after switch during playback")
+assert(audio_playback.playing, "playing should resume after switch during playback")
 
-print("  ok playback stopped and flushed on source switch")
+print("  ok hot swap: pipeline uninterrupted, sources updated")
 
 --------------------------------------------------------------------------------
 -- Test 6: init_session asserts if already initialized
@@ -305,13 +310,13 @@ print("Test 9: shutdown_session clears all state")
 
 audio_playback.switch_source(cache_a)
 assert(audio_playback.session_initialized, "session should be initialized")
-assert(audio_playback.source_loaded, "source should be loaded")
+assert(audio_playback.has_audio, "has_audio before shutdown")
 
 reset_counters()
 audio_playback.shutdown_session()
 
 assert(not audio_playback.session_initialized, "session_initialized should be false")
-assert(not audio_playback.source_loaded, "source_loaded should be false")
+assert(not audio_playback.has_audio, "has_audio should be false after shutdown")
 assert(audio_playback.aop == nil, "aop should be nil")
 assert(audio_playback.sse == nil, "sse should be nil")
 assert(aop_close_count == 1, "AOP should be closed once")

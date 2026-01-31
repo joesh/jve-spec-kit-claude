@@ -71,6 +71,9 @@ local mock_audio = {
 
 function mock_audio.is_ready() return true end
 function mock_audio.set_max_media_time(v) mock_audio.max_media_time_us = v end
+function mock_audio.set_max_time(v) mock_audio.max_media_time_us = v end
+function mock_audio.set_audio_sources() end
+mock_audio.get_time_us = mock_audio.get_media_time_us
 
 function mock_audio.start()
     mock_audio.playing = true

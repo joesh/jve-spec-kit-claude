@@ -1,11 +1,8 @@
---- Test: timeline_playback applies audio_to_timeline_offset_us
+--- Test: timeline_playback uses audio_playback.get_time_us() for timeline time
 --
--- Regression: In timeline mode, audio runs in source time (e.g. 0-5s within a clip),
--- but playhead is in timeline time (e.g. 30-35s). Without offset correction,
--- get_media_time_us() returns source time → playhead jumps to frame 0.
---
--- The fix: timeline_playback.tick() must add tick_in.audio_to_timeline_offset_us
--- to source_time before computing frame position.
+-- Architecture: audio_playback.get_time_us() returns timeline time directly.
+-- timeline_playback.tick() uses this value as-is to compute frame position.
+-- No offset conversion needed — audio tracks timeline time natively.
 
 require("test_env")
 
@@ -40,7 +37,7 @@ local mock_media_cache = {
 package.loaded["core.media.media_cache"] = mock_media_cache
 
 -- Mock timeline_resolver: clip starts at timeline frame 750 (30s @ 25fps),
--- source_in = 0. So at timeline 31s (frame 775), source_time = 1s = 1000000us.
+-- source_in = 0. Resolver returns source_time for decode purposes.
 local mock_clip = { id = "clip_A" }
 local mock_resolver_result = {
     media_path = "/media/clip_a.mov",
@@ -73,22 +70,21 @@ package.loaded["core.playback.timeline_playback"] = nil
 local timeline_playback = require("core.playback.timeline_playback")
 
 --------------------------------------------------------------------------------
--- Test 1: tick with offset converts source→timeline time for frame position
+-- Test 1: tick uses get_time_us() (timeline time) directly for frame position
 --------------------------------------------------------------------------------
-print("Test 1: audio source_time + offset → correct timeline frame")
+print("Test 1: audio returns timeline time → correct frame")
 
 -- Scenario: clip starts at timeline frame 750 (= 30s @ 25fps).
--- Audio reports source_time = 1000000us (1s into clip).
--- offset = 30000000 (30s).
--- Expected timeline_time = 1000000 + 30000000 = 31000000us = frame 775.
+-- Audio reports timeline_time = 31000000us (31s on timeline).
+-- Expected frame = floor(31000000 * 25 / 1000000) = 775.
 
-local mock_audio_source_time_us = 1000000  -- 1s in source time
-local timeline_offset_us = 30000000        -- clip starts at 30s on timeline
+local mock_audio_time_us = 31000000  -- 31s timeline time
 
 local mock_audio = {
     playing = true,
     is_ready = function() return true end,
-    get_media_time_us = function() return mock_audio_source_time_us end,
+    get_time_us = function() return mock_audio_time_us end,
+    get_media_time_us = function() return mock_audio_time_us end,  -- alias
     set_speed = function() end,
     set_source = function() end,
 }
@@ -102,7 +98,6 @@ local tick_in = {
     total_frames = 90000,  -- 1 hour
     sequence_id = "seq_1",
     current_clip_id = "clip_A",
-    audio_to_timeline_offset_us = timeline_offset_us,
 }
 
 displayed_times = {}
@@ -115,12 +110,11 @@ assert(result.continue == true, "Should continue")
 print(string.format("  pos=%d (expected 775) ✓", result.new_pos))
 
 --------------------------------------------------------------------------------
--- Test 2: without offset (or offset=0), source time IS timeline time (source mode equiv)
+-- Test 2: audio returns a different timeline time → correct frame
 --------------------------------------------------------------------------------
-print("Test 2: offset=0 → source time used directly")
+print("Test 2: audio returns 2s timeline time → frame 50")
 
-tick_in.audio_to_timeline_offset_us = 0
-mock_audio_source_time_us = 2000000  -- 2s
+mock_audio_time_us = 2000000  -- 2s timeline time
 
 displayed_times = {}
 result = timeline_playback.tick(tick_in, mock_audio, mock_viewer)
@@ -131,12 +125,11 @@ assert(result.new_pos == 50,
 print(string.format("  pos=%d (expected 50) ✓", result.new_pos))
 
 --------------------------------------------------------------------------------
--- Test 3: offset nil (backward compat) treated as 0
+-- Test 3: audio returns 3s timeline time → frame 75
 --------------------------------------------------------------------------------
-print("Test 3: offset=nil → treated as 0 (backward compat)")
+print("Test 3: audio returns 3s timeline time → frame 75")
 
-tick_in.audio_to_timeline_offset_us = nil
-mock_audio_source_time_us = 3000000  -- 3s
+mock_audio_time_us = 3000000  -- 3s timeline time
 
 result = timeline_playback.tick(tick_in, mock_audio, mock_viewer)
 
@@ -146,11 +139,10 @@ assert(result.new_pos == 75,
 print(string.format("  pos=%d (expected 75) ✓", result.new_pos))
 
 --------------------------------------------------------------------------------
--- Test 4: no audio (fallback path) — offset irrelevant
+-- Test 4: no audio → frame-based advancement
 --------------------------------------------------------------------------------
-print("Test 4: no audio → frame-based advancement (offset irrelevant)")
+print("Test 4: no audio → frame-based advancement")
 
-tick_in.audio_to_timeline_offset_us = 30000000
 tick_in.pos = 100
 
 result = timeline_playback.tick(tick_in, nil, mock_viewer)

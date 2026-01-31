@@ -76,6 +76,9 @@ function mock_audio.stop() mock_audio.playing = false end
 function mock_audio.set_speed(speed) mock_audio.speed = speed end
 function mock_audio.get_media_time_us() return mock_audio.media_time_us end
 function mock_audio.set_max_media_time(max_us) mock_audio.max_media_time_us = max_us end
+function mock_audio.set_max_time(max_us) mock_audio.max_media_time_us = max_us end
+function mock_audio.set_audio_sources() end
+mock_audio.get_time_us = mock_audio.get_media_time_us
 function mock_audio.seek(time_us)
     mock_audio.media_time_us = time_us
     mock_audio.latched = false

@@ -144,9 +144,8 @@ function M.tick(tick_in, audio_playback, viewer_panel)
     local pos
     if audio_playback and audio_playback.is_ready() and audio_playback.playing then
         -- AUDIO ACTIVE: Video follows audio time (spec Rule V1)
-        -- Audio runs in source time; convert to timeline time via offset.
-        local source_time_us = audio_playback.get_media_time_us()
-        local timeline_time_us = source_time_us + (tick_in.audio_to_timeline_offset_us or 0)
+        -- Audio now tracks playback time directly (timeline time in timeline mode).
+        local timeline_time_us = audio_playback.get_time_us()
         pos = helpers.calc_frame_from_time_us(timeline_time_us, tick_in.fps_num, tick_in.fps_den)
     else
         -- NO AUDIO: Advance frame independently (fallback only)

@@ -73,6 +73,12 @@ local mock_cache = {
         local frames = math.floor((end_us - start_us) * 48000 / 1000000)
         return "mock_pcm_ptr", frames, start_us
     end,
+    get_audio_pcm_for_path = function(path, start_us, end_us)
+        local frames = math.floor((end_us - start_us) * 48000 / 1000000)
+        return "mock_pcm_ptr", frames, start_us
+    end,
+    get_file_path = function() return "/mock/test.mov" end,
+    ensure_audio_pooled = function() end,
 }
 
 -- Load audio_playback fresh

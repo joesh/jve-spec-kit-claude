@@ -41,6 +41,7 @@ package.loaded["core.media.media_cache"] = {
         return { fps_num = 24000, fps_den = 1001, has_audio = false }
     end,
     activate = function() end,
+    ensure_audio_pooled = function() end,
 }
 
 _G.qt_create_single_shot_timer = function() end
@@ -71,6 +72,9 @@ package.loaded["core.playback.timeline_resolver"] = {
             source_time_us = 6250000,  -- 6.25s into source
             clip = mock_clip,
         }
+    end,
+    resolve_all_audio_at_time = function(playhead_rat, sequence_id)
+        return {}  -- no audio clips for this test
     end,
 }
 

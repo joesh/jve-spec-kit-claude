@@ -36,7 +36,6 @@ end
 -- Helper: reset module state between tests
 local function reset_module_state()
     audio_playback.session_initialized = false
-    audio_playback.source_loaded = false
     audio_playback.playing = false
     audio_playback.has_audio = false
     audio_playback.aop = nil
@@ -94,7 +93,6 @@ reset_module_state()
 
 print("\nTest 2.1: Initial state values")
 assert(audio_playback.session_initialized == false, "Should start with no session")
-assert(audio_playback.source_loaded == false, "Should start with no source")
 assert(audio_playback.playing == false, "Should start not playing")
 assert(audio_playback.has_audio == false, "Should start with no audio")
 assert(audio_playback.aop == nil, "aop should be nil")
@@ -130,8 +128,12 @@ print("  ✓ switch_source validates cache.get_asset_info")
 
 print("\nTest 3.3: switch_source with cache missing get_audio_reader asserts")
 expect_assert(
-    function() audio_playback.switch_source({ get_asset_info = function() end }) end,
-    "get_audio_reader",
+    function() audio_playback.switch_source({
+        get_asset_info = function()
+            return { has_audio = true, duration_us = 1000000, fps_num = 30, fps_den = 1 }
+        end,
+    }) end,
+    "audio_reader",
     "switch_source without get_audio_reader"
 )
 print("  ✓ switch_source validates cache.get_audio_reader")
@@ -297,7 +299,6 @@ print("  ✓ seek when no session stores time")
 print("\nTest 6.4: seek when session active but not playing updates stopped state")
 reset_module_state()
 audio_playback.session_initialized = true
-audio_playback.source_loaded = true
 audio_playback.has_audio = true
 audio_playback.playing = false
 audio_playback.max_media_time_us = 1000000
@@ -357,7 +358,6 @@ print("  ✓ start() asserts when no session")
 
 print("\nTest 8.2: start when no audio is no-op")
 audio_playback.session_initialized = true
-audio_playback.source_loaded = true
 audio_playback.has_audio = false
 audio_playback.start()  -- Should not throw
 assert(audio_playback.playing == false, "Should not start when no audio")

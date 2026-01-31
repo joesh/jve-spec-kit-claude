@@ -5,8 +5,9 @@
 -- - Implements JKL shuttle behavior with speed ramping
 -- - Schedules frame display via timer
 -- - Coordinates source_playback and timeline_playback sub-modules
+-- - Resolves audio independently from video (supports J/L cuts, multi-track)
 --
--- **VIDEO FOLLOWS AUDIO.** During playback, video queries audio_playback.get_media_time_us()
+-- **VIDEO FOLLOWS AUDIO.** During playback, video queries audio_playback.get_time_us()
 -- to determine which frame to display. Video NEVER pushes time into audio.
 -- sync_audio() is called ONLY on transport events (start, shuttle, slow_play, seek).
 --
@@ -15,6 +16,7 @@
 -- - source_playback: source-mode tick logic, latch/unlatch, media_cache prefetch
 -- - timeline_playback: timeline-mode tick logic, clip resolution, source switching
 -- - playback_helpers: shared utilities (time conversion, audio control)
+-- - timeline_resolver: resolves video AND audio clips at playhead time
 --
 -- Non-goals:
 -- - Does not own video decoding (delegates to viewer_panel)
@@ -59,12 +61,9 @@ local M = {
     -- Timeline playback mode state
     timeline_mode = false,      -- true = playing timeline, false = playing source
     sequence_id = nil,          -- active sequence when in timeline mode
-    current_clip_id = nil,      -- track which clip is currently playing for switch detection
+    current_clip_id = nil,      -- track which VIDEO clip is currently playing
+    current_audio_clip_ids = {}, -- set of active audio clip IDs (for change detection)
     timeline_sync_callback = nil, -- callback(frame_idx) called during _tick for playhead sync
-
-    -- Source↔timeline time offset for audio master clock in timeline mode.
-    -- timeline_time_us = audio_source_time_us + audio_to_timeline_offset_us
-    audio_to_timeline_offset_us = 0,
 }
 
 -- Viewer panel reference (set via init)
@@ -123,8 +122,7 @@ function M.init_audio(ap)
 end
 
 --- Initialize (or re-initialize) audio for the currently active media_cache source.
--- Shared path for both source-mode and timeline-mode clip switches.
--- Lazy-inits session on first audio source, then does lightweight switch_source.
+-- Shared path for source-mode clip load. Uses set_audio_sources.
 function M.init_audio_for_active_media()
     local audio_pb = require("core.media.audio_playback")
 
@@ -139,7 +137,23 @@ function M.init_audio_for_active_media()
         audio_pb.init_session(info.audio_sample_rate, 2)
     end
 
-    audio_pb.switch_source(media_cache)
+    if not info.has_audio then
+        audio_pb.set_audio_sources({}, media_cache)
+        audio_playback = audio_pb
+        return
+    end
+
+    local file_path = media_cache.get_file_path()
+    assert(file_path, "playback_controller.init_audio_for_active_media: no active file_path")
+    media_cache.ensure_audio_pooled(file_path)
+
+    audio_pb.set_audio_sources({{
+        path = file_path,
+        source_offset_us = 0,
+        volume = 1.0,
+        duration_us = info.duration_us,
+    }}, media_cache)
+    audio_pb.set_max_time(M.max_media_time_us)
     audio_playback = audio_pb
 end
 
@@ -177,31 +191,117 @@ local function sync_audio()
     helpers.sync_audio(audio_playback, M.direction, M.speed)
 end
 
---- Resolve current timeline position to source time and compute audio offset.
--- Returns source_time_us, or nil if gap.
--- Side effect: updates M.audio_to_timeline_offset_us.
-local function resolve_audio_position(timeline_frame)
-    if not M.timeline_mode or not M.sequence_id then return nil end
-    local playhead_rat = helpers.frame_to_rational(math.floor(timeline_frame), M.fps_num, M.fps_den)
-    local resolved = timeline_resolver.resolve_at_time(playhead_rat, M.sequence_id)
-    if not resolved then return nil end
-    local timeline_time_us = helpers.calc_time_us_from_frame(math.floor(timeline_frame), M.fps_num, M.fps_den)
-    M.audio_to_timeline_offset_us = timeline_time_us - resolved.source_time_us
-    return resolved.source_time_us
+--------------------------------------------------------------------------------
+-- Independent Audio Resolution (timeline mode)
+-- Resolves all audio clips at playhead, builds source list, detects changes.
+--------------------------------------------------------------------------------
+
+--- Resolve audio clips at timeline frame and set audio sources.
+-- @param timeline_frame number: current timeline frame
+-- @return boolean: true if at least one audio clip is active
+local function resolve_and_set_audio_sources(timeline_frame)
+    assert(M.timeline_mode and M.sequence_id,
+        "resolve_and_set_audio_sources: not in timeline mode")
+
+    local playhead_rat = helpers.frame_to_rational(
+        math.floor(timeline_frame), M.fps_num, M.fps_den)
+    local audio_clips = timeline_resolver.resolve_all_audio_at_time(
+        playhead_rat, M.sequence_id)
+
+    -- Check if any track is soloed
+    local any_soloed = false
+    for _, ac in ipairs(audio_clips) do
+        if ac.track.soloed then any_soloed = true; break end
+    end
+
+    -- Build source list for audio_playback
+    local sources = {}
+    for _, ac in ipairs(audio_clips) do
+        -- Ensure media is in pool
+        media_cache.ensure_audio_pooled(ac.media_path)
+
+        -- Calculate source_offset_us: timeline_start_us - source_in_us
+        -- playback_time - source_offset = source_decode_time
+        -- At timeline_start, source_decode_time = source_in
+        -- So: source_offset = timeline_start_us - source_in_us
+        -- Each Rational carries its own fps — use to_seconds() for correct conversion.
+        -- timeline_start is in timeline fps, source_in is in clip fps.
+        local timeline_start_us = math.floor(ac.clip.timeline_start:to_seconds() * 1000000)
+        local source_in_us = math.floor(ac.clip.source_in:to_seconds() * 1000000)
+        local source_offset_us = timeline_start_us - source_in_us
+
+        -- Effective volume respects solo/mute
+        local effective_volume
+        if any_soloed then
+            effective_volume = ac.track.soloed and ac.track.volume or 0
+        else
+            effective_volume = ac.track.muted and 0 or ac.track.volume
+        end
+
+        -- Get media info for duration
+        local entry_info = media_cache.ensure_audio_pooled(ac.media_path)
+
+        sources[#sources + 1] = {
+            path = ac.media_path,
+            source_offset_us = source_offset_us,
+            volume = effective_volume,
+            duration_us = entry_info.duration_us,
+        }
+    end
+
+    -- Detect change (compare clip ID sets)
+    local new_ids = {}
+    for _, ac in ipairs(audio_clips) do new_ids[ac.clip.id] = true end
+    local changed = false
+    local old_count = 0
+    for _ in pairs(M.current_audio_clip_ids) do old_count = old_count + 1 end
+    if #audio_clips ~= old_count then
+        changed = true
+    else
+        for id in pairs(new_ids) do
+            if not M.current_audio_clip_ids[id] then changed = true; break end
+        end
+    end
+
+    if changed then
+        M.current_audio_clip_ids = new_ids
+
+        -- Lazy-init audio session on first audio clip in timeline mode.
+        -- In source mode, init_audio_for_active_media handles this.
+        if #sources > 0 and not audio_playback then
+            local audio_pb = require("core.media.audio_playback")
+            if qt_constants.SSE and qt_constants.AOP and not audio_pb.session_initialized then
+                -- Use first source's info for session sample rate
+                local first_info = media_cache.ensure_audio_pooled(sources[1].path)
+                if first_info and first_info.has_audio then
+                    audio_pb.init_session(first_info.audio_sample_rate, 2)
+                    audio_pb.set_max_time(M.max_media_time_us)
+                    audio_playback = audio_pb
+                    logger.info("playback_controller",
+                        "Lazy-init audio session for timeline mode")
+                end
+            elseif audio_pb.session_initialized then
+                audio_playback = audio_pb
+            end
+        end
+
+        if audio_playback and audio_playback.session_initialized then
+            audio_playback.set_audio_sources(sources, media_cache)
+        end
+    end
+
+    return #audio_clips > 0
 end
 
---- Start audio at the correct position (source or timeline mode).
+--- Start audio at the correct position (unified, no mode branching).
 local function start_audio()
-    if M.timeline_mode then
-        local source_time_us = resolve_audio_position(M.get_position())
-        if source_time_us and audio_playback and audio_playback.is_ready() then
-            helpers.sync_audio(audio_playback, M.direction, M.speed)
-            audio_playback.seek(source_time_us)
-            audio_playback.start()
-        end
-    else
-        helpers.start_audio(audio_playback, M.get_position(), M.fps_num, M.fps_den, M.direction, M.speed)
-    end
+    if not audio_playback or not audio_playback.is_ready() then return end
+    -- Sources already set (by resolve_and_set_audio_sources or source load)
+    local time_us = helpers.calc_time_us_from_frame(
+        M.get_position(), M.fps_num, M.fps_den)
+    helpers.sync_audio(audio_playback, M.direction, M.speed)
+    audio_playback.seek(time_us)
+    audio_playback.start()
 end
 
 local function stop_audio()
@@ -235,7 +335,7 @@ function M.set_source(total_frames, fps_num, fps_den)
 
     -- Inform audio of max time (required before start)
     if audio_playback and audio_playback.session_initialized then
-        audio_playback.set_max_media_time(M.max_media_time_us)
+        audio_playback.set_max_time(M.max_media_time_us)
     end
 
     M.stop()
@@ -319,6 +419,10 @@ function M.shuttle(dir)
     end
 
     if was_stopped then
+        -- In timeline mode, resolve audio before starting
+        if M.timeline_mode and M.sequence_id then
+            resolve_and_set_audio_sources(M.get_position())
+        end
         start_audio()
     else
         sync_audio()
@@ -342,6 +446,9 @@ function M.slow_play(dir)
     end
 
     if was_stopped then
+        if M.timeline_mode and M.sequence_id then
+            resolve_and_set_audio_sources(M.get_position())
+        end
         start_audio()
     else
         sync_audio()
@@ -385,6 +492,11 @@ function M.play()
         media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
     end
 
+    -- In timeline mode, resolve audio before starting
+    if M.timeline_mode and M.sequence_id then
+        resolve_and_set_audio_sources(M.get_position())
+    end
+
     start_audio()
 
     M._schedule_tick()
@@ -403,6 +515,7 @@ function M.set_timeline_mode(enabled, sequence_id, sequence_info)
             "playback_controller.set_timeline_mode: sequence_id required when enabling timeline mode")
         M.sequence_id = sequence_id
         M.current_clip_id = nil
+        M.current_audio_clip_ids = {}
 
         -- Store timeline_state ref for get_position/set_position
         timeline_state_ref = require("ui.timeline.timeline_state")
@@ -423,6 +536,12 @@ function M.set_timeline_mode(enabled, sequence_id, sequence_info)
 
         if fps_num and fps_den and fps_num > 0 and fps_den > 0 then
             M.set_source(total_frames or 86400, fps_num, fps_den)
+
+            -- Set audio max time for timeline mode
+            if audio_playback and audio_playback.session_initialized then
+                audio_playback.set_max_time(M.max_media_time_us)
+            end
+
             logger.debug("playback_controller",
                 string.format("Timeline mode enabled for sequence %s (fps=%d/%d)", sequence_id, fps_num, fps_den))
         else
@@ -432,6 +551,7 @@ function M.set_timeline_mode(enabled, sequence_id, sequence_info)
     else
         M.sequence_id = nil
         M.current_clip_id = nil
+        M.current_audio_clip_ids = {}
         timeline_state_ref = nil
         logger.debug("playback_controller", "Timeline mode disabled")
     end
@@ -491,7 +611,7 @@ function M.seek(frame_idx)
     M.set_position_silent(clamped)
 
     -- If playing, stop audio first to flush hardware buffer.
-    -- Without this, get_media_time_us() returns stale time on the next tick
+    -- Without this, get_time_us() returns stale time on the next tick
     -- and overwrites the user's seek position.
     local was_playing = (M.state == "playing")
     if was_playing then
@@ -506,15 +626,16 @@ function M.seek(frame_idx)
                 M.fps_num, M.fps_den, M.sequence_id, M.current_clip_id,
                 nil, nil, viewer_panel, nil, math.floor(clamped))
             M.current_clip_id = new_clip_id
+
+            -- Video clip switch: only activate video media (audio is independent)
             if M.current_clip_id ~= old_clip_id then
-                M.init_audio_for_active_media()
-            end
-            -- Update offset for new position
-            if source_time_us then
-                local timeline_time_us = calc_time_us_from_frame(math.floor(clamped))
-                M.audio_to_timeline_offset_us = timeline_time_us - source_time_us
+                -- init_audio_for_active_media is for source mode only.
+                -- In timeline mode, audio is resolved independently below.
             end
         end
+
+        -- Resolve audio independently
+        resolve_and_set_audio_sources(math.floor(clamped))
     else
         -- Source mode: direct frame display
         if viewer_panel then
@@ -522,19 +643,14 @@ function M.seek(frame_idx)
         end
     end
 
-    -- Restart audio at new position (start_audio handles both modes)
+    -- Restart audio at new position
     if was_playing then
         start_audio()
     else
         -- Parked: just seek audio for scrub
-        if M.timeline_mode then
-            local source_time_us = resolve_audio_position(math.floor(clamped))
-            if source_time_us and audio_playback and audio_playback.is_ready() then
-                audio_playback.seek(source_time_us)
-            end
-        elseif audio_playback and audio_playback.is_ready() then
-            local media_time_us = calc_time_us_from_frame(clamped)
-            audio_playback.seek(media_time_us)
+        local time_us = calc_time_us_from_frame(clamped)
+        if audio_playback and audio_playback.is_ready() then
+            audio_playback.seek(time_us)
         end
     end
 
@@ -574,24 +690,18 @@ function M._tick()
             total_frames = M.total_frames,
             sequence_id = M.sequence_id,
             current_clip_id = M.current_clip_id,
-            audio_to_timeline_offset_us = M.audio_to_timeline_offset_us,
         }
         local result = timeline_playback.tick(tick_in, audio_playback, viewer_panel)
 
-        -- Controller commits state — init audio on clip switch, restart at source position
+        -- Video clip switch: only activate video media
         if result.current_clip_id ~= M.current_clip_id then
-            M.init_audio_for_active_media()
-            if result.source_time_us and audio_playback and audio_playback.is_ready() then
-                -- Recompute offset for new clip
-                local timeline_time_us = helpers.calc_time_us_from_frame(
-                    result.frame_idx, M.fps_num, M.fps_den)
-                M.audio_to_timeline_offset_us = timeline_time_us - result.source_time_us
-                audio_playback.seek(result.source_time_us)
-                helpers.sync_audio(audio_playback, M.direction, M.speed)
-                audio_playback.start()
-            end
+            -- No audio init on video clip switch — audio is resolved independently
         end
         M.current_clip_id = result.current_clip_id
+
+        -- Resolve audio independently on every tick
+        resolve_and_set_audio_sources(result.frame_idx)
+
         if result.continue then
             -- Ordering invariant: resolve already done inside tick → now commit position → sync
             M.set_position(result.new_pos)

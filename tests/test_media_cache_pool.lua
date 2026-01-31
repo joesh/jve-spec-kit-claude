@@ -3,7 +3,7 @@
 --
 -- Tests the LRU reader pool that replaces single-asset load/unload:
 -- - activate() opens reader on first call, no-ops on repeat
--- - Pool tracks multiple open readers (max_readers=4)
+-- - Pool tracks multiple open readers (max_readers=8)
 -- - LRU eviction closes oldest reader when pool full
 -- - is_loaded() reflects active reader state
 -- - get_video_frame() works with active reader
@@ -101,8 +101,8 @@ print("Test 1: Pool API present")
 assert(media_cache.activate, "media_cache.activate missing")
 assert(media_cache.reader_pool, "media_cache.reader_pool missing")
 assert(media_cache.max_readers, "media_cache.max_readers missing")
-assert(media_cache.max_readers == 4, string.format(
-    "max_readers should be 4, got %d", media_cache.max_readers))
+assert(media_cache.max_readers == 8, string.format(
+    "max_readers should be 8, got %d", media_cache.max_readers))
 
 print("  OK: Pool API present")
 
@@ -172,30 +172,34 @@ assert(decode_calls[1].frame_idx == 42, "Should decode frame 42")
 print("  OK: get_video_frame works with active reader")
 
 --------------------------------------------------------------------------------
--- Test 6: LRU eviction when pool full (max_readers=4)
+-- Test 6: LRU eviction when pool full (max_readers=8)
 --------------------------------------------------------------------------------
 print("Test 6: LRU eviction at max_readers")
 
--- Already have clip_a and clip_b. Add clip_c and clip_d to fill pool.
+-- Already have clip_a and clip_b. Add clip_c through clip_h to fill pool to 8.
 media_cache.activate("/test/clip_c.mov")
 media_cache.activate("/test/clip_d.mov")
+media_cache.activate("/test/clip_e.mov")
+media_cache.activate("/test/clip_f.mov")
+media_cache.activate("/test/clip_g.mov")
+media_cache.activate("/test/clip_h.mov")
 
--- Pool should have 4 readers now
+-- Pool should have 8 readers now
 local pool_count = 0
 for _ in pairs(media_cache.reader_pool) do pool_count = pool_count + 1 end
-assert(pool_count == 4, string.format("Pool should have 4, got %d", pool_count))
+assert(pool_count == 8, string.format("Pool should have 8, got %d", pool_count))
 
--- Now activate a 5th — should evict the LRU (clip_a, earliest last_used)
+-- Now activate a 9th — should evict the LRU (clip_a, earliest last_used)
 local pre_close_count = #closed_readers
-media_cache.activate("/test/clip_e.mov")
+media_cache.activate("/test/clip_i.mov")
 
 pool_count = 0
 for _ in pairs(media_cache.reader_pool) do pool_count = pool_count + 1 end
-assert(pool_count == 4, string.format("Pool should still be 4 after eviction, got %d", pool_count))
+assert(pool_count == 8, string.format("Pool should still be 8 after eviction, got %d", pool_count))
 assert(not media_cache.reader_pool["/test/clip_a.mov"],
     "clip_a should have been evicted (LRU)")
-assert(media_cache.reader_pool["/test/clip_e.mov"],
-    "clip_e should be in pool")
+assert(media_cache.reader_pool["/test/clip_i.mov"],
+    "clip_i should be in pool")
 
 -- Verify resources were closed for evicted reader
 assert(#closed_readers > pre_close_count,

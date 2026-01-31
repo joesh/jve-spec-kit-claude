@@ -91,6 +91,14 @@ local mock_media_cache = {
         local frames = math.floor((end_us - start_us) * 48000 / 1000000)
         return mock_ptr, frames, start_us
     end,
+    get_audio_pcm_for_path = function(path, start_us, end_us)
+        media_cache_fetch_count = media_cache_fetch_count + 1
+        local mock_ptr = "pcm_data_" .. media_cache_fetch_count
+        local frames = math.floor((end_us - start_us) * 48000 / 1000000)
+        return mock_ptr, frames, start_us
+    end,
+    get_file_path = function() return "/mock/test.mov" end,
+    ensure_audio_pooled = function() end,
 }
 
 -- Set up global mocks

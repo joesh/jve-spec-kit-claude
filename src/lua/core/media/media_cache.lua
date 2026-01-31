@@ -1,10 +1,12 @@
 --- Multi-Reader LRU Media Cache
 --
 -- Responsibilities:
--- - Maintains LRU pool of open readers (max 4 simultaneously open media files)
+-- - Maintains LRU pool of open readers (max 8 simultaneously open media files)
 -- - Each reader has dual AVFormatContexts (video + audio) for seek isolation
 -- - activate(path) makes a reader "active" — pool lookup, open if miss, LRU evict if full
 -- - Provides video frame decode and audio PCM access for the active reader
+-- - Per-entry audio caches for multi-track audio (J/L cuts, overlapping clips)
+-- - ensure_audio_pooled(path) opens a reader for audio without changing active video
 --
 -- Why LRU pool:
 -- Timeline scrubbing clicks between clips on different media files. Without a pool,
@@ -23,9 +25,10 @@ local qt_constants = require("core.qt_constants")
 
 local M = {
     -- LRU reader pool: { [file_path] = pool_entry }
-    -- pool_entry = { video_asset, video_reader, audio_asset, audio_reader, info, last_used }
+    -- pool_entry = { video_asset, video_reader, audio_asset, audio_reader, info,
+    --               audio_cache, last_used }
     reader_pool = {},
-    max_readers = 4,
+    max_readers = 8,
 
     -- Currently active reader path (for get_video_frame/get_audio_pcm)
     active_path = nil,
@@ -42,7 +45,7 @@ local M = {
         reverse_decode_budget = 60,
     },
 
-    -- Audio PCM cache (single chunk around playhead)
+    -- Global audio PCM cache (for active-path source-mode compat)
     audio_cache = {
         pcm = nil,             -- EMP PCM handle
         start_us = 0,          -- start time of cached PCM
@@ -68,39 +71,69 @@ local function active_entry()
 end
 
 --------------------------------------------------------------------------------
+-- Internal: Create a fresh per-entry audio cache
+--------------------------------------------------------------------------------
+
+local function new_audio_cache()
+    return { pcm = nil, start_us = 0, end_us = 0, data_ptr = nil, frames = 0 }
+end
+
+--------------------------------------------------------------------------------
+-- Internal: Release a per-entry audio cache
+--------------------------------------------------------------------------------
+
+local function release_entry_audio_cache(entry)
+    if entry.audio_cache and entry.audio_cache.pcm then
+        qt_constants.EMP.PCM_RELEASE(entry.audio_cache.pcm)
+        entry.audio_cache.pcm = nil
+        entry.audio_cache.data_ptr = nil
+        entry.audio_cache.start_us = 0
+        entry.audio_cache.end_us = 0
+        entry.audio_cache.frames = 0
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Internal: Open a new reader pair for a file path
+-- Supports both video+audio and audio-only files.
 --------------------------------------------------------------------------------
 
 local function open_reader(file_path)
     assert(qt_constants, "media_cache.open_reader: qt_constants not available")
     assert(qt_constants.EMP, "media_cache.open_reader: EMP bindings not available")
 
-    -- Open VIDEO asset (format context A)
-    local video_asset, err = qt_constants.EMP.ASSET_OPEN(file_path)
-    assert(video_asset, string.format(
-        "media_cache.open_reader: ASSET_OPEN failed for video '%s': %s",
+    -- Open first asset to probe format
+    local first_asset, err = qt_constants.EMP.ASSET_OPEN(file_path)
+    assert(first_asset, string.format(
+        "media_cache.open_reader: ASSET_OPEN failed for '%s': %s",
         file_path, err and err.msg or "unknown error"))
 
-    local info = qt_constants.EMP.ASSET_INFO(video_asset)
+    local info = qt_constants.EMP.ASSET_INFO(first_asset)
     assert(info, string.format(
         "media_cache.open_reader: ASSET_INFO failed for '%s'", file_path))
-    assert(info.has_video, string.format(
-        "media_cache.open_reader: no video stream in '%s'", file_path))
-
-    -- Create video reader
-    local video_reader, reader_err = qt_constants.EMP.READER_CREATE(video_asset)
-    assert(video_reader, string.format(
-        "media_cache.open_reader: READER_CREATE failed for video: %s",
-        reader_err and reader_err.msg or "unknown error"))
+    assert(info.has_video or info.has_audio, string.format(
+        "media_cache.open_reader: no video or audio stream in '%s'", file_path))
 
     local entry = {
-        video_asset = video_asset,
-        video_reader = video_reader,
+        video_asset = nil,
+        video_reader = nil,
         audio_asset = nil,
         audio_reader = nil,
         info = info,
+        audio_cache = new_audio_cache(),
         last_used = os.clock(),
     }
+
+    if info.has_video then
+        -- Use first_asset as video asset
+        entry.video_asset = first_asset
+
+        local video_reader, reader_err = qt_constants.EMP.READER_CREATE(first_asset)
+        assert(video_reader, string.format(
+            "media_cache.open_reader: READER_CREATE failed for video: %s",
+            reader_err and reader_err.msg or "unknown error"))
+        entry.video_reader = video_reader
+    end
 
     -- Open AUDIO asset (format context B) - SEPARATE from video
     if info.has_audio then
@@ -117,17 +150,35 @@ local function open_reader(file_path)
         entry.audio_asset = audio_asset
         entry.audio_reader = audio_reader
 
-        logger.info("media_cache", string.format(
-            "Opened dual assets: video + audio for '%s'", file_path))
+        if info.has_video then
+            logger.info("media_cache", string.format(
+                "Opened dual assets: video + audio for '%s'", file_path))
+        else
+            logger.info("media_cache", string.format(
+                "Opened audio-only asset for '%s'", file_path))
+        end
     else
+        -- No audio, first_asset already used for video
         logger.info("media_cache", string.format(
             "Opened single asset (no audio) for '%s'", file_path))
     end
 
-    logger.info("media_cache", string.format(
-        "Media: %dx%d @ %d/%d fps, duration=%.2fs, has_audio=%s",
-        info.width, info.height, info.fps_num, info.fps_den,
-        info.duration_us / 1000000, tostring(info.has_audio)))
+    -- Close first_asset if it wasn't used for video (audio-only file)
+    if not info.has_video then
+        qt_constants.EMP.ASSET_CLOSE(first_asset)
+    end
+
+    if info.has_video then
+        logger.info("media_cache", string.format(
+            "Media: %dx%d @ %d/%d fps, duration=%.2fs, has_audio=%s",
+            info.width, info.height, info.fps_num, info.fps_den,
+            info.duration_us / 1000000, tostring(info.has_audio)))
+    else
+        logger.info("media_cache", string.format(
+            "Audio-only: duration=%.2fs, sample_rate=%d, channels=%d",
+            info.duration_us / 1000000,
+            info.audio_sample_rate or 0, info.audio_channels or 0))
+    end
 
     return entry
 end
@@ -141,6 +192,9 @@ local function close_entry(entry)
     if entry.video_reader then
         qt_constants.EMP.READER_STOP_PREFETCH(entry.video_reader)
     end
+
+    -- Release per-entry audio cache
+    release_entry_audio_cache(entry)
 
     -- Close video reader and asset
     if entry.video_reader then
@@ -191,6 +245,42 @@ local function evict_lru()
 end
 
 --------------------------------------------------------------------------------
+-- Internal: Count pool entries
+--------------------------------------------------------------------------------
+
+local function pool_count()
+    local count = 0
+    for _ in pairs(M.reader_pool) do count = count + 1 end
+    return count
+end
+
+--------------------------------------------------------------------------------
+-- Internal: Ensure path is in pool (open if needed, LRU evict if full).
+-- Does NOT change active_path.
+-- @return pool_entry
+--------------------------------------------------------------------------------
+
+local function ensure_in_pool(file_path)
+    local entry = M.reader_pool[file_path]
+    if entry then
+        entry.last_used = os.clock()
+        return entry
+    end
+
+    -- Pool miss — need to open. Evict if full.
+    if pool_count() >= M.max_readers then
+        evict_lru()
+    end
+
+    entry = open_reader(file_path)
+    M.reader_pool[file_path] = entry
+
+    logger.debug("media_cache", string.format("Pool miss (ensure_in_pool), opened: %s", file_path))
+
+    return entry
+end
+
+--------------------------------------------------------------------------------
 -- Internal: Release Lua-side caches (video frames, audio PCM)
 -- Called when switching active reader so stale frames aren't displayed.
 --------------------------------------------------------------------------------
@@ -207,7 +297,7 @@ local function release_lua_caches()
     M.video_cache.reverse_window_start = nil
     M.video_cache.reverse_window_end = nil
 
-    -- Release cached PCM
+    -- Release global audio cache (source-mode compat)
     if M.audio_cache.pcm then
         qt_constants.EMP.PCM_RELEASE(M.audio_cache.pcm)
         M.audio_cache.pcm = nil
@@ -296,30 +386,11 @@ function M.activate(file_path)
         release_lua_caches()
     end
 
-    -- Check pool for existing entry
-    local entry = M.reader_pool[file_path]
-    if entry then
-        -- Pool hit — promote to active
-        entry.last_used = os.clock()
-        M.active_path = file_path
-        logger.debug("media_cache", string.format("Pool hit: %s", file_path))
-        return entry.info
-    end
-
-    -- Pool miss — need to open. Evict if full.
-    local pool_count = 0
-    for _ in pairs(M.reader_pool) do pool_count = pool_count + 1 end
-    if pool_count >= M.max_readers then
-        evict_lru()
-    end
-
-    -- Open new reader pair
-    entry = open_reader(file_path)
-    M.reader_pool[file_path] = entry
+    -- Ensure in pool (opens if needed)
+    local entry = ensure_in_pool(file_path)
     M.active_path = file_path
 
-    logger.debug("media_cache", string.format("Pool miss, opened: %s (pool size=%d)",
-        file_path, pool_count + 1))
+    logger.debug("media_cache", string.format("Activated: %s", file_path))
 
     return entry.info
 end
@@ -355,6 +426,100 @@ function M.cleanup()
 end
 
 --------------------------------------------------------------------------------
+-- Audio Pool Access (multi-track, does NOT change active_path)
+--------------------------------------------------------------------------------
+
+--- Ensure a path is in the reader pool for audio access.
+-- Opens the file if not already pooled. Does NOT change active_path
+-- (video is unaffected).
+-- @param file_path Path to media file
+-- @return asset_info
+function M.ensure_audio_pooled(file_path)
+    assert(file_path, "media_cache.ensure_audio_pooled: file_path is nil")
+    assert(type(file_path) == "string", string.format(
+        "media_cache.ensure_audio_pooled: file_path must be string, got %s",
+        type(file_path)))
+
+    local entry = ensure_in_pool(file_path)
+    return entry.info
+end
+
+--- Get audio PCM for a specific pooled path (multi-track audio).
+-- Uses per-entry audio cache. Does NOT require path to be active.
+-- @param file_path Path to media file (must be in pool)
+-- @param start_us Start time in microseconds
+-- @param end_us End time in microseconds
+-- @param out_sample_rate Output sample rate
+-- @return pcm_data_ptr, frames, actual_start_us
+function M.get_audio_pcm_for_path(file_path, start_us, end_us, out_sample_rate)
+    assert(file_path, "media_cache.get_audio_pcm_for_path: file_path is nil")
+    local entry = M.reader_pool[file_path]
+    assert(entry, string.format(
+        "media_cache.get_audio_pcm_for_path: '%s' not in pool (call ensure_audio_pooled first)",
+        file_path))
+    assert(entry.audio_reader, string.format(
+        "media_cache.get_audio_pcm_for_path: '%s' has no audio_reader", file_path))
+    assert(type(start_us) == "number",
+        "media_cache.get_audio_pcm_for_path: start_us must be number")
+    assert(type(end_us) == "number",
+        "media_cache.get_audio_pcm_for_path: end_us must be number")
+    assert(end_us > start_us, string.format(
+        "media_cache.get_audio_pcm_for_path: end_us (%d) must be > start_us (%d)",
+        end_us, start_us))
+
+    local cache = entry.audio_cache
+
+    -- Check if requested range is within per-entry cache
+    if cache.pcm and
+       start_us >= cache.start_us and
+       end_us <= cache.end_us then
+        return cache.data_ptr, cache.frames, cache.start_us
+    end
+
+    -- Need to decode new range - release old cache first
+    if cache.pcm then
+        qt_constants.EMP.PCM_RELEASE(cache.pcm)
+        cache.pcm = nil
+    end
+
+    -- Convert time to frames for EMP API
+    local us_per_frame = (entry.info.fps_den * 1000000) / entry.info.fps_num
+    local frame_start = math.floor(start_us / us_per_frame)
+    local frame_end = math.ceil(end_us / us_per_frame)
+
+    -- Decode audio range (resample to out_sample_rate if provided)
+    local decode_rate = out_sample_rate or entry.info.audio_sample_rate
+    local pcm, err = qt_constants.EMP.READER_DECODE_AUDIO_RANGE(
+        entry.audio_reader,
+        frame_start,
+        frame_end,
+        entry.info.fps_num,
+        entry.info.fps_den,
+        decode_rate,
+        entry.info.audio_channels
+    )
+    assert(pcm, string.format(
+        "media_cache.get_audio_pcm_for_path: READER_DECODE_AUDIO_RANGE failed [%d-%d] for '%s': %s",
+        frame_start, frame_end, file_path, err and err.msg or "unknown error"))
+
+    -- Cache the result in per-entry cache
+    local info = qt_constants.EMP.PCM_INFO(pcm)
+    cache.pcm = pcm
+    cache.start_us = info.start_time_us
+    cache.end_us = info.start_time_us + (info.frames * 1000000 / decode_rate)
+    cache.data_ptr = qt_constants.EMP.PCM_DATA_PTR(pcm)
+    cache.frames = info.frames
+
+    entry.last_used = os.clock()
+
+    logger.debug("media_cache", string.format(
+        "Cached audio PCM for '%s': %.3fs - %.3fs (%d frames)",
+        file_path, cache.start_us / 1000000, cache.end_us / 1000000, cache.frames))
+
+    return cache.data_ptr, cache.frames, cache.start_us
+end
+
+--------------------------------------------------------------------------------
 -- Video Frame Access
 --------------------------------------------------------------------------------
 
@@ -370,6 +535,9 @@ function M.get_video_frame(frame_idx)
         "media_cache.get_video_frame: frame_idx must be >= 0, got %d", frame_idx))
 
     local entry = active_entry()
+    assert(entry.video_reader, string.format(
+        "media_cache.get_video_frame: active entry '%s' has no video_reader (audio-only file?)",
+        M.active_path))
 
     -- Let C++ handle caching (prefetch thread fills cache, DecodeAtUS checks cache first)
     -- Don't double-cache in Lua - causes stale handle issues when C++ evicts
@@ -455,10 +623,11 @@ function M._ensure_reverse_window(end_frame_idx, backfill_count)
 end
 
 --------------------------------------------------------------------------------
--- Audio PCM Access
+-- Audio PCM Access (active-path, source-mode compat)
 --------------------------------------------------------------------------------
 
 --- Get audio PCM for time range (from cache or decode)
+-- Uses global audio_cache for active-path. For multi-track, use get_audio_pcm_for_path.
 -- @param start_us Start time in microseconds
 -- @param end_us End time in microseconds
 -- @param out_sample_rate Output sample rate (nil = source native rate). Pass
@@ -559,18 +728,22 @@ function M.set_playhead(frame_idx, direction, speed)
     if direction ~= M.last_prefetch_direction then
         if direction == 0 then
             -- Stopped: stop prefetch thread
-            qt_constants.EMP.READER_STOP_PREFETCH(entry.video_reader)
+            if entry.video_reader then
+                qt_constants.EMP.READER_STOP_PREFETCH(entry.video_reader)
+            end
             logger.debug("media_cache", "Prefetch stopped")
         else
             -- Playing: start prefetch (forward or reverse)
-            qt_constants.EMP.READER_START_PREFETCH(entry.video_reader, direction)
-            logger.debug("media_cache", string.format("Prefetch started: direction=%d", direction))
+            if entry.video_reader then
+                qt_constants.EMP.READER_START_PREFETCH(entry.video_reader, direction)
+                logger.debug("media_cache", string.format("Prefetch started: direction=%d", direction))
+            end
         end
         M.last_prefetch_direction = direction
     end
 
     -- Update prefetch target (tells background thread where to decode ahead)
-    if direction ~= 0 then
+    if direction ~= 0 and entry.video_reader then
         qt_constants.EMP.READER_UPDATE_PREFETCH_TARGET(
             entry.video_reader,
             frame_idx,
