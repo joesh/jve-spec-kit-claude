@@ -64,6 +64,12 @@ local M = {
     current_clip_id = nil,      -- track which VIDEO clip is currently playing
     current_audio_clip_ids = {}, -- set of active audio clip IDs (for change detection)
     timeline_sync_callback = nil, -- callback(frame_idx) called during _tick for playhead sync
+
+    -- External move detection: last frame committed by _tick().
+    -- If get_position() differs from this, an external caller moved the playhead
+    -- (frame-forward, go-to-edit, ruler click, undo) and we must re-anchor audio.
+    -- nil when stopped (detection inactive).
+    _last_committed_frame = nil,
 }
 
 -- Viewer panel reference (set via init)
@@ -386,6 +392,7 @@ function M.shuttle(dir)
         M.speed = 1
         M.state = "playing"
         M.transport_mode = "shuttle"
+        M._last_committed_frame = math.floor(M.get_position())
 
         -- Play mode for shuttle: full BGRA caching for sequential access
         qt_constants.EMP.SET_DECODE_MODE("play")
@@ -439,6 +446,7 @@ function M.slow_play(dir)
     M.speed = 0.5
     M.state = "playing"
     M.transport_mode = "shuttle"
+    M._last_committed_frame = math.floor(M.get_position())
     logger.debug("playback_controller", string.format("Slow play %s at 0.5x", dir == 1 and "forward" or "reverse"))
 
     if not M.timeline_mode and media_cache.is_loaded() then
@@ -463,6 +471,7 @@ function M.stop()
     M.direction = 0
     M.speed = 1
     M.transport_mode = "none"
+    M._last_committed_frame = nil
     M._clear_latch()
 
     stop_audio()
@@ -483,6 +492,7 @@ function M.play()
     M.speed = 1
     M.state = "playing"
     M.transport_mode = "play"
+    M._last_committed_frame = math.floor(M.get_position())
     M._clear_latch()
 
     -- Play mode: BGRA-convert all intermediates for sequential cache
@@ -609,6 +619,7 @@ function M.seek(frame_idx)
     -- Silent: in timeline mode, the caller already set
     -- timeline_state.playhead_position; in source mode, no listeners to fire.
     M.set_position_silent(clamped)
+    M._last_committed_frame = math.floor(clamped)
 
     -- If playing, stop audio first to flush hardware buffer.
     -- Without this, get_time_us() returns stale time on the next tick
@@ -680,9 +691,25 @@ function M._tick()
         "playback_controller._tick: fps must be set and positive")
 
     if M.timeline_mode and M.sequence_id then
+        -- Detect external playhead move (frame-forward, ruler click, undo, etc.)
+        local current_pos = M.get_position()
+        if M._last_committed_frame ~= nil
+           and math.floor(current_pos) ~= M._last_committed_frame then
+            -- External move detected — re-anchor audio at new position
+            local time_us = calc_time_us_from_frame(current_pos)
+            if audio_playback and audio_playback.is_ready() then
+                audio_playback.seek(time_us)
+            end
+            -- Resolve audio sources at new position
+            resolve_and_set_audio_sources(math.floor(current_pos))
+            logger.debug("playback_controller",
+                string.format("External move detected: %d → %d, re-anchored audio",
+                    M._last_committed_frame, math.floor(current_pos)))
+        end
+
         -- Timeline mode: build tick_in, call tick, own the ordering
         local tick_in = {
-            pos = M.get_position(),
+            pos = current_pos,
             direction = M.direction,
             speed = M.speed,
             fps_num = M.fps_num,
@@ -705,12 +732,14 @@ function M._tick()
         if result.continue then
             -- Ordering invariant: resolve already done inside tick → now commit position → sync
             M.set_position(result.new_pos)
+            M._last_committed_frame = math.floor(result.new_pos)
             if M.timeline_sync_callback then
                 M.timeline_sync_callback(result.frame_idx)
             end
             M._schedule_tick()
         else
             M.set_position(result.new_pos)
+            M._last_committed_frame = math.floor(result.new_pos)
             M.stop()
         end
     else
