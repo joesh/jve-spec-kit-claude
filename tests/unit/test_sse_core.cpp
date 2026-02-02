@@ -981,6 +981,124 @@ private slots:
     }
 
     // ========================================================================
+    // SCRUB ENGINE REGRESSION TESTS
+    // Tests that scrub (non-1x) produces usable audio without artifacts.
+    // These test the snippet-based OLA algorithm replacing broken WSOLA.
+    // ========================================================================
+
+    void test_scrub_produces_audio_at_2x() {
+        // REGRESSION: WSOLA at 2x produced amplitude-modulated garbage.
+        // Snippet-based scrub must produce non-silent, non-starved output.
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        // Push 2 seconds of 440Hz sine
+        int64_t frames = cfg.sample_rate * 2;
+        std::vector<float> pcm = generate_sine_pcm(frames, cfg.channels, 440, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), frames, 0);
+
+        engine->SetTarget(0, 2.0f, sse::QualityMode::Q1);
+
+        // Render 20 blocks (10240 frames ≈ 213ms)
+        std::vector<float> output(512 * cfg.channels);
+        int starve_count = 0;
+        int audio_blocks = 0;
+
+        for (int i = 0; i < 20; ++i) {
+            engine->Render(output.data(), 512);
+            if (engine->Starved()) {
+                starve_count++;
+                engine->ClearStarvedFlag();
+            }
+            if (has_audio(output.data(), 512, cfg.channels)) {
+                audio_blocks++;
+            }
+        }
+
+        QVERIFY2(starve_count == 0,
+            qPrintable(QString("2x scrub starved %1/20 blocks").arg(starve_count)));
+        QVERIFY2(audio_blocks >= 18,
+            qPrintable(QString("2x scrub: only %1/20 blocks had audio (expected ≥18)")
+                .arg(audio_blocks)));
+    }
+
+    void test_scrub_no_discontinuities_at_2x() {
+        // REGRESSION: WSOLA overlap-add produced clicks at grain boundaries.
+        // Check that consecutive samples don't jump more than source allows.
+        // A 440Hz sine at 48kHz has max per-sample delta ~= 0.057.
+        // At 2x varispeed, pitch doubles, so max delta ~= 0.114.
+        // Allow generous headroom: 0.3 per sample.
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        int64_t frames = cfg.sample_rate * 2;
+        std::vector<float> pcm = generate_sine_pcm(frames, cfg.channels, 440, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), frames, 0);
+
+        engine->SetTarget(0, 2.0f, sse::QualityMode::Q1);
+
+        constexpr float MAX_DELTA = 0.3f;
+        int discontinuities = 0;
+        float prev_sample = 0.0f;
+        bool first = true;
+
+        std::vector<float> output(512 * cfg.channels);
+
+        for (int block = 0; block < 20; ++block) {
+            engine->Render(output.data(), 512);
+
+            for (int i = 0; i < 512; ++i) {
+                float sample = output[i * cfg.channels];  // Left channel
+                if (!first) {
+                    float delta = std::abs(sample - prev_sample);
+                    if (delta > MAX_DELTA) {
+                        discontinuities++;
+                    }
+                }
+                prev_sample = sample;
+                first = false;
+            }
+        }
+
+        // Allow at most 5 discontinuities (Hann window crossfade boundaries)
+        QVERIFY2(discontinuities <= 5,
+            qPrintable(QString("2x scrub: %1 discontinuities > %2 (click artifacts)")
+                .arg(discontinuities).arg(MAX_DELTA)));
+    }
+
+    void test_scrub_all_modes_route_to_scrub() {
+        // All quality modes (Q1, Q2, Q3) should produce audio at 2x.
+        // Q3_DECIMATE previously used per-sample decimation; now uses snippet scrub.
+        sse::SseConfig cfg = sse::default_config();
+
+        sse::QualityMode modes[] = {
+            sse::QualityMode::Q1,
+            sse::QualityMode::Q2,
+            sse::QualityMode::Q3_DECIMATE
+        };
+
+        for (auto mode : modes) {
+            auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+            int64_t frames = cfg.sample_rate * 2;
+            std::vector<float> pcm = generate_sine_pcm(frames, cfg.channels, 440, cfg.sample_rate);
+            engine->PushSourcePcm(pcm.data(), frames, 0);
+
+            engine->SetTarget(0, 2.0f, mode);
+
+            std::vector<float> output(512 * cfg.channels);
+            engine->Render(output.data(), 512);
+
+            QVERIFY2(has_audio(output.data(), 512, cfg.channels),
+                qPrintable(QString("Mode %1 at 2x produced silence")
+                    .arg(static_cast<int>(mode))));
+            QVERIFY2(!engine->Starved(),
+                qPrintable(QString("Mode %1 at 2x starved")
+                    .arg(static_cast<int>(mode))));
+        }
+    }
+
+    // ========================================================================
     // STRESS TESTS
     // ========================================================================
 

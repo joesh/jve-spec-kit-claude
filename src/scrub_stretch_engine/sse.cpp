@@ -9,9 +9,6 @@
 
 namespace sse {
 
-// Constants
-static constexpr int ANALYSIS_WINDOW_MS = 20;  // 20ms analysis window
-static constexpr int OVERLAP_PERCENT = 75;     // 75% overlap
 static constexpr float PI = 3.14159265358979f;
 
 // Circular buffer for source PCM with time tracking
@@ -131,7 +128,10 @@ private:
     int64_t m_total_frames;
 };
 
-// WSOLA implementation
+// Snippet-based overlap-add scrub engine
+// Algorithm: fetch source snippet at current time, linear-resample to output rate,
+// apply Hann window, overlap-add with 50% hop. Produces varispeed scrub at all speeds.
+// 1x uses direct passthrough (no windowing overhead).
 class ScrubStretchEngineImpl {
 public:
     ScrubStretchEngineImpl(const SseConfig& config)
@@ -142,29 +142,32 @@ public:
         , m_quality(QualityMode::Q1)
         , m_starved(false)
         , m_last_direction(0)
-        , m_xfade_remaining(0) {
+        , m_xfade_remaining(0)
+        , m_scrub_pos(0)
+        , m_snippet_valid(false) {
 
-        // Calculate window sizes
-        m_analysis_frames = (config.sample_rate * ANALYSIS_WINDOW_MS) / 1000;
-        m_hop_frames = m_analysis_frames * (100 - OVERLAP_PERCENT) / 100;
+        // Snippet geometry: 40ms snippet, 50% overlap → 20ms hop
+        m_snippet_frames = (config.sample_rate * SNIPPET_MS) / 1000;
+        m_hop_frames = m_snippet_frames / 2;
 
-        // Allocate buffers
-        m_analysis_buffer.resize(static_cast<size_t>(m_analysis_frames * config.channels));
-        m_synthesis_buffer.resize(static_cast<size_t>(m_analysis_frames * config.channels));
-        m_output_buffer.resize(static_cast<size_t>(m_analysis_frames * config.channels));
-        m_xfade_buffer.resize(static_cast<size_t>(m_analysis_frames * config.channels));
-        m_window.resize(static_cast<size_t>(m_analysis_frames));
+        // Max source frames needed: snippet_frames * MAX_SPEED_DECIMATE
+        int max_fetch = static_cast<int>(m_snippet_frames * MAX_SPEED_DECIMATE) + 1;
 
-        // Hann window
-        for (int i = 0; i < m_analysis_frames; i++) {
-            m_window[i] = 0.5f * (1.0f - std::cos(2.0f * PI * i / (m_analysis_frames - 1)));
+        // Allocate buffers (interleaved: frames * channels)
+        size_t snippet_size = static_cast<size_t>(m_snippet_frames * config.channels);
+        m_snippet_a.resize(snippet_size, 0.0f);
+        m_snippet_b.resize(snippet_size, 0.0f);
+        m_fetch_buffer.resize(static_cast<size_t>(max_fetch * config.channels));
+        m_xfade_buffer.resize(snippet_size);
+
+        // Hann window over snippet_frames
+        m_window.resize(static_cast<size_t>(m_snippet_frames));
+        for (int i = 0; i < m_snippet_frames; i++) {
+            m_window[i] = 0.5f * (1.0f - std::cos(2.0f * PI * i / (m_snippet_frames - 1)));
         }
 
-        // Calculate crossfade frames
+        // Direction crossfade frames
         m_xfade_frames = (config.xfade_ms * config.sample_rate) / 1000;
-
-        // Search range for correlation
-        m_search_frames = m_hop_frames / 2;
     }
 
     void reset() {
@@ -173,51 +176,38 @@ public:
         m_starved = false;
         m_last_direction = 0;
         m_xfade_remaining = 0;
-        std::fill(m_output_buffer.begin(), m_output_buffer.end(), 0.0f);
+        reset_snippet_state();
     }
 
     void set_target(int64_t t_us, float speed, QualityMode mode) {
         // Detect direction change
         int new_direction = (speed >= 0) ? 1 : -1;
         if (m_last_direction != 0 && new_direction != m_last_direction) {
-            // Direction flip - clear synthesis state to prevent stale window artifacts
-            // The synthesis buffer holds residual from the previous window (chronologically
-            // "later" in media time for reverse), which would bleed via overlap-add.
-            std::fill(m_synthesis_buffer.begin(), m_synthesis_buffer.end(), 0.0f);
-
-            // Initiate crossfade to smooth the transition
+            // Direction flip: initiate crossfade from current output
             m_xfade_remaining = m_xfade_frames;
-            std::copy(m_output_buffer.begin(), m_output_buffer.end(), m_xfade_buffer.begin());
+            // Save current snippet_a as crossfade source (best approximation of last output)
+            std::copy(m_snippet_a.begin(), m_snippet_a.end(), m_xfade_buffer.begin());
+            reset_snippet_state();
         }
         m_last_direction = new_direction;
 
-        // ALWAYS set time - SetTarget is now only called on transport events
-        // (start, seek, speed change), not during steady-state playback.
-        // The old "m_needs_time_init" hack was needed when video called SetTarget
-        // every frame, but audio_playback now handles time tracking via AOP playhead.
         m_current_time_us = t_us;
-
         m_speed = speed;
         m_quality = mode;
 
         // Clamp speed to valid range based on quality mode
         float abs_speed = std::abs(m_speed);
         if (mode == QualityMode::Q3_DECIMATE) {
-            // Decimate mode: allow up to MAX_SPEED_DECIMATE (16x)
-            // Assert invariants for decimate mode
-            assert(abs_speed > MAX_SPEED_STRETCHED &&
-                "Q3_DECIMATE should only be used for speeds > MAX_SPEED_STRETCHED (4x)");
             if (abs_speed > MAX_SPEED_DECIMATE) {
                 m_speed = (m_speed >= 0) ? MAX_SPEED_DECIMATE : -MAX_SPEED_DECIMATE;
             }
         } else {
-            // Q1/Q2: clamp to stretched range
             float min_speed = (mode == QualityMode::Q1) ? m_config.min_speed_q1 : m_config.min_speed_q2;
             if (abs_speed < min_speed) {
                 m_speed = (m_speed >= 0) ? min_speed : -min_speed;
             }
-            if (abs_speed > MAX_SPEED_STRETCHED) {
-                m_speed = (m_speed >= 0) ? MAX_SPEED_STRETCHED : -MAX_SPEED_STRETCHED;
+            if (abs_speed > MAX_SPEED_DECIMATE) {
+                m_speed = (m_speed >= 0) ? MAX_SPEED_DECIMATE : -MAX_SPEED_DECIMATE;
             }
         }
     }
@@ -225,18 +215,14 @@ public:
     void push_source(const float* data, int64_t frames, int64_t start_time_us) {
         m_source_buffer.push(data, frames, start_time_us, m_config.sample_rate);
 
-        // Trim data far outside playhead to prevent unbounded memory growth.
-        // Keep 10 seconds in both directions to match Lua's audio cache window.
-        // This allows reverse playback without constant re-pushing.
-        int64_t keep_margin_us = 10000000;  // 10 seconds (matches Lua AUDIO_CACHE_HALF_WINDOW_US)
+        // Trim data far outside playhead to prevent unbounded memory growth
+        int64_t keep_margin_us = 10000000;  // 10s (matches Lua AUDIO_CACHE_HALF_WINDOW_US)
         if (m_speed >= 0) {
-            // Forward: trim data far behind us (low times)
             int64_t min_keep = m_current_time_us - keep_margin_us;
             if (min_keep > 0) {
                 m_source_buffer.trim(min_keep, m_config.sample_rate);
             }
         } else {
-            // Reverse: trim data far ahead of us (high times)
             int64_t max_keep = m_current_time_us + keep_margin_us;
             m_source_buffer.trim_after(max_keep, m_config.sample_rate);
         }
@@ -244,133 +230,18 @@ public:
 
     int64_t render(float* out, int64_t out_frames) {
         if (std::abs(m_speed) < 0.001f) {
-            // Essentially paused - output silence
             std::memset(out, 0, out_frames * m_config.channels * sizeof(float));
             return out_frames;
         }
 
-        // Dispatch to decimate mode for Q3_DECIMATE (>4x speeds)
-        if (m_quality == QualityMode::Q3_DECIMATE) {
-            return render_decimate(out, out_frames);
-        }
-
-        // Standard WSOLA path for Q1/Q2
-        int64_t frames_produced = 0;
-
-        while (frames_produced < out_frames) {
-            int64_t frames_needed = std::min(out_frames - frames_produced,
-                                             static_cast<int64_t>(m_hop_frames));
-
-            // Calculate fetch position - for reverse, we need to look back in time
-            // to get the samples we'll reverse and output
-            int64_t fetch_time_us = m_current_time_us;
-            if (m_speed < 0) {
-                // For reverse: fetch from (current - window_duration) so after reversing,
-                // the first sample corresponds to current_time
-                int64_t window_duration_us = (m_analysis_frames * 1000000LL) / m_config.sample_rate;
-                fetch_time_us = m_current_time_us - window_duration_us;
-            }
-
-            // Try to get source samples
-            bool have_source = m_source_buffer.get_samples(
-                fetch_time_us, m_config.sample_rate,
-                m_analysis_buffer.data(), m_analysis_frames
-            );
-
-            if (!have_source) {
-                // Starved - output silence for remaining
-                m_starved = true;
-                std::memset(out + frames_produced * m_config.channels, 0,
-                            (out_frames - frames_produced) * m_config.channels * sizeof(float));
-                return out_frames;
-            }
-
-            // For reverse playback, reverse the samples so they play backwards
-            if (m_speed < 0) {
-                reverse_interleaved(m_analysis_buffer.data(), m_analysis_frames);
-            }
-
-            // WSOLA synthesis
-            process_wsola_frame(frames_needed);
-
-            // Copy to output with crossfade if needed
-            for (int64_t i = 0; i < frames_needed; i++) {
-                int64_t idx = (frames_produced + i) * m_config.channels;
-                int64_t buf_idx = i * m_config.channels;
-
-                for (int ch = 0; ch < m_config.channels; ch++) {
-                    float sample = m_output_buffer[buf_idx + ch];
-
-                    // Apply crossfade if transitioning
-                    if (m_xfade_remaining > 0) {
-                        float xfade_pos = static_cast<float>(m_xfade_remaining) / m_xfade_frames;
-                        float old_sample = m_xfade_buffer[buf_idx + ch];
-                        sample = sample * (1.0f - xfade_pos) + old_sample * xfade_pos;
-                        m_xfade_remaining--;
-                    }
-
-                    out[idx + ch] = sample;
-                }
-            }
-
-            frames_produced += frames_needed;
-
-            // Advance time based on speed
-            int64_t time_advance_us = (frames_needed * 1000000LL) / m_config.sample_rate;
-            time_advance_us = static_cast<int64_t>(time_advance_us * m_speed);
-            m_current_time_us += time_advance_us;
-        }
-
-        return frames_produced;
-    }
-
-    // Decimate mode rendering: no pitch correction, just sample skipping
-    // Used for >4x speeds where WSOLA quality degrades
-    int64_t render_decimate(float* out, int64_t out_frames) {
         float abs_speed = std::abs(m_speed);
 
-        // Debug asserts for decimate mode invariants
-        assert(abs_speed > MAX_SPEED_STRETCHED &&
-            "render_decimate: abs(speed) must be > MAX_SPEED_STRETCHED (4x)");
-        assert(abs_speed <= MAX_SPEED_DECIMATE &&
-            "render_decimate: abs(speed) must be <= MAX_SPEED_DECIMATE (16x)");
-
-        int64_t frames_produced = 0;
-
-        while (frames_produced < out_frames) {
-            // For decimate mode, we sample at intervals based on speed
-            // At 8x, we take every 8th sample; at 16x, every 16th sample
-
-            // Try to get source sample at current time
-            // We only need 1 frame, but get_samples requires m_analysis_frames
-            bool have_source = m_source_buffer.get_samples(
-                m_current_time_us, m_config.sample_rate,
-                m_analysis_buffer.data(), m_analysis_frames
-            );
-
-            if (!have_source) {
-                // Starved - output silence for remaining
-                m_starved = true;
-                std::memset(out + frames_produced * m_config.channels, 0,
-                            (out_frames - frames_produced) * m_config.channels * sizeof(float));
-                return out_frames;
-            }
-
-            // Copy first frame from analysis buffer to output
-            for (int ch = 0; ch < m_config.channels; ch++) {
-                out[frames_produced * m_config.channels + ch] = m_analysis_buffer[ch];
-            }
-
-            frames_produced++;
-
-            // Advance time based on speed (skip ahead proportionally)
-            // Each output frame advances the source by speed frames
-            int64_t time_advance_us = (1 * 1000000LL) / m_config.sample_rate;
-            time_advance_us = static_cast<int64_t>(time_advance_us * m_speed);
-            m_current_time_us += time_advance_us;
+        // 1x passthrough: direct copy, no windowing
+        if (abs_speed > 0.99f && abs_speed < 1.01f) {
+            return render_passthrough(out, out_frames);
         }
 
-        return frames_produced;
+        return render_scrub(out, out_frames);
     }
 
     bool starved() const { return m_starved; }
@@ -378,7 +249,194 @@ public:
     int64_t current_time_us() const { return m_current_time_us; }
 
 private:
-    // Reverse interleaved audio samples in-place
+    // ── Snippet state management ──
+
+    void reset_snippet_state() {
+        m_scrub_pos = 0;
+        m_snippet_valid = false;
+        std::fill(m_snippet_a.begin(), m_snippet_a.end(), 0.0f);
+        std::fill(m_snippet_b.begin(), m_snippet_b.end(), 0.0f);
+    }
+
+    // ── Core scrub render: overlap-add with Hann windowed snippets ──
+
+    int64_t render_scrub(float* out, int64_t out_frames) {
+        int ch = m_config.channels;
+        int64_t frames_produced = 0;
+
+        while (frames_produced < out_frames) {
+            // If we're at the start of a new hop, prepare the next snippet
+            if (m_scrub_pos >= m_hop_frames || !m_snippet_valid) {
+                if (!prepare_next_snippet()) {
+                    // Starved - fill remaining with silence
+                    m_starved = true;
+                    std::memset(out + frames_produced * ch, 0,
+                                (out_frames - frames_produced) * ch * sizeof(float));
+                    return out_frames;
+                }
+                m_scrub_pos = 0;
+            }
+
+            // How many frames can we produce from the current snippet position?
+            int64_t available = m_hop_frames - m_scrub_pos;
+            int64_t to_produce = std::min(out_frames - frames_produced, available);
+
+            // Overlap-add: snippet_a[pos] + snippet_b[pos + hop]
+            for (int64_t i = 0; i < to_produce; i++) {
+                int pos = m_scrub_pos + static_cast<int>(i);
+                int pos_b = pos + m_hop_frames;  // snippet_b is offset by hop
+
+                for (int c = 0; c < ch; c++) {
+                    float sample = m_snippet_a[pos * ch + c];
+                    if (pos_b < m_snippet_frames) {
+                        sample += m_snippet_b[pos_b * ch + c];
+                    }
+
+                    // Apply direction crossfade if active
+                    if (m_xfade_remaining > 0) {
+                        float xfade_pos = static_cast<float>(m_xfade_remaining) / m_xfade_frames;
+                        sample = sample * (1.0f - xfade_pos);
+                        m_xfade_remaining--;
+                    }
+
+                    out[(frames_produced + i) * ch + c] = sample;
+                }
+            }
+
+            m_scrub_pos += static_cast<int>(to_produce);
+            frames_produced += to_produce;
+        }
+
+        return frames_produced;
+    }
+
+    // ── 1x passthrough: direct source copy ──
+
+    int64_t render_passthrough(float* out, int64_t out_frames) {
+        int ch = m_config.channels;
+
+        // For reverse, fetch from (current - duration) so output starts at current_time
+        int64_t fetch_time = m_current_time_us;
+        if (m_speed < 0) {
+            int64_t duration_us = (out_frames * 1000000LL) / m_config.sample_rate;
+            fetch_time = m_current_time_us - duration_us;
+        }
+
+        bool have_source = m_source_buffer.get_samples(
+            fetch_time, m_config.sample_rate, out, out_frames);
+
+        if (!have_source) {
+            m_starved = true;
+            std::memset(out, 0, out_frames * ch * sizeof(float));
+            return out_frames;
+        }
+
+        if (m_speed < 0) {
+            reverse_interleaved(out, out_frames);
+        }
+
+        // Apply direction crossfade if active
+        if (m_xfade_remaining > 0) {
+            apply_direction_crossfade(out, out_frames);
+        }
+
+        advance_time(out_frames);
+        return out_frames;
+    }
+
+    // ── Prepare next snippet: swap, fetch, resample, window, advance ──
+
+    bool prepare_next_snippet() {
+        int ch = m_config.channels;
+        float abs_speed = std::abs(m_speed);
+
+        // Swap: old snippet_a becomes snippet_b (it's the trailing overlap)
+        std::swap(m_snippet_a, m_snippet_b);
+
+        // Calculate how many source frames we need for this snippet
+        int source_frames_needed = static_cast<int>(std::ceil(m_snippet_frames * abs_speed));
+        if (source_frames_needed < 1) source_frames_needed = 1;
+
+        // Fetch source at current time
+        int64_t fetch_time = m_current_time_us;
+        if (m_speed < 0) {
+            // For reverse: fetch from (current - source_duration) so data corresponds
+            // to the time region we're about to play through
+            int64_t source_duration_us = (static_cast<int64_t>(source_frames_needed) * 1000000LL) / m_config.sample_rate;
+            fetch_time = m_current_time_us - source_duration_us;
+        }
+
+        bool have_source = m_source_buffer.get_samples(
+            fetch_time, m_config.sample_rate,
+            m_fetch_buffer.data(), source_frames_needed);
+
+        if (!have_source) {
+            return false;
+        }
+
+        // Reverse the fetched source if playing backwards
+        if (m_speed < 0) {
+            reverse_interleaved(m_fetch_buffer.data(), source_frames_needed);
+        }
+
+        // Linear resample: source_frames_needed → m_snippet_frames
+        linear_resample(m_fetch_buffer.data(), source_frames_needed,
+                        m_snippet_a.data(), m_snippet_frames, ch);
+
+        // Apply Hann window
+        for (int i = 0; i < m_snippet_frames; i++) {
+            for (int c = 0; c < ch; c++) {
+                m_snippet_a[i * ch + c] *= m_window[i];
+            }
+        }
+
+        m_snippet_valid = true;
+
+        // Advance source time by hop duration (not snippet duration)
+        advance_time(m_hop_frames);
+
+        return true;
+    }
+
+    // ── Linear interpolation resample ──
+
+    static void linear_resample(const float* in, int in_frames,
+                                float* out, int out_frames, int channels) {
+        if (in_frames <= 1) {
+            // Degenerate: just copy the single frame (or zero)
+            for (int i = 0; i < out_frames; i++) {
+                for (int c = 0; c < channels; c++) {
+                    out[i * channels + c] = (in_frames == 1) ? in[c] : 0.0f;
+                }
+            }
+            return;
+        }
+
+        float ratio = static_cast<float>(in_frames - 1) / static_cast<float>(out_frames - 1);
+
+        for (int i = 0; i < out_frames; i++) {
+            float src_pos = i * ratio;
+            int idx0 = static_cast<int>(src_pos);
+            int idx1 = std::min(idx0 + 1, in_frames - 1);
+            float frac = src_pos - idx0;
+
+            for (int c = 0; c < channels; c++) {
+                out[i * channels + c] = in[idx0 * channels + c] * (1.0f - frac)
+                                      + in[idx1 * channels + c] * frac;
+            }
+        }
+    }
+
+    // ── Time advancement ──
+
+    void advance_time(int64_t output_frames) {
+        int64_t time_advance_us = (output_frames * 1000000LL) / m_config.sample_rate;
+        time_advance_us = static_cast<int64_t>(time_advance_us * m_speed);
+        m_current_time_us += time_advance_us;
+    }
+
+    // ── Utilities ──
+
     void reverse_interleaved(float* data, int64_t frames) {
         int channels = m_config.channels;
         for (int64_t i = 0; i < frames / 2; i++) {
@@ -389,98 +447,18 @@ private:
         }
     }
 
-    void process_wsola_frame(int64_t hop_out_frames) {
-        float abs_speed = std::abs(m_speed);
-
-        // For speed=1.0, just copy through
-        if (abs_speed > 0.99f && abs_speed < 1.01f) {
-            std::copy(m_analysis_buffer.begin(),
-                      m_analysis_buffer.begin() + hop_out_frames * m_config.channels,
-                      m_output_buffer.begin());
-            return;
-        }
-
-        // Calculate input hop based on speed ratio
-        int input_hop = static_cast<int>(m_hop_frames * abs_speed);
-        if (input_hop < 1) input_hop = 1;
-        if (input_hop > m_analysis_frames / 2) input_hop = m_analysis_frames / 2;
-
-        // Find best correlation offset
-        int best_offset = find_best_correlation(input_hop);
-
-        // Apply Hann window and overlap-add
-        for (int i = 0; i < m_hop_frames && i < static_cast<int>(hop_out_frames); i++) {
-            for (int ch = 0; ch < m_config.channels; ch++) {
-                int src_idx = (best_offset + i) * m_config.channels + ch;
-                int dst_idx = i * m_config.channels + ch;
-
-                if (src_idx < static_cast<int>(m_analysis_buffer.size())) {
-                    float windowed = m_analysis_buffer[src_idx] * m_window[i];
-
-                    // Simple overlap-add synthesis
-                    if (i < m_hop_frames / 4) {
-                        // Overlap region - blend with previous
-                        float blend = static_cast<float>(i) / (m_hop_frames / 4);
-                        m_output_buffer[dst_idx] = m_synthesis_buffer[dst_idx] * (1.0f - blend) +
-                                                   windowed * blend;
-                    } else {
-                        m_output_buffer[dst_idx] = windowed;
-                    }
-
-                    // Store for next overlap
-                    m_synthesis_buffer[dst_idx] = m_analysis_buffer[src_idx] * m_window[m_hop_frames - 1 - i];
-                }
+    void apply_direction_crossfade(float* out, int64_t frames) {
+        int ch = m_config.channels;
+        for (int64_t i = 0; i < frames && m_xfade_remaining > 0; i++) {
+            float xfade_pos = static_cast<float>(m_xfade_remaining) / m_xfade_frames;
+            for (int c = 0; c < ch; c++) {
+                out[i * ch + c] *= (1.0f - xfade_pos);
             }
+            m_xfade_remaining--;
         }
     }
 
-    int find_best_correlation(int target_hop) {
-        // Simple correlation search around target position
-        int best_offset = target_hop;
-        float best_corr = -1.0f;
-
-        int search_start = std::max(0, target_hop - m_search_frames);
-        int search_end = std::min(m_analysis_frames - m_hop_frames, target_hop + m_search_frames);
-
-        for (int offset = search_start; offset < search_end; offset++) {
-            float corr = compute_correlation(offset);
-            if (corr > best_corr) {
-                best_corr = corr;
-                best_offset = offset;
-            }
-        }
-
-        return best_offset;
-    }
-
-    float compute_correlation(int offset) {
-        // Simplified correlation - just sum of products
-        float sum = 0.0f;
-        float norm1 = 0.0f;
-        float norm2 = 0.0f;
-
-        int corr_length = m_hop_frames / 4;  // Only correlate overlap region
-
-        for (int i = 0; i < corr_length; i++) {
-            for (int ch = 0; ch < m_config.channels; ch++) {
-                int idx1 = i * m_config.channels + ch;
-                int idx2 = (offset + i) * m_config.channels + ch;
-
-                if (idx2 < static_cast<int>(m_analysis_buffer.size())) {
-                    float s1 = m_synthesis_buffer[idx1];
-                    float s2 = m_analysis_buffer[idx2];
-                    sum += s1 * s2;
-                    norm1 += s1 * s1;
-                    norm2 += s2 * s2;
-                }
-            }
-        }
-
-        if (norm1 > 0.0001f && norm2 > 0.0001f) {
-            return sum / std::sqrt(norm1 * norm2);
-        }
-        return 0.0f;
-    }
+    // ── Member data ──
 
     SseConfig m_config;
     SourceBuffer m_source_buffer;
@@ -496,17 +474,20 @@ private:
     int m_xfade_remaining;
     int m_xfade_frames;
 
-    // WSOLA parameters
-    int m_analysis_frames;
-    int m_hop_frames;
-    int m_search_frames;
+    // Snippet geometry
+    int m_snippet_frames;   // 40ms = 1920 @ 48kHz
+    int m_hop_frames;       // 50% overlap = 960 @ 48kHz
 
-    // Buffers
-    std::vector<float> m_analysis_buffer;
-    std::vector<float> m_synthesis_buffer;
-    std::vector<float> m_output_buffer;
-    std::vector<float> m_xfade_buffer;
-    std::vector<float> m_window;
+    // Snippet state
+    int m_scrub_pos;        // Current position within the hop region
+    bool m_snippet_valid;   // Whether snippet_a/b contain valid data
+
+    // Buffers (all interleaved: frames * channels)
+    std::vector<float> m_snippet_a;     // Current snippet (windowed)
+    std::vector<float> m_snippet_b;     // Previous snippet (for overlap tail)
+    std::vector<float> m_fetch_buffer;  // Raw source fetch (pre-resample)
+    std::vector<float> m_xfade_buffer;  // Direction crossfade snapshot
+    std::vector<float> m_window;        // Hann window (snippet_frames)
 };
 
 // ScrubStretchEngine implementation

@@ -16,6 +16,9 @@ enum class QualityMode {
 constexpr float MAX_SPEED_STRETCHED = 4.0f;   // Max speed for pitch-corrected playback
 constexpr float MAX_SPEED_DECIMATE = 16.0f;   // Max speed for decimate mode
 
+// Snippet-based scrub constants
+constexpr int SNIPPET_MS = 40;                // Snippet length for overlap-add scrub
+
 // Configuration for SSE
 struct SseConfig {
     int32_t sample_rate;       // Device rate (default 48000)
@@ -32,8 +35,8 @@ struct SseConfig {
 // Forward declaration
 class ScrubStretchEngineImpl;
 
-// WSOLA-based pitch-preserving time stretcher
-// Supports bidirectional playback with seamless direction changes
+// Snippet-based overlap-add scrub engine
+// Windowed varispeed for all speeds; 1x passthrough; bidirectional with crossfade
 class ScrubStretchEngine {
 public:
     ~ScrubStretchEngine();

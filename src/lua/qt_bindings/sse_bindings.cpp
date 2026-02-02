@@ -116,7 +116,7 @@ static int lua_sse_reset(lua_State* L) {
 }
 
 // SSE.SET_TARGET(sse, t_us, speed, quality_mode)
-// quality_mode: 1 = Q1 (editor), 2 = Q2 (extreme slomo)
+// quality_mode: 1 = Q1 (editor), 2 = Q2 (extreme slomo), 3 = Q3_DECIMATE (varispeed)
 static int lua_sse_set_target(lua_State* L) {
     sse::ScrubStretchEngine* engine = get_sse_userdata(L, 1);
     if (!engine) {
@@ -127,12 +127,22 @@ static int lua_sse_set_target(lua_State* L) {
     float speed = static_cast<float>(luaL_checknumber(L, 3));
     int mode_int = static_cast<int>(luaL_optinteger(L, 4, 1));
 
-    sse::QualityMode mode = (mode_int == 2) ? sse::QualityMode::Q2 : sse::QualityMode::Q1;
+    sse::QualityMode mode;
+    if (mode_int == 3) {
+        mode = sse::QualityMode::Q3_DECIMATE;
+    } else if (mode_int == 2) {
+        mode = sse::QualityMode::Q2;
+    } else {
+        mode = sse::QualityMode::Q1;
+    }
     engine->SetTarget(t_us, speed, mode);
     return 0;
 }
 
-// SSE.PUSH_PCM(sse, pcm_data_ptr, frames, start_time_us)
+// SSE.PUSH_PCM(sse, pcm_data_ptr, frames, start_time_us [, skip_frames])
+// Optional skip_frames: offset into buffer (in frames) to start from.
+// When provided, pushes (frames - skip_frames) starting at data + skip_frames * channels,
+// with start_time_us adjusted forward by skip_frames worth of time.
 static int lua_sse_push_pcm(lua_State* L) {
     sse::ScrubStretchEngine* engine = get_sse_userdata(L, 1);
     if (!engine) {
@@ -152,6 +162,17 @@ static int lua_sse_push_pcm(lua_State* L) {
     }
     int64_t frames = static_cast<int64_t>(luaL_checkinteger(L, 3));
     int64_t start_time_us = static_cast<int64_t>(luaL_checkinteger(L, 4));
+
+    // Optional: skip_frames offset into buffer (for windowed push)
+    if (lua_gettop(L) >= 5 && !lua_isnil(L, 5)) {
+        int64_t skip = static_cast<int64_t>(luaL_checkinteger(L, 5));
+        int64_t max_frames = lua_gettop(L) >= 6
+            ? static_cast<int64_t>(luaL_checkinteger(L, 6))
+            : (frames - skip);
+        constexpr int CHANNELS = 2;  // stereo interleaved
+        data += skip * CHANNELS;
+        frames = std::min(max_frames, frames - skip);
+    }
 
     engine->PushSourcePcm(data, frames, start_time_us);
     return 0;
@@ -289,6 +310,8 @@ void register_sse_bindings(lua_State* L) {
     lua_setfield(L, -2, "Q1");
     lua_pushinteger(L, 2);
     lua_setfield(L, -2, "Q2");
+    lua_pushinteger(L, 3);
+    lua_setfield(L, -2, "Q3_DECIMATE");
 
     lua_setfield(L, -2, "SSE");
 }
