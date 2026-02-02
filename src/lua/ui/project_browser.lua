@@ -1381,7 +1381,9 @@ function M.refresh()
 end
 
 handle_tree_drop = function(event)
-    if not event or type(event.sources) ~= "table" or #event.sources == 0 then
+    assert(type(event) == "table",
+        "project_browser.handle_tree_drop: event must be a table, got " .. type(event))
+    if type(event.sources) ~= "table" or #event.sources == 0 then
         return false
     end
 

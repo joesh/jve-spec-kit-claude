@@ -73,25 +73,54 @@ protected:
         if (!drop_handler.empty() && lua_state) {
             lua_getglobal(lua_state, drop_handler.c_str());
             if (lua_isfunction(lua_state, -1)) {
-                // Arguments: target_item_id, mime_data
-                QTreeWidgetItem* item = itemAt(event->position().toPoint());
-                lua_pushinteger(lua_state, makeTreeItemId(item));
-                
-                // Simple text data for now, extend for custom mime types if needed
-                if (event->mimeData()->hasText()) {
-                    lua_pushstring(lua_state, event->mimeData()->text().toUtf8().constData());
-                } else {
-                    lua_pushnil(lua_state);
-                }
+                // Build event table: {sources={id,...}, target_id=id, position="into"|...}
+                lua_newtable(lua_state); // event table for drop_handler
 
-                if (lua_pcall(lua_state, 2, 0, 0) != LUA_OK) {
+                // sources: IDs of all selected (dragged) items
+                QList<QTreeWidgetItem*> selected = selectedItems();
+                lua_newtable(lua_state);
+                for (int i = 0; i < selected.size(); i++) {
+                    lua_pushinteger(lua_state, makeTreeItemId(selected[i]));
+                    lua_rawseti(lua_state, -2, i + 1);
+                }
+                lua_setfield(lua_state, -2, "sources");
+
+                // target_id: item under the drop cursor
+                QTreeWidgetItem* targetItem = itemAt(event->position().toPoint());
+                lua_pushinteger(lua_state, makeTreeItemId(targetItem));
+                lua_setfield(lua_state, -2, "target_id");
+
+                // position: where relative to the target item
+                const char* pos = "viewport";
+                if (targetItem) {
+                    switch (dropIndicatorPosition()) {
+                        case QAbstractItemView::AboveItem: pos = "above"; break;
+                        case QAbstractItemView::BelowItem: pos = "below"; break;
+                        case QAbstractItemView::OnItem:    pos = "into"; break;
+                        case QAbstractItemView::OnViewport: pos = "viewport"; break;
+                    }
+                }
+                lua_pushstring(lua_state, pos);
+                lua_setfield(lua_state, -2, "position");
+
+                if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
                     qWarning() << "Error calling Lua drop handler:" << lua_tostring(lua_state, -1);
                     lua_pop(lua_state, 1);
+                    event->ignore();
+                } else {
+                    bool handled = lua_toboolean(lua_state, -1);
+                    lua_pop(lua_state, 1);
+                    if (handled) {
+                        event->setDropAction(Qt::IgnoreAction);
+                        event->accept();
+                    } else {
+                        event->ignore();
+                    }
                 }
             } else {
                 lua_pop(lua_state, 1);
+                event->ignore();
             }
-            event->acceptProposedAction();
         } else {
             QTreeWidget::dropEvent(event);
         }
