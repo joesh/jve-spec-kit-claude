@@ -151,7 +151,12 @@ CREATE TABLE IF NOT EXISTS clips (
     -- State
     enabled BOOLEAN NOT NULL DEFAULT 1,
     offline BOOLEAN NOT NULL DEFAULT 0,
-    
+
+    -- Per-clip source viewer state (marks + playhead)
+    mark_in_frame INTEGER,       -- nullable (no mark set)
+    mark_out_frame INTEGER,      -- nullable (no mark set)
+    playhead_frame INTEGER NOT NULL DEFAULT 0,
+
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
 );

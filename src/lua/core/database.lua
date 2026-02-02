@@ -2186,4 +2186,87 @@ end
 -- REMOVED: import_media() - Stub function that returned dummy data
 -- Use media_reader.lua and ImportMedia command instead
 
+--------------------------------------------------------------------------------
+-- Per-Clip Marks & Playhead
+--------------------------------------------------------------------------------
+
+--- Load mark_in, mark_out, playhead for a clip.
+-- @param clip_id string: clip row ID
+-- @return table {mark_in_frame, mark_out_frame, playhead_frame} or nil if clip not found
+function M.load_clip_marks(clip_id)
+    assert(clip_id and clip_id ~= "",
+        "database.load_clip_marks: clip_id required")
+    assert(db_connection,
+        "database.load_clip_marks: no active database connection")
+
+    local stmt = db_connection:prepare([[
+        SELECT mark_in_frame, mark_out_frame, playhead_frame
+        FROM clips
+        WHERE id = ?
+    ]])
+    assert(stmt, "database.load_clip_marks: failed to prepare query")
+
+    stmt:bind_value(1, clip_id)
+
+    local result = nil
+    if stmt:exec() and stmt:next() then
+        result = {
+            mark_in_frame = stmt:value(0),   -- nil when NULL
+            mark_out_frame = stmt:value(1),  -- nil when NULL
+            playhead_frame = stmt:value(2),
+        }
+    end
+
+    stmt:finalize()
+    return result
+end
+
+--- Persist mark_in, mark_out, playhead for a clip.
+-- mark_in and mark_out may be nil (clears the mark).
+-- @param clip_id string: clip row ID (must exist)
+-- @param mark_in number|nil: mark in frame
+-- @param mark_out number|nil: mark out frame
+-- @param playhead number: playhead frame
+function M.save_clip_marks(clip_id, mark_in, mark_out, playhead)
+    assert(clip_id and clip_id ~= "",
+        "database.save_clip_marks: clip_id required")
+    assert(playhead ~= nil,
+        "database.save_clip_marks: playhead required")
+    assert(db_connection,
+        "database.save_clip_marks: no active database connection")
+
+    local stmt = db_connection:prepare([[
+        UPDATE clips
+        SET mark_in_frame = ?, mark_out_frame = ?, playhead_frame = ?,
+            modified_at = strftime('%s','now')
+        WHERE id = ?
+    ]])
+    assert(stmt, "database.save_clip_marks: failed to prepare update")
+
+    -- bind_value with nil produces SQL NULL for nullable columns
+    if mark_in ~= nil then
+        stmt:bind_value(1, mark_in)
+    elseif stmt.bind_null then
+        stmt:bind_null(1)
+    else
+        stmt:bind_value(1, nil)
+    end
+
+    if mark_out ~= nil then
+        stmt:bind_value(2, mark_out)
+    elseif stmt.bind_null then
+        stmt:bind_null(2)
+    else
+        stmt:bind_value(2, nil)
+    end
+
+    stmt:bind_value(3, playhead)
+    stmt:bind_value(4, clip_id)
+
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok ~= false, string.format(
+        "database.save_clip_marks: UPDATE failed for clip %s", clip_id))
+end
+
 return M

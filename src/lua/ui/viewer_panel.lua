@@ -18,6 +18,8 @@ local inspectable_factory = require("inspectable")
 local logger = require("core.logger")
 local media_cache = require("core.media.media_cache")
 local playback_controller = require("core.playback.playback_controller")
+local source_viewer_state = require("ui.source_viewer_state")
+local source_mark_bar = require("ui.source_mark_bar")
 
 local M = {}
 
@@ -28,7 +30,6 @@ local viewer_widget = nil
 local title_label = nil
 local content_container = nil
 local video_surface = nil      -- GPUVideoSurface for video display
-
 -- Current display state (frame comes from media_cache, we just track index)
 local current_frame_idx = 0
 
@@ -166,6 +167,17 @@ function M.create()
     end
     logger.info("viewer_panel", "Video surface created for frame display")
 
+    -- Create source mark bar below video surface (ScriptableTimeline widget)
+    assert(qt_constants.WIDGET.CREATE_TIMELINE,
+           "viewer_panel.create: CREATE_TIMELINE not available")
+    local mark_bar_widget = qt_constants.WIDGET.CREATE_TIMELINE()
+    assert(mark_bar_widget, "viewer_panel.create: CREATE_TIMELINE returned nil")
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(mark_bar_widget, "Expanding", "Fixed")
+    timeline.set_desired_height(mark_bar_widget, source_mark_bar.BAR_HEIGHT)
+    qt_constants.LAYOUT.ADD_WIDGET(content_layout, mark_bar_widget)
+    source_mark_bar.create(mark_bar_widget)
+    logger.info("viewer_panel", "Source mark bar created")
+
     -- Initialize playback controller with this viewer panel
     playback_controller.init(M)
 
@@ -192,6 +204,7 @@ end
 
 function M.clear()
     ensure_created()
+    source_viewer_state.unload()
     clear_video_surface()
     if qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Source Viewer")
@@ -213,7 +226,22 @@ function M.show_source_clip(media)
     playback_controller.set_timeline_mode(false)
 
     -- Load and display video frame (asserts on failure)
-    load_video_frame(media.file_path)
+    local info = load_video_frame(media.file_path)
+
+    -- Load per-clip marks/playhead from DB into source_viewer_state
+    local clip_id = media.clip_id or media.id
+    if clip_id and info then
+        local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
+        if total_frames > 0 then
+            source_viewer_state.load_clip(clip_id, total_frames, info.fps_num, info.fps_den)
+
+            -- Seek to restored playhead position
+            local restored_playhead = source_viewer_state.playhead
+            if restored_playhead > 0 then
+                playback_controller.set_position(restored_playhead)
+            end
+        end
+    end
 
     local inspectable = nil
     if media.clip_id or media.id then
@@ -297,6 +325,11 @@ end
 function M.show_timeline(sequence)
     ensure_created()
     assert(sequence, "viewer_panel.show_timeline: sequence is nil")
+
+    -- Save current source clip state before switching to timeline
+    if source_viewer_state.has_clip() then
+        source_viewer_state.save_to_db()
+    end
 
     if qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Timeline Viewer")

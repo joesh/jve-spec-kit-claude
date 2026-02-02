@@ -54,12 +54,28 @@ local mock_emp = {
 }
 
 -- Mock qt_constants (both package.loaded and global for media_cache compatibility)
+-- Mock global timeline drawing API (used by source_mark_bar)
+_G.timeline = {
+    get_dimensions = function() return 400, 20 end,
+    clear_commands = function() end,
+    add_rect = function() end,
+    add_line = function() end,
+    add_triangle = function() end,
+    add_text = function() end,
+    update = function() end,
+    set_lua_state = function() end,
+    set_mouse_event_handler = function() end,
+    set_resize_event_handler = function() end,
+    set_desired_height = function() end,
+}
+
 local mock_qt_constants = {
     EMP = mock_emp,
     WIDGET = {
         CREATE = function() return {} end,
         CREATE_LABEL = function(text) return {text = text} end,
         CREATE_GPU_VIDEO_SURFACE = function() return {} end,
+        CREATE_TIMELINE = function() return {} end,
     },
     LAYOUT = {
         CREATE_VBOX = function() return {} end,
@@ -69,9 +85,16 @@ local mock_qt_constants = {
         SET_ON_WIDGET = function() end,
         SET_STRETCH_FACTOR = function() end,
     },
+    CONTROL = {
+        SET_WIDGET_SIZE_POLICY = function() end,
+        SET_LAYOUT_SPACING = function() end,
+        SET_LAYOUT_MARGINS = function() end,
+    },
     PROPERTIES = {
         SET_STYLE = function() end,
         SET_TEXT = function() end,
+        SET_MIN_HEIGHT = function() end,
+        SET_MAX_HEIGHT = function() end,
     },
     GEOMETRY = {
         SET_SIZE_POLICY = function() end,
@@ -83,6 +106,34 @@ _G.qt_constants = mock_qt_constants  -- media_cache checks global
 -- Mock selection_hub
 package.loaded["ui.selection_hub"] = {
     update_selection = function() end,
+}
+
+-- Mock source_viewer_state (avoids database dependency)
+package.loaded["ui.source_viewer_state"] = {
+    current_clip_id = nil,
+    total_frames = 0,
+    playhead = 0,
+    mark_in = nil,
+    mark_out = nil,
+    has_clip = function() return false end,
+    load_clip = function(clip_id, total_frames, fps_num, fps_den)
+        local svs = package.loaded["ui.source_viewer_state"]
+        svs.current_clip_id = clip_id
+        svs.total_frames = total_frames
+    end,
+    unload = function() end,
+    save_to_db = function() end,
+    set_playhead = function() end,
+    add_listener = function() end,
+    remove_listener = function() end,
+}
+
+-- Mock source_mark_bar
+package.loaded["ui.source_mark_bar"] = {
+    BAR_HEIGHT = 20,
+    create = function(widget)
+        return { widget = widget, render = function() end }
+    end,
 }
 
 -- Mock inspectable
