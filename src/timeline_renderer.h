@@ -137,4 +137,5 @@ extern "C" {
     int lua_timeline_set_key_event_handler(lua_State* L);
     int lua_timeline_set_resize_event_handler(lua_State* L);
     int lua_timeline_set_lua_state(lua_State* L);
+    int lua_timeline_set_desired_height(lua_State* L);
 }

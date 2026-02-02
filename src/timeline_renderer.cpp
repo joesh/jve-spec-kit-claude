@@ -20,12 +20,17 @@ TimelineRenderer::TimelineRenderer(const std::string& widget_id, QWidget* parent
 
 QSize TimelineRenderer::sizeHint() const
 {
-    // Return a reasonable default size. The Expanding size policy will cause
-    // layouts to give us available space. Using QWIDGETSIZE_MAX caused issues
-    // with scroll areas sizing the widget larger than the viewport.
-    // Width: 800px default (reasonable minimum)
-    // Height: 150px default (3 tracks @ 50px each)
-    return QSize(800, 150);
+    // Width: 800px default (reasonable minimum for timeline views)
+    // Height: desired_height_ (default 150, configurable via setDesiredHeight)
+    return QSize(800, desired_height_);
+}
+
+void TimelineRenderer::setDesiredHeight(int height)
+{
+    desired_height_ = height;
+    setMinimumHeight(height);
+    setMaximumHeight(height);
+    updateGeometry();  // Tell layout to recalculate with new sizeHint
 }
 
 void TimelineRenderer::clearCommands()
@@ -527,6 +532,9 @@ void registerTimelineBindings(lua_State* L)
     lua_pushcfunction(L, lua_timeline_set_lua_state);
     lua_setfield(L, -2, "set_lua_state");
 
+    lua_pushcfunction(L, lua_timeline_set_desired_height);
+    lua_setfield(L, -2, "set_desired_height");
+
     lua_setglobal(L, "timeline");
 
 }
@@ -716,6 +724,20 @@ int lua_timeline_set_lua_state(lua_State* L)
 
     if (timeline) {
         timeline->setLuaState(L);
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_set_desired_height(lua_State* L)
+{
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
+    int height = luaL_checkinteger(L, 2);
+
+    if (timeline) {
+        timeline->setDesiredHeight(height);
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);
