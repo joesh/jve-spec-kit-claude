@@ -24,6 +24,17 @@ local Rational = require("core.rational")
 
 -- Playback controller for JKL shuttle (lazy loaded to avoid circular deps)
 local playback_controller = nil
+
+-- Self-managed arrow key repeat: bypasses macOS key repeat rate (~12/sec)
+-- with our own timer at ~30fps. Detects keyDown → start timer, keyUp → stop.
+local ARROW_STEP_MS = 33            -- ~30fps stepping (matches NLE convention)
+local ARROW_INITIAL_DELAY_MS = 100  -- delay before repeat starts
+local arrow_repeat_active = false   -- true while arrow key is held and timer is running
+local arrow_repeat_dir = 0          -- 1=right, -1=left
+local arrow_repeat_shift = false    -- shift held = 1-second jumps
+local arrow_repeat_gen = 0          -- generation counter for timer invalidation
+local arrow_seek_pending = false
+local arrow_seek_target = nil
 local function get_playback_controller()
     if not playback_controller then
         playback_controller = require("core.playback.playback_controller")
@@ -699,6 +710,58 @@ function keyboard_shortcuts.perform_delete_action(opts)
     return false
 end
 
+-- Execute a single arrow-key frame step in the given direction.
+-- dir: 1=right, -1=left.  shift: true = 1-second jumps.
+-- Extracted so both the immediate key-press and the repeat timer share logic.
+local function step_arrow_frame(dir, shift)
+    local frame_rate = get_active_frame_rate()
+    local current_time = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
+    local current_frame = frame_utils.time_to_frame(current_time, frame_rate)
+
+    local fps_float = get_fps_float(frame_rate)
+    local step_frames = shift and math.max(1, math.floor(fps_float + 0.5)) or 1
+
+    if dir < 0 then
+        current_frame = math.max(0, current_frame - step_frames)
+    else
+        current_frame = current_frame + step_frames
+    end
+
+    local new_time = frame_utils.frame_to_time(current_frame, frame_rate)
+    timeline_state.set_playhead_position(new_time)
+
+    local pc = get_playback_controller()
+    if pc.has_source() then
+        if pc.play_frame_audio then
+            pc.play_frame_audio(current_frame)
+        end
+        arrow_seek_target = new_time
+        if not arrow_seek_pending then
+            arrow_seek_pending = true
+            qt_create_single_shot_timer(0, function()
+                arrow_seek_pending = false
+                pc.seek_to_rational(arrow_seek_target)
+            end)
+        end
+    end
+end
+
+-- Chained single-shot timer callback for arrow key repeat.
+-- Schedules next tick BEFORE doing work so decode latency doesn't inflate interval.
+local function arrow_repeat_tick(gen)
+    if gen ~= arrow_repeat_gen or not arrow_repeat_active then return end
+    if not timeline_state then return end
+
+    -- Schedule next tick first — keeps cadence steady regardless of decode cost
+    if qt_create_single_shot_timer then
+        qt_create_single_shot_timer(ARROW_STEP_MS, function()
+            arrow_repeat_tick(gen)
+        end)
+    end
+
+    step_arrow_frame(arrow_repeat_dir, arrow_repeat_shift)
+end
+
 -- Global key handler function (called from Qt event filter)
 -- Internal implementation of handle_key (without command event management)
 local function handle_key_impl(event)
@@ -871,23 +934,29 @@ local function handle_key_impl(event)
 
     if (key == KEY.Left or key == KEY.Right) and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
-            local frame_rate = get_active_frame_rate()
-            local current_time = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
-            
-            -- If current_time is Rational, time_to_frame handles it.
-            local current_frame = frame_utils.time_to_frame(current_time, frame_rate)
-            
-            local fps_float = get_fps_float(frame_rate)
-            local step_frames = modifier_shift and math.max(1, math.floor(fps_float + 0.5)) or 1
-            
-            if key == KEY.Left then
-                current_frame = math.max(0, current_frame - step_frames)
-            else
-                current_frame = current_frame + step_frames
+            -- Swallow OS autorepeat — we drive our own timer
+            if event.is_auto_repeat then
+                return true
             end
-            
-            local new_time = frame_utils.frame_to_time(current_frame, frame_rate)
-            timeline_state.set_playhead_position(new_time)
+
+            local dir = (key == KEY.Right) and 1 or -1
+
+            -- Immediate first step
+            step_arrow_frame(dir, modifier_shift)
+
+            -- Start self-managed repeat timer
+            arrow_repeat_active = true
+            arrow_repeat_dir = dir
+            arrow_repeat_shift = modifier_shift
+            arrow_repeat_gen = arrow_repeat_gen + 1
+            local gen = arrow_repeat_gen
+
+            if qt_create_single_shot_timer then
+                qt_create_single_shot_timer(ARROW_INITIAL_DELAY_MS, function()
+                    arrow_repeat_tick(gen)
+                end)
+            end
+
             return true
         end
     end
@@ -1372,12 +1441,31 @@ function keyboard_shortcuts.handle_key(event)
     return result
 end
 
--- Handle key release events (for K held state tracking)
+-- Handle key release events (K held state + arrow repeat cancellation)
 function keyboard_shortcuts.handle_key_release(event)
     local key = event.key
+
+    -- Ignore OS autorepeat release events (they precede each autorepeat press)
+    if event.is_auto_repeat then
+        return false
+    end
+
     if key == KEY.K then
         k_held = false
     end
+
+    -- K+J or K+L slow play: releasing J/L while K held → stop
+    if (key == KEY.J or key == KEY.L) and k_held then
+        local pc = get_playback_controller()
+        pc.stop()
+    end
+
+    -- Stop arrow key repeat on real release
+    if key == KEY.Left or key == KEY.Right then
+        arrow_repeat_active = false
+        arrow_repeat_gen = arrow_repeat_gen + 1  -- invalidate pending timer
+    end
+
     return false  -- Key release is not "handled" - let it propagate
 end
 

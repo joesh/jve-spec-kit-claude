@@ -76,6 +76,10 @@ protected:
                 lua_pushinteger(lua_state, (int)keyEvent->modifiers());
                 lua_settable(lua_state, -3);
 
+                lua_pushstring(lua_state, "is_auto_repeat");
+                lua_pushboolean(lua_state, keyEvent->isAutoRepeat());
+                lua_settable(lua_state, -3);
+
                 QWidget* focus_widget = QApplication::focusWidget();
                 if (focus_widget) {
                     lua_pushstring(lua_state, "focus_widget");
@@ -124,6 +128,10 @@ protected:
 
                 lua_pushstring(lua_state, "key");
                 lua_pushinteger(lua_state, keyEvent->key());
+                lua_settable(lua_state, -3);
+
+                lua_pushstring(lua_state, "is_auto_repeat");
+                lua_pushboolean(lua_state, keyEvent->isAutoRepeat());
                 lua_settable(lua_state, -3);
 
                 if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
