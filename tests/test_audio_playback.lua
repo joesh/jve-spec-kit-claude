@@ -216,19 +216,19 @@ expect_assert(
 )
 print("  ✓ set_speed(string) asserts")
 
-print("\nTest 5.3: set_speed quality mode selection - Q1 for >= 0.25")
+print("\nTest 5.3: set_speed quality mode selection - Q1 for >= 1.0, Q3 varispeed for <1.0")
 audio_playback.set_speed(1.0)
 assert(audio_playback.speed == 1.0, "Speed should be 1.0")
 assert(audio_playback.quality_mode == 1, "Should use Q1 for 1.0x")
 
 audio_playback.set_speed(0.5)
 assert(audio_playback.speed == 0.5, "Speed should be 0.5")
-assert(audio_playback.quality_mode == 1, "Should use Q1 for 0.5x")
+assert(audio_playback.quality_mode == 3, "Should use Q3_DECIMATE (varispeed) for 0.5x")
 
 audio_playback.set_speed(0.25)
 assert(audio_playback.speed == 0.25, "Speed should be 0.25")
-assert(audio_playback.quality_mode == 1, "Should use Q1 for 0.25x (boundary)")
-print("  ✓ Q1 selected for speed >= 0.25")
+assert(audio_playback.quality_mode == 3, "Should use Q3_DECIMATE (varispeed) for 0.25x (boundary)")
+print("  ✓ Q1 for >=1.0x, Q3 varispeed for [0.25, 1.0)")
 
 print("\nTest 5.4: set_speed quality mode selection - Q2 for < 0.25")
 audio_playback.set_speed(0.24)
@@ -251,7 +251,7 @@ assert(audio_playback.quality_mode == 1, "Should use Q1 for -1.0x")
 
 audio_playback.set_speed(-0.5)
 assert(audio_playback.speed == -0.5, "Speed should be -0.5")
-assert(audio_playback.quality_mode == 1, "Should use Q1 for -0.5x")
+assert(audio_playback.quality_mode == 3, "Should use Q3_DECIMATE (varispeed) for -0.5x")
 
 audio_playback.set_speed(-0.1)
 assert(audio_playback.speed == -0.1, "Speed should be -0.1")

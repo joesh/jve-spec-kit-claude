@@ -92,6 +92,7 @@ local M = {
 
 -- Internal state
 local pumping = false        -- Re-entrancy guard
+local burst_generation = 0   -- Monotonic counter; stop-timer only fires if gen matches
 local last_pcm_range = { start_us = 0, end_us = 0 }
 local last_fetch_pb_start_us = nil  -- pb_start from the last actual fetch (nil = no prior fetch)
 
@@ -590,11 +591,17 @@ function M.set_speed(new_signed_speed)
         ("audio_playback.set_speed: abs_speed %.1f exceeds MAX_SPEED_DECIMATE (16)"):format(abs_speed))
 
     -- Auto-select quality mode from abs(speed)
+    -- Sub-1x: varispeed (Q3_DECIMATE) — natural pitch drop, no time-stretch
+    -- Sub-0.25x: extreme slomo (Q2) — pitch-corrected, higher latency
+    -- 1x-4x: editor (Q1) — pitch-corrected, low latency
+    -- >4x: decimate (Q3_DECIMATE) — sample-skipping, no pitch correction
     local new_mode
     if abs_speed > MAX_SPEED_STRETCHED then
         new_mode = Q3_DECIMATE
     elseif abs_speed < 0.25 then
         new_mode = Q2
+    elseif abs_speed < 1.0 then
+        new_mode = Q3_DECIMATE
     else
         new_mode = Q1
     end
@@ -641,6 +648,98 @@ function M.clear_underrun()
     assert(M.session_initialized and M.aop,
         "audio_playback.clear_underrun: session not initialized or aop is nil")
     qt_constants.AOP.CLEAR_UNDERRUN(M.aop)
+end
+
+--------------------------------------------------------------------------------
+-- Frame-Step Audio Burst (Jog)
+-- Plays a short burst of audio for single-frame steps (arrow key jog).
+-- Reanchors, decodes, renders, writes, starts AOP, schedules stop timer.
+--------------------------------------------------------------------------------
+
+--- Play a short audio burst at a given time.
+-- Used for frame-step jog: plays ~1 frame of audio so user hears the frame.
+-- Bails if not initialized, no audio, or currently playing.
+-- @param time_us number: playback time to play at
+-- @param duration_us number: burst length in microseconds (typically 1 frame)
+function M.play_burst(time_us, duration_us)
+    if not M.session_initialized then return end
+    if not M.has_audio then return end
+    if M.playing then return end
+    assert(type(time_us) == "number",
+        "audio_playback.play_burst: time_us must be number")
+    assert(type(duration_us) == "number" and duration_us > 0,
+        "audio_playback.play_burst: duration_us must be positive number")
+
+    -- Set up SSE at burst position WITHOUT flushing AOP yet.
+    -- Old audio keeps playing while we render the new burst.
+    local clamped = clamp_media_us(time_us)
+    M.media_anchor_us = clamped
+    M.media_time_us = clamped
+    M.speed = 1.0
+    M.quality_mode = Q1
+    M.aop_epoch_playhead_us = qt_constants.AOP.PLAYHEAD_US(M.aop)
+    qt_constants.SSE.RESET(M.sse)
+    qt_constants.SSE.SET_TARGET(M.sse, clamped, 1.0, Q1)
+
+    -- Re-push cached PCM to SSE (SSE.RESET cleared its buffer).
+    -- If position is within existing cache, push only a small window (~200ms)
+    -- around the burst position instead of the full ~10s cache.
+    if last_pcm_range.end_us > 0 and last_pcm_range.pcm_ptr
+       and clamped >= last_pcm_range.start_us
+       and clamped <= last_pcm_range.end_us then
+        -- Compute sub-window: 200ms around burst position
+        local window_us = 200000
+        local win_start_us = math.max(last_pcm_range.start_us, clamped - window_us)
+        local win_end_us = math.min(last_pcm_range.end_us, clamped + window_us)
+
+        -- Convert to frame offsets within the cached buffer
+        local samples_per_us = M.session_sample_rate / 1000000
+        local skip_frames = math.floor((win_start_us - last_pcm_range.start_us) * samples_per_us)
+        local win_frames = math.floor((win_end_us - win_start_us) * samples_per_us)
+        win_frames = math.min(win_frames, last_pcm_range.frames - skip_frames)
+
+        if win_frames > 0 then
+            -- Use C-side offset: PUSH_PCM(sse, ptr, total_frames, start_time, skip, max)
+            qt_constants.SSE.PUSH_PCM(M.sse, last_pcm_range.pcm_ptr,
+                last_pcm_range.frames, win_start_us, skip_frames, win_frames)
+        end
+    else
+        last_pcm_range = { start_us = 0, end_us = 0 }
+        last_fetch_pb_start_us = nil
+        M._ensure_pcm_cache()
+    end
+    advance_sse_past_codec_delay()
+
+    local burst_frames = math.ceil(M.session_sample_rate * duration_us / 1000000)
+    burst_frames = math.min(burst_frames, CFG.MAX_RENDER_FRAMES)
+    local pcm, produced = qt_constants.SSE.RENDER_ALLOC(M.sse, burst_frames)
+
+    if produced > 0 then
+        -- Invalidate any pending burst stop timer before writing new audio
+        burst_generation = burst_generation + 1
+        local my_gen = burst_generation
+
+        -- Late flush: minimize gap between old audio ending and new audio starting
+        qt_constants.AOP.FLUSH(M.aop)
+        qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
+        qt_constants.AOP.START(M.aop)
+
+        -- Schedule stop after burst completes (burst duration + 50ms safety margin).
+        -- Only fires if no newer burst has started (generation check).
+        local stop_delay_ms = math.ceil(duration_us / 1000) + 50
+        qt_create_single_shot_timer(stop_delay_ms, function()
+            if burst_generation ~= my_gen then return end
+            qt_constants.AOP.STOP(M.aop)
+            qt_constants.AOP.FLUSH(M.aop)
+        end)
+    end
+
+    -- Store stopped-state position at burst time
+    M.media_time_us = time_us
+
+    logger.debug("audio_playback", string.format(
+        "play_burst: t=%.3fs dur=%.1fms frames=%d produced=%d",
+        time_us / 1000000, duration_us / 1000, burst_frames, produced or 0))
 end
 
 --------------------------------------------------------------------------------

@@ -166,10 +166,10 @@ assert(audio_playback.quality_mode == Q3_DECIMATE,
     "-8x should use Q3_DECIMATE, got " .. tostring(audio_playback.quality_mode))
 print("  ok -8x -> Q3_DECIMATE")
 
-print("\nTest 2.6: Speed 0.5x selects Q1 mode")
+print("\nTest 2.6: Speed 0.5x selects Q3_DECIMATE mode (varispeed, no pitch correction)")
 audio_playback.set_speed(0.5)
-assert(audio_playback.quality_mode == Q1, "0.5x should use Q1, got " .. tostring(audio_playback.quality_mode))
-print("  ok 0.5x -> Q1")
+assert(audio_playback.quality_mode == Q3_DECIMATE, "0.5x should use Q3_DECIMATE (varispeed), got " .. tostring(audio_playback.quality_mode))
+print("  ok 0.5x -> Q3_DECIMATE (varispeed)")
 
 print("\nTest 2.7: Speed 0.15x selects Q2 mode")
 audio_playback.set_speed(0.15)
