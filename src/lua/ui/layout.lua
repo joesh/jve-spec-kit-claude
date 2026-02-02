@@ -276,7 +276,7 @@ focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline", {
 panel_manager.init({
     main_splitter = main_splitter,
     top_splitter = top_splitter,
-    focus_manager = focus_manager
+    focus_manager = focus_manager,
 })
 
 -- Initialize all panels to unfocused state
@@ -358,14 +358,11 @@ local function save_window_state()
         x = x, y = y, width = w, height = h
     })
 
-    local top_sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(top_splitter)
-    local main_sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(main_splitter)
-    db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, {
-        top = top_sizes, main = main_sizes
-    })
+    local sizes = panel_manager.get_persistable_sizes()
+    db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, sizes)
 
     logger.trace("layout", string.format("Window state saved: geo=%d,%d %dx%d, splitters top=%s main=%s",
-        x, y, w, h, dkjson.encode(top_sizes), dkjson.encode(main_sizes)))
+        x, y, w, h, dkjson.encode(sizes.top), dkjson.encode(sizes.main)))
 end
 
 -- Register save-on-change handlers (persists even if app is killed)

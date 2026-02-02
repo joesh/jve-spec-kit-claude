@@ -1,16 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~162 LOC
--- Volatility: unknown
+--- Panel maximize/restore
 --
 -- @file panel_manager.lua
 local qt_constants = require("core.qt_constants")
@@ -31,18 +19,16 @@ local PANEL_INDEX = {
 }
 
 local function get_splitter_sizes(splitter)
-    if not splitter or not qt_constants or not qt_constants.LAYOUT or not qt_constants.LAYOUT.GET_SPLITTER_SIZES then
+    if not splitter or not qt_constants.LAYOUT or not qt_constants.LAYOUT.GET_SPLITTER_SIZES then
         return nil
     end
     local ok, sizes = pcall(qt_constants.LAYOUT.GET_SPLITTER_SIZES, splitter)
-    if ok then
-        return sizes
-    end
+    if ok then return sizes end
     return nil
 end
 
 local function set_splitter_sizes(splitter, sizes)
-    if splitter and sizes and qt_constants and qt_constants.LAYOUT and qt_constants.LAYOUT.SET_SPLITTER_SIZES then
+    if splitter and sizes then
         qt_constants.LAYOUT.SET_SPLITTER_SIZES(splitter, sizes)
     end
 end
@@ -58,17 +44,14 @@ local function focused_panel(panel_id)
 end
 
 function M.init(opts)
-    opts = opts or {}
+    assert(opts, "panel_manager.init: opts required")
     state.main_splitter = opts.main_splitter
     state.top_splitter = opts.top_splitter
     state.focus_manager = opts.focus_manager
-    -- Note: Panel highlights auto-refresh via geometry change handlers in focus_manager
 end
 
 local function normalize_sizes(sizes, fallback)
-    if not sizes or #sizes == 0 then
-        return fallback
-    end
+    if not sizes or #sizes == 0 then return fallback end
     return sizes
 end
 
@@ -88,9 +71,7 @@ local function maximize_top_panel(panel_id)
     for _, value in ipairs(main_sizes) do
         total_main = total_main + value
     end
-    if total_main == 0 then
-        total_main = 1
-    end
+    if total_main == 0 then total_main = 1 end
 
     state.maximized = {
         panel_id = panel_id,
@@ -104,6 +85,7 @@ local function maximize_top_panel(panel_id)
     local new_top_sizes = {0, 0, 0}
     new_top_sizes[panel_index] = total_main
     set_splitter_sizes(state.top_splitter, new_top_sizes)
+
     return true
 end
 
@@ -118,9 +100,7 @@ local function maximize_timeline()
     for _, value in ipairs(main_sizes) do
         total_main = total_main + value
     end
-    if total_main == 0 then
-        total_main = 1
-    end
+    if total_main == 0 then total_main = 1 end
 
     state.maximized = {
         panel_id = "timeline",
@@ -133,9 +113,7 @@ local function maximize_timeline()
 end
 
 local function restore_layout()
-    if not state.maximized then
-        return false
-    end
+    if not state.maximized then return false end
 
     if state.maximized.main_sizes then
         set_splitter_sizes(state.main_splitter, state.maximized.main_sizes)
@@ -152,6 +130,23 @@ function M.is_maximized()
     return state.maximized ~= nil
 end
 
+--- Return splitter sizes suitable for persistence.
+-- If maximized, returns the saved pre-maximize sizes.
+-- If not maximized, reads current sizes from Qt.
+function M.get_persistable_sizes()
+    assert(state.main_splitter, "panel_manager.get_persistable_sizes: not initialized")
+    if state.maximized then
+        return {
+            top = state.maximized.top_sizes,
+            main = state.maximized.main_sizes,
+        }
+    end
+    return {
+        top = get_splitter_sizes(state.top_splitter),
+        main = get_splitter_sizes(state.main_splitter),
+    }
+end
+
 function M.toggle_maximize(panel_id)
     if not state.main_splitter then
         return false, "Panel manager not initialized"
@@ -164,8 +159,7 @@ function M.toggle_maximize(panel_id)
 
     if state.maximized then
         if not panel_id or state.maximized.panel_id == target_panel then
-            local restored = restore_layout()
-            return restored, nil
+            return restore_layout(), nil
         end
         restore_layout()
     end

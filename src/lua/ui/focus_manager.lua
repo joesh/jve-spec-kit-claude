@@ -17,7 +17,6 @@
 -- - Focus Manager Module
 -- - Tracks which panel has keyboard focus and provides clear visual feedback
 -- - Shows a bright colored header/border on the active panel
-local qt_constants = require("core.qt_constants")
 local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 
@@ -102,32 +101,13 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
         pcall(qt_set_widget_attribute, widget, "WA_StyledBackground", true)
     end
 
-    local highlight_widget = qt_constants.WIDGET.CREATE()
-    qt_constants.WIDGET.SET_PARENT(highlight_widget, widget)
-    qt_constants.PROPERTIES.SET_GEOMETRY(highlight_widget, 0, 0, 1, 1)
-    qt_constants.DISPLAY.SET_VISIBLE(highlight_widget, false)
-    if qt_set_widget_attribute then
-        pcall(qt_set_widget_attribute, highlight_widget, "WA_TransparentForMouseEvents", true)
-        pcall(qt_set_widget_attribute, highlight_widget, "WA_StyledBackground", true)
-    end
-
     registered_panels[panel_id] = {
         widget = widget,
         header_widget = header_widget,
         panel_name = panel_name or panel_id,
         focus_widgets = focus_widgets,
         object_name = object_name,
-        highlight_widget = highlight_widget,
     }
-
-    -- Install resize handler to keep highlight sized correctly when panel resizes
-    local resize_handler_name = string.format("__focus_resize_%s", sanitized_id)
-    _G[resize_handler_name] = function()
-        M.refresh_highlight(panel_id)
-    end
-    if qt_constants.SIGNAL and qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER then
-        qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER(widget, resize_handler_name)
-    end
 
     -- Install focus event handlers for all focusable widgets associated with this panel
     for index, focus_widget in ipairs(focus_widgets) do
@@ -202,31 +182,15 @@ function M.update_panel_visual(panel_id, is_focused)
         ]], header_color), panel_id .. ":header")
     end
 
-    if panel.highlight_widget then
-        if qt_update_widget then
-            pcall(qt_update_widget, panel.widget)
-        end
-        local width, height = qt_constants.PROPERTIES.GET_SIZE(panel.widget)
-        if width and height then
-            qt_constants.PROPERTIES.SET_GEOMETRY(panel.highlight_widget, 0, 0, width, height)
-        else
-            local geo_ok, _, _, w, h = pcall(qt_constants.PROPERTIES.GET_GEOMETRY, panel.widget)
-            if geo_ok then
-                qt_constants.PROPERTIES.SET_GEOMETRY(panel.highlight_widget, 0, 0, w or 0, h or 0)
-            end
-        end
-
-        local highlight_style = string.format([[ 
-            QWidget {
-                border: %dpx solid %s;
-                border-radius: %dpx;
-                background-color: rgba(0, 0, 0, 0);
-            }
-        ]], BORDER_WIDTH, border_color, BORDER_RADIUS)
-        safe_set_stylesheet(panel.highlight_widget, highlight_style, panel_id .. ":highlight")
-        qt_constants.DISPLAY.SET_VISIBLE(panel.highlight_widget, is_focused)
-        qt_constants.DISPLAY.RAISE(panel.highlight_widget)
-    end
+    -- Apply border directly to panel widget via object-name-scoped stylesheet.
+    -- No overlay widget — overlays become native NSViews that occlude Metal surfaces.
+    local border_style = string.format([[
+        #%s {
+            border: %dpx solid %s;
+            border-radius: %dpx;
+        }
+    ]], panel.object_name, BORDER_WIDTH, border_color, BORDER_RADIUS)
+    safe_set_stylesheet(panel.widget, border_style, panel_id .. ":border")
 end
 
 -- Get currently focused panel ID
@@ -241,13 +205,6 @@ function M.refresh_highlight(panel_id)
     end
     local is_focused = (target == focused_panel_id)
     M.update_panel_visual(target, is_focused)
-end
-
-function M.refresh_all_highlights()
-    for panel_id, _ in pairs(registered_panels) do
-        local is_focused = (panel_id == focused_panel_id)
-        M.update_panel_visual(panel_id, is_focused)
-    end
 end
 
 -- Get focused panel info
