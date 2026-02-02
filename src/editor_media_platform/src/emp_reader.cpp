@@ -1034,13 +1034,18 @@ void Reader::prefetch_worker() {
             // No decode_mutex needed - we have our own decoder!
 
             // Seek target: continue from where the cache ends.
-            // Stale sessions are already cleared by DecodeAtUS, so
-            // cache_max_pts is always from the current session.
+            // Direction-aware: forward starts past cache_max_pts to avoid
+            // re-decoding; reverse seeks to prefetch_to so FFmpeg lands on
+            // a keyframe BEFORE the region we need.
             TimeUS seek_target = target;
             {
                 std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
-                if (!m_impl->frame_cache.empty() && m_impl->cache_max_pts > seek_target) {
-                    seek_target = m_impl->cache_max_pts;
+                if (!m_impl->frame_cache.empty()) {
+                    if (dir > 0 && m_impl->cache_max_pts > seek_target) {
+                        seek_target = m_impl->cache_max_pts;
+                    } else if (dir < 0) {
+                        seek_target = prefetch_to;
+                    }
                 }
             }
 
@@ -1125,6 +1130,17 @@ void Reader::prefetch_worker() {
                     m_impl->cache_min_pts, m_impl->cache_max_pts,
                     target, m_impl->max_cache_frames
                 );
+            }
+
+            // Cache full — prefetch has filled available space.
+            // Check under lock, sleep outside to avoid blocking main thread.
+            bool cache_full = false;
+            {
+                std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+                cache_full = (m_impl->frame_cache.size() >= m_impl->max_cache_frames);
+            }
+            if (cache_full) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
 
             auto decode_end = std::chrono::steady_clock::now();

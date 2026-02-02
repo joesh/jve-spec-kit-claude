@@ -70,6 +70,16 @@ local M = {
     -- (frame-forward, go-to-edit, ruler click, undo) and we must re-anchor audio.
     -- nil when stopped (detection inactive).
     _last_committed_frame = nil,
+
+    -- Frame decimation: tick generation counter.
+    -- Incremented on stop(). Timer callbacks capture generation at schedule time;
+    -- stale callbacks (generation mismatch) are discarded without executing.
+    _tick_generation = 0,
+
+    -- Frame decimation: last frame displayed by _tick().
+    -- If audio hasn't advanced past this frame, the tick is skipped (no redundant decode).
+    -- nil when stopped, set on play/shuttle/slow_play/seek.
+    _last_tick_frame = nil,
 }
 
 -- Viewer panel reference (set via init)
@@ -393,6 +403,7 @@ function M.shuttle(dir)
         M.state = "playing"
         M.transport_mode = "shuttle"
         M._last_committed_frame = math.floor(M.get_position())
+        M._last_tick_frame = math.floor(M.get_position())
 
         -- Play mode for shuttle: full BGRA caching for sequential access
         qt_constants.EMP.SET_DECODE_MODE("play")
@@ -447,6 +458,7 @@ function M.slow_play(dir)
     M.state = "playing"
     M.transport_mode = "shuttle"
     M._last_committed_frame = math.floor(M.get_position())
+    M._last_tick_frame = math.floor(M.get_position())
     logger.debug("playback_controller", string.format("Slow play %s at 0.5x", dir == 1 and "forward" or "reverse"))
 
     if not M.timeline_mode and media_cache.is_loaded() then
@@ -472,9 +484,16 @@ function M.stop()
     M.speed = 1
     M.transport_mode = "none"
     M._last_committed_frame = nil
+    M._tick_generation = M._tick_generation + 1
+    M._last_tick_frame = nil
     M._clear_latch()
 
     stop_audio()
+
+    -- Stop prefetch thread — set_playhead with direction=0 triggers READER_STOP_PREFETCH
+    if not M.timeline_mode and media_cache.is_loaded() then
+        media_cache.set_playhead(math.floor(M.get_position()), 0, 0)
+    end
 
     -- Park mode: only BGRA-convert the target frame, skip intermediates
     qt_constants.EMP.SET_DECODE_MODE("park")
@@ -493,6 +512,7 @@ function M.play()
     M.state = "playing"
     M.transport_mode = "play"
     M._last_committed_frame = math.floor(M.get_position())
+    M._last_tick_frame = math.floor(M.get_position())
     M._clear_latch()
 
     -- Play mode: BGRA-convert all intermediates for sequential cache
@@ -613,13 +633,23 @@ function M.seek(frame_idx)
     assert(frame_idx, "playback_controller.seek: frame_idx is nil")
     assert(frame_idx >= 0, "playback_controller.seek: frame_idx must be >= 0")
 
+    local clamped = math.min(frame_idx, M.total_frames - 1)
+    local clamped_int = math.floor(clamped)
+
+    -- Skip redundant decode when stopped and already displaying this frame.
+    -- Prevents double-decode when keyboard handler seeks directly and the
+    -- debounced viewer listener fires again for the same position.
+    if M.state ~= "playing" and clamped_int == M._last_committed_frame then
+        return
+    end
+
     M._clear_latch()
 
-    local clamped = math.min(frame_idx, M.total_frames - 1)
     -- Silent: in timeline mode, the caller already set
     -- timeline_state.playhead_position; in source mode, no listeners to fire.
     M.set_position_silent(clamped)
-    M._last_committed_frame = math.floor(clamped)
+    M._last_committed_frame = clamped_int
+    M._last_tick_frame = clamped_int
 
     -- If playing, stop audio first to flush hardware buffer.
     -- Without this, get_time_us() returns stale time on the next tick
@@ -643,10 +673,10 @@ function M.seek(frame_idx)
                 -- init_audio_for_active_media is for source mode only.
                 -- In timeline mode, audio is resolved independently below.
             end
-        end
 
-        -- Resolve audio independently
-        resolve_and_set_audio_sources(math.floor(clamped))
+            -- Resolve audio independently
+            resolve_and_set_audio_sources(math.floor(clamped))
+        end
     else
         -- Source mode: direct frame display
         if viewer_panel then
@@ -666,6 +696,34 @@ function M.seek(frame_idx)
     end
 
     logger.debug("playback_controller", string.format("Seek to frame %d", math.floor(clamped)))
+end
+
+--------------------------------------------------------------------------------
+-- Frame-Step Audio (Jog)
+--------------------------------------------------------------------------------
+
+--- Play a short audio burst for a single-frame step (arrow key jog).
+-- Uses ~1.5x frame duration: long enough to be intelligible, short enough
+-- that consecutive steps overlap by only ~15-20ms (inaudible as echo).
+-- @param frame_idx number: the frame to play audio for
+function M.play_frame_audio(frame_idx)
+    if M.state == "playing" then return end
+    if not audio_playback then return end
+    if not audio_playback.is_ready() then return end
+    if not audio_playback.play_burst then return end
+    assert(M.fps_num and M.fps_den,
+        "playback_controller.play_frame_audio: fps not set")
+
+    -- In timeline mode, resolve audio sources at the stepped-to frame
+    if M.timeline_mode and M.sequence_id then
+        resolve_and_set_audio_sources(frame_idx)
+    end
+
+    local time_us = helpers.calc_time_us_from_frame(frame_idx, M.fps_num, M.fps_den)
+    local frame_duration_us = helpers.calc_time_us_from_frame(1, M.fps_num, M.fps_den)
+    -- 1.5x frame duration, clamped to [40ms, 60ms]
+    local burst_us = math.max(40000, math.min(60000, math.floor(frame_duration_us * 1.5)))
+    audio_playback.play_burst(time_us, burst_us)
 end
 
 --- Get current playback info for display
@@ -692,9 +750,28 @@ function M._tick()
 
     if M.timeline_mode and M.sequence_id then
         -- Detect external playhead move (frame-forward, ruler click, undo, etc.)
+        -- Must come BEFORE same-frame skip: external moves override audio-derived position.
         local current_pos = M.get_position()
+        local external_move = false
         if M._last_committed_frame ~= nil
            and math.floor(current_pos) ~= M._last_committed_frame then
+            external_move = true
+        end
+
+        -- Same-frame skip: if audio hasn't advanced past the last displayed frame
+        -- AND no external move occurred, skip this tick (avoids redundant decode).
+        if not external_move
+           and audio_playback and audio_playback.is_ready() and audio_playback.playing then
+            local audio_time = audio_playback.get_time_us()
+            local audio_frame = helpers.calc_frame_from_time_us(
+                audio_time, M.fps_num, M.fps_den)
+            if M._last_tick_frame ~= nil and audio_frame == M._last_tick_frame then
+                M._schedule_tick()
+                return
+            end
+        end
+
+        if external_move then
             -- External move detected — re-anchor audio at new position
             local time_us = calc_time_us_from_frame(current_pos)
             if audio_playback and audio_playback.is_ready() then
@@ -702,6 +779,8 @@ function M._tick()
             end
             -- Resolve audio sources at new position
             resolve_and_set_audio_sources(math.floor(current_pos))
+            -- Clear last_tick_frame so the tick proceeds after re-anchor
+            M._last_tick_frame = nil
             logger.debug("playback_controller",
                 string.format("External move detected: %d → %d, re-anchored audio",
                     M._last_committed_frame, math.floor(current_pos)))
@@ -733,6 +812,7 @@ function M._tick()
             -- Ordering invariant: resolve already done inside tick → now commit position → sync
             M.set_position(result.new_pos)
             M._last_committed_frame = math.floor(result.new_pos)
+            M._last_tick_frame = result.frame_idx
             if M.timeline_sync_callback then
                 M.timeline_sync_callback(result.frame_idx)
             end
@@ -740,9 +820,21 @@ function M._tick()
         else
             M.set_position(result.new_pos)
             M._last_committed_frame = math.floor(result.new_pos)
+            M._last_tick_frame = result.frame_idx
             M.stop()
         end
     else
+        -- Source mode: same-frame skip
+        if audio_playback and audio_playback.is_ready() and audio_playback.playing then
+            local audio_time = audio_playback.get_media_time_us()
+            local audio_frame = helpers.calc_frame_from_time_us(
+                audio_time, M.fps_num, M.fps_den)
+            if M._last_tick_frame ~= nil and audio_frame == M._last_tick_frame then
+                M._schedule_tick()
+                return
+            end
+        end
+
         -- Source mode: build tick_in, call tick, commit result
         local tick_in = {
             pos = M.get_position(),
@@ -759,6 +851,7 @@ function M._tick()
 
         -- Controller commits state
         M.set_position(result.new_pos)
+        M._last_tick_frame = math.floor(result.new_pos)
         M.latched = result.latched
         M.latched_boundary = result.latched_boundary
         if result.continue then
@@ -785,7 +878,9 @@ function M._schedule_tick()
 
     interval = math.max(interval, 16)  -- ~60fps max
 
+    local gen = M._tick_generation
     qt_create_single_shot_timer(interval, function()
+        if M._tick_generation ~= gen then return end  -- stale tick, discard
         M._tick()
     end)
 end
