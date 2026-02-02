@@ -929,7 +929,7 @@ local function handle_key_impl(event)
         end
     end
 
-    -- Mark In/Out controls
+    -- Mark In/Out controls (timeline panel)
     if key == KEY.I and timeline_state and panel_active_timeline then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
@@ -956,6 +956,50 @@ local function handle_key_impl(event)
                 local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
                 timeline_state.set_mark_out(playhead)
             end
+            return true
+        end
+    end
+
+    -- Mark In/Out controls (source viewer panel)
+    local source_state = require("ui.source_viewer_state")
+    if key == KEY.I and panel_active_viewer and source_state.has_clip() then
+        if not modifier_meta and not modifier_alt then
+            if modifier_shift then
+                -- Shift+I: go to mark in
+                if source_state.mark_in then
+                    local pc = get_playback_controller()
+                    source_state.set_playhead(source_state.mark_in)
+                    pc.set_position(source_state.mark_in)
+                end
+            else
+                -- I: set mark in at playhead
+                source_state.set_mark_in(source_state.playhead)
+            end
+            return true
+        end
+    end
+
+    if key == KEY.O and panel_active_viewer and source_state.has_clip() then
+        if not modifier_meta and not modifier_alt then
+            if modifier_shift then
+                -- Shift+O: go to mark out
+                if source_state.mark_out then
+                    local pc = get_playback_controller()
+                    source_state.set_playhead(source_state.mark_out)
+                    pc.set_position(source_state.mark_out)
+                end
+            else
+                -- O: set mark out at playhead
+                source_state.set_mark_out(source_state.playhead)
+            end
+            return true
+        end
+    end
+
+    if key == KEY.X and panel_active_viewer and source_state.has_clip() then
+        if modifier_alt and not modifier_meta then
+            -- Alt+X: clear marks
+            source_state.clear_marks()
             return true
         end
     end

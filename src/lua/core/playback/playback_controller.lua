@@ -690,6 +690,12 @@ function M.seek(frame_idx)
         if viewer_panel then
             viewer_panel.show_frame(math.floor(clamped))
         end
+
+        -- Sync source viewer state (mark bar playhead) on seek
+        local svs = require("ui.source_viewer_state")
+        if svs.has_clip() then
+            svs.set_playhead(math.floor(clamped))
+        end
     end
 
     -- Restart audio at new position
@@ -862,6 +868,13 @@ function M._tick()
         M._last_tick_frame = math.floor(result.new_pos)
         M.latched = result.latched
         M.latched_boundary = result.latched_boundary
+
+        -- Sync source viewer state (mark bar playhead) during playback
+        local svs = require("ui.source_viewer_state")
+        if svs.has_clip() then
+            svs.set_playhead(math.floor(result.new_pos))
+        end
+
         if result.continue then
             M._schedule_tick()
         else
