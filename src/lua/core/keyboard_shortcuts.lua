@@ -33,8 +33,6 @@ local arrow_repeat_active = false   -- true while arrow key is held and timer is
 local arrow_repeat_dir = 0          -- 1=right, -1=left
 local arrow_repeat_shift = false    -- shift held = 1-second jumps
 local arrow_repeat_gen = 0          -- generation counter for timer invalidation
-local arrow_seek_pending = false
-local arrow_seek_target = nil
 local function get_playback_controller()
     if not playback_controller then
         playback_controller = require("core.playback.playback_controller")
@@ -710,47 +708,16 @@ function keyboard_shortcuts.perform_delete_action(opts)
     return false
 end
 
--- Execute a single arrow-key frame step in the given direction.
+-- Execute a single arrow-key frame step via the StepFrame command.
 -- dir: 1=right, -1=left.  shift: true = 1-second jumps.
--- Extracted so both the immediate key-press and the repeat timer share logic.
 local function step_arrow_frame(dir, shift)
-    local frame_rate = get_active_frame_rate()
-    local current_time = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
-    local current_frame = frame_utils.time_to_frame(current_time, frame_rate)
-
-    local fps_float = get_fps_float(frame_rate)
-    local step_frames = shift and math.max(1, math.floor(fps_float + 0.5)) or 1
-
-    if dir < 0 then
-        current_frame = math.max(0, current_frame - step_frames)
-    else
-        current_frame = current_frame + step_frames
-    end
-
-    local new_time = frame_utils.frame_to_time(current_frame, frame_rate)
-    timeline_state.set_playhead_position(new_time)
-
-    local pc = get_playback_controller()
-    if pc.has_source() then
-        if pc.play_frame_audio then
-            pc.play_frame_audio(current_frame)
-        end
-        arrow_seek_target = new_time
-        if not arrow_seek_pending then
-            arrow_seek_pending = true
-            qt_create_single_shot_timer(0, function()
-                arrow_seek_pending = false
-                pc.seek_to_rational(arrow_seek_target)
-            end)
-        end
-    end
+    execute_command("StepFrame", {direction = dir, shift = shift})
 end
 
 -- Chained single-shot timer callback for arrow key repeat.
 -- Schedules next tick BEFORE doing work so decode latency doesn't inflate interval.
 local function arrow_repeat_tick(gen)
     if gen ~= arrow_repeat_gen or not arrow_repeat_active then return end
-    if not timeline_state then return end
 
     -- Schedule next tick first — keeps cadence steady regardless of decode cost
     if qt_create_single_shot_timer then
@@ -775,6 +742,7 @@ local function handle_key_impl(event)
 
     local focused_panel = get_focused_panel_id()
     local panel_active_timeline = panel_is_active("timeline", focused_panel)
+    local panel_active_viewer = panel_is_active("viewer", focused_panel)
     local panel_active_browser = panel_is_active("project_browser", focused_panel)
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
 
@@ -932,7 +900,7 @@ local function handle_key_impl(event)
         return false
     end
 
-    if (key == KEY.Left or key == KEY.Right) and timeline_state and panel_active_timeline then
+    if (key == KEY.Left or key == KEY.Right) and (panel_active_timeline or panel_active_viewer) then
         if not modifier_meta and not modifier_alt then
             -- Swallow OS autorepeat — we drive our own timer
             if event.is_auto_repeat then

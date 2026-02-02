@@ -201,8 +201,12 @@ handled = keyboard_shortcuts.handle_key({
     focus_widget_is_text_input = false,
 })
 assert_true(handled, "Right arrow should be handled when timeline has focus")
-assert_true(#timeline_moves == 1, "Playhead should move when timeline handles arrow keys")
-assert_true(timeline_state.playhead > 100, "Playhead should advance on right arrow")
+-- Arrow keys now dispatch StepFrame command (tested in test_step_frame_command.lua)
+local found_step = false
+for _, cmd in ipairs(command_manager_stub.executed_commands) do
+    if cmd == "StepFrame" then found_step = true; break end
+end
+assert_true(found_step, "Right arrow should dispatch StepFrame command")
 
 -- Test 3: Text inputs bypass timeline shortcuts
 reset_environment()

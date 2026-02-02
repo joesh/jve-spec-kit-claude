@@ -208,6 +208,10 @@ function M.show_source_clip(media)
         qt_constants.PROPERTIES.SET_TEXT(title_label, "Source Viewer")
     end
 
+    -- Exit timeline mode so playback/stepping drives source, not timeline
+    playback_controller.stop()
+    playback_controller.set_timeline_mode(false)
+
     -- Load and display video frame (asserts on failure)
     load_video_frame(media.file_path)
 

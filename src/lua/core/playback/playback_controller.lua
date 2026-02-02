@@ -106,15 +106,23 @@ function M.get_position()
     return M._position
 end
 
---- Set current frame position (fires timeline_state listeners in timeline mode).
--- In timeline mode, writes through to timeline_state (int→Rational).
--- Always updates local _position.
+--- Set current frame position and update the viewer when parked.
+-- In timeline mode, writes through to timeline_state (int→Rational);
+-- the timeline_panel listener handles decimated viewer seek.
+-- In source mode when parked, calls seek() directly to display the frame.
+-- During playback, the tick functions handle display — no seek here.
 function M.set_position(v)
     if M.timeline_mode and timeline_state_ref then
         local rat = helpers.frame_to_rational(math.floor(v), M.fps_num, M.fps_den)
         timeline_state_ref.set_playhead_position(rat)
+        M._position = v
+    else
+        M._position = v
+        -- Source mode, parked: display the frame (tick handles display during playback)
+        if M.state ~= "playing" then
+            M.seek(v)
+        end
     end
-    M._position = v
 end
 
 --- Set position without firing timeline_state listeners.

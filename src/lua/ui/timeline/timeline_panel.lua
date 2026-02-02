@@ -1708,6 +1708,17 @@ function M.create(opts)
         end
     end)
 
+    -- Restore timeline viewer when timeline panel regains focus after source viewing.
+    -- selection_hub fires on every active-panel change (focus_manager → set_active_panel).
+    selection_hub.register_listener(function(_, panel_id)
+        if panel_id == "timeline" then
+            local seq_id = state.get_sequence_id and state.get_sequence_id()
+            if seq_id and seq_id ~= "" then
+                M.load_sequence(seq_id)
+            end
+        end
+    end)
+
     return container
 end
 
@@ -1716,9 +1727,20 @@ function M.load_sequence(sequence_id)
         return
     end
 
+    local playback_controller = require("core.playback.playback_controller")
+
     local current = state.get_sequence_id and state.get_sequence_id()
     if current == sequence_id then
-        logger.debug("timeline_panel", string.format("Timeline already displaying sequence %s", sequence_id))
+        -- Restore timeline mode + viewer (may have been cleared by source viewer)
+        if not playback_controller.timeline_mode then
+            playback_controller.set_timeline_mode(true, sequence_id)
+            local Sequence = require("models.sequence")
+            local seq = Sequence.load(sequence_id)
+            if seq then
+                local viewer_panel = require("ui.viewer_panel")
+                viewer_panel.show_timeline(seq)
+            end
+        end
         return
     end
 
@@ -1750,6 +1772,8 @@ function M.load_sequence(sequence_id)
 
     ensure_tab_for_sequence(sequence_id)
     update_tab_styles(sequence_id)
+
+    playback_controller.set_timeline_mode(true, sequence_id)
 end
 
 -- Check if timeline is currently dragging clips or edges
