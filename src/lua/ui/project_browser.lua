@@ -131,30 +131,6 @@ local function is_descendant(potential_parent_id, target_id)
     return false
 end
 
-local function set_bin_parent(bin_id, new_parent_id)
-    if not bin_id then
-        return false
-    end
-
-    local changed = false
-    if M.bins then
-        for _, bin in ipairs(M.bins) do
-            if bin.id == bin_id then
-                if bin.parent_id ~= new_parent_id then
-                    bin.parent_id = new_parent_id
-                    changed = true
-                end
-                break
-            end
-        end
-    end
-
-    if M.bin_map and M.bin_map[bin_id] then
-        M.bin_map[bin_id].parent_id = new_parent_id
-    end
-
-    return changed
-end
 
 local function defer_to_ui(callback)
     if type(qt_create_single_shot_timer) == "function" then
