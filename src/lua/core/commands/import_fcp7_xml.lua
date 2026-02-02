@@ -17,6 +17,7 @@
 local M = {}
 local logger = require("core.logger")
 local command_helper = require("core.command_helper")
+local file_browser = require("core.file_browser")
 local Rational = require("core.rational")
 
 --- Calculate and apply zoom-to-fit viewport for a sequence.
@@ -146,8 +147,8 @@ function M.register(executors, undoers, db)
             end
 
             -- Show file picker dialog
-            file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
+            file_path = file_browser.open_file(
+                "import_fcp7_xml", main_window,
                 "Import Final Cut Pro 7 XML",
                 "Final Cut Pro XML (*.xml);;All Files (*)"
             )

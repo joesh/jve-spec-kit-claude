@@ -17,6 +17,7 @@
 -- @file import_resolve_project.lua
 local M = {}
 local logger = require("core.logger")
+local file_browser = require("core.file_browser")
 
 local sql_escape
 local frame_rate_to_rational
@@ -85,8 +86,8 @@ function M.register(executors, undoers, db)
             end
 
             -- Show file picker dialog
-            file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
+            file_path = file_browser.open_file(
+                "import_resolve_drp", main_window,
                 "Import Resolve Project (.drp)",
                 "Resolve Project Files (*.drp);;All Files (*)"
             )
@@ -339,8 +340,8 @@ function M.register(executors, undoers, db)
             end
 
             -- Show file picker dialog
-            file_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
+            file_path = file_browser.open_file(
+                "import_resolve_db", main_window,
                 "Import Resolve Database",
                 "Database Files (*.db *.sqlite *.resolve);;All Files (*)",
                 os.getenv("HOME") .. "/Movies/DaVinci Resolve"

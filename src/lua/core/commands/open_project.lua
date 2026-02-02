@@ -18,6 +18,7 @@
 local M = {}
 local logger = require("core.logger")
 local project_open = require("core.project_open")
+local file_browser = require("core.file_browser")
 
 -- Schema for OpenProject command
 local SPEC = {
@@ -55,8 +56,8 @@ function M.register(executors, undoers, db, set_last_error)
             -- Show file picker dialog
             local home = os.getenv("HOME") or ""
             local default_dir = home ~= "" and (home .. "/Documents/JVE Projects") or ""
-            project_path = qt_constants.FILE_DIALOG.OPEN_FILE(
-                main_window,
+            project_path = file_browser.open_file(
+                "open_project", main_window,
                 "Open Project",
                 "JVE Project Files (*.jvp);;All Files (*)",
                 default_dir

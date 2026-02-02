@@ -23,6 +23,7 @@ local Clip = require("models.clip")
 local MediaReader = require("media.media_reader")
 local Rational = require("core.rational")
 local logger = require("core.logger")
+local file_browser = require("core.file_browser")
 
 -- Schema for ImportMedia command
 local SPEC = {
@@ -274,8 +275,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             -- Show file picker dialog
-            file_paths = qt_constants.FILE_DIALOG.OPEN_FILES(
-                main_window,
+            file_paths = file_browser.open_files(
+                "import_media", main_window,
                 "Import Media Files",
                 "Media Files (*.mp4 *.mov *.m4v *.avi *.mkv *.mxf *.wav *.aiff *.mp3);;All Files (*)"
             )
