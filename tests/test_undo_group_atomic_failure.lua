@@ -71,15 +71,13 @@ assert(
     "First command in undo group must succeed before failure occurs"
 )
 
--- Execute failing command (missing required parameter)
--- AddTrack requires track_type, omitting it should cause validation failure
--- Temporarily disable asserts so validation failure returns error instead of asserting
+-- Execute failing command: valid schema but nonexistent sequence causes executor failure
 local asserts = require("core.asserts")
 asserts._set_enabled_for_tests(false)
 local fail_result = cm.execute("AddTrack", {
     project_id  = "proj",
-    sequence_id = layout.sequence_id,
-    -- Missing required parameter: track_type
+    sequence_id = "nonexistent_sequence_id",
+    track_type  = "video",
 })
 asserts._set_enabled_for_tests(true)
 

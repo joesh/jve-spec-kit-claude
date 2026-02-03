@@ -244,7 +244,7 @@ function M.validate_and_normalize(command_name, spec, params, opts)
             end
 
             if v ~= nil and rule.kind then
-                if type(v) ~= rule.kind then
+                if not kind_ok(rule.kind, v) then
                     return false, string.format("Command '%s' param '%s' must be a %s", command_name, k, rule.kind)
                 end
             end
@@ -308,7 +308,7 @@ function M.validate_and_normalize(command_name, spec, params, opts)
                         end
 
                         if field_val ~= nil and field_rule.kind then
-                            if type(field_val) ~= field_rule.kind then
+                            if not kind_ok(field_rule.kind, field_val) then
                                 return false, string.format(
                                     "Command '%s' param '%s.%s' must be a %s",
                                     command_name,
@@ -371,8 +371,10 @@ function M.validate_and_normalize(command_name, spec, params, opts)
         return true, nil
     end
 
-    apply_rules(args, true)
-    apply_rules(persisted, opts.require_persisted == true)
+    local ok, err = apply_rules(args, true)
+    if not ok then return fail(err) end
+    local ok2, err2 = apply_rules(persisted, opts.require_persisted == true)
+    if not ok2 then return fail(err2) end
 
     -- Cross-field constraints: requires_any groups
     if spec.requires_any ~= nil then

@@ -8,8 +8,8 @@ local SPEC = {
     args = {
         project_id = { required = true, kind = "string" },
         sequence_id = { required = true, kind = "string" },
-        viewport_start_time = { required = true, kind = "number" },
-        viewport_duration = { required = true, kind = "number" },
+        viewport_start_time = { required = true },
+        viewport_duration = { required = true },
     },
 }
 

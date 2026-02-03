@@ -8,7 +8,7 @@ local SPEC = {
     args = {
         project_id = { required = true, kind = "string" },
         sequence_id = { required = true, kind = "string" },
-        playhead_position = { required = true, kind = "number" },
+        playhead_position = { required = true },
     },
 }
 
