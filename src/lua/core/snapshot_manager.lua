@@ -393,6 +393,7 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
     if delete_query then
         delete_query:bind_value(1, sequence_id)
         delete_query:exec()
+        delete_query:finalize()
     end
 
     -- Insert new snapshot

@@ -193,7 +193,12 @@ function ErrorBuilder:build()
     
     -- Map internal fields to error_system compatibility
     self.error_data.remediation = self.error_data.suggestions
-    self.error_data.technical_details = self.error_data.context
+    -- Merge context into technical_details (don't overwrite existing details)
+    for key, value in pairs(self.error_data.context) do
+        if self.error_data.technical_details[key] == nil then
+            self.error_data.technical_details[key] = value
+        end
+    end
     
     -- Build final error using existing error_system
     return error_system.create_error(self.error_data)

@@ -304,11 +304,11 @@ function M.get_link_group_id(clip_id, db)
     return link_group_id
 end
 
--- Calculate the anchor time for a link group (minimum start_value across all clips)
+-- Calculate the anchor time for a link group (minimum timeline_start_frame across all clips)
 -- This is used to maintain sync when trimming linked clips
 function M.calculate_anchor_time(link_group_id, db)
     local query = db:prepare([[
-        SELECT MIN(c.start_value)
+        SELECT MIN(c.timeline_start_frame)
         FROM clips c
         JOIN clip_links cl ON c.id = cl.clip_id
         WHERE cl.link_group_id = ?
