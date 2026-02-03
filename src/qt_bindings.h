@@ -147,6 +147,8 @@ int lua_set_parent(lua_State* L);
 // Widget attribute functions
 int lua_set_widget_attribute(lua_State* L);
 int lua_set_object_name(lua_State* L);
+int lua_set_widget_property(lua_State* L);
+int lua_set_widget_contents_margins(lua_State* L);
 
 // Utility functions
 void* lua_to_widget(lua_State* L, int index);

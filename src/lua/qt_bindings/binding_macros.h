@@ -8,6 +8,40 @@
 #include "../../qt_bindings.h"
 
 #include <QScrollArea>
+#include <QStyleOption>
+#include <QPainter>
+
+// QWidget subclass that paints its stylesheet AND focus borders.
+// Plain QWidget on macOS Qt6 skips paintEvent entirely, so stylesheet
+// borders never render. This subclass fixes that AND draws focus borders
+// from a "focusBorderColor" dynamic property — bypassing Qt stylesheet
+// resolution entirely for reliable rendering on macOS Metal.
+class StyledWidget : public QWidget {
+public:
+    using QWidget::QWidget;
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QStyleOption opt;
+        opt.initFrom(this);
+        QPainter p(this);
+        style()->drawPrimitive(QStyle::PE_Widget, &opt, &p, this);
+
+        // Draw focus border from dynamic property (set by focus_manager)
+        QVariant borderProp = property("focusBorderColor");
+        if (borderProp.isValid() && !borderProp.toString().isEmpty()) {
+            QColor borderColor(borderProp.toString());
+            if (borderColor.isValid()) {
+                p.setRenderHint(QPainter::Antialiasing, true);
+                QPen pen(borderColor);
+                pen.setWidth(2);
+                p.setPen(pen);
+                p.setBrush(Qt::NoBrush);
+                p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 6, 6);
+            }
+        }
+    }
+};
+
 // Helper to get widget from Lua stack with type checking
 template<typename T>
 T* get_widget(lua_State* L, int index = 1) {

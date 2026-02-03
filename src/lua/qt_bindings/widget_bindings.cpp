@@ -13,7 +13,7 @@ int lua_create_main_window(lua_State* L) {
     lua_push_widget(L, window);
     return 1;
 }
-LUA_BIND_WIDGET_CREATOR(lua_create_widget, QWidget)
+LUA_BIND_WIDGET_CREATOR(lua_create_widget, StyledWidget)
 LUA_BIND_WIDGET_CREATOR_WITH_TEXT(lua_create_label, QLabel)
 
 int lua_create_scroll_area(lua_State* L) {

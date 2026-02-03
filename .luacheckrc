@@ -35,6 +35,8 @@ globals = {
     "qt_set_widget_attribute",
     "qt_update_widget",
     "qt_set_widget_stylesheet",
+    "qt_set_widget_property",
+    "qt_set_widget_contents_margins",
     "qt_set_object_name",
     "qt_set_focus_handler",
     "qt_set_focus_policy",

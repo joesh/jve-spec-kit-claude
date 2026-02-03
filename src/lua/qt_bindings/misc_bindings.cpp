@@ -199,7 +199,7 @@ int lua_create_timeline_renderer(lua_State* L) {
 }
 
 int lua_create_inspector_panel(lua_State* L) {
-    QWidget* inspector_container = new QWidget();
+    StyledWidget* inspector_container = new StyledWidget();
     inspector_container->setObjectName("LuaInspectorContainer");
     inspector_container->setStyleSheet(
         "QWidget#LuaInspectorContainer { "
@@ -394,6 +394,27 @@ int lua_update_widget(lua_State* L) {
     return 0;
 }
 
+int lua_set_widget_property(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!widget) return luaL_error(L, "qt_set_widget_property: widget required");
+    const char* name = luaL_checkstring(L, 2);
+    const char* value = luaL_checkstring(L, 3);
+    widget->setProperty(name, QString::fromUtf8(value));
+    widget->update();
+    return 0;
+}
+
+int lua_set_widget_contents_margins(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!widget) return luaL_error(L, "qt_set_widget_contents_margins: widget required");
+    int left = luaL_checkinteger(L, 2);
+    int top = luaL_checkinteger(L, 3);
+    int right = luaL_checkinteger(L, 4);
+    int bottom = luaL_checkinteger(L, 5);
+    widget->setContentsMargins(left, top, right, bottom);
+    return 0;
+}
+
 // Scroll position functions
 int lua_get_scroll_position(lua_State* L) {
     QScrollArea* sa = get_widget<QScrollArea>(L, 1);
@@ -455,6 +476,7 @@ int lua_set_widget_attribute(lua_State* L) {
     if (strcmp(attr_name, "WA_TransparentForMouseEvents") == 0) attr = Qt::WA_TransparentForMouseEvents;
     else if (strcmp(attr_name, "WA_Hover") == 0) attr = Qt::WA_Hover;
     else if (strcmp(attr_name, "WA_StyledBackground") == 0) attr = Qt::WA_StyledBackground;
+    else if (strcmp(attr_name, "WA_TranslucentBackground") == 0) attr = Qt::WA_TranslucentBackground;
     else return luaL_error(L, "Unknown widget attribute: %s", attr_name);
     
     widget->setAttribute(attr, value);
