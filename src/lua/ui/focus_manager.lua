@@ -1,29 +1,21 @@
---- TODO: one-line summary (human review required)
+--- Focus Manager Module
+-- Tracks which panel has keyboard focus and provides clear visual feedback.
 --
--- Responsibilities:
--- - TODO
+-- Border highlights are painted directly by StyledWidget::paintEvent via the
+-- "focusBorderColor" dynamic property (qt_set_widget_property). This bypasses
+-- Qt stylesheet border resolution entirely — which is unreliable on macOS Qt6.
 --
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~196 LOC
--- Volatility: unknown
+-- No child overlay widgets (they become native NSViews on macOS, occluding Metal).
+-- No stylesheet border rules (they either don't render or cascade into children).
 --
 -- @file focus_manager.lua
--- Original intent (unreviewed):
--- - Focus Manager Module
--- - Tracks which panel has keyboard focus and provides clear visual feedback
--- - Shows a bright colored header/border on the active panel
 local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 
 local M = {}
 local logger = require("core.logger")
 
--- Panel registry: maps panel_id -> {widget, header_widget, panel_name}
+-- Panel registry: maps panel_id -> {widget, header_widget, panel_name, ...}
 local registered_panels = {}
 
 local focus_debug_enabled = os.getenv("JVE_DEBUG_FOCUS") == "1"
@@ -44,10 +36,9 @@ local COLORS = {
     focused_header = FOCUS_COLOR,
     unfocused_header = "#2a2a2a",
     focused_border = FOCUS_COLOR,
-    unfocused_border = "#2d2d2d",
+    unfocused_border = "#2d2d2d",  -- subtle dark border, always drawn
 }
 
-local BORDER_RADIUS = 6
 local BORDER_WIDTH = 2
 
 local function sanitize_panel_id(panel_id)
@@ -65,10 +56,29 @@ local function safe_set_stylesheet(widget, stylesheet, context)
     end
 end
 
+--- Set the border color property on a panel's widget.
+-- StyledWidget::paintEvent reads "focusBorderColor" and draws directly with QPainter.
+local function apply_border_color(panel, is_focused)
+    if not panel or not panel.widget then return end
+    local color = is_focused and COLORS.focused_border or COLORS.unfocused_border
+    local ok, err = pcall(qt_set_widget_property, panel.widget, "focusBorderColor", color)
+    if not ok then
+        logger.warn("focus", string.format(
+            "Failed to set focusBorderColor on %s: %s", panel.panel_name, tostring(err)))
+    end
+end
+
+--- Apply border colors to all registered panels based on current focus state.
+local function apply_all_borders()
+    for _, panel in pairs(registered_panels) do
+        apply_border_color(panel, panel.panel_id == focused_panel_id)
+    end
+end
+
 -- Register a panel for focus tracking
 -- Args:
 --   panel_id (string) - unique identifier
---   widget (userdata) - main panel container
+--   widget (userdata) - main panel container (must be StyledWidget for borders)
 --   header_widget (userdata|nil) - optional header label to recolor
 --   panel_name (string|nil) - friendly name for logs
 --   options (table|nil):
@@ -93,20 +103,21 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
         table.insert(focus_widgets, widget)
     end
 
-    local object_name = "focus_panel_" .. sanitized_id
-    if qt_set_object_name then
-        pcall(qt_set_object_name, widget, object_name)
-    end
     if qt_set_widget_attribute then
         pcall(qt_set_widget_attribute, widget, "WA_StyledBackground", true)
+    end
+
+    -- Reserve space for the border so children don't paint over it
+    if qt_set_widget_contents_margins then
+        pcall(qt_set_widget_contents_margins, widget, BORDER_WIDTH, BORDER_WIDTH, BORDER_WIDTH, BORDER_WIDTH)
     end
 
     registered_panels[panel_id] = {
         widget = widget,
         header_widget = header_widget,
         panel_name = panel_name or panel_id,
+        panel_id = panel_id,
         focus_widgets = focus_widgets,
-        object_name = object_name,
     }
 
     -- Install focus event handlers for all focusable widgets associated with this panel
@@ -119,9 +130,6 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
             qt_set_focus_handler(focus_widget, handler_name)
         end
     end
-
-    -- Apply initial unfocused style
-    M.update_panel_visual(panel_id, false)
 
     focus_debug(string.format("Focus tracking registered for panel: %s", panel_name or panel_id))
     return true
@@ -140,57 +148,52 @@ function M.set_focused_panel(panel_id)
         return  -- No change
     end
 
-    -- Remove focus indicator from old panel
-    if focused_panel_id then
-        M.update_panel_visual(focused_panel_id, false)
-    end
-
-    -- Set new focused panel
+    local old_panel_id = focused_panel_id
     focused_panel_id = panel_id
 
-    -- Add focus indicator to new panel
+    -- Update header on old panel
+    if old_panel_id then
+        M.update_header(old_panel_id, false)
+        local old_panel = registered_panels[old_panel_id]
+        apply_border_color(old_panel, false)
+    end
+
+    -- Update header + border on new panel
     if focused_panel_id then
-        M.update_panel_visual(focused_panel_id, true)
-        local panel = registered_panels[focused_panel_id]
-        if panel then
-            focus_debug(string.format("Focus: %s", panel.panel_name))
+        M.update_header(focused_panel_id, true)
+        local new_panel = registered_panels[focused_panel_id]
+        apply_border_color(new_panel, true)
+        if new_panel then
+            focus_debug(string.format("Focus: %s", new_panel.panel_name))
         end
     end
 
     selection_hub.set_active_panel(focused_panel_id)
 end
 
--- Update visual indicators for a panel
-function M.update_panel_visual(panel_id, is_focused)
+-- Update header visual for a single panel
+function M.update_header(panel_id, is_focused)
     local panel = registered_panels[panel_id]
-    if not panel then
+    if not panel or not panel.header_widget then
         return
     end
-
-    local border_color = is_focused and COLORS.focused_border or COLORS.unfocused_border
-
-    if panel.header_widget then
-        local header_color = is_focused and COLORS.focused_header or COLORS.unfocused_header
-        safe_set_stylesheet(panel.header_widget, string.format([[ 
-            QLabel {
-                background: %s;
-                color: white;
-                padding: 4px;
-                font-size: 12px;
-                border: none;
-            }
-        ]], header_color), panel_id .. ":header")
-    end
-
-    -- Apply border directly to panel widget via object-name-scoped stylesheet.
-    -- No overlay widget — overlays become native NSViews that occlude Metal surfaces.
-    local border_style = string.format([[
-        #%s {
-            border: %dpx solid %s;
-            border-radius: %dpx;
+    local header_color = is_focused and COLORS.focused_header or COLORS.unfocused_header
+    safe_set_stylesheet(panel.header_widget, string.format([[
+        QLabel {
+            background: %s;
+            color: white;
+            padding: 4px;
+            font-size: 12px;
+            border: none;
         }
-    ]], panel.object_name, BORDER_WIDTH, border_color, BORDER_RADIUS)
-    safe_set_stylesheet(panel.widget, border_style, panel_id .. ":border")
+    ]], header_color), panel_id .. ":header")
+end
+
+-- Legacy API: update visual for a single panel (headers + border)
+function M.update_panel_visual(panel_id, is_focused)
+    M.update_header(panel_id, is_focused)
+    local panel = registered_panels[panel_id]
+    apply_border_color(panel, is_focused)
 end
 
 -- Get currently focused panel ID
@@ -205,6 +208,13 @@ function M.refresh_highlight(panel_id)
     end
     local is_focused = (target == focused_panel_id)
     M.update_panel_visual(target, is_focused)
+end
+
+function M.refresh_all_highlights()
+    for panel_id, _ in pairs(registered_panels) do
+        M.update_header(panel_id, panel_id == focused_panel_id)
+    end
+    apply_all_borders()
 end
 
 -- Get focused panel info
@@ -237,8 +247,9 @@ end
 -- Initialize all registered panels to unfocused state
 function M.initialize_all_panels()
     for panel_id, _ in pairs(registered_panels) do
-        M.update_panel_visual(panel_id, false)
+        M.update_header(panel_id, false)
     end
+    apply_all_borders()
 end
 
 return M
