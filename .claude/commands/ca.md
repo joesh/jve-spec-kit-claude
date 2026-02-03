@@ -55,5 +55,6 @@ EOF
 - If a file has changes belonging to two different logical groups, note this and ask the user how to proceed
 - Run `git status` after the final commit to verify clean tree
 - Show the final `git log --oneline` of all new commits
+- Push to remote after all commits succeed: `git push`
 
 $ARGUMENTS
