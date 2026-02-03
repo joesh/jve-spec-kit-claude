@@ -689,11 +689,31 @@ end
 function M.execute(command_or_name, params)
     -- Track execution depth for nested command support
     execution_depth = execution_depth + 1
+
+    -- Guard: ensure execution_depth is always decremented even if the body throws
+    local ok, result_or_err, command_out = xpcall(function()
+        return M._execute_body(command_or_name, params)
+    end, debug.traceback)
+
+    execution_depth = execution_depth - 1
+    -- Clear root tracking when top-level command finishes
+    if execution_depth == 0 then
+        root_command_sequence_number = nil
+        root_playhead_value = nil
+        root_playhead_rate = nil
+    end
+
+    if not ok then
+        error(result_or_err)
+    end
+    return result_or_err, command_out
+end
+
+function M._execute_body(command_or_name, params)
     local is_nested = execution_depth > 1
 
     local command, normalize_failure = normalize_command(command_or_name, params)
     if not command then
-        execution_depth = execution_depth - 1
         return normalize_failure, nil
     end
 
@@ -743,7 +763,8 @@ function M.execute(command_or_name, params)
         execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
 
         result.success = execution_success
-        result.error_message = execution_error_message or ""
+        result.error_message = execution_error_message ~= "" and execution_error_message
+            or (last_error_message ~= "" and last_error_message or "")
         if execution_result_data ~= nil then
             result.result_data = execution_result_data
         end
@@ -1117,13 +1138,6 @@ function M.execute(command_or_name, params)
     end
 
 ::cleanup::
-    execution_depth = execution_depth - 1
-    -- Clear root tracking when top-level command finishes
-    if execution_depth == 0 then
-        root_command_sequence_number = nil
-        root_playhead_value = nil
-        root_playhead_rate = nil
-    end
     return result, command
 end
 
