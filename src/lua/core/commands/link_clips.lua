@@ -73,18 +73,12 @@ function M.register(executors, undoers, db)
         local args = command:get_all_parameters()
         local link_group_id = args.link_group_id
 
-        if not link_group_id then
-            return false
-        end
+        assert(link_group_id, "UnlinkClip.undo: missing link_group_id in undo args")
 
         -- Delete the entire link group
-        local query = db:prepare([[
+        local query = assert(db:prepare([[
             DELETE FROM clip_links WHERE link_group_id = ?
-        ]])
-
-        if not query then
-            return false
-        end
+        ]]), "UnlinkClip.undo: failed to prepare DELETE query")
 
         query:bind_value(1, link_group_id)
         local result = query:exec()
@@ -182,7 +176,7 @@ function M.register(executors, undoers, db)
         local time_offset = args.original_time_offset
 
         local insert_query = db:prepare([[
-            INSERT INTO clip_links (link_group_id, clip_id, args.original_role, time_offset, enabled)
+            INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
             VALUES (?, ?, ?, ?, 1)
         ]])
 

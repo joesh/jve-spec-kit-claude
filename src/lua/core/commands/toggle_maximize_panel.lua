@@ -34,8 +34,8 @@ function M.register(executors, undoers, db)
         local panel_manager = require("ui.panel_manager")
 
         local ok, err = panel_manager.toggle_maximize(args.panel_id)
-        if not ok and err then
-            print(string.format("WARNING: ToggleMaximizePanel: %s", err))
+        if not ok then
+            assert(false, string.format("ToggleMaximizePanel: failed for panel %s: %s", tostring(args.panel_id), tostring(err)))
         end
         return true
     end

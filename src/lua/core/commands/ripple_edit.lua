@@ -191,17 +191,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local post_states = {}
         local deleted_clip_ids = {}
         
-        local seq_fps_num = 30
-        local seq_fps_den = 1
+        local seq_fps_num, seq_fps_den
         local seq_stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-        if seq_stmt then
-            seq_stmt:bind_value(1, sequence_id)
-            if seq_stmt:exec() and seq_stmt:next() then
-                seq_fps_num = seq_stmt:value(0)
-                seq_fps_den = seq_stmt:value(1)
-            end
-            seq_stmt:finalize()
+        assert(seq_stmt, "RippleEdit: failed to prepare sequence fps query")
+        seq_stmt:bind_value(1, sequence_id)
+        local seq_ok = seq_stmt:exec() and seq_stmt:next()
+        if seq_ok then
+            seq_fps_num = seq_stmt:value(0)
+            seq_fps_den = seq_stmt:value(1)
         end
+        seq_stmt:finalize()
+        assert(seq_fps_num, string.format("RippleEdit: missing fps_numerator for sequence_id=%s", tostring(sequence_id)))
+        assert(seq_fps_den, string.format("RippleEdit: missing fps_denominator for sequence_id=%s", tostring(sequence_id)))
         
         -- Strict input: delta must be Rational via args.delta_ms (Rational/table) or integer frames
         local delta_rat
@@ -391,14 +392,34 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if shift_rat.frames < 0 and clips_to_shift and #clips_to_shift > 0 and edge_info.edge_type == "gap_before" then
             local max_allowed = shift_rat.frames
             local trimmed_end = clip.timeline_start + clip.duration
+            -- Build lookup of downstream clip IDs so we can skip constraints
+            -- against predecessors that will shift by the same amount
+            -- (they maintain relative spacing and can't overlap each other).
+            local shifting_ids = {[clip.id] = true}
+            for _, sc in ipairs(clips_to_shift) do
+                shifting_ids[sc.id] = true
+            end
             for _, target in ipairs(clips_to_shift) do
                 local prev_end = nil
                 for _, other in ipairs(all_clips) do
                     if other.track_id == target.track_id and other.id ~= target.id then
-                        local other_end = other.timeline_start + other.duration
+                        -- Skip predecessors that are also shifting — they
+                        -- maintain the same relative gap so no overlap risk.
+                        if shifting_ids[other.id] then
+                            goto continue_neighbor
+                        end
+                        -- Use the edited clip's NEW position, not the stale
+                        -- all_clips entry (loaded before modifications).
+                        local other_end
+                        if other.id == clip.id then
+                            other_end = trimmed_end
+                        else
+                            other_end = other.timeline_start + other.duration
+                        end
                         if other_end <= target.timeline_start and (not prev_end or other_end > prev_end) then
                             prev_end = other_end
                         end
+                        ::continue_neighbor::
                     end
                 end
                 local baseline = prev_end or Rational.new(0, seq_fps_num, seq_fps_den)

@@ -235,12 +235,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             cmd.project_id = child_project_id
 
             local undoer = command_undoers[spec.command_type]
-            if undoer then
-                local success = undoer(cmd)
-                if not success then
-                    print(string.format("WARNING: BatchCommand undo: Failed to undo command %d (%s)", i, spec.command_type))
-                end
-            end
+            assert(undoer, string.format("BatchCommand undo: no undoer registered for command %d (%s)", i, spec.command_type))
+            local success = undoer(cmd)
+            assert(success, string.format("BatchCommand undo: child undo failed for command %d (%s)", i, spec.command_type))
             merge_timeline_mutations(command, cmd:get_parameter("__timeline_mutations"))
         end
 

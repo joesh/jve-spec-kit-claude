@@ -59,7 +59,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if duration_value == nil and source_out_value ~= nil then
             duration_value = source_out_value - source_in_value
         end
-        duration_value = duration_value or 1
+        assert(duration_value, "DuplicateMasterClip: missing duration_value (no duration_value and no source_out_value)")
 
         local duration = Rational.new(duration_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
         local source_in = Rational.new(source_in_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)

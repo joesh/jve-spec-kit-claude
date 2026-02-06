@@ -152,6 +152,7 @@ function M.register(executors, undoers, db)
                 name = media_item.name,
                 file_path = media_item.file_path,
                 duration = media_item.duration,
+                frame_rate = media_item.frame_rate or parse_result.project.settings.frame_rate,
                 width = parse_result.project.settings.width,
                 height = parse_result.project.settings.height
             })
@@ -275,35 +276,35 @@ function M.register(executors, undoers, db)
     local function resolve_project_undoer(command)
         local args = command:get_all_parameters()
 
-        if not args.result_project_id then
-            logger.error("import_resolve", "Cannot undo - command state missing")
-            return false
-        end
+        assert(args.result_project_id, "UndoImportResolveProject: missing result_project_id")
 
         -- Delete clips
         for _, clip_id in ipairs(args.created_clip_ids or {}) do
-            db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id))
+            assert(db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id)),
+                "UndoImportResolveProject: clips DELETE failed for " .. tostring(clip_id))
         end
 
         -- Delete tracks
         for _, track_id in ipairs(args.created_track_ids or {}) do
-            db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id))
+            assert(db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id)),
+                "UndoImportResolveProject: tracks DELETE failed for " .. tostring(track_id))
         end
 
         -- Delete timelines
         for _, timeline_id in ipairs(args.created_timeline_ids or {}) do
-            db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", timeline_id))
+            assert(db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", timeline_id)),
+                "UndoImportResolveProject: sequences DELETE failed for " .. tostring(timeline_id))
         end
 
         -- Delete media
         for _, media_id in ipairs(args.created_media_ids or {}) do
-            db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id))
+            assert(db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id)),
+                "UndoImportResolveProject: media DELETE failed for " .. tostring(media_id))
         end
 
         -- Delete project
-        if args.result_project_id then
-            db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id))
-        end
+        assert(db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id)),
+            "UndoImportResolveProject: projects DELETE failed for " .. tostring(args.result_project_id))
 
         logger.info("import_resolve", "Undo: Deleted imported Resolve project and all associated data")
         return true
@@ -407,6 +408,7 @@ function M.register(executors, undoers, db)
                 name = media_item.name,
                 file_path = media_item.file_path,
                 duration = media_item.duration,
+                frame_rate = media_item.frame_rate or import_result.project.frame_rate,
                 width = import_result.project.width,
                 height = import_result.project.height
             })
@@ -521,35 +523,35 @@ function M.register(executors, undoers, db)
     local function resolve_database_undoer(command)
         local args = command:get_all_parameters()
 
-        if not args.result_project_id then
-            logger.error("import_resolve", "Cannot undo - command state missing")
-            return false
-        end
+        assert(args.result_project_id, "UndoImportResolveDatabase: missing result_project_id")
 
         -- Delete clips
         for _, clip_id in ipairs(args.created_clip_ids or {}) do
-            db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id))
+            assert(db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id)),
+                "UndoImportResolveDatabase: clips DELETE failed for " .. tostring(clip_id))
         end
 
         -- Delete tracks
         for _, track_id in ipairs(args.created_track_ids or {}) do
-            db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id))
+            assert(db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id)),
+                "UndoImportResolveDatabase: tracks DELETE failed for " .. tostring(track_id))
         end
 
         -- Delete timelines
         for _, timeline_id in ipairs(args.created_timeline_ids or {}) do
-            db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", timeline_id))
+            assert(db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", timeline_id)),
+                "UndoImportResolveDatabase: sequences DELETE failed for " .. tostring(timeline_id))
         end
 
         -- Delete media
         for _, media_id in ipairs(args.created_media_ids or {}) do
-            db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id))
+            assert(db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id)),
+                "UndoImportResolveDatabase: media DELETE failed for " .. tostring(media_id))
         end
 
         -- Delete project
-        if args.result_project_id then
-            db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id))
-        end
+        assert(db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id)),
+            "UndoImportResolveDatabase: projects DELETE failed for " .. tostring(args.result_project_id))
 
         logger.info("import_resolve", "Undo: Deleted imported Resolve database and all associated data")
         return true

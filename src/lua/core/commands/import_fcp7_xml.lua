@@ -423,41 +423,36 @@ function M.register(executors, undoers, db)
         local deleted_sequence_lookup = {}
 
         for _, clip_id in ipairs(clip_ids) do
-            local delete_query = db:prepare("DELETE FROM clips WHERE id = ?")
-            if delete_query then
-                delete_query:bind_value(1, clip_id)
-                delete_query:exec()
-                delete_query:finalize()
-            end
+            local delete_query = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
+                "UndoImportFCP7XML: failed to prepare clips DELETE for " .. tostring(clip_id))
+            delete_query:bind_value(1, clip_id)
+            assert(delete_query:exec(), "UndoImportFCP7XML: clips DELETE failed for " .. tostring(clip_id))
+            delete_query:finalize()
         end
 
         for _, track_id in ipairs(track_ids) do
-            local delete_query = db:prepare("DELETE FROM tracks WHERE id = ?")
-            if delete_query then
-                delete_query:bind_value(1, track_id)
-                delete_query:exec()
-                delete_query:finalize()
-            end
+            local delete_query = assert(db:prepare("DELETE FROM tracks WHERE id = ?"),
+                "UndoImportFCP7XML: failed to prepare tracks DELETE for " .. tostring(track_id))
+            delete_query:bind_value(1, track_id)
+            assert(delete_query:exec(), "UndoImportFCP7XML: tracks DELETE failed for " .. tostring(track_id))
+            delete_query:finalize()
         end
 
         for _, sequence_id in ipairs(sequence_ids) do
-            local delete_query = db:prepare("DELETE FROM sequences WHERE id = ?")
-            if delete_query then
-                delete_query:bind_value(1, sequence_id)
-                delete_query:exec()
-                delete_query:finalize()
-            end
+            local delete_query = assert(db:prepare("DELETE FROM sequences WHERE id = ?"),
+                "UndoImportFCP7XML: failed to prepare sequences DELETE for " .. tostring(sequence_id))
+            delete_query:bind_value(1, sequence_id)
+            assert(delete_query:exec(), "UndoImportFCP7XML: sequences DELETE failed for " .. tostring(sequence_id))
+            delete_query:finalize()
             deleted_sequence_lookup[sequence_id] = true
-
         end
 
         for _, media_id in ipairs(media_ids) do
-            local delete_query = db:prepare("DELETE FROM media WHERE id = ?")
-            if delete_query then
-                delete_query:bind_value(1, media_id)
-                delete_query:exec()
-                delete_query:finalize()
-            end
+            local delete_query = assert(db:prepare("DELETE FROM media WHERE id = ?"),
+                "UndoImportFCP7XML: failed to prepare media DELETE for " .. tostring(media_id))
+            delete_query:bind_value(1, media_id)
+            assert(delete_query:exec(), "UndoImportFCP7XML: media DELETE failed for " .. tostring(media_id))
+            delete_query:finalize()
         end
 
         local fallback_sequence = nil

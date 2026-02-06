@@ -27,9 +27,9 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    if not command_executors or not command_undoers or not db then
-        return nil
-    end
+    assert(command_executors, "DeleteMasterClip.register: missing command_executors")
+    assert(command_undoers, "DeleteMasterClip.register: missing command_undoers")
+    assert(db, "DeleteMasterClip.register: missing db")
 
     local Clip = require("models.clip")
 
@@ -37,14 +37,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
         if prop_stmt then
             prop_stmt:bind_value(1, clip_id)
-            prop_stmt:exec()
+            assert(prop_stmt:exec(), "DeleteMasterClip: properties DELETE failed for clip " .. tostring(clip_id))
             prop_stmt:finalize()
         end
 
         local link_stmt = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
         if link_stmt then
             link_stmt:bind_value(1, clip_id)
-            link_stmt:exec()
+            assert(link_stmt:exec(), "DeleteMasterClip: clip_links DELETE failed for clip " .. tostring(clip_id))
             link_stmt:finalize()
         end
 
@@ -52,13 +52,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if clip_obj then
             return clip_obj:delete()
         else
-            local delete_stmt = db:prepare("DELETE FROM clips WHERE id = ?")
-            if delete_stmt then
-                delete_stmt:bind_value(1, clip_id)
-                local ok = delete_stmt:exec()
-                delete_stmt:finalize()
-                return ok
-            end
+            local delete_stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
+                "DeleteMasterClip: failed to prepare clips DELETE for clip " .. tostring(clip_id))
+            delete_stmt:bind_value(1, clip_id)
+            assert(delete_stmt:exec(), "DeleteMasterClip: clips DELETE failed for clip " .. tostring(clip_id))
+            delete_stmt:finalize()
         end
         return true
     end
@@ -129,23 +127,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local delete_tracks = db:prepare("DELETE FROM tracks WHERE sequence_id = ?")
             if delete_tracks then
                 delete_tracks:bind_value(1, source_sequence_id)
-                delete_tracks:exec()
+                assert(delete_tracks:exec(), "DeleteMasterClip: tracks DELETE failed for sequence " .. tostring(source_sequence_id))
                 delete_tracks:finalize()
             end
 
             local delete_snapshots = db:prepare("DELETE FROM snapshots WHERE sequence_id = ?")
             if delete_snapshots then
                 delete_snapshots:bind_value(1, source_sequence_id)
-                delete_snapshots:exec()
+                assert(delete_snapshots:exec(), "DeleteMasterClip: snapshots DELETE failed for sequence " .. tostring(source_sequence_id))
                 delete_snapshots:finalize()
             end
 
-            local delete_sequence_stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
-            if delete_sequence_stmt then
-                delete_sequence_stmt:bind_value(1, source_sequence_id)
-                delete_sequence_stmt:exec()
-                delete_sequence_stmt:finalize()
-            end
+            local delete_sequence_stmt = assert(db:prepare("DELETE FROM sequences WHERE id = ?"),
+                "DeleteMasterClip: failed to prepare sequences DELETE for sequence " .. tostring(source_sequence_id))
+            delete_sequence_stmt:bind_value(1, source_sequence_id)
+            assert(delete_sequence_stmt:exec(), "DeleteMasterClip: sequences DELETE failed for sequence " .. tostring(source_sequence_id))
+            delete_sequence_stmt:finalize()
         end
 
         local snapshot = {

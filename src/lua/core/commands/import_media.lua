@@ -75,24 +75,23 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
         return nil
     end
 
-    local fps_num = 30
-    local fps_den = 1
-    if metadata and metadata.video and metadata.video.frame_rate then
-        local rate = metadata.video.frame_rate
-        if type(rate) == "number" and rate > 0 then
-            fps_num = math.floor(rate + 0.5)
-        elseif type(rate) == "table" and rate.fps_numerator then
-            fps_num = rate.fps_numerator
-            fps_den = rate.fps_denominator
-        end
+    assert(metadata and metadata.video and metadata.video.frame_rate,
+        "ImportMedia: missing video.frame_rate in metadata for " .. tostring(file_path))
+    local fps_num, fps_den
+    local rate = metadata.video.frame_rate
+    if type(rate) == "number" and rate > 0 then
+        fps_num = math.floor(rate + 0.5)
+        fps_den = 1
+    elseif type(rate) == "table" and rate.fps_numerator then
+        fps_num = rate.fps_numerator
+        fps_den = rate.fps_denominator
+    else
+        error("ImportMedia: unrecognized frame_rate format for " .. tostring(file_path))
     end
 
-    local duration_rat
-    if metadata and metadata.duration_ms and metadata.duration_ms > 0 then
-        duration_rat = Rational.from_seconds(metadata.duration_ms / 1000.0, fps_num, fps_den)
-    else
-        duration_rat = Rational.new(fps_num, fps_num, fps_den)  -- 1 second default
-    end
+    assert(metadata.duration_ms and metadata.duration_ms > 0,
+        "ImportMedia: missing or zero duration_ms in metadata for " .. tostring(file_path))
+    local duration_rat = Rational.from_seconds(metadata.duration_ms / 1000.0, fps_num, fps_den)
     local zero_rat = Rational.new(0, fps_num, fps_den)
 
     local base_name = extract_filename(file_path)
@@ -100,8 +99,8 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
     -- Create master sequence
     local sequence = Sequence.create(base_name .. " (Source)", project_id,
         {fps_numerator = fps_num, fps_denominator = fps_den},
-        metadata and metadata.video and metadata.video.width or 1920,
-        metadata and metadata.video and metadata.video.height or 1080,
+        assert(metadata and metadata.video and metadata.video.width, "ImportMedia: missing video.width for " .. tostring(file_path)),
+        assert(metadata and metadata.video and metadata.video.height, "ImportMedia: missing video.height for " .. tostring(file_path)),
         {
             id = replay_ids.master_sequence_id,
             kind = "master"
@@ -399,12 +398,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if type(audio_clip_ids) == "table" then
                 for _, clip_id in ipairs(audio_clip_ids) do
                     if clip_id and clip_id ~= "" then
-                        local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
-                        if stmt then
-                            stmt:bind_value(1, clip_id)
-                            stmt:exec()
-                            stmt:finalize()
-                        end
+                        local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
+                            "UndoImportMedia: failed to prepare audio clip DELETE for " .. tostring(clip_id))
+                        stmt:bind_value(1, clip_id)
+                        assert(stmt:exec(), "UndoImportMedia: audio clip DELETE failed for " .. tostring(clip_id))
+                        stmt:finalize()
                     end
                 end
             end
@@ -413,24 +411,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Delete video clips
         for _, clip_id in ipairs(master_video_clip_ids) do
             if clip_id and clip_id ~= "" then
-                local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
-                if stmt then
-                    stmt:bind_value(1, clip_id)
-                    stmt:exec()
-                    stmt:finalize()
-                end
+                local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
+                    "UndoImportMedia: failed to prepare video clip DELETE for " .. tostring(clip_id))
+                stmt:bind_value(1, clip_id)
+                assert(stmt:exec(), "UndoImportMedia: video clip DELETE failed for " .. tostring(clip_id))
+                stmt:finalize()
             end
         end
 
         -- Delete master clips
         for _, clip_id in ipairs(master_clip_ids) do
             if clip_id and clip_id ~= "" then
-                local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
-                if stmt then
-                    stmt:bind_value(1, clip_id)
-                    stmt:exec()
-                    stmt:finalize()
-                end
+                local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
+                    "UndoImportMedia: failed to prepare master clip DELETE for " .. tostring(clip_id))
+                stmt:bind_value(1, clip_id)
+                assert(stmt:exec(), "UndoImportMedia: master clip DELETE failed for " .. tostring(clip_id))
+                stmt:finalize()
             end
         end
 
@@ -439,12 +435,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if type(audio_track_ids) == "table" then
                 for _, track_id in ipairs(audio_track_ids) do
                     if track_id and track_id ~= "" then
-                        local stmt = db:prepare("DELETE FROM tracks WHERE id = ?")
-                        if stmt then
-                            stmt:bind_value(1, track_id)
-                            stmt:exec()
-                            stmt:finalize()
-                        end
+                        local stmt = assert(db:prepare("DELETE FROM tracks WHERE id = ?"),
+                            "UndoImportMedia: failed to prepare audio track DELETE for " .. tostring(track_id))
+                        stmt:bind_value(1, track_id)
+                        assert(stmt:exec(), "UndoImportMedia: audio track DELETE failed for " .. tostring(track_id))
+                        stmt:finalize()
                     end
                 end
             end
@@ -453,36 +448,33 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Delete video tracks
         for _, track_id in ipairs(master_video_track_ids) do
             if track_id and track_id ~= "" then
-                local stmt = db:prepare("DELETE FROM tracks WHERE id = ?")
-                if stmt then
-                    stmt:bind_value(1, track_id)
-                    stmt:exec()
-                    stmt:finalize()
-                end
+                local stmt = assert(db:prepare("DELETE FROM tracks WHERE id = ?"),
+                    "UndoImportMedia: failed to prepare video track DELETE for " .. tostring(track_id))
+                stmt:bind_value(1, track_id)
+                assert(stmt:exec(), "UndoImportMedia: video track DELETE failed for " .. tostring(track_id))
+                stmt:finalize()
             end
         end
 
         -- Delete sequences
         for _, seq_id in ipairs(master_sequence_ids) do
             if seq_id and seq_id ~= "" then
-                local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
-                if stmt then
-                    stmt:bind_value(1, seq_id)
-                    stmt:exec()
-                    stmt:finalize()
-                end
+                local stmt = assert(db:prepare("DELETE FROM sequences WHERE id = ?"),
+                    "UndoImportMedia: failed to prepare sequence DELETE for " .. tostring(seq_id))
+                stmt:bind_value(1, seq_id)
+                assert(stmt:exec(), "UndoImportMedia: sequence DELETE failed for " .. tostring(seq_id))
+                stmt:finalize()
             end
         end
 
         -- Delete media
         for _, media_id in ipairs(media_ids) do
             if media_id and media_id ~= "" then
-                local stmt = db:prepare("DELETE FROM media WHERE id = ?")
-                if stmt then
-                    stmt:bind_value(1, media_id)
-                    stmt:exec()
-                    stmt:finalize()
-                end
+                local stmt = assert(db:prepare("DELETE FROM media WHERE id = ?"),
+                    "UndoImportMedia: failed to prepare media DELETE for " .. tostring(media_id))
+                stmt:bind_value(1, media_id)
+                assert(stmt:exec(), "UndoImportMedia: media DELETE failed for " .. tostring(media_id))
+                stmt:finalize()
             end
         end
 

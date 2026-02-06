@@ -50,7 +50,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if config.type == "string" then
             return value ~= nil and tostring(value) or ""
         elseif config.type == "number" then
-            return tonumber(value) or 0
+            return assert(tonumber(value), string.format("SetSequenceMetadata: field %s requires numeric value, got %s", tostring(field), tostring(value)))
         elseif config.type == "nullable_number" then
             if value == nil or value == "" then
                 return nil

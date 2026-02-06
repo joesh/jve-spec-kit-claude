@@ -34,7 +34,8 @@ local SPEC = {
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     local MIN_TRACK_HEIGHT = 24
-    local DEFAULT_TRACK_HEIGHT = (ui_constants and ui_constants.TIMELINE and ui_constants.TIMELINE.TRACK_HEIGHT) or 50
+    local DEFAULT_TRACK_HEIGHT = assert(ui_constants and ui_constants.TIMELINE and ui_constants.TIMELINE.TRACK_HEIGHT,
+        "CreateSequence: ui_constants.TIMELINE.TRACK_HEIGHT not defined")
     local TRACK_TEMPLATE_KEY = "track_height_template"
 
     local function normalize_height(value)

@@ -113,21 +113,16 @@ function M.register(executors, undoers, db)
         for media_id, new_file_path in pairs(args.relink_map) do
             local media = Media.load(media_id)
 
-            if media then
-                -- Store old path for undo
-                old_paths[media_id] = media.file_path
+            assert(media, string.format("BatchRelinkMedia: media not found: %s", media_id))
 
-                -- Update path
-                media.file_path = new_file_path
+            -- Store old path for undo
+            old_paths[media_id] = media.file_path
 
-                if media:save() then
-                    relinked_count = relinked_count + 1
-                else
-                    print(string.format("WARNING: Failed to relink media %s", media_id))
-                end
-            else
-                print(string.format("WARNING: Media not found: %s", media_id))
-            end
+            -- Update path
+            media.file_path = new_file_path
+
+            assert(media:save(), string.format("BatchRelinkMedia: failed to save relinked media %s", media_id))
+            relinked_count = relinked_count + 1
         end
 
         command:set_parameters({

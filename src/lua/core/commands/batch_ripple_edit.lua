@@ -736,7 +736,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		        assert(ctx.original_states_map, "compute_earliest_ripple_hint: original_states_map is nil")
 		        ctx.earliest_ripple_hint = nil
 		        for _, edge_info in ipairs(ctx.edge_infos) do
-		            if edge_info.trim_type ~= "roll" then
+		            if edge_info.trim_type ~= "roll" and edge_info.clip_id and ctx.original_states_map[edge_info.clip_id] then
 		                local point = compute_edge_boundary_time(edge_info, ctx.original_states_map)
 		                if point and (not ctx.earliest_ripple_hint or point < ctx.earliest_ripple_hint) then
 		                    ctx.earliest_ripple_hint = point

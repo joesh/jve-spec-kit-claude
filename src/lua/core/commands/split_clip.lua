@@ -212,16 +212,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local second_clip = Clip.load(args.second_clip_id)
-        if not second_clip then
-            set_last_error(string.format("UndoSplitClip: Second clip not found: %s", tostring(args.second_clip_id)))
-            return false
+        if second_clip then
+            if not second_clip:delete() then
+                set_last_error("UndoSplitClip: Failed to delete second clip")
+                return false
+            end
+            command_helper.add_delete_mutation(command, args.sequence_id, args.second_clip_id)
+        else
+            logger.warn("split_clip", string.format(
+                "UndoSplitClip: Second clip %s already absent, skipping delete",
+                tostring(args.second_clip_id)))
         end
-
-        if not second_clip:delete() then
-            set_last_error("UndoSplitClip: Failed to delete second clip")
-            return false
-        end
-        command_helper.add_delete_mutation(command, args.sequence_id, args.second_clip_id)
 
         original_clip.timeline_start = original_timeline_start
         original_clip.duration = original_duration

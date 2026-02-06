@@ -88,11 +88,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
                 deleted_props[clip_id] = command_helper.snapshot_properties_for_clip(clip_id)
 
-                if clip:delete() then
-                    deleted_count = deleted_count + 1
-                else
-                    print(string.format("WARNING: Cut: failed to delete clip %s", clip_id))
-                end
+                assert(clip:delete(), string.format("Cut: failed to delete clip %s", clip_id))
+                deleted_count = deleted_count + 1
             else
                 print(string.format("WARNING: Cut: clip %s not found", clip_id))
             end
@@ -123,12 +120,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_undoers["Cut"] = function(command)
         local args = command:get_all_parameters()
-        local states = args.deleted_clip_states or {}
-        local props = args.deleted_clip_properties or {}
-        if type(states) ~= "table" then
-            return false
-        end
-
+        assert(type(args.deleted_clip_states) == "table", "UndoCut: missing deleted_clip_states")
+        local states = args.deleted_clip_states
+        assert(type(args.deleted_clip_properties) == "table", "UndoCut: missing deleted_clip_properties")
+        local props = args.deleted_clip_properties
         for _, state in ipairs(states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
