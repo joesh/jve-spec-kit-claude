@@ -62,10 +62,19 @@ exclude_files = {
     "src/lua/ui/keyboard_dialog_premiere.lua",
     "src/lua/ui/**/*.json",
     "src/lua/ui/.DS_Store",
+    "**/*.cpp",
+    "**/*.h",
+    "**/*.hpp",
+    "**/*.c",
+    "**/*.md",
+    "**/*.txt",
+    "**/*.json",
+    ".git/**",
 }
 
 include_files = {
-    "src/lua/ui/**",
+    "src/lua/**",
+    "tests/**",
 }
 
 files = {

@@ -64,155 +64,65 @@ Full-codebase audit identified ~8,000 LOC with zero or minimal test coverage. Ta
 
 ## Still Open
 
-- [ ] (in_progress) Reduce edge-release latency on large timelines — `TimelineActiveRegion`/preloaded snapshots execution-only; awaiting in-app confirmation with `JVE_DEBUG_COMMAND_PERF=1`.
-- [ ] Decide on enforcement approach for future command isolation violations.
+- [ ] **Edge-release latency** — NOT STARTED. `TimelineActiveRegion` has on-demand snapshot builds but no preloading/caching. Header TODOs unfilled. Needs design decision on when to preload (playhead move vs drag start) and perf target.
+- [ ] **Command isolation enforcement** — PARTIAL (60%). Depth tracking + undo grouping implemented. Missing: hard max-depth assert, re-entrancy guards. Current approach is soft guardrails, not fail-fast.
 
 ## Test SQL Isolation Refactoring (2026-01-20)
 
-**Goal**: Refactor all tests to use model methods instead of raw SQL.
+**Goal**: Refactor tests to prefer model methods over raw SQL.
 
-### Already Fixed
-- [x] `tests/helpers/ripple_layout.lua` - Helper now uses Project, Sequence, Track, Media, Clip models
+**Status**: ~45% complete. Many tests use hybrid approach (models for core logic, raw SQL for quick setup/verification). This is acceptable for tests — full refactoring is low priority.
 
-### Batch Ripple Tests (18 files)
-- [ ] `test_batch_ripple_clamped_noop.lua`
-- [ ] `test_batch_ripple_gap_before_expand.lua`
-- [ ] `test_batch_ripple_gap_clamp.lua`
-- [ ] `test_batch_ripple_gap_downstream_block.lua`
-- [ ] `test_batch_ripple_gap_materialization.lua`
-- [ ] `test_batch_ripple_gap_nested_closure.lua`
-- [ ] `test_batch_ripple_gap_preserves_enabled.lua`
-- [ ] `test_batch_ripple_gap_undo_no_temp_gap.lua`
-- [ ] `test_batch_ripple_gap_upstream_preserve.lua`
-- [ ] `test_batch_ripple_handle_ripple.lua`
-- [ ] `test_batch_ripple_media_limit.lua`
-- [ ] `test_batch_ripple_out_trim_clamp.lua`
-- [ ] `test_batch_ripple_roll.lua`
-- [ ] `test_batch_ripple_temp_gap_replay.lua`
-- [ ] `test_batch_ripple_undo_respects_pre_bulk_shift_order.lua`
-- [ ] `test_batch_ripple_upstream_overlap.lua`
-- [ ] `test_batch_move_block_cross_track_occludes_dest.lua`
-- [ ] `test_batch_move_clip_to_track_undo.lua`
+### Already Clean (use models, no raw SQL)
+- [x] `tests/helpers/ripple_layout.lua` — Helper uses Project, Sequence, Track, Media, Clip models
+- [x] `test_batch_command_contract.lua` — Pure integration test, no direct DB queries
+- [x] `test_timeline_drag_copy.lua` — Uses Clip.create(), .save(), .load(), database.load_clips()
 
-### Ripple Tests (12 files)
-- [ ] `test_ripple_delete_gap.lua`
-- [ ] `test_ripple_delete_gap_integration.lua`
-- [ ] `test_ripple_delete_gap_selection_redo.lua`
-- [ ] `test_ripple_delete_gap_selection_restore.lua`
-- [ ] `test_ripple_delete_gap_undo_integration.lua`
-- [ ] `test_ripple_delete_playhead.lua`
-- [ ] `test_ripple_delete_selection.lua`
-- [ ] `test_ripple_gap_selection_undo.lua`
-- [ ] `test_ripple_multitrack_collision.lua`
-- [ ] `test_ripple_multitrack_overlap_blocks.lua`
-- [ ] `test_ripple_noop.lua`
-- [ ] `test_ripple_overlap_blocks.lua`
-- [ ] `test_ripple_redo_integrity.lua`
-- [ ] `test_ripple_temp_gap_sanitize.lua`
-- [ ] `test_imported_ripple.lua`
+### Hybrid (acceptable — models + raw SQL helpers)
+These use model methods for core test logic but have raw SQL helpers for setup/verification. Low priority to refactor.
 
-### Import Tests (10 files)
-- [ ] `test_import_bad_xml.lua`
-- [ ] `test_import_fcp7_negative_start.lua`
-- [ ] `test_import_fcp7_xml.lua`
-- [ ] `test_import_media_command.lua`
-- [ ] `test_import_redo_restores_sequence.lua`
-- [ ] `test_import_resolve_drp.lua`
-- [ ] `test_import_reuses_existing_media_by_path.lua`
-- [ ] `test_import_undo_removes_sequence.lua`
-- [ ] `test_import_undo_skips_replay.lua`
+- [~] `test_ripple_delete_gap.lua`
+- [~] `test_undo_media_cleanup.lua`
+- [~] `test_insert_copies_properties.lua`
+- [~] `test_clip_occlusion.lua`
+- [~] `test_delete_sequence.lua`
 
-### Undo/Redo Tests (10 files)
-- [ ] `test_undo_media_cleanup.lua`
-- [ ] `test_undo_mutations_include_full_state.lua`
-- [ ] `test_undo_restart_redo.lua`
-- [ ] `test_playhead_restoration.lua`
-- [ ] `test_selection_undo_redo.lua`
-- [ ] `test_roll_drag_undo.lua`
-- [ ] `test_move_clip_to_track_undo_records_mutations.lua`
-- [ ] `test_move_clip_to_track_undo_restores_original.lua`
-- [ ] `test_revert_mutations_nudge_overlap.lua`
-- [ ] `test_branching_after_undo.lua`
+### Heavy Raw SQL (refactor if time permits)
+These have significant raw SQL (`db:exec()`, `db:prepare()`, multiple `fetch_*` helpers). Worth refactoring for consistency.
 
-### Command Manager Tests (6 files)
-- [ ] `test_command_manager_listeners.lua`
-- [ ] `test_command_manager_missing_undoer.lua`
-- [ ] `test_command_manager_replay_initial_state.lua`
-- [ ] `test_command_manager_sequence_position.lua`
-- [ ] `test_command_helper_bulk_shift_does_not_double_apply.lua`
-- [ ] `test_command_helper_bulk_shift_undo.lua`
-- [ ] `test_command_helper_bulk_shift_undo_ordering.lua`
+- [ ] `test_batch_ripple_clamped_noop.lua` — `fetch_clip_start/duration` helpers
+- [ ] `test_import_fcp7_xml.lua` — Most complex: `count_rows`, `fetch_commands`, `fetch_clip_ids`, `fetch_property`, etc.
+- [ ] `test_nudge_block_resolves_overlaps.lua` — Raw `INSERT INTO clips`
 
-### Timeline Tests (11 files)
-- [ ] `test_timeline_drag_copy.lua`
-- [ ] `test_timeline_edit_navigation.lua`
-- [ ] `test_timeline_insert_origin.lua`
-- [ ] `test_timeline_mutation_hydration.lua`
-- [ ] `test_timeline_navigation.lua`
-- [ ] `test_timeline_reload_guard.lua`
-- [ ] `test_timeline_viewport_persistence.lua`
-- [ ] `test_timeline_zoom_fit.lua`
-- [ ] `test_timeline_zoom_fit_toggle.lua`
-- [ ] `test_track_height_persistence.lua`
-- [ ] `test_track_move_nudge.lua`
+### Remaining Tests (unchecked, likely hybrid)
+Most of these probably follow the hybrid pattern. Check individually if refactoring.
 
-### Drag Tests (3 files)
-- [ ] `test_drag_block_right_overlap_integration.lua`
-- [ ] `test_drag_multi_clip_cross_track_integration.lua`
-- [ ] `test_roll_trim_behavior.lua`
+**Batch Ripple (17 remaining)**
+`test_batch_ripple_gap_before_expand`, `test_batch_ripple_gap_clamp`, `test_batch_ripple_gap_downstream_block`, `test_batch_ripple_gap_materialization`, `test_batch_ripple_gap_nested_closure`, `test_batch_ripple_gap_preserves_enabled`, `test_batch_ripple_gap_undo_no_temp_gap`, `test_batch_ripple_gap_upstream_preserve`, `test_batch_ripple_handle_ripple`, `test_batch_ripple_media_limit`, `test_batch_ripple_out_trim_clamp`, `test_batch_ripple_roll`, `test_batch_ripple_temp_gap_replay`, `test_batch_ripple_undo_respects_pre_bulk_shift_order`, `test_batch_ripple_upstream_overlap`, `test_batch_move_block_cross_track_occludes_dest`, `test_batch_move_clip_to_track_undo`
 
-### Insert/Overwrite Tests (7 files)
-- [ ] `test_insert_copies_properties.lua`
-- [ ] `test_insert_rescales_master_clip_to_sequence_timebase.lua`
-- [ ] `test_insert_snapshot_boundary.lua`
-- [ ] `test_insert_split_behavior.lua`
-- [ ] `test_insert_undo_imported_sequence.lua`
-- [ ] `test_overwrite_complex.lua`
-- [ ] `test_overwrite_mutations.lua`
-- [ ] `test_overwrite_rational_crash.lua`
-- [ ] `test_overwrite_rescales_master_clip_to_sequence_timebase.lua`
+**Ripple (14 remaining)**
+`test_ripple_delete_gap_integration`, `test_ripple_delete_gap_selection_redo`, `test_ripple_delete_gap_selection_restore`, `test_ripple_delete_gap_undo_integration`, `test_ripple_delete_playhead`, `test_ripple_delete_selection`, `test_ripple_gap_selection_undo`, `test_ripple_multitrack_collision`, `test_ripple_multitrack_overlap_blocks`, `test_ripple_noop`, `test_ripple_overlap_blocks`, `test_ripple_redo_integrity`, `test_ripple_temp_gap_sanitize`, `test_imported_ripple`
 
-### Nudge Tests (4 files)
-- [ ] `test_nudge_block_resolves_overlaps.lua`
-- [ ] `test_nudge_command_manager_undo.lua`
-- [ ] `test_nudge_ms_input.lua`
-- [ ] `test_nudge_undo_restores_occluded_clip.lua`
+**Import (8 remaining)**
+`test_import_bad_xml`, `test_import_fcp7_negative_start`, `test_import_media_command`, `test_import_redo_restores_sequence`, `test_import_resolve_drp`, `test_import_reuses_existing_media_by_path`, `test_import_undo_removes_sequence`, `test_import_undo_skips_replay`
 
-### Clip/Delete Tests (7 files)
-- [ ] `test_clip_occlusion.lua`
-- [ ] `test_delete_clip_capture_restore.lua`
-- [ ] `test_delete_clip_undo_restore_cache.lua`
-- [ ] `test_delete_sequence.lua`
-- [ ] `test_duplicate_clips_clamps_block_to_avoid_source_overlaps.lua`
-- [ ] `test_duplicate_clips_preserves_structural_fields.lua`
-- [ ] `test_duplicate_master_clip.lua`
+**Undo/Redo (9 remaining)**
+`test_undo_mutations_include_full_state`, `test_undo_restart_redo`, `test_playhead_restoration`, `test_selection_undo_redo`, `test_roll_drag_undo`, `test_move_clip_to_track_undo_records_mutations`, `test_move_clip_to_track_undo_restores_original`, `test_revert_mutations_nudge_overlap`, `test_branching_after_undo`
 
-### Other Command Tests (12 files)
-- [ ] `test_batch_command_contract.lua`
-- [ ] `test_blade_command.lua`
-- [ ] `test_capture_clip_state_serialization.lua`
-- [ ] `test_clipboard_timeline.lua`
-- [ ] `test_create_sequence_tracks.lua`
-- [ ] `test_cut_command.lua`
-- [ ] `test_database_load_clips_uses_sequence_fps.lua`
-- [ ] `test_database_shutdown_removes_wal_sidecars.lua`
-- [ ] `test_gap_open_expand.lua`
-- [ ] `test_option_drag_duplicate.lua`
-- [ ] `test_set_clip_property.lua`
-- [ ] `test_split_clip_mutations.lua`
+**Command Manager (7 remaining)**
+`test_command_manager_listeners`, `test_command_manager_missing_undoer`, `test_command_manager_replay_initial_state`, `test_command_manager_sequence_position`, `test_command_helper_bulk_shift_does_not_double_apply`, `test_command_helper_bulk_shift_undo`, `test_command_helper_bulk_shift_undo_ordering`
 
-### Refactoring Pattern
-Each test needs to be updated to:
-1. Replace `db:exec()` calls with model `.create()` / `.save()` methods
-2. Replace `db:prepare()` + SELECT queries with model `.load()` / `.find()` methods
-3. Use `tests/helpers/ripple_layout.lua` pattern where applicable for test fixture setup
-4. Keep assertions that verify model state, not raw SQL queries
+**Timeline (10 remaining)**
+`test_timeline_edit_navigation`, `test_timeline_insert_origin`, `test_timeline_mutation_hydration`, `test_timeline_navigation`, `test_timeline_reload_guard`, `test_timeline_viewport_persistence`, `test_timeline_zoom_fit`, `test_timeline_zoom_fit_toggle`, `test_track_height_persistence`, `test_track_move_nudge`
 
-### Notes
-- The `tests/helpers/ripple_layout.lua` helper has been refactored and can be used as a template
-- Models available: Project, Sequence, Track, Media, Clip, Property
-- All models now have `.create()`, `.load()`, `.save()`, `.delete()` methods
-- For test fixtures that need custom setup, consider creating additional helper modules
+**Other (remaining)**
+`test_drag_block_right_overlap_integration`, `test_drag_multi_clip_cross_track_integration`, `test_roll_trim_behavior`, `test_insert_rescales_master_clip_to_sequence_timebase`, `test_insert_snapshot_boundary`, `test_insert_split_behavior`, `test_insert_undo_imported_sequence`, `test_overwrite_complex`, `test_overwrite_mutations`, `test_overwrite_rational_crash`, `test_overwrite_rescales_master_clip_to_sequence_timebase`, `test_nudge_command_manager_undo`, `test_nudge_ms_input`, `test_nudge_undo_restores_occluded_clip`, `test_delete_clip_capture_restore`, `test_delete_clip_undo_restore_cache`, `test_duplicate_clips_clamps_block_to_avoid_source_overlaps`, `test_duplicate_clips_preserves_structural_fields`, `test_duplicate_master_clip`, `test_blade_command`, `test_capture_clip_state_serialization`, `test_clipboard_timeline`, `test_create_sequence_tracks`, `test_cut_command`, `test_database_load_clips_uses_sequence_fps`, `test_database_shutdown_removes_wal_sidecars`, `test_gap_open_expand`, `test_option_drag_duplicate`, `test_set_clip_property`, `test_split_clip_mutations`
+
+### Refactoring Pattern (if needed)
+1. Replace `db:exec()` with model `.create()` / `.save()`
+2. Replace `db:prepare()` + SELECT with model `.load()` / `.find()`
+3. Use `tests/helpers/ripple_layout.lua` as template
+4. Models: Project, Sequence, Track, Media, Clip, Property
 
 ---
 

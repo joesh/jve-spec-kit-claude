@@ -176,6 +176,34 @@ CREATE INDEX IF NOT EXISTS idx_clip_links_group ON clip_links(link_group_id);
 CREATE INDEX IF NOT EXISTS idx_clip_links_clip ON clip_links(clip_id);
 
 -- ============================================================================
+-- CLIP PROPERTIES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS properties (
+    id TEXT PRIMARY KEY,
+    clip_id TEXT NOT NULL,
+    property_name TEXT NOT NULL,
+    property_value TEXT, -- JSON-encoded value
+    property_type TEXT DEFAULT 'string',
+    default_value TEXT,
+    UNIQUE(clip_id, property_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_properties_clip_id ON properties(clip_id);
+
+-- ============================================================================
+-- SNAPSHOTS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS snapshots (
+    id TEXT PRIMARY KEY,
+    sequence_id TEXT NOT NULL,
+    sequence_number INTEGER NOT NULL,
+    clips_state TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- ============================================================================
 -- UI & AUXILIARY
 -- ============================================================================
 

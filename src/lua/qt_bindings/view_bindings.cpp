@@ -422,11 +422,21 @@ int lua_set_tree_selection_changed_handler(lua_State* L) {
             
             QList<QTreeWidgetItem*> selected = tree->selectedItems();
             if (!selected.isEmpty()) {
-                QTreeWidgetItem* item = selected.first();
-                lua_newtable(L);
+                lua_newtable(L);  // event table
+
+                // item_id: first selected item (backward compatibility)
                 lua_pushstring(L, "item_id");
-                lua_pushinteger(L, makeTreeItemId(item));
+                lua_pushinteger(L, makeTreeItemId(selected.first()));
                 lua_settable(L, -3);
+
+                // items: array of ALL selected item IDs (for multi-select)
+                lua_newtable(L);  // items array
+                for (int i = 0; i < selected.size(); i++) {
+                    lua_pushinteger(L, makeTreeItemId(selected[i]));
+                    lua_rawseti(L, -2, i + 1);
+                }
+                lua_setfield(L, -2, "items");
+
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
                     qWarning() << "Error in selection handler:" << lua_tostring(L, -1);
                     lua_pop(L, 1);
