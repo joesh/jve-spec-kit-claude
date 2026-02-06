@@ -194,6 +194,7 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - **Skipping TodoWrite updates** - track all task progress (Rule 0)
 - **Wrong commit attribution** - use Joe's format (Rule 2.8)
 - **Ignoring build warnings/errors** - must have clean builds (Rule 2.4)
+- **Command-specific logic in menu_system.lua** - menu dispatch must route through gather_context then command; no parameter resolution in menu handlers
 
 ---
 
