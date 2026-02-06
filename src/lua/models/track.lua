@@ -24,7 +24,7 @@ Track.__index = Track
 local function resolve_db()
     local conn = database.get_connection()
     if not conn then
-        print("WARNING: Track.save: No database connection available")
+        error("Track: No database connection available")
     end
     return conn
 end
@@ -35,20 +35,13 @@ local function determine_next_index(sequence_id, track_type, provided_index)
     end
 
     local conn = resolve_db()
-    if not conn then
-        -- Fall back to first track if we cannot query
-        return 1
-    end
+    assert(conn, "Track.determine_next_index: no database connection")
 
-    local stmt = conn:prepare([[
+    local stmt = assert(conn:prepare([[
         SELECT COALESCE(MAX(track_index), 0)
         FROM tracks
         WHERE sequence_id = ? AND track_type = ?
-    ]])
-
-    if not stmt then
-        return 1
-    end
+    ]]), "Track.determine_next_index: failed to prepare query")
 
     stmt:bind_value(1, sequence_id)
     stmt:bind_value(2, track_type)
@@ -63,14 +56,8 @@ local function determine_next_index(sequence_id, track_type, provided_index)
 end
 
 local function build_track(track_type, name, sequence_id, opts)
-    if not name or name == "" then
-        print("ERROR: Track.create: name is required")
-        return nil
-    end
-    if not sequence_id or sequence_id == "" then
-        print("ERROR: Track.create: sequence_id is required")
-        return nil
-    end
+    assert(name and name ~= "", "Track.create: name is required")
+    assert(sequence_id and sequence_id ~= "", "Track.create: sequence_id is required")
 
     opts = opts or {}
     local track = {
@@ -83,8 +70,8 @@ local function build_track(track_type, name, sequence_id, opts)
         locked = opts.locked == true,
         muted = opts.muted == true,
         soloed = opts.soloed == true,
-        volume = opts.volume or 1.0,
-        pan = opts.pan or 0.0,
+        volume = opts.volume or 1.0, -- NSF-OK: 1.0 = unity gain (domain default for new tracks)
+        pan = opts.pan or 0.0, -- NSF-OK: 0.0 = center pan (domain default for new tracks)
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -93,17 +80,18 @@ local function build_track(track_type, name, sequence_id, opts)
 end
 
 function Track.create_video(name, sequence_id, opts)
-    return build_track("VIDEO", name or "Video Track", sequence_id, opts)
+    assert(name, "Track.create_video: name is required")
+    return build_track("VIDEO", name, sequence_id, opts)
 end
 
 function Track.create_audio(name, sequence_id, opts)
-    return build_track("AUDIO", name or "Audio Track", sequence_id, opts)
+    assert(name, "Track.create_audio: name is required")
+    return build_track("AUDIO", name, sequence_id, opts)
 end
 
 function Track.load(id)
     if not id or id == "" then
-        print("ERROR: Track.load: id is required")
-        return nil
+        error("Track.load: id is required")
     end
 
     local conn = resolve_db()
@@ -118,8 +106,7 @@ function Track.load(id)
     ]])
 
     if not stmt then
-        print("WARNING: Track.load: failed to prepare query")
-        return nil
+        error("Track.load: failed to prepare query")
     end
 
     stmt:bind_value(1, id)
@@ -243,14 +230,8 @@ function Track.get_sequence_id(track_id)
 end
 
 function Track:save()
-    if not self or not self.id or self.id == "" then
-        print("ERROR: Track.save: invalid track or missing id")
-        return false
-    end
-    if not self.sequence_id or self.sequence_id == "" then
-        print("ERROR: Track.save: sequence_id is required")
-        return false
-    end
+    assert(self and self.id and self.id ~= "", "Track.save: invalid track or missing id")
+    assert(self.sequence_id and self.sequence_id ~= "", "Track.save: sequence_id is required")
 
     local conn = resolve_db()
     if not conn then
@@ -278,10 +259,7 @@ function Track:save()
             pan = excluded.pan
     ]])
 
-    if not stmt then
-        print("WARNING: Track.save: failed to prepare insert statement")
-        return false
-    end
+    assert(stmt, "Track.save: failed to prepare insert statement")
 
     stmt:bind_value(1, self.id)
     stmt:bind_value(2, self.sequence_id)
@@ -297,7 +275,9 @@ function Track:save()
 
     local ok = stmt:exec()
     if not ok then
-        print(string.format("WARNING: Track.save: failed for %s with error: %s", self.id, stmt:last_error()))
+        local err = stmt:last_error()
+        stmt:finalize()
+        error(string.format("Track.save: failed for %s: %s", tostring(self.id), tostring(err)))
     end
 
     stmt:finalize()
@@ -306,20 +286,17 @@ end
 
 -- Count tracks for a sequence
 function Track.count_for_sequence(sequence_id)
-    if not sequence_id then return 0 end
+    assert(sequence_id, "Track.count_for_sequence: sequence_id is required")
 
     local database = require("core.database")
-    local conn = database.get_connection()
-    if not conn then return 0 end
-
-    local stmt = conn:prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?")
-    if not stmt then return 0 end
+    local conn = assert(database.get_connection(), "Track.count_for_sequence: no database connection")
+    local stmt = assert(conn:prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?"),
+        "Track.count_for_sequence: failed to prepare query for sequence_id=" .. tostring(sequence_id))
 
     stmt:bind_value(1, sequence_id)
-    local count = 0
-    if stmt:exec() and stmt:next() then
-        count = tonumber(stmt:value(0)) or 0
-    end
+    assert(stmt:exec(), "Track.count_for_sequence: query execution failed for sequence_id=" .. tostring(sequence_id))
+    assert(stmt:next(), "Track.count_for_sequence: no result row")
+    local count = stmt:value(0)
     stmt:finalize()
     return count
 end
@@ -327,7 +304,7 @@ end
 -- Ensure default tracks exist for a sequence
 -- Creates V1, V2, V3 video tracks and A1, A2, A3 audio tracks if none exist
 function Track.ensure_defaults_for_sequence(sequence_id)
-    if not sequence_id then return false end
+    assert(sequence_id, "Track.ensure_defaults_for_sequence: sequence_id is required")
 
     if Track.count_for_sequence(sequence_id) > 0 then
         return true  -- Already has tracks

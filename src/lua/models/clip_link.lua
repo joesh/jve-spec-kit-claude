@@ -29,9 +29,7 @@ function M.get_link_group(clip_id, db)
         SELECT link_group_id FROM clip_links WHERE clip_id = ?
     ]])
 
-    if not query then
-        return nil
-    end
+    assert(query, string.format("clip_link.get_link_group: failed to prepare query for clip %s", tostring(clip_id)))
 
     query:bind_value(1, clip_id)
 
@@ -53,9 +51,7 @@ function M.get_link_group(clip_id, db)
         ORDER BY role
     ]])
 
-    if not query then
-        return nil
-    end
+    assert(query, string.format("clip_link.get_link_group: failed to prepare group query for link_group %s", tostring(link_group_id)))
 
     query:bind_value(1, link_group_id)
 
@@ -81,9 +77,7 @@ function M.is_linked(clip_id, db)
         SELECT 1 FROM clip_links WHERE clip_id = ? LIMIT 1
     ]])
 
-    if not query then
-        return false
-    end
+    assert(query, string.format("clip_link.is_linked: failed to prepare query for clip %s", tostring(clip_id)))
 
     query:bind_value(1, clip_id)
 
@@ -121,7 +115,7 @@ function M.create_link_group(clips, db)
         insert_query:bind_value(1, link_group_id)
         insert_query:bind_value(2, clip_info.clip_id)
         insert_query:bind_value(3, clip_info.role)
-        insert_query:bind_value(4, clip_info.time_offset or 0)
+        insert_query:bind_value(4, clip_info.time_offset or 0) -- NSF-OK: 0 = no time offset between linked clips
 
         if not insert_query:exec() then
             insert_query:finalize()
@@ -148,15 +142,17 @@ function M.link_two_clips(left, right)
     assert(not right_group or right_group == left_group, "link_two_clips: clip already linked to another group")
 
     if not left_group then
+        assert(left.role, "link_two_clips: left.role is required")
+        assert(right.role, "link_two_clips: right.role is required")
         local link_group_id, error_msg = M.create_link_group({
             {
                 clip_id = left_id,
-                role = left.role or "video",
+                role = left.role,
                 time_offset = left.time_offset or 0
             },
             {
                 clip_id = right_id,
-                role = right.role or "audio",
+                role = right.role,
                 time_offset = right.time_offset or 0
             }
         }, db)
@@ -171,7 +167,8 @@ function M.link_two_clips(left, right)
     ]]), "link_two_clips: failed to prepare insert")
     insert_query:bind_value(1, left_group)
     insert_query:bind_value(2, right_id)
-    insert_query:bind_value(3, right.role or "audio")
+    assert(right.role, "link_two_clips: right.role is required")
+    insert_query:bind_value(3, right.role)
     insert_query:bind_value(4, right.time_offset or 0)
     local ok = insert_query:exec()
     insert_query:finalize()
@@ -204,16 +201,12 @@ function M.unlink_clip(clip_id, db)
     end
 
     -- Remove this clip from the link group
-    local delete_query = db:prepare([[
+    local delete_query = assert(db:prepare([[
         DELETE FROM clip_links WHERE clip_id = ?
-    ]])
-
-    if not delete_query then
-        return false
-    end
+    ]]), "clip_link.unlink_clip: failed to prepare DELETE for clip " .. tostring(clip_id))
 
     delete_query:bind_value(1, clip_id)
-    delete_query:exec()
+    assert(delete_query:exec(), "clip_link.unlink_clip: DELETE failed for clip " .. tostring(clip_id))
     delete_query:finalize()
 
     -- Check how many clips remain in the group
@@ -221,9 +214,7 @@ function M.unlink_clip(clip_id, db)
         SELECT COUNT(*) FROM clip_links WHERE link_group_id = ?
     ]])
 
-    if not count_query then
-        return true  -- Clip was removed, ignore cleanup failure
-    end
+    assert(count_query, "clip_link.unlink_clip: failed to prepare COUNT query for group " .. tostring(link_group_id))
 
     count_query:bind_value(1, link_group_id)
 
@@ -235,15 +226,11 @@ function M.unlink_clip(clip_id, db)
 
     -- If only 1 clip remains, delete the entire link group
     if remaining_count <= 1 then
-        local cleanup_query = db:prepare([[
-            DELETE FROM clip_links WHERE link_group_id = ?
-        ]])
-
-        if cleanup_query then
-            cleanup_query:bind_value(1, link_group_id)
-            cleanup_query:exec()
-            cleanup_query:finalize()
-        end
+        local cleanup_query = assert(db:prepare("DELETE FROM clip_links WHERE link_group_id = ?"),
+            "clip_link.unlink_clip: failed to prepare cleanup DELETE")
+        cleanup_query:bind_value(1, link_group_id)
+        assert(cleanup_query:exec(), "clip_link.unlink_clip: cleanup DELETE failed for group " .. tostring(link_group_id))
+        cleanup_query:finalize()
     end
 
     return true
@@ -251,34 +238,28 @@ end
 
 -- Temporarily disable link for a clip (link remains but doesn't apply)
 function M.disable_link(clip_id, db)
-    local query = db:prepare([[
+    local query = assert(db:prepare([[
         UPDATE clip_links SET enabled = 0 WHERE clip_id = ?
-    ]])
-
-    if not query then
-        return false
-    end
+    ]]), "clip_link.disable_link: failed to prepare query for clip " .. tostring(clip_id))
 
     query:bind_value(1, clip_id)
     local result = query:exec()
     query:finalize()
+    assert(result, "clip_link.disable_link: exec failed for clip " .. tostring(clip_id))
 
     return result
 end
 
 -- Re-enable a disabled link
 function M.enable_link(clip_id, db)
-    local query = db:prepare([[
+    local query = assert(db:prepare([[
         UPDATE clip_links SET enabled = 1 WHERE clip_id = ?
-    ]])
-
-    if not query then
-        return false
-    end
+    ]]), "clip_link.enable_link: failed to prepare query for clip " .. tostring(clip_id))
 
     query:bind_value(1, clip_id)
     local result = query:exec()
     query:finalize()
+    assert(result, "clip_link.enable_link: exec failed for clip " .. tostring(clip_id))
 
     return result
 end
@@ -289,9 +270,7 @@ function M.get_link_group_id(clip_id, db)
         SELECT link_group_id FROM clip_links WHERE clip_id = ?
     ]])
 
-    if not query then
-        return nil
-    end
+    assert(query, string.format("clip_link.get_link_group_id: failed to prepare query for clip %s", tostring(clip_id)))
 
     query:bind_value(1, clip_id)
 
@@ -314,9 +293,7 @@ function M.calculate_anchor_time(link_group_id, db)
         WHERE cl.link_group_id = ?
     ]])
 
-    if not query then
-        return nil
-    end
+    assert(query, string.format("clip_link.calculate_anchor_time: failed to prepare query for link_group %s", tostring(link_group_id)))
 
     query:bind_value(1, link_group_id)
 

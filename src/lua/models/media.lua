@@ -21,7 +21,8 @@ local M = {}
 
 -- Helper to decompose float rate to num/den (simplified for migration)
 local function rate_from_float(fps)
-    if not fps or fps <= 0 then return 30, 1 end
+    assert(fps, "rate_from_float: fps must not be nil")
+    assert(type(fps) == "number" and fps > 0, "rate_from_float: fps must be a positive number, got: " .. tostring(fps))
     -- Common NTSC values
     if math.abs(fps - 29.97) < 0.01 then return 30000, 1001 end
     if math.abs(fps - 23.976) < 0.01 then return 24000, 1001 end
@@ -65,10 +66,11 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         dur_rational = dur_input
     elseif dur_frames_input then
         -- If duration_frames provided, treat as frames
-        dur_rational = Rational.new(tonumber(dur_frames_input) or 0, num, den)
+        local frames = assert(tonumber(dur_frames_input), "Media.create: duration_frames must be a number, got " .. tostring(dur_frames_input))
+        dur_rational = Rational.new(frames, num, den)
     else
-        -- Assume input is milliseconds if number (legacy compat for creation)
-        local seconds = (tonumber(dur_input) or 0) / 1000.0
+        local dur_ms = assert(tonumber(dur_input), "Media.create: duration must be a number, got " .. tostring(dur_input))
+        local seconds = dur_ms / 1000.0
         dur_rational = Rational.from_seconds(seconds, num, den)
     end
 
@@ -79,10 +81,10 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         name = name,
         duration = dur_rational,
         frame_rate = { fps_numerator = num, fps_denominator = den },
-        width = tonumber(params.width) or 0,
-        height = tonumber(params.height) or 0,
-        audio_channels = tonumber(params.audio_channels) or 0,
-        codec = params.codec or "",
+        width = tonumber(params.width) or 0, -- NSF-OK: 0 = unknown dimension (audio-only media has no width)
+        height = tonumber(params.height) or 0, -- NSF-OK: 0 = unknown dimension
+        audio_channels = tonumber(params.audio_channels) or 0, -- NSF-OK: 0 = unknown/not applicable
+        codec = params.codec or "", -- NSF-OK: "" = unknown codec
         created_at = params.created_at or os.time(),
         modified_at = params.modified_at or os.time(),
         metadata = params.metadata or '{}'
@@ -94,44 +96,33 @@ end
 
 -- Load a media item from the database
 function M.load(media_id)
-    if not media_id or media_id == "" then
-        logger.warn("media", "Media.load: Invalid media_id")
-        return nil
-    end
+    assert(media_id and media_id ~= "", "Media.load: media_id must not be nil or empty")
 
     local database = require("core.database")
-    local db = database.get_connection()
-    if not db then
-        logger.warn("media", "Media.load: No database connection available")
-        return nil
-    end
+    local db = assert(database.get_connection(), "Media.load: no database connection available")
 
-    local query = db:prepare([[
+    local query = assert(db:prepare([[
         SELECT id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
                width, height, audio_channels, codec, created_at, modified_at, metadata
         FROM media WHERE id = ?
-    ]])
-    if not query then
-        logger.warn("media", "Media.load: Failed to prepare query")
-        return nil
-    end
+    ]]), string.format("Media.load: failed to prepare query for media_id=%s", media_id))
 
     query:bind_value(1, media_id)
 
     if not query:exec() then
-        logger.warn("media", string.format("Media.load: Query execution failed: %s", query:last_error()))
-        query:finalize()
-        return nil
+        error(string.format("Media.load: query execution failed for media_id=%s: %s", media_id, query:last_error()))
     end
 
     if not query:next() then
         query:finalize()
-        return nil
+        return nil -- NSF-OK: nil = "not found" (distinct from DB error, which asserts above)
     end
     
-    local frames = query:value(4) or 0
-    local num = query:value(5) or 30
-    local den = query:value(6) or 1
+    local frames = query:value(4) or 0 -- NSF-OK: 0 frames = still-image or unknown-duration media
+    local num = query:value(5)
+    local den = query:value(6)
+    assert(num, string.format("Media.load: fps_numerator is NULL for media_id=%s", tostring(media_id)))
+    assert(den, string.format("Media.load: fps_denominator is NULL for media_id=%s", tostring(media_id)))
 
     local media = {
         id = query:value(0),
@@ -140,9 +131,9 @@ function M.load(media_id)
         file_path = query:value(3),
         duration = Rational.new(frames, num, den),
         frame_rate = { fps_numerator = num, fps_denominator = den },
-        width = tonumber(query:value(7)) or 0,
-        height = tonumber(query:value(8)) or 0,
-        audio_channels = tonumber(query:value(9)) or 0,
+        width = tonumber(query:value(7)) or 0, -- NSF-OK: 0 = unknown dimension
+        height = tonumber(query:value(8)) or 0, -- NSF-OK: 0 = unknown dimension
+        audio_channels = tonumber(query:value(9)) or 0, -- NSF-OK: 0 = unknown
         codec = query:value(10),
         created_at = query:value(11),
         modified_at = query:value(12),
@@ -165,18 +156,21 @@ function M:save()
     end
 
     -- Correctly handle duration (Rational)
-    local dur_frames = 0
+    local dur_frames
     if type(self.duration) == "table" and self.duration.frames then
         dur_frames = self.duration.frames
     elseif type(self.duration) == "number" then
         dur_frames = self.duration
     elseif type(self.duration_frames) == "number" then
         dur_frames = self.duration_frames
+    else
+        error("Media:save: duration is required for media " .. tostring(self.id))
     end
 
     -- Handle Rate
     local num = (self.frame_rate and self.frame_rate.fps_numerator) or self.fps_numerator
-    local den = (self.frame_rate and self.frame_rate.fps_denominator) or self.fps_denominator or 1
+    local den = (self.frame_rate and self.frame_rate.fps_denominator) or self.fps_denominator
+    assert(den and den > 0, string.format("Media:save: Invalid fps_denominator for media %s (den=%s)", tostring(self.id), tostring(den)))
     
     if not num or num <= 0 then
         error(string.format("Media:save: Invalid frame rate for media %s (num=%s)", self.id, tostring(num)))

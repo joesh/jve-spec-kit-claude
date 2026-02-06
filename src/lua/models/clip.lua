@@ -20,10 +20,9 @@ local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
 local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
 local Rational = require("core.rational")
+local logger = require("core.logger")
 
 local M = {}
-
-local DEFAULT_CLIP_KIND = "timeline"
 
 local function derive_display_name(id, existing_name)
     if existing_name and existing_name ~= "" then
@@ -190,7 +189,7 @@ function M.create(name, media_id, opts)
     local clip = {
         id = opts.id or uuid.generate(),
         project_id = opts.project_id,
-        clip_kind = opts.clip_kind or DEFAULT_CLIP_KIND,
+        clip_kind = opts.clip_kind or "timeline", -- NSF-OK: "timeline" is the natural default kind for new clips
         name = name,
         track_id = opts.track_id,
         media_id = media_id,
@@ -319,23 +318,21 @@ local function ensure_project_context(self, db)
             seq_query:finalize()
         end
     end
+
+    assert(self.project_id, string.format(
+        "ensure_project_context: could not derive project_id for clip %s (track_id=%s, source_sequence_id=%s)",
+        tostring(self.id), tostring(self.track_id), tostring(self.source_sequence_id)))
 end
 
 -- Save clip to database (INSERT or UPDATE)
 local function save_internal(self, opts)
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then
-        print("WARNING: Clip.save: No database connection available")
-        return false
-    end
+    assert(db, "Clip.save: No database connection available")
 
     opts = opts or {}
 
-    if not self.id or self.id == "" then
-        print("WARNING: Clip.save: Invalid clip ID")
-        return false
-    end
+    assert(self.id and self.id ~= "", "Clip.save: clip id is required")
 
     -- Verify Invariants
     if type(self.timeline_start) ~= "table" or not self.timeline_start.frames then 
@@ -346,7 +343,7 @@ local function save_internal(self, opts)
     end
 
     ensure_project_context(self, db)
-    self.clip_kind = self.clip_kind or DEFAULT_CLIP_KIND
+    assert(self.clip_kind, "Clip.save: clip_kind is required for clip " .. tostring(self.id))
     self.offline = self.offline and true or false
     self.name = derive_display_name(self.id, self.name)
 
@@ -404,10 +401,7 @@ local function save_internal(self, opts)
         ]])
     end
 
-    if not query then
-        print("WARNING: Clip.save: Failed to prepare query")
-        return false
-    end
+    assert(query, "Clip.save: Failed to prepare query for clip " .. tostring(self.id))
 
     if exists then
         query:bind_value(1, self.project_id)
@@ -449,16 +443,16 @@ local function save_internal(self, opts)
 
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil
     if not query:exec() then
-        print(string.format("WARNING: Clip.save: Failed to save clip: %s", query:last_error()))
+        local err = query:last_error()
         query:finalize()
-        return false
+        error(string.format("Clip.save: Failed to save clip %s: %s", tostring(self.id), err))
     end
     
     query:finalize()
 
     if krono_enabled and krono_start and krono_exists and krono_exec then
         local total_ms = (krono_exec - krono_start)
-        print(string.format("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
+        logger.debug("clip", string.format("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
             tostring(self.id:sub(1,8)), total_ms,
             krono_exists - krono_start, krono_exec - krono_exists))
     end
@@ -478,18 +472,15 @@ end
 function M:delete()
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then
-        print("WARNING: Clip.delete: No database connection available")
-        return false
-    end
+    assert(db, "Clip.delete: No database connection available")
 
     local query = db:prepare("DELETE FROM clips WHERE id = ?")
     query:bind_value(1, self.id)
 
     if not query:exec() then
-        print(string.format("WARNING: Clip.delete: Failed to delete clip: %s", query:last_error()))
+        local err = query:last_error()
         query:finalize()
-        return false
+        error(string.format("Clip.delete: Failed to delete clip %s: %s", tostring(self.id), err))
     end
     
     query:finalize()

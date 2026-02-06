@@ -27,7 +27,7 @@ local function resolve_db(db)
     end
     local conn = database.get_connection()
     if not conn then
-        print("WARNING: Project.save: No database connection available")
+        error("Project: No database connection available")
     end
     return conn
 end
@@ -40,10 +40,7 @@ local function ensure_settings_json(settings)
 end
 
 function Project.create(name, opts)
-    if not name or name == "" then
-        print("ERROR: Project.create: name is required")
-        return nil
-    end
+    assert(name and name ~= "", "Project.create: name is required")
 
     opts = opts or {}
     local now = os.time()
@@ -66,10 +63,7 @@ function Project.create_with_id(id, name, opts)
 end
 
 function Project.load(id, db)
-    if not id or id == "" then
-        print("ERROR: Project.load: id is required")
-        return nil
-    end
+    assert(id and id ~= "", "Project.load: id is required")
 
     local conn = resolve_db(db)
     if not conn then
@@ -77,17 +71,14 @@ function Project.load(id, db)
     end
 
     local stmt = conn:prepare("SELECT id, name, created_at, modified_at, settings FROM projects WHERE id = ?")
-    if not stmt then
-        print("WARNING: Project.load: failed to prepare query")
-        return nil
-    end
+    assert(stmt, "Project.load: failed to prepare query")
 
     stmt:bind_value(1, id)
 
     if not stmt:exec() then
-        print(string.format("WARNING: Project.load: query failed for %s", id))
+        local err = stmt:last_error()
         stmt:finalize()
-        return nil
+        error(string.format("Project.load: query failed for %s: %s", id, tostring(err)))
     end
 
     if not stmt:next() then
@@ -109,15 +100,8 @@ function Project.load(id, db)
 end
 
 function Project:save(db)
-    if not self or not self.id or self.id == "" then
-        print("ERROR: Project.save: invalid project or missing id")
-        return false
-    end
-
-    if not self.name or self.name == "" then
-        print("ERROR: Project.save: name is required")
-        return false
-    end
+    assert(self and self.id and self.id ~= "", "Project.save: invalid project or missing id")
+    assert(self.name and self.name ~= "", "Project.save: name is required")
 
     local conn = resolve_db(db)
     if not conn then
@@ -139,10 +123,7 @@ function Project:save(db)
             settings = excluded.settings
     ]])
 
-    if not stmt then
-        print("WARNING: Project.save: failed to prepare insert statement")
-        return false
-    end
+    assert(stmt, "Project.save: failed to prepare insert statement")
 
     stmt:bind_value(1, self.id)
     stmt:bind_value(2, self.name)
@@ -152,7 +133,9 @@ function Project:save(db)
 
     local ok = stmt:exec()
     if not ok then
-        print(string.format("WARNING: Project.save: failed for %s", self.id))
+        local err = stmt:last_error()
+        stmt:finalize()
+        error(string.format("Project.save: failed for %s: %s", tostring(self.id), tostring(err)))
     end
 
     stmt:finalize()
@@ -161,20 +144,11 @@ end
 
 -- Count all projects in the database
 function Project.count()
-    local conn = database.get_connection()
-    if not conn then
-        return 0
-    end
-
-    local stmt = conn:prepare("SELECT COUNT(*) FROM projects")
-    if not stmt then
-        return 0
-    end
-
-    local count = 0
-    if stmt:exec() and stmt:next() then
-        count = tonumber(stmt:value(0)) or 0
-    end
+    local conn = assert(database.get_connection(), "Project.count: no database connection")
+    local stmt = assert(conn:prepare("SELECT COUNT(*) FROM projects"), "Project.count: failed to prepare query")
+    assert(stmt:exec(), "Project.count: query execution failed")
+    assert(stmt:next(), "Project.count: no result row")
+    local count = stmt:value(0)
     stmt:finalize()
     return count
 end

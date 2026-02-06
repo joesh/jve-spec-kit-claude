@@ -26,7 +26,7 @@ Sequence.__index = Sequence
 local function resolve_db()
     local conn = database.get_connection()
     if not conn then
-        print("WARNING: Sequence.save: No database connection available")
+        error("Sequence: No database connection available")
     end
     return conn
 end
@@ -43,22 +43,15 @@ local function validate_frame_rate(val)
 end
 
 function Sequence.create(name, project_id, frame_rate, width, height, opts)
-    if not name or name == "" then
-        print("ERROR: Sequence.create: name is required")
-        return nil
-    end
-    if not project_id or project_id == "" then
-        print("ERROR: Sequence.create: project_id is required")
-        return nil
-    end
+    assert(name and name ~= "", "Sequence.create: name is required")
+    assert(project_id and project_id ~= "", "Sequence.create: project_id is required")
 
     local fr = validate_frame_rate(frame_rate)
     
-    -- Clamp resolution (legacy logic preserved)
-    local w = 1920
-    local h = 1080
-    if type(width) == "number" and width > 0 then w = math.floor(width) end
-    if type(height) == "number" and height > 0 then h = math.floor(height) end
+    assert(type(width) == "number" and width > 0, "Sequence.create: width is required and must be positive")
+    assert(type(height) == "number" and height > 0, "Sequence.create: height is required and must be positive")
+    local w = math.floor(width)
+    local h = math.floor(height)
 
     opts = opts or {}
     local now = os.time()
@@ -110,10 +103,7 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
 end
 
 function Sequence.load(id)
-    if not id or id == "" then
-        print("ERROR: Sequence.load: id is required")
-        return nil
-    end
+    assert(id and id ~= "", "Sequence.load: id is required")
 
     local conn = resolve_db()
     if not conn then
@@ -128,16 +118,13 @@ function Sequence.load(id)
                 FROM sequences WHERE id = ?
             ]])
     
-            if not stmt then
-                print(string.format("WARNING: Sequence.load: failed to prepare query: %s", conn:last_error()))
-                return nil
-            end
+            assert(stmt, string.format("Sequence.load: failed to prepare query: %s", conn:last_error()))
     
             stmt:bind_value(1, id)
             if not stmt:exec() then
-                print(string.format("WARNING: Sequence.load: query failed for %s", id))
+                local err = stmt:last_error()
                 stmt:finalize()
-                return nil
+                error(string.format("Sequence.load: query failed for %s: %s", id, tostring(err)))
             end
     
             if not stmt:next() then
@@ -164,11 +151,11 @@ function Sequence.load(id)
                 height = stmt:value(7),
 
                 -- New Rational Properties (loaded from frames)
-                playhead_position = Rational.new(stmt:value(8) or 0, fps_num, fps_den),
-                viewport_start_time = Rational.new(stmt:value(9) or 0, fps_num, fps_den),
+                playhead_position = Rational.new(assert(stmt:value(8), "Sequence.load: playhead_frame is NULL for id=" .. tostring(id)), fps_num, fps_den),
+                viewport_start_time = Rational.new(assert(stmt:value(9), "Sequence.load: view_start_frame is NULL for id=" .. tostring(id)), fps_num, fps_den),
 
                 -- Viewport Duration
-                viewport_duration = Rational.new(stmt:value(10) or 240, fps_num, fps_den),
+                viewport_duration = Rational.new(assert(stmt:value(10), "Sequence.load: view_duration_frames is NULL for id=" .. tostring(id)), fps_num, fps_den),
 
                 -- Selection state (JSON strings from database)
                 selected_clip_ids_json = selected_clip_ids,  -- Let caller parse JSON
@@ -193,14 +180,8 @@ function Sequence.load(id)
 end
 
 function Sequence:save()
-    if not self or not self.id or self.id == "" then
-        print("ERROR: Sequence.save: invalid sequence or missing id")
-        return false
-    end
-    if not self.project_id or self.project_id == "" then
-        print("ERROR: Sequence.save: project_id is required")
-        return false
-    end
+    assert(self and self.id and self.id ~= "", "Sequence.save: invalid sequence or missing id")
+    assert(self.project_id and self.project_id ~= "", "Sequence.save: project_id is required")
 
     local conn = resolve_db()
     if not conn then
@@ -223,7 +204,8 @@ function Sequence:save()
     local db_mark_in = self.mark_in and self.mark_in.frames or nil
     local db_mark_out = self.mark_out and self.mark_out.frames or nil
     
-    local db_audio_rate = self.audio_sample_rate or 48000
+    assert(self.audio_sample_rate, "Sequence.save: audio_sample_rate is required for sequence " .. tostring(self.id))
+    local db_audio_rate = self.audio_sample_rate
 
     -- CRITICAL: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
     -- INSERT OR REPLACE triggers DELETE first, which cascades to delete clips via foreign keys!
@@ -255,8 +237,7 @@ function Sequence:save()
 
     if not stmt then
         local err = conn.last_error and conn:last_error() or "unknown error"
-        print("WARNING: Sequence.save: failed to prepare insert statement: " .. err)
-        return false
+        error("Sequence.save: failed to prepare insert statement: " .. err)
     end
 
     stmt:bind_value(1, self.id)
@@ -299,7 +280,9 @@ function Sequence:save()
 
     local ok = stmt:exec()
     if not ok then
-        print(string.format("WARNING: Sequence.save: failed for %s with error: %s", self.id, stmt:last_error()))
+        local err = stmt:last_error()
+        stmt:finalize()
+        error(string.format("Sequence.save: failed for %s: %s", tostring(self.id), tostring(err)))
     end
 
     stmt:finalize()
@@ -309,20 +292,11 @@ end
 -- Count all sequences in the database
 function Sequence.count()
     local database = require("core.database")
-    local conn = database.get_connection()
-    if not conn then
-        return 0
-    end
-
-    local stmt = conn:prepare("SELECT COUNT(*) FROM sequences")
-    if not stmt then
-        return 0
-    end
-
-    local count = 0
-    if stmt:exec() and stmt:next() then
-        count = tonumber(stmt:value(0)) or 0
-    end
+    local conn = assert(database.get_connection(), "Sequence.count: no database connection")
+    local stmt = assert(conn:prepare("SELECT COUNT(*) FROM sequences"), "Sequence.count: failed to prepare query")
+    assert(stmt:exec(), "Sequence.count: query execution failed")
+    assert(stmt:next(), "Sequence.count: no result row")
+    local count = stmt:value(0)
     stmt:finalize()
     return count
 end
@@ -330,7 +304,7 @@ end
 -- Ensure a default sequence exists for a project, creating one if needed
 -- Returns the default sequence (existing or newly created)
 function Sequence.ensure_default(project_id)
-    project_id = project_id or "default_project"
+    assert(project_id, "Sequence.ensure_default: project_id is required")
 
     local existing = Sequence.load("default_sequence")
     if existing then
@@ -340,7 +314,8 @@ function Sequence.ensure_default(project_id)
     -- Create default sequence with standard settings
     local frame_rate = {fps_numerator = 30, fps_denominator = 1}
     local sequence = Sequence.create("Default Sequence", project_id, frame_rate, 1920, 1080, {
-        id = "default_sequence"
+        id = "default_sequence",
+        audio_rate = 48000
     })
     if sequence and sequence:save() then
         return sequence
