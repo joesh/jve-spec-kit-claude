@@ -167,7 +167,7 @@ local function format_timecode(time_input, override_rate)
       frame_rate = timeline_state.get_sequence_frame_rate()
     end
   end
-  frame_rate = frame_rate or frame_utils.default_frame_rate
+  assert(frame_rate, "inspector.view.format_timecode: frame_rate is nil (no override and no sequence frame rate available)")
 
   local ok, formatted = pcall(frame_utils.format_timecode, time_input, frame_rate)
   if ok and formatted then
@@ -178,15 +178,13 @@ local function format_timecode(time_input, override_rate)
 end
 
 current_frame_rate = function()
-  if timeline_state and timeline_state.get_sequence_frame_rate then
-    local ok, rate = pcall(timeline_state.get_sequence_frame_rate)
-    if ok then
-        if type(rate) == "table" or (type(rate) == "number" and rate > 0) then
-            return rate
-        end
-    end
-  end
-  return frame_utils.default_frame_rate
+  assert(timeline_state and timeline_state.get_sequence_frame_rate,
+    "inspector.view.current_frame_rate: timeline_state or get_sequence_frame_rate not available")
+  local rate = timeline_state.get_sequence_frame_rate()
+  assert(rate, "inspector.view.current_frame_rate: get_sequence_frame_rate returned nil")
+  assert(type(rate) == "table" or (type(rate) == "number" and rate > 0),
+    string.format("inspector.view.current_frame_rate: invalid rate: %s", tostring(rate)))
+  return rate
 end
 
 local function build_mark_summary()

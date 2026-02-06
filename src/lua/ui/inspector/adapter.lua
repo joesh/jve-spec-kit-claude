@@ -38,37 +38,24 @@ function A.bind(panel_handle, fns)
       message = "panel_handle is nil",
       operation = "bind_inspector_adapter",
       component = "inspector.adapter",
-      user_message = "Cannot bind inspector adapter - invalid panel handle",
-      remediation = {
-        "Ensure the inspector panel was created successfully before binding",
-        "Check that create_inspector_panel() returned a valid result"
-      }
     })
   end
-  
+
   error_system.assert_type(fns, "table", "fns", {
-    operation = "bind_inspector_adapter", 
+    operation = "bind_inspector_adapter",
     component = "inspector.adapter"
   })
-  
+
   if not (fns.applySearchFilter and fns.setSelectedClips) then
     return error_system.create_error({
       code = error_system.CODES.MISSING_REQUIRED_FUNCTIONS,
-      category = "inspector", 
+      category = "inspector",
       message = "Missing required functions in fns table",
       operation = "bind_inspector_adapter",
       component = "inspector.adapter",
-      technical_details = {
-        has_applySearchFilter = not not fns.applySearchFilter,
-        has_setSelectedClips = not not fns.setSelectedClips
-      },
-      remediation = {
-        "Provide fns.applySearchFilter function",
-        "Provide fns.setSelectedClips function"
-      }
     })
   end
-  
+
   A._panel, A._fn = panel_handle, fns
   return error_system.create_success({
     message = "Inspector adapter bound successfully"

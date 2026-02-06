@@ -30,7 +30,7 @@ end
 local focused_panel_id = nil
 
 -- Focus indicator colors
-local FOCUS_COLOR = ui_constants.COLORS.FOCUS_BORDER_COLOR or "#0078d4"
+local FOCUS_COLOR = assert(ui_constants.COLORS.FOCUS_BORDER_COLOR, "focus_manager: ui_constants.COLORS.FOCUS_BORDER_COLOR is not defined")
 
 local COLORS = {
     focused_header = FOCUS_COLOR,

@@ -135,9 +135,8 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
         callback = persist_callback
     end
 
-    if type(mutations) ~= "table" then
-        return false
-    end
+    assert(type(mutations) == "table",
+        "timeline_state.apply_mutations: mutations must be a table, got " .. type(mutations))
     return clips.apply_mutations(mutations, callback)
 end
 
@@ -213,8 +212,14 @@ M.normalize_edge_selection = selection.normalize_edge_selection
 M.get_project_id = function() return data.state.project_id end
 M.get_sequence_id = function() return data.state.sequence_id end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
-M.get_sequence_fps_numerator = function() return data.state.sequence_frame_rate.fps_numerator end
-M.get_sequence_fps_denominator = function() return data.state.sequence_frame_rate.fps_denominator end
+M.get_sequence_fps_numerator = function()
+    assert(data.state.sequence_frame_rate, "timeline_state.get_sequence_fps_numerator: sequence_frame_rate not initialized")
+    return data.state.sequence_frame_rate.fps_numerator
+end
+M.get_sequence_fps_denominator = function()
+    assert(data.state.sequence_frame_rate, "timeline_state.get_sequence_fps_denominator: sequence_frame_rate not initialized")
+    return data.state.sequence_frame_rate.fps_denominator
+end
 
 -- Marks
 M.get_mark_in = function() return data.state.mark_in_value end

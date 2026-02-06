@@ -139,10 +139,15 @@ local function rebuild_clip_indexes()
 
     for _, list in pairs(track_clip_index) do
         table.sort(list, function(a, b)
-            local a_start = a.timeline_start.frames or 0
-            local b_start = b.timeline_start.frames or 0
+            assert(a.timeline_start and a.timeline_start.frames ~= nil,
+                "clip_state: clip missing timeline_start.frames in sort (id=" .. tostring(a.id) .. ")")
+            assert(b.timeline_start and b.timeline_start.frames ~= nil,
+                "clip_state: clip missing timeline_start.frames in sort (id=" .. tostring(b.id) .. ")")
+            local a_start = a.timeline_start.frames
+            local b_start = b.timeline_start.frames
             if a_start == b_start then
-                return (a.id or "") < (b.id or "")
+                assert(a.id and b.id, "clip_state: clip missing id in sort")
+                return a.id < b.id
             end
             return a_start < b_start
         end)
@@ -242,14 +247,44 @@ function M.locate_neighbor(clip, offset)
     return info.list[neighbor_index]
 end
 
+--- Return the last frame occupied by any clip on any track.
+--- Returns 0 for an empty timeline.
+function M.get_content_end_frame()
+    local clips = data.state.clips
+    if not clips or #clips == 0 then return 0 end
+
+    local rate = data.state.sequence_frame_rate
+    assert(rate and rate.fps_numerator and rate.fps_denominator,
+        "clip_state.get_content_end_frame: missing sequence_frame_rate")
+
+    local max_end = 0
+    for _, clip in ipairs(clips) do
+        local start_val = clip.timeline_start or clip.start_value
+        local duration_val = clip.duration or clip.duration_value
+        local start_rt = Rational.hydrate(start_val, rate.fps_numerator, rate.fps_denominator)
+        local duration_rt = Rational.hydrate(duration_val, rate.fps_numerator, rate.fps_denominator)
+        if start_rt and duration_rt then
+            local clip_end = start_rt.frames + duration_rt.frames
+            if clip_end > max_end then
+                max_end = clip_end
+            end
+        end
+    end
+    return max_end
+end
+
 function M.hydrate_from_database(clip_id, expected_sequence_id)
-    if not clip_id or not db or not db.load_clip_entry then return nil end
-    local ok, clip = pcall(db.load_clip_entry, clip_id)
-    if not ok or not clip then return nil end
+    assert(clip_id, "clip_state.hydrate_from_database: clip_id is required")
+    assert(db and db.load_clip_entry, "clip_state.hydrate_from_database: database module missing load_clip_entry")
+    local clip = db.load_clip_entry(clip_id)
+    if not clip then
+        error("clip_state.hydrate_from_database: clip not found in database: " .. tostring(clip_id))
+    end
 
     local target_sequence = expected_sequence_id or data.state.sequence_id
     if target_sequence and clip.track_sequence_id and clip.track_sequence_id ~= target_sequence then
-        return nil
+        error(string.format("clip_state.hydrate_from_database: clip %s belongs to sequence %s, not %s",
+            tostring(clip_id), tostring(clip.track_sequence_id), tostring(target_sequence)))
     end
 
     normalize_clip_rationals(clip)

@@ -69,9 +69,20 @@ local function normalize_master_clip(item, context)
         media = context.media_lookup[clip.media_id]
     end
 
-    local duration = tonumber(clip.duration or (media and media.duration) or 0) or 0
-    local source_in = tonumber(clip.source_in) or 0
-    local source_out = tonumber(clip.source_out) or duration
+    -- Extract frames from Rational or use raw number
+    local function to_frames(val)
+        if val == nil then return nil end
+        if type(val) == "number" then return val end
+        if type(val) == "table" and val.frames ~= nil then return val.frames end
+        return tonumber(val)
+    end
+
+    local raw_duration = clip.duration or (media and media.duration)
+    assert(raw_duration ~= nil, string.format("browser_state.normalize_master_clip: missing duration for clip %s", tostring(clip.clip_id or item.clip_id)))
+    local duration = to_frames(raw_duration)
+    assert(duration, string.format("browser_state.normalize_master_clip: cannot extract duration frames for clip %s: %s", tostring(clip.clip_id or item.clip_id), tostring(raw_duration)))
+    local source_in = to_frames(clip.source_in) or 0
+    local source_out = to_frames(clip.source_out) or duration
 
     local project_id = clip.project_id or context.project_id or (media and media.project_id)
     assert(project_id and project_id ~= "", "browser_state.normalize_master_clip: missing project_id for master clip " .. tostring(clip.clip_id or item.clip_id or item.media_id))
@@ -92,9 +103,9 @@ local function normalize_master_clip(item, context)
         start_value = source_in,
         source_in = source_in,
         source_out = source_out,
-        frame_rate = clip.frame_rate or (media and media.frame_rate) or 0,
-        width = clip.width or (media and media.width) or 0,
-        height = clip.height or (media and media.height) or 0,
+        frame_rate = assert(clip.frame_rate or (media and media.frame_rate), string.format("browser_state.normalize_master_clip: missing frame_rate for clip %s", tostring(clip.clip_id))),
+        width = assert(clip.width or (media and media.width), string.format("browser_state.normalize_master_clip: missing width for clip %s", tostring(clip.clip_id))),
+        height = assert(clip.height or (media and media.height), string.format("browser_state.normalize_master_clip: missing height for clip %s", tostring(clip.clip_id))),
         codec = clip.codec or (media and media.codec),
         file_path = clip.file_path or (media and media.file_path),
         metadata = decode_metadata(media and media.metadata),
@@ -136,7 +147,8 @@ local function normalize_timeline(item, context)
         return nil
     end
 
-    local duration = tonumber(sequence.duration) or 0
+    assert(sequence.duration ~= nil, string.format("browser_state.normalize_timeline: missing duration for sequence %s", tostring(sequence.id)))
+    local duration = assert(tonumber(sequence.duration), string.format("browser_state.normalize_timeline: non-numeric duration for sequence %s: %s", tostring(sequence.id), tostring(sequence.duration)))
 
     local entry = {
         id = sequence.id,
@@ -145,9 +157,9 @@ local function normalize_timeline(item, context)
         start_value = 0,
         source_in = 0,
         source_out = duration,
-        frame_rate = sequence.frame_rate or 0,
-        width = sequence.width or 0,
-        height = sequence.height or 0,
+        frame_rate = assert(sequence.frame_rate, string.format("browser_state.normalize_timeline: missing frame_rate for sequence %s", tostring(sequence.id))),
+        width = assert(sequence.width, string.format("browser_state.normalize_timeline: missing width for sequence %s", tostring(sequence.id))),
+        height = assert(sequence.height, string.format("browser_state.normalize_timeline: missing height for sequence %s", tostring(sequence.id))),
         metadata = {},
         item_type = "timeline",
         view = "project_browser",

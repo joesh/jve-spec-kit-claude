@@ -1731,14 +1731,19 @@ function M.load_sequence(sequence_id)
 
     local current = state.get_sequence_id and state.get_sequence_id()
     if current == sequence_id then
-        -- Restore timeline mode + viewer (may have been cleared by source viewer)
+        -- Restore timeline mode (may have been cleared by source viewer).
+        -- Only restore the viewer display if source viewer does NOT have a clip
+        -- loaded — otherwise we'd clobber "Source Viewer" title with "Timeline Viewer".
         if not playback_controller.timeline_mode then
             playback_controller.set_timeline_mode(true, sequence_id)
-            local Sequence = require("models.sequence")
-            local seq = Sequence.load(sequence_id)
-            if seq then
-                local viewer_panel = require("ui.viewer_panel")
-                viewer_panel.show_timeline(seq)
+            local source_viewer_state = require("ui.source_viewer_state")
+            if not source_viewer_state.has_clip() then
+                local Sequence = require("models.sequence")
+                local seq = Sequence.load(sequence_id)
+                if seq then
+                    local viewer_panel = require("ui.viewer_panel")
+                    viewer_panel.show_timeline(seq)
+                end
             end
         end
         return

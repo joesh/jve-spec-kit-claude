@@ -33,7 +33,6 @@ local qt_constants = require("core.qt_constants")
 local profile_scope = require("core.profile_scope")
 local logger = require("core.logger")
 local uuid = require("uuid")
-local insert_selected_clip_into_timeline = require("core.clip_insertion")
 
 local handler_seq = 0
 
@@ -173,35 +172,26 @@ local function generate_sequential_label(prefix, lookup)
 end
 
 local function current_project_id()
-    local ok, value = pcall(function()
-        return M.project_id or db.get_current_project_id()
-    end)
-    if ok and value and value ~= "" then
-        return value
-    end
-    return nil
+    local value = M.project_id or db.get_current_project_id()
+    assert(value and value ~= "", "project_browser.current_project_id: no project_id available")
+    return value
 end
 
 local function sequence_defaults()
-    local defaults = {
-        frame_rate = 30.0,
-        width = 1920,
-        height = 1080
-    }
-
     local timeline_panel = M.timeline_panel
     local timeline_state_module = timeline_panel and timeline_panel.get_state and timeline_panel.get_state()
     local sequence_id = timeline_state_module and timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id()
-    if sequence_id and sequence_id ~= "" then
-        local ok, record = pcall(db.load_sequence_record, sequence_id)
-        if ok and record then
-            defaults.frame_rate = record.frame_rate or defaults.frame_rate
-            defaults.width = record.width or defaults.width
-            defaults.height = record.height or defaults.height
-        end
-    end
-
-    return defaults
+    assert(sequence_id and sequence_id ~= "", "project_browser.sequence_defaults: no active sequence_id to derive defaults from")
+    local record = db.load_sequence_record(sequence_id)
+    assert(record, string.format("project_browser.sequence_defaults: failed to load sequence record for %s", sequence_id))
+    assert(record.frame_rate, string.format("project_browser.sequence_defaults: sequence %s missing frame_rate", sequence_id))
+    assert(record.width, string.format("project_browser.sequence_defaults: sequence %s missing width", sequence_id))
+    assert(record.height, string.format("project_browser.sequence_defaults: sequence %s missing height", sequence_id))
+    return {
+        frame_rate = record.frame_rate,
+        width = record.width,
+        height = record.height,
+    }
 end
 
 local function finalize_pending_rename(new_name)
@@ -437,7 +427,8 @@ local function activate_item(item_info)
             return false, "Master clip metadata missing"
         end
 
-        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+        local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
+        assert(media, string.format("project_browser.activate_item: missing media for master_clip %s (media_id=%s)", tostring(clip.clip_id), tostring(clip.media_id)))
 
         if M.viewer_panel and M.viewer_panel.show_source_clip then
             local viewer_payload = {
@@ -496,7 +487,8 @@ local function format_duration(duration_input, frame_rate)
         return "--:--"
     end
 
-    local rate = frame_rate or frame_utils.default_frame_rate
+    assert(frame_rate, "project_browser.format_duration: frame_rate must not be nil")
+    local rate = frame_rate
     local ok, formatted = pcall(frame_utils.format_timecode, duration_input, rate)
     if ok and formatted then
         return formatted
@@ -625,6 +617,7 @@ local function populate_tree()
     M.ignore_tree_item_change = false
 
     local project_id = M.project_id or db.get_current_project_id()
+    assert(project_id and project_id ~= "", "project_browser.populate_tree: no project_id available")
     M.project_id = project_id
 
     local settings = db.get_project_settings(M.project_id)
@@ -1115,7 +1108,7 @@ function M.create()
     end
 
     if qt_constants.CONTROL.SET_TREE_SELECTION_MODE then
-        qt_constants.CONTROL.SET_TREE_SELECTION_MODE(tree, "extended")
+        qt_constants.CONTROL.SET_TREE_SELECTION_MODE(tree, "ExtendedSelection")
     end
 
     M.tree = tree
@@ -1302,8 +1295,9 @@ function M.set_timeline_panel(timeline_panel_mod)
 end
 
 function M.set_project_title(name)
+    assert(name and name ~= "", "project_browser.set_project_title: name must not be nil or empty")
     local label = M.project_title_widget
-    local display = name and name ~= "" and name or "Untitled Project"
+    local display = name
     if label and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(label, display)
     else
@@ -1384,7 +1378,8 @@ handle_tree_drop = function(event)
     end
 
     local target_info = lookup_item_by_tree_id(event.target_id)
-    local position = (event.position or "viewport"):lower()
+    assert(event.position, "project_browser.handle_tree_drop: event.position is nil")
+    local position = event.position:lower()
 
     local function resolve_bin_parent(target, pos)
         if pos == "viewport" then
@@ -1709,7 +1704,7 @@ show_browser_context_menu = function(event)
         table.insert(actions, {
             label = "Insert Into Timeline",
             handler = function()
-                M.insert_selected_to_timeline("Insert")
+                M.add_selected_to_timeline("Insert")
             end
         })
         table.insert(actions, {
@@ -1765,40 +1760,211 @@ show_browser_context_menu = function(event)
     qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
 end
 
-function M.insert_selected_to_timeline(command_type, options)
-    local this_func_label = "project_browser.insert_selected_to_timeline"
+function M.add_selected_to_timeline(command_type, options)
+    local this_func_label = "project_browser.add_selected_to_timeline"
+    local Rational = require("core.rational")
 
     -- UI: Gather user intent and selection
     assert(M.timeline_panel, this_func_label .. ": timeline panel not available")
-    local clip = assert(M.get_selected_master_clip(), this_func_label .. ": no media item selected")
+    assert(command_type == "Insert" or command_type == "Overwrite", this_func_label .. ": unsupported command_type")
+
+    -- Get all selected master clips
+    local selected_clips = {}
+    if M.selected_items then
+        for _, item in ipairs(M.selected_items) do
+            if item.type == "master_clip" and item.clip_id then
+                local clip = M.master_clip_map[item.clip_id]
+                if clip then
+                    table.insert(selected_clips, clip)
+                end
+            end
+        end
+    end
+
+    if #selected_clips == 0 then
+        local diag = {}
+        if not M.selected_items or #M.selected_items == 0 then
+            table.insert(diag, "M.selected_items is empty")
+        else
+            local first = M.selected_items[1]
+            table.insert(diag, string.format("selected type=%s", tostring(first and first.type)))
+        end
+        error(this_func_label .. ": no media item selected (" .. table.concat(diag, ", ") .. ")")
+    end
+
+    -- Get timeline context
     local timeline_state_module = assert(M.timeline_panel.get_state and M.timeline_panel.get_state(), this_func_label .. ": timeline state not available")
     local sequence_id = assert(timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id(), this_func_label .. ": missing active sequence_id")
     local project_id = assert(timeline_state_module.get_project_id and timeline_state_module.get_project_id(), this_func_label .. ": missing active project_id")
     local insert_pos = assert(timeline_state_module.get_playhead_position and timeline_state_module.get_playhead_position(), this_func_label .. ": missing insert position")
-    assert(command_type == "Insert" or command_type == "Overwrite", this_func_label .. ": unsupported command_type")
 
     local advance_playhead = options and options.advance_playhead == true
-    local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
 
-    -- UI: Create and execute command
-    local cmd = assert(Command.create("AddClipToTimeline", project_id), this_func_label .. ": failed to create AddClipToTimeline command")
-    cmd:set_parameters({
-        ["clip"] = clip,
-        ["timeline_state"] = timeline_state_module,
-        ["sequence_id"] = sequence_id,
-        ["project_id"] = project_id,
-        ["insert_pos"] = insert_pos,
-        ["command_type"] = command_type,
-        ["advance_playhead"] = advance_playhead,
-        ["media_lookup"] = M.media_map,
-    })
-    command_manager.begin_command_event("ui")
-    local result = command_manager.execute(cmd)
-    command_manager.end_command_event()
-    assert(result and result.success, string.format(this_func_label .. ": AddClipToTimeline failed: %s", result and result.error_message or "unknown error"))
+    -- For single clip, use Insert/Overwrite command (simpler, backward compatible)
+    if #selected_clips == 1 then
+        local clip = selected_clips[1]
+        local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
 
-    -- UI: Provide feedback
-    logger.info("project_browser", string.format("Media inserted to timeline: %s", media and (media.name or media.file_name) or "unknown"))
+        -- Apply source viewer marks if the viewer is showing this clip
+        local marks_applied = false
+        local source_in_mark, source_out_mark, duration_mark
+        local svs_ok, source_viewer_state = pcall(require, "ui.source_viewer_state")
+        if svs_ok and source_viewer_state
+            and source_viewer_state.current_clip_id == clip.clip_id
+            and source_viewer_state.mark_in ~= nil and source_viewer_state.mark_out ~= nil then
+            local fps_num = (clip.rate and clip.rate.fps_numerator) or (media and media.frame_rate and media.frame_rate.fps_numerator)
+            local fps_den = (clip.rate and clip.rate.fps_denominator) or (media and media.frame_rate and media.frame_rate.fps_denominator)
+            assert(fps_num, "add_selected_to_timeline: clip/media missing fps_numerator")
+            assert(fps_den, "add_selected_to_timeline: clip/media missing fps_denominator")
+            source_in_mark = Rational.new(source_viewer_state.mark_in, fps_num, fps_den)
+            source_out_mark = Rational.new(source_viewer_state.mark_out, fps_num, fps_den)
+            duration_mark = Rational.new(source_viewer_state.mark_out - source_viewer_state.mark_in, fps_num, fps_den)
+            marks_applied = true
+        end
+
+        -- Build command parameters
+        local time_param_name = command_type == "Insert" and "insert_time" or "overwrite_time"
+        local cmd_params = {
+            media_id = clip.media_id,
+            master_clip_id = clip.clip_id,
+            sequence_id = sequence_id,
+            project_id = project_id,
+            [time_param_name] = insert_pos,
+            advance_playhead = advance_playhead,
+        }
+        if marks_applied then
+            cmd_params.source_in = source_in_mark
+            cmd_params.source_out = source_out_mark
+            cmd_params.duration = duration_mark
+        end
+
+        local cmd = assert(Command.create(command_type, project_id), this_func_label .. ": failed to create " .. command_type .. " command")
+        cmd:set_parameters(cmd_params)
+        command_manager.begin_command_event("ui")
+        local result = command_manager.execute(cmd)
+        command_manager.end_command_event()
+        assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
+
+        logger.info("project_browser", string.format("Media added to timeline: %s", media and (media.name or media.file_name) or "unknown"))
+    else
+        -- Multiple clips: build groups and call AddClipsToSequence directly
+        local clip_edit_helper = require("core.clip_edit_helper")
+        local Track = require("models.track")
+        local Media = require("models.media")
+        local Sequence = require("models.sequence")
+
+        -- Get sequence FPS
+        local sequence = assert(Sequence.load(sequence_id), this_func_label .. ": sequence not found")
+        local seq_fps_num = assert(sequence.frame_rate and sequence.frame_rate.fps_numerator, this_func_label .. ": sequence missing fps_numerator")
+        local seq_fps_den = assert(sequence.frame_rate and sequence.frame_rate.fps_denominator, this_func_label .. ": sequence missing fps_denominator")
+
+        -- Get target video track
+        local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
+        assert(#video_tracks > 0, this_func_label .. ": no video tracks in sequence")
+        local target_video_track = video_tracks[1]
+
+        -- Check source viewer marks (only apply to first clip if viewing it)
+        local svs_ok, source_viewer_state = pcall(require, "ui.source_viewer_state")
+
+        -- Build groups for each selected clip (serial arrangement)
+        local groups = {}
+        for i, clip in ipairs(selected_clips) do
+            local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or Media.load(clip.media_id)
+            assert(media, this_func_label .. ": media not found for clip " .. tostring(clip.clip_id))
+
+            local media_fps_num = (clip.rate and clip.rate.fps_numerator) or (media.frame_rate and media.frame_rate.fps_numerator)
+            local media_fps_den = (clip.rate and clip.rate.fps_denominator) or (media.frame_rate and media.frame_rate.fps_denominator)
+            assert(media_fps_num and media_fps_den, this_func_label .. ": clip/media missing fps")
+
+            -- Determine source marks: use viewer marks only for first clip if showing it
+            local source_in, source_out, duration
+            if i == 1 and svs_ok and source_viewer_state
+                and source_viewer_state.current_clip_id == clip.clip_id
+                and source_viewer_state.mark_in ~= nil and source_viewer_state.mark_out ~= nil then
+                source_in = Rational.new(source_viewer_state.mark_in, media_fps_num, media_fps_den)
+                source_out = Rational.new(source_viewer_state.mark_out, media_fps_num, media_fps_den)
+                duration = Rational.new(source_viewer_state.mark_out - source_viewer_state.mark_in, media_fps_num, media_fps_den)
+            else
+                -- Use clip's existing source in/out or full media duration
+                if clip.source_in and clip.source_out and clip.duration then
+                    source_in = clip.source_in
+                    source_out = clip.source_out
+                    duration = clip.duration
+                else
+                    local media_dur_frames = media.duration and media.duration.frames or media.duration_frames
+                    assert(media_dur_frames, this_func_label .. ": media missing duration")
+                    source_in = Rational.new(0, media_fps_num, media_fps_den)
+                    source_out = Rational.new(media_dur_frames, media_fps_num, media_fps_den)
+                    duration = Rational.new(media_dur_frames, media_fps_num, media_fps_den)
+                end
+            end
+
+            -- Build clips for this group (video + audio)
+            local clip_entries = {}
+
+            -- Video clip
+            table.insert(clip_entries, {
+                role = "video",
+                media_id = clip.media_id,
+                master_clip_id = clip.clip_id,
+                project_id = project_id,
+                name = clip.name or media.name or clip.clip_id,
+                source_in = source_in,
+                source_out = source_out,
+                duration = duration,
+                fps_numerator = media_fps_num,
+                fps_denominator = media_fps_den,
+                target_track_id = target_video_track.id,
+            })
+
+            -- Audio clips
+            local audio_channels = (media.audio_channels) or 0
+            if audio_channels > 0 then
+                local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
+                for ch = 0, audio_channels - 1 do
+                    local audio_track = audio_track_resolver(nil, ch)
+                    table.insert(clip_entries, {
+                        role = "audio",
+                        channel = ch,
+                        media_id = clip.media_id,
+                        master_clip_id = clip.clip_id,
+                        project_id = project_id,
+                        name = (clip.name or media.name or clip.clip_id) .. " (Audio)",
+                        source_in = source_in,
+                        source_out = source_out,
+                        duration = duration,
+                        fps_numerator = media_fps_num,
+                        fps_denominator = media_fps_den,
+                        target_track_id = audio_track.id,
+                    })
+                end
+            end
+
+            table.insert(groups, {
+                clips = clip_entries,
+                duration = duration,
+                master_clip_id = clip.clip_id,
+            })
+        end
+
+        -- Execute AddClipsToSequence
+        local edit_type = command_type == "Insert" and "insert" or "overwrite"
+        command_manager.begin_command_event("ui")
+        local result = command_manager.execute("AddClipsToSequence", {
+            groups = groups,
+            position = insert_pos,
+            sequence_id = sequence_id,
+            project_id = project_id,
+            edit_type = edit_type,
+            arrangement = "serial",
+            advance_playhead = advance_playhead,
+        })
+        command_manager.end_command_event()
+        assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
+
+        logger.info("project_browser", string.format("Added %d clips to timeline (%s)", #selected_clips, edit_type))
+    end
+
     if focus_manager and focus_manager.focus_panel then
         focus_manager.focus_panel("timeline")
     else

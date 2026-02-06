@@ -50,11 +50,6 @@ function M.init(opts)
     state.focus_manager = opts.focus_manager
 end
 
-local function normalize_sizes(sizes, fallback)
-    if not sizes or #sizes == 0 then return fallback end
-    return sizes
-end
-
 local function maximize_top_panel(panel_id)
     if not state.top_splitter or not state.main_splitter then
         return false, "Splitters not initialized"
@@ -65,18 +60,18 @@ local function maximize_top_panel(panel_id)
         return false, string.format("Unknown panel '%s'", tostring(panel_id))
     end
 
-    local main_sizes = get_splitter_sizes(state.main_splitter) or {1, 1}
-    local top_sizes = get_splitter_sizes(state.top_splitter) or {1, 1, 1}
+    local main_sizes = assert(get_splitter_sizes(state.main_splitter), "panel_manager.maximize_top_panel: failed to get main_splitter sizes")
+    local top_sizes = assert(get_splitter_sizes(state.top_splitter), "panel_manager.maximize_top_panel: failed to get top_splitter sizes")
     local total_main = 0
     for _, value in ipairs(main_sizes) do
         total_main = total_main + value
     end
-    if total_main == 0 then total_main = 1 end
+    assert(total_main > 0, "panel_manager.maximize_top_panel: total_main is zero")
 
     state.maximized = {
         panel_id = panel_id,
-        main_sizes = normalize_sizes(main_sizes, {1, 1}),
-        top_sizes = normalize_sizes(top_sizes, {1, 1, 1}),
+        main_sizes = main_sizes,
+        top_sizes = top_sizes,
     }
 
     -- Hide timeline, show top area only
@@ -94,18 +89,18 @@ local function maximize_timeline()
         return false, "Main splitter not initialized"
     end
 
-    local main_sizes = get_splitter_sizes(state.main_splitter) or {1, 1}
-    local top_sizes = get_splitter_sizes(state.top_splitter) or {1, 1, 1}
+    local main_sizes = assert(get_splitter_sizes(state.main_splitter), "panel_manager.maximize_timeline: failed to get main_splitter sizes")
+    local top_sizes = assert(get_splitter_sizes(state.top_splitter), "panel_manager.maximize_timeline: failed to get top_splitter sizes")
     local total_main = 0
     for _, value in ipairs(main_sizes) do
         total_main = total_main + value
     end
-    if total_main == 0 then total_main = 1 end
+    assert(total_main > 0, "panel_manager.maximize_timeline: total_main is zero")
 
     state.maximized = {
         panel_id = "timeline",
-        main_sizes = normalize_sizes(main_sizes, {1, 1}),
-        top_sizes = normalize_sizes(top_sizes, {1, 1, 1}),
+        main_sizes = main_sizes,
+        top_sizes = top_sizes,
     }
 
     set_splitter_sizes(state.main_splitter, {0, total_main})

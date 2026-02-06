@@ -56,10 +56,8 @@ function M.init(window, cmd_mgr, proj_browser)
 
     -- Initialize ui_state so commands can access main_window (only if window provided)
     if window then
-        local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
-        if ui_state_ok then
-            ui_state.init(window, { project_browser = proj_browser })
-        end
+        local ui_state = require("ui.ui_state")
+        ui_state.init(window, { project_browser = proj_browser })
     end
 
     if undo_listener_token and command_manager and command_manager.remove_listener then
@@ -86,10 +84,8 @@ end
 --- Set timeline panel reference (called after timeline is created)
 -- @param timeline_pnl table: Timeline panel instance
 function M.set_timeline_panel(timeline_pnl)
-    local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
-    if ui_state_ok then
-        ui_state.set_timeline_panel(timeline_pnl)
-    end
+    local ui_state = require("ui.ui_state")
+    ui_state.set_timeline_panel(timeline_pnl)
 end
 
 --- Parse XML file using LuaExpat
@@ -377,6 +373,7 @@ local function get_active_project_id()
         end
     end
 
+    -- NSF-OK: nil project_id is valid during startup before any project is loaded
     return nil
 end
 
@@ -412,6 +409,18 @@ local function create_action_callback(command_name, params)
             return
         end
 
+        if command_name == "Delete" then
+            local keyboard_shortcuts = require("core.keyboard_shortcuts")
+            keyboard_shortcuts.perform_delete_action()
+            return
+        end
+
+        if command_name == "Insert" or command_name == "Overwrite" then
+            local project_browser = require("ui.project_browser")
+            project_browser.add_selected_to_timeline(command_name, {advance_playhead = true})
+            return
+        end
+
         if command_name == "Quit" then
             logger.info("menu", "Quitting application")
             local ok, err = pcall(function()
@@ -432,18 +441,15 @@ local function create_action_callback(command_name, params)
         local command_params = params or {}
         command_params.project_id = command_params.project_id or project_id
 
-		local success_flag, result_value = pcall(function()
-			-- Headless tests inject a minimal command_manager stub (execute-only).
-			if type(command_manager.execute_ui) == "function" then
-				return command_manager.execute_ui(command_name, command_params)
-			end
-			-- Fallback for stubs that don't implement execute_ui.
-			return command_manager.execute(command_name, command_params)
-		end)
+		local result_value
+		-- Headless tests inject a minimal command_manager stub (execute-only).
+		if type(command_manager.execute_ui) == "function" then
+			result_value = command_manager.execute_ui(command_name, command_params)
+		else
+			result_value = command_manager.execute(command_name, command_params)
+		end
 
-        if not success_flag then
-            logger.error("menu", string.format("Command '%s' failed: %s", tostring(command_name), tostring(result_value)))
-        elseif result_value and not result_value.success and not result_value.cancelled then
+        if result_value and not result_value.success and not result_value.cancelled then
             logger.error("menu", string.format("Command '%s' returned error: %s", tostring(command_name), tostring(result_value.error_message or "unknown")))
         elseif result_value and result_value.cancelled then
             logger.debug("menu", string.format("Command '%s' cancelled by user", tostring(command_name)))

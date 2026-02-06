@@ -26,8 +26,10 @@ local function negate_delta(delta)
         return Rational.new(-delta.frames, delta.fps_numerator, delta.fps_denominator)
     end
     if type(delta) == "table" and delta.frames then
-        local fps_num = delta.fps_numerator or (delta.rate and delta.rate.fps_numerator) or 30
-        local fps_den = delta.fps_denominator or (delta.rate and delta.rate.fps_denominator) or 1
+        local fps_num = delta.fps_numerator or (delta.rate and delta.rate.fps_numerator)
+        local fps_den = delta.fps_denominator or (delta.rate and delta.rate.fps_denominator)
+        assert(fps_num, "negate_delta: missing fps_numerator on delta table")
+        assert(fps_den, "negate_delta: missing fps_denominator on delta table")
         return Rational.new(-delta.frames, fps_num, fps_den)
     end
     if delta == math.huge then
@@ -217,8 +219,10 @@ function Renderer.compute_preview_geometry(clip, edge_type, delta, raw_edge_type
     local start = clip.timeline_start
     local duration = clip.duration
     local delta_rat = to_rational_if_needed(delta, duration)
-    local fps_num = (duration and duration.fps_numerator) or (start and start.fps_numerator) or 30
-    local fps_den = (duration and duration.fps_denominator) or (start and start.fps_denominator) or 1
+    local fps_num = (duration and duration.fps_numerator) or (start and start.fps_numerator)
+    local fps_den = (duration and duration.fps_denominator) or (start and start.fps_denominator)
+    assert(fps_num, "compute_preview_geometry: missing fps_numerator on clip.duration and clip.timeline_start")
+    assert(fps_den, "compute_preview_geometry: missing fps_denominator on clip.duration and clip.timeline_start")
 
     -- Gap geometry: Gaps are rendered at the *boundary* they represent
     -- gap_after: Positioned at end of clip (left boundary of gap space)

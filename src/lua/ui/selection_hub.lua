@@ -17,6 +17,7 @@
 -- Selection Hub
 -- Centralizes active selection state across panels and notifies interested listeners.
 local M = {}
+local logger = require("core.logger")
 
 local selections = {}
 local listeners = {}
@@ -36,7 +37,8 @@ local function notify(panel_id)
         if type(callback) == "function" then
             local ok, err = pcall(callback, items, panel_id)
             if not ok then
-                print(string.format("WARNING: selection_hub listener %s raised error: %s", tostring(token), tostring(err)))
+                logger.error("selection_hub", string.format(
+                    "listener %s raised error: %s", tostring(token), tostring(err)))
             end
         end
     end

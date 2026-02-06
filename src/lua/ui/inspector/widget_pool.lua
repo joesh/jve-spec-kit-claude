@@ -287,11 +287,7 @@ function M.connect_signal(widget, signal_name, handler)
     local result
     local wrapped_handler
     wrapped_handler = function(...)
-        local ok, err = pcall(handler, ...)
-        if not ok then
-            print(string.format("[widget_pool] Handler for signal '%s' failed: %s", signal_name, tostring(err)))
-            print(debug.traceback(err, 2))
-        end
+        handler(...)
     end
 
     if signal_name == "textChanged" then
