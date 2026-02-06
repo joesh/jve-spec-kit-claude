@@ -28,17 +28,17 @@ local M = {}
 -- tests that expect core.command_implementations.register_commands to populate
 -- executor/undoer tables.
 local command_modules = {
-    "add_clip", "add_track", "batch_command", "batch_ripple_edit",
-    "create_clip", "create_project", "create_sequence", "cut", "delete_bin", "delete_clip",
+    "add_clips_to_sequence", "add_track", "batch_command", "batch_ripple_edit",
+    "create_project", "create_sequence", "cut", "delete_bin", "delete_clip",
     "delete_master_clip", "delete_sequence", "deselect_all", "duplicate_master_clip",
     "edit_history", "go_to_end", "go_to_next_edit", "go_to_prev_edit", "go_to_start",
     "import_fcp7_xml", "import_media", "import_resolve_project", "insert",
-    "insert_clip_to_timeline", "link_clips", "load_project", "match_frame",
+    "link_clips", "load_project", "match_frame",
     "modify_property", "move_clip_to_track", "move_to_bin", "new_bin", "nudge", "overwrite",
     "relink_media", "rename_item", "ripple_delete", "ripple_delete_selection",
     "ripple_edit", "select_all", "set_clip_property", "set_project_setting", "set_property",
     "set_sequence_metadata", "set_track_heights", "setup_project", "split_clip", "step_frame", "toggle_clip_enabled",
-    "toggle_maximize_panel",
+    "toggle_maximize_panel", "trim_head", "trim_tail",
 }
 
 local function register_new_entries(executors, undoers, before_keys)
@@ -54,14 +54,12 @@ function M.register_commands(executors, undoers, db)
     undoers = undoers or {}
 
     for _, module_name in ipairs(command_modules) do
-        local ok, mod = pcall(require, "core.commands." .. module_name)
-        if ok and type(mod) == "table" and type(mod.register) == "function" then
+        local mod = require("core.commands." .. module_name)
+        if type(mod) == "table" and type(mod.register) == "function" then
             local existing = {}
             for k in pairs(executors) do existing[k] = true end
-            local ok_register = pcall(mod.register, executors, undoers, db, command_manager.set_last_error)
-            if ok_register then
-                register_new_entries(executors, undoers, existing)
-            end
+            mod.register(executors, undoers, db, command_manager.set_last_error)
+            register_new_entries(executors, undoers, existing)
         end
     end
 

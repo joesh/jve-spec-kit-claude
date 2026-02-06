@@ -204,6 +204,8 @@ local KEY = {
     Return = 16777220,
     Enter = 16777221,
     Tab = 16777217,
+    BracketLeft = 91,   -- '[' (Qt::Key_BracketLeft)
+    BracketRight = 93,  -- ']' (Qt::Key_BracketRight)
 }
 
 -- Qt modifier constants (from Qt::KeyboardModifier enum)
@@ -264,34 +266,23 @@ function keyboard_shortcuts.clear_zoom_toggle()
 end
 
 local function snapshot_viewport(state)
-    if not state then
-        return {start_value = 0, duration = 10000}
-    end
+    assert(state, "snapshot_viewport: timeline state is required")
 
     if state.capture_viewport then
-        local ok, viewport = pcall(state.capture_viewport)
-        if ok and type(viewport) == "table" then
-            return {
-                start_value = viewport.start_value,
-                duration = viewport.duration,
-            }
-        end
+        local viewport = state.capture_viewport()
+        assert(type(viewport) == "table", "snapshot_viewport: capture_viewport must return a table")
+        return {
+            start_value = viewport.start_value,
+            duration = viewport.duration,
+        }
     end
 
-    local start_value = 0
-    local duration = 30 * 1000  -- fallback of ~1s
-    if state.get_viewport_start_time then
-        local ok, value = pcall(state.get_viewport_start_time)
-        if ok then
-            start_value = value or start_value
-        end
-    end
-    if state.get_viewport_duration then
-        local ok, value = pcall(state.get_viewport_duration)
-        if ok then
-            duration = value or duration
-        end
-    end
+    assert(state.get_viewport_start_time, "snapshot_viewport: state missing get_viewport_start_time")
+    assert(state.get_viewport_duration, "snapshot_viewport: state missing get_viewport_duration")
+    local start_value = state.get_viewport_start_time()
+    local duration = state.get_viewport_duration()
+    assert(start_value ~= nil, "snapshot_viewport: get_viewport_start_time returned nil")
+    assert(duration ~= nil, "snapshot_viewport: get_viewport_duration returned nil")
     return {start_value = start_value, duration = duration}
 end
 
@@ -485,25 +476,27 @@ local function get_current_sequence_position()
 end
 
 local function get_active_frame_rate()
-    if timeline_state and timeline_state.get_sequence_frame_rate then
-        local rate = timeline_state.get_sequence_frame_rate()
-        if type(rate) == "table" then
-            return rate
-        elseif type(rate) == "number" and rate > 0 then
-            return { fps_numerator = math.floor(rate + 0.5), fps_denominator = 1 }
-        end
+    assert(timeline_state and timeline_state.get_sequence_frame_rate,
+        "get_active_frame_rate: timeline_state or get_sequence_frame_rate not available")
+    local rate = timeline_state.get_sequence_frame_rate()
+    assert(rate, "get_active_frame_rate: get_sequence_frame_rate returned nil")
+    if type(rate) == "table" then
+        return rate
+    elseif type(rate) == "number" and rate > 0 then
+        return { fps_numerator = math.floor(rate + 0.5), fps_denominator = 1 }
     end
-    return frame_utils.default_frame_rate
+    error(string.format("get_active_frame_rate: invalid rate type %s: %s", type(rate), tostring(rate)))
 end
 
 local function get_fps_float(rate)
+    assert(rate ~= nil, "get_fps_float: rate must not be nil")
     if type(rate) == "table" and rate.fps_numerator then
-        if rate.fps_denominator == 0 then return 0 end
+        assert(rate.fps_denominator ~= 0, "get_fps_float: fps_denominator is zero")
         return rate.fps_numerator / rate.fps_denominator
     elseif type(rate) == "number" then
         return rate
     end
-    return 30.0
+    error(string.format("get_fps_float: unrecognized rate type: %s", type(rate)))
 end
 
 -- Initialize with references to other modules
@@ -608,7 +601,8 @@ function keyboard_shortcuts.perform_delete_action(opts)
 
     clear_redo_toggle()
 
-    local selected_clips = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
+    assert(timeline_state.get_selected_clips, "keyboard_shortcuts.perform_delete_action: timeline_state missing get_selected_clips")
+    local selected_clips = timeline_state.get_selected_clips()
 
     if shift_held and selected_clips and #selected_clips > 0 then
         local clip_ids = {}
@@ -641,8 +635,8 @@ function keyboard_shortcuts.perform_delete_action(opts)
     if selected_clips and #selected_clips > 0 then
         local Command = require("command")
         local json = require("dkjson")
-        local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
-        local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+        local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
         assert(project_id and project_id ~= "", "keyboard_shortcuts.perform_delete_action: missing active project_id")
 
         local command_specs = {}
@@ -681,7 +675,8 @@ function keyboard_shortcuts.perform_delete_action(opts)
         return true
     end
 
-    local selected_gaps = timeline_state.get_selected_gaps and timeline_state.get_selected_gaps() or {}
+    assert(timeline_state.get_selected_gaps, "keyboard_shortcuts.perform_delete_action: timeline_state missing get_selected_gaps")
+    local selected_gaps = timeline_state.get_selected_gaps()
     if #selected_gaps > 0 then
         local gap = selected_gaps[1]
         local params = {
@@ -938,7 +933,8 @@ local function handle_key_impl(event)
                     timeline_state.set_playhead_position(mark_in)
                 end
             else
-                local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
+                local playhead = assert(timeline_state.get_playhead_position and timeline_state.get_playhead_position(),
+                    "keyboard_shortcuts.handle_key: get_playhead_position returned nil for mark_in")
                 timeline_state.set_mark_in(playhead)
             end
             return true
@@ -953,7 +949,8 @@ local function handle_key_impl(event)
                     timeline_state.set_playhead_position(mark_out)
                 end
             else
-                local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
+                local playhead = assert(timeline_state.get_playhead_position and timeline_state.get_playhead_position(),
+                    "keyboard_shortcuts.handle_key: get_playhead_position returned nil for mark_out")
                 timeline_state.set_mark_out(playhead)
             end
             return true
@@ -1009,20 +1006,26 @@ local function handle_key_impl(event)
             timeline_state.clear_marks()
             return true
         elseif not modifier_meta and not modifier_alt then
-            local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position() or 0
-            local clips = timeline_state.get_clips and timeline_state.get_clips() or {}
+            assert(timeline_state.get_playhead_position, "keyboard_shortcuts.handle_key: timeline_state missing get_playhead_position")
+            local playhead = timeline_state.get_playhead_position()
+            assert(timeline_state.get_clips, "keyboard_shortcuts.handle_key: timeline_state missing get_clips")
+            local clips = timeline_state.get_clips()
             local best_clip = nil
             local best_priority = nil
 
             for _, clip in ipairs(clips) do
-                local clip_start = clip.timeline_start or clip.start_value or 0
-                local clip_end = clip_start + (clip.duration or 0)
-                
+                assert(clip.timeline_start or clip.start_value, string.format("keyboard_shortcuts.handle_key: clip %s missing timeline_start/start_value", tostring(clip.id)))
+                local clip_start = clip.timeline_start or clip.start_value
+                assert(clip.duration, string.format("keyboard_shortcuts.handle_key: clip %s missing duration", tostring(clip.id)))
+                local clip_end = clip_start + clip.duration
+
                 if playhead >= clip_start and playhead <= clip_end then
                     local track = timeline_state.get_track_by_id and timeline_state.get_track_by_id(clip.track_id)
                     if track then
                         local type_priority = (track.track_type == "VIDEO") and 0 or 1
-                        local track_index = track.track_index or timeline_state.get_track_index(clip.track_id) or math.huge
+                        assert(track.track_index or (timeline_state.get_track_index and timeline_state.get_track_index(clip.track_id)),
+                            string.format("keyboard_shortcuts.handle_key: track %s missing track_index", tostring(clip.track_id)))
+                        local track_index = track.track_index or timeline_state.get_track_index(clip.track_id)
                         local priority = type_priority * 1000 + track_index
                         if not best_priority or priority < best_priority then
                             best_priority = priority
@@ -1033,8 +1036,8 @@ local function handle_key_impl(event)
             end
 
             if best_clip then
-                local clip_start = best_clip.timeline_start or best_clip.start_value or 0
-                local clip_out = clip_start + (best_clip.duration or 0)
+                local clip_start = best_clip.timeline_start or best_clip.start_value
+                local clip_out = clip_start + best_clip.duration
                 timeline_state.set_mark_in(clip_start)
                 timeline_state.set_mark_out(clip_out)
             end
@@ -1146,8 +1149,8 @@ local function handle_key_impl(event)
         local selected_edges = timeline_state.get_selected_edges()
 
         local Command = require("command")
-        local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
-        local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
+        local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
         assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: missing active project_id for ripple/nudge")
         assert(sequence_id and sequence_id ~= "", "keyboard_shortcuts.handle_key: missing active sequence_id for ripple/nudge")
 
@@ -1272,13 +1275,13 @@ local function handle_key_impl(event)
                 return true
             end
 
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
             assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: Blade missing active project_id")
             local batch_cmd_params = {
                 project_id = project_id,
             }
             batch_cmd_params.commands_json = json.encode(specs)
-            local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+            local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
             if active_sequence_id and active_sequence_id ~= "" then
                 for key, value in pairs({
                     ["sequence_id"] = active_sequence_id,
@@ -1293,6 +1296,54 @@ local function handle_key_impl(event)
                 print(string.format("Blade: Split %d clip(s) at %s", #specs, tostring(playhead_value)))
             else
                 print(string.format("Blade: Failed to split clips: %s", result.error_message or "unknown error"))
+            end
+        end
+        return true
+    end
+
+    -- Shift+Cmd+[ : TrimHead (remove content before playhead, like Premiere Q)
+    -- Shift+Cmd+] : TrimTail (remove content after playhead, like Premiere W)
+    if (key == KEY.BracketLeft or key == KEY.BracketRight) and modifier_meta and modifier_shift and not modifier_alt then
+        if timeline_state and command_manager and panel_active_timeline then
+            local playhead_value = timeline_state.get_playhead_position()
+            local target_clips = timeline_state.get_clips_at_time(playhead_value)
+
+            if #target_clips == 0 then
+                print("Trim: No clips under playhead")
+                return true
+            end
+
+            local trim_type = (key == KEY.BracketLeft) and "TrimHead" or "TrimTail"
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
+            assert(project_id and project_id ~= "",
+                "keyboard_shortcuts.handle_key: Trim missing active project_id")
+            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+            assert(sequence_id and sequence_id ~= "",
+                "keyboard_shortcuts.handle_key: Trim missing active sequence_id")
+
+            local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
+            assert(rate and rate.fps_numerator and rate.fps_denominator,
+                "keyboard_shortcuts.handle_key: Trim: sequence frame rate unavailable")
+
+            local playhead_frame = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator).frames
+            local trimmed = 0
+
+            for _, clip in ipairs(target_clips) do
+                local result = execute_command(trim_type, {
+                    clip_id = clip.id,
+                    project_id = project_id,
+                    sequence_id = sequence_id,
+                    trim_frame = playhead_frame,
+                })
+                if result and result.success then
+                    trimmed = trimmed + 1
+                end
+            end
+
+            if trimmed > 0 then
+                print(string.format("%s: Trimmed %d clip(s) at frame %d", trim_type, trimmed, playhead_frame))
+            else
+                print(string.format("%s: No clips could be trimmed at frame %d", trim_type, playhead_frame))
             end
         end
         return true
@@ -1325,7 +1376,7 @@ local function handle_key_impl(event)
     -- F9: INSERT at playhead (ripple subsequent clips forward)
     if key == KEY.F9 and panel_active_timeline then
         if command_manager and timeline_state and project_browser then
-            project_browser.insert_selected_to_timeline("Insert", {advance_playhead = true})
+            project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
         end
         return true
     end
@@ -1338,7 +1389,7 @@ local function handle_key_impl(event)
                 print("❌ OVERWRITE: No media selected in project browser")
                 return true
             end
-            project_browser.insert_selected_to_timeline("Overwrite", {advance_playhead = true})
+            project_browser.add_selected_to_timeline("Overwrite", {advance_playhead = true})
         end
         return true
     end
