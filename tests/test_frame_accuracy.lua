@@ -98,229 +98,6 @@ end
 -- TEST SUITE FUNCTIONS (moved into main for consistent execution)
 -- ============================================================================
 
-local function test_create_clip_command_func()
-    local db = setup_test_db()
-    command_manager.init("default_sequence", "default_project")
-    
-    local project = Project.create("Test Project")
-    project:save(db)
-    assert_not_nil(project.id, "Project ID should not be nil")
-
-    local sequence = Sequence.create("Test Sequence", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
-    sequence:save(db)
-    assert_not_nil(sequence.id, "Sequence ID should not be nil")
-    
-    local track = Track.create_video("Video Track 1", sequence.id, {index = 1})
-    track:save(db)
-    assert_not_nil(track.id, "Track ID should not be nil")
-
-    local media_duration_rational = Rational.new(240, 24, 1) -- 10 seconds at 24 FPS
-    local media = Media.create({
-        project_id = project.id,
-        file_path = "/path/to/media.mov",
-        name = "Test Media",
-        duration = media_duration_rational,
-        fps_numerator = 24,
-        fps_denominator = 1,
-        width = 1920,
-        height = 1080,
-    })
-    media:save(db)
-    assert_not_nil(media.id, "Media ID should not be nil")
-
-    -- Simulate a CreateClip command
-    local command_data = {
-        id = "cmd_create_clip_1",
-        type = "CreateClip",
-        parameters = {
-            project_id = project.id,
-            sequence_id = sequence.id,
-            track_id = track.id,
-            media_id = media.id,
-            timeline_start_frame = 0,
-            duration_frames = 120, -- 5 seconds at 24 FPS
-            source_in_frame = 24, -- 1 second into source
-            source_out_frame = 144, -- 6 seconds into source
-        }
-    }
-    
-    local success_obj = command_manager.execute(command_data)
-    if not success_obj.success then
-        print("Command execution failed with error: " .. success_obj.error_message)
-    end
-    assert_eq(success_obj.success, true, "CreateClip command execution should succeed")
-    assert_not_nil(command_data.parameters.clip_id, "Clip ID should be set by command")
-    -- Ensure clip_id is accessible if it was set on the command object
-    local clip_id_from_command = success_obj.result_data.parameters and success_obj.result_data.parameters.clip_id
-    if not clip_id_from_command then
-        local deserialized_command = require('command').deserialize(success_obj.result_data)
-        clip_id_from_command = deserialized_command.parameters.clip_id
-    end
-    assert_not_nil(clip_id_from_command, "Clip ID should be available in result data")
-
-    local created_clip = Clip.load(clip_id_from_command, db)
-    assert_not_nil(created_clip, "Created clip should be loadable from DB")
-    
-    assert_eq(created_clip.timeline_start.frames, 0, "Created clip timeline_start_frame")
-    assert_eq(created_clip.duration.frames, 120, "Created clip duration_frames")
-    assert_eq(created_clip.source_in.frames, 24, "Created clip source_in_frame")
-    assert_eq(created_clip.source_out.frames, 144, "Created clip source_out_frame")
-    assert_eq(created_clip.rate.fps_numerator, 24, "Created clip fps_numerator")
-    assert_eq(created_clip.rate.fps_denominator, 1, "Created clip fps_denominator")
-    assert_eq(created_clip.project_id, project.id, "Created clip project_id")
-    assert_eq(created_clip.track_id, track.id, "Created clip track_id")
-    assert_eq(created_clip.media_id, media.id, "Created clip media_id")
-
-    teardown_test_db(db)
-end
-
-local function test_insert_clip_to_timeline_command_func()
-    local db = setup_test_db()
-    command_manager.init("default_sequence", "default_project")
-    
-    local project = Project.create("Test Project 2")
-    project:save(db)
-
-    local sequence = Sequence.create("Test Sequence 2", project.id, {fps_numerator = 30, fps_denominator = 1}, 1920, 1080)
-    sequence:save(db)
-    
-    local track = Track.create_video("Video Track 2", sequence.id, {index = 1})
-    track:save(db)
-
-    local media_duration_rational = Rational.new(300, 30, 1) -- 10 seconds at 30 FPS
-    local media = Media.create({
-        project_id = project.id,
-        file_path = "/path/to/media2.mov",
-        name = "Test Media 2",
-        duration = media_duration_rational,
-        fps_numerator = 30,
-        fps_denominator = 1,
-        width = 1920,
-        height = 1080,
-    })
-    media:save(db)
-
-    -- Simulate an InsertClipToTimeline command (no master clip)
-    local command_data = {
-        id = "cmd_insert_clip_1",
-        type = "InsertClipToTimeline",
-        parameters = {
-            project_id = project.id,
-            sequence_id = sequence.id,
-            track_id = track.id,
-            media_id = media.id,
-            timeline_start_frame = 60, -- Insert at 2 seconds (30 FPS)
-            -- No explicit duration_frames, should use media's duration (rescaled if necessary)
-            -- No explicit source_in/out, should use media's full duration
-        }
-    }
-    
-    local success_obj = command_manager.execute(command_data)
-    assert_eq(success_obj.success, true, "InsertClipToTimeline command execution should succeed")
-    
-    local deserialized_command = Command.deserialize(success_obj.result_data)
-    local clip_id_from_command = deserialized_command.parameters.clip_id
-    assert_not_nil(clip_id_from_command, "Clip ID should be set by command")
-
-    local inserted_clip = Clip.load(clip_id_from_command, db)
-    assert_not_nil(inserted_clip, "Inserted clip should be loadable from DB")
-    
-    assert_eq(inserted_clip.timeline_start.frames, 60, "Inserted clip timeline_start_frame")
-    assert_eq(inserted_clip.duration.frames, 300, "Inserted clip duration_frames (from media)")
-    assert_eq(inserted_clip.source_in.frames, 0, "Inserted clip source_in_frame (from media)")
-    assert_eq(inserted_clip.source_out.frames, 300, "Inserted clip source_out_frame (from media)")
-    assert_eq(inserted_clip.rate.fps_numerator, 30, "Inserted clip fps_numerator")
-    assert_eq(inserted_clip.rate.fps_denominator, 1, "Inserted clip fps_denominator")
-    
-    teardown_test_db(db)
-end
-
-local function test_insert_clip_with_master_clip_rescale_func()
-    local db = setup_test_db()
-    command_manager.init("default_sequence", "default_project")
-    
-    local project = Project.create("Test Project 3")
-    project:save(db)
-
-    -- Sequence at 24 FPS
-    local sequence = Sequence.create("Test Sequence 3", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
-    sequence:save(db)
-    
-    local track = Track.create_video("Video Track 3", sequence.id, {index = 1})
-    track:save(db)
-
-    -- Media at 30 FPS, 10 seconds
-    local media_duration_rational = Rational.new(300, 30, 1) -- 10 seconds at 30 FPS
-    local media = Media.create({
-        project_id = project.id,
-        file_path = "/path/to/media3.mov",
-        name = "Test Media 3",
-        duration = media_duration_rational,
-        fps_numerator = 30,
-        fps_denominator = 1,
-        width = 1920,
-        height = 1080,
-    })
-    media:save(db)
-
-    -- Create a master clip at 30 FPS, 5 seconds from media
-    local master_clip_duration_rational = Rational.new(150, 30, 1) -- 5 seconds at 30 FPS
-    local master_clip_source_in_rational = Rational.new(30, 30, 1) -- 1 second in
-    local master_clip_source_out_rational = Rational.new(180, 30, 1) -- 6 seconds in
-    local master_clip_obj = Clip.create("Master Clip 1", media.id, {
-        project_id = project.id,
-        clip_kind = "master",
-        timeline_start = Rational.new(0, 30, 1), -- Doesn't matter for master clip
-        duration = master_clip_duration_rational,
-        source_in = master_clip_source_in_rational,
-        source_out = master_clip_source_out_rational,
-        fps_numerator = 30, -- Master clip maintains its native rate
-        fps_denominator = 1,
-    })
-    master_clip_obj:save(db)
-    assert_not_nil(master_clip_obj.id, "Master Clip ID should not be nil")
-
-
-    -- Simulate an InsertClipToTimeline command using the master clip
-    -- Master clip's 5-second duration (150f @ 30fps) should be 120f @ 24fps
-    local command_data = {
-        id = "cmd_insert_clip_2",
-        type = "InsertClipToTimeline",
-        parameters = {
-            project_id = project.id,
-            sequence_id = sequence.id,
-            track_id = track.id,
-            media_id = media.id, -- Still provide media_id
-            master_clip_id = master_clip_obj.id,
-            timeline_start_frame = 48, -- Insert at 2 seconds (24 FPS)
-        }
-    }
-    
-    local success_obj = command_manager.execute(command_data)
-    assert_eq(success_obj.success, true, "InsertClipToTimeline command with master clip should succeed")
-    
-    local deserialized_command = Command.deserialize(success_obj.result_data)
-    local clip_id_from_command = deserialized_command.parameters.clip_id
-    assert_not_nil(clip_id_from_command, "Clip ID should be set by command")
-
-    local inserted_clip = Clip.load(clip_id_from_command, db)
-    assert_not_nil(inserted_clip, "Inserted clip from master should be loadable from DB")
-    
-    assert_eq(inserted_clip.timeline_start.frames, 48, "Inserted clip timeline_start_frame (rescaled from command param)")
-    
-    -- Master clip 150f@30fps = 5s. 5s@24fps = 120 frames.
-    assert_eq(inserted_clip.duration.frames, 120, "Inserted clip duration_frames (rescaled from master clip)")
-    -- Master clip source_in 30f@30fps = 1s. 1s@24fps = 24 frames.
-    assert_eq(inserted_clip.source_in.frames, 24, "Inserted clip source_in_frame (rescaled from master clip)")
-    -- Master clip source_out 180f@30fps = 6s. 6s@24fps = 144 frames.
-    assert_eq(inserted_clip.source_out.frames, 144, "Inserted clip source_out_frame (rescaled from master clip)")
-
-    assert_eq(inserted_clip.rate.fps_numerator, 24, "Inserted clip fps_numerator (should match sequence)")
-    assert_eq(inserted_clip.rate.fps_denominator, 1, "Inserted clip fps_denominator (should match sequence)")
-    
-    teardown_test_db(db)
-end
-
 local function test_split_clip_command_func()
     local db = setup_test_db()
     command_manager.init("default_sequence", "default_project")
@@ -358,23 +135,24 @@ local function test_split_clip_command_func()
     local initial_clip_duration_frames = 240
     local insert_command_data = {
         id = "cmd_initial_insert",
-        type = "InsertClipToTimeline",
+        type = "Insert",
         parameters = {
             project_id = project.id,
             sequence_id = sequence.id,
             track_id = track.id,
             media_id = media.id,
-            timeline_start_frame = 0,
-            duration_frames = initial_clip_duration_frames,
-            source_in_frame = 0,
-            source_out_frame = initial_clip_duration_frames,
+            insert_time = Rational.new(0, sequence_fps_num, sequence_fps_den),
+            duration = Rational.new(initial_clip_duration_frames, sequence_fps_num, sequence_fps_den),
+            source_in = Rational.new(0, 24, 1),  -- source is at media rate
+            source_out = Rational.new(initial_clip_duration_frames, 24, 1),
+            advance_playhead = false,
         }
     }
     local insert_success_obj = command_manager.execute(insert_command_data)
     if not insert_success_obj.success then
-        print("Initial insert failed with error: " .. insert_success_obj.error_message)
+        print("Initial insert failed with error: " .. tostring(insert_success_obj.error_message))
     end
-    assert_eq(insert_success_obj.success, true, "Initial InsertClipToTimeline command should succeed")
+    assert_eq(insert_success_obj.success, true, "Initial Insert command should succeed")
     local initial_clip_deserialized_command = Command.deserialize(insert_success_obj.result_data)
     local initial_clip_id = initial_clip_deserialized_command.parameters.clip_id
     assert_not_nil(initial_clip_id, "Initial Clip ID should be set by command")
@@ -742,13 +520,13 @@ end
 
 local function test_move_clip_to_track_command_func()
     local db = setup_test_db()
-    command_manager.init("default_sequence", "default_project")
 
     local project = Project.create("Test Project MoveClip")
     project:save(db)
-    
+
     local sequence = Sequence.create("Test Sequence MoveClip", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
     sequence:save(db)
+    command_manager.init(sequence.id, project.id)
     
     local track1 = Track.create_video("Video Track 1", sequence.id, {index = 1})
     track1:save(db)
@@ -856,29 +634,19 @@ local function main()
     -- Load all command modules to register them before running tests
     -- This mimics command_manager's behavior
     local modules_to_load = {
-        "core.commands.create_clip",
-        "core.commands.insert_clip_to_timeline",
-        "core.commands.split_clip", -- Added split_clip
-        "core.commands.ripple_delete", -- Added ripple_delete
-        "core.commands.ripple_edit", -- Added ripple_edit
-        "core.commands.nudge", -- Added nudge
-        "core.commands.move_clip_to_track", -- Added move_clip_to_track
-        -- Add other command modules here as they are refactored
+        "core.commands.split_clip",
+        "core.commands.ripple_delete",
+        "core.commands.ripple_edit",
+        "core.commands.nudge",
+        "core.commands.move_clip_to_track",
+        "core.commands.insert",  -- For inserting clips
+        "core.commands.add_clips_to_sequence",  -- THE algorithm for timeline edits
     }
     for _, module_name in ipairs(modules_to_load) do
         require(module_name)
     end
 
     print("\n------------------------------------")
-    
-    collectgarbage("collect")
-    run_test("test_create_clip_command", test_create_clip_command_func)
-
-    collectgarbage("collect")
-    run_test("test_insert_clip_to_timeline_command", test_insert_clip_to_timeline_command_func)
-
-    collectgarbage("collect")
-    run_test("test_insert_clip_with_master_clip_rescale", test_insert_clip_with_master_clip_rescale_func)
 
     collectgarbage("collect")
     run_test("test_split_clip_command", test_split_clip_command_func)

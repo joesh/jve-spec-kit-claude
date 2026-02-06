@@ -53,16 +53,21 @@ do
     end, "params.message must be a non%-empty string")
 end
 
-print("\n--- create_error: defaults ---")
+print("\n--- create_error: required fields ---")
 do
-    local err = error_system.create_error({ message = "test error" })
+    local err = error_system.create_error({
+        message = "test error",
+        code = "TEST_ERROR",
+        operation = "test_op",
+        component = "test_component"
+    })
     check("success is false", err.success == false)
     check("message preserved", err.message == "test error")
-    check("default code", err.code == "UNKNOWN_ERROR")
+    check("code preserved", err.code == "TEST_ERROR")
     check("default category", err.category == "system")
     check("default severity", err.severity == "error")
-    check("default operation", err.operation == "unknown_operation")
-    check("default component", err.component == "unknown_component")
+    check("operation preserved", err.operation == "test_op")
+    check("component preserved", err.component == "test_component")
     check("default context_stack empty", #err.context_stack == 0)
     check("default technical_details empty", next(err.technical_details) == nil)
     check("default parameters empty", next(err.parameters) == nil)
@@ -120,7 +125,7 @@ end
 -- ============================================================
 print("\n--- is_error / is_success ---")
 do
-    local err = error_system.create_error({ message = "e" })
+    local err = error_system.create_error({ message = "e", code = "TEST", operation = "test", component = "test" })
     local suc = error_system.create_success({})
     check("is_error on error", error_system.is_error(err) == true)
     check("is_error on success", error_system.is_error(suc) == false)
@@ -141,7 +146,7 @@ end
 -- ============================================================
 print("\n--- add_context ---")
 do
-    local err = error_system.create_error({ message = "base" })
+    local err = error_system.create_error({ message = "base", code = "TEST", operation = "test", component = "test" })
     local result = error_system.add_context(err, {
         operation = "op1",
         component = "comp1",
@@ -189,7 +194,7 @@ end
 print("\n--- safe_call: error return path ---")
 do
     local fn = function()
-        return error_system.create_error({ message = "inner fail", code = "MY_ERR" })
+        return error_system.create_error({ message = "inner fail", code = "MY_ERR", operation = "inner", component = "test" })
     end
     local r = error_system.safe_call(fn, { operation = "wrap_op", component = "wrap_comp" })
     check("safe_call error propagated", error_system.is_error(r))
@@ -245,6 +250,8 @@ do
         user_message = "user msg",
         code = "TEST_CODE",
         category = "test_cat",
+        operation = "test_op",
+        component = "test_comp",
     })
     local formatted = error_system.format_user_error(err)
     check("format contains user_message", formatted:find("user msg") ~= nil)
@@ -351,7 +358,7 @@ end
 -- ============================================================
 print("\n--- log_detailed_error ---")
 do
-    local err = error_system.create_error({ message = "log me" })
+    local err = error_system.create_error({ message = "log me", code = "LOG_TEST", operation = "log_op", component = "log_comp" })
     local out = error_system.log_detailed_error(err)
     check("log_detailed_error for error", out:find("DEBUG ERROR REPORT") ~= nil)
 

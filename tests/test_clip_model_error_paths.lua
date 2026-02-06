@@ -313,10 +313,14 @@ do
         duration = Rational.new(10, 24),
     })
     clip.id = ""
-    check("save empty id returns false", clip:save() == false)
+    expect_error("save empty id asserts", function()
+        clip:save()
+    end, "clip id is required")
 
     clip.id = nil
-    check("save nil id returns false", clip:save() == false)
+    expect_error("save nil id asserts", function()
+        clip:save()
+    end, "clip id is required")
 end
 
 -- ============================================================

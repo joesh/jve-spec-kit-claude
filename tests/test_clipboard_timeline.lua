@@ -124,6 +124,16 @@ local function setup_database(path)
     assert(database.init(path))
     local conn = database.get_connection()
     assert(conn:exec(SCHEMA_SQL))
+    assert(conn:exec([[
+        CREATE TABLE IF NOT EXISTS properties (
+            id TEXT PRIMARY KEY,
+            clip_id TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            property_value TEXT,
+            property_type TEXT,
+            default_value TEXT
+        );
+    ]]))
     assert(conn:exec(BASE_DATA_SQL))
     local executors = {}
     local undoers = {}

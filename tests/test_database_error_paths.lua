@@ -268,23 +268,23 @@ result = database.load_sequence_track_heights("seq1")
 check("valid JSON → trk1=80", result.trk1 == 80)
 check("valid JSON → trk_a1=40", result.trk_a1 == 40)
 
--- 3e. Malformed JSON → dkjson returns nil (doesn't throw), falls through to type check
+-- 3e. Malformed JSON → dkjson returns (nil, pos), caught at decode
 db:exec([[
     UPDATE sequence_track_layouts SET track_heights_json = '{bad json###'
     WHERE sequence_id = 'seq1';
 ]])
 expect_error("malformed JSON → FATAL", function()
     database.load_sequence_track_heights("seq1")
-end, "expected JSON object")
+end, "invalid JSON")
 
--- 3f. JSON array [1,2,3] → Lua table, passes type check (arrays ARE tables in Lua)
+-- 3f. JSON array [1,2,3] → rejected (track heights must be object, not array)
 db:exec([[
     UPDATE sequence_track_layouts SET track_heights_json = '[1, 2, 3]'
     WHERE sequence_id = 'seq1';
 ]])
-result = database.load_sequence_track_heights("seq1")
-check("JSON array → returns as table (no error)", type(result) == "table")
-check("JSON array → has elements", result[1] == 1 and result[2] == 2)
+expect_error("JSON array → FATAL (expected object)", function()
+    database.load_sequence_track_heights("seq1")
+end, "expected JSON object")
 
 -- 3g. JSON string instead of object → FATAL (string is not a table)
 db:exec([[

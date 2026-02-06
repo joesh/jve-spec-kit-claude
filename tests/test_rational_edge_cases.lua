@@ -122,10 +122,10 @@ do
     check("hydrate partial fps: num", h2.fps_numerator == 48)
     check("hydrate partial fps: den defaults 1", h2.fps_denominator == 1)
 
-    -- Table with no fps → uses fallback arg → uses 30/1 default
-    local h3 = Rational.hydrate({ frames = 5 })
-    check("hydrate no fps defaults 30", h3.fps_numerator == 30)
-    check("hydrate no fps den defaults 1", h3.fps_denominator == 1)
+    -- Table with no fps → must assert (no silent fallback)
+    local ok_h3, err_h3 = pcall(function() Rational.hydrate({ frames = 5 }) end)
+    check("hydrate no fps asserts", not ok_h3)
+    check("hydrate no fps error mentions fps", err_h3 and tostring(err_h3):find("fps") ~= nil)
 
     -- Table with no fps but caller provides defaults
     local h4 = Rational.hydrate({ frames = 5 }, 60, 1)
@@ -139,9 +139,10 @@ do
     check("hydrate number", h5.frames == 100)
     check("hydrate number fps", h5.fps_numerator == 24)
 
-    -- Number no fps → default 30
-    local h6 = Rational.hydrate(50)
-    check("hydrate number default fps", h6.fps_numerator == 30)
+    -- Number no fps → must assert (no silent fallback)
+    local ok_h6, err_h6 = pcall(function() Rational.hydrate(50) end)
+    check("hydrate number no fps asserts", not ok_h6)
+    check("hydrate number no fps error mentions fps", err_h6 and tostring(err_h6):find("fps") ~= nil)
 
     -- String → nil
     check("hydrate string", Rational.hydrate("123") == nil)

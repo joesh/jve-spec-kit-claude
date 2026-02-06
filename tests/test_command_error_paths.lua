@@ -65,20 +65,19 @@ check("deserialize('') reason", err == "JSON string is empty")
 
 -- 1c. invalid JSON → (nil, "Failed to decode JSON: ...")
 cmd, err = Command.deserialize("{bad json###")
--- dkjson doesn't throw, returns (nil, pos, errmsg). pcall(json.decode, ...) succeeds
--- with decoded=nil, so falls through to "not a table" check
+-- dkjson returns (nil, pos) on malformed input; direct call catches this
 check("deserialize(bad json) → nil", cmd == nil)
-check("deserialize(bad json) reason", type(err) == "string" and err:match("not a table"))
+check("deserialize(bad json) reason", type(err) == "string" and err:match("Failed to decode JSON"))
 
 -- 1d. JSON string (not table) → (nil, "Decoded JSON is not a table")
 cmd, err = Command.deserialize('"just a string"')
 check("deserialize(string) → nil", cmd == nil)
 check("deserialize(string) reason", err == "Decoded JSON is not a table")
 
--- 1e. JSON null → (nil, "Decoded JSON is not a table")
+-- 1e. JSON null → (nil, "Failed to decode JSON: ...")
 cmd, err = Command.deserialize("null")
 check("deserialize(null) → nil", cmd == nil)
-check("deserialize(null) reason", err == "Decoded JSON is not a table")
+check("deserialize(null) reason", type(err) == "string" and err:match("Failed to decode JSON"))
 
 -- 1f. JSON number → (nil, "Decoded JSON is not a table")
 cmd, err = Command.deserialize("42")
@@ -325,7 +324,7 @@ cmd.executed_at = now
 -- playhead_value is nil by default
 expect_error("save nil playhead_value → FATAL", function()
     cmd:save(db)
-end, "requires playhead_value")
+end, "missing playhead_value")
 
 -- 5c. playhead_rate = 0 → FATAL
 cmd = Command.create("TestCmd", "proj1")
@@ -334,7 +333,7 @@ cmd.playhead_rate = 0
 cmd.executed_at = now
 expect_error("save playhead_rate=0 → FATAL", function()
     cmd:save(db)
-end, "requires playhead_value")
+end, "invalid playhead_rate")
 
 -- 5d. Missing executed_at → FATAL
 cmd = Command.create("TestCmd", "proj1")
