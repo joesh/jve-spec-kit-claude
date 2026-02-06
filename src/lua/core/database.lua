@@ -221,9 +221,7 @@ local function ensure_sequence_track_layouts_table()
         )
     ]])
 
-    if ok == false then
-        logger.warn("database", "Failed to ensure sequence_track_layouts table: " .. tostring(err or "unknown error"))
-    end
+    assert(ok ~= false, "ensure_sequence_track_layouts_table: CREATE TABLE failed: " .. tostring(err or "unknown error"))
 end
 
 local function trim_text(value)
@@ -616,7 +614,7 @@ end
 
 -- Schema migration: ensure commands table has all required columns
 function M.ensure_commands_table_columns()
-    if not db_connection then return end
+    assert(db_connection, "ensure_commands_table_columns: no database connection")
 
     local needed = {
         selected_clip_ids_pre = true,
@@ -626,7 +624,7 @@ function M.ensure_commands_table_columns()
     }
 
     local pragma = db_connection:prepare("PRAGMA table_info(commands)")
-    if not pragma then return end
+    assert(pragma, "ensure_commands_table_columns: failed to prepare PRAGMA table_info(commands)")
 
     if pragma:exec() then
         while pragma:next() do
@@ -636,7 +634,9 @@ function M.ensure_commands_table_columns()
     pragma:finalize()
 
     for col, _ in pairs(needed) do
-        db_connection:exec("ALTER TABLE commands ADD COLUMN " .. col .. " TEXT DEFAULT '[]'")
+        local ok, err = db_connection:exec("ALTER TABLE commands ADD COLUMN " .. col .. " TEXT DEFAULT '[]'")
+        assert(ok ~= false, string.format(
+            "ensure_commands_table_columns: ALTER TABLE ADD COLUMN %s failed: %s", col, tostring(err)))
     end
 end
 
@@ -917,10 +917,8 @@ function M.load_clip_properties(clip_id)
         FROM properties
         WHERE clip_id = ?
     ]])
-
-    if not query then
-        return properties
-    end
+    assert(query, string.format(
+        "load_clip_properties: failed to prepare query for clip %s", tostring(clip_id)))
 
     query:bind_value(1, clip_id)
 
@@ -1410,12 +1408,12 @@ function M.load_sequence_track_heights(sequence_id)
     if stmt:exec() and stmt:next() then
         local raw = stmt:value(0)
         if raw and raw ~= "" then
-            local ok, decoded = pcall(json.decode, raw)
-            if not ok then
+            local decoded, decode_err = json.decode(raw)
+            if not decoded then
                 stmt:finalize()
-                error("FATAL: load_sequence_track_heights: invalid JSON in database")
+                error("FATAL: load_sequence_track_heights: invalid JSON in database: " .. tostring(decode_err))
             end
-            if type(decoded) ~= "table" then
+            if type(decoded) ~= "table" or decoded[1] ~= nil then
                 stmt:finalize()
                 error("FATAL: load_sequence_track_heights: expected JSON object in database")
             end
@@ -1766,9 +1764,8 @@ function M.load_bins(project_id, opts)
         WHERE project_id = ? AND namespace_id = ?
         ORDER BY sort_index ASC, path ASC
     ]])
-    if not stmt then
-        return {}
-    end
+    assert(stmt, string.format(
+        "load_bins: failed to prepare query for project %s", tostring(project_id)))
     stmt:bind_value(1, project_id)
     stmt:bind_value(2, namespace_id)
 

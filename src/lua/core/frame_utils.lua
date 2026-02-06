@@ -25,16 +25,14 @@ M.default_frame_rate = { fps_numerator = 30, fps_denominator = 1 }
 
 -- Helper: Normalize rate input to table
 function M.normalize_rate(rate)
-    if not rate then
-        return M.default_frame_rate
-    end
+    assert(rate ~= nil, "normalize_rate: rate must not be nil")
     if type(rate) == "table" and rate.fps_numerator then
         return rate
     end
     if type(rate) == "number" then
         return { fps_numerator = math.floor(rate + 0.5), fps_denominator = 1 }
     end
-    return M.default_frame_rate
+    error("normalize_rate: unrecognized rate type: " .. type(rate))
 end
 
 -- Calculate frame duration (Rational object)
@@ -56,8 +54,8 @@ end
 function M.time_to_frame(time_obj, frame_rate)
     local rate = M.normalize_rate(frame_rate)
     local r = Rational.hydrate(time_obj, rate.fps_numerator, rate.fps_denominator)
-    
-    if not r then return 0, false end
+
+    assert(r, string.format("frame_utils.time_to_frame: Rational.hydrate returned nil for time_obj=%s", tostring(time_obj)))
     
     -- Rescale if necessary
     if r.fps_numerator ~= rate.fps_numerator or r.fps_denominator ~= rate.fps_denominator then
@@ -77,10 +75,8 @@ end
 function M.snap_to_frame(time_obj, frame_rate)
     local rate = M.normalize_rate(frame_rate)
     local r = Rational.hydrate(time_obj, rate.fps_numerator, rate.fps_denominator)
-    
-    if not r then
-        return Rational.new(0, rate.fps_numerator, rate.fps_denominator)
-    end
+
+    assert(r, string.format("frame_utils.snap_to_frame: Rational.hydrate returned nil for time_obj=%s", tostring(time_obj)))
     
     return r:rescale(rate.fps_numerator, rate.fps_denominator)
 end
@@ -188,7 +184,8 @@ function M.format_duration(duration_input, frame_rate)
         return "--:--"
     end
 
-    local rate = frame_rate or M.default_frame_rate
+    assert(frame_rate, "format_duration: frame_rate must not be nil")
+    local rate = frame_rate
     local ok, formatted = pcall(M.format_timecode, duration_input, rate)
     if ok and formatted then
         return formatted

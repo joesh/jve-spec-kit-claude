@@ -156,15 +156,19 @@ function Rational.hydrate(val, fps_num, fps_den)
 
     -- If it's a plain table with frames (deserialized JSON)
     if type(val) == "table" and val.frames then
-        return Rational.new(val.frames, val.fps_numerator or fps_num or 30, val.fps_denominator or fps_den or 1)
+        local num = val.fps_numerator or fps_num
+        local den = val.fps_denominator or fps_den or 1
+        assert(num, "Rational.hydrate: missing fps_numerator (table has .frames but no fps info and no fps_num arg)")
+        return Rational.new(val.frames, num, den)
     end
 
-    -- If it's a number, treat as integer frames (legacy compat) or seconds? 
+    -- If it's a number, treat as integer frames (legacy compat) or seconds?
     -- V5 convention: Number inputs in commands/models are usually Frames unless specified otherwise.
     -- But in UI layer (legacy), numbers often meant Milliseconds.
     -- Context matters. BUT safe hydration usually assumes Frames for consistency with DB.
     if type(val) == "number" then
-        return Rational.new(val, fps_num or 30, fps_den or 1)
+        assert(fps_num, "Rational.hydrate: missing fps_num arg for bare number input")
+        return Rational.new(val, fps_num, fps_den or 1)
     end
 
     return nil
@@ -248,12 +252,6 @@ end
 
 --- Check equality.
 function Rational_mt.__eq(lhs, rhs)
-    if type(lhs) == "number" and getmetatable(rhs) == Rational_mt then
-        lhs = Rational.new(lhs, rhs.fps_numerator, rhs.fps_denominator)
-    elseif type(rhs) == "number" and getmetatable(lhs) == Rational_mt then
-        rhs = Rational.new(rhs, lhs.fps_numerator, lhs.fps_denominator)
-    end
-
     if getmetatable(lhs) ~= Rational_mt or getmetatable(rhs) ~= Rational_mt then
         return false
     end
@@ -275,12 +273,6 @@ end
 
 --- Less than.
 function Rational_mt.__lt(lhs, rhs)
-    if type(lhs) == "number" and getmetatable(rhs) == Rational_mt then
-        lhs = Rational.new(lhs, rhs.fps_numerator, rhs.fps_denominator)
-    elseif type(rhs) == "number" and getmetatable(lhs) == Rational_mt then
-        rhs = Rational.new(rhs, lhs.fps_numerator, lhs.fps_denominator)
-    end
-
     if getmetatable(lhs) ~= Rational_mt or getmetatable(rhs) ~= Rational_mt then
         error("Rational:lt: operands must be Rational or number", 2)
     end

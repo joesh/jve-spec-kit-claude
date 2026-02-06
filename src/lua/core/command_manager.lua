@@ -56,7 +56,8 @@ local root_playhead_rate = nil
 
 
 local function bug_result(message)
-    last_error_message = message or ""
+    assert(message, "command_manager.bug_result: message is required")
+    last_error_message = message
     local result = { success = false, error_message = last_error_message, result_data = "", is_bug = true }
     if asserts_module.enabled() then
         assert(false, last_error_message)
@@ -140,9 +141,10 @@ local function notify_command_event(event)
         return
     end
     for _, listener in ipairs(command_event_listeners) do
+        -- NSF-OK: pcall isolates broadcast listeners; one failing listener must not block others
         local ok, err = pcall(listener, event)
         if not ok then
-            logger.warn("command_manager", string.format("Command listener failed: %s", tostring(err)))
+            logger.error("command_manager", string.format("Command listener failed: %s", tostring(err)))
         end
     end
 end
@@ -571,6 +573,7 @@ function M.init(sequence_id, project_id)
         assert(seq.project_id == project_id,
             "CommandManager.init: provided project_id does not match sequences.project_id (sequence_id="
                 .. tostring(sequence_id) .. ", provided=" .. tostring(project_id) .. ", db=" .. tostring(seq.project_id) .. ")")
+        -- NSF-OK: timeline_state may not have init() in test/headless environments
         local ok_ts, timeline_state = pcall(require, "ui.timeline.timeline_state")
         if ok_ts and timeline_state and type(timeline_state.init) == "function" then
             timeline_state.init(sequence_id, project_id)
@@ -1056,7 +1059,7 @@ function M._execute_body(command_or_name, params)
             -- COMMIT (skip if undo group is active - savepoint will handle commit)
             if not undo_group_active then
                 local db_module = require("core.database")
-                db_module.commit()
+                assert(db_module.commit(), "command_manager: post-command commit failed")
             end
             if perf.enabled then
                 perf.log("db_commit")
@@ -1449,6 +1452,12 @@ local function execute_redo_command(cmd)
         return { success = false, error_message = last_error_message }
     end
 
+    -- Persist updated mutations (e.g., new split clip IDs generated during redo)
+    local saved = cmd:save(db)
+    if not saved then
+        logger.warn("command_manager", string.format("Redo: failed to persist updated command %s", cmd.type))
+    end
+
     history.set_current_sequence_number(cmd.sequence_number)
     history.save_undo_position()
     state_mgr.restore_selection_from_serialized(cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
@@ -1694,10 +1703,8 @@ function M.revert_to_sequence(sequence_number)
     logger.info("command_manager", string.format("Reverting to sequence: %d", sequence_number))
     -- Delegate to Command model (no raw SQL in command_manager)
     local Command = require("command")
-    if not Command.mark_undone_after(sequence_number) then
-        logger.error("command_manager", "Failed to revert commands")
-        return
-    end
+    assert(Command.mark_undone_after(sequence_number),
+        "command_manager.revert_to_sequence: failed to revert commands at sequence " .. tostring(sequence_number))
     history.init(db, active_sequence_id, active_project_id)
 end
 
@@ -1912,10 +1919,8 @@ function M.begin_undo_group(label)
     -- Open savepoint for transaction (nested transactions use savepoints)
     local db_module = require("core.database")
     local savepoint_name = "undo_group_" .. group_id
-    local ok = db_module.savepoint(savepoint_name)
-    if not ok then
-        logger.warn("command_manager", "Failed to create savepoint for undo group: " .. savepoint_name)
-    end
+    assert(db_module.savepoint(savepoint_name),
+        "command_manager.begin_undo_group: failed to create savepoint " .. savepoint_name)
     return group_id
 end
 
@@ -1924,22 +1929,11 @@ function M.end_undo_group()
     if group_id then
         local db_module = require("core.database")
         local savepoint_name = "undo_group_" .. group_id
-        local ok, err = pcall(function()
-            db_module.release_savepoint(savepoint_name)
-        end)
-        if not ok then
-            logger.error("command_manager", string.format("Failed to release savepoint %s: %s", savepoint_name, tostring(err)))
-            return
-        end
+        db_module.release_savepoint(savepoint_name)
 
         -- Only commit once the outermost undo group closes.
         if not history.get_current_undo_group_id() then
-            local commit_ok, commit_err = pcall(function()
-                db_module.commit()
-            end)
-            if not commit_ok then
-                logger.error("command_manager", string.format("Failed to commit undo group transaction: %s", tostring(commit_err)))
-            end
+            db_module.commit()
         end
     end
 end

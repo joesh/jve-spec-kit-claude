@@ -28,9 +28,7 @@ local logger = require("core.logger")
 
 local function lookup_track_sequence(track_id)
     if not track_id or track_id == "" then return nil end
-    local ok, result = pcall(Track.get_sequence_id, track_id)
-    if not ok then return nil end
-    return result
+    return Track.get_sequence_id(track_id)
 end
 
 function M.resolve_active_sequence_id(sequence_id_param, timeline_state)
@@ -113,13 +111,10 @@ function M.ensure_timeline_mutation_bucket(command, sequence_id)
 end
 
 function M.clip_update_payload(source, fallback_sequence_id)
-    if not source or not source.id then
-        return nil
-    end
+    assert(source, "clip_update_payload: source is required")
+    assert(source.id, "clip_update_payload: source.id is required")
     local track_sequence_id = source.owner_sequence_id or source.track_sequence_id or fallback_sequence_id
-    if not track_sequence_id then
-        return nil
-    end
+    assert(track_sequence_id, string.format("clip_update_payload: no sequence_id for clip %s", tostring(source.id)))
     local rate = source.rate
     if not rate and source.fps_numerator and source.fps_denominator then
         rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
@@ -198,9 +193,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
 end
 
 function M.add_update_mutation(command, sequence_id, update)
-    if not update then
-        return
-    end
+    assert(update, "add_update_mutation: update payload is required")
     local bucket = M.ensure_timeline_mutation_bucket(command, sequence_id)
     if not bucket then
         return
@@ -233,9 +226,7 @@ function M.add_update_mutation(command, sequence_id, update)
 end
 
 function M.add_insert_mutation(command, sequence_id, clip)
-    if not clip then
-        return
-    end
+    assert(clip, "add_insert_mutation: clip payload is required")
     local bucket = M.ensure_timeline_mutation_bucket(command, sequence_id)
     if not bucket then
         return
@@ -268,9 +259,7 @@ function M.add_insert_mutation(command, sequence_id, clip)
 end
 
 function M.add_delete_mutation(command, sequence_id, clip_ids)
-    if not clip_ids then
-        return
-    end
+    assert(clip_ids, "add_delete_mutation: clip_ids is required")
     local bucket = M.ensure_timeline_mutation_bucket(command, sequence_id)
     if not bucket then
         return
@@ -293,9 +282,13 @@ function M.resolve_sequence_id_for_edges(command, primary_edge, edge_list)
             return nil
         end
 
-        local ok, result = pcall(Clip.get_sequence_id, edge.clip_id)
-        if not ok then return nil end
-        return result
+        -- Resolution lookup: clip may not exist yet (e.g. during validation).
+        -- Clip.get_sequence_id errors on missing clip, so guard with load_optional.
+        local clip = Clip.load_optional(edge.clip_id)
+        if not clip or not clip.track_id then
+            return nil
+        end
+        return Clip.get_sequence_id(edge.clip_id)
     end
 
     local resolved = lookup_sequence_id(primary_edge)
@@ -325,8 +318,8 @@ function M.resolve_sequence_for_track(sequence_id_param, track_id)
         return provided
     end
 
-    local ok, track_sequence_id = pcall(Track.get_sequence_id, track_id)
-    if not ok or not track_sequence_id or track_sequence_id == "" then
+    local track_sequence_id = Track.get_sequence_id(track_id)
+    if not track_sequence_id or track_sequence_id == "" then
         return provided
     end
 
@@ -355,8 +348,8 @@ function M.restore_clip_state(state)
         local resolved_project_id = nil
 
         if seq_id and seq_id ~= "" then
-            local ok, sequence = pcall(Sequence.load, seq_id)
-            if ok and sequence and sequence.project_id then
+            local sequence = Sequence.load(seq_id)
+            if sequence and sequence.project_id then
                 resolved_project_id = sequence.project_id
             end
         end
@@ -450,27 +443,13 @@ function M.capture_clip_state(clip)
 end
 
 function M.snapshot_properties_for_clip(clip_id)
-    if not clip_id or clip_id == "" then
-        return {}
-    end
-
-    local ok, props = pcall(Property.load_for_clip, clip_id)
-    if not ok then
-        return {}
-    end
-    return props
+    assert(clip_id and clip_id ~= "", "snapshot_properties_for_clip: clip_id is required")
+    return Property.load_for_clip(clip_id)
 end
 
 function M.fetch_clip_properties_for_copy(clip_id)
-    if not clip_id or clip_id == "" then
-        return {}
-    end
-
-    local ok, props = pcall(Property.copy_for_clip, clip_id)
-    if not ok then
-        return {}
-    end
-    return props
+    assert(clip_id and clip_id ~= "", "fetch_clip_properties_for_copy: clip_id is required")
+    return Property.copy_for_clip(clip_id)
 end
 
 function M.ensure_copied_properties(command, source_clip_id)
@@ -498,17 +477,14 @@ function M.insert_properties_for_clip(clip_id, properties)
         })
     end
 
-    local ok, result = pcall(Property.save_for_clip, clip_id, properties_with_new_ids)
-    return ok
+    Property.save_for_clip(clip_id, properties_with_new_ids)
+    return true
 end
 
 function M.delete_properties_for_clip(clip_id)
-    if not clip_id or clip_id == "" then
-        return true
-    end
-
-    local ok, result = pcall(Property.delete_for_clip, clip_id)
-    return ok
+    assert(clip_id and clip_id ~= "", "delete_properties_for_clip: clip_id is required")
+    Property.delete_for_clip(clip_id)
+    return true
 end
 
 function M.delete_properties_by_list(properties)
@@ -523,8 +499,8 @@ function M.delete_properties_by_list(properties)
         end
     end
 
-    local ok, result = pcall(Property.delete_by_ids, prop_ids)
-    return ok
+    Property.delete_by_ids(prop_ids)
+    return true
 end
 
 function M.delete_clips_by_id(command, sequence_id, clip_ids)
@@ -1085,6 +1061,9 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     for i = #mutations, 1, -1 do
         local mut = mutations[i]
         if mut.type == "insert" then
+            -- Delete properties first (properties table has no ON DELETE CASCADE)
+            M.delete_properties_for_clip(mut.clip_id)
+
             local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
             if not stmt then return false, "Failed to prepare undo insert: " .. tostring(db:last_error()) end
             stmt:bind_value(1, mut.clip_id)
@@ -1252,7 +1231,21 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     end
 
     if #updates > 0 then
-        if command and command.type == "Nudge" then
+        -- For AddClipsToSequence undo, updates are un-ripples (shift left)
+        -- Must process in ascending order (leftmost clips first) to avoid overlaps
+        if command and command.type == "AddClipsToSequence" then
+            local function start_frames(mut)
+                local prev = mut.previous
+                if not prev then return 0 end
+                local ts = prev.timeline_start or prev.start_value
+                if type(ts) == "table" and ts.frames then return ts.frames end
+                if type(ts) == "number" then return ts end
+                return 0
+            end
+            table.sort(updates, function(a, b)
+                return start_frames(a) < start_frames(b)  -- ascending order
+            end)
+        elseif command and command.type == "Nudge" then
             local nudge = command.get_parameter and (command:get_parameter("nudge_amount_rat") or command:get_parameter("nudge_amount"))
             local sign = 0
             if type(nudge) == "table" and nudge.frames then

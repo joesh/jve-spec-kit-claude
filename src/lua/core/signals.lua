@@ -42,6 +42,7 @@ function Signals.connect(signal_name, handler, priority)
         return error_system.create_error({
             code = "INVALID_SIGNAL_NAME",
             category = "signals",
+            component = "signals",
             message = "Signal name must be a string",
             operation = "connect",
             user_message = "Cannot connect signal: invalid signal name",
@@ -56,6 +57,7 @@ function Signals.connect(signal_name, handler, priority)
         return error_system.create_error({
             code = "EMPTY_SIGNAL_NAME",
             category = "signals",
+            component = "signals",
             message = "Signal name cannot be empty",
             operation = "connect",
             user_message = "Cannot connect signal: signal name is empty"
@@ -65,7 +67,8 @@ function Signals.connect(signal_name, handler, priority)
     if type(handler) ~= "function" then
         return error_system.create_error({
             code = "INVALID_HANDLER",
-            category = "signals", 
+            category = "signals",
+            component = "signals", 
             message = "Handler must be a function",
             operation = "connect",
             user_message = "Cannot connect signal: invalid handler",
@@ -81,6 +84,7 @@ function Signals.connect(signal_name, handler, priority)
         return error_system.create_error({
             code = "INVALID_PRIORITY",
             category = "signals",
+            component = "signals",
             message = "Priority must be a number",
             operation = "connect", 
             user_message = "Cannot connect signal: invalid priority",
@@ -142,6 +146,7 @@ function Signals.disconnect(connection_id)
         return error_system.create_error({
             code = "INVALID_CONNECTION_ID",
             category = "signals",
+            component = "signals",
             message = "Connection ID must be a number",
             operation = "disconnect",
             user_message = "Cannot disconnect: invalid connection ID"
@@ -153,6 +158,7 @@ function Signals.disconnect(connection_id)
         return error_system.create_error({
             code = "CONNECTION_NOT_FOUND", 
             category = "signals",
+            component = "signals",
             message = "Connection ID not found",
             operation = "disconnect",
             user_message = "Cannot disconnect: connection not found",
@@ -195,6 +201,7 @@ function Signals.emit(signal_name, ...)
         return error_system.create_error({
             code = "INVALID_SIGNAL_NAME",
             category = "signals",
+            component = "signals",
             message = "Signal name must be a string",
             operation = "emit",
             user_message = "Cannot emit signal: invalid signal name"
@@ -224,7 +231,7 @@ function Signals.emit(signal_name, ...)
         end
 
         local success, result = pcall(handler_record.handler, unpack(args))
-        
+
         local handler_result = {
             connection_id = handler_record.id,
             success = success,
@@ -232,20 +239,18 @@ function Signals.emit(signal_name, ...)
             creation_trace = handler_record.creation_trace,
             handler_type = type(handler_record.handler)
         }
-        
+
         if not success then
-            print(string.format(
-                "[signals] Handler failure: signal=%s connection=%s handler=%s (%s) error=%s",
+            local logger = require("core.logger")
+            logger.error("signals", string.format(
+                "Handler failure: signal=%s connection=%s error=%s",
                 signal_name,
                 tostring(handler_record.id),
-                tostring(handler_record.handler),
-                type(handler_record.handler),
                 tostring(result)
             ))
-            -- Handler failed - include error information but continue with other handlers
             handler_result.error = result
         end
-        
+
         table.insert(results, handler_result)
     end
     

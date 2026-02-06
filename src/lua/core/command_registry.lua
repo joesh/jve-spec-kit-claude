@@ -17,6 +17,7 @@
 -- CommandRegistry: Manages command executors and auto-loading
 -- Extracted from command_manager.lua
 local M = {}
+local logger = require("core.logger")
 
 local command_executors = {}
 local command_specs     = {}
@@ -193,7 +194,7 @@ function M.load_command_module(command_type)
     local register_type = is_undo_type and base_type or command_type
     local loaded, err = try_load(primary_path, register_type)
     if not loaded then
-        print(string.format("ERROR: %s", err or ("Unable to load " .. primary_path)))
+        logger.error("command_registry", err or ("Unable to load " .. primary_path))
         return false
     end
 

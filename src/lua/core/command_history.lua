@@ -70,12 +70,13 @@ function M.init(database, sequence_id, project_id)
 
     -- Query last sequence number from database
     local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
-    if query then
-        if query:exec() and query:next() then
-            last_sequence_number = query:value(0) or 0
-        end
-        query:finalize()
+    assert(query, "CommandHistory.init: failed to prepare sequence_number query")
+    local ok = query:exec()
+    assert(ok, "CommandHistory.init: failed to execute sequence_number query")
+    if query:next() then
+        last_sequence_number = query:value(0) or 0
     end
+    query:finalize()
 
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
     global_state.sequence_id = active_sequence_id
@@ -272,25 +273,18 @@ end
 
 -- Save current undo position to database (persists across sessions)
 function M.save_undo_position()
-    if not db then
-        return false
-    end
+    assert(db, "CommandHistory.save_undo_position: no database connection")
 
     local sequence_id = M.get_current_stack_sequence_id(true)
-    if not sequence_id or sequence_id == "" then
-        return false
-    end
+    assert(sequence_id and sequence_id ~= "",
+        "CommandHistory.save_undo_position: no active sequence_id")
 
-    local update = db:prepare([[ 
+    local update = db:prepare([[
         UPDATE sequences
         SET current_sequence_number = ?
         WHERE id = ?
     ]])
-
-    if not update then
-        logger.warn("command_history", "Failed to prepare undo position update")
-        return false
-    end
+    assert(update, "CommandHistory.save_undo_position: failed to prepare update")
 
     local stored_position = current_sequence_number
     if stored_position == nil then
@@ -301,10 +295,8 @@ function M.save_undo_position()
     local success = update:exec()
     update:finalize()
 
-    if not success then
-        logger.warn("command_history", "Failed to save undo position to database")
-        return false
-    end
+    assert(success, string.format(
+        "CommandHistory.save_undo_position: UPDATE failed for sequence %s", tostring(sequence_id)))
 
     return true
 end
@@ -377,6 +369,7 @@ end
 
 function M.end_undo_group()
     if #undo_group_stack == 0 then
+        -- NSF-OK: mismatch can happen if error unwinds during group; callers handle nil return
         logger.warn("command_history", "end_undo_group called with no active group")
         return nil
     end

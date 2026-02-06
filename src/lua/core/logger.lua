@@ -119,7 +119,7 @@ function logger.init(user_config)
     if config.output_destinations.file and config.log_file_path then
         log_file_handle = io.open(config.log_file_path, "a")
         if not log_file_handle then
-            -- Fallback to console only
+            -- NSF-OK: console fallback when file open fails; logging must not crash the app
             config.output_destinations.file = false
             -- Store warning to log after initialization completes
             _init_warning = "Failed to open log file: " .. config.log_file_path

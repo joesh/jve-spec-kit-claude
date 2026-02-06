@@ -184,14 +184,14 @@ function error_system.create_error(params)
     
     return {
         -- Core error information
-        code = params.code or "UNKNOWN_ERROR",
-        category = params.category or ERROR_CATEGORIES.SYSTEM,
-        severity = params.severity or ERROR_SEVERITY.ERROR,
-        message = params.message or "An unknown error occurred",
-        
+        code = assert(params.code, "error_system.create_error: params.code is required"),
+        category = params.category or ERROR_CATEGORIES.SYSTEM, -- NSF-OK: SYSTEM is safe default category
+        severity = params.severity or ERROR_SEVERITY.ERROR, -- NSF-OK: ERROR is safe default severity
+        message = params.message,
+
         -- Context information (builds up through call stack)
-        operation = params.operation or "unknown_operation",
-        component = params.component or "unknown_component",
+        operation = assert(params.operation, "error_system.create_error: params.operation is required"),
+        component = assert(params.component, "error_system.create_error: params.component is required"),
         context_stack = params.context_stack or {},
         
         -- Technical details
@@ -281,14 +281,13 @@ function error_system.format_user_error(error_obj)
     if not error_obj then
         error("error_system.format_user_error: error_obj cannot be nil")
     end
-    
-    if error_obj.success then
-        return "No error to format"
-    end
-    
-    -- Validate error object structure
+
     if type(error_obj) ~= "table" then
         error("error_system.format_user_error: error_obj must be a table, got " .. type(error_obj))
+    end
+
+    if error_obj.success then
+        return "No error to format"
     end
     
     if not error_obj.message and not error_obj.user_message then

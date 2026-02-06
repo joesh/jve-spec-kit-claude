@@ -20,6 +20,7 @@
 local uuid = require("uuid")
 local Rational = require("core.rational")
 local asserts = require("core.asserts")
+local logger = require("core.logger")
 
 local M = {}
 
@@ -41,9 +42,7 @@ local function ensure_snapshots_table(db)
         )
     ]])
 
-    if not ok then
-        print("WARNING: snapshot_manager: Failed to ensure snapshots table")
-    end
+    assert(ok, "snapshot_manager: Failed to ensure snapshots table")
 
     return ok
 end
@@ -170,8 +169,8 @@ local function build_snapshot_payload(db, sequence_id, clips)
         local src_in_frame = clip.source_in and clip.source_in.frames
         local src_out_frame = clip.source_out and clip.source_out.frames
         
-        -- Fallback for missing Rational objects (should be caught by require_field ideally)
-        if not start_frame then start_frame = 0 end -- Error?
+        assert(start_frame ~= nil, string.format(
+            "snapshot_manager.build_snapshot_payload: clip %s missing timeline_start.frames", tostring(clip.id)))
         
         table.insert(clip_data, {
             id = clip.id,
@@ -381,7 +380,7 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
 
     ensure_snapshots_table(db)
 
-    print(string.format("Creating snapshot at sequence %d with %d clips",
+    logger.info("snapshot_manager", string.format("Creating snapshot at sequence %d with %d clips",
         sequence_number, #clips))
 
     -- Build snapshot payload (sequence + tracks + clips + media)
@@ -402,10 +401,7 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
         VALUES (?, ?, ?, ?, ?)
     ]])
 
-    if not query then
-        print("WARNING: create_snapshot: Failed to prepare insert query")
-        return false
-    end
+    assert(query, "snapshot_manager.create_snapshot: Failed to prepare insert query")
 
     query:bind_value(1, uuid.generate())
     query:bind_value(2, sequence_id)
@@ -413,12 +409,9 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
     query:bind_value(4, snapshot_json)
     query:bind_value(5, os.time())
 
-    if not query:exec() then
-        print("WARNING: create_snapshot: Failed to insert snapshot")
-        return false
-    end
+    assert(query:exec(), "snapshot_manager.create_snapshot: Failed to insert snapshot")
 
-    print(string.format("✅ Snapshot created at sequence %d", sequence_number))
+    logger.info("snapshot_manager", string.format("Snapshot created at sequence %d", sequence_number))
     return true
 end
 
@@ -440,26 +433,23 @@ function M.load_snapshot(db, sequence_id)
         LIMIT 1
     ]])
 
-    if not query then
-        print("WARNING: load_snapshot: Failed to prepare query")
-        return nil
-    end
+    assert(query, "snapshot_manager.load_snapshot: Failed to prepare query")
 
     query:bind_value(1, sequence_id)
 
     if not query:exec() or not query:next() then
-        print("No snapshot found for sequence: " .. sequence_id)
+        logger.debug("snapshot_manager", "No snapshot found for sequence: " .. sequence_id)
         return nil
     end
 
     local sequence_number = query:value(0)
     local clips_json = query:value(1)
 
-    print(string.format("Loading snapshot from sequence %d", sequence_number))
+    logger.info("snapshot_manager", string.format("Loading snapshot from sequence %d", sequence_number))
 
     local snapshot_state = deserialize_snapshot_payload(clips_json)
     local clips = snapshot_state.clips or {}
-    print(string.format("✅ Loaded snapshot with %d clips", #clips))
+    logger.info("snapshot_manager", string.format("Loaded snapshot with %d clips", #clips))
 
     return {
         sequence_number = sequence_number,
@@ -484,10 +474,7 @@ function M.load_project_snapshots(db, project_id, target_sequence_number, exclud
         WHERE seq.project_id = ? AND s.sequence_number <= ?
     ]])
 
-    if not query then
-        print("WARNING: load_project_snapshots: Failed to prepare query")
-        return {}
-    end
+    assert(query, "snapshot_manager.load_project_snapshots: Failed to prepare query")
 
     query:bind_value(1, project_id)
     query:bind_value(2, target_sequence_number or 0)

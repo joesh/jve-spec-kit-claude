@@ -196,32 +196,26 @@ function M.capture_selection_snapshot()
         end
     end
 
-    local success_clips, clips_json = pcall(qt_json_encode, clip_ids)
-    if not success_clips then
-        clips_json = "[]"
-    end
+    local clips_json = json.encode(clip_ids)
 
-    local success_edges, edges_json = pcall(qt_json_encode, edge_descriptors)
-    if not success_edges then
-        edges_json = "[]"
-    end
+    local edges_json = json.encode(edge_descriptors)
 
-    local selected_gaps = timeline_state.get_selected_gaps and timeline_state.get_selected_gaps() or {}
     local gap_descriptors = {}
-    for _, gap in ipairs(selected_gaps) do
-        if gap and gap.track_id and gap.start_value and gap.duration then
-            table.insert(gap_descriptors, {
-                track_id = gap.track_id,
-                start_value = gap.start_value,
-                duration = gap.duration
-            })
+    if type(timeline_state.get_selected_gaps) == "function" then
+        local selected_gaps = timeline_state.get_selected_gaps()
+        assert(selected_gaps ~= nil, "command_state.capture_selection_snapshot: timeline_state.get_selected_gaps() returned nil")
+        for _, gap in ipairs(selected_gaps) do
+            if gap and gap.track_id and gap.start_value and gap.duration then
+                table.insert(gap_descriptors, {
+                    track_id = gap.track_id,
+                    start_value = gap.start_value,
+                    duration = gap.duration
+                })
+            end
         end
     end
 
-    local success_gaps, gaps_json = pcall(qt_json_encode, gap_descriptors)
-    if not success_gaps then
-        gaps_json = "[]"
-    end
+    local gaps_json = json.encode(gap_descriptors)
 
     return clips_json, edges_json, gaps_json
 end
@@ -253,11 +247,10 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
         if not json_text or json_text == "" then
             return {}
         end
-        local ok, value = pcall(qt_json_decode, json_text)
-        if ok and type(value) == "table" then
-            return value
-        end
-        return {}
+        local value, pos, err = json.decode(json_text)
+        assert(value ~= nil, "command_state.decode: corrupt JSON in undo record: " .. tostring(err))
+        assert(type(value) == "table", "command_state.decode: expected table from JSON, got " .. type(value))
+        return value
     end
 
     local edge_infos = decode(edges_json)

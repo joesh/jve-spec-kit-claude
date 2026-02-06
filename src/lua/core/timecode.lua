@@ -92,7 +92,7 @@ function M.format_ruler_label(time_obj, frame_rate)
     elseif type(time_obj) == "number" then
         tc_obj = Rational.new(time_obj, rate.fps_numerator, rate.fps_denominator)
     else
-        tc_obj = Rational.new(0, rate.fps_numerator, rate.fps_denominator)
+        error("timecode.format_ruler_label: unsupported time_obj type: " .. type(time_obj))
     end
 
     -- Always emit full timecode (HH:MM:SS:FF) for ruler labels to avoid ambiguous MM:SS displays.
