@@ -61,11 +61,7 @@ function M.resolve_at_time(playhead_rat, sequence_id)
         local clip = Clip.find_at_time(track.id, playhead_rat)
         if clip then
             local media = Media.load(clip.media_id)
-            if not media then
-                logger.warn("timeline_resolver",
-                    string.format("Clip %s references missing media %s", clip.id, tostring(clip.media_id)))
-                goto continue_track
-            end
+            assert(media, string.format("timeline_resolver.resolve_at_time: clip %s references missing media %s", clip.id, tostring(clip.media_id)))
 
             local source_time_us = calc_source_time_us(clip, playhead_rat)
 
@@ -75,7 +71,6 @@ function M.resolve_at_time(playhead_rat, sequence_id)
                 clip = clip,
             }
         end
-        ::continue_track::
     end
 
     -- No clip found at playhead = gap
@@ -101,12 +96,7 @@ function M.resolve_all_audio_at_time(playhead_rat, sequence_id)
         local clip = Clip.find_at_time(track.id, playhead_rat)
         if clip then
             local media = Media.load(clip.media_id)
-            if not media then
-                logger.warn("timeline_resolver",
-                    string.format("Audio clip %s references missing media %s",
-                        clip.id, tostring(clip.media_id)))
-                goto continue_audio_track
-            end
+            assert(media, string.format("timeline_resolver.resolve_all_audio_at_time: audio clip %s references missing media %s", clip.id, tostring(clip.media_id)))
 
             local source_time_us = calc_source_time_us(clip, playhead_rat)
 
@@ -117,7 +107,6 @@ function M.resolve_all_audio_at_time(playhead_rat, sequence_id)
                 track = track,
             }
         end
-        ::continue_audio_track::
     end
 
     return results

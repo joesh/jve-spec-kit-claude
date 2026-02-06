@@ -115,9 +115,7 @@ function M.create(widget)
         timeline.update(bar.widget)
     end
 
-    -- Seek video to a source frame.
-    -- Calls viewer_panel.show_frame directly — bypasses playback_controller
-    -- so timeline_mode doesn't block source viewer scrubbing.
+    -- Seek video to a source frame and sync playback_controller position.
     local function seek_to_frame(frame)
         local playback_controller = require("core.playback.playback_controller")
         if playback_controller.is_playing() then
@@ -127,6 +125,7 @@ function M.create(widget)
         assert(viewer_panel.has_media(),
             "source_mark_bar.seek_to_frame: no media loaded in viewer_panel")
         viewer_panel.show_frame(frame)
+        playback_controller.set_position(frame)
     end
 
     -- Mouse interaction

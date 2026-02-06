@@ -109,6 +109,7 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
         -- (direction != 0); parked seeks don't need prefetch.
         if direction and direction ~= 0 then
             local asset_info = media_cache.get_asset_info()
+            assert(asset_info, "timeline_playback.resolve_and_display: media_cache.get_asset_info() returned nil during active playback")
             local source_frame = math.floor(
                 resolved.source_time_us * asset_info.fps_num
                 / (asset_info.fps_den * 1000000))

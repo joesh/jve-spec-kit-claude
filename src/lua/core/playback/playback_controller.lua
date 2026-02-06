@@ -32,6 +32,8 @@ local timeline_playback = require("core.playback.timeline_playback")
 local timeline_resolver = require("core.playback.timeline_resolver")
 local helpers = require("core.playback.playback_helpers")
 
+local SECONDS_PER_DAY = 86400
+
 local M = {
     state = "stopped",  -- "stopped" | "playing"
     direction = 0,      -- -1=reverse, 0=stopped, 1=forward
@@ -153,7 +155,10 @@ function M.init_audio_for_active_media()
     local info = media_cache.get_asset_info()
     assert(info, "playback_controller.init_audio_for_active_media: no active media")
 
-    if not (qt_constants.SSE and qt_constants.AOP) then return end
+    if not (qt_constants.SSE and qt_constants.AOP) then
+        logger.warn("playback_controller", "init_audio_for_active_media: qt_constants.SSE and/or qt_constants.AOP bindings missing")
+        return
+    end
 
     -- Lazy session init on first audio source
     if not audio_pb.session_initialized then
@@ -568,24 +573,35 @@ function M.set_timeline_mode(enabled, sequence_id, sequence_info)
             if rate and rate.fps_numerator and rate.fps_denominator then
                 fps_num = rate.fps_numerator
                 fps_den = rate.fps_denominator
-                total_frames = 86400 * fps_num / fps_den  -- 1 hour worth
             end
         end
 
-        if fps_num and fps_den and fps_num > 0 and fps_den > 0 then
-            M.set_source(total_frames or 86400, fps_num, fps_den)
-
-            -- Set audio max time for timeline mode
-            if audio_playback and audio_playback.session_initialized then
-                audio_playback.set_max_time(M.max_media_time_us)
+        assert(fps_num and fps_num > 0,
+            string.format("playback_controller.set_timeline_mode: fps_num must be > 0 for sequence %s, got %s", sequence_id, tostring(fps_num)))
+        assert(fps_den and fps_den > 0,
+            string.format("playback_controller.set_timeline_mode: fps_den must be > 0 for sequence %s, got %s", sequence_id, tostring(fps_den)))
+        -- Query actual content end from clip_state; fall back to scrub limit for empty timelines
+        if not total_frames then
+            local ok, clip_state = pcall(require, "ui.timeline.state.clip_state")
+            if ok and clip_state and clip_state.get_content_end_frame then
+                local content_end = clip_state.get_content_end_frame()
+                if content_end and content_end > 0 then
+                    total_frames = content_end
+                end
             end
-
-            logger.debug("playback_controller",
-                string.format("Timeline mode enabled for sequence %s (fps=%d/%d)", sequence_id, fps_num, fps_den))
-        else
-            logger.warn("playback_controller",
-                string.format("Timeline mode enabled but no fps available for sequence %s", sequence_id))
         end
+        if not total_frames then
+            total_frames = math.floor(SECONDS_PER_DAY * fps_num / fps_den)
+        end
+        M.set_source(total_frames, fps_num, fps_den)
+
+        -- Set audio max time for timeline mode
+        if audio_playback and audio_playback.session_initialized then
+            audio_playback.set_max_time(M.max_media_time_us)
+        end
+
+        logger.debug("playback_controller",
+            string.format("Timeline mode enabled for sequence %s (fps=%d/%d)", sequence_id, fps_num, fps_den))
     else
         M.sequence_id = nil
         M.current_clip_id = nil
