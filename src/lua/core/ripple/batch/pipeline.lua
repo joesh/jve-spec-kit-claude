@@ -36,9 +36,9 @@ function M.run(ctx, db, ops)
     ops.analyze_selection(ctx)
     ops.compute_constraints(ctx, db)
 
-    local ok_edges = ops.process_edge_trims(ctx, db)
+    local ok_edges, edge_err = ops.process_edge_trims(ctx, db)
     if not ok_edges then
-        return false, "Failed to process edge trims"
+        return false, "Failed to process edge trims: " .. tostring(edge_err)
     end
 
     local ok_shift, adjusted_frames = ops.compute_downstream_shifts(ctx, db)

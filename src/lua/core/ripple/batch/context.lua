@@ -78,11 +78,16 @@ function M.create(command)
     }
 
     if ctx.edge_infos_raw then
+        local logger = require("core.logger")
         for _, edge in ipairs(ctx.edge_infos_raw) do
             local source_original_id = edge.original_clip_id or edge.clip_id
             local cleaned_id = edge.clip_id
             if type(cleaned_id) == "string" and cleaned_id:find("^temp_gap_") then
                 cleaned_id = cleaned_id:gsub("^temp_gap_", "")
+            end
+            if not cleaned_id then
+                logger.warn("batch_context", "skipping edge_info with nil clip_id")
+                goto continue_edge
             end
             ctx.edge_infos[#ctx.edge_infos + 1] = {
                 clip_id = cleaned_id,
@@ -92,10 +97,12 @@ function M.create(command)
                 trim_type = edge.trim_type,
                 type = edge.type,
             }
+            ::continue_edge::
         end
     end
 
-    ctx.primary_edge = ctx.provided_lead_edge or (ctx.edge_infos and ctx.edge_infos[1] or nil)
+    ctx.primary_edge = ctx.provided_lead_edge or (ctx.edge_infos and ctx.edge_infos[1])
+    assert(ctx.primary_edge, "BatchRippleEdit: no primary_edge (no lead_edge provided and edge_infos is empty)")
     ctx.sequence_id = command_helper.resolve_sequence_id_for_edges(command, ctx.primary_edge, ctx.edge_infos)
     ctx.project_id = command.project_id or command:get_parameter("project_id")
     assert(ctx.project_id and ctx.project_id ~= "", "BatchRippleEdit: missing project_id")

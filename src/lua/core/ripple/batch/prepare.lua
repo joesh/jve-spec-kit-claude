@@ -51,7 +51,9 @@ function M.resolve_delta(ctx)
         if getmetatable(delta_ms) == Rational.metatable then
             delta_rat = delta_ms:rescale(seq_fps_num, seq_fps_den)
         elseif type(delta_ms) == "table" and delta_ms.frames then
-            delta_rat = Rational.new(delta_ms.frames, delta_ms.fps_numerator or seq_fps_num, delta_ms.fps_denominator or seq_fps_den)
+            assert(delta_ms.fps_numerator and delta_ms.fps_denominator,
+                "BatchRippleEdit: delta_ms Rational-like table missing fps_numerator/fps_denominator")
+            delta_rat = Rational.new(delta_ms.frames, delta_ms.fps_numerator, delta_ms.fps_denominator)
         else
             error("BatchRippleEdit: delta_ms must be Rational-like")
         end
@@ -63,7 +65,8 @@ end
 
 function M.snapshot_edge_infos(ctx)
     local stored_edge_infos = {}
-    for _, edge in ipairs(ctx.edge_infos or {}) do
+    assert(type(ctx.edge_infos) == "table", "BatchRippleEdit.snapshot_edge_infos: ctx.edge_infos must be a table")
+    for _, edge in ipairs(ctx.edge_infos) do
         stored_edge_infos[#stored_edge_infos + 1] = {
             clip_id = edge.original_clip_id or edge.clip_id,
             original_clip_id = edge.original_clip_id,

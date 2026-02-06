@@ -19,11 +19,10 @@ function M.build_track_clip_map(all_clips)
     assert(all_clips, "build_track_clip_map: all_clips is nil")
     local map = {}
     for _, clip in ipairs(all_clips) do
+        assert(clip.track_id, "build_track_clip_map: clip missing track_id (id=" .. tostring(clip.id) .. ")")
         local track_id = clip.track_id
-        if track_id then
-            map[track_id] = map[track_id] or {}
-            table.insert(map[track_id], clip)
-        end
+        map[track_id] = map[track_id] or {}
+        table.insert(map[track_id], clip)
     end
     for _, list in pairs(map) do
         table.sort(list, function(a, b)
