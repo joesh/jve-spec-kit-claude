@@ -149,7 +149,7 @@ local function plan_insert(row)
         type = "insert",
         clip_id = row.id,
         project_id = row.project_id,
-        clip_kind = row.clip_kind or "timeline",
+        clip_kind = assert(row.clip_kind, "clip_mutator.plan_insert: missing clip_kind for clip " .. tostring(row.id)),
         name = row.name or "",
         track_id = row.track_id,
         media_id = row.media_id,
@@ -297,16 +297,12 @@ local function iter_overlaps(clip_list, start_value, end_time)
 end
 
 function ClipMutator.resolve_occlusions(db, params)
-    if not params then
-        return true
-    end
-
+    if not params then return true end
     local track_id = params.track_id
-    local start_value = params.timeline_start or params.start_value -- Accept both
-    local duration = params.duration
-	    if not track_id or start_value == nil or duration == nil then
-	        return true
-	    end
+    if not track_id then return true end
+    local start_value = params.timeline_start or params.start_value
+    assert(start_value ~= nil, "clip_mutator.resolve_occlusions: timeline_start/start_value is required")
+    local duration = assert(params.duration, "clip_mutator.resolve_occlusions: duration is required")
 
 	    start_value = ensure_rational(start_value, params, "start_value")
 	    duration = ensure_rational(duration, params, "duration")
@@ -456,7 +452,11 @@ function ClipMutator.resolve_occlusions(db, params)
     end
 
     for clip_id, pending_state in pairs(pending_lookup) do
-        pending_state._seen = true
+        if not pending_state._seen and not pending_state._virtual then
+            logger.warn("clip_mutator", string.format(
+                "resolve_occlusions: pending clip %s was not found on track %s",
+                tostring(clip_id), tostring(track_id)))
+        end
     end
 
     local krono_end = krono_enabled and krono.now and krono.now() or nil
@@ -479,10 +479,9 @@ function ClipMutator.resolve_ripple(db, params)
     local track_id = params.track_id
     local insert_time = params.insert_time or params.timeline_start
     local shift_amount = params.shift_amount or params.duration
-    
-    if not track_id or not insert_time or not shift_amount then
-        return true -- Nothing to do
-    end
+    if not track_id then return true end
+    if not insert_time then return true end
+    assert(shift_amount, "clip_mutator.resolve_ripple: shift_amount/duration is required")
 
     insert_time = ensure_rational(insert_time, params, "insert_time")
     shift_amount = ensure_rational(shift_amount, params, "shift_amount")

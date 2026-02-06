@@ -319,12 +319,12 @@ function M.deserialize(json_string)
     if not json_string or json_string == "" then
         return nil, "JSON string is empty"
     end
-    local success, data = pcall(json.decode, json_string)
-    if not success then
-        return nil, "Failed to decode JSON: " .. tostring(data)
+    local data, decode_err = json.decode(json_string)
+    if not data then
+        return nil, "Failed to decode JSON: " .. tostring(decode_err)
     end
 
-    if not data or type(data) ~= "table" then
+    if type(data) ~= "table" then
         return nil, "Decoded JSON is not a table"
     end
 
@@ -513,7 +513,10 @@ function M:save(db)
     if type(self.playhead_rate) == "number" then
         playhead_rate_val = self.playhead_rate
     elseif type(self.playhead_rate) == "table" and self.playhead_rate.fps_numerator then
-        playhead_rate_val = self.playhead_rate.fps_numerator / (self.playhead_rate.fps_denominator or 1)
+        if not self.playhead_rate.fps_denominator or self.playhead_rate.fps_denominator == 0 then
+            error("Command.save: playhead_rate missing fps_denominator", 2)
+        end
+        playhead_rate_val = self.playhead_rate.fps_numerator / self.playhead_rate.fps_denominator
     end
 
     local db_playhead_value = nil
@@ -523,9 +526,12 @@ function M:save(db)
         db_playhead_value = self.playhead_value.frames
     end
 
-    if db_playhead_value == nil or playhead_rate_val <= 0 then
-        error("FATAL: Command.save requires playhead_value and valid playhead_rate")
-    end
+    assert(db_playhead_value ~= nil, string.format(
+        "FATAL: Command.save: missing playhead_value (command_type=%s, playhead_value=%s)",
+        tostring(self.type), tostring(self.playhead_value)))
+    assert(playhead_rate_val > 0, string.format(
+        "FATAL: Command.save: invalid playhead_rate (command_type=%s, playhead_rate=%s)",
+        tostring(self.type), tostring(playhead_rate_val)))
 
     -- Post-execution playhead (optional - only captured for commands that advance playhead)
     local db_playhead_value_post = nil

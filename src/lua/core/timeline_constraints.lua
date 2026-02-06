@@ -36,7 +36,9 @@ end
 
 local function clip_source_in(clip)
     if not clip then return nil end
-    return to_ms(clip.source_in) or tonumber(clip.source_in_value) or 0
+    local val = to_ms(clip.source_in) or tonumber(clip.source_in_value)
+    assert(val, "timeline_constraints.clip_source_in: clip missing source_in (id=" .. tostring(clip.id) .. ")")
+    return val
 end
 
 local function clip_source_out(clip)
@@ -50,7 +52,9 @@ end
 
 local function clip_start(clip)
     if not clip then return nil end
-    return to_ms(clip.timeline_start) or to_ms(clip.start_value) or 0
+    local val = to_ms(clip.timeline_start) or to_ms(clip.start_value)
+    assert(val, "timeline_constraints.clip_start: clip missing timeline_start/start_value (id=" .. tostring(clip.id) .. ")")
+    return val
 end
 
 -- Calculate the valid range for moving a clip
@@ -171,36 +175,23 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
         else  -- edge_type == "out"
             -- Can't drag right beyond source media end
             local media_record = nil
-            local db_connection = nil
-            if database_module and database_module.get_connection then
-                db_connection = database_module.get_connection()
-            end
-            if not db_connection then
-                db_connection = rawget(_G, "db")
-            end
+            assert(database_module and database_module.get_connection,
+                "timeline_constraints: database_module.get_connection unavailable")
+            local db_connection = database_module.get_connection()
+            assert(db_connection, "timeline_constraints: no active database connection")
 
-            if Media and Media.load and db_connection then
-                local ok, result = pcall(Media.load, clip.media_id, db_connection)
-                if ok and result then
-                    media_record = result
-                else
-                    local restored = false
-                    if database_module and database_module.ensure_media_record then
-                        local ensure_ok, ensure_result = pcall(database_module.ensure_media_record, clip.media_id)
-                        restored = ensure_ok and ensure_result
-                    end
+            assert(Media and Media.load, "timeline_constraints: Media.load unavailable")
+            media_record = Media.load(clip.media_id, db_connection)
+            if not media_record then
+                if database_module.ensure_media_record then
+                    local restored = database_module.ensure_media_record(clip.media_id)
                     if restored then
-                        local reload_ok, reload_result = pcall(Media.load, clip.media_id, db_connection)
-                        if reload_ok then
-                            media_record = reload_result
-                        end
-                    end
-                    if not media_record then
-                        media_missing = true
+                        media_record = Media.load(clip.media_id, db_connection)
                     end
                 end
-            else
-                media_missing = true
+                if not media_record then
+                    media_missing = true
+                end
             end
 
             local media_duration = clip_duration(media_record)

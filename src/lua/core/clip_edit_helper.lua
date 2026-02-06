@@ -17,8 +17,7 @@ local command_helper = require('core.command_helper')
 local rational_helpers = require('core.command_rational_helpers')
 
 local function get_timeline_state()
-    local ok, mod = pcall(require, 'ui.timeline.timeline_state')
-    return ok and mod or nil
+    return require('ui.timeline.timeline_state')
 end
 
 --- Resolve media_id from UI state if not provided
@@ -30,16 +29,14 @@ function M.resolve_media_id_from_ui(media_id, command)
         return media_id
     end
 
-    local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
-    if ui_state_ok then
-        local project_browser = ui_state.get_project_browser and ui_state.get_project_browser()
-        if project_browser and project_browser.get_selected_master_clip then
-            local selected_clip = project_browser.get_selected_master_clip()
-            if selected_clip and selected_clip.media_id then
-                media_id = selected_clip.media_id
-                if command then
-                    command:set_parameter("media_id", media_id)
-                end
+    local ui_state = require("ui.ui_state")
+    local project_browser = ui_state.get_project_browser and ui_state.get_project_browser()
+    if project_browser and project_browser.get_selected_master_clip then
+        local selected_clip = project_browser.get_selected_master_clip()
+        if selected_clip and selected_clip.media_id then
+            media_id = selected_clip.media_id
+            if command then
+                command:set_parameter("media_id", media_id)
             end
         end
     end
@@ -167,9 +164,8 @@ function M.resolve_timing(params, master_clip, media, seq_fps_num, seq_fps_den, 
         end
     end
 
-    -- Default source_in to 0
     if not source_in_rat then
-        source_in_rat = Rational.new(0, media_fps_num, media_fps_den)
+        source_in_rat = Rational.new(0, media_fps_num, media_fps_den) -- NSF-OK: source_in=0 means "start of media"
     end
 
     -- Calculate missing values from available ones
@@ -194,17 +190,19 @@ function M.resolve_timing(params, master_clip, media, seq_fps_num, seq_fps_den, 
     }, nil
 end
 
---- Determine clip name from various sources
+--- Determine clip name from command args, master_clip, media, or explicit caller name
 -- @param args table Command arguments
 -- @param master_clip table|nil Master clip
 -- @param media table|nil Media
--- @param fallback string Fallback name if nothing else available
+-- @param caller_name string|nil Explicit name from caller (required if no other source)
 -- @return string Clip name
-function M.resolve_clip_name(args, master_clip, media, fallback)
-    return args.clip_name
+function M.resolve_clip_name(args, master_clip, media, caller_name)
+    local name = args.clip_name
         or (master_clip and master_clip.name)
         or (media and media.name)
-        or fallback
+        or caller_name
+    assert(name, "clip_edit_helper.resolve_clip_name: unable to determine clip name from args, master_clip, media, or caller")
+    return name
 end
 
 --- Create a selected_clip object with video and audio support
@@ -261,9 +259,8 @@ end
 
 --- Create an audio track resolver function
 -- @param sequence_id string Sequence ID
--- @param db table Database connection (optional, for track creation)
 -- @return function(self, index) Returns track object for audio channel index
-function M.create_audio_track_resolver(sequence_id, db)
+function M.create_audio_track_resolver(sequence_id)
     -- Initial list of audio tracks
     local audio_tracks = {}
     local timeline_state = get_timeline_state()
@@ -319,9 +316,11 @@ function M.get_media_fps(db, master_clip, media_id, seq_fps_num, seq_fps_den)
         return rational_helpers.require_master_clip_rate(master_clip)
     elseif media_id and media_id ~= "" then
         return rational_helpers.require_media_rate(db, media_id)
-    else
-        return seq_fps_num, seq_fps_den
     end
+    -- No master_clip or media_id: use sequence fps (valid for timeline clips with no media)
+    assert(seq_fps_num, "clip_edit_helper.get_media_fps: no master_clip, no media_id, and no seq_fps_num fallback")
+    assert(seq_fps_den, "clip_edit_helper.get_media_fps: no master_clip, no media_id, and no seq_fps_den fallback")
+    return seq_fps_num, seq_fps_den
 end
 
 return M

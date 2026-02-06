@@ -8,8 +8,10 @@ local M = {}
 
 local function sort_tracks(tracks)
     table.sort(tracks, function(a, b)
-        local a_index = a.track_index or 0
-        local b_index = b.track_index or 0
+        assert(a.track_index, "track_resolver.sort_tracks: track missing track_index (id=" .. tostring(a.id) .. ")")
+        assert(b.track_index, "track_resolver.sort_tracks: track missing track_index (id=" .. tostring(b.id) .. ")")
+        local a_index = a.track_index
+        local b_index = b.track_index
         return a_index < b_index
     end)
 end

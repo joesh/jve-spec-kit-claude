@@ -27,8 +27,11 @@ local function binary_search_first_start_on_or_after(track_clips, target_frames)
     while lo <= hi do
         local mid = math.floor((lo + hi) / 2)
         local clip = track_clips[mid]
-        local start_frames = clip and clip.timeline_start and clip.timeline_start.frames or nil
-        if start_frames and start_frames >= target_frames then
+        assert(clip, "timeline_active_region: nil clip in binary search at index " .. tostring(mid))
+        assert(clip.timeline_start and clip.timeline_start.frames ~= nil,
+            "timeline_active_region: clip missing timeline_start.frames in binary search (id=" .. tostring(clip.id) .. ")")
+        local start_frames = clip.timeline_start.frames
+        if start_frames >= target_frames then
             ans = mid
             hi = mid - 1
         else
