@@ -1405,9 +1405,9 @@ local function handle_key_impl(event)
 
             -- Optional: Show submission dialog immediately (non-blocking)
             local submission_dialog = require("bug_reporter.ui.submission_dialog")
-            local dialog = submission_dialog.create(test_path)
-            if dialog then
-                qt_show_dialog(dialog, false)
+            local wrapper = submission_dialog.create(test_path)
+            if wrapper and wrapper.dialog then
+                qt_show_dialog(wrapper.dialog, false)
             end
         else
             print("❌ Bug report capture failed")

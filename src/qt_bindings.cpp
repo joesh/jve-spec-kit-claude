@@ -71,6 +71,9 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_create_checkbox); lua_setfield(L, -2, "CREATE_CHECKBOX");
     lua_pushcfunction(L, lua_create_combobox); lua_setfield(L, -2, "CREATE_COMBOBOX");
     lua_pushcfunction(L, lua_create_slider); lua_setfield(L, -2, "CREATE_SLIDER");
+    lua_pushcfunction(L, lua_create_group_box); lua_setfield(L, -2, "CREATE_GROUP_BOX");
+    lua_pushcfunction(L, lua_create_text_edit); lua_setfield(L, -2, "CREATE_TEXT_EDIT");
+    lua_pushcfunction(L, lua_create_progress_bar); lua_setfield(L, -2, "CREATE_PROGRESS_BAR");
     lua_pushcfunction(L, lua_create_tree_widget); lua_setfield(L, -2, "CREATE_TREE");
     lua_pushcfunction(L, lua_create_timeline_renderer); lua_setfield(L, -2, "CREATE_TIMELINE");
     lua_pushcfunction(L, lua_create_inspector_panel); lua_setfield(L, -2, "CREATE_INSPECTOR");
@@ -93,6 +96,9 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_layout); lua_setfield(L, -2, "SET_ON_WIDGET");
     lua_pushcfunction(L, lua_add_widget_to_layout); lua_setfield(L, -2, "ADD_WIDGET");
     lua_pushcfunction(L, lua_add_stretch_to_layout); lua_setfield(L, -2, "ADD_STRETCH");
+    lua_pushcfunction(L, lua_add_spacing_to_layout); lua_setfield(L, -2, "ADD_SPACING");
+    lua_pushcfunction(L, lua_add_layout_to_layout); lua_setfield(L, -2, "ADD_LAYOUT");
+    lua_pushcfunction(L, lua_set_widget_layout); lua_setfield(L, -2, "SET_WIDGET_LAYOUT");
     lua_pushcfunction(L, lua_set_central_widget); lua_setfield(L, -2, "SET_CENTRAL_WIDGET");
     lua_pushcfunction(L, lua_set_splitter_sizes); lua_setfield(L, -2, "SET_SPLITTER_SIZES");
     lua_pushcfunction(L, lua_get_splitter_sizes); lua_setfield(L, -2, "GET_SPLITTER_SIZES");
@@ -108,6 +114,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_add_combobox_item); lua_setfield(L, -2, "ADD_COMBOBOX_ITEM");
     lua_pushcfunction(L, lua_set_combobox_current_text); lua_setfield(L, -2, "SET_COMBOBOX_CURRENT_TEXT");
     lua_pushcfunction(L, lua_get_combobox_current_text); lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_TEXT");
+    lua_pushcfunction(L, lua_set_combobox_current_index); lua_setfield(L, -2, "SET_COMBOBOX_CURRENT_INDEX");
+    lua_pushcfunction(L, lua_get_combobox_current_index); lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_INDEX");
     lua_pushcfunction(L, lua_set_slider_range); lua_setfield(L, -2, "SET_SLIDER_RANGE");
     lua_pushcfunction(L, lua_set_slider_value); lua_setfield(L, -2, "SET_SLIDER_VALUE");
     lua_pushcfunction(L, lua_get_slider_value); lua_setfield(L, -2, "GET_SLIDER_VALUE");
@@ -143,6 +151,10 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_scroll_area_v_scrollbar_policy); lua_setfield(L, -2, "SET_SCROLL_AREA_V_SCROLLBAR_POLICY");
     lua_pushcfunction(L, lua_set_layout_spacing); lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins); lua_setfield(L, -2, "SET_LAYOUT_MARGINS");
+    lua_pushcfunction(L, lua_set_enabled); lua_setfield(L, -2, "SET_ENABLED");
+    lua_pushcfunction(L, lua_set_progress_bar_value); lua_setfield(L, -2, "SET_PROGRESS_BAR_VALUE");
+    lua_pushcfunction(L, lua_set_progress_bar_range); lua_setfield(L, -2, "SET_PROGRESS_BAR_RANGE");
+    lua_pushcfunction(L, lua_set_text_edit_read_only); lua_setfield(L, -2, "SET_TEXT_EDIT_READ_ONLY");
     lua_pushcfunction(L, lua_set_widget_size_policy); lua_setfield(L, -2, "SET_WIDGET_SIZE_POLICY");
     lua_pushcfunction(L, lua_set_button_click_handler); lua_setfield(L, -2, "SET_BUTTON_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_widget_click_handler); lua_setfield(L, -2, "SET_WIDGET_CLICK_HANDLER");
@@ -249,6 +261,10 @@ void registerQtBindings(lua_State* L)
     // Populate 'qt_constants.DIALOG' subtable
     lua_newtable(L);
     lua_pushcfunction(L, lua_show_confirm_dialog); lua_setfield(L, -2, "SHOW_CONFIRM");
+    lua_pushcfunction(L, lua_create_dialog); lua_setfield(L, -2, "CREATE");
+    lua_pushcfunction(L, lua_show_dialog); lua_setfield(L, -2, "SHOW");
+    lua_pushcfunction(L, lua_close_dialog); lua_setfield(L, -2, "CLOSE");
+    lua_pushcfunction(L, lua_set_dialog_layout); lua_setfield(L, -2, "SET_LAYOUT");
     lua_setfield(L, -2, "DIALOG");
 
     // Populate 'qt_constants.EMP' subtable (Editor Media Platform - video decoding)

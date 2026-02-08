@@ -3,6 +3,9 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSlider>
+#include <QGroupBox>
+#include <QTextEdit>
+#include <QProgressBar>
 
 
 
@@ -99,3 +102,72 @@ int lua_set_slider_range(lua_State* L) {
 
 LUA_BIND_SETTER_INT(lua_set_slider_value, QSlider, setValue)
 LUA_BIND_GETTER_INT(lua_get_slider_value, QSlider, value)
+
+// Group Box
+LUA_BIND_WIDGET_CREATOR_WITH_TEXT(lua_create_group_box, QGroupBox)
+
+// Text Edit (multiline)
+int lua_create_text_edit(lua_State* L) {
+    const char* text = lua_tostring(L, 1);
+    QTextEdit* te = new QTextEdit();
+    if (text) te->setPlainText(QString::fromUtf8(text));
+    lua_push_widget(L, te);
+    return 1;
+}
+
+int lua_set_text_edit_read_only(lua_State* L) {
+    QTextEdit* te = get_widget<QTextEdit>(L, 1);
+    bool ro = lua_toboolean(L, 2);
+    if (te) te->setReadOnly(ro);
+    return 0;
+}
+
+// Progress Bar
+int lua_create_progress_bar(lua_State* L) {
+    QProgressBar* pb = new QProgressBar();
+    pb->setRange(0, 100);
+    pb->setValue(0);
+    lua_push_widget(L, pb);
+    return 1;
+}
+
+int lua_set_progress_bar_value(lua_State* L) {
+    QProgressBar* pb = get_widget<QProgressBar>(L, 1);
+    int val = luaL_checkinteger(L, 2);
+    if (pb) pb->setValue(val);
+    return 0;
+}
+
+int lua_set_progress_bar_range(lua_State* L) {
+    QProgressBar* pb = get_widget<QProgressBar>(L, 1);
+    int min = luaL_checkinteger(L, 2);
+    int max = luaL_checkinteger(L, 3);
+    if (pb) pb->setRange(min, max);
+    return 0;
+}
+
+// Generic setEnabled for any widget
+int lua_set_enabled(lua_State* L) {
+    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    bool enabled = lua_toboolean(L, 2);
+    if (w) w->setEnabled(enabled);
+    return 0;
+}
+
+// Combobox index
+int lua_set_combobox_current_index(lua_State* L) {
+    QComboBox* cb = get_widget<QComboBox>(L, 1);
+    int idx = luaL_checkinteger(L, 2);
+    if (cb) cb->setCurrentIndex(idx);
+    return 0;
+}
+
+int lua_get_combobox_current_index(lua_State* L) {
+    QComboBox* cb = get_widget<QComboBox>(L, 1);
+    if (cb) {
+        lua_pushinteger(L, cb->currentIndex());
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}

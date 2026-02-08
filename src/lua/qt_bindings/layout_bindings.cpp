@@ -187,3 +187,53 @@ int lua_get_splitter_sizes(lua_State* L) {
     lua_pushnil(L);
     return 1;
 }
+
+// Add spacing to a box layout
+int lua_add_spacing_to_layout(lua_State* L) {
+    void* container_ptr = lua_to_widget(L, 1);
+    int spacing = luaL_checkinteger(L, 2);
+
+    if (QBoxLayout* box = qobject_cast<QBoxLayout*>(static_cast<QObject*>(static_cast<QWidget*>(container_ptr)))) {
+        box->addSpacing(spacing);
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Add nested layout to a box layout
+int lua_add_layout_to_layout(lua_State* L) {
+    void* parent_ptr = lua_to_widget(L, 1);
+    void* child_ptr = lua_to_widget(L, 2);
+
+    if (!parent_ptr || !child_ptr) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    QBoxLayout* parent_box = qobject_cast<QBoxLayout*>(static_cast<QObject*>(static_cast<QWidget*>(parent_ptr)));
+    QLayout* child_layout = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(child_ptr)));
+
+    if (parent_box && child_layout) {
+        parent_box->addLayout(child_layout);
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Set layout on a widget (for group boxes, etc.)
+int lua_set_widget_layout(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QLayout* layout = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(lua_to_widget(L, 2))));
+
+    if (widget && layout) {
+        widget->setLayout(layout);
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
