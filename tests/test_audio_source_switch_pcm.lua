@@ -142,6 +142,7 @@ audio_playback.set_audio_sources({{
     source_offset_us = 5000000,  -- clip B starts at 5s on timeline
     volume = 1.0,
     duration_us = 30000000,  -- 30s clip
+    clip_end_us = 5000000 + 30000000,  -- explicit boundary from engine
 }}, mock_cache)
 
 assert(audio_playback.playing, "should still be playing after switch")
@@ -226,6 +227,7 @@ audio_playback.set_audio_sources({{
     source_offset_us = 15000000,  -- clip C starts at 15s on timeline
     volume = 1.0,
     duration_us = 60000000,
+    clip_end_us = 15000000 + 60000000,  -- explicit boundary from engine
 }}, mock_cache)
 
 -- PCM should be decoded around source time 5s (= 20s - 15s offset)

@@ -113,4 +113,5 @@ For short-term debug prints that will immediately be removed you may use print.
 4. **Verify** → Confirm no competing implementations created
 
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
-- When asked to write new code or fix a bug, first add a regression test that fails. Only after demonstrating the failure may you implement the fix and verify the test passes.
+
+**When addressing a bug**: First write a regression test that fails. Verify the failure. Only then implement the fix and confirm the test passes.

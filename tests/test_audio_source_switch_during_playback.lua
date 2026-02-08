@@ -121,6 +121,7 @@ audio_playback.set_audio_sources({{
     source_offset_us = 0,
     volume = 1.0,
     duration_us = 60000000,
+    clip_end_us = 60000000,  -- explicit from engine
 }}, mock_cache)
 
 -- CRITICAL: After source switch, playback should resume at ~8s, NOT 5s.

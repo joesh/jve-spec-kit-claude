@@ -148,7 +148,14 @@ local function normalize_timeline(item, context)
     end
 
     assert(sequence.duration ~= nil, string.format("browser_state.normalize_timeline: missing duration for sequence %s", tostring(sequence.id)))
-    local duration = assert(tonumber(sequence.duration), string.format("browser_state.normalize_timeline: non-numeric duration for sequence %s: %s", tostring(sequence.id), tostring(sequence.duration)))
+    -- Handle both Rational objects (.frames) and plain numbers
+    local duration
+    if type(sequence.duration) == "table" and sequence.duration.frames then
+        duration = sequence.duration.frames
+    else
+        duration = tonumber(sequence.duration)
+    end
+    assert(duration, string.format("browser_state.normalize_timeline: invalid duration for sequence %s: %s", tostring(sequence.id), tostring(sequence.duration)))
 
     local entry = {
         id = sequence.id,

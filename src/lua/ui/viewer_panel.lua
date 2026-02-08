@@ -66,9 +66,6 @@ local function load_video_frame(file_path)
     logger.info("viewer_panel", string.format("Loaded video: %dx%d @ %d/%d fps",
         info.width, info.height, info.fps_num, info.fps_den))
 
-    -- Initialize audio via shared path (handles both source and timeline modes)
-    playback_controller.init_audio_for_active_media()
-
     -- Set playback source (frame count and rational fps)
     local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
     playback_controller.set_source(total_frames, info.fps_num, info.fps_den)

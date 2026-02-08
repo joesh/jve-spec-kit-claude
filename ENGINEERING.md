@@ -140,6 +140,57 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - TimelineDatabase holds all objects by stable IDs
 - Sequences contain Tracks containing TimelineInstances of MediaItems
 
+**4.1. Media vs Clip Conceptual Model**
+
+**Media**: A file on disk, external to the editor. Media has no marks, no timeline position — it's just bytes.
+
+**Clip**: The editor's representation of media within the project:
+- Points to a media file (media_id)
+- Has marks: source_in, source_out (which portion of media to use)
+- Has metadata: frame rate, duration
+- Has a pointer to its master clip (from which derived)
+
+**Master Clip**: Created when media is imported, lives in the browser/bin. The canonical reference for all derived clips.
+
+**Derived Clip**: Placed on a sequence or subclipped from a master. Changes to the master propagate to derived clips.
+
+**Key rule**: Media never exists in the editor without a clip. Even the browser shows master clips, not raw media.
+
+**4.2. Display Engine Architecture**
+
+The display engine plays a **SEQUENCE**, not individual clips:
+
+1. Takes playhead position (Rational time)
+2. Resolves which clips are active on all tracks at that time
+3. Renders/composites video from those clips
+4. Mixes audio from those clips
+5. **Detects and handles edit boundaries** (engine owns this responsibility)
+
+```
+Display Engine (sequence-aware, owns boundaries)
+    ↓ tells players WHAT to play + explicit boundaries
+Audio Player              Video Display
+(caches audio PCM)        (caches frames)
+    ↓ uses                    ↓ uses
+         Media Cache (shared decode layer)
+```
+
+**Engine responsibilities** (playback_controller in timeline mode):
+- Resolve clips at playhead via timeline_resolver
+- Detect when playhead approaches/crosses edit boundary
+- Compute explicit boundaries for each clip
+- Tell audio: "play clip A from source_time X, stop at boundary Y"
+- Tell video: "show frame from clip B at source_time Z"
+- Pass explicit boundaries to players — players do NOT compute boundaries
+
+**Player responsibilities** (audio_playback, viewer_panel):
+- Play/display what they're told to play
+- Cache/prefetch within given boundaries
+- Stop when told to stop
+- NO boundary calculation — use boundaries from engine
+
+**Why this matters**: When boundaries are computed in the wrong layer (e.g., audio_playback computing clip_end from incomplete data), bugs emerge. The engine knows the sequence structure; players do not. Keep boundary logic in the layer that has complete information.
+
 **5. Lua Integration**
 - Hot reloading support for script development
 - ResourcePaths system for cross-directory execution

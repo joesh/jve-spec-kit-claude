@@ -89,6 +89,7 @@ audio_pb.set_audio_sources({{
     source_offset_us = 0,
     volume = 1.0,
     duration_us = 3333333,
+    clip_end_us = 3333333,  -- explicit boundary
 }}, mock_cache)
 
 --------------------------------------------------------------------------------
