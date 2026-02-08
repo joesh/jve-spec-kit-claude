@@ -61,6 +61,7 @@ package.loaded['ui.timeline.timeline_state'] = nil
 
 -- Test 2: timeline_panel.lua uses ui_constants
 print("\nTest 2: timeline_panel.lua")
+local timeline_panel
 success, timeline_panel = pcall(function()
     return require("ui.timeline.timeline_panel")
 end)

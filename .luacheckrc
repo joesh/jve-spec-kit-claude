@@ -50,6 +50,7 @@ globals = {
     "qt_create_single_shot_timer",
     "qt_set_global_key_handler",
     "qt_set_layout_stretch_factor",
+    "qt_show_dialog",
     "timeline",
 
     -- Runtime globals
@@ -61,15 +62,31 @@ exclude_files = {
     "CMakeFiles/**",
     "src/lua/ui/keyboard_dialog_premiere.lua",
     "src/lua/ui/**/*.json",
-    "src/lua/ui/.DS_Store",
+    "**/.DS_Store",
     "**/*.cpp",
+    "**/*.cpp.d",
     "**/*.h",
     "**/*.hpp",
     "**/*.c",
     "**/*.md",
     "**/*.txt",
     "**/*.json",
+    "**/*.moc",
+    "**/*.moc.d",
+    "**/*.mp4",
+    "**/*.xml",
+    "**/*.sh",
+    "**/*.sql",
+    "**/*.db",
     ".git/**",
+    -- bug_reporter uses undefined C++ bindings not yet implemented
+    "src/lua/bug_reporter/**",
+    -- autogen contains Qt moc files, not Lua
+    "tests/autogen/**",
+    -- ad_hoc tests are incomplete/experimental
+    "tests/ad_hoc/**",
+    -- fixture files are test data, not Lua
+    "tests/fixtures/**",
 }
 
 include_files = {

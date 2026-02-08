@@ -24,7 +24,7 @@ package.loaded["command"] = {
             params = {},
             set_parameter = function(self, k, v) self.params[k] = v end,
             get_parameter = function(self, k) return self.params[k] end,
-            create_undo = function() return self end,
+            create_undo = function(self) return self end,
             serialize = function() return "{}" end,
         }
     end

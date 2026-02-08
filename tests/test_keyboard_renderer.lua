@@ -107,6 +107,7 @@ end
 
 -- Test 2: Create keyboard widget
 print("\nTest 2: Create keyboard widget")
+local keyboard
 success, keyboard = pcall(function()
     return keyboard_renderer.create()
 end)
@@ -151,6 +152,7 @@ end
 
 -- Test 4: Create individual key
 print("\nTest 4: Create individual key")
+local key
 success, key = pcall(function()
     return keyboard_renderer.create_key("A", 48, "normal")
 end)

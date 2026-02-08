@@ -1414,7 +1414,7 @@ function M.undo_group(group_id)
     for _, cmd in ipairs(commands_to_undo) do
         local result = M.execute_undo(cmd)
         if not result.success then
-            return result, command
+            return result, cmd
         end
     end
 
@@ -1569,7 +1569,7 @@ function M.redo_group(group_id)
 
         local result = execute_redo_command(cmd)
         if not result.success then
-            return result, command
+            return result, cmd
         end
 
         parent = cmd.sequence_number

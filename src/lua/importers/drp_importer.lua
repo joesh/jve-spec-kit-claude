@@ -353,6 +353,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
     return video_tracks, audio_tracks, media_lookup
 end
 
+-- Forward declaration (defined below parse_sequence)
+local parse_clip_item
+
 --- Parse sequence XML to extract timeline data
 -- @param seq_elem table: XML element for <Sequence>
 -- @param frame_rate number: Project frame rate
@@ -486,7 +489,7 @@ end
 -- @param clip_elem table: XML element for <ClipItem>
 -- @param frame_rate number: Timeline frame rate
 -- @return table|nil: Clip data, or nil if invalid
-local function parse_clip_item(clip_elem, frame_rate)
+parse_clip_item = function(clip_elem, frame_rate)
     local name_elem = find_element(clip_elem, "Name")
     local start_elem = find_element(clip_elem, "Start")
     local end_elem = find_element(clip_elem, "End")

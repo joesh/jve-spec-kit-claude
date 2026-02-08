@@ -24,36 +24,6 @@ local BASE_DATA_SQL = string.format([[
 ]], now, now, now, now)
 
 
-
-local function reload_clips_into_state(state)
-    state.clips = {}
-    local stmt = db:prepare([[
-        SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
-        FROM clips
-    ]])
-    if not stmt then return end -- Should handle error
-    if stmt:exec() then
-        while stmt:next() do
-            local clip_id = stmt:value(0)
-            local clip = {
-                id = clip_id,
-                track_id = stmt:value(1),
-                start_value = stmt:value(2) * 1000.0 / 30.0, -- Approx MS for legacy test logic
-                duration_value = stmt:value(3) * 1000.0 / 30.0,
-                source_in_value = stmt:value(4) * 1000.0 / 30.0,
-                source_out_value = stmt:value(5) * 1000.0 / 30.0,
-                enabled = true
-            }
-            table.insert(state.clips, clip)
-            if state.clip_lookup then
-                state.clip_lookup[clip.id] = clip
-            end
-        end
-    else
-        print("DEBUG: reload_clips query failed")
-    end
-    stmt:finalize()
-end
 local timeline_state = {
     playhead_value = 0,
     selected_clips = {},
