@@ -635,20 +635,3 @@ int lua_set_parent(lua_State* L) {
     return 1;
 }
 
-int lua_show_dialog(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
-
-    if (!widget) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-
-    // Show widget as modal dialog
-    widget->setWindowModality(Qt::ApplicationModal);
-    widget->show();
-    widget->raise();
-    widget->activateWindow();
-
-    lua_pushboolean(L, 1);
-    return 1;
-}

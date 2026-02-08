@@ -1,4 +1,5 @@
 #include "binding_macros.h"
+#include <QDialog>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QPushButton>
@@ -117,4 +118,67 @@ int lua_show_confirm_dialog(lua_State* L)
     lua_pushboolean(L, accepted ? 1 : 0);
     lua_pushstring(L, accepted ? "confirm" : "cancel");
     return 2;
+}
+
+// Custom Dialog Bindings
+// CREATE(title [, width, height]) -> dialog widget
+int lua_create_dialog(lua_State* L) {
+    const char* title = luaL_checkstring(L, 1);
+    int width = luaL_optinteger(L, 2, 400);
+    int height = luaL_optinteger(L, 3, 300);
+
+    QDialog* dialog = new QDialog();
+    dialog->setWindowTitle(QString::fromUtf8(title));
+    dialog->resize(width, height);
+    dialog->setWindowModality(Qt::ApplicationModal);
+
+    lua_push_widget(L, dialog);
+    return 1;
+}
+
+// SHOW(dialog [, blocking=true])
+// blocking=true: calls exec(), waits for close, returns result code (0=rejected, 1=accepted)
+// blocking=false: shows modal immediately, returns true
+int lua_show_dialog(lua_State* L) {
+    QDialog* dialog = get_widget<QDialog>(L, 1);
+    if (!dialog) return luaL_error(L, "DIALOG.SHOW: argument must be QDialog");
+
+    bool blocking = lua_isboolean(L, 2) ? lua_toboolean(L, 2) : true;
+
+    if (blocking) {
+        int result = dialog->exec();
+        lua_pushinteger(L, result);
+    } else {
+        dialog->setWindowModality(Qt::ApplicationModal);
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+        lua_pushboolean(L, 1);
+    }
+    return 1;
+}
+
+// CLOSE(dialog [, accept=true])
+int lua_close_dialog(lua_State* L) {
+    QDialog* dialog = get_widget<QDialog>(L, 1);
+    if (!dialog) return luaL_error(L, "DIALOG.CLOSE: argument must be QDialog");
+
+    bool accept = lua_isboolean(L, 2) ? lua_toboolean(L, 2) : true;
+    if (accept) {
+        dialog->accept();
+    } else {
+        dialog->reject();
+    }
+    return 0;
+}
+
+// SET_LAYOUT(dialog, layout)
+int lua_set_dialog_layout(lua_State* L) {
+    QDialog* dialog = get_widget<QDialog>(L, 1);
+    QLayout* layout = get_widget<QLayout>(L, 2);
+    if (!dialog) return luaL_error(L, "DIALOG.SET_LAYOUT: first argument must be QDialog");
+    if (!layout) return luaL_error(L, "DIALOG.SET_LAYOUT: second argument must be QLayout");
+
+    dialog->setLayout(layout);
+    return 0;
 }

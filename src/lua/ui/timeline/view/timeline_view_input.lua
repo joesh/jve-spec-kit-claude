@@ -24,6 +24,7 @@ local focus_manager = require("ui.focus_manager")
 local magnetic_snapping = require("core.magnetic_snapping")
 local Rational = require("core.rational")
 local TimelineActiveRegion = require("core.timeline_active_region")
+local command_manager = require("core.command_manager")
 
 local RIGHT_MOUSE_BUTTON = 2
 local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
@@ -247,46 +248,24 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             return
         end
 
-        -- Clip Selection
+        -- Clip Selection (via SelectClips command)
         local clicked_clip = find_clip_under_cursor(view, x, y, width, height)
         if clicked_clip then
             local selected_clips = state.get_selected_clips()
             local is_selected = false
             for _, s in ipairs(selected_clips) do if s.id == clicked_clip.id then is_selected = true break end end
-            
-            if is_selected then
-                if modifiers and modifiers.command then
-                    -- Deselect
-                    local new_sel = {}
-                    for _, s in ipairs(selected_clips) do if s.id ~= clicked_clip.id then table.insert(new_sel, s) end end
-                    state.set_selection(new_sel)
-                    view.render()
-                    return
-                else
-                    -- Prepare drag
-                    view.potential_drag = {
-                        type = "clips",
-                        start_x = x,
-                        start_y = y,
-                        start_value = state.pixel_to_time(x, width),
-                        clips = selected_clips,
-                        modifiers = modifiers,
-                        anchor_clip_id = clicked_clip.id
-                    }
-                    return
-                end
-            else
-                if not (modifiers and modifiers.command) then
-                    state.clear_edge_selection()
-                    state.set_selection({clicked_clip})
-                else
-                    -- Add
-                    local new_sel = {}
-                    for _, s in ipairs(selected_clips) do table.insert(new_sel, s) end
-                    table.insert(new_sel, clicked_clip)
-                    state.set_selection(new_sel)
-                end
-                
+
+            -- Execute SelectClips command (handles Option→linked, Cmd→toggle)
+            command_manager.execute("SelectClips", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+                target_clip_ids = { clicked_clip.id },
+                modifiers = modifiers,
+            })
+
+            -- For already-selected clips without Cmd: just prepare drag, no selection change
+            -- SelectClips handles this by returning same selection
+            if is_selected and not (modifiers and modifiers.command) then
                 view.potential_drag = {
                     type = "clips",
                     start_x = x,
@@ -296,9 +275,21 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     modifiers = modifiers,
                     anchor_clip_id = clicked_clip.id
                 }
-                view.render()
                 return
             end
+
+            -- Prepare drag with newly selected clips
+            view.potential_drag = {
+                type = "clips",
+                start_x = x,
+                start_y = y,
+                start_value = state.pixel_to_time(x, width),
+                clips = state.get_selected_clips(),
+                modifiers = modifiers,
+                anchor_clip_id = clicked_clip.id
+            }
+            view.render()
+            return
         end
 
         -- Gap Selection
@@ -331,9 +322,10 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
 
         -- Empty space drag (Rubber band)
         if not (modifiers and modifiers.command) then
-            state.clear_edge_selection()
-            state.clear_gap_selection()
-            state.set_selection({})
+            command_manager.execute("DeselectAll", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+            })
         end
         if view.on_drag_start then
             view.panel_drag_move, view.panel_drag_end = view.on_drag_start(view.widget, x, y, modifiers)

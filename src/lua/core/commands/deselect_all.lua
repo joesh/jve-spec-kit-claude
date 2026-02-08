@@ -47,8 +47,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         timeline_state.set_selection({})
         timeline_state.clear_edge_selection()
+        if timeline_state.clear_gap_selection then
+            timeline_state.clear_gap_selection()
+        end
 
-        print("✅ Deselected all clips and edges")
+        print("✅ Deselected all clips, edges, and gaps")
         return true
     end
 

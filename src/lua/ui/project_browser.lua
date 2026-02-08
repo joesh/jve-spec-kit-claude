@@ -46,6 +46,32 @@ local function selection_context()
     }
 end
 
+-- Route browser selection through SelectBrowserItems command
+local function select_browser_items(items, context, modifiers)
+    context = context or selection_context()
+
+    -- Wrap in command event if not already in one
+    local owns_event = not command_manager.peek_command_event_origin()
+    if owns_event then
+        command_manager.begin_command_event("ui")
+    end
+
+    command_manager.execute("SelectBrowserItems", {
+        project_id = M.project_id or context.project_id or "unknown",
+        items = items or {},
+        context = context,
+        modifiers = modifiers or {},
+    })
+
+    if owns_event then
+        command_manager.end_command_event()
+    end
+end
+
+local function clear_browser_selection()
+    select_browser_items({}, selection_context())
+end
+
 local REFRESH_COMMANDS = {
     ImportMedia = true,
     ImportFCP7XML = true,
@@ -278,12 +304,7 @@ local function finalize_pending_rename(new_name)
     end
 
     if pending.target_type ~= "bin" then
-        browser_state.update_selection(M.selected_items or {}, {
-            master_lookup = M.master_clip_map,
-            media_lookup = M.media_map,
-            sequence_lookup = M.sequence_map,
-            project_id = M.project_id
-        })
+        select_browser_items(M.selected_items or {})
     end
 
     local ok_state, timeline_state = pcall(require, 'ui.timeline.timeline_state')
@@ -566,12 +587,7 @@ local function apply_single_selection(info)
     local collected = {info}
     M.selected_items = collected
     M.selected_item = info
-    browser_state.update_selection(collected, {
-        master_lookup = M.master_clip_map,
-        media_lookup = M.media_map,
-        sequence_lookup = M.sequence_map,
-        project_id = M.project_id
-    })
+    select_browser_items(collected)
 end
 
 local function populate_tree()
@@ -873,7 +889,7 @@ local function populate_tree()
 
     local function restore_previous_selection_from_cache(previous)
         if not previous or #previous == 0 then
-            browser_state.clear_selection()
+            clear_browser_selection()
             return
         end
 
@@ -907,7 +923,7 @@ local function populate_tree()
         end
 
         if #matches == 0 then
-            browser_state.clear_selection()
+            clear_browser_selection()
             return
         end
 
@@ -927,12 +943,7 @@ local function populate_tree()
                 end
                 M.selected_items = collected
                 M.selected_item = collected[1]
-                browser_state.update_selection(collected, {
-                    master_lookup = M.master_clip_map,
-                    media_lookup = M.media_map,
-                    sequence_lookup = M.sequence_map,
-                    project_id = M.project_id
-                })
+                select_browser_items(collected)
             end
         else
             local collected = {}
@@ -941,12 +952,7 @@ local function populate_tree()
             end
             M.selected_items = collected
             M.selected_item = collected[1]
-            browser_state.update_selection(collected, {
-                master_lookup = M.master_clip_map,
-                media_lookup = M.media_map,
-                sequence_lookup = M.sequence_map,
-                project_id = M.project_id
-            })
+            select_browser_items(collected)
         end
     end
 
@@ -1154,12 +1160,7 @@ function M.create()
             end
         end
 
-        browser_state.update_selection(collected, {
-            master_lookup = M.master_clip_map,
-            media_lookup = M.media_map,
-            sequence_lookup = M.sequence_map,
-            project_id = M.project_id
-        })
+        select_browser_items(collected)
 
         if not is_restoring_selection then
             if focus_manager and focus_manager.focus_panel then
@@ -1996,7 +1997,7 @@ function M.select_all_items()
 
     local entries = collect_all_tree_entries()
     if #entries == 0 then
-        browser_state.clear_selection()
+        clear_browser_selection()
         M.selected_items = {}
         M.selected_item = nil
         return false, "No items available to select"
@@ -2016,7 +2017,7 @@ function M.select_all_items()
     end
     M.selected_items = collected
     M.selected_item = collected[1]
-    browser_state.update_selection(collected, selection_context())
+    select_browser_items(collected)
     return true
 end
 
@@ -2155,7 +2156,7 @@ local function update_selection_state(info)
     end
     M.selected_item = info
     M.selected_items = {info}
-    browser_state.update_selection({info}, selection_context())
+    select_browser_items({info})
 end
 
 function M.focus_master_clip(master_clip_id, opts)
@@ -2211,7 +2212,7 @@ function M.focus_bin(bin_id, opts)
     if not bin_id or bin_id == "" then
         M.selected_item = nil
         M.selected_items = {}
-        browser_state.clear_selection()
+        clear_browser_selection()
         return true
     end
 
@@ -2344,7 +2345,7 @@ end
     M.selected_item = sequence_info
     M.selected_items = {sequence_info}
 
-	    browser_state.update_selection({sequence_info}, selection_context())
+    select_browser_items({sequence_info})
 
     if not opts.skip_focus then
         if focus_manager and focus_manager.focus_panel then

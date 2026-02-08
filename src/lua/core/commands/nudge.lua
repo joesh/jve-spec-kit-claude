@@ -16,7 +16,6 @@
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
-local clip_links = require('models.clip_link')
 local clip_mutator = require("core.clip_mutator")
 local timeline_state = require('ui.timeline.timeline_state')
 local frame_utils = require('core.frame_utils')
@@ -320,22 +319,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         elseif args.selected_clip_ids and #args.selected_clip_ids > 0 then
             nudge_type = "clips"
             local clips_to_move = {}
-            local processed_groups = {}
 
+            -- Only move explicitly selected clips (link is a selection hint, not command behavior)
             for _, clip_id in ipairs(args.selected_clip_ids) do
                 clips_to_move[clip_id] = true
-                local link_group = clip_links.get_link_group(clip_id, db)
-                if link_group then
-                    local link_group_id = clip_links.get_link_group_id(clip_id, db)
-                    if link_group_id and not processed_groups[link_group_id] then
-                        processed_groups[link_group_id] = true
-                        for _, link_info in ipairs(link_group) do
-                            if link_info.enabled then
-                                clips_to_move[link_info.clip_id] = true
-                            end
-                        end
-                    end
-                end
             end
 
             local move_targets = {}
@@ -472,18 +459,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
 
-            local total_moved = 0
-            for _ in pairs(clips_to_move) do
-                total_moved = total_moved + 1
-            end
-
-            local linked_count = total_moved - #args.selected_clip_ids
-            if linked_count > 0 then
-                print(string.format("✅ Nudged %d clip(s) + %d linked clip(s) by %s",
-                    #args.selected_clip_ids, linked_count, tostring(nudge_amount_rat)))
-            else
-                print(string.format("✅ Nudged %d clip(s) by %s", #args.selected_clip_ids, tostring(nudge_amount_rat)))
-            end
+            print(string.format("✅ Nudged %d clip(s) by %s", #args.selected_clip_ids, tostring(nudge_amount_rat)))
         else
             set_last_error("Nudge: Nothing selected")
             return false

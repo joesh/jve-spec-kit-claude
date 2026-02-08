@@ -108,7 +108,15 @@ function M.create(widget, state_module, track_filter_fn, options)
 
     -- Event Wiring
     local function on_mouse(type, x, y, btn, mods)
+        local command_manager = require("core.command_manager")
+        local owns_event = not command_manager.peek_command_event_origin()
+        if owns_event then
+            command_manager.begin_command_event("ui")
+        end
         input.handle_mouse(view, type, x, y, btn, mods)
+        if owns_event then
+            command_manager.end_command_event()
+        end
     end
     local function on_wheel(dx, dy, mods)
         input.handle_wheel(view, dx, dy, mods)

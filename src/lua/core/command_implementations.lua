@@ -36,7 +36,7 @@ local command_modules = {
     "link_clips", "load_project", "match_frame",
     "modify_property", "move_clip_to_track", "move_to_bin", "new_bin", "nudge", "overwrite",
     "relink_media", "rename_item", "ripple_delete", "ripple_delete_selection",
-    "ripple_edit", "select_all", "set_clip_property", "set_project_setting", "set_property",
+    "ripple_edit", "select_all", "select_browser_items", "select_clips", "set_clip_property", "set_project_setting", "set_property",
     "set_sequence_metadata", "set_track_heights", "setup_project", "split_clip", "step_frame", "toggle_clip_enabled",
     "toggle_maximize_panel", "trim_head", "trim_tail",
 }

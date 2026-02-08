@@ -13,9 +13,9 @@ moc_*.cpp
 moc_*.h
 qrc_*.cpp
 ui_*.h
-# CMake-generated makefiles; wrapper Makefile kept
-Makefile
-Makefile2
+# CMake-generated makefiles (root wrapper Makefile is tracked)
+build/Makefile
+build/Makefile2
 *build-log*
 *.tlog
 
