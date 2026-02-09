@@ -254,7 +254,28 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
     local saved_value, has_row = M.load_sequence_undo_position(sequence_id)
     local state = M.ensure_stack_state(stack_id)
 
+    -- NSF: Validate that saved cursor points to an existing command
+    -- If orphaned (e.g., commands table was cleared), reset to actual last command
     if saved_value and saved_value > 0 then
+        local check = db:prepare("SELECT 1 FROM commands WHERE sequence_number = ?")
+        assert(check, "initialize_stack_position_from_db: failed to prepare orphan check query")
+        check:bind_value(1, saved_value)
+        local exists = check:exec() and check:next()
+        check:finalize()
+        if not exists then
+            logger.warn("command_history", string.format(
+                "Orphaned undo cursor: sequence %s has current_sequence_number=%d but command doesn't exist. Resetting to %s.",
+                sequence_id, saved_value, last_sequence_number > 0 and tostring(last_sequence_number) or "nil"))
+            saved_value = last_sequence_number > 0 and last_sequence_number or nil
+            -- Persist the fix
+            local fix = db:prepare("UPDATE sequences SET current_sequence_number = ? WHERE id = ?")
+            assert(fix, "initialize_stack_position_from_db: failed to prepare orphan fix query")
+            fix:bind_value(1, saved_value or 0)
+            fix:bind_value(2, sequence_id)
+            local ok = fix:exec()
+            fix:finalize()
+            assert(ok, string.format("initialize_stack_position_from_db: failed to persist orphan fix for sequence %s", sequence_id))
+        end
         M.set_current_sequence_number(saved_value)
     elseif saved_value == 0 then
         M.set_current_sequence_number(nil)

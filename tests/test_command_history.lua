@@ -356,12 +356,20 @@ end
 -- ============================================================
 print("\n--- initialize_stack_position_from_db ---")
 do
+    -- Create a command at sequence_number=42 so the cursor isn't orphaned
+    local insert_cmd = db:prepare([[
+        INSERT OR REPLACE INTO commands (id, sequence_number, command_type, command_args, timestamp)
+        VALUES ('cmd_42', 42, 'TestCmd', '{}', 0)
+    ]])
+    insert_cmd:exec()
+    insert_cmd:finalize()
+
     -- Save position 42 to DB
     command_history.init(db, sequence_id, project_id)
     command_history.set_current_sequence_number(42)
     command_history.save_undo_position()
 
-    -- Re-init → should pick up saved position
+    -- Re-init → should pick up saved position (command exists, not orphaned)
     command_history.init(db, sequence_id, project_id)
     check("position restored from DB", command_history.get_current_sequence_number() == 42)
 
@@ -376,6 +384,18 @@ do
     command_history.reset()
     command_history.init(db, sequence_id, project_id)
     check("saved 0 → current nil", command_history.get_current_sequence_number() == nil)
+
+    -- Test orphan detection: set cursor to non-existent command
+    db:exec("DELETE FROM commands WHERE sequence_number = 42")
+    local upd2 = db:prepare("UPDATE sequences SET current_sequence_number = 999 WHERE id = ?")
+    upd2:bind_value(1, sequence_id)
+    upd2:exec()
+    upd2:finalize()
+
+    command_history.reset()
+    command_history.init(db, sequence_id, project_id)
+    -- Orphan detected: cursor was 999 but no command exists, should reset to nil (no commands)
+    check("orphan cursor reset to nil", command_history.get_current_sequence_number() == nil)
 end
 
 -- ============================================================
