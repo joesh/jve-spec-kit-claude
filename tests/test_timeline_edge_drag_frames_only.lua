@@ -2,10 +2,33 @@
 
 require("test_env")
 
+local database = require("core.database")
+local command_manager = require("core.command_manager")
+local timeline_state = require("ui.timeline.timeline_state")
 local timeline_view_input = require("ui.timeline.view.timeline_view_input")
 local edge_picker = require("ui.timeline.edge_picker")
 local time_utils = require("core.time_utils")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
+
+-- Initialize DB for command execution
+local db_path = "/tmp/jve/test_timeline_edge_drag_frames_only.db"
+os.remove(db_path)
+assert(database.init(db_path))
+local db = database.get_connection()
+db:exec(require("import_schema"))
+
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
+        audio_rate, width, height, view_start_frame, view_duration_frames,
+        playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
+    VALUES ('seq1', 'proj1', 'Seq', 'timeline', 24000, 1001, 48000,
+        1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
+]], now, now, now, now))
+
+command_manager.init("seq1", "proj1")
 
 _G.timeline = {
     get_dimensions = function() return 1000, 100 end
@@ -26,21 +49,32 @@ local clips = {
     }
 }
 
-local function new_state()
-    local state = {
-        _selected_edges = {}
-    }
+-- Shared mock edge storage
+local mock_edges = {}
 
-    state.get_selected_edges = function() return state._selected_edges end
-    state.set_edge_selection = function(edges) state._selected_edges = edges or {} end
+-- Mock timeline_state module for SelectEdges command
+timeline_state.get_selected_edges = function() return mock_edges end
+timeline_state.set_edge_selection = function(edges) mock_edges = edges or {} end
+timeline_state.get_clip_by_id = function(clip_id)
+    for _, clip in ipairs(clips) do
+        if clip.id == clip_id then return clip end
+    end
+    return nil
+end
+
+local function new_state()
+    local state = {}
+
+    state.get_selected_edges = function() return mock_edges end
+    state.set_edge_selection = function(edges) mock_edges = edges or {} end
     state.toggle_edge_selection = function(clip_id, edge_type, trim_type)
-        for idx, edge in ipairs(state._selected_edges) do
+        for idx, edge in ipairs(mock_edges) do
             if edge.clip_id == clip_id and edge.edge_type == edge_type then
-                table.remove(state._selected_edges, idx)
+                table.remove(mock_edges, idx)
                 return
             end
         end
-        table.insert(state._selected_edges, {
+        table.insert(mock_edges, {
             clip_id = clip_id,
             edge_type = edge_type,
             trim_type = trim_type or "ripple",
@@ -54,7 +88,7 @@ local function new_state()
     state.pixel_to_time = function(x) return x end
     state.time_to_pixel = function(time_value) return time_value end
     state.get_playhead_position = function() return 0 end
-    state.clear_edge_selection = function() state._selected_edges = {} end
+    state.clear_edge_selection = function() mock_edges = {} end
     state.clear_gap_selection = function() end
     state.set_selection = function() end
     state.get_clip_by_id = function(clip_id)
@@ -66,6 +100,8 @@ local function new_state()
     state.set_active_edge_drag_state = function() end
     state.is_dragging_playhead = function() return false end
     state.set_dragging_playhead = function() end
+    state.get_project_id = function() return "proj1" end
+    state.get_sequence_id = function() return "seq1" end
 
     return state
 end

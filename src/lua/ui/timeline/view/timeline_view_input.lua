@@ -221,17 +221,13 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             end
             local lead_edge = dragged_edge
 
-            if modifiers and modifiers.command then
-                for _, edge in ipairs(target_edges) do
-                    state.toggle_edge_selection(edge.clip_id, edge.edge_type, edge.trim_type)
-                end
-            elseif modifiers and modifiers.shift then
-                for _, edge in ipairs(target_edges) do
-                    state.toggle_edge_selection(edge.clip_id, edge.edge_type, edge.trim_type)
-                end
-            elseif not selection_contains_all(state.get_selected_edges(), target_edges) then
-                state.set_edge_selection(target_edges)
-            end
+            -- Execute SelectEdges command (handles Option→linked, Cmd/Shift→toggle)
+            command_manager.execute("SelectEdges", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+                target_edges = target_edges,
+                modifiers = modifiers,
+            })
 
             view.potential_drag = {
                 type = "edges",
@@ -446,6 +442,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         elseif state.is_dragging_playhead() then
             local time = state.pixel_to_time(x, width)
             state.set_playhead_position(time)
+            command_manager.execute("SetPlayhead", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+                playhead_position = time,
+            })
         elseif view.panel_drag_move then
             view.pending_gap_click = nil
             view.panel_drag_move(view.widget, x, y)
@@ -505,8 +506,13 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             local gap = view.pending_gap_click.initial_gap
             local tid = view.get_track_id_at_y(y, height)
             if tid then
-                if view.pending_gap_click.command_modifier then state.toggle_gap_selection(gap)
-                else state.set_gap_selection({gap}) end
+                -- Execute SelectGaps command (handles Cmd→toggle)
+                command_manager.execute("SelectGaps", {
+                    project_id = state.get_project_id(),
+                    sequence_id = state.get_sequence_id(),
+                    target_gaps = { gap },
+                    modifiers = { command = view.pending_gap_click.command_modifier },
+                })
             end
             view.pending_gap_click = nil
         end

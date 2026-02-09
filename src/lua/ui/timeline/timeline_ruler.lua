@@ -22,6 +22,7 @@ local M = {}
 local timecode = require("core.timecode")
 local frame_utils = require("core.frame_utils")
 local profile_scope = require("core.profile_scope")
+local command_manager = require("core.command_manager")
 
 M.RULER_HEIGHT = 32
 local MIN_LABEL_SPACING = 20
@@ -340,6 +341,11 @@ function M.create(widget, state_module)
                 -- pixel_to_time now returns integer frame, already snapped
                 local snapped_frame = state_module.pixel_to_time(x, width)
                 state_module.set_playhead_position(snapped_frame)
+                command_manager.execute("SetPlayhead", {
+                    project_id = state_module.get_project_id(),
+                    sequence_id = state_module.get_sequence_id(),
+                    playhead_position = snapped_frame,
+                })
                 state_module.set_dragging_playhead(true)
             end
 
@@ -357,6 +363,11 @@ function M.create(widget, state_module)
                 -- pixel_to_time returns integer frame, already snapped
                 local snapped_frame = state_module.pixel_to_time(x, width)
                 state_module.set_playhead_position(snapped_frame)
+                command_manager.execute("SetPlayhead", {
+                    project_id = state_module.get_project_id(),
+                    sequence_id = state_module.get_sequence_id(),
+                    playhead_position = snapped_frame,
+                })
             end
 
         elseif event_type == "release" then

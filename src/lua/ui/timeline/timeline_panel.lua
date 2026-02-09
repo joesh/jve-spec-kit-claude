@@ -224,6 +224,11 @@ local function apply_timecode_entry_text()
         return false
     end
     state.set_playhead_position(parsed)
+    command_manager.execute("SetPlayhead", {
+        project_id = state.get_project_id(),
+        sequence_id = state.get_sequence_id(),
+        playhead_position = parsed,
+    })
     set_timecode_text_if_changed(get_formatted_playhead_timecode())
     return true
 end
@@ -1398,111 +1403,65 @@ function M.create(opts)
         local rect_height = math.abs(end_y_splitter - drag_state.splitter_start_y)
 
         -- Convert splitter rectangle to time range
-        -- We need to map to a timeline view widget to get proper width for time conversion
         local viewport_width, _ = timeline.get_dimensions(video_widget)
-        local start_value = state.pixel_to_time(rect_x, viewport_width)
-        local end_time = state.pixel_to_time(rect_x + rect_width, viewport_width)
+        local time_start = state.pixel_to_time(rect_x, viewport_width)
+        local time_end = state.pixel_to_time(rect_x + rect_width, viewport_width)
 
-        -- Find all clips that intersect with the selection rectangle
-        local selected_clips = {}
-        for _, clip in ipairs(state.get_clips()) do
-            -- Check time overlap
-            local clip_end_time = clip.timeline_start + clip.duration
-            local time_overlaps = not (clip_end_time < start_value or clip.timeline_start > end_time)
+        -- Find which tracks intersect the Y range of the selection rectangle
+        local intersecting_track_ids = {}
 
-            if time_overlaps then
+        -- Helper to check track intersection and collect matching track IDs
+        local function collect_intersecting_tracks(view_widget, tracks, bottom_to_top)
+            local _, widget_height = timeline.get_dimensions(view_widget)
 
-                -- Determine which view this clip is in
-                local track = state.get_track_by_id(clip.track_id)
-                if track then
-                    local is_video = track.track_type == "VIDEO"
-                    local view_widget = is_video and video_widget or audio_widget
+            -- Convert selection rect to widget coordinates
+            local sel_top_global_x, sel_top_global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(vertical_splitter, rect_x, rect_y)
+            local _, sel_top_widget_y = qt_constants.WIDGET.MAP_FROM_GLOBAL(view_widget, sel_top_global_x, sel_top_global_y)
 
-                    -- Get widget height for bottom-to-top calculation
-                    local widget_width, widget_height = timeline.get_dimensions(view_widget)
+            local sel_bot_global_x, sel_bot_global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(vertical_splitter, rect_x, rect_y + rect_height)
+            local _, sel_bot_widget_y = qt_constants.WIDGET.MAP_FROM_GLOBAL(view_widget, sel_bot_global_x, sel_bot_global_y)
 
-                    -- Calculate track Y position using SAME logic as timeline_view.lua rendering
-                    local track_y_widget = 0
-                    local tracks = is_video and state.get_video_tracks() or state.get_audio_tracks()
+            local sel_y_min = math.min(sel_top_widget_y, sel_bot_widget_y)
+            local sel_y_max = math.max(sel_top_widget_y, sel_bot_widget_y)
 
-                    if is_video then
-                        -- Video tracks: render bottom-to-top (same as timeline_view.lua)
-                        -- Find track index
-                        local track_index = -1
-                        for i, t in ipairs(tracks) do
-                            if t.id == clip.track_id then
-                                track_index = i - 1  -- 0-based
-                                break
-                            end
-                        end
+            local track_y = bottom_to_top and widget_height or 0
 
-                        -- Calculate Y from bottom upward (matches get_track_y in timeline_view.lua)
-                        track_y_widget = widget_height
-                        for i = 0, track_index do
-                            if tracks[i + 1] then
-                                local h = state.get_track_height(tracks[i + 1].id)
-                                track_y_widget = track_y_widget - h
-                            end
-                        end
-                    else
-                        -- Audio tracks: render top-to-bottom (same as timeline_view.lua)
-                        for _, t in ipairs(tracks) do
-                            if t.id == clip.track_id then
-                                break
-                            end
-                            track_y_widget = track_y_widget + state.get_track_height(t.id)
-                        end
-                    end
+            for i, track in ipairs(tracks) do
+                local track_height = state.get_track_height(track.id)
 
-                    local track_height = state.get_track_height(clip.track_id)
-
-                    -- Convert selection rectangle from splitter coordinates to widget coordinates
-                    -- Splitter → global → widget
-                    local sel_global_x, sel_global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(vertical_splitter, rect_x, rect_y)
-                    local sel_widget_x, sel_widget_y = qt_constants.WIDGET.MAP_FROM_GLOBAL(view_widget, sel_global_x, sel_global_y)
-
-                    local sel_bottom_global_x, sel_bottom_global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(vertical_splitter, rect_x + rect_width, rect_y + rect_height)
-                    local sel_bottom_widget_x, sel_bottom_widget_y = qt_constants.WIDGET.MAP_FROM_GLOBAL(view_widget, sel_bottom_global_x, sel_bottom_global_y)
-
-                    -- Check if selection rectangle (in widget coords) overlaps with track (also in widget coords)
-                    local track_bottom = track_y_widget + track_height
-                    local y_overlaps = not (track_bottom < sel_widget_y or track_y_widget > sel_bottom_widget_y)
-
-                    if y_overlaps then
-                        table.insert(selected_clips, clip)
-                    end
-                end
-            end
-        end
-
-        -- Update selection state
-        -- If Cmd was held during drag, toggle clips in/out of selection instead of replacing
-        if drag_state.modifiers and drag_state.modifiers.command then
-            local current_selection = state.get_selected_clips()
-
-            -- Toggle: add clips that aren't selected, remove clips that are selected
-            for _, dragged_clip in ipairs(selected_clips) do
-                local found_index = nil
-                for i, existing_clip in ipairs(current_selection) do
-                    if existing_clip.id == dragged_clip.id then
-                        found_index = i
-                        break
-                    end
-                end
-
-                if found_index then
-                    -- Already selected - remove it (toggle off)
-                    table.remove(current_selection, found_index)
+                local track_top, track_bottom
+                if bottom_to_top then
+                    track_y = track_y - track_height
+                    track_top = track_y
+                    track_bottom = track_y + track_height
                 else
-                    -- Not selected - add it (toggle on)
-                    table.insert(current_selection, dragged_clip)
+                    track_top = track_y
+                    track_bottom = track_y + track_height
+                    track_y = track_y + track_height
+                end
+
+                -- Check Y overlap
+                local y_overlaps = not (track_bottom <= sel_y_min or track_top >= sel_y_max)
+                if y_overlaps then
+                    table.insert(intersecting_track_ids, track.id)
                 end
             end
-
-            state.set_selection(current_selection)
-        else
-            state.set_selection(selected_clips)
         end
+
+        -- Check video tracks (bottom-to-top layout)
+        collect_intersecting_tracks(video_widget, state.get_video_tracks(), true)
+        -- Check audio tracks (top-to-bottom layout)
+        collect_intersecting_tracks(audio_widget, state.get_audio_tracks(), false)
+
+        -- Execute SelectRectangle command (handles Cmd→toggle, time/track intersection)
+        command_manager.execute("SelectRectangle", {
+            project_id = state.get_project_id(),
+            sequence_id = state.get_sequence_id(),
+            time_start = time_start,
+            time_end = time_end,
+            track_ids = intersecting_track_ids,
+            modifiers = drag_state.modifiers,
+        })
 
         -- Reset drag state
         drag_state.dragging = false
