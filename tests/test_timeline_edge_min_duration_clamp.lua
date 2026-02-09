@@ -84,8 +84,8 @@ timeline_state.set_edge_selection({edge})
 timeline_renderer.render(view)
 
 assert(view.drag_state.preview_clamped_delta_frames, "expected preview to compute a clamped delta for over-shrinking clips")
-assert(view.drag_state.preview_clamped_delta_frames == 4,
-    "expected in-edge shrink to clamp at duration-1 (5-1=4 frames)")
+assert(view.drag_state.preview_clamped_delta_frames == 5,
+    "expected in-edge shrink to clamp at full duration (5 frames = deletes clip)")
 assert(view.drag_state.preview_data, "expected preview_data to exist (dry run should succeed)")
 
 timeline = original_timeline

@@ -144,14 +144,14 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
     end
 
     if not is_gap_clip then
-        -- CONSTRAINT 1: Minimum clip duration (must be at least 1ms)
+        -- CONSTRAINT 1: Allow trimming to zero duration (clip will be deleted)
         if edge_type == "in" then
-            -- Trimming in-point: can't make duration < 1
-            max_delta = duration - 1  -- Drag right max
+            -- Trimming in-point: can trim to zero (deletes clip)
+            max_delta = duration  -- Drag right max
             min_delta = -math.huge  -- Drag left limited by media/adjacent clip
         else  -- edge_type == "out"
-            -- Trimming out-point: can't make duration < 1
-            min_delta = -(duration - 1)  -- Drag left max
+            -- Trimming out-point: can trim to zero (deletes clip)
+            min_delta = -duration  -- Drag left max
             max_delta = math.huge  -- Drag right limited by media/adjacent clip
         end
     else

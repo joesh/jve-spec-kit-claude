@@ -106,7 +106,7 @@ do
     layout:cleanup()
 end
 
--- Test 3: Failed command leaves database unchanged (transaction rollback)
+-- Test 3: Trim beyond duration deletes clip (clamps to zero)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_rollback.db",
@@ -115,30 +115,26 @@ do
         }
     })
 
-    local before = Clip.load(layout.clips.v1_left.id, layout.db)
     local before_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    -- Command clamps when trim would go past minimum duration
+    -- Command clamps when trim would go past zero (deletes clip)
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
         {clip_id = layout.clips.v1_left.id, edge_type = "out", track_id = layout.tracks.v1.id}
     })
-    cmd:set_parameter("delta_frames", -20)  -- Would make duration negative
+    cmd:set_parameter("delta_frames", -20)  -- Would make duration negative, clamps to zero (delete)
 
     local result = command_manager.execute(cmd)
-    assert(result.success, "Command should succeed (delta should clamp to min duration)")
+    assert(result.success, "Command should succeed (delta clamps to delete clip)")
 
-    -- Database should reflect a clamped trim (min duration = 1 frame)
-    local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration == 1,
-        string.format("Clamped trim should stop at 1 frame, got duration=%d", after.duration))
-    assert(after.timeline_start == before.timeline_start,
-        "Out-edge trim should not move timeline_start")
+    -- Clip should be deleted (trimmed to zero)
+    local after = Clip.load_optional(layout.clips.v1_left.id, layout.db)
+    assert(after == nil, "Clip trimmed beyond duration should be DELETED")
 
     local right_after = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(right_after.timeline_start == before_right.timeline_start - 9,
-        string.format("Downstream clip should ripple left by 9 frames, got %d", right_after.timeline_start))
+    assert(right_after.timeline_start == before_right.timeline_start - 10,
+        string.format("Downstream clip should ripple left by 10 frames (full clip), got %d", right_after.timeline_start))
 
     layout:cleanup()
 end

@@ -242,13 +242,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local edge_key = build_edge_key(edge_info)
         ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
         local delta_min, delta_max = compute_roll_constraint(edge_info, clip, ctx.original_states_map[edge_info.clip_id], neighbors, ctx.edited_clip_lookup)
+        -- Roll edit points (multiple roll edges on same track) use global constraint.
+        -- Multitrack roll (single roll edge per track) uses per-edge constraint only.
+        local is_edit_point = ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id]
         if delta_min then
             ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, delta_min)
-            update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+            if is_edit_point then
+                update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+            end
         end
         if delta_max then
             ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, delta_max)
-            update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+            if is_edit_point then
+                update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+            end
         end
     end
 
@@ -299,13 +306,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return
         end
         local edge_key = build_edge_key(edge_info)
+        -- Multitrack roll uses per-edge constraints; edit points and ripple use global.
+        local is_multitrack_roll = edge_info.trim_type == "roll"
+            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
         ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
         if normalized_edge == "in" then
             if not effective_delta_positive and clip_state.source_in then
                 assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
                 local extend_limit = -clip_state.source_in
                 ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, extend_limit)
-                update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+                if not is_multitrack_roll then
+                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+                end
             end
         elseif normalized_edge == "out" and effective_delta_positive and clip.media_id then
             local media = (ctx.preloaded_media and ctx.preloaded_media[clip.media_id]) or require("models.media").load(clip.media_id, db)
@@ -320,10 +332,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if will_negate then
                     local global_constraint = -available_frames
                     ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_constraint)
-                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+                    if not is_multitrack_roll then
+                        update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+                    end
                 else
                     ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, available_frames)
-                    update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+                    if not is_multitrack_roll then
+                        update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+                    end
                 end
             end
         end
@@ -353,12 +369,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local min_applied = -math.huge
         local max_applied = math.huge
         if normalized_edge == "in" then
-            max_applied = duration_frames - 1
+            max_applied = duration_frames  -- Allow trim to zero (deletes clip)
         else -- out
-            min_applied = -(duration_frames - 1)
+            min_applied = -duration_frames  -- Allow trim to zero (deletes clip)
         end
 
         local edge_key = build_edge_key(edge_info)
+        -- Multitrack roll uses per-edge constraints; edit points and ripple use global.
+        local is_multitrack_roll = edge_info.trim_type == "roll"
+            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
         ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
 
         local global_min = min_applied
@@ -371,11 +390,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if global_min ~= -math.huge then
             ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_min)
-            update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+            if not is_multitrack_roll then
+                update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
+            end
         end
         if global_max ~= math.huge then
             ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, global_max)
-            update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+            if not is_multitrack_roll then
+                update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
+            end
         end
     end
 
@@ -535,9 +558,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not edge_info.track_id then
                 edge_info.track_id = ctx.clip_track_lookup[edge_info.clip_id]
             end
-            if edge_info.track_id then
-                ctx.selected_tracks[edge_info.track_id] = true
-            end
+            assert(edge_info.track_id,
+                string.format("assign_edge_tracks: edge %s:%s missing track_id (clip_id=%s not in lookup?)",
+                    tostring(edge_info.clip_id), tostring(edge_info.edge_type), tostring(edge_info.clip_id)))
+            ctx.selected_tracks[edge_info.track_id] = true
             edge_info.normalized_edge = edge_utils.to_bracket(edge_info.edge_type)
         end
     end
@@ -737,6 +761,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         ctx.clamped_delta_frames = ctx.delta_frames
+
+        -- Pre-compute which tracks have roll edit points (multiple CLIP roll edges on same track).
+        -- Gap edges (gap_before/gap_after) don't count - they're part of the same edit as the clip edge.
+        -- Roll edges on these tracks use global constraints; multitrack roll uses per-edge.
+        ctx.roll_edit_point_tracks = {}
+        local roll_count_by_track = {}
+        for _, edge_info in ipairs(ctx.edge_infos) do
+            if edge_info.trim_type == "roll" and edge_info.track_id then
+                -- Only count clip edges (in/out), not gap edges
+                local edge_type = edge_info.edge_type
+                if edge_type == "in" or edge_type == "out" then
+                    roll_count_by_track[edge_info.track_id] = (roll_count_by_track[edge_info.track_id] or 0) + 1
+                end
+            end
+        end
+        for track_id, count in pairs(roll_count_by_track) do
+            if count > 1 then
+                ctx.roll_edit_point_tracks[track_id] = true
+            end
+        end
     end
 
 		    local function compute_earliest_ripple_hint(ctx)
@@ -952,11 +996,43 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        ctx.gap_right_moved = {}
 	    end
 
-    local function compute_applied_delta(ctx, edge_key)
-        local applied_delta = ctx.clamped_delta_frames
-        if should_negate_edge(ctx, edge_key) then
-            applied_delta = -ctx.clamped_delta_frames
+    local function compute_applied_delta(ctx, edge_key, edge_info)
+        local applied_delta
+        -- Multitrack roll (single roll edge per track) uses per-edge constraints independently.
+        -- Roll edit points (multiple roll edges on same track) and ripple use global clamped delta.
+        local is_multitrack_roll = edge_info and edge_info.trim_type == "roll"
+            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
+        if is_multitrack_roll then
+            -- Multitrack roll: use original delta + per-edge constraints
+            applied_delta = ctx.delta_frames
+            if should_negate_edge(ctx, edge_key) then
+                applied_delta = -ctx.delta_frames
+            end
+            local constraints = ctx.per_edge_constraints[edge_key]
+            if constraints then
+                local before_clamp = applied_delta
+                if constraints.min ~= -math.huge and applied_delta < constraints.min then
+                    applied_delta = constraints.min
+                end
+                if constraints.max ~= math.huge and applied_delta > constraints.max then
+                    applied_delta = constraints.max
+                end
+                if before_clamp ~= applied_delta then
+                    logger.debug("ripple", string.format("Multitrack roll edge %s: requested=%d, clamped to %d (min=%s, max=%s)",
+                        edge_key, before_clamp, applied_delta,
+                        constraints.min == -math.huge and "-inf" or tostring(constraints.min),
+                        constraints.max == math.huge and "+inf" or tostring(constraints.max)))
+                end
+            end
+        else
+            -- Ripple edges or same-track roll edit points use global clamped delta
+            applied_delta = ctx.clamped_delta_frames
+            if should_negate_edge(ctx, edge_key) then
+                applied_delta = -ctx.clamped_delta_frames
+            end
         end
+        logger.debug("ripple", string.format("compute_applied_delta: key=%s, is_multitrack_roll=%s, delta_frames=%s, clamped=%s, result=%s",
+            edge_key, tostring(is_multitrack_roll), tostring(ctx.delta_frames), tostring(ctx.clamped_delta_frames), tostring(applied_delta)))
         return applied_delta
     end
 
@@ -1186,7 +1262,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local original = ctx.original_states_map[clip_id]
             local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
             local key = build_edge_key(edge_info)
-            local applied_delta = compute_applied_delta(ctx, key)
+            local applied_delta = compute_applied_delta(ctx, key, edge_info)
 
             local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
             if not success then
@@ -1737,7 +1813,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         if anchor_clip_id and raw_edge_type then
                             local edge_key = string.format("%s:%s", tostring(anchor_clip_id), tostring(raw_edge_type))
                             local source_key = build_edge_key(edge_info)
-                            local applied = compute_applied_delta(ctx, source_key)
+                            local applied = compute_applied_delta(ctx, source_key, edge_info)
                             upsert({
                                 edge_key = edge_key,
                                 clip_id = anchor_clip_id,
