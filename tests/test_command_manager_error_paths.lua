@@ -101,16 +101,16 @@ do
     check("error mentions 'Unsupported'", result.error_message and result.error_message:find("Unsupported") ~= nil)
 end
 
-print("\n--- no active command event → bug_result ---")
+print("\n--- no active command event → auto-wraps ---")
 do
     command_manager.end_command_event()
     command_manager.register_executor("EventTestCmd", function() return true end, function() return true end, {
         args = { project_id = { required = true } }
     })
 
+    -- execute() should auto-wrap in command event when none is active
     local result = command_manager.execute("EventTestCmd", { project_id = "proj1" })
-    check("no event → success=false", result.success == false)
-    check("error mentions 'No active command event'", result.error_message and result.error_message:find("No active command event") ~= nil)
+    check("no event → auto-wraps, success=true", result.success == true)
 
     command_manager.begin_command_event("script")
     command_manager.unregister_executor("EventTestCmd")

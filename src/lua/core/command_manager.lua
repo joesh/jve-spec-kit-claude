@@ -48,10 +48,14 @@ local execution_depth = 0
 
 -- Root command tracking for automatic undo grouping
 -- When a command executes nested commands, they all share the root's sequence_number as undo_group_id
--- Nested commands also inherit the root's playhead context (same user action, same playhead position)
+-- Nested commands also inherit the root's playhead and pre-selection context (same user action)
 local root_command_sequence_number = nil
 local root_playhead_value = nil
 local root_playhead_rate = nil
+-- Selection captured at root command start (inherited by nested commands for undo)
+local root_selected_clips_pre = nil
+local root_selected_edges_pre = nil
+local root_selected_gaps_pre = nil
 
 
 
@@ -690,6 +694,13 @@ end
 
 -- Main execute function
 function M.execute(command_or_name, params)
+    -- Auto-wrap in command event if none active (avoids requiring every call site to wrap)
+    local auto_wrapped = false
+    if not command_event_origin or command_event_depth == 0 then
+        M.begin_command_event("ui")
+        auto_wrapped = true
+    end
+
     -- Track execution depth for nested command support
     execution_depth = execution_depth + 1
 
@@ -704,6 +715,13 @@ function M.execute(command_or_name, params)
         root_command_sequence_number = nil
         root_playhead_value = nil
         root_playhead_rate = nil
+        root_selected_clips_pre = nil
+        root_selected_edges_pre = nil
+        root_selected_gaps_pre = nil
+    end
+
+    if auto_wrapped then
+        M.end_command_event()
     end
 
     if not ok then
@@ -760,8 +778,9 @@ function M._execute_body(command_or_name, params)
         -- Assign sequence number and link to parent
         sequence_number = history.increment_sequence_number()
         command.sequence_number = sequence_number
-        -- Fall back to root's sequence when current is nil (root hasn't saved yet)
-        command.parent_sequence_number = history.get_current_sequence_number() or root_command_sequence_number
+        -- Nested commands must have root command as parent for proper undo/redo tree traversal.
+        -- Using history position would break the chain when root hasn't saved yet.
+        command.parent_sequence_number = root_command_sequence_number
 
         -- Inherit undo group: explicit group takes precedence over automatic grouping
         explicit_group = history.get_current_undo_group_id()
@@ -800,6 +819,14 @@ function M._execute_body(command_or_name, params)
             -- Inherit playhead context from root (same user action, same playhead position)
             command.playhead_value = root_playhead_value
             command.playhead_rate = root_playhead_rate
+
+            -- Inherit pre-selection from root (for undo).
+            -- Post-selection is NOT inherited because it's captured AFTER executor completes,
+            -- but nested commands run DURING the executor. redo_group handles this by
+            -- restoring from root command after all nested redos complete.
+            command.selected_clip_ids_pre = root_selected_clips_pre
+            command.selected_edge_infos_pre = root_selected_edges_pre
+            command.selected_gap_infos_pre = root_selected_gaps_pre
 
             -- Save nested command to DB (shares root's transaction)
             local saved = command:save(db)
@@ -951,6 +978,10 @@ function M._execute_body(command_or_name, params)
     skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
     if not skip_selection_snapshot then
         capture_pre_selection_for_command(command)
+        -- Store for nested commands to inherit (they share the same user action context)
+        root_selected_clips_pre = command.selected_clip_ids_pre
+        root_selected_edges_pre = command.selected_edge_infos_pre
+        root_selected_gaps_pre = command.selected_gap_infos_pre
     end
 
     -- EXECUTE
@@ -988,7 +1019,13 @@ function M._execute_body(command_or_name, params)
         command.status = "Executed"
         command.executed_at = os.time()
 
+        -- Normalize selection after trim edits: stale gap edges become clip edges
+        -- when the gap has been closed by the edit
         if not skip_selection_snapshot then
+            local ok_sel, selection_state = pcall(require, "ui.timeline.state.selection_state")
+            if ok_sel and selection_state and type(selection_state.normalize_edge_selection) == "function" then
+                selection_state.normalize_edge_selection()
+            end
             capture_post_selection_for_command(command)
         end
 
@@ -1042,20 +1079,13 @@ function M._execute_body(command_or_name, params)
             -- else: nested commands advanced cursor past us, keep it there
             history.save_undo_position()
 
-            -- Snapshotting
+            -- Snapshotting (only for commands that modify existing sequences)
             local snapshot_mgr = require('core.snapshot_manager')
             local force_snapshot = command_flag(command, "force_snapshot", "__force_snapshot")
-            if force_snapshot or snapshot_mgr.should_snapshot(sequence_number) then
-                 local targets = command:get_parameter("__snapshot_sequence_ids")
-                 assert(targets, "Snapshot restore: Missing __snapshot_sequence_ids parameter")
-                 if #targets == 0 then
-                     local def_seq = history.get_current_stack_sequence_id(true)
-                     if def_seq then table.insert(targets, def_seq) end
-                 end
-                 for _, seq_id in ipairs(targets) do
-                    local clips = require('core.database').load_clips(seq_id)
-                    snapshot_mgr.create_snapshot(db, seq_id, sequence_number, clips)
-                 end
+            local seq_id = command:get_parameter("sequence_id")
+            if seq_id and (force_snapshot or snapshot_mgr.should_snapshot(sequence_number)) then
+                 local clips = require('core.database').load_clips(seq_id)
+                 snapshot_mgr.create_snapshot(db, seq_id, sequence_number, clips)
                  if perf.enabled then
                     perf.log("snapshotting")
                     perf.reset()
@@ -1428,6 +1458,8 @@ function M.undo_group(group_id)
     local earliest_cmd = commands_to_undo[#commands_to_undo]
     history.set_current_sequence_number(earliest_cmd.parent_sequence_number)
     history.save_undo_position()
+    -- Note: selection is restored by the last execute_undo (root command).
+    -- Nested commands now inherit root's selection, so all restore correctly.
 
     return { success = true }
 end
@@ -1574,7 +1606,7 @@ function M.redo_group(group_id)
             break
         end
 
-        -- First command in group is the root (it captured selection)
+        -- First command in group is the root (it captured post-selection)
         if not root_cmd then
             root_cmd = cmd
         end
@@ -1587,8 +1619,9 @@ function M.redo_group(group_id)
         parent = cmd.sequence_number
     end
 
-    -- Restore selection from root command (nested commands don't capture selection,
-    -- so their restore in execute_redo_command may have cleared it)
+    -- Restore post-selection from root command. Nested commands don't have post-selection
+    -- because it's captured AFTER the root executor completes, but nested commands
+    -- execute DURING the root executor. So we restore from root after all redos.
     if root_cmd then
         state_mgr.restore_selection_from_serialized(
             root_cmd.selected_clip_ids, root_cmd.selected_edge_infos, root_cmd.selected_gap_infos)
