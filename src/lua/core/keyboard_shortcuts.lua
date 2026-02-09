@@ -1329,7 +1329,61 @@ local function handle_key_impl(event)
         return true
     end
     if key == KEY.E and panel_active_timeline then
-        print("Trim tool (not implemented yet)")
+        -- E: Extend Edit - extend selected edge(s) to playhead
+        -- Honors trim_type (ripple vs roll)
+        if timeline_state and command_manager then
+            local selected_edges = timeline_state.get_selected_edges()
+            if not selected_edges or #selected_edges == 0 then
+                print("ExtendEdit: no edges selected")
+                return true
+            end
+
+            local playhead_value = timeline_state.get_playhead_position()
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
+            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+            assert(project_id and project_id ~= "", "keyboard_shortcuts: missing project_id for ExtendEdit")
+            assert(sequence_id and sequence_id ~= "", "keyboard_shortcuts: missing sequence_id for ExtendEdit")
+
+            -- Build edge_infos with trim_type preserved
+            local all_clips = timeline_state.get_clips()
+            local edge_infos = {}
+            for _, edge in ipairs(selected_edges) do
+                local clip = nil
+                for _, c in ipairs(all_clips) do
+                    if c.id == edge.clip_id then
+                        clip = c
+                        break
+                    end
+                end
+                if clip then
+                    table.insert(edge_infos, {
+                        clip_id = edge.clip_id,
+                        edge_type = edge.edge_type,
+                        track_id = clip.track_id,
+                        trim_type = edge.trim_type,  -- ripple or roll
+                    })
+                end
+            end
+
+            if #edge_infos == 0 then
+                print("ExtendEdit: no valid edges found")
+                return true
+            end
+
+            local result = execute_command("ExtendEdit", {
+                edge_infos = edge_infos,
+                playhead_frame = playhead_value,
+                project_id = project_id,
+                sequence_id = sequence_id,
+            })
+
+            if result and result.success then
+                local trim_type = edge_infos[1].trim_type or "ripple"
+                print(string.format("Extended %d edge(s) to playhead (%s)", #edge_infos, trim_type))
+            else
+                print("ExtendEdit: " .. ((result and result.error_message) or "failed"))
+            end
+        end
         return true
     end
     if key == KEY.R and panel_active_timeline then

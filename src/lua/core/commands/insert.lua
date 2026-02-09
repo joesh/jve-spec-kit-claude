@@ -224,10 +224,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
 
-    -- No undoer needed - undo is handled by the undo group containing AddClipsToSequence
+    -- Undo is handled by the nested AddClipsToSequence command via undo group
+    command_undoers["Insert"] = function(command)
+        return true
+    end
+
     return {
         executor = command_executors["Insert"],
-        undoer = nil,
+        undoer = command_undoers["Insert"],
         spec = SPEC,
     }
 end

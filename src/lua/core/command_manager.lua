@@ -713,6 +713,12 @@ function M.execute(command_or_name, params)
 end
 
 function M._execute_body(command_or_name, params)
+    -- During redo, wrapper commands may call execute() but nested cmds are replayed by redo_group
+    -- Check early to skip normalize_command which requires an active command event
+    if undo_redo_in_progress then
+        return { success = true }, nil
+    end
+
     local is_nested = execution_depth > 1
 
     local command, normalize_failure = normalize_command(command_or_name, params)
@@ -741,7 +747,6 @@ function M._execute_body(command_or_name, params)
         result_data = ""
     }
 
-    -- Nested execution: record to DB but skip transaction/commit/UI refresh (root handles)
     -- This enables automatic undo grouping - all nested commands share root's undo_group_id
     if is_nested then
         -- Check for non-undoable commands - execute without recording, even when nested
@@ -755,7 +760,8 @@ function M._execute_body(command_or_name, params)
         -- Assign sequence number and link to parent
         sequence_number = history.increment_sequence_number()
         command.sequence_number = sequence_number
-        command.parent_sequence_number = history.get_current_sequence_number()
+        -- Fall back to root's sequence when current is nil (root hasn't saved yet)
+        command.parent_sequence_number = history.get_current_sequence_number() or root_command_sequence_number
 
         -- Inherit undo group: explicit group takes precedence over automatic grouping
         explicit_group = history.get_current_undo_group_id()
@@ -1554,6 +1560,7 @@ function M.redo_group(group_id)
     assert(db, "redo_group: no database connection")
 
     local parent = history.get_current_sequence_number() or 0
+    local root_cmd = nil  -- Track root command for selection restore
 
     -- Follow history tree forward while commands are in this group
     while true do
@@ -1567,12 +1574,24 @@ function M.redo_group(group_id)
             break
         end
 
+        -- First command in group is the root (it captured selection)
+        if not root_cmd then
+            root_cmd = cmd
+        end
+
         local result = execute_redo_command(cmd)
         if not result.success then
             return result, cmd
         end
 
         parent = cmd.sequence_number
+    end
+
+    -- Restore selection from root command (nested commands don't capture selection,
+    -- so their restore in execute_redo_command may have cleared it)
+    if root_cmd then
+        state_mgr.restore_selection_from_serialized(
+            root_cmd.selected_clip_ids, root_cmd.selected_edge_infos, root_cmd.selected_gap_infos)
     end
 
     return { success = true }
@@ -1595,6 +1614,7 @@ function M.execute_undo(original_command)
         if not undoer then
             local msg = string.format("No undoer registered for %s", tostring(original_command.type))
             logger.error("command_manager", msg)
+            undo_redo_in_progress = false
             return { success = false, error_message = msg }
         end
     end

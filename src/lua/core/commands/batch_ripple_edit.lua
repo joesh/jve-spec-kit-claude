@@ -1040,6 +1040,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return false
     end
 
+    -- Check if clip has any edge selected (used to determine if right clip is part of edit)
+    local function clip_has_selected_edge(ctx, clip_id)
+        assert(ctx.edge_infos, "clip_has_selected_edge: edge_infos is nil")
+        for _, edge_info in ipairs(ctx.edge_infos) do
+            -- Check both original_clip_id (for materialized gaps) and clip_id
+            if edge_info.clip_id == clip_id or edge_info.original_clip_id == clip_id then
+                return true
+            end
+        end
+        return false
+    end
+
     local function snapshot_clip_for_gap(ctx, clip)
         return {
             id = clip.id,
@@ -1077,6 +1089,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        end
 	        local right_id = gap_clip.gap_right_id
 	        if not right_id or ctx.gap_right_moved[right_id] then
+	            return
+	        end
+	        -- Roll edits don't propagate to adjacent clips UNLESS that clip has its own
+	        -- selected edge (e.g., gap_after + gap_before roll where both sides are selected)
+	        if gap_clip.trim_type == "roll" and not clip_has_selected_edge(ctx, right_id) then
 	            return
 	        end
 	        if gap_right_has_independent_in_edge(ctx, right_id) then
@@ -2077,7 +2094,8 @@ create_temp_gap_clip = function(edge_info, clip_lookup, all_clips, seq_fps_num, 
         modified_at = 0,
         is_temp_gap = true,
         gap_left_id = left_clip and left_clip.id or nil,
-        gap_right_id = right_clip and right_clip.id or nil
+        gap_right_id = right_clip and right_clip.id or nil,
+        trim_type = edge_info.trim_type  -- Preserve roll/ripple for gap propagation
     }
     return gap_clip
 end
