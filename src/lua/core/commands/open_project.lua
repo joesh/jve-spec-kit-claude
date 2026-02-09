@@ -2,6 +2,7 @@
 --
 -- Responsibilities:
 -- - OpenProject: Shows file picker when interactive=true, opens project database
+-- - Handles multiple formats: .jvp (native), .drp (Resolve archive → conversion)
 --
 -- Non-goals:
 -- - Undo support (opening a project is an application-level action, not undoable)
@@ -10,8 +11,9 @@
 -- Invariants:
 -- - Requires project_path (or gathered from dialog)
 -- - After opening, command_manager is re-initialized with new database
+-- - .drp files trigger conversion dialog before opening
 --
--- Size: ~150 LOC
+-- Size: ~250 LOC
 -- Volatility: low
 --
 -- @file open_project.lua
@@ -20,6 +22,31 @@ local logger = require("core.logger")
 local project_open = require("core.project_open")
 local file_browser = require("core.file_browser")
 
+-- ---------------------------------------------------------------------------
+-- Format Detection
+-- ---------------------------------------------------------------------------
+
+local function get_file_extension(path)
+    if not path then return nil end
+    return path:match("%.([^%.]+)$")
+end
+
+local function detect_project_format(path)
+    local ext = get_file_extension(path)
+    if not ext then return "unknown" end
+    ext = ext:lower()
+
+    if ext == "jvp" then
+        return "jvp"
+    elseif ext == "drp" then
+        return "drp"
+    elseif ext == "db" or ext == "resolve" then
+        return "resolve_db"
+    else
+        return "unknown"
+    end
+end
+
 -- Schema for OpenProject command
 local SPEC = {
     args = {
@@ -27,6 +54,7 @@ local SPEC = {
         project_path = {},  -- Path to project file (or gathered from dialog)
     },
     no_persist = true,  -- Opening a project is not a typical undoable command
+    no_project_context = true,  -- Doesn't require active project (it OPENS a project)
 }
 
 function M.register(executors, undoers, db, set_last_error)
@@ -53,13 +81,13 @@ function M.register(executors, undoers, db, set_last_error)
                 return { success = false, error_message = "Main window not initialized" }
             end
 
-            -- Show file picker dialog
+            -- Show file picker dialog (accepts .jvp native, .drp Resolve archive)
             local home = os.getenv("HOME") or ""
             local default_dir = home ~= "" and (home .. "/Documents/JVE Projects") or ""
             project_path = file_browser.open_file(
                 "open_project", main_window,
                 "Open Project",
-                "JVE Project Files (*.jvp);;All Files (*)",
+                "All Project Files (*.jvp *.drp);;JVE Projects (*.jvp);;Resolve Archives (*.drp);;All Files (*)",
                 default_dir
             )
 
@@ -74,13 +102,48 @@ function M.register(executors, undoers, db, set_last_error)
 
         logger.info("open_project", "Opening project: " .. tostring(project_path))
 
+        -- Detect format and route accordingly
+        local format = detect_project_format(project_path)
+        logger.debug("open_project", "Detected format: " .. format)
+
+        if format == "drp" then
+            -- .drp requires conversion to .jvp first
+            local drp_converter = require("core.drp_project_converter")
+
+            -- Get main_window for dialog
+            local ui_state_ok2, ui_state2 = pcall(require, "ui.ui_state")
+            local conv_window = ui_state_ok2 and ui_state2.get_main_window() or nil
+
+            local jvp_path = drp_converter.show_conversion_dialog(project_path, conv_window)
+            if not jvp_path then
+                logger.debug("open_project", "OpenProject: User cancelled conversion dialog")
+                return { success = true, cancelled = true }
+            end
+
+            local conv_ok, conv_err = drp_converter.convert(project_path, jvp_path)
+            if not conv_ok then
+                return { success = false, error_message = "Conversion failed: " .. tostring(conv_err) }
+            end
+
+            -- Now open the converted .jvp
+            project_path = jvp_path
+            logger.info("open_project", "Converted .drp, now opening: " .. project_path)
+
+        elseif format == "resolve_db" then
+            -- Resolve DB peer mode - not yet implemented
+            return { success = false, error_message = "Resolve database peer mode not yet implemented" }
+
+        elseif format ~= "jvp" then
+            return { success = false, error_message = "Unknown project format: " .. tostring(project_path) }
+        end
+
         -- Get UI references
         local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
         local main_window = ui_state_ok and ui_state.get_main_window() or nil
         local project_browser = ui_state_ok and ui_state.get_project_browser() or nil
         local timeline_panel = ui_state_ok and ui_state.get_timeline_panel() or nil
 
-        -- Open database
+        -- Open .jvp database
         local database = require("core.database")
         local opened = project_open.open_project_database_or_prompt_cleanup(
             database, qt_constants, project_path, main_window
@@ -101,69 +164,53 @@ function M.register(executors, undoers, db, set_last_error)
             return { success = false, error_message = "Failed to open project database" }
         end
 
-        local db_conn = database.get_connection()
-        if not db_conn then
-            return { success = false, error_message = "Database connection is nil after open" }
-        end
+        -- Find most recent sequence via model (SQL isolation: models own DB access)
+        local Sequence = require("models.sequence")
+        local sequence = Sequence.find_most_recent()
 
-        -- Find most recent sequence
-        local sequence_id, project_id
-        local stmt = db_conn:prepare([[
-            SELECT id, project_id
-            FROM sequences
-            ORDER BY modified_at DESC, created_at DESC, id ASC
-            LIMIT 1
-        ]])
-
-        if not stmt then
-            return { success = false, error_message = "Failed to prepare sequence query" }
-        end
-
-        local ok = stmt:exec() and stmt:next()
-        if ok then
-            sequence_id = stmt:value(0)
-            project_id = stmt:value(1)
-        end
-        stmt:finalize()
-
-        if not sequence_id or sequence_id == "" then
+        if not sequence then
             return { success = false, error_message = "No sequences found in project" }
         end
 
-        if not project_id or project_id == "" then
+        if not sequence.project_id or sequence.project_id == "" then
             return { success = false, error_message = "Sequence missing project_id" }
         end
 
         -- Re-initialize command manager with new database
         local command_manager = require("core.command_manager")
-        command_manager.init(db_conn, sequence_id, project_id)
+        command_manager.init(sequence.id, sequence.project_id)
 
         -- Load timeline
         if timeline_panel and timeline_panel.load_sequence then
-            timeline_panel.load_sequence(sequence_id)
+            timeline_panel.load_sequence(sequence.id)
         end
 
-        -- Refresh project browser
-        if project_browser and project_browser.refresh then
-            project_browser.refresh()
+        -- Refresh project browser (set project_id first to avoid stale cache)
+        if project_browser then
+            if project_browser.set_project_id then
+                project_browser.set_project_id(sequence.project_id)
+            end
+            if project_browser.refresh then
+                project_browser.refresh()
+            end
         end
 
         if project_browser and project_browser.focus_sequence then
-            project_browser.focus_sequence(sequence_id)
+            project_browser.focus_sequence(sequence.id)
         end
 
         -- Set window title
         local Project = require("models.project")
-        local project = Project.load(project_id)
+        local project = Project.load(sequence.project_id)
         if project and project.name and project.name ~= "" then
             if main_window and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TITLE then
                 qt_constants.PROPERTIES.SET_TITLE(main_window, project.name)
             end
         end
 
-        logger.info("open_project", string.format("Opened project: %s (sequence: %s)", project_id, sequence_id))
+        logger.info("open_project", string.format("Opened project: %s (sequence: %s)", sequence.project_id, sequence.id))
 
-        return { success = true, project_id = project_id, sequence_id = sequence_id }
+        return { success = true, project_id = sequence.project_id, sequence_id = sequence.id }
     end
 
     -- No undoer - opening a project is not undoable

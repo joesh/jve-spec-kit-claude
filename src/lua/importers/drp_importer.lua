@@ -100,7 +100,25 @@ local function parse_xml_file(xml_path)
     return convert_node(root), nil
 end
 
+--- Find direct child element by tag name (non-recursive)
+-- Use this for properties that belong to the element itself (Name, Duration, etc.)
+-- @param elem table: XML element to search
+-- @param tag_name string: Tag name to find
+-- @return table|nil: First matching direct child, or nil if not found
+local function find_direct_child(elem, tag_name)
+    if not elem or not elem.children then return nil end
+
+    for _, child in ipairs(elem.children) do
+        if child.tag == tag_name then
+            return child
+        end
+    end
+
+    return nil
+end
+
 --- Find XML element by tag name (recursive search)
+-- Use this for finding nested structures (tracks, clips, etc.)
 -- @param elem table: XML element to search
 -- @param tag_name string: Tag name to find
 -- @return table|nil: First matching element, or nil if not found
@@ -196,7 +214,8 @@ local function parse_project_metadata(project_elem)
         return project
     end
 
-    local name_elem = find_element(project_elem, "ProjectName") or find_element(project_elem, "Name")
+    -- Use find_direct_child for project-level properties to avoid nested elements
+    local name_elem = find_direct_child(project_elem, "ProjectName") or find_direct_child(project_elem, "Name")
     if name_elem then
         local name = get_text(name_elem)
         if name and name ~= "" then
@@ -212,9 +231,10 @@ local function parse_project_metadata(project_elem)
         return value or default
     end
 
-    local frame_rate_elem = find_element(project_elem, "TimelineFrameRate")
-    local width_elem = find_element(project_elem, "TimelineResolutionWidth")
-    local height_elem = find_element(project_elem, "TimelineResolutionHeight")
+    -- Look for timeline settings as direct children first, then fall back to recursive
+    local frame_rate_elem = find_direct_child(project_elem, "TimelineFrameRate") or find_element(project_elem, "TimelineFrameRate")
+    local width_elem = find_direct_child(project_elem, "TimelineResolutionWidth") or find_element(project_elem, "TimelineResolutionWidth")
+    local height_elem = find_direct_child(project_elem, "TimelineResolutionHeight") or find_element(project_elem, "TimelineResolutionHeight")
 
     if not frame_rate_elem or not width_elem or not height_elem then
         local settings_elem = find_element(project_elem, "ProjectSettings")
@@ -259,6 +279,88 @@ local function parse_media_pool(media_pool_elem)
     end
 
     return media_items
+end
+
+-- ---------------------------------------------------------------------------
+-- Timeline Name Resolution
+-- ---------------------------------------------------------------------------
+--
+-- Resolve's .drp format stores timeline metadata separately from sequence data:
+--
+--   SeqContainer/*.xml     → Contains tracks and clips (Sm2SequenceContainer)
+--                            Each track has a <Sequence> reference ID
+--
+--   MediaPool/**/*.xml     → Contains Sm2Timeline elements with:
+--                            - <Name> (the timeline's display name)
+--                            - <Sequence><Sm2Sequence DbId="..."> (the sequence ID)
+--
+-- To get timeline names, we must:
+-- 1. Recursively scan all MpFolder.xml files in MediaPool/
+-- 2. Find all <Sm2Timeline> elements
+-- 3. Extract the nested <Sm2Sequence DbId> and <Name>
+-- 4. Build a map: Sequence ID → Timeline Name
+-- 5. When parsing SeqContainer, look up names using track's <Sequence> ref
+--
+-- @param tmp_dir string: Extracted .drp temp directory
+-- @return table: Map of sequence_id → timeline_name
+--
+local function build_timeline_name_map(tmp_dir)
+    local name_map = {}
+
+    -- Find all MpFolder.xml files recursively
+    local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
+    local find_handle = io.popen(find_cmd)
+    if not find_handle then
+        return name_map
+    end
+
+    local mp_files = find_handle:read("*all")
+    find_handle:close()
+
+    for mp_file in mp_files:gmatch("[^\n]+") do
+        local mp_root = parse_xml_file(mp_file)
+        if mp_root then
+            -- Find all Sm2Timeline elements (timelines can be in any folder)
+            local timelines = find_all_elements(mp_root, "Sm2Timeline")
+            for _, timeline_elem in ipairs(timelines) do
+                -- Get the timeline's display name
+                local name_elem = find_direct_child(timeline_elem, "Name")
+                local timeline_name = name_elem and get_text(name_elem) or nil
+
+                if timeline_name and timeline_name ~= "" then
+                    -- Find the nested Sm2Sequence to get its DbId
+                    -- Structure: <Sm2Timeline><Sequence><Sm2Sequence DbId="...">
+                    local seq_wrapper = find_direct_child(timeline_elem, "Sequence")
+                    if seq_wrapper then
+                        local sm2_seq = find_direct_child(seq_wrapper, "Sm2Sequence")
+                        if sm2_seq and sm2_seq.attrs and sm2_seq.attrs.DbId then
+                            local seq_id = sm2_seq.attrs.DbId
+                            name_map[seq_id] = timeline_name
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return name_map
+end
+
+-- Extract the sequence reference ID from a SeqContainer
+-- Tracks reference their parent sequence via <Sequence>...</Sequence>
+-- @param seq_container_elem table: The Sm2SequenceContainer element
+-- @return string|nil: The sequence reference ID, or nil if not found
+local function extract_sequence_ref_id(seq_container_elem)
+    -- Look in tracks for the <Sequence> reference
+    -- All tracks in a container reference the same sequence
+    local track = find_element(seq_container_elem, "Sm2TiTrack")
+    if track then
+        local seq_ref = find_direct_child(track, "Sequence")
+        if seq_ref then
+            return get_text(seq_ref)
+        end
+    end
+    return nil
 end
 
 local function parse_resolve_tracks(seq_elem, frame_rate)
@@ -351,8 +453,10 @@ local parse_clip_item
 -- @param frame_rate number: Project frame rate
 -- @return table: Timeline data
 local function parse_sequence(seq_elem, frame_rate)
-    local name_elem = find_element(seq_elem, "Name")
-    local duration_elem = find_element(seq_elem, "Duration")
+    -- Use find_direct_child for sequence properties to avoid picking up
+    -- nested <Name>/<Duration> elements from clips
+    local name_elem = find_direct_child(seq_elem, "Name")
+    local duration_elem = find_direct_child(seq_elem, "Duration")
 
     local timeline = {
         name = name_elem and get_text(name_elem) or "Untitled Timeline",
@@ -553,13 +657,17 @@ function M.parse_drp_file(drp_path)
 
     local project = parse_project_metadata(project_elem)
 
-    -- Parse MediaPool XML
+    -- Parse MediaPool XML for master clips
     local media_pool_path = tmp_dir .. "/MediaPool/Master/MpFolder.xml"
     local media_items = {}
     local media_pool_root, err = parse_xml_file(media_pool_path)
     if media_pool_root then
         media_items = parse_media_pool(media_pool_root)
     end
+
+    -- Build timeline name map by scanning all MediaPool folders
+    -- This maps Sequence IDs to their display names from Sm2Timeline elements
+    local timeline_name_map = build_timeline_name_map(tmp_dir)
 
     -- Parse sequence XMLs
     local timelines = {}
@@ -588,6 +696,13 @@ function M.parse_drp_file(drp_path)
             end
             if seq_elem then
                 local timeline = parse_sequence(seq_elem, project.settings.frame_rate)
+
+                -- Look up the timeline's display name using the sequence reference
+                local seq_ref_id = extract_sequence_ref_id(seq_elem)
+                if seq_ref_id and timeline_name_map[seq_ref_id] then
+                    timeline.name = timeline_name_map[seq_ref_id]
+                end
+
                 table.insert(timelines, timeline)
             end
         end
