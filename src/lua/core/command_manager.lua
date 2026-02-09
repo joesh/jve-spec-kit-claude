@@ -267,8 +267,12 @@ local function normalize_command(command_or_name, params)
         return nil, bug_result(origin_err)
     end
 
+    -- Check spec early for commands that don't require project context (e.g., OpenProject)
+    local spec_for_check = type(command_or_name) == "string" and registry.get_spec(command_or_name) or nil
+    local no_project_context = spec_for_check and spec_for_check.no_project_context
+
     local active_project_id, active_project_err = ensure_active_project_id()
-    if active_project_err then
+    if active_project_err and not no_project_context then
         return nil, bug_result(active_project_err)
     end
 
@@ -276,13 +280,14 @@ local function normalize_command(command_or_name, params)
 		params = params or {}
 		-- UI convenience: if caller omitted project_id, default to active project.
 		-- Script callers must pass it explicitly to avoid silently targeting the wrong project.
+		-- Commands with no_project_context can run without a project_id.
 		if origin == "ui" and (not params.project_id or params.project_id == "") then
-			params.project_id = active_project_id
+			params.project_id = active_project_id or ""
 		end
-		if not (params.project_id and params.project_id ~= "") then
+		if not no_project_context and not (params.project_id and params.project_id ~= "") then
 			return nil, bug_result("execute(command_name, params): params.project_id is required")
 		end
-        if origin == "ui" and params.project_id ~= active_project_id then
+        if not no_project_context and origin == "ui" and params.project_id ~= active_project_id then
             return nil, bug_result("UI command must target active project_id")
         end
 
@@ -596,7 +601,7 @@ end
 -- Validate command parameters
 local function validate_command_parameters(command)
     if not command.type or command.type == "" then return false end
-    if not command.project_id or command.project_id == "" then return false end
+    -- project_id validation is handled by schema - commands that need it declare it there
     return true
 end
 
@@ -868,6 +873,14 @@ function M._execute_body(command_or_name, params)
     if spec and spec.undoable == false then
         result = execute_non_recording(command)
         exec_scope:finish("non_recording")
+        goto cleanup
+    end
+
+    -- Commands with no_persist skip transaction handling entirely
+    -- (e.g. OpenProject which switches databases mid-execution)
+    if spec and spec.no_persist then
+        result = execute_non_recording(command)
+        exec_scope:finish("no_persist")
         goto cleanup
     end
 
