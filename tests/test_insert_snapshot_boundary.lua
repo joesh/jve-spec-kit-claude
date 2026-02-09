@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
--- Regression: Insert must not crash at snapshot boundary when __snapshot_sequence_ids is missing.
--- The command manager takes a snapshot every 50 commands; Insert was not setting
--- the required snapshot targets, causing an assert and "INSERT failed: unknown error".
+-- Regression: Insert must not crash at snapshot boundary.
+-- The command manager takes a snapshot every 50 commands; this test verifies
+-- that Insert commands work correctly when hitting a snapshot boundary.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")

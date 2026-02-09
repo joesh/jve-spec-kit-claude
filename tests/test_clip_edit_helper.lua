@@ -150,7 +150,6 @@ cmd = mock_command()
 result = clip_edit_helper.resolve_sequence_id({ sequence_id = "seq1" }, nil, cmd)
 check("sequence_id from args", result == "seq1")
 check("sequence_id set on command", cmd.params.sequence_id == "seq1")
-check("__snapshot_sequence_ids set", cmd.params.__snapshot_sequence_ids ~= nil)
 
 -- 2b. Resolve from track_id
 cmd = mock_command()
@@ -167,13 +166,6 @@ check("sequence_id from timeline_state", result == "seq_from_ts")
 mock_timeline_state.get_sequence_id = nil
 result = clip_edit_helper.resolve_sequence_id({}, nil, nil)
 check("sequence_id all nil → nil", result == nil)
-
--- 2e. __snapshot_sequence_ids not overwritten if already set
-cmd = mock_command()
-cmd:set_parameter("__snapshot_sequence_ids", {"existing"})
-local args = { sequence_id = "seq1", __snapshot_sequence_ids = {"existing"} }
-result = clip_edit_helper.resolve_sequence_id(args, nil, cmd)
-check("snapshot_ids not overwritten", cmd.params.__snapshot_sequence_ids[1] == "existing")
 
 
 -- ═══════════════════════════════════════════════════════════════

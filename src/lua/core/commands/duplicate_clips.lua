@@ -45,9 +45,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not sequence_id or sequence_id == "" then
             return false, "DuplicateClips: missing sequence_id"
         end
-        if not args.__snapshot_sequence_ids then
-            command:set_parameter("__snapshot_sequence_ids", {sequence_id})
-        end
 
         local clip_ids = args.clip_ids
         if type(clip_ids) ~= "table" or #clip_ids == 0 then

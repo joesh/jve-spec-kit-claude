@@ -103,7 +103,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         clip.owner_sequence_id = clip.owner_sequence_id or mutation_sequence
         command:set_parameters({
             ["sequence_id"] = mutation_sequence,
-            ["__snapshot_sequence_ids"] = {mutation_sequence},
             ["original_track_id"] = clip.track_id,
         })
         if args.dry_run then
@@ -190,14 +189,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         
         -- We need sequence_id to record UI mutations during revert
-        -- Prefer explicit sequence id saved on the command; fall back to snapshot targets or mutation provenance.
+        -- Prefer explicit sequence id saved on the command; fall back to mutation provenance.
         local sequence_id = args.sequence_id
-        if (not sequence_id or sequence_id == "") then
-
-            if type(args.__snapshot_sequence_ids) == "table" and #args.__snapshot_sequence_ids > 0 then
-                sequence_id = args.__snapshot_sequence_ids[1]
-            end
-        end
         if (not sequence_id or sequence_id == "") and type(args.executed_mutations) == "table" then
             for _, mut in ipairs(args.executed_mutations) do
                 if mut.previous and mut.previous.track_sequence_id then

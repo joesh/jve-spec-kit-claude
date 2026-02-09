@@ -276,11 +276,6 @@ function M.register(executors, undoers, db)
             #create_result.track_ids,
             #create_result.clip_ids))
 
-        command:set_parameters({
-            ["__force_snapshot"] = true,
-            ["__snapshot_sequence_ids"] = create_result.sequence_ids,
-        })
-
         -- Refresh project browser to show newly imported sequences
         local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
         if ui_state_ok then

@@ -64,9 +64,6 @@ function M.resolve_sequence_id(args, track_id, command)
 
     if sequence_id and sequence_id ~= "" and command then
         command:set_parameter("sequence_id", sequence_id)
-        if not args.__snapshot_sequence_ids then
-            command:set_parameter("__snapshot_sequence_ids", {sequence_id})
-        end
     end
 
     return sequence_id

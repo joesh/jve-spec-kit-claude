@@ -75,7 +75,6 @@ local command_specs = {
 local batch = Command.create("BatchCommand", "proj")
 batch:set_parameter("commands_json", json.encode(command_specs))
 batch:set_parameter("sequence_id", "seq")
-batch:set_parameter("__snapshot_sequence_ids", {"seq"})
 
 local exec = command_manager.execute(batch)
 assert(exec and exec.success, "batch move execution failed")

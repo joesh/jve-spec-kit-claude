@@ -361,11 +361,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("project_id", project_id)
         command.project_id = project_id
 
-        -- Store for undo
-        if not args.__snapshot_sequence_ids then
-            command:set_parameter("__snapshot_sequence_ids", {sequence_id})
-        end
-
         -- Reuse clip IDs from previous execution (for redo)
         local redo_clip_ids = args.created_clip_ids
 
