@@ -15,6 +15,7 @@
 -- @file split_clip.lua
 local M = {}
 local Clip = require('models.clip')
+local ClipLink = require("models.clip_link")
 local command_helper = require("core.command_helper")
 local logger = require("core.logger")
 
@@ -31,6 +32,7 @@ local SPEC = {
     },
     persisted = {
         original_duration = {},  -- Set by executor
+        original_link_group_id = {},  -- Set by executor if clip was linked
         original_source_in = {},  -- Set by executor
         original_source_out = {},  -- Set by executor
         original_timeline_start = {},  -- Set by executor
@@ -84,9 +86,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         if mutation_sequence and (not args.sequence_id or args.sequence_id == "") then
             command:set_parameter("sequence_id", mutation_sequence)
-        end
-        if mutation_sequence and not args.__snapshot_sequence_ids then
-            command:set_parameter("__snapshot_sequence_ids", {mutation_sequence})
         end
 
         command:set_parameters({
@@ -155,9 +154,29 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         command:set_parameter("second_clip_id", second_clip.id)
 
+        -- Store link info for the Split wrapper to use when creating new link groups
+        -- SplitClip does NOT add to link groups - the Split wrapper handles that
+        local link_group_id = ClipLink.get_link_group_id(clip_id, db)
+        if link_group_id then
+            local link_group = ClipLink.get_link_group(clip_id, db)
+            for _, link_info in ipairs(link_group or {}) do
+                if link_info.clip_id == clip_id then
+                    command:set_parameter("original_link_group_id", link_group_id)
+                    command:set_parameter("original_link_role", link_info.role)
+                    break
+                end
+            end
+        end
+
         print(string.format("Split clip %s at frame %d into clips %s and %s",
             clip_id, split_frame, original_clip.id, second_clip.id))
-        return true
+
+        return {
+            success = true,
+            second_clip_id = second_clip.id,
+            original_link_group_id = link_group_id,
+            original_link_role = command:get_parameter("original_link_role"),
+        }
     end
 
     local function perform_split_clip_undo(command)
@@ -184,6 +203,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local second_clip = Clip.load(args.second_clip_id)
         if second_clip then
+            -- Unlink before deleting (Split wrapper may have linked the second halves)
+            ClipLink.unlink_clip(args.second_clip_id, db)
             if not second_clip:delete() then
                 set_last_error("UndoSplitClip: Failed to delete second clip")
                 return false
@@ -295,6 +316,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local success_count = 0
         local any_failed = false
 
+        -- Track second clips by their original link group for re-linking
+        local second_clips_by_link_group = {}  -- link_group_id -> [{clip_id, role}, ...]
+
         for _, spec in ipairs(specs) do
             local split_cmd = Command.create("SplitClip", project_id)
             split_cmd:set_parameter("clip_id", spec.parameters.clip_id)
@@ -306,6 +330,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local result = command_manager.execute(split_cmd)
             if result.success then
                 success_count = success_count + 1
+
+                -- Track second clips for re-linking
+                if result.original_link_group_id and result.second_clip_id then
+                    local group_id = result.original_link_group_id
+                    second_clips_by_link_group[group_id] = second_clips_by_link_group[group_id] or {}
+                    table.insert(second_clips_by_link_group[group_id], {
+                        clip_id = result.second_clip_id,
+                        role = result.original_link_role,
+                    })
+                end
             else
                 logger.error("split", string.format("Split: SplitClip failed for clip %s: %s",
                     spec.parameters.clip_id, result.error_message or "unknown"))
@@ -315,6 +349,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if any_failed and success_count == 0 then
             return {success = false, error_message = "Split: all SplitClip commands failed"}
+        end
+
+        -- Create new link groups for second halves (mirroring original link groups)
+        for link_group_id, second_clips in pairs(second_clips_by_link_group) do
+            if #second_clips >= 2 then
+                -- Create a new link group with the second halves
+                local new_group_id, err = ClipLink.create_link_group(second_clips, db)
+                if new_group_id then
+                    logger.debug("split", string.format(
+                        "Created new link group %s for %d second-half clips (from original group %s)",
+                        new_group_id, #second_clips, link_group_id))
+                else
+                    logger.warn("split", string.format(
+                        "Failed to create link group for second halves: %s", err or "unknown"))
+                end
+            end
+            -- If only 1 second clip from a link group, it stays unlinked
+            -- (the other linked clip wasn't split)
         end
 
         logger.debug("split", string.format("Split %d clip(s) at playhead", success_count))
