@@ -46,8 +46,4 @@ assert(captured_command.type == "BatchCommand", "Command should be a BatchComman
 local sequence_id = captured_command:get_parameter("sequence_id")
 assert(sequence_id == "sequence_test", "BatchCommand must record active sequence_id")
 
-local snapshot_targets = captured_command:get_parameter("__snapshot_sequence_ids")
-assert(type(snapshot_targets) == "table" and snapshot_targets[1] == "sequence_test",
-    "__snapshot_sequence_ids should include the active sequence")
-
 print("✅ Keyboard shortcut delete wiring includes sequence metadata")

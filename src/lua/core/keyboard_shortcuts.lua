@@ -634,12 +634,7 @@ function keyboard_shortcuts.perform_delete_action(opts)
         }
         batch_cmd_params.commands_json = commands_json
         if active_sequence_id and active_sequence_id ~= "" then
-            for key, value in pairs({
-                ["sequence_id"] = active_sequence_id,
-                ["__snapshot_sequence_ids"] = {active_sequence_id},
-            }) do
-                batch_cmd_params[key] = value
-            end
+            batch_cmd_params.sequence_id = active_sequence_id
         end
 
         local result = execute_command("BatchCommand", batch_cmd_params)
@@ -1141,7 +1136,8 @@ local function handle_key_impl(event)
                     table.insert(edge_infos, {
                         clip_id = edge.clip_id,
                         edge_type = edge.edge_type,
-                        track_id = clip.track_id
+                        track_id = clip.track_id,
+                        trim_type = edge.trim_type,
                     })
                 end
             end
@@ -1253,12 +1249,7 @@ local function handle_key_impl(event)
             batch_cmd_params.commands_json = json.encode(specs)
             local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
             if active_sequence_id and active_sequence_id ~= "" then
-                for key, value in pairs({
-                    ["sequence_id"] = active_sequence_id,
-                    ["__snapshot_sequence_ids"] = {active_sequence_id},
-                }) do
-                    batch_cmd_params[key] = value
-                end
+                batch_cmd_params.sequence_id = active_sequence_id
             end
 
             local result = execute_command("BatchCommand", batch_cmd_params)

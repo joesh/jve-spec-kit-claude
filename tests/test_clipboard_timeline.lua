@@ -186,7 +186,6 @@ local function execute_batch(specs)
     local batch_cmd = Command.create("BatchCommand", "default_project")
     batch_cmd:set_parameter("commands_json", json.encode(specs))
     batch_cmd:set_parameter("sequence_id", "default_sequence")
-    batch_cmd:set_parameter("__snapshot_sequence_ids", {"default_sequence"})
     local result = command_manager.execute(batch_cmd)
     assert(result.success, result.error_message or "BatchCommand failed")
 end

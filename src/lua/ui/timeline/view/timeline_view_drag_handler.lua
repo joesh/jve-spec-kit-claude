@@ -111,7 +111,6 @@ function M.handle_release(view, drag_state, modifiers)
             local result = command_manager.execute("DuplicateClips", {
                 ["project_id"] = active_proj,
                 ["sequence_id"] = active_seq,
-                ["__snapshot_sequence_ids"] = {active_seq},
                 ["clip_ids"] = ids,
                 ["delta_frames"] = delta_frames,
                 ["target_track_id"] = target_track_id,
@@ -218,7 +217,6 @@ function M.handle_release(view, drag_state, modifiers)
             }
             if active_seq and active_seq ~= "" then
                 params.sequence_id = active_seq
-                params.__snapshot_sequence_ids = {active_seq}
             end
             local result = command_manager.execute("BatchCommand", params)
             if not result.success then
@@ -295,7 +293,6 @@ function M.handle_release(view, drag_state, modifiers)
         end
         if active_seq then
             params.sequence_id = active_seq
-            params.__snapshot_sequence_ids = {active_seq}
         end
         -- Provide the interaction snapshot/region so BatchRippleEdit can avoid
         -- loading the full sequence for roll-only edits.

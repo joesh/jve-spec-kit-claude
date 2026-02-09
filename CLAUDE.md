@@ -115,3 +115,5 @@ For short-term debug prints that will immediately be removed you may use print.
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
 
 **When addressing a bug**: First write a regression test that fails. Verify the failure. Only then implement the fix and confirm the test passes.
+
+**Bug ownership**: Don't distinguish between "your" bugs and "pre-existing" bugs. If you find a bug, it becomes yours to fix. We care about fixing things, not about blame. "You" means Claude (any session), not just this specific context.

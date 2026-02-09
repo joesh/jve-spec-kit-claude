@@ -50,22 +50,12 @@ end
 local function select_browser_items(items, context, modifiers)
     context = context or selection_context()
 
-    -- Wrap in command event if not already in one
-    local owns_event = not command_manager.peek_command_event_origin()
-    if owns_event then
-        command_manager.begin_command_event("ui")
-    end
-
     command_manager.execute("SelectBrowserItems", {
         project_id = M.project_id or context.project_id or "unknown",
         items = items or {},
         context = context,
         modifiers = modifiers or {},
     })
-
-    if owns_event then
-        command_manager.end_command_event()
-    end
 end
 
 local function clear_browser_selection()
@@ -247,7 +237,6 @@ local function finalize_pending_rename(new_name)
     end
 
     local project_id = M.project_id or db.get_current_project_id()
-    command_manager.begin_command_event("ui")
     local result = command_manager.execute("RenameItem", {
         ["project_id"] = project_id,
                 ["target_type"] = pending.target_type,
@@ -255,7 +244,6 @@ local function finalize_pending_rename(new_name)
                 ["new_name"] = trimmed_name,
                 ["previous_name"] = pending.original_name,
     })
-    command_manager.end_command_event()
     if result and result.success then
         logger.debug("project_browser", string.format("RenameItem executed for %s → %s", tostring(pending.target_id), trimmed_name))
     else
@@ -1207,13 +1195,7 @@ function M.create()
 
         M.selected_item = item_info
         local result
-        if command_manager.execute_ui then
-            result = command_manager.execute_ui(ACTIVATE_COMMAND)
-        else
-            command_manager.begin_command_event("ui")
-            result = command_manager.execute(ACTIVATE_COMMAND)
-            command_manager.end_command_event()
-        end
+        result = command_manager.execute(ACTIVATE_COMMAND)
         if not result.success then
             logger.warn("project_browser", "ActivateBrowserSelection failed: " .. tostring(result.error_message or "unknown error"))
         end
@@ -1498,9 +1480,7 @@ handle_tree_key_event = function(event)
             return M.selected_item
         end,
         activate_sequence = function()
-            command_manager.begin_command_event("ui")
             local result = command_manager.execute(ACTIVATE_COMMAND)
-            command_manager.end_command_event()
             if not result or not result.success then
                 logger.warn("project_browser", string.format("ActivateBrowserSelection failed: %s", result and result.error_message or "unknown error"))
                 return false
@@ -1561,12 +1541,10 @@ local function create_bin_in_root()
     local name_lookup = collect_name_lookup(M.bin_map)
     local temp_name = generate_sequential_label("Bin", name_lookup)
 
-    command_manager.begin_command_event("ui")
     local result, cmd = command_manager.execute("NewBin", {
         project_id = project_id,
         name = temp_name,
     })
-    command_manager.end_command_event()
     if not result or not result.success then
         logger.warn("project_browser", string.format("New Bin failed: %s", result and result.error_message or "unknown error"))
         return
@@ -1592,7 +1570,6 @@ local function create_sequence_in_project()
     local temp_name = generate_sequential_label("Sequence", name_lookup)
     local defaults = sequence_defaults()
 
-    command_manager.begin_command_event("ui")
     local result, cmd = command_manager.execute("CreateSequence", {
         project_id = project_id,
         name = temp_name,
@@ -1600,7 +1577,6 @@ local function create_sequence_in_project()
         width = defaults.width,
         height = defaults.height,
     })
-    command_manager.end_command_event()
     if not result or not result.success then
         logger.warn("project_browser", string.format("New Sequence failed: %s", result and result.error_message or "unknown error"))
         return
@@ -1711,9 +1687,7 @@ show_browser_context_menu = function(event)
         table.insert(actions, {
             label = "Reveal in Filesystem",
             handler = function()
-                command_manager.begin_command_event("ui")
                 local result = command_manager.execute("RevealInFilesystem")
-                command_manager.end_command_event()
                 if result and not result.success then
                     logger.warn("project_browser", string.format("Reveal in Filesystem failed: %s", result.error_message or "unknown error"))
                 end
@@ -1837,9 +1811,7 @@ function M.add_selected_to_timeline(command_type, options)
 
         local cmd = assert(Command.create(command_type, project_id), this_func_label .. ": failed to create " .. command_type .. " command")
         cmd:set_parameters(cmd_params)
-        command_manager.begin_command_event("ui")
         local result = command_manager.execute(cmd)
-        command_manager.end_command_event()
         assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
 
         logger.info("project_browser", string.format("Media added to timeline: %s", media and (media.name or media.file_name) or "unknown"))
@@ -1948,7 +1920,6 @@ function M.add_selected_to_timeline(command_type, options)
 
         -- Execute AddClipsToSequence
         local edit_type = command_type == "Insert" and "insert" or "overwrite"
-        command_manager.begin_command_event("ui")
         local result = command_manager.execute("AddClipsToSequence", {
             groups = groups,
             position = insert_pos,
@@ -1958,7 +1929,6 @@ function M.add_selected_to_timeline(command_type, options)
             arrangement = "serial",
             advance_playhead = advance_playhead,
         })
-        command_manager.end_command_event()
         assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
 
         logger.info("project_browser", string.format("Added %d clips to timeline (%s)", #selected_clips, edit_type))
@@ -2037,12 +2007,10 @@ function M.delete_selected_items()
             if clip then
                 local project_id = clip.project_id or M.project_id or db.get_current_project_id()
                 assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteMasterClip " .. tostring(item.clip_id))
-                command_manager.begin_command_event("ui")
                 local result = command_manager.execute("DeleteMasterClip", {
                     master_clip_id = clip.clip_id,
                     project_id = project_id,
                 })
-                command_manager.end_command_event()
                 if result and result.success then
                     deleted = deleted + 1
                 else
@@ -2062,12 +2030,10 @@ function M.delete_selected_items()
 
                 local project_id = M.project_id or db.get_current_project_id()
                 assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteSequence " .. tostring(sequence_id))
-                command_manager.begin_command_event("ui")
                 local result = command_manager.execute("DeleteSequence", {
                     sequence_id = sequence_id,
                     project_id = project_id,
                 })
-                command_manager.end_command_event()
                 if result and result.success then
                     deleted = deleted + 1
                 else
@@ -2079,12 +2045,10 @@ function M.delete_selected_items()
         elseif item.type == "bin" and item.id then
             local project_id = M.project_id or db.get_current_project_id()
             assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteBin " .. tostring(item.id))
-            command_manager.begin_command_event("ui")
             local result = command_manager.execute("DeleteBin", {
                 ["project_id"] = project_id,
                                 ["bin_id"] = item.id,
             })
-            command_manager.end_command_event()
             if result and result.success then
                 deleted = deleted + 1
             else
