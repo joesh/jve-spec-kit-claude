@@ -151,7 +151,7 @@ function M.register(executors, undoers, db)
                 project_id = project.id,
                 name = media_item.name,
                 file_path = media_item.file_path,
-                duration = media_item.duration,
+                duration_frames = media_item.duration,  -- drp_importer returns frames, not ms
                 frame_rate = media_item.frame_rate or parse_result.project.settings.frame_rate,
                 width = parse_result.project.settings.width,
                 height = parse_result.project.settings.height
@@ -407,7 +407,7 @@ function M.register(executors, undoers, db)
                 project_id = project.id,
                 name = media_item.name,
                 file_path = media_item.file_path,
-                duration = media_item.duration,
+                duration_frames = media_item.duration,  -- resolve_database_importer returns frames, not ms
                 frame_rate = media_item.frame_rate or import_result.project.frame_rate,
                 width = import_result.project.width,
                 height = import_result.project.height

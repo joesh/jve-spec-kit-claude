@@ -40,6 +40,10 @@ local module_aliases = {
     -- Split lives in split_clip.lua (registers both Split and SplitClip)
     Split = "core.commands.split_clip",
     SplitClip = "core.commands.split_clip",
+
+    -- Link/Unlink live in link_clips.lua
+    LinkClips = "core.commands.link_clips",
+    UnlinkClips = "core.commands.link_clips",
 }
 function M.init(database, set_last_error_fn)
     db = database

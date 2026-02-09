@@ -56,6 +56,7 @@ local asserts_module = require("core.asserts")
 -- Keys allowed on all commands (auto-injected by menu system, command_manager, etc.)
 local GLOBAL_ALLOWED_KEYS = {
     sequence_id = true,  -- Auto-passed by menu system to all commands
+    project_id = true,   -- Auto-passed by menu system to all commands
 }
 
 local function is_ephemeral_key(k)
