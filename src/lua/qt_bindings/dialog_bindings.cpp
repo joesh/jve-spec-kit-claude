@@ -47,6 +47,18 @@ int lua_file_dialog_directory(lua_State* L) {
     return 1;
 }
 
+int lua_file_dialog_save(lua_State* L) {
+    QWidget* parent = get_widget<QWidget>(L, 1);
+    const char* title = luaL_optstring(L, 2, "Save File");
+    const char* filter = luaL_optstring(L, 3, "All Files (*)");
+    const char* dir = luaL_optstring(L, 4, "");
+
+    QString filename = QFileDialog::getSaveFileName(parent, QString::fromUtf8(title), QString::fromUtf8(dir), QString::fromUtf8(filter));
+    if (filename.isEmpty()) lua_pushnil(L);
+    else lua_pushstring(L, filename.toUtf8().constData());
+    return 1;
+}
+
 // Show a confirmation dialog with optional customisation
 // Accepts either:
 //   - table with fields:

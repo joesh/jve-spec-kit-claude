@@ -281,6 +281,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_file_dialog_open); lua_setfield(L, -2, "OPEN_FILE");
     lua_pushcfunction(L, lua_file_dialog_open_multiple); lua_setfield(L, -2, "OPEN_FILES");
     lua_pushcfunction(L, lua_file_dialog_directory); lua_setfield(L, -2, "OPEN_DIRECTORY");
+    lua_pushcfunction(L, lua_file_dialog_save); lua_setfield(L, -2, "SAVE_FILE");
     lua_setfield(L, -2, "FILE_DIALOG");
 
     // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers

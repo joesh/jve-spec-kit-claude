@@ -139,6 +139,34 @@ function M.open_directory(name, parent, title, fallback_dir)
     return result
 end
 
+--- Open a save file dialog with auto-persisted directory.
+-- @param name         string  unique dialog identifier (e.g. "save_project")
+-- @param parent       widget  Qt parent widget
+-- @param title        string  dialog title
+-- @param filter       string  file filter (e.g. "JVE Project (*.jvp)")
+-- @param fallback_dir string  optional default when no persisted path
+-- @param default_name string  optional default filename (e.g. "Untitled.jvp")
+-- @return string|nil  selected file path, or nil if cancelled
+function M.save_file(name, parent, title, filter, fallback_dir, default_name)
+    assert(name and name ~= "", "file_browser.save_file: name is required")
+    local dir = get_dir(name, fallback_dir)
+    -- Combine directory with default filename if provided
+    local initial_path = dir
+    if default_name and default_name ~= "" then
+        if dir ~= "" then
+            initial_path = dir .. "/" .. default_name
+        else
+            initial_path = default_name
+        end
+    end
+    local result = qt_constants.FILE_DIALOG.SAVE_FILE(parent, title, filter, initial_path)
+    if result then
+        local extracted = extract_dir(result)
+        if extracted then persist_dir(name, extracted) end
+    end
+    return result
+end
+
 -- ---------------------------------------------------------------------------
 -- Test helpers (prefixed with _ to signal internal use)
 -- ---------------------------------------------------------------------------
