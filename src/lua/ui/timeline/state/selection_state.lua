@@ -22,6 +22,49 @@ local clip_state = require("ui.timeline.state.clip_state")
 
 local on_selection_changed_callback = nil
 
+-- Check if a gap_after edge is stale (gap has been closed)
+-- gap_after on clip A represents the left side of a gap after A.
+-- When gap closes, the adjacent clip B's in-point is now at A's end.
+-- Returns: {edge_type="in", clip_id=B.id} if gap closed, nil if gap still exists
+local function check_gap_after_stale(clip)
+    if not clip or not clip.track_id then return nil end
+    local track_clips = clip_state.get_for_track(clip.track_id)
+    if not track_clips then return nil end
+
+    local clip_end = clip.timeline_start + clip.duration
+    for _, other in ipairs(track_clips) do
+        if other.id ~= clip.id and other.timeline_start == clip_end then
+            -- Adjacent clip found - gap is closed
+            -- Convert to "in" edge on the ADJACENT clip
+            return {edge_type = "in", clip_id = other.id}
+        end
+    end
+    return nil  -- Gap still exists
+end
+
+-- Check if a gap_before edge is stale (gap has been closed)
+-- gap_before on clip B represents the right side of a gap before B.
+-- When gap closes, the adjacent clip A's out-point is now at B's start.
+-- Returns: {edge_type="out", clip_id=A.id} if gap closed, nil if gap still exists
+local function check_gap_before_stale(clip)
+    if not clip or not clip.track_id then return nil end
+    local track_clips = clip_state.get_for_track(clip.track_id)
+    if not track_clips then return nil end
+
+    local clip_start = clip.timeline_start
+    for _, other in ipairs(track_clips) do
+        if other.id ~= clip.id then
+            local other_end = other.timeline_start + other.duration
+            if other_end == clip_start then
+                -- Adjacent clip found - gap is closed
+                -- Convert to "out" edge on the ADJACENT clip
+                return {edge_type = "out", clip_id = other.id}
+            end
+        end
+    end
+    return nil  -- Gap still exists
+end
+
 local function normalize_edge_selection()
     local state = data.state
     if not state.selected_edges or #state.selected_edges == 0 then
@@ -33,7 +76,7 @@ local function normalize_edge_selection()
     local changed = false
 
     clip_state.invalidate_indexes() -- Ensure fresh indexes before traversal? Actually ensure_clip_indexes calls it if needed.
-    
+
     for _, edge in ipairs(state.selected_edges) do
         local clip = clip_state.get_by_id(edge.clip_id)
 
@@ -41,12 +84,41 @@ local function normalize_edge_selection()
             local new_edge_type = edge.edge_type
             local new_clip_id = clip.id
 
+            -- Check if gap edges are stale (gap has been closed)
+            -- When stale, convert to the adjacent clip's corresponding edge
+            if new_edge_type == "gap_after" then
+                local converted = check_gap_after_stale(clip)
+                if converted then
+                    new_edge_type = converted.edge_type
+                    new_clip_id = converted.clip_id
+                    changed = true
+                end
+            elseif new_edge_type == "gap_before" then
+                local converted = check_gap_before_stale(clip)
+                if converted then
+                    new_edge_type = converted.edge_type
+                    new_clip_id = converted.clip_id
+                    changed = true
+                end
+            end
+
             local key = new_clip_id .. ":" .. new_edge_type
             if not seen[key] then
+                -- Get track_id from the appropriate clip
+                -- If clip_id changed (stale gap conversion), look up the new clip
+                local track_id = clip.track_id
+                if new_clip_id ~= clip.id then
+                    local new_clip = clip_state.get_by_id(new_clip_id)
+                    if new_clip then
+                        track_id = new_clip.track_id
+                    end
+                end
+
                 table.insert(normalized, {
                     clip_id = new_clip_id,
                     edge_type = new_edge_type,
-                    trim_type = edge.trim_type
+                    trim_type = edge.trim_type,
+                    track_id = track_id
                 })
                 seen[key] = true
             else

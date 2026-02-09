@@ -11,6 +11,7 @@ local M = {}
 
 local clip_links = require("models.clip_link")
 local timeline_state = require("ui.timeline.timeline_state")
+local edge_picker = require("ui.timeline.edge_picker")
 
 local SPEC = {
     undoable = false,
@@ -22,47 +23,133 @@ local SPEC = {
     },
 }
 
---- Expand edges to include same edge_type on all linked clips
---- For each edge, finds linked clips and adds the same edge_type with same trim_type
+--- Determine the "side" of an edge (downstream = out/gap_after, upstream = in/gap_before)
+local function edge_to_side(edge_type)
+    if edge_type == "out" or edge_type == "gap_after" then
+        return "downstream"
+    elseif edge_type == "in" or edge_type == "gap_before" then
+        return "upstream"
+    end
+    return nil
+end
+
+--- Determine if edges form a roll selection (both edges at same boundary).
+--- A roll requires 2+ edges with at least one "out" and one "in" (or gap equivalents),
+--- all with trim_type="roll".
+local function is_roll_selection(edges)
+    if #edges < 2 then return false end
+
+    local has_out = false  -- out or gap_before (left side of boundary)
+    local has_in = false   -- in or gap_after (right side of boundary)
+    local all_roll = true
+
+    for _, edge in ipairs(edges) do
+        if edge.trim_type ~= "roll" then
+            all_roll = false
+        end
+        if edge.edge_type == "out" or edge.edge_type == "gap_before" then
+            has_out = true
+        elseif edge.edge_type == "in" or edge.edge_type == "gap_after" then
+            has_in = true
+        end
+    end
+
+    return all_roll and has_out and has_in
+end
+
+--- Expand edges to include linked clips using the same click gesture.
+--- For each edge, finds linked clips and "replays" the same boundary selection on their tracks.
+--- This ensures rolls are complete on all linked tracks (both edges at the boundary).
+---
+--- @param edges table Array of {clip_id, edge_type, trim_type}
+--- @param db userdata Database connection
+--- @return table Expanded array of edges
 local function expand_to_linked_edges(edges, db)
     local expanded = {}
     local seen = {}
 
-    for _, edge in ipairs(edges) do
-        -- Add the original edge if not already seen
-        local key = edge.clip_id .. ":" .. edge.edge_type
-        if not seen[key] then
-            seen[key] = true
-            table.insert(expanded, {
+    -- Determine click type from input edges
+    -- Roll requires a proper boundary pair (out+in edges), not just trim_type="roll"
+    local click_type = is_roll_selection(edges) and "roll" or "single"
+
+    local function add_edge(edge_entry)
+        local key = edge_entry.clip_id .. ":" .. edge_entry.edge_type
+        if seen[key] then return end
+        seen[key] = true
+        table.insert(expanded, edge_entry)
+    end
+
+    local function add_edges_from_result(result, trim_type)
+        for _, edge in ipairs(result.edges or {}) do
+            add_edge({
                 clip_id = edge.clip_id,
                 edge_type = edge.edge_type,
-                trim_type = edge.trim_type,
+                trim_type = trim_type,
+                track_id = edge.track_id
             })
         end
+    end
 
-        -- Find linked clips and add the same edge_type
-        -- Note: we don't track processed_groups because the same clip may need
-        -- different edge_types added (e.g., roll between clip out + gap_after)
+    -- Track which clips we've already expanded (avoid redundant work)
+    local expanded_clips = {}
+
+    for _, edge in ipairs(edges) do
+        -- Add the original edge
+        add_edge({
+            clip_id = edge.clip_id,
+            edge_type = edge.edge_type,
+            trim_type = edge.trim_type,
+            track_id = edge.track_id
+        })
+
+        -- Determine which side of the clip this edge represents
+        local side = edge_to_side(edge.edge_type)
+        if not side then
+            goto continue_edge
+        end
+
+        -- Get the clip to find its linked clips
+        local clip = timeline_state.get_clip_by_id(edge.clip_id)
+        if not clip then
+            goto continue_edge
+        end
+
+        -- Avoid expanding the same clip+side twice
+        local expand_key = edge.clip_id .. ":" .. side
+        if expanded_clips[expand_key] then
+            goto continue_edge
+        end
+        expanded_clips[expand_key] = true
+
+        -- Get all linked clips
         local link_group = clip_links.get_link_group(edge.clip_id, db)
-        if link_group then
-            for _, link_info in ipairs(link_group) do
-                if link_info.enabled then
-                    local linked_key = link_info.clip_id .. ":" .. edge.edge_type
-                    if not seen[linked_key] then
-                        -- Verify clip exists
-                        local clip = timeline_state.get_clip_by_id(link_info.clip_id)
-                        if clip then
-                            seen[linked_key] = true
-                            table.insert(expanded, {
-                                clip_id = link_info.clip_id,
-                                edge_type = edge.edge_type,
-                                trim_type = edge.trim_type,
-                            })
-                        end
+        if not link_group then
+            goto continue_edge
+        end
+
+        -- For each linked clip, "replay" the same boundary selection on its track
+        for _, link_info in ipairs(link_group) do
+            if link_info.enabled and link_info.clip_id ~= edge.clip_id then
+                local linked_clip = timeline_state.get_clip_by_id(link_info.clip_id)
+                if linked_clip and linked_clip.track_id then
+                    -- Get all clips on the linked clip's track
+                    local track_clips = timeline_state.get_clips_for_track(linked_clip.track_id)
+                    if track_clips and #track_clips > 0 then
+                        -- Use the core boundary selection function
+                        local result = edge_picker.select_boundary_edges(
+                            track_clips,
+                            linked_clip,
+                            side,
+                            click_type
+                        )
+                        -- Add all edges from the result, preserving trim_type from original edge
+                        add_edges_from_result(result, edge.trim_type)
                     end
                 end
             end
         end
+
+        ::continue_edge::
     end
 
     return expanded

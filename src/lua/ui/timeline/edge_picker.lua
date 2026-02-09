@@ -18,6 +18,144 @@ local ui_constants = require("core.ui_constants")
 
 local M = {}
 
+--- Select edges at a clip's boundary.
+--- This is the core function for edge selection - used by both mouse picking and expansion.
+---
+--- @param track_clips table Array of clips on the track (will be sorted)
+--- @param target_clip table The clip whose boundary we're selecting
+--- @param side string "downstream" (out edge) or "upstream" (in edge)
+--- @param click_type string "single" (one edge) or "roll" (both edges at boundary)
+--- @return table {edges = [...], boundary_time = number}
+function M.select_boundary_edges(track_clips, target_clip, side, click_type)
+    assert(track_clips, "select_boundary_edges: track_clips required")
+    assert(target_clip, "select_boundary_edges: target_clip required")
+    assert(target_clip.id, "select_boundary_edges: target_clip.id required")
+    assert(side == "downstream" or side == "upstream",
+        "select_boundary_edges: side must be 'downstream' or 'upstream'")
+    assert(click_type == "single" or click_type == "roll",
+        "select_boundary_edges: click_type must be 'single' or 'roll'")
+
+    -- Build sorted list of valid clips
+    local valid_clips = {}
+    local target_idx = nil
+    for _, clip in ipairs(track_clips) do
+        local start_val = clip.timeline_start or clip.start_value
+        local dur_val = clip.duration or clip.duration_value
+        if type(start_val) == "number" and type(dur_val) == "number" and dur_val > 0 then
+            local entry = {
+                id = clip.id,
+                track_id = clip.track_id,
+                timeline_start = start_val,
+                duration = dur_val
+            }
+            table.insert(valid_clips, entry)
+        end
+    end
+
+    table.sort(valid_clips, function(a, b)
+        if a.timeline_start == b.timeline_start then
+            return (a.id or "") < (b.id or "")
+        end
+        return a.timeline_start < b.timeline_start
+    end)
+
+    -- Find target clip in sorted list
+    for i, clip in ipairs(valid_clips) do
+        if clip.id == target_clip.id then
+            target_idx = i
+            break
+        end
+    end
+
+    if not target_idx then
+        return {edges = {}, boundary_time = nil}
+    end
+
+    local clip = valid_clips[target_idx]
+    local prev_clip = valid_clips[target_idx - 1]
+    local next_clip = valid_clips[target_idx + 1]
+
+    local edges = {}
+    local boundary_time
+
+    if side == "downstream" then
+        -- Boundary at clip's end (out edge)
+        boundary_time = clip.timeline_start + clip.duration
+
+        -- Left side of boundary: this clip's out edge
+        local left_edge = {
+            clip_id = clip.id,
+            edge_type = "out",
+            track_id = clip.track_id
+        }
+
+        -- Right side of boundary: next clip's in edge or gap
+        local right_edge
+        if next_clip and next_clip.timeline_start == boundary_time then
+            -- Adjacent clip
+            right_edge = {
+                clip_id = next_clip.id,
+                edge_type = "in",
+                track_id = next_clip.track_id
+            }
+        else
+            -- Gap after this clip
+            right_edge = {
+                clip_id = clip.id,
+                edge_type = "gap_after",
+                track_id = clip.track_id
+            }
+        end
+
+        if click_type == "roll" then
+            table.insert(edges, left_edge)
+            table.insert(edges, right_edge)
+        else
+            -- Single click on downstream = out edge
+            table.insert(edges, left_edge)
+        end
+
+    else -- side == "upstream"
+        -- Boundary at clip's start (in edge)
+        boundary_time = clip.timeline_start
+
+        -- Right side of boundary: this clip's in edge
+        local right_edge = {
+            clip_id = clip.id,
+            edge_type = "in",
+            track_id = clip.track_id
+        }
+
+        -- Left side of boundary: prev clip's out edge or gap
+        local left_edge
+        if prev_clip and (prev_clip.timeline_start + prev_clip.duration) == boundary_time then
+            -- Adjacent clip
+            left_edge = {
+                clip_id = prev_clip.id,
+                edge_type = "out",
+                track_id = prev_clip.track_id
+            }
+        else
+            -- Gap before this clip
+            left_edge = {
+                clip_id = clip.id,
+                edge_type = "gap_before",
+                track_id = clip.track_id
+            }
+        end
+
+        if click_type == "roll" then
+            table.insert(edges, left_edge)
+            table.insert(edges, right_edge)
+        else
+            -- Single click on upstream = in edge
+            table.insert(edges, right_edge)
+        end
+    end
+
+    return {edges = edges, boundary_time = boundary_time}
+end
+
 -- Validate clip has integer bounds
 local function validate_bounds(clip)
     if not clip then return nil end
