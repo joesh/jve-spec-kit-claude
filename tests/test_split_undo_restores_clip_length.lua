@@ -36,12 +36,12 @@ for _, c in ipairs(clips_before) do
 end
 
 assert(clip_before, "clip should exist before split")
-local original_duration = clip_before.duration.frames
+local original_duration = clip_before.duration
 assert(original_duration and original_duration > 10,
     string.format("Initial duration should be > 10 frames, got %s", tostring(original_duration)))
 
 -- Calculate split point at middle of clip
-local split_point = clip_before.timeline_start.frames + math.floor(original_duration / 2)
+local split_point = clip_before.timeline_start + math.floor(original_duration / 2)
 
 -- Execute SplitClip
 local split_result = command_manager.execute("SplitClip", {
@@ -64,7 +64,7 @@ for _, c in ipairs(clips_after_split) do
 end
 
 assert(clip_after_split, "clip should still exist after split")
-local split_duration = clip_after_split.duration.frames
+local split_duration = clip_after_split.duration
 assert(split_duration < original_duration,
     string.format("After split, duration (%d) should be less than original (%d)",
         split_duration, original_duration))
@@ -84,9 +84,9 @@ for _, c in ipairs(clips_after_undo) do
 end
 
 assert(clip_after_undo, "clip should exist after undo")
-assert(clip_after_undo.duration and clip_after_undo.duration.frames == original_duration,
+assert(clip_after_undo.duration and clip_after_undo.duration == original_duration,
     string.format("REGRESSION: After undo, in-memory duration should be restored to %d frames, got %s",
-        original_duration, clip_after_undo.duration and clip_after_undo.duration.frames or "nil"))
+        original_duration, clip_after_undo.duration and clip_after_undo.duration or "nil"))
 
 -- Cleanup
 layout:cleanup()

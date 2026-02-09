@@ -107,7 +107,7 @@ do
     })
     local affected = find_affected_clip(payload, clips.v2.id)
     assert(affected, "v2 clip should be affected when its out edge is selected")
-    local new_duration = affected.new_duration and affected.new_duration.frames
+    local new_duration = affected.new_duration and affected.new_duration
     assert(new_duration, "affected clip should report new duration")
     assert(new_duration > layout.clips.v2.duration,
         string.format("v2 duration should grow when lead gap delta is negative and opposing bracket negates it (got %s)", tostring(new_duration)))

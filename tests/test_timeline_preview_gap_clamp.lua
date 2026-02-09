@@ -4,7 +4,6 @@ package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_state = require("ui.timeline.timeline_state")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -71,7 +70,7 @@ view.drag_state = {
     type = "edges",
     edges = edges,
     lead_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"},
-    delta_rational = Rational.new(-800, 1000, 1),
+    delta_frames = -800,
     preview_data = nil
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
@@ -91,7 +90,7 @@ end
 
 assert(#yellow_rects > 0, "Expected yellow preview rects for dragged clips")
 
-local clamp_px = timeline_state.time_to_pixel(Rational.new(1500, 1000, 1), width)
+local clamp_px = timeline_state.time_to_pixel(1500, width)
 
 for _, rect in ipairs(yellow_rects) do
     assert(rect.x >= clamp_px,

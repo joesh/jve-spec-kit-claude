@@ -4,7 +4,6 @@ require("test_env")
 
 local timeline_view_input = require("ui.timeline.view.timeline_view_input")
 local edge_picker = require("ui.timeline.edge_picker")
-local Rational = require("core.rational")
 local time_utils = require("core.time_utils")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 
@@ -16,14 +15,14 @@ local clips = {
     {
         id = "clip_a",
         track_id = "track_v1",
-        timeline_start = Rational.new(0, 24, 1),
-        duration = Rational.new(50, 24, 1)
+        timeline_start = 0,
+        duration = 50
     },
     {
         id = "clip_b",
         track_id = "track_v1",
-        timeline_start = Rational.new(60, 24, 1),
-        duration = Rational.new(40, 24, 1)
+        timeline_start = 60,
+        duration = 40
     }
 }
 
@@ -51,10 +50,10 @@ local function new_state()
     state.get_track_clip_index = function() return clips end
     state.get_all_tracks = function() return {{id = "track_v1", track_type = "VIDEO"}} end
     state.get_sequence_frame_rate = function() return {fps_numerator = 24, fps_denominator = 1} end
-    state.get_viewport_duration = function() return Rational.new(100, 24, 1) end
-    state.pixel_to_time = function(x) return Rational.new(x, 24, 1) end
-    state.time_to_pixel = function(time_value) return time_value.frames or 0 end
-    state.get_playhead_position = function() return Rational.new(0, 24, 1) end
+    state.get_viewport_duration = function() return 100 end
+    state.pixel_to_time = function(x) return x end
+    state.time_to_pixel = function(time_value) return time_value end
+    state.get_playhead_position = function() return 0 end
     state.clear_edge_selection = function() state._selected_edges = {} end
     state.clear_gap_selection = function() end
     state.set_selection = function() end
@@ -112,7 +111,7 @@ time_utils.to_milliseconds = original_to_ms
 keyboard_shortcuts.is_snapping_enabled = original_snapping
 
 assert(view.drag_state, "drag_state should be created on move")
-assert(view.drag_state.delta_rational and view.drag_state.delta_rational.frames == 15,
-    "delta_rational should track frame delta without milliseconds")
+assert(view.drag_state.delta_frames == 15,
+    "delta_frames should track frame delta without milliseconds")
 
 print("✅ Edge drag updates use frame deltas only")

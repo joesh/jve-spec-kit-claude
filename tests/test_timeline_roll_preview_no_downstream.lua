@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_state = require("ui.timeline.timeline_state")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -56,7 +55,7 @@ view.drag_state = {
     type = "edges",
     edges = {gap_edge, clip_edge},
     lead_edge = clip_edge,
-    delta_rational = Rational.new(-200, 1000, 1)
+    delta_frames = -200
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -87,13 +86,8 @@ layout:cleanup()
 
 assert(ok, "timeline renderer errored: " .. tostring(err))
 
-local seq_rate = timeline_state.get_sequence_frame_rate()
-local function to_rational(frames)
-    return Rational.new(frames, seq_rate.fps_numerator, seq_rate.fps_denominator)
-end
-
 local downstream_start_px = timeline_state.time_to_pixel(
-    to_rational(clips.v1_downstream.timeline_start),
+    clips.v1_downstream.timeline_start,
     viewport_width
 )
 local downstream_highlight = false

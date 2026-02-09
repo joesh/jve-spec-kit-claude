@@ -159,7 +159,7 @@ nudge_cmd:set_parameter("sequence_id", seq_id)
 nudge_cmd:set_parameter("selected_clip_ids", {clip_id})
 -- Pass Rational delta for Nudge
 local nudge_delta = Rational.new(24, fps_num, fps_den) -- +1s
-nudge_cmd:set_parameter("nudge_amount_rat", nudge_delta)
+nudge_cmd:set_parameter("nudge_amount", nudge_delta)
 
 local nudge_res = command_manager.execute(nudge_cmd)
 assert_true(nudge_res.success, "Nudge command executed")

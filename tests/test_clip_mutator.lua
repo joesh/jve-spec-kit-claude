@@ -2,7 +2,6 @@ require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
-local Rational = require("core.rational")
 local ripple_layout = require("helpers.ripple_layout")
 
 local pass_count = 0
@@ -40,10 +39,10 @@ do
     local row = {
         id = "c1", project_id = "p1", clip_kind = "timeline", name = "Clip",
         track_id = "t1", media_id = "m1",
-        timeline_start = Rational.new(0, 1000, 1),
-        duration = Rational.new(100, 1000, 1),
-        source_in = Rational.new(0, 24000, 1001),
-        source_out = Rational.new(100, 24000, 1001),
+        timeline_start = 0,
+        duration = 100,
+        source_in = 0,
+        source_out = 100,
         fps_numerator = 24000, fps_denominator = 1001,
         enabled = true, offline = false,
         created_at = os.time(), modified_at = os.time()
@@ -155,10 +154,10 @@ print("\n--- plan_update: valid ---")
 do
     local row = {
         id = "c1", track_id = "t1",
-        timeline_start = Rational.new(10, 1000, 1),
-        duration = Rational.new(50, 1000, 1),
-        source_in = Rational.new(5, 1000, 1),
-        source_out = Rational.new(55, 1000, 1),
+        timeline_start = 10,
+        duration = 50,
+        source_in = 5,
+        source_out = 55,
         enabled = true
     }
     local original = {id = "c1", start_value = 0, duration = 100}
@@ -205,8 +204,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(1000, 1000, 1),
-        duration = Rational.new(200, 1000, 1),
+        timeline_start = 1000,
+        duration = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("no overlap ok", ok == true)
@@ -228,8 +227,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(0, 1000, 1),
-        duration = Rational.new(500, 1000, 1),
+        timeline_start = 0,
+        duration = 500,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("full cover ok", ok == true)
@@ -254,8 +253,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(300, 1000, 1),
-        duration = Rational.new(500, 1000, 1),
+        timeline_start = 300,
+        duration = 500,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("tail trim ok", ok == true)
@@ -280,8 +279,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(0, 1000, 1),
-        duration = Rational.new(400, 1000, 1),
+        timeline_start = 0,
+        duration = 400,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("head trim ok", ok == true)
@@ -307,8 +306,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(300, 1000, 1),
-        duration = Rational.new(300, 1000, 1),
+        timeline_start = 300,
+        duration = 300,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("straddle ok", ok == true)
@@ -335,8 +334,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(0, 1000, 1),
-        duration = Rational.new(500, 1000, 1),
+        timeline_start = 0,
+        duration = 500,
         exclude_clip_id = "clip_v1_left",
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -363,8 +362,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(100, 1000, 1),
-        duration = Rational.new(600, 1000, 1),
+        timeline_start = 100,
+        duration = 600,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("multi ok", ok == true)
@@ -393,8 +392,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = Rational.new(100, 1000, 1),
-        duration = Rational.new(400, 1000, 1),
+        timeline_start = 100,
+        duration = 400,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("zero trim ok", ok == true)
@@ -437,8 +436,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = Rational.new(500, 1000, 1),
-        shift_amount = Rational.new(200, 1000, 1),
+        insert_time = 500,
+        shift_amount = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("ripple shift ok", ok == true)
@@ -464,8 +463,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = Rational.new(400, 1000, 1),
-        shift_amount = Rational.new(300, 1000, 1),
+        insert_time = 400,
+        shift_amount = 300,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("ripple split ok", ok == true)
@@ -505,8 +504,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = Rational.new(0, 1000, 1),
-        shift_amount = Rational.new(100, 1000, 1),
+        insert_time = 0,
+        shift_amount = 100,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("ripple reverse ok", ok == true)
@@ -532,8 +531,8 @@ do
 
     local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = Rational.new(1000, 1000, 1),
-        shift_amount = Rational.new(200, 1000, 1),
+        insert_time = 1000,
+        shift_amount = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("ripple no clips ok", ok == true)
@@ -615,7 +614,7 @@ do
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v1.id,
         anchor_clip_id = "clip_v1_left",
-        delta_rat = Rational.new(0, 1000, 1)
+        delta_frames = 0
     })
     check("dup zero delta ok", ok == true)
     check("dup zero delta 0 mutations", #result.planned_mutations == 0)
@@ -640,7 +639,7 @@ do
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v1.id,
         anchor_clip_id = "clip_v1_left",
-        delta_rat = Rational.new(1000, 1000, 1)
+        delta_frames = 1000
     })
     check("dup positive ok", ok == true)
     check("dup positive has mutations", #result.planned_mutations > 0)
@@ -676,7 +675,7 @@ do
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v2.id,
         anchor_clip_id = "clip_v1_left",
-        delta_rat = Rational.new(0, 1000, 1)
+        delta_frames = 0
     })
     check("dup cross-track ok", ok == true)
     check("dup cross-track 1 new id", #result.new_clip_ids == 1)
@@ -714,7 +713,7 @@ do
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v2.id,
         anchor_clip_id = "clip_v1_left",
-        delta_rat = Rational.new(0, 1000, 1)
+        delta_frames = 0
     })
     check("dup occlusion ok", ok == true)
     check("dup occlusion has mutations", #result.planned_mutations > 0)
@@ -749,7 +748,7 @@ do
             sequence_id = layout.sequence_id,
             clip_ids = {"nonexistent_clip_id"},
             target_track_id = layout.tracks.v1.id,
-            delta_rat = Rational.new(100, 1000, 1)
+            delta_frames = 100
         })
     end)
 
@@ -773,7 +772,7 @@ do
         clip_ids = {"clip_v1_left", "nonexistent_clip_id"},
         target_track_id = layout.tracks.v1.id,
         anchor_clip_id = "clip_v1_left",
-        delta_rat = Rational.new(1000, 1000, 1)
+        delta_frames = 1000
     })
     check("dup nonexistent source not ok", ok == false)
     check("dup nonexistent source has error", err ~= nil and err:find("not found") ~= nil)
@@ -803,7 +802,7 @@ do
             clip_ids = {"clip_v1_left"},
             target_track_id = "track_a1",
             anchor_clip_id = "clip_v1_left",
-            delta_rat = Rational.new(0, 1000, 1)
+            delta_frames = 0
         })
     end)
 

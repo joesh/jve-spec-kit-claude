@@ -97,7 +97,7 @@ pc.set_timeline_mode(true, "seq_1", {
 -- Set playhead to timeline frame 1680 (= ~70.07s in timeline time)
 -- This is the value get_position() returns in timeline mode.
 local Rational = require("core.rational")
-mock_playhead_rat = Rational.new(1680, 24000, 1001)
+mock_playhead_rat = 1680
 pc.set_position_silent(1680)
 
 --------------------------------------------------------------------------------

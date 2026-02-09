@@ -70,7 +70,6 @@ package.loaded["core.clipboard_actions"] = {
 local menu_system = require("core.menu_system")
 local timeline_state = require("ui.timeline.timeline_state")
 local data = require("ui.timeline.state.timeline_state_data")
-local Rational = require("core.rational")
 local dkjson = require("dkjson")
 
 -- Seed timeline state with a single clip and playhead inside it.
@@ -82,16 +81,16 @@ data.state.sequence_id = "timeline_seq"
 local clip = {
     id = "clip_rational",
     track_id = "v1",
-    timeline_start = Rational.new(0, 24, 1),
-    duration = Rational.new(48, 24, 1),
-    source_in = Rational.new(0, 24, 1),
-    source_out = Rational.new(48, 24, 1),
+    timeline_start = 0,
+    duration = 48,
+    source_in = 0,
+    source_out = 48,
     enabled = true,
     -- start_value intentionally absent to mirror UI clip objects
 }
 data.state.clips = { clip }
 data.state.selected_clips = { clip }
-timeline_state.set_playhead_position(Rational.new(10, 24, 1))
+timeline_state.set_playhead_position(10)  -- integer frames
 
 local captured_command = nil
 local mock_command_manager = {

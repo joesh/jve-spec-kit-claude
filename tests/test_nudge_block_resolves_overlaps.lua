@@ -59,7 +59,7 @@ cmd:set_parameter("project_id", "proj")
 cmd:set_parameter("fps_numerator", 24)
 cmd:set_parameter("fps_denominator", 1)
 cmd:set_parameter("selected_clip_ids", {"c1", "c2"})
-cmd:set_parameter("nudge_amount_rat", Rational.new(250, 24, 1)) -- move block right, would overlap c3 without trimming
+cmd:set_parameter("nudge_amount", 250) -- move block right, would overlap c3 without trimming
 
 local exec = command_manager.execute(cmd)
 assert(exec and exec.success, "nudge execution failed")

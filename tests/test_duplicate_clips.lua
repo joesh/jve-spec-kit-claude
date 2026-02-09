@@ -10,7 +10,6 @@ local database = require('core.database')
 local Clip = require('models.clip')
 local Media = require('models.media')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 local asserts = require('core.asserts')
 
 -- Mock Qt timer
@@ -90,10 +89,10 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         project_id = "project",
         track_id = track_id,
         owner_sequence_id = "sequence",
-        timeline_start = Rational.new(start_frame, 30, 1),
-        duration = Rational.new(duration_frames, 30, 1),
-        source_in = Rational.new(0, 30, 1),
-        source_out = Rational.new(duration_frames, 30, 1),
+        timeline_start = start_frame,
+        duration = duration_frames,
+        source_in = 0,
+        source_out = duration_frames,
         enabled = true,
         fps_numerator = 30,
         fps_denominator = 1
@@ -146,7 +145,7 @@ local result = execute_command("DuplicateClips", {
     clip_ids = {"clip_a"},
     anchor_clip_id = "clip_a",
     target_track_id = "track_v1",
-    delta_rat = Rational.new(100, 30, 1)  -- Offset by 100 frames
+    delta_frames = 100  -- Offset by 100 frames
 })
 assert(result.success, "DuplicateClips should succeed: " .. tostring(result.error_message))
 
@@ -166,7 +165,7 @@ result = execute_command("DuplicateClips", {
     clip_ids = {"clip_a"},
     anchor_clip_id = "clip_a",
     target_track_id = "track_v2",  -- Different track
-    delta_rat = Rational.new(0, 30, 1)
+    delta_frames = 0
 })
 assert(result.success, "DuplicateClips to different track should succeed")
 
@@ -189,7 +188,7 @@ result = execute_command("DuplicateClips", {
     clip_ids = {"clip_a", "clip_b", "clip_c"},
     anchor_clip_id = "clip_a",
     target_track_id = "track_v2",
-    delta_rat = Rational.new(0, 30, 1)
+    delta_frames = 0
 })
 assert(result.success, "DuplicateClips multiple should succeed")
 
@@ -232,7 +231,7 @@ result = execute_command("DuplicateClips", {
     clip_ids = {"clip_a"},
     anchor_clip_id = "clip_a",
     target_track_id = "track_v2",
-    delta_rat = Rational.new(50, 30, 1)  -- 50 frame offset
+    delta_frames = 50  -- 50 frame offset
 })
 assert(result.success, "DuplicateClips with offset should succeed")
 
@@ -289,7 +288,7 @@ result = execute_command("DuplicateClips", {
     clip_ids = {"clip_orig"},
     anchor_clip_id = "clip_orig",
     target_track_id = "track_v2",
-    delta_rat = Rational.new(0, 30, 1)
+    delta_frames = 0
 })
 assert(result.success, "DuplicateClips should succeed")
 

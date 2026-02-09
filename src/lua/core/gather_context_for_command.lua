@@ -18,7 +18,6 @@
 
 local M = {}
 
-local Rational = require("core.rational")
 local Track = require("models.track")
 local Media = require("models.media")
 local clip_media = require("core.utils.clip_media")
@@ -28,9 +27,9 @@ local logger = require("core.logger")
 --- Get the clip's stored marks or fall back to full duration
 -- @param clip table Master clip with source_in, source_out, duration fields
 -- @param media table Media object for fallback duration
--- @param fps_num number FPS numerator for Rational construction
--- @param fps_den number FPS denominator for Rational construction
--- @return Rational source_in, Rational source_out, Rational duration
+-- @param fps_num number FPS numerator (metadata only)
+-- @param fps_den number FPS denominator (metadata only)
+-- @return number source_in (frames), number source_out (frames), number duration (frames)
 local function resolve_clip_marks(clip, media, fps_num, fps_den)
     assert(clip, "gather_context: clip required")
     assert(fps_num and fps_num > 0, "gather_context: fps_num required")
@@ -40,57 +39,36 @@ local function resolve_clip_marks(clip, media, fps_num, fps_den)
     local source_out = clip.source_out
     local duration = clip.duration
 
-    -- If clip has Rational marks, use them directly
-    if source_in and getmetatable(source_in) == Rational.metatable then
-        -- Already Rational, good
-    elseif source_in and type(source_in) == "table" and source_in.frames ~= nil then
-        source_in = Rational.new(source_in.frames, fps_num, fps_den)
-    elseif source_in and type(source_in) == "number" then
-        source_in = Rational.new(source_in, fps_num, fps_den)
-    else
+    -- Normalize source_in to integer
+    if type(source_in) == "number" then
+        -- Already integer, good
+    elseif source_in == nil then
         -- Fall back to start of media
-        source_in = Rational.new(0, fps_num, fps_den)
+        source_in = 0
+    else
+        error("gather_context: source_in must be integer, got " .. type(source_in))
     end
 
-    if source_out and getmetatable(source_out) == Rational.metatable then
-        -- Already Rational, good
-    elseif source_out and type(source_out) == "table" and source_out.frames ~= nil then
-        source_out = Rational.new(source_out.frames, fps_num, fps_den)
-    elseif source_out and type(source_out) == "number" then
-        source_out = Rational.new(source_out, fps_num, fps_den)
-    else
+    -- Normalize source_out to integer
+    if type(source_out) == "number" then
+        -- Already integer, good
+    elseif source_out == nil then
         -- Derive from duration or media duration
         if duration then
-            local dur_frames
-            if getmetatable(duration) == Rational.metatable then
-                dur_frames = duration.frames
-            elseif type(duration) == "table" and duration.frames then
-                dur_frames = duration.frames
-            elseif type(duration) == "number" then
-                dur_frames = duration
-            end
-            if dur_frames then
-                source_out = Rational.new(source_in.frames + dur_frames, fps_num, fps_den)
-            end
-        end
-        if not source_out then
+            assert(type(duration) == "number", "gather_context: duration must be integer")
+            source_out = source_in + duration
+        else
             assert(media and media.duration, "gather_context: no source_out and no media duration")
-            local media_dur = media.duration
-            if getmetatable(media_dur) == Rational.metatable then
-                source_out = Rational.new(source_in.frames + media_dur.frames, fps_num, fps_den)
-            elseif type(media_dur) == "table" and media_dur.frames then
-                source_out = Rational.new(source_in.frames + media_dur.frames, fps_num, fps_den)
-            elseif type(media_dur) == "number" then
-                source_out = Rational.new(source_in.frames + media_dur, fps_num, fps_den)
-            else
-                error("gather_context: cannot resolve source_out from media duration")
-            end
+            assert(type(media.duration) == "number", "gather_context: media.duration must be integer")
+            source_out = source_in + media.duration
         end
+    else
+        error("gather_context: source_out must be integer, got " .. type(source_out))
     end
 
     -- Derive duration from marks
-    duration = Rational.new(source_out.frames - source_in.frames, fps_num, fps_den)
-    assert(duration.frames > 0, "gather_context: duration must be positive")
+    duration = source_out - source_in
+    assert(duration > 0, "gather_context: duration must be positive")
 
     return source_in, source_out, duration
 end

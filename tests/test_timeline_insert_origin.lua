@@ -16,7 +16,6 @@ local command_manager = require('core.command_manager')
 local timeline_state = require('ui.timeline.timeline_state')
 local Command = require('command')
 local Media = require('models.media')
-local Rational = require('core.rational')
 
 local DB_PATH = "/tmp/jve/test_timeline_insert_origin.db"
 os.remove(DB_PATH)
@@ -71,7 +70,7 @@ command_manager.init("default_sequence", "default_project")
 timeline_state.init("default_sequence")
 
 local playhead = timeline_state.get_playhead_position()
-assert(playhead.frames == 0, "playhead should start at frame 0 for new sequence")
+assert(playhead == 0, "playhead should start at frame 0 for new sequence")
 
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("media_id", media.id)
@@ -79,7 +78,7 @@ insert_cmd:set_parameter("sequence_id", "default_sequence")
 insert_cmd:set_parameter("track_id", "video1")
 insert_cmd:set_parameter("insert_time", playhead)
 insert_cmd:set_parameter("duration", media.duration)
-insert_cmd:set_parameter("source_in", Rational.new(0, 25, 1))
+insert_cmd:set_parameter("source_in", 0)
 insert_cmd:set_parameter("source_out", media.duration)
 insert_cmd:set_parameter("advance_playhead", true)
 
@@ -99,19 +98,19 @@ for _, c in ipairs(clips) do
 end
 assert(clip, "video clip not found")
 
-assert(clip.timeline_start.frames == 0, string.format("clip should start at frame 0, got %s", tostring(clip.timeline_start.frames)))
+assert(clip.timeline_start == 0, string.format("clip should start at frame 0, got %s", tostring(clip.timeline_start)))
 
 -- Verify rendering math keeps the clip at the origin for a 1000px viewport
-timeline_state.set_viewport_start_time(Rational.new(0, 24, 1))
+timeline_state.set_viewport_start_time(0)
 local px = timeline_state.time_to_pixel(clip.timeline_start, 1000)
 assert(px >= -1 and px <= 1, string.format("clip should render at viewport origin, got pixel=%s", tostring(px)))
 
 -- Playhead should advance to the end of the inserted clip when requested
 local final_playhead = timeline_state.get_playhead_position()
-local expected_frames = math.floor((media.duration.frames * 24 * media.duration.fps_denominator + media.duration.fps_numerator / 2)
-    / (media.duration.fps_numerator))
-assert(final_playhead.frames == expected_frames,
-    string.format("playhead should advance to clip end (%d), got %s", expected_frames, tostring(final_playhead.frames)))
+-- Playhead advances by clip.duration (integer frames in sequence timebase)
+-- The Insert command uses the provided duration directly without rescaling
+assert(final_playhead == media.duration,
+    string.format("playhead should advance to clip end (%d), got %s", media.duration, tostring(final_playhead)))
 
 print("✅ Insert at playhead origin renders at timeline start")
 os.remove(DB_PATH)

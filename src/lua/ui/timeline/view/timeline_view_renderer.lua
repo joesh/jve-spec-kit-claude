@@ -19,13 +19,8 @@
 local M = {}
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")
-local Rational = require("core.rational")
 local Command = require("command")
 local command_manager = require("core.command_manager")
-
-local function frames_to_rational(frames, fps_num, fps_den)
-    return Rational.new(frames or 0, fps_num, fps_den)
-end
 
 local function build_edge_signature(edges)
     local parts = {}
@@ -65,17 +60,14 @@ local function is_gap_preview(entry)
     return false
 end
 
-local function normalize_preview_entries(entries, fps_num, fps_den)
+-- All coords are integer frames - no conversion needed
+local function normalize_preview_entries(entries)
     local normalized = {}
     for _, entry in ipairs(coerce_clip_entries(entries) or {}) do
         local start_value = entry.new_start_value or entry.timeline_start or entry.start_value
         local duration_value = entry.new_duration or entry.duration
-        if type(start_value) == "number" then
-            start_value = frames_to_rational(start_value, fps_num, fps_den)
-        end
-        if type(duration_value) == "number" then
-            duration_value = frames_to_rational(duration_value, fps_num, fps_den)
-        end
+        assert(type(start_value) == "number", "normalize_preview_entries: start_value must be integer")
+        assert(type(duration_value) == "number", "normalize_preview_entries: duration_value must be integer")
         table.insert(normalized, {
             clip_id = entry.clip_id,
             new_start_value = start_value,
@@ -88,14 +80,14 @@ local function normalize_preview_entries(entries, fps_num, fps_den)
     return normalized
 end
 
-local function build_preview_from_payload(payload, fps_num, fps_den)
+local function build_preview_from_payload(payload)
     if type(payload) ~= "table" then
         return nil
     end
-    local affected_entries = normalize_preview_entries(payload.affected_clips or payload.affected_clip, fps_num, fps_den) or {}
+    local affected_entries = normalize_preview_entries(payload.affected_clips or payload.affected_clip) or {}
     local preview = {
         affected_clips = {},
-        shifted_clips = normalize_preview_entries(payload.shifted_clips, fps_num, fps_den) or {},
+        shifted_clips = normalize_preview_entries(payload.shifted_clips) or {},
         shift_blocks = payload.shift_blocks or {},
         clamped_edges = payload.clamped_edges or {},
         edge_preview = payload.edge_preview
@@ -120,27 +112,11 @@ local function build_preview_from_payload(payload, fps_num, fps_den)
     return preview
 end
 
-local function coerce_to_rational(value, fps_num, fps_den)
-    if not value then return nil end
-    if getmetatable(value) == Rational.metatable then
-        return value
-    end
-    if type(value) == "number" then
-        return Rational.new(value, fps_num, fps_den)
-    end
-    return nil
-end
-
-local function rational_equals(a, b)
-    if not a or not b then
-        return false
-    end
-    if getmetatable(a) ~= Rational.metatable or getmetatable(b) ~= Rational.metatable then
-        return false
-    end
-    return a.frames == b.frames
-        and a.fps_numerator == b.fps_numerator
-        and a.fps_denominator == b.fps_denominator
+-- All coords are integer frames - no coercion needed
+local function assert_integer(value, context)
+    if value == nil then return nil end
+    assert(type(value) == "number", context .. ": value must be integer, got " .. type(value))
+    return value
 end
 
 local function parse_temp_gap_identifier(clip_id)
@@ -163,7 +139,7 @@ local function parse_temp_gap_identifier(clip_id)
     return track_id, tonumber(start_str), tonumber(end_str)
 end
 
-local function build_temp_gap_preview_clip(preview, seq_rate)
+local function build_temp_gap_preview_clip(preview)
     if not preview or not preview.clip_id then
         return nil
     end
@@ -172,28 +148,24 @@ local function build_temp_gap_preview_clip(preview, seq_rate)
     if not track_id or not start_frames or not end_frames then
         return nil
     end
-    assert(seq_rate and seq_rate.fps_numerator and seq_rate.fps_denominator, "build_temp_gap_preview_clip: missing sequence fps metadata")
-    local fps_num = seq_rate.fps_numerator
-    local fps_den = seq_rate.fps_denominator
     local duration_frames = end_frames - start_frames
     if duration_frames < 0 then
         duration_frames = 0
     end
-    local start_value = Rational.new(start_frames, fps_num, fps_den)
-    local duration = Rational.new(duration_frames, fps_num, fps_den)
+    -- All coords are integer frames
     return {
         id = preview.clip_id,
         track_id = track_id,
-        timeline_start = start_value,
-        duration = duration,
-        source_in = Rational.new(0, fps_num, fps_den),
-        source_out = duration,
+        timeline_start = start_frames,
+        duration = duration_frames,
+        source_in = 0,
+        source_out = duration_frames,
         enabled = 1,
         is_gap = true
     }
 end
 
-local function get_preview_clip(state_module, preview_clip_cache, preview_entry, seq_rate)
+local function get_preview_clip(state_module, preview_clip_cache, preview_entry)
     if not preview_entry or not preview_entry.clip_id then
         return nil
     end
@@ -207,7 +179,7 @@ local function get_preview_clip(state_module, preview_clip_cache, preview_entry,
             return clip
         end
     end
-    local gap_clip = build_temp_gap_preview_clip(preview_entry, seq_rate)
+    local gap_clip = build_temp_gap_preview_clip(preview_entry)
     if gap_clip then
         preview_clip_cache[preview_entry.clip_id] = gap_clip
         return gap_clip
@@ -217,7 +189,7 @@ end
 
 local PREVIEW_RECT_COLOR = "#ffff00"
 
-local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration_rational)
+local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
     if not clip or not clip.track_id or not start_value or not duration_value then
         return
     end
@@ -258,7 +230,7 @@ local function draw_preview_outline(view, clip, start_value, duration_value, sta
     timeline.add_rect(view.widget, visible_x + visible_w - 2, clip_y, 2, clip_height, PREVIEW_RECT_COLOR)
 end
 
-local function render_preview_rectangles(view, preview_data, preview_clip_cache, seq_rate, state_module, width, height, viewport_duration_rational)
+local function render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height, viewport_duration)
     if not preview_data then return end
     local affected = preview_data.affected_clips
     if not affected and preview_data.affected_clip then
@@ -267,26 +239,23 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
 
     for _, entry in ipairs(affected or {}) do
         if not entry.is_gap then
-            local clip = get_preview_clip(state_module, preview_clip_cache, entry, seq_rate)
+            local clip = get_preview_clip(state_module, preview_clip_cache, entry)
             if clip then
                 local start_value = entry.new_start_value or clip.timeline_start
                 local duration_value = entry.new_duration or clip.duration
-                draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration_rational)
+                draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
             end
         end
     end
 
     for _, shift in ipairs(preview_data.shifted_clips or {}) do
-        local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = shift.clip_id}, seq_rate)
+        local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = shift.clip_id})
         if clip and shift.new_start_value then
             local existing_start = clip.timeline_start
             local new_start = shift.new_start_value
-            if type(new_start) == "number" then
-                local fps = state_module.get_sequence_frame_rate()
-                new_start = Rational.new(new_start, fps.fps_numerator, fps.fps_denominator)
-            end
-            if not rational_equals(new_start, existing_start) then
-                draw_preview_outline(view, clip, new_start, clip.duration, state_module, width, height, viewport_duration_rational)
+            -- All coords are now integers, simple comparison
+            if new_start ~= existing_start then
+                draw_preview_outline(view, clip, new_start, clip.duration, state_module, width, height, viewport_duration)
             end
         end
     end
@@ -301,8 +270,9 @@ local function lower_bound_start_frames(clips, start_frames)
     while lo < hi do
         local mid = math.floor((lo + hi) / 2)
         local clip = clips[mid]
-        local clip_start = clip and clip.timeline_start and clip.timeline_start.frames
-        if not clip_start then
+        -- All coords are integer frames now
+        local clip_start = clip and clip.timeline_start
+        if type(clip_start) ~= "number" then
             -- Defensive: if the index contains malformed entries, fall back to
             -- scanning from the front rather than risking an infinite loop.
             return 1
@@ -316,14 +286,11 @@ local function lower_bound_start_frames(clips, start_frames)
     return lo
 end
 
-local function render_shift_block_outlines(view, preview_data, seq_rate, state_module, width, height, viewport_duration_rational, viewport_start_rational, viewport_end_rational)
+local function render_shift_block_outlines(view, preview_data, state_module, width, height, viewport_duration, viewport_start, viewport_end)
     if not preview_data or type(preview_data.shift_blocks) ~= "table" or #preview_data.shift_blocks == 0 then
         return
     end
-    if not seq_rate or not seq_rate.fps_numerator or not seq_rate.fps_denominator then
-        return
-    end
-    if not viewport_start_rational or not viewport_end_rational then
+    if type(viewport_start) ~= "number" or type(viewport_end) ~= "number" then
         return
     end
     if not (state_module and state_module.get_track_clip_index) then
@@ -353,9 +320,6 @@ local function render_shift_block_outlines(view, preview_data, seq_rate, state_m
         if entry and entry.clip_id then excluded[entry.clip_id] = true end
     end
 
-    local fps_num = seq_rate.fps_numerator
-    local fps_den = seq_rate.fps_denominator
-
     local visible_tracks = view.filtered_tracks or {}
     for _, track in ipairs(visible_tracks) do
         local track_id = track and track.id
@@ -363,8 +327,8 @@ local function render_shift_block_outlines(view, preview_data, seq_rate, state_m
             local block = per_track[track_id] or global_block
             if block and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
                 local delta_frames = block.delta_frames
-                local min_old_start = viewport_start_rational.frames - delta_frames
-                local max_old_start = viewport_end_rational.frames - delta_frames
+                local min_old_start = viewport_start - delta_frames
+                local max_old_start = viewport_end - delta_frames
                 if min_old_start < block.start_frames then
                     min_old_start = block.start_frames
                 end
@@ -376,29 +340,29 @@ local function render_shift_block_outlines(view, preview_data, seq_rate, state_m
                         start_index = start_index - 1 -- include previous clip for potential overlap
                     end
 
-                    local delta = Rational.new(delta_frames, fps_num, fps_den)
                     for i = start_index, #track_clips do
                         local clip = track_clips[i]
-                        if not clip or not clip.timeline_start or not clip.duration or not clip.timeline_start.frames then
+                        -- All coords are integer frames
+                        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
                             goto continue_shift_clip
                         end
 
-                        local old_start_frames = clip.timeline_start.frames
-                        if old_start_frames > max_old_start then
+                        local old_start = clip.timeline_start
+                        if old_start > max_old_start then
                             break
                         end
-                        if old_start_frames < block.start_frames then
+                        if old_start < block.start_frames then
                             goto continue_shift_clip
                         end
                         if clip.id and excluded[clip.id] then
                             goto continue_shift_clip
                         end
 
-                        local new_start = clip.timeline_start + delta
-                        if new_start.frames < 0 then
-                            new_start = Rational.new(0, fps_num, fps_den)
+                        local new_start = clip.timeline_start + delta_frames
+                        if new_start < 0 then
+                            new_start = 0
                         end
-                        draw_preview_outline(view, clip, new_start, clip.duration, state_module, width, height, viewport_duration_rational)
+                        draw_preview_outline(view, clip, new_start, clip.duration, state_module, width, height, viewport_duration)
 
                         ::continue_shift_clip::
                     end
@@ -408,7 +372,7 @@ local function render_shift_block_outlines(view, preview_data, seq_rate, state_m
     end
 end
 
-local function render_edge_handle(view, clip, normalized_edge, raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration_rational)
+local function render_edge_handle(view, clip, normalized_edge, raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration)
     if not clip or not clip.track_id or not start_value or not duration_value then
         return
     end
@@ -418,7 +382,7 @@ local function render_edge_handle(view, clip, normalized_edge, raw_edge_type, st
     if not th or th <= 0 then return end
 
     local sx = state_module.time_to_pixel(start_value, width)
-    local cw = math.floor((duration_value / viewport_duration_rational) * width) - 1
+    local cw = math.floor((duration_value / viewport_duration) * width) - 1
     if cw < 0 then cw = 0 end
     local ch = th - 10
     local handle_y = cy + 5
@@ -463,7 +427,7 @@ local function ensure_edge_preview(drag_state, state_module)
         if drag_state then
             drag_state.preview_data = nil
             drag_state.preview_request_token = nil
-            drag_state.preview_clamped_delta = nil
+            drag_state.preview_clamped_delta_frames = nil
             drag_state.clamped_edges = nil
         end
     end
@@ -489,21 +453,16 @@ local function ensure_edge_preview(drag_state, state_module)
         return
     end
 
-    local seq_rate = state_module.get_sequence_frame_rate and state_module.get_sequence_frame_rate()
-    assert(seq_rate, "ensure_edge_preview: Failed to retrieve sequence frame rate")
-    assert(seq_rate.fps_numerator and seq_rate.fps_denominator, "ensure_edge_preview: missing fps metadata")
-    local fps_num = seq_rate.fps_numerator
-    local fps_den = seq_rate.fps_denominator
-
-    local delta_rat = coerce_to_rational(drag_state.delta_rational, fps_num, fps_den)
-    if not delta_rat then
+    -- delta_frames is now an integer directly from drag state
+    local delta_frames = assert_integer(drag_state.delta_frames, "ensure_edge_preview: delta_frames")
+    if not delta_frames then
         clear_preview_state()
-        debug("missing delta (delta_rational)")
+        debug("missing delta (delta_frames)")
         return
     end
 
     local signature = build_edge_signature(edges)
-    local token = string.format("%s@%d", signature, delta_rat.frames or 0)
+    local token = string.format("%s@%d", signature, delta_frames)
     if drag_state.preview_request_token == token and drag_state.preview_data then
         debug("preview already computed for token " .. token)
         return
@@ -545,7 +504,7 @@ local function ensure_edge_preview(drag_state, state_module)
     cmd:set_parameters({
         ["edge_infos"] = edge_infos,
         ["sequence_id"] = sequence_id,
-        ["delta_frames"] = delta_rat.frames,
+        ["delta_frames"] = delta_frames,
         ["dry_run"] = true,
         ["__preloaded_clip_snapshot"] = snapshot,
         ["__timeline_active_region"] = active_region,
@@ -581,7 +540,7 @@ local function ensure_edge_preview(drag_state, state_module)
         preview_payload = result
     end
 
-    local preview_data = build_preview_from_payload(preview_payload, fps_num, fps_den)
+    local preview_data = build_preview_from_payload(preview_payload)
     assert(preview_data, "Edge preview dry run must return preview payload")
     assert(type(preview_data.edge_preview) == "table"
             and type(preview_data.edge_preview.edges) == "table",
@@ -592,12 +551,9 @@ local function ensure_edge_preview(drag_state, state_module)
     drag_state.preview_request_token = token
     debug("preview ready; affected=" .. tostring(#(drag_state.preview_data.affected_clips or {})))
 
+    -- Clamped delta is integer frames
     local clamped_frames = cmd.get_parameter and cmd:get_parameter("clamped_delta_frames")
-    if clamped_frames ~= nil then
-        drag_state.preview_clamped_delta = Rational.new(clamped_frames, fps_num, fps_den)
-    else
-        drag_state.preview_clamped_delta = nil
-    end
+    drag_state.preview_clamped_delta_frames = clamped_frames
 end
 
 local function get_track_with_offset(state_module, track_id, offset)
@@ -636,21 +592,21 @@ function M.render(view)
     state_module.debug_begin_layout_capture(view.debug_id, width, height)
     timeline.clear_commands(view.widget)
 
-    -- Viewport state
-    local viewport_start_rational = state_module.get_viewport_start_time()
-    local viewport_duration_rational = state_module.get_viewport_duration()
-    local viewport_end_rational = viewport_start_rational + viewport_duration_rational
-    local playhead_position_rational = state_module.get_playhead_position()
-    local mark_in_rational = state_module.get_mark_in and state_module.get_mark_in()
-    local mark_out_rational = state_module.get_mark_out and state_module.get_mark_out()
+    -- Viewport state (all integer frames)
+    local viewport_start = state_module.get_viewport_start_time()
+    local viewport_duration = state_module.get_viewport_duration()
+    local viewport_end = viewport_start + viewport_duration
+    local playhead_position = state_module.get_playhead_position()
+    local mark_in = state_module.get_mark_in and state_module.get_mark_in()
+    local mark_out = state_module.get_mark_out and state_module.get_mark_out()
 
     -- Draw Mark Overlays
-    if mark_in_rational and mark_out_rational and mark_out_rational > mark_in_rational then
+    if mark_in and mark_out and mark_out > mark_in then
         local fill_color = state_module.colors.mark_range_fill
-        local visible_start = Rational.max(mark_in_rational, viewport_start_rational)
-        local visible_end = mark_out_rational
-        if viewport_end_rational < visible_end then visible_end = viewport_end_rational end
-        
+        local visible_start = math.max(mark_in, viewport_start)
+        local visible_end = mark_out
+        if viewport_end < visible_end then visible_end = viewport_end end
+
         if visible_end > visible_start then
             local start_x = state_module.time_to_pixel(visible_start, width)
             local end_x = state_module.time_to_pixel(visible_end, width)
@@ -690,11 +646,12 @@ function M.render(view)
 
     local layout_by_id = view.track_layout_cache.by_id
 
-    local function draw_clip_instance(clip, render_track_id, clip_start_rational, clip_duration_rational, outline_only)
-        if not clip or not render_track_id or not clip_start_rational or not clip_duration_rational then
+    local function draw_clip_instance(clip, render_track_id, clip_start, clip_duration, outline_only)
+        if not clip or not render_track_id or not clip_start or not clip_duration then
             return
         end
-        if clip_duration_rational.frames <= 0 then
+        -- All coords are integer frames
+        if clip_duration <= 0 then
             return
         end
         local track_layout = layout_by_id and layout_by_id[render_track_id]
@@ -704,9 +661,9 @@ function M.render(view)
 
         local y = track_layout.y
         local track_height = track_layout.height
-        local clip_end_rational = clip_start_rational + clip_duration_rational
-        local x = state_module.time_to_pixel(clip_start_rational, width)
-        local clip_end_px = state_module.time_to_pixel(clip_end_rational, width)
+        local clip_end = clip_start + clip_duration
+        local x = state_module.time_to_pixel(clip_start, width)
+        local clip_end_px = state_module.time_to_pixel(clip_end, width)
         y = y + 5
         local clip_width = math.max(1, clip_end_px - x)
         local clip_height = track_height - 10
@@ -781,11 +738,9 @@ function M.render(view)
             error("timeline_view_renderer: state_module.get_track_clip_index is required", 2)
         end
 
-        local viewport_start_frames = viewport_start_rational.frames
-        local viewport_end_frames = viewport_end_rational.frames
-        if viewport_start_frames == nil or viewport_end_frames == nil then
-            error("timeline_view_renderer: viewport frames are required", 2)
-        end
+        -- All coords are integer frames
+        assert(type(viewport_start) == "number" and type(viewport_end) == "number",
+            "timeline_view_renderer: viewport frames are required")
 
         for _, track in ipairs(view.filtered_tracks) do
             local track_id = track and track.id
@@ -793,24 +748,21 @@ function M.render(view)
             if track_id and track_layout and track_layout.y < height and (track_layout.y + track_layout.height) > 0 then
                 local track_clips = state_module.get_track_clip_index(track_id)
                 if track_clips and #track_clips > 0 then
-                    local start_index = lower_bound_start_frames(track_clips, viewport_start_frames)
+                    local start_index = lower_bound_start_frames(track_clips, viewport_start)
                     if start_index > 1 then
                         start_index = start_index - 1
                     end
                     for i = start_index, #track_clips do
                         local clip = track_clips[i]
-                        if not clip or not clip.timeline_start or not clip.duration then
+                        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
                             goto continue_clip
                         end
-                        local clip_start_frames = clip.timeline_start.frames
-                        if not clip_start_frames then
-                            goto continue_clip
-                        end
-                        if clip_start_frames >= viewport_end_frames then
+                        local clip_start = clip.timeline_start
+                        if clip_start >= viewport_end then
                             break
                         end
-                        local clip_end_frames = clip_start_frames + clip.duration.frames
-                        if clip_end_frames <= viewport_start_frames then
+                        local clip_end = clip_start + clip.duration
+                        if clip_end <= viewport_start then
                             goto continue_clip
                         end
 
@@ -845,24 +797,17 @@ function M.render(view)
     -- Draw Selected Gaps
     local selected_gaps = state_module.get_selected_gaps and state_module.get_selected_gaps() or {}
     if #selected_gaps > 0 then
-        local seq_rate = state_module.get_sequence_frame_rate()
-        assert(seq_rate and seq_rate.fps_numerator and seq_rate.fps_denominator, "timeline_view_renderer: missing sequence fps metadata")
-        local fps_num = seq_rate.fps_numerator
-        local fps_den = seq_rate.fps_denominator
         for _, gap in ipairs(selected_gaps) do
-            local start_rat = gap.start_value
-            local dur_rat = gap.duration
-            if getmetatable(start_rat) ~= Rational.metatable then
-                start_rat = Rational.hydrate and Rational.hydrate(start_rat, fps_num, fps_den) or start_rat
-            end
-            if getmetatable(dur_rat) ~= Rational.metatable then
-                dur_rat = Rational.hydrate and Rational.hydrate(dur_rat, fps_num, fps_den) or dur_rat
-            end
+            -- All coords are integer frames now
+            local gap_start = gap.start_value
+            local gap_duration = gap.duration
+            assert(type(gap_start) == "number", "timeline_view_renderer: gap.start_value must be integer")
+            assert(type(gap_duration) == "number", "timeline_view_renderer: gap.duration must be integer")
             local gap_y = view.get_track_y_by_id(gap.track_id, height)
             if gap_y >= 0 then
                 local th = view.get_track_visual_height(gap.track_id)
-                local sx = state_module.time_to_pixel(start_rat, width)
-                local ex = state_module.time_to_pixel(start_rat + dur_rat, width)
+                local sx = state_module.time_to_pixel(gap_start, width)
+                local ex = state_module.time_to_pixel(gap_start + gap_duration, width)
                 local w = ex - sx
                 if w > 0 then
                     local gt = gap_y + 5
@@ -884,18 +829,18 @@ function M.render(view)
 
     -- Drag Previews
     if view.drag_state and view.drag_state.type == "clips" then
-        local delta_rat = view.drag_state.delta_rational
-        
+        local delta_frames = view.drag_state.delta_frames or 0
+
         local preview_hint = nil
         local current_y = view.drag_state.current_y or view.drag_state.start_y
         local target_tid = view.get_track_id_at_y(current_y, height)
-        
+
         if target_tid then
             local anchor_clip = nil
             local aid = view.drag_state.anchor_clip_id
             if aid then for _, c in ipairs(view.drag_state.clips) do if c.id == aid then anchor_clip = c break end end end
             if not anchor_clip then anchor_clip = view.drag_state.clips[1] end
-            
+
             if anchor_clip then
                 local tracks = state_module.get_all_tracks()
                 local anchor_idx, target_idx
@@ -929,7 +874,6 @@ function M.render(view)
             preview_track_offset = preview_hint.track_offset
         end
 
-        local delta_is_rational = getmetatable(delta_rat) == Rational.metatable
         for _, clip in ipairs(view.drag_state.clips) do
             if clip and clip.id then
                 local render_track_id = clip.track_id
@@ -939,10 +883,8 @@ function M.render(view)
                     render_track_id = preview_target_id
                 end
 
-                local start_value = clip.timeline_start
-                if delta_is_rational and start_value then
-                    start_value = start_value + delta_rat
-                end
+                -- All coords are integer frames
+                local start_value = clip.timeline_start + delta_frames
                 draw_clip_instance(clip, render_track_id, start_value, clip.duration, true)
             end
         end
@@ -957,41 +899,33 @@ function M.render(view)
 
     local dragging_edges = edge_drag_state and edge_drag_state.type == "edges"
     local preview_clip_cache = {}
-    local seq_rate = state_module.get_sequence_frame_rate()
-    assert(seq_rate and seq_rate.fps_numerator and seq_rate.fps_denominator, "timeline_view_renderer: missing sequence fps metadata")
-    local fps_num = seq_rate.fps_numerator
-    local fps_den = seq_rate.fps_denominator
-    local zero_delta = Rational.new(0, fps_num, fps_den)
-    local edge_delta = zero_delta
+    -- All deltas are integer frames
+    local edge_delta = 0
     local edges_to_render = state_module.get_selected_edges() or {}
 
     if dragging_edges then
         ensure_edge_preview(edge_drag_state, state_module)
-        local requested_delta = coerce_to_rational(edge_drag_state.delta_rational, fps_num, fps_den)
-        local clamped_delta = coerce_to_rational(edge_drag_state.preview_clamped_delta, fps_num, fps_den)
+        local requested_delta = assert_integer(edge_drag_state.delta_frames, "render: edge delta_frames")
+        local clamped_delta = assert_integer(edge_drag_state.preview_clamped_delta_frames, "render: clamped_delta_frames")
         if clamped_delta then
             edge_delta = clamped_delta
         elseif requested_delta then
             edge_delta = requested_delta
         end
-        if not edge_delta then
-            edge_delta = zero_delta
-        end
         edges_to_render = edge_drag_state.edges or edges_to_render
 
         local preview_data = edge_drag_state.preview_data
         if preview_data then
-            render_preview_rectangles(view, preview_data, preview_clip_cache, seq_rate, state_module, width, height, viewport_duration_rational)
+            render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height, viewport_duration)
             render_shift_block_outlines(
                 view,
                 preview_data,
-                seq_rate,
                 state_module,
                 width,
                 height,
-                viewport_duration_rational,
-                viewport_start_rational,
-                viewport_end_rational
+                viewport_duration,
+                viewport_start,
+                viewport_end
             )
         end
     end
@@ -1007,14 +941,14 @@ function M.render(view)
 
             for _, entry in ipairs(edge_preview.edges) do
                 if type(entry) == "table" and entry.clip_id and entry.raw_edge_type and entry.normalized_edge then
-                    local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = entry.clip_id}, seq_rate)
+                    local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = entry.clip_id})
                     if clip then
-                        local delta_frames = tonumber(entry.applied_delta_frames) or 0
-                        local delta = Rational.new(delta_frames, fps_num, fps_den)
+                        -- All deltas are integer frames
+                        local applied_delta = tonumber(entry.applied_delta_frames) or 0
                         local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
                             clip,
                             entry.normalized_edge,
-                            delta,
+                            applied_delta,
                             entry.raw_edge_type
                         )
                         if start_value and duration_value then
@@ -1034,7 +968,7 @@ function M.render(view)
                                 state_module,
                                 width,
                                 height,
-                                viewport_duration_rational
+                                viewport_duration
                             )
                         end
                     end
@@ -1049,7 +983,7 @@ function M.render(view)
                 (edge_drag_state and edge_drag_state.lead_edge) or nil
             )
             for _, p in ipairs(previews) do
-                local clip = get_preview_clip(state_module, preview_clip_cache, p, seq_rate)
+                local clip = get_preview_clip(state_module, preview_clip_cache, p)
                 if clip then
                     local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
                         clip,
@@ -1070,7 +1004,7 @@ function M.render(view)
                             state_module,
                             width,
                             height,
-                            viewport_duration_rational
+                            viewport_duration
                         )
                     end
                 end
@@ -1079,15 +1013,15 @@ function M.render(view)
     end
 
     -- Playhead
-    if playhead_position_rational >= viewport_start_rational and playhead_position_rational <= viewport_end_rational then
-        local px = state_module.time_to_pixel(playhead_position_rational, width)
+    if playhead_position >= viewport_start and playhead_position <= viewport_end then
+        local px = state_module.time_to_pixel(playhead_position, width)
 
         -- DEBUG: Log timeline view width and playhead position
         if os.getenv("JVE_DEBUG_PLAYHEAD") == "1" then
             local logger = require("core.logger")
             logger.debug("playhead_debug", string.format(
                 "TIMELINE[%s]: width=%d playhead_x=%d playhead_frames=%d",
-                view.debug_id or "?", width, px, playhead_position_rational.frames or -1
+                view.debug_id or "?", width, px, playhead_position
             ))
         end
 
@@ -1097,7 +1031,7 @@ function M.render(view)
     -- Snap Indicator
     if edge_drag_state and edge_drag_state.snap_info and edge_drag_state.snap_info.snapped then
         local st = edge_drag_state.snap_info.snap_point.time
-        if st >= viewport_start_rational and st <= viewport_end_rational then
+        if st >= viewport_start and st <= viewport_end then
             local sx = state_module.time_to_pixel(st, width)
             timeline.add_line(view.widget, sx, 0, sx, height, 0x00FFFF, 2)
         end

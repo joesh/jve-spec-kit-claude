@@ -68,7 +68,7 @@ local cmd = Command.create("Nudge", "proj")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("fps_numerator", 24)
 cmd:set_parameter("fps_denominator", 1)
-cmd:set_parameter("nudge_amount_rat", Rational.new(100, 24, 1))
+cmd:set_parameter("nudge_amount", 100)
 cmd:set_parameter("selected_clip_ids", {"c2"})
 
 local exec = command_manager.execute(cmd)

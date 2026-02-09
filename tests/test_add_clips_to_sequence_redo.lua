@@ -81,7 +81,7 @@ print("Test: AddClipsToSequence execute → undo → redo cycle")
 local groups = {
     {
         master_clip_id = "master_1",
-        duration = Rational.new(50, 24, 1),
+        duration = 50,
         clips = {
             {
                 role = "video",
@@ -89,9 +89,9 @@ local groups = {
                 master_clip_id = "master_1",
                 project_id = "project",
                 name = "Clip 1",
-                source_in = Rational.new(0, 24, 1),
-                source_out = Rational.new(50, 24, 1),
-                duration = Rational.new(50, 24, 1),
+                source_in = 0,
+                source_out = 50,
+                duration = 50,
                 fps_numerator = 24,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
@@ -100,7 +100,7 @@ local groups = {
     },
     {
         master_clip_id = "master_2",
-        duration = Rational.new(75, 24, 1),
+        duration = 75,
         clips = {
             {
                 role = "video",
@@ -108,9 +108,9 @@ local groups = {
                 master_clip_id = "master_2",
                 project_id = "project",
                 name = "Clip 2",
-                source_in = Rational.new(0, 24, 1),
-                source_out = Rational.new(75, 24, 1),
-                duration = Rational.new(75, 24, 1),
+                source_in = 0,
+                source_out = 75,
+                duration = 75,
                 fps_numerator = 24,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
@@ -124,7 +124,7 @@ print("  Executing AddClipsToSequence...")
 command_manager.begin_command_event("test")
 local result = command_manager.execute("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 24, 1),
+    position = 0,
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "overwrite",

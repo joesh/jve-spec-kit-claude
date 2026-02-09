@@ -8,7 +8,6 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local Media = require("models.media")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 
 local function remove_best_effort(path)
     if not path or path == "" then
@@ -58,10 +57,10 @@ local master = Clip.create("Master", media.id, {
     id = "master1",
     clip_kind = "master",
     project_id = "proj",
-    timeline_start = Rational.new(0, 30, 1),
-    duration = Rational.new(1000, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(1000, 30, 1),
+    timeline_start = 0,
+    duration = 1000,
+    source_in = 0,
+    source_out = 1000,
     fps_numerator = 30,
     fps_denominator = 1,
 })
@@ -74,10 +73,10 @@ local t1 = Clip.create("Timeline", media.id, {
     track_id = "v1",
     owner_sequence_id = "seq",
     parent_clip_id = master.id,
-    timeline_start = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(5, 30, 1),
-    source_out = Rational.new(105, 30, 1),
+    timeline_start = 0,
+    duration = 100,
+    source_in = 5,
+    source_out = 105,
     fps_numerator = 30,
     fps_denominator = 1,
     offline = true,
@@ -88,7 +87,7 @@ local dup = Command.create("DuplicateClips", "proj")
 dup:set_parameter("project_id", "proj")
 dup:set_parameter("sequence_id", "seq")
 dup:set_parameter("clip_ids", {"t1"})
-dup:set_parameter("delta_rat", Rational.new(30, 30, 1))
+dup:set_parameter("delta_frames", 30)
 dup:set_parameter("target_track_id", "v2")
 dup:set_parameter("anchor_clip_id", "t1")
 

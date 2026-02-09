@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 
--- Regression: clip_state must normalize timeline_start/duration to the owning
--- sequence timebase so that frame-based indices and viewport culling remain valid.
+-- Regression: clip_state should preserve integer timeline_start/duration values.
+-- With the integer refactor, no retagging is needed - coords are plain integers.
 
 package.path = package.path
     .. ";../src/lua/?.lua"
@@ -11,7 +11,6 @@ package.path = package.path
 
 require("test_env")
 
-local Rational = require("core.rational")
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")
 
@@ -22,16 +21,15 @@ data.state.tracks = {
     { id = "v1", track_type = "VIDEO" },
 }
 
--- Simulate legacy/misaligned clip rationals: frames are in sequence frames,
--- but the Rational objects are tagged with a different fps.
+-- Clips use plain integer frames
 data.state.clips = {
     {
         id = "c1",
         track_id = "v1",
-        timeline_start = Rational.new(1500, 30000, 1001),
-        duration = Rational.new(100, 30000, 1001),
-        source_in = Rational.new(0, 30000, 1001),
-        source_out = Rational.new(100, 30000, 1001),
+        timeline_start = 1500,
+        duration = 100,
+        source_in = 0,
+        source_out = 100,
         enabled = true,
     },
 }
@@ -41,12 +39,9 @@ local indexed = clip_state.get_track_clip_index("v1")
 assert(indexed and #indexed == 1, "expected one indexed clip")
 
 local clip = indexed[1]
-assert(clip.timeline_start.fps_numerator == 25 and clip.timeline_start.fps_denominator == 1,
-    "expected timeline_start retagged to sequence fps 25/1")
-assert(clip.duration.fps_numerator == 25 and clip.duration.fps_denominator == 1,
-    "expected duration retagged to sequence fps 25/1")
-assert(clip.timeline_start.frames == 1500, "expected timeline_start.frames preserved")
-assert(clip.duration.frames == 100, "expected duration.frames preserved")
+assert(type(clip.timeline_start) == "number", "timeline_start should be integer")
+assert(type(clip.duration) == "number", "duration should be integer")
+assert(clip.timeline_start == 1500, "expected timeline_start preserved as 1500")
+assert(clip.duration == 100, "expected duration preserved as 100")
 
-print("✅ clip_state retags timeline times to sequence fps")
-
+print("✅ clip_state preserves integer timeline times")

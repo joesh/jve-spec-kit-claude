@@ -12,7 +12,7 @@ local Rational = require("core.rational")
 local frame_utils = require("core.frame_utils")
 
 -- Test 1: nil frame_rate with a Rational duration should assert
-local dur = Rational.new(100, 24, 1)
+local dur = 100
 local ok1, err1 = pcall(function()
     frame_utils.format_duration(dur, nil)
 end)

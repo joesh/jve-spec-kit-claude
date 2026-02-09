@@ -43,17 +43,17 @@ local function run_case(delta_frames, expect)
     local v1_right = Clip.load(clips.v1_right.id, db)
     local v2 = Clip.load(clips.v2.id, db)
 
-    local gap_size = v1_right.timeline_start.frames - (v1_left.timeline_start.frames + v1_left.duration.frames)
+    local gap_size = v1_right.timeline_start - (v1_left.timeline_start + v1_left.duration)
 
     assert(gap_size == expect.gap_duration,
         string.format("Gap duration mismatch for delta %d: expected %d, got %d",
             delta_frames, expect.gap_duration, gap_size))
-    assert(v1_right.timeline_start.frames == expect.v1_right_start,
+    assert(v1_right.timeline_start == expect.v1_right_start,
         string.format("V1 right start mismatch for delta %d: expected %d, got %d",
-            delta_frames, expect.v1_right_start, v1_right.timeline_start.frames))
-    assert(v2.duration.frames == expect.v2_duration,
+            delta_frames, expect.v1_right_start, v1_right.timeline_start))
+    assert(v2.duration == expect.v2_duration,
         string.format("V2 duration mismatch for delta %d: expected %d, got %d",
-            delta_frames, expect.v2_duration, v2.duration.frames))
+            delta_frames, expect.v2_duration, v2.duration))
 
     layout:cleanup()
 end

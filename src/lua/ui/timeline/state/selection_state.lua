@@ -19,7 +19,6 @@
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")
-local Rational = require("core.rational")
 
 local on_selection_changed_callback = nil
 
@@ -170,16 +169,9 @@ end
 
 local function gaps_equal(a, b)
     if not a or not b or a.track_id ~= b.track_id then return false end
-    if getmetatable(a.start_value) == Rational.metatable and getmetatable(b.start_value) == Rational.metatable then
-        if a.start_value ~= b.start_value then return false end
-    else
-        if (a.start_value or 0) ~= (b.start_value or 0) then return false end
-    end
-    if getmetatable(a.duration) == Rational.metatable and getmetatable(b.duration) == Rational.metatable then
-        if a.duration ~= b.duration then return false end
-    else
-        if (a.duration or a.duration_value or 0) ~= (b.duration or b.duration_value or 0) then return false end
-    end
+    -- All gap coords are now integers
+    if (a.start_value or 0) ~= (b.start_value or 0) then return false end
+    if (a.duration or a.duration_value or 0) ~= (b.duration or b.duration_value or 0) then return false end
     return true
 end
 

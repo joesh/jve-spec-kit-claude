@@ -46,13 +46,13 @@ db:exec([[
 ]])
 
 local timeline_state = {
-    playhead_position = Rational.new(500, 30, 1),
+    playhead_position = 500,
     clips = {
-        {id = 'clip_a', timeline_start = Rational.new(0, 30, 1), duration = Rational.new(1000, 30, 1)},
-        {id = 'clip_b', timeline_start = Rational.new(2000, 30, 1), duration = Rational.new(1500, 30, 1)}
+        {id = 'clip_a', timeline_start = 0, duration = 1000},
+        {id = 'clip_b', timeline_start = 2000, duration = 1500}
     },
-    viewport_start_value = Rational.new(0, 30, 1),
-    viewport_duration_frames_value = Rational.new(10000, 30, 1)
+    viewport_start_value = 0,
+    viewport_duration_frames_value = 10000
 }
 
 function timeline_state.get_selected_clips() return {} end
@@ -65,7 +65,7 @@ function timeline_state.persist_state_to_db() end
 function timeline_state.get_playhead_position() return timeline_state.playhead_position end
 function timeline_state.set_playhead_position(time_val)
     if type(time_val) == "number" then
-        timeline_state.playhead_position = Rational.new(time_val, 30, 1)
+        timeline_state.playhead_position = time_val
     else
         timeline_state.playhead_position = time_val
     end

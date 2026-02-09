@@ -40,7 +40,7 @@ check("number with fps works", r3 ~= nil)
 check("number fps = 24", r3.fps_numerator == 24)
 
 -- Test 6: Already a Rational → pass through
-local existing = Rational.new(10, 48, 1)
+local existing = Rational.new(10, 24, 1)
 local r4 = Rational.hydrate(existing)
 check("existing Rational passes through", r4 == existing)
 

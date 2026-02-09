@@ -22,7 +22,6 @@ local edge_picker = require("ui.timeline.edge_picker")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local focus_manager = require("ui.focus_manager")
 local magnetic_snapping = require("core.magnetic_snapping")
-local Rational = require("core.rational")
 local TimelineActiveRegion = require("core.timeline_active_region")
 local command_manager = require("core.command_manager")
 
@@ -67,24 +66,21 @@ local function find_clip_under_cursor(view, x, y, width, height)
         return nil
     end
 
-    local seq_rate = state.get_sequence_frame_rate()
-    assert(seq_rate and seq_rate.fps_numerator and seq_rate.fps_denominator, "timeline_view_input: missing sequence fps metadata")
-    local time_under_cursor = state.pixel_to_time(x, width)
-    time_under_cursor = Rational.hydrate(time_under_cursor, seq_rate.fps_numerator, seq_rate.fps_denominator)
-    if not time_under_cursor or not time_under_cursor.frames then
+    -- pixel_to_time now returns integer frame
+    local target_frames = state.pixel_to_time(x, width)
+    if type(target_frames) ~= "number" then
         return nil
     end
 
     -- Binary search to find the first clip starting at or after the cursor time,
     -- then check the previous clip for overlap.
-    local target_frames = time_under_cursor.frames
     local lo = 1
     local hi = #track_clips
     local idx = #track_clips + 1
     while lo <= hi do
         local mid = math.floor((lo + hi) / 2)
         local clip = track_clips[mid]
-        local start_frames = clip and clip.timeline_start and clip.timeline_start.frames or nil
+        local start_frames = type(clip.timeline_start) == "number" and clip.timeline_start or nil
         if start_frames and start_frames >= target_frames then
             idx = mid
             hi = mid - 1
@@ -98,15 +94,15 @@ local function find_clip_under_cursor(view, x, y, width, height)
 
     for i = idx, #track_clips do
         local clip = track_clips[i]
-        if not clip or not clip.timeline_start or not clip.duration then
+        if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
             goto continue_clip
         end
-        local start_frames = clip.timeline_start.frames
-        if start_frames and start_frames > target_frames then
+        local start_frames = clip.timeline_start
+        if start_frames > target_frames then
             break
         end
-        local end_frames = start_frames + clip.duration.frames
-        if end_frames and target_frames >= start_frames and target_frames <= end_frames then
+        local end_frames = start_frames + clip.duration
+        if target_frames >= start_frames and target_frames <= end_frames then
             return clip
         end
         ::continue_clip::
@@ -114,8 +110,8 @@ local function find_clip_under_cursor(view, x, y, width, height)
     return nil
 end
 
-local function find_gap_at_time(view, track_id, time_obj)
-    if not track_id or not time_obj then return nil end
+local function find_gap_at_time(view, track_id, time_frame)
+    if not track_id or type(time_frame) ~= "number" then return nil end
     local state = view.state
     if not state.get_track_clip_index then
         error("timeline_view_input: state.get_track_clip_index is required", 2)
@@ -124,17 +120,18 @@ local function find_gap_at_time(view, track_id, time_obj)
     if not clips_on_track or #clips_on_track == 0 then
         return nil
     end
-    
-    local seq_fps = state.get_sequence_frame_rate()
-    assert(seq_fps and seq_fps.fps_numerator and seq_fps.fps_denominator, "timeline_view_input: missing sequence fps metadata")
-    local previous_end = Rational.new(0, seq_fps.fps_numerator, seq_fps.fps_denominator)
+
+    local previous_end = 0
     local previous_clip_id = nil
-    
+
     for _, clip in ipairs(clips_on_track) do
+        if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+            goto continue_clip
+        end
         local gap_start = previous_end
         local gap_end = clip.timeline_start
         local gap_duration = gap_end - gap_start
-        if gap_duration.frames > 0 and time_obj >= gap_start and time_obj < gap_end then
+        if gap_duration > 0 and time_frame >= gap_start and time_frame < gap_end then
             return {
                 track_id = track_id,
                 start_value = gap_start,
@@ -145,6 +142,7 @@ local function find_gap_at_time(view, track_id, time_obj)
         end
         previous_end = clip.timeline_start + clip.duration
         previous_clip_id = clip.id
+        ::continue_clip::
     end
     return nil
 end
@@ -354,7 +352,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     view.drag_state.anchor_clip_id = view.drag_state.clips[1].id
                 end
                 local diff = view.drag_state.current_time - view.drag_state.start_value
-                view.drag_state.delta_rational = diff
+                view.drag_state.delta_frames = diff
                 
                 if view.drag_state.type == "edges" then
                     for _, edge in ipairs(view.drag_state.edges) do
@@ -429,13 +427,13 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 view.drag_state.current_x = view.drag_state.start_x
                 view.drag_state.current_time = view.drag_state.start_value
                 local zero = view.drag_state.start_value - view.drag_state.start_value
-                view.drag_state.delta_rational = zero
+                view.drag_state.delta_frames = zero
                 view.drag_state.shift_constrained = true
             else
                 view.drag_state.current_x = x
                 view.drag_state.current_time = current_time
                 local diff = current_time - view.drag_state.start_value
-                view.drag_state.delta_rational = diff
+                view.drag_state.delta_frames = diff
                 view.drag_state.shift_constrained = false
             end
             view.drag_state.alt_copy = (modifiers and modifiers.alt)

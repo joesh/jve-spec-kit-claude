@@ -69,20 +69,13 @@ local function normalize_master_clip(item, context)
         media = context.media_lookup[clip.media_id]
     end
 
-    -- Extract frames from Rational or use raw number
-    local function to_frames(val)
-        if val == nil then return nil end
-        if type(val) == "number" then return val end
-        if type(val) == "table" and val.frames ~= nil then return val.frames end
-        return tonumber(val)
-    end
-
-    local raw_duration = clip.duration or (media and media.duration)
-    assert(raw_duration ~= nil, string.format("browser_state.normalize_master_clip: missing duration for clip %s", tostring(clip.clip_id or item.clip_id)))
-    local duration = to_frames(raw_duration)
-    assert(duration, string.format("browser_state.normalize_master_clip: cannot extract duration frames for clip %s: %s", tostring(clip.clip_id or item.clip_id), tostring(raw_duration)))
-    local source_in = to_frames(clip.source_in) or 0
-    local source_out = to_frames(clip.source_out) or duration
+    -- All coords are integer frames
+    local duration = clip.duration or (media and media.duration)
+    assert(type(duration) == "number", string.format("browser_state.normalize_master_clip: duration must be integer for clip %s", tostring(clip.clip_id or item.clip_id)))
+    local source_in = clip.source_in or 0
+    local source_out = clip.source_out or duration
+    assert(type(source_in) == "number", "browser_state.normalize_master_clip: source_in must be integer")
+    assert(type(source_out) == "number", "browser_state.normalize_master_clip: source_out must be integer")
 
     local project_id = clip.project_id or context.project_id or (media and media.project_id)
     assert(project_id and project_id ~= "", "browser_state.normalize_master_clip: missing project_id for master clip " .. tostring(clip.clip_id or item.clip_id or item.media_id))
@@ -147,15 +140,9 @@ local function normalize_timeline(item, context)
         return nil
     end
 
-    assert(sequence.duration ~= nil, string.format("browser_state.normalize_timeline: missing duration for sequence %s", tostring(sequence.id)))
-    -- Handle both Rational objects (.frames) and plain numbers
-    local duration
-    if type(sequence.duration) == "table" and sequence.duration.frames then
-        duration = sequence.duration.frames
-    else
-        duration = tonumber(sequence.duration)
-    end
-    assert(duration, string.format("browser_state.normalize_timeline: invalid duration for sequence %s: %s", tostring(sequence.id), tostring(sequence.duration)))
+    -- All coords are integer frames
+    local duration = sequence.duration
+    assert(type(duration) == "number", string.format("browser_state.normalize_timeline: duration must be integer for sequence %s", tostring(sequence.id)))
 
     local entry = {
         id = sequence.id,

@@ -90,7 +90,7 @@ local project_browser = require("ui.project_browser")
 local mock_timeline_state = {
     get_sequence_id = function() return "sequence" end,
     get_project_id = function() return "project" end,
-    get_playhead_position = function() return Rational.new(0, 24, 1) end,
+    get_playhead_position = function() return 0 end,
 }
 project_browser.timeline_panel = {
     get_state = function() return mock_timeline_state end,

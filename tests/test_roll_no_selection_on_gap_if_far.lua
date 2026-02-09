@@ -5,18 +5,17 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 require("test_env")
 
 local roll_detector = require("ui.timeline.roll_detector")
-local Rational = require("core.rational")
 
 -- Two clips with large gap: no roll selection; only nearest edge should be picked by input logic.
 local clips = {
-    {id = "a", track_id = "v1", timeline_start = Rational.new(0,24,1), duration = Rational.new(50,24,1)},
-    {id = "b", track_id = "v1", timeline_start = Rational.new(200,24,1), duration = Rational.new(50,24,1)},
+    {id = "a", track_id = "v1", timeline_start = 0, duration = 50},
+    {id = "b", track_id = "v1", timeline_start = 200, duration = 50},
 }
 
 local width = 1000
-local function time_to_px(rat)
+local function time_to_px(frames)
     local total_frames = 300
-    return math.floor((rat.frames / total_frames) * width + 0.5)
+    return math.floor((frames / total_frames) * width + 0.5)
 end
 
 local entries = {}
@@ -29,7 +28,7 @@ end
 
 local function detect_roll_between_clips(left_clip, right_clip, click_x, viewport_width)
     local left_end = left_clip.timeline_start + left_clip.duration
-    local sep = (right_clip.timeline_start.frames or right_clip.timeline_start) - (left_end.frames or left_end)
+    local sep = right_clip.timeline_start - left_end
     return sep == 1
 end
 

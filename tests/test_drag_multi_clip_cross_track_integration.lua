@@ -90,7 +90,7 @@ local drag_state = {
     },
     anchor_clip_id = "c1",
     delta_ms = 0,
-    delta_rational = Rational.new(0, 24, 1),
+    delta_frames = 0,
     current_y = 10,
     start_y = 0
 }

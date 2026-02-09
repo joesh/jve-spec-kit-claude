@@ -21,7 +21,7 @@ local Sequence = require("models.sequence")
 local Track = require("models.track")
 local Clip = require("models.clip")
 local MediaReader = require("media.media_reader")
-local Rational = require("core.rational")
+local frame_utils = require("core.frame_utils")
 local logger = require("core.logger")
 local file_browser = require("core.file_browser")
 
@@ -91,8 +91,8 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
 
     assert(metadata.duration_ms and metadata.duration_ms > 0,
         "ImportMedia: missing or zero duration_ms in metadata for " .. tostring(file_path))
-    local duration_rat = Rational.from_seconds(metadata.duration_ms / 1000.0, fps_num, fps_den)
-    local zero_rat = Rational.new(0, fps_num, fps_den)
+    -- Convert duration_ms to integer frames
+    local duration_frames = frame_utils.ms_to_frames(metadata.duration_ms, fps_num, fps_den)
 
     local base_name = extract_filename(file_path)
 
@@ -156,10 +156,10 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
         project_id = project_id,
         clip_kind = "master",
         source_sequence_id = sequence.id,
-        timeline_start = zero_rat,
-        duration = duration_rat,
-        source_in = zero_rat,
-        source_out = duration_rat,
+        timeline_start = 0,
+        duration = duration_frames,
+        source_in = 0,
+        source_out = duration_frames,
         enabled = true,
         offline = false,
         fps_numerator = fps_num,
@@ -180,10 +180,10 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
             track_id = video_track.id,
             parent_clip_id = master_clip.id,
             owner_sequence_id = sequence.id,
-            timeline_start = zero_rat,
-            duration = duration_rat,
-            source_in = zero_rat,
-            source_out = duration_rat,
+            timeline_start = 0,
+            duration = duration_frames,
+            source_in = 0,
+            source_out = duration_frames,
             enabled = true,
             offline = false,
             fps_numerator = fps_num,
@@ -206,10 +206,10 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
             track_id = track_id,
             parent_clip_id = master_clip.id,
             owner_sequence_id = sequence.id,
-            timeline_start = zero_rat,
-            duration = duration_rat,
-            source_in = zero_rat,
-            source_out = duration_rat,
+            timeline_start = 0,
+            duration = duration_frames,
+            source_in = 0,
+            source_out = duration_frames,
             enabled = true,
             offline = false,
             fps_numerator = fps_num,

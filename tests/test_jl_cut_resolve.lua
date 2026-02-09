@@ -68,7 +68,7 @@ local timeline_resolver = require("core.playback.timeline_resolver")
 
 -- Test 1: At frame 60 — video is clip_B, audio is [clip_A on A1, clip_B on A2]
 local function test_jl_cut_frame_60()
-    local playhead = Rational.new(60, 24, 1)
+    local playhead = 60
 
     -- Video: clip_B on V1 (frames 48-96)
     local video = timeline_resolver.resolve_at_time(playhead, "seq")
@@ -114,7 +114,7 @@ end
 
 -- Test 2: At frame 30 — only A1 has audio (clip_A, frames 0-72)
 local function test_only_a1_at_frame_30()
-    local playhead = Rational.new(30, 24, 1)
+    local playhead = 30
 
     -- No video at frame 30 (V1 clip_B starts at 48)
     local video = timeline_resolver.resolve_at_time(playhead, "seq")
@@ -133,7 +133,7 @@ end
 
 -- Test 3: At frame 100 — gap, no audio anywhere
 local function test_gap_returns_empty()
-    local playhead = Rational.new(100, 24, 1)
+    local playhead = 100
 
     local audio = timeline_resolver.resolve_all_audio_at_time(playhead, "seq")
     assert(#audio == 0,
@@ -144,7 +144,7 @@ end
 
 -- Test 4: At frame 48 — edit point: A1 still playing, A2 just starts
 local function test_edit_point_frame_48()
-    local playhead = Rational.new(48, 24, 1)
+    local playhead = 48
 
     local audio = timeline_resolver.resolve_all_audio_at_time(playhead, "seq")
     assert(#audio == 2,
@@ -160,7 +160,7 @@ end
 
 -- Test 5: Track metadata is returned (needed for mute/solo logic)
 local function test_track_metadata_returned()
-    local playhead = Rational.new(60, 24, 1)
+    local playhead = 60
     local audio = timeline_resolver.resolve_all_audio_at_time(playhead, "seq")
 
     for _, entry in ipairs(audio) do

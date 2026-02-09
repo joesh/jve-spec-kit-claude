@@ -163,26 +163,25 @@ do
 end
 
 -- ============================================================
--- T11: Rational __eq and __lt regression (dead code removal)
+-- T11: Integer coordinate comparison (Rational refactor complete)
 -- ============================================================
-print("\n--- T11: Rational comparison regression ---")
+print("\n--- T11: Integer coordinate comparison ---")
 do
-    local Rational = require("core.rational")
+    -- All coordinates are now plain integers
+    local a = 10
+    local b = 10
+    local c = 20
 
-    local a = Rational.new(10, 24000, 1001)
-    local b = Rational.new(10, 24000, 1001)
-    local c = Rational.new(20, 24000, 1001)
-
-    check("T11: equal rationals are equal", a == b)
-    check("T11: unequal rationals are not equal", not (a == c))
+    check("T11: equal integers are equal", a == b)
+    check("T11: unequal integers are not equal", not (a == c))
     check("T11: less than works", a < c)
     check("T11: not less than when equal", not (a < b))
     check("T11: not less than when greater", not (c < a))
 
-    -- Different rates, same value
-    local d = Rational.new(10, 30000, 1001)
-    local e = Rational.new(10, 24000, 1001)
-    check("T11: different rates, different values", not (d == e))
+    -- Same value integers are equal
+    local d = 10
+    local e = 10
+    check("T11: same value integers are equal", d == e)
 end
 
 -- ============================================================

@@ -27,8 +27,8 @@ local state = {
     end,
     get_clips = function()
         return {
-            {id = "c1", track_id = "v1", timeline_start = Rational.new(0,24,1), duration = Rational.new(24,24,1)},
-            {id = "c2", track_id = "v2", timeline_start = Rational.new(48,24,1), duration = Rational.new(24,24,1)},
+            {id = "c1", track_id = "v1", timeline_start = 0, duration = 24},
+            {id = "c2", track_id = "v2", timeline_start = 48, duration = 24},
         }
     end
 }
@@ -48,7 +48,7 @@ local drag_state = {
     },
     anchor_clip_id = "c2",
     delta_ms = 1000, -- move in time, not across tracks
-    delta_rational = Rational.from_seconds(1, 24, 1),
+    delta_frames = 24,
     current_y = 10,
     start_y = 0
 }

@@ -61,7 +61,7 @@ local media = Media.create({
 media:save(db)
 
 -- Mock timeline_state to provide playhead position
-local mock_playhead = Rational.new(150, 30, 1)  -- Playhead at frame 150
+local mock_playhead = 150  -- Playhead at frame 150
 
 package.loaded["ui.timeline.timeline_state"] = {
     get_playhead_position = function()
@@ -145,9 +145,9 @@ local result = execute_insert({
     track_id = "track_v1",
     sequence_id = "sequence",
     project_id = "project",
-    duration = Rational.new(50, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(50, 30, 1),
+    duration = 50,
+    source_in = 0,
+    source_out = 50,
 })
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))
 

@@ -87,10 +87,10 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         project_id = "project",
         track_id = track_id,
         owner_sequence_id = "sequence",
-        timeline_start = Rational.new(start_frame, 30, 1),
-        duration = Rational.new(duration_frames, 30, 1),
-        source_in = Rational.new(0, 30, 1),
-        source_out = Rational.new(duration_frames, 30, 1),
+        timeline_start = start_frame,
+        duration = duration_frames,
+        source_in = 0,
+        source_out = duration_frames,
         enabled = true,
         fps_numerator = 30,
         fps_denominator = 1
@@ -152,10 +152,10 @@ local result = execute_command("Overwrite", {
     sequence_id = "sequence",
     track_id = "track_v1",
     media_id = "media_ow",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1)
+    overwrite_time = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100
 })
 assert(result.success, "Overwrite should succeed: " .. tostring(result.error_message))
 assert(count_clips("track_v1") == 1, "Should have 1 clip on track")
@@ -173,10 +173,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     media_id = "media_ow",
     clip_id = "overwrite_clip",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1)
+    overwrite_time = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100
 })
 assert(result.success, "Overwrite should succeed")
 
@@ -198,10 +198,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     media_id = "media_ow",
     clip_id = "overwrite_start",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(50, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(50, 30, 1)
+    overwrite_time = 0,
+    duration = 50,
+    source_in = 0,
+    source_out = 50
 })
 assert(result.success, "Overwrite should succeed")
 
@@ -253,10 +253,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     media_id = "media_ow",
     clip_id = "middle_overwrite",
-    overwrite_time = Rational.new(75, 30, 1),
-    duration = Rational.new(50, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(50, 30, 1)
+    overwrite_time = 75,
+    duration = 50,
+    source_in = 0,
+    source_out = 50
 })
 assert(result.success, "Overwrite should succeed")
 
@@ -273,8 +273,8 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1)
+    overwrite_time = 0,
+    duration = 100
     -- No media_id
 })
 asserts._set_enabled_for_tests(true)
@@ -290,10 +290,10 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     -- No track_id - should use first video track
     media_id = "media_ow",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1)
+    overwrite_time = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100
 })
 assert(result.success, "Overwrite should resolve track_id from sequence: " .. tostring(result.error_message))
 assert(count_clips("track_v1") == 1, "Clip should be on first video track (track_v1)")
@@ -310,8 +310,8 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     media_id = "media_ow",
     clip_id = "fallback_dur_clip",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(0, 30, 1)  -- Zero duration - should fallback to media
+    overwrite_time = 0,
+    duration = 0  -- Zero duration - should fallback to media
 })
 assert(result.success, "Overwrite should succeed with duration fallback: " .. tostring(result.error_message))
 
@@ -332,10 +332,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     media_id = "media_ow",
     clip_id = "ow_1",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1)
+    overwrite_time = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100
 })
 assert(result.success, "First overwrite should succeed")
 
@@ -346,10 +346,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     media_id = "media_ow",
     clip_id = "ow_2",
-    overwrite_time = Rational.new(100, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(100, 30, 1),
-    source_out = Rational.new(200, 30, 1)
+    overwrite_time = 100,
+    duration = 100,
+    source_in = 100,
+    source_out = 200
 })
 assert(result.success, "Second overwrite should succeed")
 
@@ -360,10 +360,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     media_id = "media_ow",
     clip_id = "ow_3",
-    overwrite_time = Rational.new(200, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(200, 30, 1),
-    source_out = Rational.new(300, 30, 1)
+    overwrite_time = 200,
+    duration = 100,
+    source_in = 200,
+    source_out = 300
 })
 assert(result.success, "Third overwrite should succeed")
 
@@ -390,10 +390,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v2",  -- Different track
     media_id = "media_ow",
     clip_id = "v2_clip",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1)
+    overwrite_time = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100
 })
 assert(result.success, "Overwrite on v2 should succeed")
 
@@ -435,10 +435,10 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     track_id = "track_v1",
     media_id = "media_with_audio",
-    overwrite_time = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1)
+    overwrite_time = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100
 })
 assert(result.success, "Overwrite with audio media should succeed: " .. tostring(result.error_message))
 

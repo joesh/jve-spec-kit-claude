@@ -65,15 +65,15 @@ assert(result.success, result.error_message or "BatchRippleEdit failed to extend
 
 local left_clip = Clip.load("clip_left", db)
 assert(left_clip ~= nil, "clip_left missing after ripple")
-assert(left_clip.duration.frames == 8000, string.format("clip_left should extend by requested delta; expected duration 8000, got %s", tostring(left_clip.duration.frames)))
+assert(left_clip.duration == 8000, string.format("clip_left should extend by requested delta; expected duration 8000, got %s", tostring(left_clip.duration)))
 
 local right_clip = Clip.load("clip_right", db)
 assert(right_clip ~= nil, "clip_right missing after ripple")
-assert(right_clip.timeline_start.frames == 10000, string.format("Downstream clip should shift by ripple delta; expected 10000, got %s", tostring(right_clip.timeline_start.frames)))
+assert(right_clip.timeline_start == 10000, string.format("Downstream clip should shift by ripple delta; expected 10000, got %s", tostring(right_clip.timeline_start)))
 
 local other_clip = Clip.load("clip_other_track", db)
 assert(other_clip ~= nil, "clip_other_track missing after ripple")
-assert(other_clip.timeline_start.frames == 11000, string.format("Other track should shift by ripple delta; expected 11000, got %s", tostring(other_clip.timeline_start.frames)))
+assert(other_clip.timeline_start == 11000, string.format("Other track should shift by ripple delta; expected 11000, got %s", tostring(other_clip.timeline_start)))
 
 os.remove(TEST_DB)
 print("✅ BatchRippleEdit extends out-point ripple and shifts unrelated tracks correctly")

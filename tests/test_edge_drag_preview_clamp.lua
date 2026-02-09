@@ -3,7 +3,6 @@
 package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
-local Rational = require("core.rational")
 
 local colors = {
     edge_selected_available = 0x00FF00,
@@ -36,23 +35,23 @@ end
 
 -- Regression: gap edges should behave like anchored clip handles that move with the drag delta.
 local clip = {
-    timeline_start = Rational.new(100, 24, 1),
-    duration = Rational.new(200, 24, 1)
+    timeline_start = 100,
+    duration = 200
 }
-local delta = Rational.new(24, 24, 1) -- 1 second
+local delta = 24 -- 1 second
 local gap_start, gap_dur = edge_drag_renderer.compute_preview_geometry(clip, "gap_after", delta)
-local expected_gap_anchor = (clip.timeline_start + clip.duration).frames
-assert(gap_start.frames == expected_gap_anchor,
-    string.format("gap_after preview should stay anchored at clip out-point; expected %d got %d", expected_gap_anchor, gap_start and gap_start.frames or -1))
-assert(gap_dur.frames == 0, "gap preview geometry should have zero width (handle only)")
+local expected_gap_anchor = clip.timeline_start + clip.duration
+assert(gap_start == expected_gap_anchor,
+    string.format("gap_after preview should stay anchored at clip out-point; expected %d got %d", expected_gap_anchor, gap_start or -1))
+assert(gap_dur == 0, "gap preview geometry should have zero width (handle only)")
 
 -- Regression: in-edge previews must shift their start positions when trimming.
 local in_start, in_duration = edge_drag_renderer.compute_preview_geometry(clip, "in", delta)
-local expected_in_start = clip.timeline_start.frames
-assert(in_start.frames == expected_in_start,
-    string.format("in-edge preview should keep clip start anchored; expected %d got %d", expected_in_start, in_start and in_start.frames or -1))
-assert(in_duration.frames == (clip.duration - delta).frames,
+local expected_in_start = clip.timeline_start
+assert(in_start == expected_in_start,
+    string.format("in-edge preview should keep clip start anchored; expected %d got %d", expected_in_start, in_start or -1))
+assert(in_duration == clip.duration - delta,
     string.format("in-edge preview should shorten duration; expected %d got %d",
-        (clip.duration - delta).frames, in_duration and in_duration.frames or -1))
+        clip.duration - delta, in_duration or -1))
 
 print("✅ edge drag preview clamp test passed")

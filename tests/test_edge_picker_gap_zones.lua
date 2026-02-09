@@ -9,7 +9,6 @@ package.path = package.path
     .. ";./?/init.lua"
 
 local edge_picker = require("ui.timeline.edge_picker")
-local Rational = require("core.rational")
 local ui_constants = require("core.ui_constants")
 
 local EDGE = ui_constants.TIMELINE.EDGE_ZONE_PX
@@ -20,13 +19,13 @@ local function make_clip(id, start_frames, dur_frames)
     return {
         id = id,
         track_id = "v1",
-        timeline_start = Rational.new(start_frames, 24, 1),
-        duration = Rational.new(dur_frames, 24, 1)
+        timeline_start = start_frames,
+        duration = dur_frames
     }
 end
 
 local function time_to_pixel(time_obj)
-    return time_obj.frames
+    return time_obj
 end
 
 local function pick(clips, x)

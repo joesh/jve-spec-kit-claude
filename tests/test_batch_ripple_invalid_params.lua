@@ -171,28 +171,4 @@ do
     layout:cleanup()
 end
 
--- Test 8: Invalid delta_ms type (number instead of Rational) should error
-do
-    local layout = ripple_layout.create({
-        db_path = "/tmp/jve/test_batch_ripple_invalid_delta_type.db",
-        clips = {
-            v1_left = {timeline_start = 0, duration = 1000}
-        }
-    })
-
-    local cmd = Command.create("BatchRippleEdit", layout.project_id)
-    cmd:set_parameter("sequence_id", layout.sequence_id)
-    cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_left.id, edge_type = "out", track_id = layout.tracks.v1.id}
-    })
-    cmd:set_parameter("delta_ms", 100)  -- Plain number, should be Rational
-
-    local result = command_manager.execute(cmd)
-    assert(not result.success, "Plain number for delta_ms should fail (must be Rational)")
-    assert(result.error_message and result.error_message:find("Rational"),
-        "Error should mention Rational type requirement")
-
-    layout:cleanup()
-end
-
 print("✅ BatchRippleEdit parameter validation handles all invalid input gracefully")

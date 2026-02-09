@@ -43,15 +43,15 @@ assert(result.success, result.error_message or "BatchRippleEdit failed for media
 local left_clip = Clip.load(clips.v1_left.id, db)
 local right_clip = Clip.load(clips.v1_right.id, db)
 
-assert(left_clip.duration.frames == extra_media_frames,
-    string.format("Left clip should extend only to available media (%d), got %d", extra_media_frames, left_clip.duration.frames))
-assert(left_clip.source_out.frames == extra_media_frames,
-    string.format("Left clip source_out should equal media duration (%d), got %d", extra_media_frames, left_clip.source_out.frames))
+assert(left_clip.duration == extra_media_frames,
+    string.format("Left clip should extend only to available media (%d), got %d", extra_media_frames, left_clip.duration))
+assert(left_clip.source_out == extra_media_frames,
+    string.format("Left clip source_out should equal media duration (%d), got %d", extra_media_frames, left_clip.source_out))
 
 local expected_shift = extra_media_frames - clips.v1_left.duration
-assert(right_clip.timeline_start.frames == clips.v1_right.timeline_start + expected_shift,
+assert(right_clip.timeline_start == clips.v1_right.timeline_start + expected_shift,
     string.format("Downstream clip should shift by %d frames, got %d",
-        expected_shift, right_clip.timeline_start.frames - clips.v1_right.timeline_start))
+        expected_shift, right_clip.timeline_start - clips.v1_right.timeline_start))
 
 layout:cleanup()
 print("✅ Ripple clamps at media boundary and shifts downstream clips accordingly")

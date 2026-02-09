@@ -36,11 +36,11 @@ do
     local after_left = Clip.load(layout.clips.v1_left.id, layout.db)
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    assert(after_left.timeline_start.frames == before_left.timeline_start.frames,
+    assert(after_left.timeline_start == before_left.timeline_start,
         "Left clip start should be unchanged")
-    assert(after_left.duration.frames == before_left.duration.frames,
+    assert(after_left.duration == before_left.duration,
         "Left clip duration should be unchanged")
-    assert(after_right.timeline_start.frames == before_right.timeline_start.frames,
+    assert(after_right.timeline_start == before_right.timeline_start,
         "Right clip should not shift")
 
     layout:cleanup()
@@ -75,7 +75,7 @@ do
     -- This is correct - it documents which clips would move (by zero frames)
     if payload.shifted_clips then
         for _, shift_info in ipairs(payload.shifted_clips) do
-            assert(shift_info.new_start_value.frames == layout.clips.v1_right.timeline_start,
+            assert(shift_info.new_start_value == layout.clips.v1_right.timeline_start,
                 "Shifted clips should have same start position (zero shift)")
         end
     end
@@ -113,9 +113,9 @@ do
     local after_undo_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
     -- Since execute was no-op, undo should also be no-op (already at original state)
-    assert(after_undo_left.timeline_start.frames == before_undo_left.timeline_start.frames,
+    assert(after_undo_left.timeline_start == before_undo_left.timeline_start,
         "Undo of zero-delta should not change state")
-    assert(after_undo_right.timeline_start.frames == before_undo_right.timeline_start.frames,
+    assert(after_undo_right.timeline_start == before_undo_right.timeline_start,
         "Undo of zero-delta should not change state")
 
     layout:cleanup()
@@ -148,11 +148,11 @@ do
     local after_left = Clip.load(layout.clips.v1_left.id, layout.db)
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    assert(after_left.duration.frames == before_left.duration.frames,
+    assert(after_left.duration == before_left.duration,
         "Roll with zero delta should not change left clip duration")
-    assert(after_right.timeline_start.frames == before_right.timeline_start.frames,
+    assert(after_right.timeline_start == before_right.timeline_start,
         "Roll with zero delta should not move right clip start")
-    assert(after_right.duration.frames == before_right.duration.frames,
+    assert(after_right.duration == before_right.duration,
         "Roll with zero delta should not change right clip duration")
 
     layout:cleanup()

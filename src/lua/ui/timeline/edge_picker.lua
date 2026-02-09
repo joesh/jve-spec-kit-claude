@@ -13,75 +13,75 @@
 -- Volatility: unknown
 --
 -- @file edge_picker.lua
+-- All coordinates are now integer frames
 local ui_constants = require("core.ui_constants")
-local Rational = require("core.rational")
 
 local M = {}
 
-local function hydrate_bounds(clip)
+-- Validate clip has integer bounds
+local function validate_bounds(clip)
     if not clip then return nil end
-    local start_rt = Rational.hydrate(clip.timeline_start or clip.start_value)
-    local dur_rt = Rational.hydrate(clip.duration or clip.duration_value)
-    if not start_rt or not dur_rt or dur_rt.frames <= 0 then
+    local start_val = clip.timeline_start or clip.start_value
+    local dur_val = clip.duration or clip.duration_value
+    if type(start_val) ~= "number" or type(dur_val) ~= "number" or dur_val <= 0 then
         return nil
     end
-    return start_rt, dur_rt
+    return start_val, dur_val
 end
 
 -- Build boundary map for a single track. Each boundary holds the left/right edge
 -- that meet at that time (clip edge or gap edge).
+-- All times are integer frames.
 function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
     if not time_to_pixel or not viewport_width then return {} end
 
     local valid_clips = {}
     for _, clip in ipairs(track_clips) do
-        local start_rt, dur_rt = hydrate_bounds(clip)
-        if start_rt and dur_rt then
-            clip.timeline_start = start_rt
-            clip.duration = dur_rt
+        local start_val, dur_val = validate_bounds(clip)
+        if start_val and dur_val then
+            clip.timeline_start = start_val
+            clip.duration = dur_val
             table.insert(valid_clips, clip)
         end
     end
 
     table.sort(valid_clips, function(a, b)
-        local af = a.timeline_start.frames
-        local bf = b.timeline_start.frames
+        local af = a.timeline_start
+        local bf = b.timeline_start
         if af == bf then return (a.id or "") < (b.id or "") end
         return af < bf
     end)
 
     local boundaries = {}
     for idx, clip in ipairs(valid_clips) do
-        local start_time = clip.timeline_start
+        local start_frames = clip.timeline_start
         local duration = clip.duration
 
         local prev = valid_clips[idx - 1]
         local next_clip = valid_clips[idx + 1]
 
-        local end_time = start_time + duration
-        local start_frames = start_time.frames
-        local end_frames = end_time.frames
+        local end_frames = start_frames + duration
 
-        local start_px = time_to_pixel(start_time, viewport_width)
-        local end_px = time_to_pixel(end_time, viewport_width)
+        local start_px = time_to_pixel(start_frames, viewport_width)
+        local end_px = time_to_pixel(end_frames, viewport_width)
 
-        local start_boundary = boundaries[start_frames] or {time = start_time, px = start_px}
-        if prev and (prev.timeline_start.frames + prev.duration.frames) == start_frames then
+        local start_boundary = boundaries[start_frames] or {time = start_frames, px = start_px}
+        if prev and (prev.timeline_start + prev.duration) == start_frames then
             start_boundary.left = {clip = prev, clip_id = prev.id, edge_type = "out"}
         else
-            -- Gap before this clip: gap runs from prev clip's end (or time 0) to this clip's start
-            local prev_end_time = prev and (prev.timeline_start + prev.duration) or Rational.new(0, start_time.fps_numerator, start_time.fps_denominator)
+            -- Gap before this clip: gap runs from prev clip's end (or frame 0) to this clip's start
+            local prev_end_frame = prev and (prev.timeline_start + prev.duration) or 0
             start_boundary.left = start_boundary.left or {
                 clip = clip, clip_id = clip.id, edge_type = "gap_before",
-                gap_other_end_time = prev_end_time  -- where gap starts
+                gap_other_end_time = prev_end_frame  -- where gap starts (integer frame)
             }
         end
         start_boundary.right = {clip = clip, clip_id = clip.id, edge_type = "in"}
         boundaries[start_frames] = start_boundary
 
-        local end_boundary = boundaries[end_frames] or {time = end_time, px = end_px}
+        local end_boundary = boundaries[end_frames] or {time = end_frames, px = end_px}
         end_boundary.left = {clip = clip, clip_id = clip.id, edge_type = "out"}
-        if next_clip and (clip.timeline_start.frames + clip.duration.frames) == next_clip.timeline_start.frames then
+        if next_clip and (clip.timeline_start + clip.duration) == next_clip.timeline_start then
             end_boundary.right = {clip = next_clip, clip_id = next_clip.id, edge_type = "in"}
         else
             -- Gap after this clip: gap runs from this clip's end to next clip's start (or nil = infinity)

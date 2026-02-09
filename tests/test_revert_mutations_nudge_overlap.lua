@@ -11,7 +11,6 @@ require("test_env")
 local database = require("core.database")
 local import_schema = require("import_schema")
 local command_helper = require("core.command_helper")
-local Rational = require("core.rational")
 
 local DB_PATH = "/tmp/jve/test_revert_mutations_nudge_overlap.db"
 os.remove(DB_PATH)
@@ -63,11 +62,11 @@ local mutations = {
             name = "B",
             track_id = "v1",
             media_id = nil,
-            timeline_start = Rational.new(110, 24, 1),
-            start_value = Rational.new(110, 24, 1),
-            duration = Rational.new(100, 24, 1),
-            source_in = Rational.new(0, 24, 1),
-            source_out = Rational.new(100, 24, 1),
+            timeline_start = 110,
+            start_value = 110,
+            duration = 100,
+            source_in = 0,
+            source_out = 100,
             fps_numerator = 24,
             fps_denominator = 1,
             enabled = true,
@@ -87,11 +86,13 @@ local mutations = {
         previous = {
             id = "A",
             track_id = "v1",
-            timeline_start = Rational.new(0, 24, 1),
-            start_value = Rational.new(0, 24, 1),
-            duration = Rational.new(100, 24, 1),
-            source_in = Rational.new(0, 24, 1),
-            source_out = Rational.new(100, 24, 1),
+            timeline_start = 0,
+            start_value = 0,
+            duration = 100,
+            source_in = 0,
+            source_out = 100,
+            fps_numerator = 24,
+            fps_denominator = 1,
             enabled = true,
         },
     },
@@ -112,7 +113,7 @@ local nudge_cmd = {
         return self.parameters[key]
     end,
 }
-nudge_cmd:set_parameter("nudge_amount_rat", Rational.new(120, 24, 1))
+nudge_cmd:set_parameter("nudge_amount", 120)
 nudge_cmd:set_parameter("nudge_amount", 120)
 
 local undo_ok, undo_err = command_helper.revert_mutations(db, mutations, nudge_cmd, "seq")

@@ -20,7 +20,6 @@ local keyboard_shortcuts = {}
 local frame_utils = require("core.frame_utils")
 local shortcut_registry = require("core.keyboard_shortcut_registry")
 local panel_manager = require("ui.panel_manager")
-local Rational = require("core.rational")
 
 -- Playback controller for JKL shuttle (lazy loaded to avoid circular deps)
 local playback_controller = nil
@@ -304,16 +303,12 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
                 restore_duration = current_duration
             end
         end
-        -- Ensure restore_duration is valid (Rational or number)
-        -- If Rational, we can't use math.max directly without check?
-        -- Rational implements __le? Yes.
-        -- But mixing types is tricky.
-        -- Let's assume Rational if V5.
-        
+        -- All coords are integer frames
+        assert(type(restore_duration) == "number", "keyboard_shortcuts: restore_duration must be integer")
+
         if state.set_viewport_duration then
             state.set_viewport_duration(restore_duration)
         elseif state.restore_viewport then
-            -- Fallback for legacy state implementations
             pcall(state.restore_viewport, prev)
         end
 
@@ -321,12 +316,7 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
             local playhead = state.get_playhead_position()
             if playhead then
                 -- Center on playhead: start = playhead - duration/2
-                local half_dur
-                if type(restore_duration) == "table" and restore_duration.frames then
-                    half_dur = restore_duration / 2
-                else
-                    half_dur = (restore_duration or 1000) / 2
-                end
+                local half_dur = math.floor(restore_duration / 2)
                 state.set_viewport_start_time(playhead - half_dur)
             end
         end
@@ -344,30 +334,29 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
         end
     end
 
-    -- Logic to find min_start and max_end using Rational
-    -- We need to be careful with mixed types if legacy clips exist
-    local Rational = require("core.rational")
+    -- All coords are integer frames
     local min_start = nil
     local max_end_time = nil
-    
+
     for _, clip in ipairs(clips) do
         local start_val = clip.timeline_start or clip.start_value
         local dur_val = clip.duration
-        
-        -- Ensure we have Rationals
-        if type(start_val) == "number" then start_val = Rational.from_seconds(start_val/1000.0) end
-        if type(dur_val) == "number" then dur_val = Rational.from_seconds(dur_val/1000.0) end
-        
-        if start_val and dur_val then
-            local end_val = start_val + dur_val
-            
-            if not min_start or start_val < min_start then
-                min_start = start_val
-            end
-            if not max_end_time or end_val > max_end_time then
-                max_end_time = end_val
-            end
+
+        -- Coordinates must be integers
+        if type(start_val) ~= "number" or type(dur_val) ~= "number" then
+            goto continue_clip
         end
+
+        local end_val = start_val + dur_val
+
+        if not min_start or start_val < min_start then
+            min_start = start_val
+        end
+        if not max_end_time or end_val > max_end_time then
+            max_end_time = end_val
+        end
+
+        ::continue_clip::
     end
 
     if not max_end_time or not min_start then
@@ -382,21 +371,17 @@ function keyboard_shortcuts.toggle_zoom_fit(target_state)
 
     local duration = max_end_time - min_start
     -- Add a 10% buffer at the end so zoom-fit isn't tight against the last clip
-    local buffer = duration / 10
+    local buffer = math.max(1, math.floor(duration / 10))
     local fit_duration = duration + buffer
-    
-    if state.set_viewport_duration_frames_value then
-        -- Legacy setter name? Or V5 uses set_viewport_duration?
-        -- Check timeline_state.lua. It uses set_viewport_duration.
-        state.set_viewport_duration(fit_duration)
-    elseif state.set_viewport_duration then
+
+    if state.set_viewport_duration then
         state.set_viewport_duration(fit_duration)
     end
     if state.set_viewport_start_time then
         state.set_viewport_start_time(min_start)
     end
 
-    print(string.format("🔍 Zoomed to fit: %s visible (buffered)", tostring(fit_duration)))
+    print(string.format("🔍 Zoomed to fit: %d frames visible (buffered)", fit_duration))
     return true
 end
 
@@ -406,24 +391,18 @@ function keyboard_shortcuts.handle_command(command_name)
         return keyboard_shortcuts.toggle_zoom_fit(timeline_state)
     elseif command_name == "TimelineZoomIn" then
         if timeline_state and timeline_state.get_viewport_duration and timeline_state.set_viewport_duration then
+            -- All coords are integer frames
             local dur = timeline_state.get_viewport_duration()
-            local new_dur = dur * 0.8
-            
-            if type(new_dur) == "table" and new_dur.frames then
-                local Rational = require("core.rational")
-                local min_dur = Rational.from_seconds(1.0, new_dur.fps_numerator, new_dur.fps_denominator)
-                new_dur = Rational.max(min_dur, new_dur)
-            else
-                new_dur = math.max(1000, new_dur)
-            end
-            
+            assert(type(dur) == "number", "keyboard_shortcuts: viewport_duration must be integer")
+            local new_dur = math.max(30, math.floor(dur * 0.8))  -- min 30 frames (~1 sec at 30fps)
             timeline_state.set_viewport_duration(new_dur)
             return true
         end
     elseif command_name == "TimelineZoomOut" then
         if timeline_state and timeline_state.get_viewport_duration and timeline_state.set_viewport_duration then
             local dur = timeline_state.get_viewport_duration()
-            timeline_state.set_viewport_duration(dur * 1.25)
+            assert(type(dur) == "number", "keyboard_shortcuts: viewport_duration must be integer")
+            timeline_state.set_viewport_duration(math.floor(dur * 1.25))
             return true
         end
     end
@@ -1126,24 +1105,16 @@ local function handle_key_impl(event)
     -- Without Shift: 1 frame, With Shift: 5 frames
     if (key == KEY.Comma or key == KEY.Period) and timeline_state and command_manager and panel_active_timeline and not modifier_meta and not modifier_alt then
         local frame_rate = get_active_frame_rate()
+        -- All coords are integer frames
         local nudge_frames = modifier_shift and 5 or 1
-        local nudge_ms = frame_utils.frame_to_time(nudge_frames, frame_rate)
         if key == KEY.Comma then
-            nudge_ms = -nudge_ms
+            nudge_frames = -nudge_frames
         end
         clear_redo_toggle()
 
-        local direction = (nudge_frames < 0 or key == KEY.Comma) and "left" or "right"
+        local direction = nudge_frames < 0 and "left" or "right"
         local frame_count = math.abs(nudge_frames)
-        local timecode_str
-        do
-            local ok, formatted = pcall(frame_utils.format_timecode, (key == KEY.Comma and -nudge_ms or nudge_ms), frame_rate)
-            if ok and formatted then
-                timecode_str = formatted
-            else
-                timecode_str = string.format("%d frame(s)", frame_count)
-            end
-        end
+        local timecode_str = string.format("%d frame(s)", frame_count)
 
         local selected_clips = timeline_state.get_selected_clips()
         local selected_edges = timeline_state.get_selected_edges()
@@ -1179,15 +1150,15 @@ local function handle_key_impl(event)
             if #edge_infos > 1 then
                 result = execute_command("BatchRippleEdit", {
                     ["edge_infos"] = edge_infos,
-                                        ["delta_frames"] = nudge_ms.frames,
-                                        ["sequence_id"] = sequence_id,
+                    ["delta_frames"] = nudge_frames,
+                    ["sequence_id"] = sequence_id,
                     project_id = project_id,
                 })
             elseif #edge_infos == 1 then
                 result = execute_command("RippleEdit", {
                     ["edge_info"] = edge_infos[1],
-                                        ["delta_frames"] = nudge_ms.frames,
-                                        ["sequence_id"] = sequence_id,
+                    ["delta_frames"] = nudge_frames,
+                    ["sequence_id"] = sequence_id,
                     project_id = project_id,
                 })
             end
@@ -1204,9 +1175,9 @@ local function handle_key_impl(event)
             end
 
             local result = execute_command("Nudge", {
-                ["nudge_amount_rat"] = nudge_ms,
-                                ["selected_clip_ids"] = clip_ids,
-                                ["sequence_id"] = sequence_id,
+                ["nudge_amount"] = nudge_frames,
+                ["selected_clip_ids"] = clip_ids,
+                ["sequence_id"] = sequence_id,
                 project_id = project_id,
             })
             if result and result.success then
@@ -1248,22 +1219,21 @@ local function handle_key_impl(event)
             local specs = {}
 
             for _, clip in ipairs(target_clips) do
-                local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
-                if not rate or not rate.fps_numerator or not rate.fps_denominator then
-                    error("Blade: Active sequence frame rate unavailable", 2)
-                end
-                local start_value = Rational.hydrate(clip.timeline_start or clip.start_value, rate.fps_numerator, rate.fps_denominator)
-                local duration_value = Rational.hydrate(clip.duration or clip.duration_value, rate.fps_numerator, rate.fps_denominator)
-                local playhead_rt = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator)
+                -- All coords are integer frames
+                local start_value = clip.timeline_start or clip.start_value
+                local duration_value = clip.duration or clip.duration_value
+                assert(type(start_value) == "number", "keyboard_shortcuts: clip timeline_start must be integer")
+                assert(type(duration_value) == "number", "keyboard_shortcuts: clip duration must be integer")
+                assert(type(playhead_value) == "number", "keyboard_shortcuts: playhead must be integer")
 
-                if start_value and duration_value and duration_value.frames > 0 and playhead_rt then
+                if duration_value > 0 then
                     local end_time = start_value + duration_value
-                    if playhead_rt > start_value and playhead_rt < end_time then
+                    if playhead_value > start_value and playhead_value < end_time then
                         table.insert(specs, {
                             command_type = "SplitClip",
                             parameters = {
                                 clip_id = clip.id,
-                                split_time = playhead_rt
+                                split_value = playhead_value  -- integer frame
                             }
                         })
                     end
@@ -1321,29 +1291,27 @@ local function handle_key_impl(event)
             assert(sequence_id and sequence_id ~= "",
                 "keyboard_shortcuts.handle_key: Trim missing active sequence_id")
 
-            local rate = timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
-            assert(rate and rate.fps_numerator and rate.fps_denominator,
-                "keyboard_shortcuts.handle_key: Trim: sequence frame rate unavailable")
+            -- playhead_value is integer frames
+            assert(type(playhead_value) == "number", "keyboard_shortcuts: playhead must be integer")
 
-            local playhead_frame = Rational.hydrate(playhead_value, rate.fps_numerator, rate.fps_denominator).frames
-            local trimmed = 0
-
+            -- Collect all clip IDs
+            local clip_ids = {}
             for _, clip in ipairs(target_clips) do
-                local result = execute_command(trim_type, {
-                    clip_id = clip.id,
-                    project_id = project_id,
-                    sequence_id = sequence_id,
-                    trim_frame = playhead_frame,
-                })
-                if result and result.success then
-                    trimmed = trimmed + 1
-                end
+                table.insert(clip_ids, clip.id)
             end
 
-            if trimmed > 0 then
-                print(string.format("%s: Trimmed %d clip(s) at frame %d", trim_type, trimmed, playhead_frame))
+            -- Single command handles all clips + ripple
+            local result = execute_command(trim_type, {
+                clip_ids = clip_ids,
+                project_id = project_id,
+                sequence_id = sequence_id,
+                trim_frame = playhead_value,
+            })
+
+            if result and result.success then
+                print(string.format("%s: Trimmed %d clip(s) at frame %d", trim_type, #clip_ids, playhead_value))
             else
-                print(string.format("%s: No clips could be trimmed at frame %d", trim_type, playhead_frame))
+                print(string.format("%s: Failed - %s", trim_type, result and result.error_message or "unknown error"))
             end
         end
         return true
@@ -1426,20 +1394,10 @@ local function handle_key_impl(event)
         if timeline_state then
             clear_zoom_fit_toggle()
             local current_duration = timeline_state.get_viewport_duration()
-            local new_duration
-            if type(current_duration) == "table" and current_duration.frames then
-                -- Rational
-                new_duration = current_duration / 1.5
-            else
-                new_duration = math.floor(current_duration / 1.5)
-            end
-            
-            -- Check min zoom?
-            -- Rational comparison
-            -- if new_duration < 100 then ... end
-            
+            assert(type(current_duration) == "number", "keyboard_shortcuts: viewport_duration must be integer")
+            local new_duration = math.max(30, math.floor(current_duration / 1.5))  -- min 30 frames
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("Zoomed in: viewport duration %s", tostring(new_duration)))
+            print(string.format("Zoomed in: viewport duration %d frames", new_duration))
         end
         return true
     end
@@ -1449,14 +1407,10 @@ local function handle_key_impl(event)
         if timeline_state then
             clear_zoom_fit_toggle()
             local current_duration = timeline_state.get_viewport_duration()
-            local new_duration
-            if type(current_duration) == "table" and current_duration.frames then
-                new_duration = current_duration * 1.5
-            else
-                new_duration = math.floor(current_duration * 1.5)
-            end
+            assert(type(current_duration) == "number", "keyboard_shortcuts: viewport_duration must be integer")
+            local new_duration = math.floor(current_duration * 1.5)
             timeline_state.set_viewport_duration(new_duration)
-            print(string.format("Zoomed out: viewport duration %s", tostring(new_duration)))
+            print(string.format("Zoomed out: viewport duration %d frames", new_duration))
         end
         return true
     end

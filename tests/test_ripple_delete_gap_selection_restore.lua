@@ -57,8 +57,8 @@ insert_clip("c2", 200, 100)
 selection_state.set_gap_selection({
     {
         track_id = "v1",
-        start_value = Rational.new(100, 24, 1),
-        duration = Rational.new(100, 24, 1),
+        start_value = 100,
+        duration = 100,
     }
 })
 
@@ -66,8 +66,8 @@ command_manager.init("seq", "proj")
 
 local cmd = Command.create("RippleDelete", "proj")
 cmd:set_parameter("track_id", "v1")
-cmd:set_parameter("gap_start", Rational.new(100, 24, 1))
-cmd:set_parameter("gap_duration", Rational.new(100, 24, 1))
+cmd:set_parameter("gap_start", 100)
+cmd:set_parameter("gap_duration", 100)
 cmd:set_parameter("sequence_id", "seq")
 
 local res = command_manager.execute(cmd)
@@ -83,7 +83,7 @@ assert(#gaps == 1, "expected one selected gap after undo")
 assert(gaps[0] == nil) -- ensure array-like
 local g = gaps[1]
 assert(g.track_id == "v1", "gap track mismatch")
-assert(g.start_value.frames == 100 and g.duration.frames == 100, "gap values not restored")
+assert(g.start_value == 100 and g.duration == 100, "gap values not restored")
 local clips = selection_state.get_selected_clips()
 assert(#clips == 0, "clip selection should be empty after restoring gap selection")
 

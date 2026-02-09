@@ -14,11 +14,9 @@
 --
 -- @file clip_mutator.lua
 local ClipMutator = {}
-local Rational = require("core.rational")
 local uuid = require("uuid")
 local logger = require("core.logger")
 local krono_ok, krono = pcall(require, "core.krono")
-local rational_helpers = require("core.command_rational_helpers")
 
     local function clone_state(row)
 	    return {
@@ -44,74 +42,52 @@ local rational_helpers = require("core.command_rational_helpers")
 	    }
 	end
 
--- Helper to get frame count
-local function get_frames(val)
-    if type(val) == "table" and val.frames then return val.frames end
+-- Assert value is integer frames
+local function assert_int(val, label)
+    assert(type(val) == "number", "clip_mutator: " .. (label or "value") .. " must be integer")
     return val
 end
 
--- Helper to get rate from row (handles DB vs Timeline State format)
-local function get_row_rate(row)
-    if row.rate then
-        return row.rate.fps_numerator, row.rate.fps_denominator
-    end
-    assert(row.fps_numerator and row.fps_denominator, "clip_mutator: missing fps metadata")
-    return row.fps_numerator, row.fps_denominator
+-- Extract frames from value (all coords are now integers; this validates and returns)
+local function get_frames(val)
+    if val == nil then return nil end
+    assert(type(val) == "number", "clip_mutator.get_frames: expected integer, got " .. type(val))
+    return val
 end
 
-local function assert_rate(num, den, label)
-    if not num or not den then
-        error("clip_mutator: missing " .. tostring(label or "fps") .. " metadata", 3)
-    end
-    if num <= 0 or den <= 0 then
-        error(string.format("clip_mutator: invalid %s metadata (%s/%s)", tostring(label or "fps"), tostring(num), tostring(den)), 3)
-    end
+-- Assert fps metadata exists (for validation only)
+local function assert_fps(num, den, label)
+    assert(num and num > 0, "clip_mutator: missing " .. (label or "fps") .. " numerator")
+    assert(den and den > 0, "clip_mutator: missing " .. (label or "fps") .. " denominator")
 end
 
-local function ensure_rational(value, params, label)
-    if getmetatable(value) == Rational.metatable then
-        return value
-    end
-
-    if type(value) == "table" and value.frames ~= nil then
-        if not value.fps_numerator or not value.fps_denominator then
-            error("clip_mutator: missing fps metadata for " .. tostring(label or "value"), 3)
-        end
-        return Rational.new(value.frames, value.fps_numerator, value.fps_denominator)
-    end
-
-    if type(value) == "number" then
-        local rate = params and params.sequence_frame_rate
-        if not rate or not rate.fps_numerator or not rate.fps_denominator then
-            error("clip_mutator: missing sequence_frame_rate for " .. tostring(label or "value") .. " hydration", 3)
-        end
-        return Rational.new(value, rate.fps_numerator, rate.fps_denominator)
-    end
-
-    error("clip_mutator: invalid " .. tostring(label or "value") .. " (type=" .. type(value) .. ")", 3)
+-- Helper to get fps metadata from row (for passing through to new clips)
+local function get_row_fps(row)
+    local num = row.fps_numerator or (row.rate and row.rate.fps_numerator)
+    local den = row.fps_denominator or (row.rate and row.rate.fps_denominator)
+    assert_fps(num, den, "clip fps")
+    return num, den
 end
 
--- Helper for mixed min/max
-local function val_max(a, b)
-    if getmetatable(a) == Rational.metatable or getmetatable(b) == Rational.metatable then
-        return Rational.max(a, b)
+-- Assert value is integer frames (fail-fast, no backward compat)
+local function ensure_integer(value, label)
+    if type(value) ~= "number" then
+        error("clip_mutator: " .. tostring(label or "value") .. " must be integer (got " .. type(value) .. ")", 3)
     end
-    return math.max(a, b)
-end
-
-local function val_min(a, b)
-    -- Rational doesn't have min? It implements __lt.
-    if getmetatable(a) == Rational.metatable or getmetatable(b) == Rational.metatable then
-        return (a < b) and a or b
-    end
-    return math.min(a, b)
+    return value
 end
 
 local function require_source_out(row, context)
-    if not row or not row.source_out then
-        error("clip_mutator: missing source_out (" .. tostring(context or "unknown") .. ")", 3)
-    end
-    return row.source_out
+    assert(row, "clip_mutator: missing row (" .. tostring(context or "unknown") .. ")")
+    local source_out = row.source_out
+    assert(type(source_out) == "number", "clip_mutator: source_out must be integer (" .. tostring(context or "unknown") .. ")")
+    return source_out
+end
+
+local function get_source_in(row)
+    local source_in = row.source_in
+    assert(type(source_in) == "number", "clip_mutator: source_in must be integer")
+    return source_in
 end
 
 local function plan_update(row, original)
@@ -140,7 +116,7 @@ local function plan_insert(row)
     -- Prefer explicit fps fields, but fall back to rate table used by Clip objects
     local fps_num = row.fps_numerator or (row.rate and row.rate.fps_numerator)
     local fps_den = row.fps_denominator or (row.rate and row.rate.fps_denominator)
-    assert_rate(fps_num, fps_den, "clip fps")
+    assert_fps(fps_num, fps_den, "clip fps")
     assert(row.timeline_start or row.start_value, "clip_mutator: insert mutation missing timeline_start")
     assert(row.duration, "clip_mutator: insert mutation missing duration")
     assert(row.source_in, "clip_mutator: insert mutation missing source_in")
@@ -204,32 +180,37 @@ local function load_track_clips(db, track_id)
         local clip_den = stmt:value(14)
         local seq_num = stmt:value(15)
         local seq_den = stmt:value(16)
-        assert_rate(clip_num, clip_den, "clip fps")
-        assert_rate(seq_num, seq_den, "sequence fps")
+        assert_fps(clip_num, clip_den, "clip fps")
+        assert_fps(seq_num, seq_den, "sequence fps")
         table.insert(results, {
-		            id = stmt:value(0),
-		            project_id = stmt:value(1),
-		            clip_kind = stmt:value(2),
-		            name = stmt:value(3),
-		            track_id = stmt:value(4),
-		            media_id = stmt:value(5),
-                    source_sequence_id = stmt:value(6),
-                    parent_clip_id = stmt:value(7),
-                    owner_sequence_id = stmt:value(8),
-		            created_at = stmt:value(19),
-		            modified_at = stmt:value(20),
-		            timeline_start = Rational.new(stmt:value(9), seq_num, seq_den),
-		            start_value = Rational.new(stmt:value(9), seq_num, seq_den), -- Legacy compat
-		            duration = Rational.new(stmt:value(10), seq_num, seq_den),
-		            source_in = Rational.new(stmt:value(11), clip_num, clip_den),
-		            source_out = Rational.new(stmt:value(12), clip_num, clip_den),
-		            rate = { fps_numerator = clip_num, fps_denominator = clip_den },
-		            fps_numerator = clip_num,
-		            fps_denominator = clip_den,
-		            enabled = stmt:value(17) == 1 or stmt:value(17) == true,
-                    offline = stmt:value(18) == 1 or stmt:value(18) == true
-		        })
-		    end
+            id = stmt:value(0),
+            project_id = stmt:value(1),
+            clip_kind = stmt:value(2),
+            name = stmt:value(3),
+            track_id = stmt:value(4),
+            media_id = stmt:value(5),
+            source_sequence_id = stmt:value(6),
+            parent_clip_id = stmt:value(7),
+            owner_sequence_id = stmt:value(8),
+            created_at = stmt:value(19),
+            modified_at = stmt:value(20),
+            -- Integer frame coordinates
+            timeline_start = stmt:value(9),
+            start_value = stmt:value(9),  -- Legacy compat
+            duration = stmt:value(10),
+            source_in = stmt:value(11),
+            source_out = stmt:value(12),
+            -- Rate metadata for source coordinate conversions
+            rate = { fps_numerator = clip_num, fps_denominator = clip_den },
+            fps_numerator = clip_num,
+            fps_denominator = clip_den,
+            -- Sequence rate for reference
+            seq_fps_numerator = seq_num,
+            seq_fps_denominator = seq_den,
+            enabled = stmt:value(17) == 1 or stmt:value(17) == true,
+            offline = stmt:value(18) == 1 or stmt:value(18) == true
+        })
+    end
     stmt:finalize()
     return results
 end
@@ -274,19 +255,17 @@ local function iter_overlaps(clip_list, start_value, end_time)
     local index = 1
     local count = #clip_list
 
-	    return function()
-	        while index <= count do
-	            local item = clip_list[index]
-	            index = index + 1
-	            local clip_start = item.timeline_start or item.start_value
-	            if not clip_start or getmetatable(clip_start) ~= Rational.metatable then
-	                error("clip_mutator: overlap check missing clip_start", 2)
-	            end
-	            local clip_end = clip_start + (item.duration or 0)
-	            
-	            -- Safe comparison (Rational < Rational)
-	            if clip_end > start_value and clip_start < end_time then
-	                return item
+    return function()
+        while index <= count do
+            local item = clip_list[index]
+            index = index + 1
+            local clip_start = item.timeline_start or item.start_value
+            assert(type(clip_start) == "number", "clip_mutator: overlap check missing clip_start")
+            local clip_end = clip_start + (item.duration or 0)
+
+            -- Integer comparison
+            if clip_end > start_value and clip_start < end_time then
+                return item
             end
             if clip_start >= end_time then
                 break
@@ -304,8 +283,9 @@ function ClipMutator.resolve_occlusions(db, params)
     assert(start_value ~= nil, "clip_mutator.resolve_occlusions: timeline_start/start_value is required")
     local duration = assert(params.duration, "clip_mutator.resolve_occlusions: duration is required")
 
-	    start_value = ensure_rational(start_value, params, "start_value")
-	    duration = ensure_rational(duration, params, "duration")
+    -- Ensure integer frame coordinates
+    start_value = ensure_integer(start_value, "start_value")
+    duration = ensure_integer(duration, "duration")
 
     local end_time = start_value + duration
     local exclude_id = params.exclude_clip_id
@@ -347,18 +327,14 @@ function ClipMutator.resolve_occlusions(db, params)
         end
 
         local clip_start = row.timeline_start or row.start_value
-        if getmetatable(clip_start) ~= Rational.metatable then
-            error("clip_mutator.resolve_occlusions: missing clip_start", 2)
-        end
+        assert(type(clip_start) == "number", "clip_mutator.resolve_occlusions: missing clip_start")
 
         local clip_duration = row.duration
-        if getmetatable(clip_duration) ~= Rational.metatable then
-            error("clip_mutator.resolve_occlusions: missing clip duration", 2)
-        end
+        assert(type(clip_duration) == "number", "clip_mutator.resolve_occlusions: missing clip duration")
 
         local clip_end = clip_start + clip_duration
-        local overlap_start = val_max(clip_start, start_value)
-        local overlap_end = val_min(clip_end, end_time)
+        local overlap_start = math.max(clip_start, start_value)
+        local overlap_end = math.min(clip_end, end_time)
 
         if overlap_end <= overlap_start then
             goto continue_loop
@@ -374,16 +350,14 @@ function ClipMutator.resolve_occlusions(db, params)
 
         -- Overlap on tail (trim right side): keep start, shorten duration to end at start_value.
         if clip_start < start_value and clip_end <= end_time then
-            local row_fps_num, row_fps_den = get_row_rate(row)
-            local new_duration_seq = start_value - clip_start
-            if new_duration_seq.frames < 1 then
+            local new_duration = start_value - clip_start
+            if new_duration < 1 then
                 table.insert(actions, plan_delete(original))
                 goto continue_loop
             end
 
-            local new_duration_src = new_duration_seq:rescale_floor(row_fps_num, row_fps_den)
-            row.duration = new_duration_seq
-            row.source_out = row.source_in + new_duration_src
+            row.duration = new_duration
+            row.source_out = get_source_in(row) + new_duration
 
             table.insert(actions, plan_update(row, original))
             goto continue_loop
@@ -391,18 +365,16 @@ function ClipMutator.resolve_occlusions(db, params)
 
         -- Overlap on head (trim left side): shift start to end_time, shorten duration from the front.
         if clip_start >= start_value and clip_end > end_time then
-            local row_fps_num, row_fps_den = get_row_rate(row)
-            local trim_amount_seq = end_time - clip_start
-            local new_duration_seq = clip_end - end_time
-            if new_duration_seq.frames < 1 then
+            local trim_amount = end_time - clip_start
+            local new_duration = clip_end - end_time
+            if new_duration < 1 then
                 table.insert(actions, plan_delete(original))
                 goto continue_loop
             end
 
-            local trim_amount_src = trim_amount_seq:rescale_floor(row_fps_num, row_fps_den)
             row.timeline_start = end_time
-            row.duration = new_duration_seq
-            row.source_in = row.source_in + trim_amount_src
+            row.duration = new_duration
+            row.source_in = get_source_in(row) + trim_amount
             row.source_out = require_source_out(original, "resolve_occlusions/head_trim")
 
             table.insert(actions, plan_update(row, original))
@@ -411,21 +383,20 @@ function ClipMutator.resolve_occlusions(db, params)
 
         -- Straddles new clip → split existing clip into left and right parts.
         if clip_start < start_value and clip_end > end_time then
-            local row_fps_num, row_fps_den = get_row_rate(row)
-            local left_duration_seq = start_value - clip_start
-            local right_duration_seq = clip_end - end_time
-            if left_duration_seq.frames < 1 then
+            local row_fps_num, row_fps_den = get_row_fps(row)
+            local left_duration = start_value - clip_start
+            local right_duration = clip_end - end_time
+            if left_duration < 1 then
                 table.insert(actions, plan_delete(original))
                 goto continue_loop
             end
 
-            local left_duration_src = left_duration_seq:rescale_floor(row_fps_num, row_fps_den)
-            row.duration = left_duration_seq
-            row.source_out = row.source_in + left_duration_src
+            row.duration = left_duration
+            row.source_out = get_source_in(row) + left_duration
             table.insert(actions, plan_update(row, original))
 
-            if right_duration_seq.frames > 0 then
-                local right_shift_src = (end_time - clip_start):rescale_floor(row_fps_num, row_fps_den)
+            if right_duration > 0 then
+                local right_shift = end_time - clip_start
                 local right_clip = {
                     id = uuid.generate(),
                     project_id = original.project_id,
@@ -434,8 +405,8 @@ function ClipMutator.resolve_occlusions(db, params)
                     track_id = original.track_id,
                     media_id = original.media_id,
                     timeline_start = end_time,
-                    duration = right_duration_seq,
-                    source_in = original.source_in + right_shift_src,
+                    duration = right_duration,
+                    source_in = get_source_in(original) + right_shift,
                     source_out = require_source_out(original, "resolve_occlusions/straddle_split"),
                     fps_numerator = row_fps_num,
                     fps_denominator = row_fps_den,
@@ -483,8 +454,9 @@ function ClipMutator.resolve_ripple(db, params)
     if not insert_time then return true end
     assert(shift_amount, "clip_mutator.resolve_ripple: shift_amount/duration is required")
 
-    insert_time = ensure_rational(insert_time, params, "insert_time")
-    shift_amount = ensure_rational(shift_amount, params, "shift_amount")
+    -- Ensure integer frame coordinates
+    insert_time = ensure_integer(insert_time, "insert_time")
+    shift_amount = ensure_integer(shift_amount, "shift_amount")
     
     local track_clips, err = load_track_clips(db, track_id)
     if not track_clips then return false, err end
@@ -496,11 +468,9 @@ function ClipMutator.resolve_ripple(db, params)
     for _, row in ipairs(track_clips) do
         local original = clone_state(row)
         local clip_start = row.timeline_start or row.start_value
-        if getmetatable(clip_start) ~= Rational.metatable then
-            error("clip_mutator.resolve_ripple: missing clip_start", 2)
-        end
+        assert(type(clip_start) == "number", "clip_mutator.resolve_ripple: missing clip_start")
         local clip_end = clip_start + row.duration
-        
+
         if clip_start >= insert_time then
             -- Fully after: Shift
             row.timeline_start = clip_start + shift_amount
@@ -509,20 +479,18 @@ function ClipMutator.resolve_ripple(db, params)
         elseif clip_start < insert_time and clip_end > insert_time then
             -- Straddles: Split
             -- Left Part: Ends at insert_time
-            local row_fps_num, row_fps_den = get_row_rate(row)
-            local split_point = insert_time
-            local left_dur = split_point - clip_start
-            local left_dur_source = left_dur:rescale_floor(row_fps_num, row_fps_den)
+            local row_fps_num, row_fps_den = get_row_fps(row)
+            local left_dur = insert_time - clip_start
 
             row.duration = left_dur
-            row.source_out = row.source_in + left_dur_source
+            row.source_out = get_source_in(row) + left_dur
 
             table.insert(actions, plan_update(row, original))
 
             -- Right Part: Starts at insert_time + shift_amount
-            local right_start = split_point + shift_amount
-            local right_dur = clip_end - split_point
-            local right_src_in = row.source_in + left_dur_source
+            local right_start = insert_time + shift_amount
+            local right_dur = clip_end - insert_time
+            local right_src_in = get_source_in(original) + left_dur
 
             local right_clip = {
                 id = uuid.generate(),
@@ -537,7 +505,7 @@ function ClipMutator.resolve_ripple(db, params)
                 timeline_start = right_start,
                 duration = right_dur,
                 source_in = right_src_in,
-                source_out = require_source_out(original, "resolve_ripple"), -- original end
+                source_out = require_source_out(original, "resolve_ripple"),
                 fps_numerator = row_fps_num,
                 fps_denominator = row_fps_den,
                 enabled = row.enabled,
@@ -551,7 +519,7 @@ function ClipMutator.resolve_ripple(db, params)
 
     -- For positive shifts (inserting), reverse the update order so rightmost clips
     -- move first, preventing overlap errors when cascading updates
-    if shift_amount.frames > 0 then
+    if shift_amount > 0 then
         local updates = {}
         local non_updates = {}
         for _, action in ipairs(actions) do
@@ -572,6 +540,17 @@ function ClipMutator.resolve_ripple(db, params)
     end
 
     return true, nil, actions
+end
+
+local function get_sequence_fps(db, sequence_id)
+    local stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
+    assert(stmt, "clip_mutator: failed to prepare sequence fps query")
+    stmt:bind_value(1, sequence_id)
+    assert(stmt:exec() and stmt:next(), "clip_mutator: sequence not found: " .. tostring(sequence_id))
+    local num, den = stmt:value(0), stmt:value(1)
+    stmt:finalize()
+    assert_fps(num, den, "sequence fps")
+    return num, den
 end
 
 local function load_sequence_tracks(db, sequence_id)
@@ -791,7 +770,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
 
     local clip_fps_num = stmt:value(13)
     local clip_fps_den = stmt:value(14)
-    assert_rate(clip_fps_num, clip_fps_den, "clip fps")
+    assert_fps(clip_fps_num, clip_fps_den, "clip fps")
 
     local clip = {
         id = stmt:value(0),
@@ -803,10 +782,12 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         source_sequence_id = stmt:value(6),
         parent_clip_id = stmt:value(7),
         owner_sequence_id = stmt:value(8),
-        timeline_start = Rational.new(stmt:value(9), seq_fps_num, seq_fps_den),
-        duration = Rational.new(stmt:value(10), seq_fps_num, seq_fps_den),
-        source_in = Rational.new(stmt:value(11), clip_fps_num, clip_fps_den),
-        source_out = Rational.new(stmt:value(12), clip_fps_num, clip_fps_den),
+        -- Integer frame coordinates
+        timeline_start = stmt:value(9),
+        duration = stmt:value(10),
+        source_in = stmt:value(11),
+        source_out = stmt:value(12),
+        -- Fps metadata (for storage/passthrough only)
         fps_numerator = clip_fps_num,
         fps_denominator = clip_fps_den,
         rate = {fps_numerator = clip_fps_num, fps_denominator = clip_fps_den},
@@ -832,13 +813,11 @@ function ClipMutator.plan_duplicate_block(db, params)
     assert(type(clip_ids) == "table" and #clip_ids > 0, "clip_mutator.plan_duplicate_block: missing clip_ids")
     assert(target_track_id and target_track_id ~= "", "clip_mutator.plan_duplicate_block: missing target_track_id")
 
-    local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
+    local seq_fps_num, seq_fps_den = get_sequence_fps(db, sequence_id)
 
-    local delta_rat = params.delta_rat or params.delta_rational
-    delta_rat = Rational.hydrate(delta_rat, seq_fps_num, seq_fps_den) or Rational.new(0, seq_fps_num, seq_fps_den)
-    if delta_rat.fps_numerator ~= seq_fps_num or delta_rat.fps_denominator ~= seq_fps_den then
-        delta_rat = Rational.new(delta_rat.frames, seq_fps_num, seq_fps_den)
-    end
+    -- Delta must be integer frames
+    local delta_frames = params.delta_frames or 0
+    assert(type(delta_frames) == "number", "clip_mutator.plan_duplicate_block: delta_frames must be integer")
 
     local tracks = load_sequence_tracks(db, sequence_id)
     local tracks_by_id, tracks_by_type_index = build_track_maps(tracks)
@@ -862,7 +841,7 @@ function ClipMutator.plan_duplicate_block(db, params)
     local delta_track_index = target_track.track_index - anchor_track.track_index
     assert(type(delta_track_index) == "number", "clip_mutator.plan_duplicate_block: invalid delta_track_index")
 
-    if delta_track_index == 0 and delta_rat.frames == 0 then
+    if delta_track_index == 0 and delta_frames == 0 then
         return true, nil, {planned_mutations = {}, new_clip_ids = {}}
     end
 
@@ -882,8 +861,8 @@ function ClipMutator.plan_duplicate_block(db, params)
 
         table.insert(source_clips, clip)
 
-        local start_frames = assert(clip.timeline_start and clip.timeline_start.frames, "clip_mutator.plan_duplicate_block: source clip missing timeline_start.frames")
-        local dur_frames = assert(clip.duration and clip.duration.frames, "clip_mutator.plan_duplicate_block: source clip missing duration.frames")
+        local start_frames = assert(type(clip.timeline_start) == "number", "clip_mutator.plan_duplicate_block: source clip timeline_start must be integer") and clip.timeline_start
+        local dur_frames = assert(type(clip.duration) == "number", "clip_mutator.plan_duplicate_block: source clip duration must be integer") and clip.duration
         local end_frames = start_frames + dur_frames
 
         source_intervals_by_track[clip.track_id] = source_intervals_by_track[clip.track_id] or {}
@@ -899,7 +878,7 @@ function ClipMutator.plan_duplicate_block(db, params)
         lower_bound = -min_source_start_frames
     end
 
-    local requested_delta_frames = delta_rat.frames
+    local requested_delta_frames = delta_frames
     if requested_delta_frames < lower_bound then
         requested_delta_frames = lower_bound
     end
@@ -919,8 +898,8 @@ function ClipMutator.plan_duplicate_block(db, params)
             goto continue_spec
         end
 
-        local start_frames = clip.timeline_start.frames
-        local end_frames = start_frames + clip.duration.frames
+        local start_frames = clip.timeline_start
+        local end_frames = start_frames + clip.duration
         copy_specs_by_track[mapped_track.id] = copy_specs_by_track[mapped_track.id] or {}
         table.insert(copy_specs_by_track[mapped_track.id], {
             clip_id = clip.id,
@@ -932,7 +911,7 @@ function ClipMutator.plan_duplicate_block(db, params)
     end
 
     local directional_sign = 1
-    if delta_rat.frames < 0 then
+    if delta_frames < 0 then
         directional_sign = -1
     end
 
@@ -946,7 +925,7 @@ function ClipMutator.plan_duplicate_block(db, params)
         return true, nil, {planned_mutations = {}, new_clip_ids = {}}
     end
 
-    local effective_delta = Rational.new(clamped_delta_frames, seq_fps_num, seq_fps_den)
+    local effective_delta = clamped_delta_frames
 
     local insert_mutations = {}
     local planned_intervals_by_track = {}
@@ -969,11 +948,11 @@ function ClipMutator.plan_duplicate_block(db, params)
         end
 
         local new_start = clip.timeline_start + effective_delta
-        if new_start.frames < 0 then
+        if new_start < 0 then
             return false, "clip_mutator.plan_duplicate_block: computed negative timeline_start after clamping"
         end
 
-        if new_start.frames == clip.timeline_start.frames and mapped_track.id == clip.track_id then
+        if new_start == clip.timeline_start and mapped_track.id == clip.track_id then
             goto continue_clip
         end
 
@@ -1031,8 +1010,8 @@ function ClipMutator.plan_duplicate_block(db, params)
     for track_id, spans in pairs(merged_overwrite_spans_by_track) do
         for _, span in ipairs(spans) do
             local span_duration = span["end"] - span.start
-            assert(span_duration and span_duration.frames and span_duration.frames >= 0, "clip_mutator.plan_duplicate_block: invalid span duration")
-            if span_duration.frames > 0 then
+            assert(type(span_duration) == "number" and span_duration >= 0, "clip_mutator.plan_duplicate_block: invalid span duration")
+            if span_duration > 0 then
                 local ok_occ, occ_err, occ_actions = ClipMutator.resolve_occlusions(db, {
                     track_id = track_id,
                     timeline_start = span.start,

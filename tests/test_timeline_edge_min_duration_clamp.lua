@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -71,16 +70,12 @@ timeline = {
     update = function() end
 }
 
-local function rational(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local edge = {clip_id = clips.v1_left.id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
 view.drag_state = {
     type = "edges",
     edges = {edge},
     lead_edge = edge,
-    delta_rational = rational(1000),
+    delta_frames = 1000,
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -88,8 +83,8 @@ timeline_state.set_edge_selection({edge})
 
 timeline_renderer.render(view)
 
-assert(view.drag_state.preview_clamped_delta, "expected preview to compute a clamped delta for over-shrinking clips")
-assert(view.drag_state.preview_clamped_delta.frames == 4,
+assert(view.drag_state.preview_clamped_delta_frames, "expected preview to compute a clamped delta for over-shrinking clips")
+assert(view.drag_state.preview_clamped_delta_frames == 4,
     "expected in-edge shrink to clamp at duration-1 (5-1=4 frames)")
 assert(view.drag_state.preview_data, "expected preview_data to exist (dry run should succeed)")
 

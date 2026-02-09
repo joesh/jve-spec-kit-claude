@@ -19,7 +19,6 @@ local Clip = require('models.clip')
 local Media = require('models.media')
 local Command = require('command')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 
 _G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end
 
@@ -83,10 +82,10 @@ local function create_clip(id, start_frame, duration_frames, source_in)
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "seq",
-        timeline_start = Rational.new(start_frame, 30, 1),
-        duration = Rational.new(duration_frames, 30, 1),
-        source_in = Rational.new(source_in, 30, 1),
-        source_out = Rational.new(source_in + duration_frames, 30, 1),
+        timeline_start = start_frame,
+        duration = duration_frames,
+        source_in = source_in,
+        source_out = source_in + duration_frames,
         enabled = true,
         fps_numerator = 30,
         fps_denominator = 1

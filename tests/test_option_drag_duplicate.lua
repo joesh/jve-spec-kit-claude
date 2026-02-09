@@ -52,16 +52,15 @@ local function create_clip(params)
     assert(media:save(db))
 
     local Clip = require('models.clip')
-    local Rational = require("core.rational")
     local clip = Clip.create(params.name or params.clip_id, params.media_id, {
         id = params.clip_id,
         track_id = params.track_id,
         project_id = 'default_project',
         owner_sequence_id = 'default_sequence',
-        timeline_start = Rational.new(params.start_value or 0, 30, 1),
-        duration = Rational.new(params.duration_value or 0, 30, 1),
-        source_in = Rational.new(params.source_in_value or 0, 30, 1),
-        source_out = Rational.new(params.source_out_value or params.duration_value or 0, 30, 1),
+        timeline_start = params.start_value or 0,
+        duration = params.duration_value or 0,
+        source_in = params.source_in_value or 0,
+        source_out = params.source_out_value or params.duration_value or 0,
         fps_numerator = 30,
         fps_denominator = 1,
         parent_clip_id = params.parent_clip_id

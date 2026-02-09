@@ -44,8 +44,8 @@ end
 
 local function assert_view(expected_start, expected_duration)
     local view = current_view()
-    local start_frames = (type(view.start_value) == "table" and view.start_value.frames) or view.start_value
-    local duration_frames = (type(view.duration) == "table" and view.duration.frames) or view.duration
+    local start_frames = (type(view.start_value) == "table" and view.start_value) or view.start_value
+    local duration_frames = (type(view.duration) == "table" and view.duration) or view.duration
     assert(start_frames == expected_start, string.format("start_value expected %d got %s", expected_start, tostring(start_frames)))
     assert(duration_frames == expected_duration, string.format("duration expected %d got %s", expected_duration, tostring(duration_frames)))
 end
@@ -71,8 +71,8 @@ with_db(function(db)
     assert(ok ~= false, "zoom fit should succeed")
 
     local view_after_fit = current_view()
-    local fit_start = (type(view_after_fit.start_value) == "table" and view_after_fit.start_value.frames) or view_after_fit.start_value
-    local fit_duration = (type(view_after_fit.duration) == "table" and view_after_fit.duration.frames) or view_after_fit.duration
+    local fit_start = (type(view_after_fit.start_value) == "table" and view_after_fit.start_value) or view_after_fit.start_value
+    local fit_duration = (type(view_after_fit.duration) == "table" and view_after_fit.duration) or view_after_fit.duration
     assert(fit_start == 0, "zoom fit should start at 0")
     assert(fit_duration >= 6600, "zoom fit should cover all clips with 10% buffer")
 

@@ -15,7 +15,7 @@
 -- @file prepare.lua
 local M = {}
 
-local Rational = require("core.rational")
+local frame_utils = require("core.frame_utils")
 
 function M.resolve_sequence_rate(ctx, db)
     assert(ctx and ctx.sequence_id and ctx.sequence_id ~= "", "BatchRippleEdit: missing sequence_id")
@@ -38,29 +38,18 @@ end
 function M.resolve_delta(ctx)
     local seq_fps_num = ctx.seq_fps_num
     local seq_fps_den = ctx.seq_fps_den
-    local delta_frames = ctx.delta_frames
+    local delta_frames_input = ctx.delta_frames
     local delta_ms = ctx.delta_ms
-    local delta_rat
 
-    if delta_frames then
-        delta_rat = Rational.new(delta_frames, seq_fps_num, seq_fps_den)
+    if delta_frames_input then
+        assert(type(delta_frames_input) == "number", "BatchRippleEdit: delta_frames must be integer")
+        ctx.delta_frames = delta_frames_input
     elseif delta_ms then
-        if type(delta_ms) == "number" then
-            error("BatchRippleEdit: delta_ms must be Rational, not number")
-        end
-        if getmetatable(delta_ms) == Rational.metatable then
-            delta_rat = delta_ms:rescale(seq_fps_num, seq_fps_den)
-        elseif type(delta_ms) == "table" and delta_ms.frames then
-            assert(delta_ms.fps_numerator and delta_ms.fps_denominator,
-                "BatchRippleEdit: delta_ms Rational-like table missing fps_numerator/fps_denominator")
-            delta_rat = Rational.new(delta_ms.frames, delta_ms.fps_numerator, delta_ms.fps_denominator)
-        else
-            error("BatchRippleEdit: delta_ms must be Rational-like")
-        end
+        assert(type(delta_ms) == "number", "BatchRippleEdit: delta_ms must be number")
+        ctx.delta_frames = frame_utils.ms_to_frames(delta_ms, seq_fps_num, seq_fps_den)
     end
 
-    ctx.delta_rat = delta_rat
-    return delta_rat ~= nil and delta_rat.frames ~= nil
+    return ctx.delta_frames ~= nil
 end
 
 function M.snapshot_edge_infos(ctx)

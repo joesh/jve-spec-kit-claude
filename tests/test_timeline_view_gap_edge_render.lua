@@ -2,8 +2,6 @@
 
 package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
-local Rational = require("core.rational")
-
 -- Capture timeline draw calls so we can assert that gap edges render handles.
 local original_timeline = timeline
 local drawn_rects = {}
@@ -33,23 +31,23 @@ local state = {
 local prev_clip = {
     id = "clip_anchor",
     track_id = "track_v1",
-    timeline_start = Rational.new(0, 1000, 1),
-    duration = Rational.new(1000, 1000, 1)
+    timeline_start = 0,
+    duration = 1000
 }
 
 local clip = {
     id = "clip_gap_target",
     track_id = "track_v1",
-    timeline_start = Rational.new(2000, 1000, 1),
-    duration = Rational.new(1000, 1000, 1)
+    timeline_start = 2000,
+    duration = 1000
 }
 
 function state.debug_begin_layout_capture() end
 function state.debug_record_track_layout() end
 function state.debug_record_clip_layout() end
-function state.get_viewport_start_time() return Rational.new(0, 1000, 1) end
-function state.get_viewport_duration() return Rational.new(5000, 1000, 1) end
-function state.get_playhead_position() return Rational.new(0, 1000, 1) end
+function state.get_viewport_start_time() return 0 end
+function state.get_viewport_duration() return 5000 end
+function state.get_playhead_position() return 0 end
 function state.get_mark_in() return nil end
 function state.get_mark_out() return nil end
 function state.get_sequence_id() return "default_sequence" end
@@ -76,9 +74,9 @@ function state.get_selected_edges()
     return state._selected_edges
 end
 function state.get_all_tracks() return {{id = "track_v1"}} end
-function state.time_to_pixel(time_rational, width)
-    local frames = time_rational.frames or 0
-    local duration_frames = state.get_viewport_duration().frames
+function state.time_to_pixel(t, width)
+    local frames = t or 0
+    local duration_frames = state.get_viewport_duration()
     return math.floor((frames / duration_frames) * width)
 end
 function state.get_track_heights() return {} end

@@ -15,8 +15,6 @@
 -- @file go_to_start.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
-local sequence_frame_rate = require('core.utils.sequence_frame_rate')
-local Rational = require('core.rational')
 
 
 local SPEC = {
@@ -40,10 +38,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        -- Use current sequence frame rate for zero
-        local fps_num, fps_den = sequence_frame_rate.require_sequence_frame_rate(timeline_state, "GoToStart")
-
-        timeline_state.set_playhead_position(Rational.new(0, fps_num, fps_den))
+        timeline_state.set_playhead_position(0)
         print("✅ Moved playhead to start")
         return true
     end

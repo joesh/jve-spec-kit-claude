@@ -62,9 +62,9 @@ for _, entry in ipairs(payload.affected_clips or {}) do
     if entry.clip_id == layout.clips.v2.id then
         v2_found = true
         -- Verify geometry: V2 should shrink from 800 to 600 frames
-        assert(entry.new_duration and entry.new_duration.frames == 600,
+        assert(entry.new_duration and entry.new_duration == 600,
             string.format("V2 should shrink to 600 frames, got %s",
-                tostring(entry.new_duration and entry.new_duration.frames or "nil")))
+                tostring(entry.new_duration and entry.new_duration or "nil")))
         break
     end
 end
@@ -76,9 +76,9 @@ for _, entry in ipairs(payload.shifted_clips or {}) do
     if entry.clip_id == layout.clips.v1_right.id then
         v1_right_found = true
         -- Verify shift: v1_right should shift left from 2500 to 2300
-        assert(entry.new_start_value and entry.new_start_value.frames == 2300,
+        assert(entry.new_start_value and entry.new_start_value == 2300,
             string.format("v1_right should shift to 2300, got %s",
-                tostring(entry.new_start_value and entry.new_start_value.frames or "nil")))
+                tostring(entry.new_start_value and entry.new_start_value or "nil")))
         break
     end
 end

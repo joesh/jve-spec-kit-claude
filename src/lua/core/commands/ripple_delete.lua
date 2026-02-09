@@ -16,7 +16,6 @@
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
-local Rational = require("core.rational")
 
 
 local SPEC = {
@@ -46,44 +45,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local track_id = args.track_id
-        local gap_start_rat = args.gap_start
-        local gap_duration_rat = args.gap_duration
+        local gap_start = args.gap_start
+        local gap_duration = args.gap_duration
         local sequence_id = args.sequence_id
 
-        -- Validate Rational inputs
-        
-        -- Hydrate from table/number if needed (e.g. from JSON or UI)
-        local function hydrate_rat(val)
-            if Rational.hydrate then
-                return Rational.hydrate(val, args.fps_numerator, args.fps_denominator)
-            end
-            return val
-        end
+        -- Validate integer inputs
+        assert(type(gap_start) == "number", "RippleDelete: gap_start must be integer")
+        assert(type(gap_duration) == "number" and gap_duration > 0, "RippleDelete: gap_duration must be positive integer")
 
-        gap_start_rat = hydrate_rat(gap_start_rat)
-        gap_duration_rat = hydrate_rat(gap_duration_rat)
-        
-        if not gap_start_rat or not gap_start_rat.frames then
-            error("RippleDelete: Invalid gap_start (missing frames)")
-        end
-        
-        if not gap_duration_rat or not gap_duration_rat.frames or gap_duration_rat.frames <= 0 then
-            error("RippleDelete: Invalid gap_duration (must be positive Rational)")
-        end
+        local gap_end = gap_start + gap_duration
 
-        local gap_end_rat = gap_start_rat + gap_duration_rat
-
-        -- Ensure global gap is clear (V5: using frames)
+        -- Ensure global gap is clear (using integer frames)
         local function ensure_global_gap_is_clear()
             -- We need to check if any clip overlaps the gap interval.
             -- Use track -> sequence join to avoid relying on owner_sequence_id being populated.
             local gap_query = db:prepare([[
-                SELECT c.id, c.track_id, c.timeline_start_frame, c.duration_frames, c.fps_numerator, c.fps_denominator
+                SELECT c.id, c.track_id, c.timeline_start_frame, c.duration_frames
                 FROM clips c
                 JOIN tracks t ON c.track_id = t.id
                 WHERE t.sequence_id = ?
             ]])
-            
+
             if not gap_query then
                 set_last_error("RippleDelete: Failed to prepare gap validation query")
                 return false
@@ -93,17 +75,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local blocking_clips = {}
             if gap_query:exec() then
                 while gap_query:next() do
-                    local c_start_frame = gap_query:value(2)
-                    local c_dur_frame = gap_query:value(3)
-                    local c_fps_num = gap_query:value(4)
-                    local c_fps_den = gap_query:value(5)
-                    
-                    local c_start = Rational.new(c_start_frame, c_fps_num, c_fps_den)
-                    local c_end = c_start + Rational.new(c_dur_frame, c_fps_num, c_fps_den)
-                    
+                    local c_start = gap_query:value(2)
+                    local c_dur = gap_query:value(3)
+                    local c_end = c_start + c_dur
+
                     -- Check overlap: NOT (end <= gap_start OR start >= gap_end)
                     -- Equivalent to: end > gap_start AND start < gap_end
-                    if c_end > gap_start_rat and c_start < gap_end_rat then
+                    if c_end > gap_start and c_start < gap_end then
                         table.insert(blocking_clips, {
                             clip_id = gap_query:value(0),
                             track_id = gap_query:value(1),
@@ -119,11 +97,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local messages = {}
                 for index, info in ipairs(blocking_clips) do
                     messages[index] = string.format(
-                        "clip %s on track %s (%s–%s)",
+                        "clip %s on track %s (%d–%d)",
                         tostring(info.clip_id),
                         tostring(info.track_id),
-                        tostring(info.start),
-                        tostring(info.end_time)
+                        info.start,
+                        info.end_time
                     )
                 end
                 print("WARNING: RippleDelete blocked because the gap is not clear across all tracks: " .. table.concat(messages, "; "))
@@ -138,15 +116,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Identify clips to move (start >= gap_end)
-        -- Optimization: Do this in Lua to handle Rational comparison robustly
         local moved_clips = {}
         local query = db:prepare([[
-            SELECT c.id, c.timeline_start_frame, c.track_id, c.fps_numerator, c.fps_denominator
+            SELECT c.id, c.timeline_start_frame, c.track_id
             FROM clips c
             JOIN tracks t ON c.track_id = t.id
             WHERE t.sequence_id = ?
         ]])
-        
+
         if not query then
             set_last_error("RippleDelete: Failed to prepare clip query")
             return false
@@ -156,15 +133,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local clip_ids = {}
         if query:exec() then
             while query:next() do
-                local c_start_frame = query:value(1)
-                local c_fps_num = query:value(3)
-                local c_fps_den = query:value(4)
-                local c_start = Rational.new(c_start_frame, c_fps_num, c_fps_den)
-                
-                if c_start >= gap_end_rat then
+                local c_start = query:value(1)
+
+                if c_start >= gap_end then
                     table.insert(clip_ids, {
                         id = query:value(0),
-                        start_rat = c_start,
+                        start = c_start,
                         track_id = query:value(2)
                     })
                 end
@@ -175,8 +149,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if args.dry_run then
             return true, {
                 track_id = track_id,
-                gap_start = gap_start_rat,
-                gap_duration = gap_duration_rat,
+                gap_start = gap_start,
+                gap_duration = gap_duration,
                 clip_count = #clip_ids
             }
         end
@@ -189,15 +163,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             local original_start = clip.timeline_start
-            
+
             -- Move clip: new_start = current_start - gap_duration
-            local new_start = clip.timeline_start - gap_duration_rat
-            
+            local new_start = clip.timeline_start - gap_duration
+
             -- Clamp to 0 if something went wrong, though validation above should prevent this
-            if new_start.frames < 0 then
-                new_start = Rational.new(0, new_start.fps_numerator, new_start.fps_denominator)
+            if new_start < 0 then
+                new_start = 0
             end
-            
+
             clip.timeline_start = new_start
 
             local saved = clip:save({skip_occlusion = true})
@@ -205,7 +179,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 print(string.format("ERROR: RippleDelete: Failed to save clip %s", tostring(info.id)))
                 return false
             end
-            
+
             local update_payload = command_helper.clip_update_payload(clip, sequence_id)
             if update_payload then
                 command_helper.add_update_mutation(command, update_payload.track_sequence_id, update_payload)
@@ -213,16 +187,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             table.insert(moved_clips, {
                 clip_id = info.id,
-                original_start = original_start, -- Rational
+                original_start = original_start,  -- integer
                 track_id = info.track_id,
             })
         end
 
         command:set_parameters({
             ["ripple_track_id"] = track_id,
-            ["ripple_gap_start"] = gap_start_rat,
+            ["ripple_gap_start"] = gap_start,
             ["ripple_sequence_id"] = sequence_id,
-            ["ripple_gap_duration"] = gap_duration_rat,
+            ["ripple_gap_duration"] = gap_duration,
             ["ripple_moved_clips"] = moved_clips,
         })
         -- Clear post-selection so redo doesn't leave stray clip selection (we removed the gap).
@@ -243,30 +217,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        -- Re-hydrate Rationals if they came back as tables
-        local function restore_rat(val)
-            if type(val) == "table" and val.frames then
-                return Rational.new(val.frames, val.fps_numerator, val.fps_denominator)
-            end
-            return val
-        end
-
         -- Restore from rightmost to leftmost to avoid transient overlaps while moving clips back.
         table.sort(args.ripple_moved_clips, function(a, b)
-            local sa = restore_rat(a.original_start)
-            local sb = restore_rat(b.original_start)
-            if getmetatable(sa) == Rational.metatable and getmetatable(sb) == Rational.metatable then
-                return sa > sb
-            end
-            return (sa or 0) > (sb or 0)
+            return (a.original_start or 0) > (b.original_start or 0)
         end)
 
         for _, info in ipairs(args.ripple_moved_clips) do
             local clip = Clip.load(info.clip_id)
             if clip then
-                local restored_start = restore_rat(info.original_start)
-                clip.timeline_start = restored_start
-                
+                clip.timeline_start = info.original_start
+
                 local saved = clip:save({skip_occlusion = true})
                 if not saved then
                     print(string.format("WARNING: RippleDelete undo: Failed to restore clip %s", tostring(info.clip_id)))

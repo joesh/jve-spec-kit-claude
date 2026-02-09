@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local renderer = require("ui.timeline.view.timeline_view_renderer")
 local command_manager = require("core.command_manager")
 local timeline_state = require("ui.timeline.timeline_state")
@@ -58,10 +57,6 @@ timeline = {
     update = function() end
 }
 
-local function rational(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local edges = {
     {clip_id = clips.v1_left.id, edge_type = "out", track_id = tracks.v1.id, trim_type = "ripple"},
     {clip_id = clips.v2.id, edge_type = "in", track_id = tracks.v2.id, trim_type = "ripple"}
@@ -72,7 +67,7 @@ view.drag_state = {
     type = "edges",
     edges = edges,
     lead_edge = lead_edge,
-    delta_rational = rational(240)
+    delta_frames = 240
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, edges, {pad_frames = 200})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)

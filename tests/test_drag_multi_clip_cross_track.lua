@@ -29,8 +29,8 @@ local state = {
     end,
     get_clips = function()
         return {
-            {id = "c1", track_id = "v1", timeline_start = Rational.new(0,24,1), duration = Rational.new(48,24,1)},
-            {id = "c2", track_id = "v1", timeline_start = Rational.new(60,24,1), duration = Rational.new(48,24,1)},
+            {id = "c1", track_id = "v1", timeline_start = 0, duration = 48},
+            {id = "c2", track_id = "v1", timeline_start = 60, duration = 48},
         }
     end
 }
@@ -49,7 +49,7 @@ local drag_state = {
     },
     anchor_clip_id = "c1",
     delta_ms = 0,
-    delta_rational = Rational.new(0, 24, 1),
+    delta_frames = 0,
     current_y = 10,
     start_y = 0
 }

@@ -15,8 +15,6 @@
 -- @file go_to_end.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
-local sequence_frame_rate = require('core.utils.sequence_frame_rate')
-local Rational = require('core.rational')
 
 
 local SPEC = {
@@ -37,9 +35,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local clips = timeline_state.get_clips() or {}
-        
-        local fps_num, fps_den = sequence_frame_rate.require_sequence_frame_rate(timeline_state, "GoToEnd")
-        local max_end = Rational.new(0, fps_num, fps_den)
+        local max_end = 0
         
         for _, clip in ipairs(clips) do
             local start = clip.timeline_start

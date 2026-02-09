@@ -36,10 +36,10 @@ assert(result.success, "Gap closure should succeed")
 local left = Clip.load(clips.v1_left.id, db)
 local right = Clip.load(clips.v1_right.id, db)
 
-assert(left.timeline_start.frames == 0, "Upstream clip should stay anchored")
-assert(left.duration.frames == 1500, "Upstream clip duration unchanged")
-assert(right.timeline_start.frames == 1500,
-    string.format("Downstream clip should be adjacent; expected 1500, got %d", right.timeline_start.frames))
+assert(left.timeline_start == 0, "Upstream clip should stay anchored")
+assert(left.duration == 1500, "Upstream clip duration unchanged")
+assert(right.timeline_start == 1500,
+    string.format("Downstream clip should be adjacent; expected 1500, got %d", right.timeline_start))
 
 -- CRITICAL: Check that no temp gap clip exists with 0 or negative duration
 local stmt = db:prepare([[
@@ -51,8 +51,8 @@ local stmt = db:prepare([[
     ORDER BY timeline_start_frame
 ]])
 stmt:bind_value(1, tracks.v1.id)
-stmt:bind_value(2, left.timeline_start.frames + left.duration.frames)
-stmt:bind_value(3, right.timeline_start.frames)
+stmt:bind_value(2, left.timeline_start + left.duration)
+stmt:bind_value(3, right.timeline_start)
 
 local gap_exists = false
 if stmt:exec() then

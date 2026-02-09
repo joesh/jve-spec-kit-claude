@@ -120,25 +120,21 @@ function M.clip_update_payload(source, fallback_sequence_id)
         rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
     end
 
-    -- Helper to extract frame value from Rational or number
-    local function to_frames(val)
-        if type(val) == "table" and val.frames ~= nil then
-            return val.frames
-        elseif type(val) == "number" then
-            return val
-        end
-        return nil
-    end
+    -- All coords must be integers (no Rational backward-compat)
+    assert(type(source.timeline_start) == "number", string.format("clip_update_payload: timeline_start must be integer for clip %s", tostring(source.id)))
+    assert(type(source.duration) == "number", string.format("clip_update_payload: duration must be integer for clip %s", tostring(source.id)))
+    assert(type(source.source_in) == "number", string.format("clip_update_payload: source_in must be integer for clip %s", tostring(source.id)))
+    assert(type(source.source_out) == "number", string.format("clip_update_payload: source_out must be integer for clip %s", tostring(source.id)))
 
     -- Use _value suffix field names that apply_mutations expects
     return {
         clip_id = source.id,
         track_id = source.track_id,
         track_sequence_id = track_sequence_id,
-        start_value = to_frames(source.timeline_start),
-        duration_value = to_frames(source.duration),
-        source_in_value = to_frames(source.source_in),
-        source_out_value = to_frames(source.source_out),
+        start_value = source.timeline_start,
+        duration_value = source.duration,
+        source_in_value = source.source_in,
+        source_out_value = source.source_out,
         rate = rate,
         fps_numerator = rate and rate.fps_numerator or nil,
         fps_denominator = rate and rate.fps_denominator or nil,
@@ -926,9 +922,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     local preserve_strict_order = command and command.type == "BatchRippleEdit"
 
     local function val_frames(v, label)
-        if type(v) == "table" and v.frames then return v.frames end
-        if type(v) == "number" then return v end
-        error(string.format("undo %s: missing required %s frames", command and command.type or "update", label or "value"), 2)
+        assert(type(v) == "number", string.format("undo %s: %s must be integer, got %s", command and command.type or "update", label or "value", type(v)))
+        return v
     end
 
     local function require_rate(prev, context)
@@ -1238,34 +1233,22 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 local prev = mut.previous
                 if not prev then return 0 end
                 local ts = prev.timeline_start or prev.start_value
-                if type(ts) == "table" and ts.frames then return ts.frames end
-                if type(ts) == "number" then return ts end
-                return 0
+                assert(ts == nil or type(ts) == "number", string.format("undo AddClipsToSequence: timeline_start must be integer for clip %s", tostring(prev.id)))
+                return ts or 0
             end
             table.sort(updates, function(a, b)
                 return start_frames(a) < start_frames(b)  -- ascending order
             end)
         elseif command and command.type == "Nudge" then
-            local nudge = command.get_parameter and (command:get_parameter("nudge_amount_rat") or command:get_parameter("nudge_amount"))
-            local sign = 0
-            if type(nudge) == "table" and nudge.frames then
-                sign = (nudge.frames > 0) and 1 or ((nudge.frames < 0) and -1 or 0)
-            elseif type(nudge) == "number" then
-                sign = (nudge > 0) and 1 or ((nudge < 0) and -1 or 0)
-            end
+            local nudge = command.get_parameter and command:get_parameter("nudge_amount")
+            assert(type(nudge) == "number", "undo Nudge: nudge_amount must be integer")
+            local sign = (nudge > 0) and 1 or ((nudge < 0) and -1 or 0)
             local function start_frames(mut)
                 local prev = mut.previous
-                if not prev then
-                    error("undo update: mutation missing 'previous' state - incompatible command version", 2)
-                end
+                assert(prev, "undo Nudge: mutation missing 'previous' state")
                 local ts = prev.timeline_start or prev.start_value
-                if type(ts) == "table" and ts.frames then return ts.frames end
-                if type(ts) == "number" then return ts end
-                -- Likely an old mutation from before fps capture was added
-                error(string.format(
-                    "undo update: clip %s missing timeline_start frames - try deleting ~/Documents/JVE\\ Projects/Untitled\\ Project.jvp to reset command history",
-                    tostring(prev.id or "unknown")
-                ), 2)
+                assert(type(ts) == "number", string.format("undo Nudge: timeline_start must be integer for clip %s", tostring(prev.id)))
+                return ts
             end
             table.sort(updates, function(a, b)
                 local sa = start_frames(a)

@@ -45,13 +45,13 @@ do
 
     -- Verify cumulative effect
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 1500,
-        string.format("Should have cumulative effect (300+200=500 frames), got duration=%d", after.duration.frames))
+    assert(after.duration == 1500,
+        string.format("Should have cumulative effect (300+200=500 frames), got duration=%d", after.duration))
 
     -- Verify downstream clip shifted twice
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start.frames == 2500,
-        string.format("Right clip should shift by total (500 frames), got start=%d", after_right.timeline_start.frames))
+    assert(after_right.timeline_start == 2500,
+        string.format("Right clip should shift by total (500 frames), got start=%d", after_right.timeline_start))
 
     layout:cleanup()
 end
@@ -98,10 +98,10 @@ do
     -- V1 command shifted all downstream clips by 400, then V2 command shifted all by 300
     -- v1_right: 2000 + 400 + 300 = 2700
     -- v2_right: 2500 + 400 + 300 = 3200
-    assert(v1_after.timeline_start.frames == 2700,
-        string.format("V1 right should shift by both ripples (400+300=700), got %d", v1_after.timeline_start.frames))
-    assert(v2_after.timeline_start.frames == 3200,
-        string.format("V2 right should shift by both ripples (400+300=700), got %d", v2_after.timeline_start.frames))
+    assert(v1_after.timeline_start == 2700,
+        string.format("V1 right should shift by both ripples (400+300=700), got %d", v1_after.timeline_start))
+    assert(v2_after.timeline_start == 3200,
+        string.format("V2 right should shift by both ripples (400+300=700), got %d", v2_after.timeline_start))
 
     layout:cleanup()
 end
@@ -131,14 +131,14 @@ do
 
     -- Database should reflect a clamped trim (min duration = 1 frame)
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 1,
-        string.format("Clamped trim should stop at 1 frame, got duration=%d", after.duration.frames))
-    assert(after.timeline_start.frames == before.timeline_start.frames,
+    assert(after.duration == 1,
+        string.format("Clamped trim should stop at 1 frame, got duration=%d", after.duration))
+    assert(after.timeline_start == before.timeline_start,
         "Out-edge trim should not move timeline_start")
 
     local right_after = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(right_after.timeline_start.frames == before_right.timeline_start.frames - 9,
-        string.format("Downstream clip should ripple left by 9 frames, got %d", right_after.timeline_start.frames))
+    assert(right_after.timeline_start == before_right.timeline_start - 9,
+        string.format("Downstream clip should ripple left by 9 frames, got %d", right_after.timeline_start))
 
     layout:cleanup()
 end
@@ -176,8 +176,8 @@ do
 
     -- First command effect should remain
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 1300,
-        string.format("Should only undo second command (300 remains), got duration=%d", after.duration.frames))
+    assert(after.duration == 1300,
+        string.format("Should only undo second command (300 remains), got duration=%d", after.duration))
 
     layout:cleanup()
 end
@@ -211,19 +211,19 @@ do
     local middle = Clip.load(layout.clips.v1_middle.id, layout.db)
     local right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    local left_end = left.timeline_start.frames + left.duration.frames
-    local middle_end = middle.timeline_start.frames + middle.duration.frames
+    local left_end = left.timeline_start + left.duration
+    local middle_end = middle.timeline_start + middle.duration
 
-    assert(middle.timeline_start.frames >= left_end,
+    assert(middle.timeline_start >= left_end,
         string.format("Middle clip should not overlap left (left ends at %d, middle starts at %d)",
-            left_end, middle.timeline_start.frames))
-    assert(right.timeline_start.frames >= middle_end,
+            left_end, middle.timeline_start))
+    assert(right.timeline_start >= middle_end,
         string.format("Right clip should not overlap middle (middle ends at %d, right starts at %d)",
-            middle_end, right.timeline_start.frames))
+            middle_end, right.timeline_start))
 
     -- Middle should have grown by 5*50=250 frames
-    assert(middle.duration.frames == 750,
-        string.format("Middle clip should grow by 250 frames, got duration=%d", middle.duration.frames))
+    assert(middle.duration == 750,
+        string.format("Middle clip should grow by 250 frames, got duration=%d", middle.duration))
 
     layout:cleanup()
 end

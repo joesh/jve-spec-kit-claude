@@ -4,7 +4,6 @@ package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_state = require("ui.timeline.timeline_state")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -52,12 +51,8 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local function rational(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
-local gap_start = Rational.new(clips.v1_left.timeline_start + clips.v1_left.duration, 1000, 1)
-local gap_end = Rational.new(clips.v1_right.timeline_start, 1000, 1)
+local gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local gap_end = clips.v1_right.timeline_start
 
 local affected_rects = {}
 local original_timeline = _G.timeline
@@ -78,14 +73,14 @@ view.drag_state = {
     type = "edges",
     edges = {gap_edge},
     lead_edge = gap_edge,
-    delta_rational = rational(-200)
+    delta_frames = -200
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
 view.drag_state.preview_request_token = string.format("%s:%s@%d",
     gap_edge.clip_id,
     gap_edge.edge_type,
-    view.drag_state.delta_rational.frames)
+    view.drag_state.delta_frames)
 
 timeline_state.set_edge_selection({gap_edge})
 

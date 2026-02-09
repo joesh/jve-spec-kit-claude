@@ -61,12 +61,12 @@ assert(result.success, result.error_message or "BatchRippleEdit with upstream sh
 local clip_a = Clip.load("clip_a", db)
 local clip_b = Clip.load("clip_b", db)
 
-assert(clip_a.timeline_start.frames == 0,
-    string.format("Clip A start should stay anchored; expected 0, got %d", clip_a.timeline_start.frames))
-assert(clip_a.duration.frames == 2800,
-    string.format("Clip A duration should be reduced to 2800; got %d", clip_a.duration.frames))
-assert(clip_b.timeline_start.frames == 3300,
-    string.format("Clip B should shift upstream by 1200 to 3300; got %d", clip_b.timeline_start.frames))
+assert(clip_a.timeline_start == 0,
+    string.format("Clip A start should stay anchored; expected 0, got %d", clip_a.timeline_start))
+assert(clip_a.duration == 2800,
+    string.format("Clip A duration should be reduced to 2800; got %d", clip_a.duration))
+assert(clip_b.timeline_start == 3300,
+    string.format("Clip B should shift upstream by 1200 to 3300; got %d", clip_b.timeline_start))
 
 os.remove(DB_PATH)
 print("✅ Upstream ripple shrinks clip and shifts downstream clip without DB overlap")

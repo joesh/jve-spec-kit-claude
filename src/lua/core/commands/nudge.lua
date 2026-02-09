@@ -22,15 +22,11 @@ local frame_utils = require('core.frame_utils')
 
 
 local SPEC = {
-    requires_any = {
-        { "nudge_amount_rat", "nudge_amount" },
-    },
     args = {
         dry_run = { kind = "boolean" },
         fps_denominator = { kind = "number" },
         fps_numerator = { kind = "number" },
-        nudge_amount = { kind = "number" },
-        nudge_amount_rat = { kind = "any" },
+        nudge_amount = { kind = "number", required = true },
         nudge_axis = {},
         nudge_type = {},  -- Set by executor ("clip" or "edge")
         project_id = { required = true },
@@ -45,7 +41,6 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local Rational = require("core.rational") -- Ensure Rational is available
     local TIMELINE_CLIP_KIND = "timeline"
 
     local function record_occlusion_actions(command, sequence_id, actions)
@@ -76,45 +71,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             print("Executing Nudge command")
         end
 
-        local nudge_amount_rat = args.nudge_amount_rat
-        local nudge_amount_frames = args.nudge_amount -- Integer frames
-
-
-
-
-	        local function require_sequence_rate()
-	            local rate = timeline_state and timeline_state.get_sequence_frame_rate and timeline_state.get_sequence_frame_rate()
-	            if type(rate) == "number" and rate > 0 then
-	                return {fps_numerator = rate, fps_denominator = 1}
-	            end
-	            if type(rate) ~= "table" or not rate.fps_numerator or not rate.fps_denominator then
-	                error("Nudge: missing sequence frame rate", 2)
-	            end
-	            return rate
-	        end
-        
-        -- Strict Rational validation: callers must provide Rational (or Rational-shaped table) at the leaf
-        if type(nudge_amount_rat) == "number" then
-            error("Nudge: nudge_amount_rat must be a Rational object, not a number.")
-        end
-        if type(nudge_amount_rat) == "table" and nudge_amount_rat.frames and not getmetatable(nudge_amount_rat) then
-            local rate = require_sequence_rate()
-            local fps_num = nudge_amount_rat.fps_numerator or rate.fps_numerator
-            local fps_den = nudge_amount_rat.fps_denominator or rate.fps_denominator
-            nudge_amount_rat = Rational.new(nudge_amount_rat.frames, fps_num, fps_den)
-        end
-
-        -- Optional legacy frame integer fallback if provided alongside sequence rate
-        if (not nudge_amount_rat) and nudge_amount_frames then
-            local rate = require_sequence_rate()
-            local fps_num = rate.fps_numerator
-            local fps_den = rate.fps_denominator
-            nudge_amount_rat = Rational.new(nudge_amount_frames, fps_num, fps_den)
-        end
-
-        if not nudge_amount_rat or not nudge_amount_rat.frames then
-            error("Nudge: Invalid nudge_amount_rat (missing frames)")
-        end
+        -- Nudge amount must be integer frames
+        local nudge_frames = args.nudge_amount
+        assert(type(nudge_frames) == "number", "Nudge: nudge_amount must be integer frames")
 
         local nudge_type = "none"
         local updates_by_clip = {}
@@ -159,32 +118,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local function capture_updates_via_reload(default_sequence_id)
             if next(mutated_clip_ids) == nil then
-                return false
+                return true  -- Nothing to capture is success (not error)
             end
             local fallback_updates = {}
             local sequence_id = default_sequence_id
-            local mutated_count = 0
             for clip_id in pairs(mutated_clip_ids) do
-                mutated_count = mutated_count + 1
                 local clip = Clip.load_optional(clip_id)
-                if clip then
-                    local update_payload = command_helper.clip_update_payload(clip, sequence_id)
-                    if update_payload then
-                        sequence_id = sequence_id or update_payload.track_sequence_id
-                        table.insert(fallback_updates, update_payload)
-                    end
-                end
+                -- NSF: If we mutated a clip, it should still exist
+                assert(clip, string.format("Nudge.capture_updates_via_reload: mutated clip %s no longer exists", clip_id))
+                local update_payload = command_helper.clip_update_payload(clip, sequence_id)
+                assert(update_payload, string.format("Nudge.capture_updates_via_reload: clip_update_payload failed for clip %s", clip_id))
+                sequence_id = sequence_id or update_payload.track_sequence_id
+                table.insert(fallback_updates, update_payload)
             end
-            if mutated_count == 0 then
-                return false
-            end
-            if #fallback_updates == 0 then
-                return false
-            end
+            assert(#fallback_updates > 0, "Nudge.capture_updates_via_reload: no updates captured but mutated_clip_ids was non-empty")
             sequence_id = sequence_id or fallback_updates[1].track_sequence_id
-            if not sequence_id then
-                return false
-            end
+            assert(sequence_id, "Nudge.capture_updates_via_reload: could not resolve sequence_id from any update")
             command_helper.add_update_mutation(command, sequence_id, fallback_updates)
             return true
         end
@@ -247,49 +196,38 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             for _, edge_info in ipairs(args.selected_edges) do
                 local clip = Clip.load(edge_info.clip_id)
-
-                if not clip then
-                    print(string.format("WARNING: Nudge: Clip %s not found", edge_info.clip_id:sub(1,8)))
-                    goto continue
-                end
+                -- NSF: If user selected an edge, the clip MUST exist
+                assert(clip, string.format("Nudge: selected edge clip %s not found - selection is stale", edge_info.clip_id))
                 
                 register_original_state(clip)
-                
-                -- Ensure the clip's rate is valid for Rational calculations
-                local clip_fps_numerator = clip.rate.fps_numerator
-                local clip_fps_denominator = clip.rate.fps_denominator
-                if not clip_fps_numerator or clip_fps_numerator <= 0 then
-                    print(string.format("ERROR: Nudge: Clip %s has invalid rate for Rational math", clip.id:sub(1,8)))
-                    return false
-                end
 
                 if edge_info.edge_type == "in" or edge_info.edge_type == "gap_before" then
                     -- Nudge 'in' edge means moving it right (shortening) or left (lengthening)
-                    local new_timeline_start = clip.timeline_start + nudge_amount_rat
-                    local new_duration = clip.duration - nudge_amount_rat
-                    local new_source_in = clip.source_in + nudge_amount_rat
+                    local new_timeline_start = clip.timeline_start + nudge_frames
+                    local new_duration = clip.duration - nudge_frames
+                    local new_source_in = clip.source_in + nudge_frames
 
                     -- Clamp duration to minimum 1 frame
-                    if new_duration.frames < 1 then new_duration = Rational.new(1, clip_fps_numerator, clip_fps_denominator) end
-                    
+                    if new_duration < 1 then new_duration = 1 end
+
                     clip.timeline_start = new_timeline_start
                     clip.duration = new_duration
                     clip.source_in = new_source_in
 
                 elseif edge_info.edge_type == "out" or edge_info.edge_type == "gap_after" then
                     -- Nudge 'out' edge means moving it right (lengthening) or left (shortening)
-                    local new_duration = clip.duration + nudge_amount_rat
-                    
+                    local new_duration = clip.duration + nudge_frames
+
                     -- Clamp duration to minimum 1 frame
-                    if new_duration.frames < 1 then new_duration = Rational.new(1, clip_fps_numerator, clip_fps_denominator) end
+                    if new_duration < 1 then new_duration = 1 end
 
                     clip.duration = new_duration
                     clip.source_out = clip.source_in + new_duration
                 end
-                
-                -- Clamp timeline_start to 0 or greater (Rational(0))
-                if clip.timeline_start.frames < 0 then
-                    clip.timeline_start = Rational.new(0, clip_fps_numerator, clip_fps_denominator)
+
+                -- Clamp timeline_start to 0 or greater
+                if clip.timeline_start < 0 then
+                    clip.timeline_start = 0
                 end
 
                 if args.dry_run then
@@ -304,8 +242,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     table.insert(planned_mutations, clip_mutator.plan_update(clip, original_states_map[clip.id]))
                     register_update(clip)
                 end
-
-                ::continue::
             end
 
             if args.dry_run then
@@ -315,7 +251,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 }
             end
 
-            print(string.format("✅ Nudged %d edge(s) by %s", #args.selected_edges, tostring(nudge_amount_rat)))
+            print(string.format("✅ Nudged %d edge(s) by %d frames", #args.selected_edges, nudge_frames))
         elseif args.selected_clip_ids and #args.selected_clip_ids > 0 then
             nudge_type = "clips"
             local clips_to_move = {}
@@ -333,13 +269,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             for clip_id, _ in pairs(clips_to_move) do
                 local clip = Clip.load(clip_id)
-                if not clip then
-                    print(string.format("WARNING: Nudge: Clip %s not found", clip_id:sub(1,8)))
-                    clips_to_move[clip_id] = nil
-                    goto continue_collect_block
-                end
+                -- NSF: If user selected a clip, it MUST exist
+                assert(clip, string.format("Nudge: selected clip %s not found - selection is stale", clip_id))
 
                 if clip.clip_kind and clip.clip_kind ~= TIMELINE_CLIP_KIND then
+                    -- Non-timeline clips (e.g., source clips) - skip silently, this is valid filtering
                     clips_to_move[clip_id] = nil
                     goto continue_collect_block
                 end
@@ -347,17 +281,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 register_original_state(clip)
                 
                 -- Nudge clip
-                local new_start = clip.timeline_start + nudge_amount_rat
-                
+                local new_start = clip.timeline_start + nudge_frames
+
                 -- Clamp to 0
-                if new_start.frames < 0 then
-                    new_start = Rational.new(0, new_start.fps_numerator, new_start.fps_denominator)
+                if new_start < 0 then
+                    new_start = 0
                 end
 
-                if not (new_start == clip.timeline_start) then
+                if new_start ~= clip.timeline_start then
                     any_change = true
                 end
-                clip.__new_start = new_start -- Store Rational
+                clip.__new_start = new_start
                 mutated_clip_ids[clip.id] = true
                 neighbor_clip_ids[#neighbor_clip_ids + 1] = clip.id
                 table.insert(move_targets, clip)
@@ -367,11 +301,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     new_duration = clip.duration
                 })
 
-                local track_id = clip.track_id or clip.owner_sequence_id -- Assuming owner_sequence_id for track fallback
-                if not track_id then
-                    print(string.format("WARNING: Nudge: Clip %s missing track_id", clip.id or "unknown"))
-                    goto continue_collect_block
-                end
+                -- NSF: track_id is required for timeline clips - owner_sequence_id is NOT a valid fallback
+                local track_id = clip.track_id
+                assert(track_id, string.format("Nudge: clip %s missing track_id - invalid timeline clip state", clip.id))
                 local group = track_groups[track_id]
                 if not group then
                     group = {
@@ -389,7 +321,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local clip_end = clip.timeline_start + clip.duration
                 local new_end = new_start + clip.duration
 
-                -- Use Rational comparisons
                 if not group.before_min or clip.timeline_start < group.before_min then group.before_min = clip.timeline_start end
                 if not group.before_max or clip_end > group.before_max then group.before_max = clip_end end
 
@@ -419,7 +350,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     if group.after_max and group.after_min then
                         local block_duration = group.after_max - group.after_min
                         if group.before_max and group.before_min then
-                            block_duration = Rational.max(block_duration, group.before_max - group.before_min)
+                            block_duration = math.max(block_duration, group.before_max - group.before_min)
                         end
                         
                         local ok, err, actions = clip_mutator.resolve_occlusions(db, {
@@ -444,7 +375,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                 -- Apply moved clips in an order that avoids transient overlaps.
                 table.sort(move_targets, function(a, b)
-                    if nudge_amount_rat.frames >= 0 then
+                    if nudge_frames >= 0 then
                         return a.timeline_start > b.timeline_start -- move right: update rightmost first
                     else
                         return a.timeline_start < b.timeline_start -- move left: update leftmost first
@@ -459,7 +390,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
 
-            print(string.format("✅ Nudged %d clip(s) by %s", #args.selected_clip_ids, tostring(nudge_amount_rat)))
+            print(string.format("✅ Nudged %d clip(s) by %d frames", #args.selected_clip_ids, nudge_frames))
         else
             set_last_error("Nudge: Nothing selected")
             return false

@@ -49,7 +49,7 @@ local function setup_database(path)
 end
 
 -- Mock timeline_state to track playhead operations
-local playhead_position = Rational.new(0, 30, 1)
+local playhead_position = 0
 local original_timeline_state = nil
 local playhead_set_calls = {}  -- Track who sets playhead
 
@@ -131,7 +131,7 @@ print("=== Redo Playhead Position Regression Test ===")
 print("This test verifies playhead_value_post is captured and restored on redo\n")
 
 -- Initial state: playhead at frame 0
-playhead_position = Rational.new(0, 30, 1)
+playhead_position = 0
 playhead_set_calls = {}
 print(string.format("Initial playhead position: %s", tostring(playhead_position)))
 
@@ -140,10 +140,10 @@ local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("track_id", "v1")
 insert_cmd:set_parameter("media_id", "media1")
-insert_cmd:set_parameter("insert_time", Rational.new(0, 30, 1))
-insert_cmd:set_parameter("duration", Rational.new(100, 30, 1))
-insert_cmd:set_parameter("source_in", Rational.new(0, 30, 1))
-insert_cmd:set_parameter("source_out", Rational.new(100, 30, 1))
+insert_cmd:set_parameter("insert_time", 0)
+insert_cmd:set_parameter("duration", 100)
+insert_cmd:set_parameter("source_in", 0)
+insert_cmd:set_parameter("source_out", 100)
 insert_cmd:set_parameter("advance_playhead", true)
 
 print("\nStep 1: Execute Insert command (100 frames at position 0)...")

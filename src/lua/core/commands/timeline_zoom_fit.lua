@@ -6,7 +6,6 @@
 --
 -- @file timeline_zoom_fit.lua
 local M = {}
-local Rational = require('core.rational')
 
 -- Module-level toggle state (persists between calls for toggle behavior)
 local zoom_fit_toggle_state = nil
@@ -72,12 +71,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if timeline_state.get_playhead_position and timeline_state.set_viewport_start_time then
                 local playhead = timeline_state.get_playhead_position()
                 if playhead then
-                    local half_dur
-                    if type(restore_duration) == "table" and restore_duration.frames then
-                        half_dur = restore_duration / 2
-                    else
-                        half_dur = (restore_duration or 1000) / 2
-                    end
+                    local half_dur = math.floor((restore_duration or 30) / 2)
                     timeline_state.set_viewport_start_time(playhead - half_dur)
                 end
             end
@@ -103,10 +97,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local start_val = clip.timeline_start or clip.start_value
             local dur_val = clip.duration
 
-            if type(start_val) == "number" then start_val = Rational.from_seconds(start_val/1000.0) end
-            if type(dur_val) == "number" then dur_val = Rational.from_seconds(dur_val/1000.0) end
-
-            if start_val and dur_val then
+            -- Coordinates are now integers
+            if type(start_val) == "number" and type(dur_val) == "number" then
                 local end_val = start_val + dur_val
 
                 if not min_start or start_val < min_start then
@@ -129,7 +121,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         }
 
         local duration = max_end_time - min_start
-        local buffer = duration / 10
+        local buffer = math.floor(duration / 10)
         local fit_duration = duration + buffer
 
         if timeline_state.set_viewport_duration then
@@ -139,7 +131,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             timeline_state.set_viewport_start_time(min_start)
         end
 
-        print(string.format("🔍 Zoomed to fit: %s visible (buffered)", tostring(fit_duration)))
+        print(string.format("🔍 Zoomed to fit: %d frames visible (buffered)", fit_duration))
         return true
     end
 

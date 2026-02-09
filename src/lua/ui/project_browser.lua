@@ -1763,7 +1763,6 @@ end
 
 function M.add_selected_to_timeline(command_type, options)
     local this_func_label = "project_browser.add_selected_to_timeline"
-    local Rational = require("core.rational")
 
     -- UI: Gather user intent and selection
     assert(M.timeline_panel, this_func_label .. ": timeline panel not available")
@@ -1813,13 +1812,10 @@ function M.add_selected_to_timeline(command_type, options)
         if svs_ok and source_viewer_state
             and source_viewer_state.current_clip_id == clip.clip_id
             and source_viewer_state.mark_in ~= nil and source_viewer_state.mark_out ~= nil then
-            local fps_num = (clip.rate and clip.rate.fps_numerator) or (media and media.frame_rate and media.frame_rate.fps_numerator)
-            local fps_den = (clip.rate and clip.rate.fps_denominator) or (media and media.frame_rate and media.frame_rate.fps_denominator)
-            assert(fps_num, "add_selected_to_timeline: clip/media missing fps_numerator")
-            assert(fps_den, "add_selected_to_timeline: clip/media missing fps_denominator")
-            source_in_mark = Rational.new(source_viewer_state.mark_in, fps_num, fps_den)
-            source_out_mark = Rational.new(source_viewer_state.mark_out, fps_num, fps_den)
-            duration_mark = Rational.new(source_viewer_state.mark_out - source_viewer_state.mark_in, fps_num, fps_den)
+            -- mark_in/mark_out are integer frames
+            source_in_mark = source_viewer_state.mark_in
+            source_out_mark = source_viewer_state.mark_out
+            duration_mark = source_viewer_state.mark_out - source_viewer_state.mark_in
             marks_applied = true
         end
 
@@ -1882,21 +1878,23 @@ function M.add_selected_to_timeline(command_type, options)
             if i == 1 and svs_ok and source_viewer_state
                 and source_viewer_state.current_clip_id == clip.clip_id
                 and source_viewer_state.mark_in ~= nil and source_viewer_state.mark_out ~= nil then
-                source_in = Rational.new(source_viewer_state.mark_in, media_fps_num, media_fps_den)
-                source_out = Rational.new(source_viewer_state.mark_out, media_fps_num, media_fps_den)
-                duration = Rational.new(source_viewer_state.mark_out - source_viewer_state.mark_in, media_fps_num, media_fps_den)
+                -- mark_in/mark_out are integer frames
+                source_in = source_viewer_state.mark_in
+                source_out = source_viewer_state.mark_out
+                duration = source_viewer_state.mark_out - source_viewer_state.mark_in
             else
                 -- Use clip's existing source in/out or full media duration
+                -- All coords are integer frames
                 if clip.source_in and clip.source_out and clip.duration then
                     source_in = clip.source_in
                     source_out = clip.source_out
                     duration = clip.duration
                 else
-                    local media_dur_frames = media.duration and media.duration.frames or media.duration_frames
-                    assert(media_dur_frames, this_func_label .. ": media missing duration")
-                    source_in = Rational.new(0, media_fps_num, media_fps_den)
-                    source_out = Rational.new(media_dur_frames, media_fps_num, media_fps_den)
-                    duration = Rational.new(media_dur_frames, media_fps_num, media_fps_den)
+                    local media_dur_frames = media.duration
+                    assert(type(media_dur_frames) == "number", this_func_label .. ": media.duration must be integer")
+                    source_in = 0
+                    source_out = media_dur_frames
+                    duration = media_dur_frames
                 end
             end
 

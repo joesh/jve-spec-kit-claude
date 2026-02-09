@@ -14,7 +14,6 @@ local M = {}
 local Clip = require('models.clip')
 local Media = require('models.media')
 local Track = require('models.track')
-local Rational = require('core.rational')
 local rational_helpers = require('core.command_rational_helpers')
 local clip_edit_helper = require('core.clip_edit_helper')
 local logger = require('core.logger')
@@ -114,19 +113,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Load media for duration and audio channel info
         local media = Media.load(media_id)
 
-        -- Resolve timing parameters
-        local timing, timing_err = clip_edit_helper.resolve_timing(
-            args, master_clip, media,
-            seq_fps_num, seq_fps_den,
-            media_fps_num, media_fps_den
-        )
+        -- Resolve timing parameters (all integers)
+        local timing, timing_err = clip_edit_helper.resolve_timing(args, master_clip, media)
         if not timing then
             set_last_error("Insert: " .. timing_err)
             return false, "Insert: " .. timing_err
         end
 
-        -- Get insert time as Rational
-        local insert_time_rat = rational_helpers.require_rational_in_rate(insert_time, seq_fps_num, seq_fps_den, "insert_time")
+        -- insert_time must be integer
+        assert(insert_time == nil or type(insert_time) == "number", "Insert: insert_time must be integer")
 
         -- Resolve clip name
         local clip_name = clip_edit_helper.resolve_clip_name(args, master_clip, media)
@@ -144,9 +139,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             master_clip_id = master_clip_id,
             project_id = project_id,
             name = clip_name,
-            source_in = timing.source_in_rat,
-            source_out = timing.source_out_rat,
-            duration = timing.duration_rat,
+            source_in = timing.source_in,
+            source_out = timing.source_out,
+            duration = timing.duration,
             fps_numerator = media_fps_num,
             fps_denominator = media_fps_den,
             target_track_id = track_id,
@@ -165,9 +160,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     master_clip_id = master_clip_id,
                     project_id = project_id,
                     name = clip_name .. " (Audio)",
-                    source_in = timing.source_in_rat,
-                    source_out = timing.source_out_rat,
-                    duration = timing.duration_rat,
+                    source_in = timing.source_in,
+                    source_out = timing.source_out,
+                    duration = timing.duration,
                     fps_numerator = media_fps_num,
                     fps_denominator = media_fps_den,
                     target_track_id = audio_track.id,
@@ -179,7 +174,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local groups = {
             {
                 clips = clips,
-                duration = timing.duration_rat,
+                duration = timing.duration,
                 master_clip_id = master_clip_id,
             }
         }
@@ -193,7 +188,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Execute AddClipsToSequence (will be automatically grouped with parent command)
         local result, nested_cmd = command_manager.execute("AddClipsToSequence", {
             groups = groups,
-            position = insert_time_rat,
+            position = insert_time,
             sequence_id = sequence_id,
             project_id = project_id,
             edit_type = "insert",
@@ -225,7 +220,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        logger.debug("insert", string.format("Inserted clip at %s", tostring(insert_time_rat)))
+        logger.debug("insert", string.format("Inserted clip at frame %d", insert_time or 0))
         return true
     end
 

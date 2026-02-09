@@ -7,7 +7,6 @@ require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_go_to_next_prev_edit.db"
 os.remove(TEST_DB)
@@ -41,10 +40,10 @@ db:exec([[
 
 -- Mock timeline_state
 local timeline_state = {
-    playhead_position = Rational.new(50, 30, 1),  -- Start in middle of clip_a
+    playhead_position = 50,  -- Start in middle of clip_a
     clips = {
-        {id = 'clip_a', timeline_start = Rational.new(0, 30, 1), duration = Rational.new(100, 30, 1)},
-        {id = 'clip_b', timeline_start = Rational.new(200, 30, 1), duration = Rational.new(150, 30, 1)},
+        {id = 'clip_a', timeline_start = 0, duration = 100},
+        {id = 'clip_b', timeline_start = 200, duration = 150},
     },
 }
 
@@ -69,101 +68,101 @@ print("=== GoToNextEdit / GoToPrevEdit Tests ===")
 
 -- Test 1: GoToNextEdit from middle of clip_a moves to end of clip_a (frame 100)
 print("Test 1: GoToNextEdit from middle of clip_a")
-timeline_state.playhead_position = Rational.new(50, 30, 1)
+timeline_state.playhead_position = 50
 local result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success, "GoToNextEdit should succeed: " .. tostring(result.error_message))
-assert(timeline_state.playhead_position.frames == 100,
-    string.format("GoToNextEdit should move to frame 100, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 100,
+    string.format("GoToNextEdit should move to frame 100, got %d", timeline_state.playhead_position))
 
 -- Test 2: GoToNextEdit from frame 100 (end of clip_a) moves to frame 200 (start of clip_b)
 print("Test 2: GoToNextEdit from end of clip_a")
-timeline_state.playhead_position = Rational.new(100, 30, 1)
+timeline_state.playhead_position = 100
 result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success, "GoToNextEdit should succeed")
-assert(timeline_state.playhead_position.frames == 200,
-    string.format("GoToNextEdit should move to frame 200, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 200,
+    string.format("GoToNextEdit should move to frame 200, got %d", timeline_state.playhead_position))
 
 -- Test 3: GoToNextEdit from frame 200 moves to frame 350 (end of clip_b)
 print("Test 3: GoToNextEdit from start of clip_b")
-timeline_state.playhead_position = Rational.new(200, 30, 1)
+timeline_state.playhead_position = 200
 result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success, "GoToNextEdit should succeed")
-assert(timeline_state.playhead_position.frames == 350,
-    string.format("GoToNextEdit should move to frame 350, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 350,
+    string.format("GoToNextEdit should move to frame 350, got %d", timeline_state.playhead_position))
 
 -- Test 4: GoToNextEdit at end of timeline stays at end
 print("Test 4: GoToNextEdit at end of timeline")
-timeline_state.playhead_position = Rational.new(350, 30, 1)
+timeline_state.playhead_position = 350
 result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success, "GoToNextEdit should succeed at end")
-assert(timeline_state.playhead_position.frames == 350,
-    string.format("GoToNextEdit should stay at frame 350, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 350,
+    string.format("GoToNextEdit should stay at frame 350, got %d", timeline_state.playhead_position))
 
 -- Test 5: GoToPrevEdit from middle of clip_b moves to frame 200
 print("Test 5: GoToPrevEdit from middle of clip_b")
-timeline_state.playhead_position = Rational.new(300, 30, 1)
+timeline_state.playhead_position = 300
 result = command_manager.execute("GoToPrevEdit", { project_id = "default_project" })
 assert(result.success, "GoToPrevEdit should succeed: " .. tostring(result.error_message))
-assert(timeline_state.playhead_position.frames == 200,
-    string.format("GoToPrevEdit should move to frame 200, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 200,
+    string.format("GoToPrevEdit should move to frame 200, got %d", timeline_state.playhead_position))
 
 -- Test 6: GoToPrevEdit from frame 200 moves to frame 100
 print("Test 6: GoToPrevEdit from start of clip_b")
-timeline_state.playhead_position = Rational.new(200, 30, 1)
+timeline_state.playhead_position = 200
 result = command_manager.execute("GoToPrevEdit", { project_id = "default_project" })
 assert(result.success, "GoToPrevEdit should succeed")
-assert(timeline_state.playhead_position.frames == 100,
-    string.format("GoToPrevEdit should move to frame 100, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 100,
+    string.format("GoToPrevEdit should move to frame 100, got %d", timeline_state.playhead_position))
 
 -- Test 7: GoToPrevEdit from frame 100 moves to frame 0
 print("Test 7: GoToPrevEdit from end of clip_a")
-timeline_state.playhead_position = Rational.new(100, 30, 1)
+timeline_state.playhead_position = 100
 result = command_manager.execute("GoToPrevEdit", { project_id = "default_project" })
 assert(result.success, "GoToPrevEdit should succeed")
-assert(timeline_state.playhead_position.frames == 0,
-    string.format("GoToPrevEdit should move to frame 0, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 0,
+    string.format("GoToPrevEdit should move to frame 0, got %d", timeline_state.playhead_position))
 
 -- Test 8: GoToPrevEdit at start of timeline stays at start
 print("Test 8: GoToPrevEdit at start of timeline")
-timeline_state.playhead_position = Rational.new(0, 30, 1)
+timeline_state.playhead_position = 0
 result = command_manager.execute("GoToPrevEdit", { project_id = "default_project" })
 assert(result.success, "GoToPrevEdit should succeed at start")
-assert(timeline_state.playhead_position.frames == 0,
-    string.format("GoToPrevEdit should stay at frame 0, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 0,
+    string.format("GoToPrevEdit should stay at frame 0, got %d", timeline_state.playhead_position))
 
 -- Test 9: Navigation in gap (between clips) still finds correct edit points
 print("Test 9: GoToNextEdit from gap")
-timeline_state.playhead_position = Rational.new(150, 30, 1)  -- In gap between clips
+timeline_state.playhead_position = 150  -- In gap between clips
 result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success, "GoToNextEdit should succeed from gap")
-assert(timeline_state.playhead_position.frames == 200,
-    string.format("GoToNextEdit from gap should move to frame 200, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 200,
+    string.format("GoToNextEdit from gap should move to frame 200, got %d", timeline_state.playhead_position))
 
 -- Test 10: GoToPrevEdit from gap
 print("Test 10: GoToPrevEdit from gap")
-timeline_state.playhead_position = Rational.new(150, 30, 1)  -- In gap
+timeline_state.playhead_position = 150  -- In gap
 result = command_manager.execute("GoToPrevEdit", { project_id = "default_project" })
 assert(result.success, "GoToPrevEdit should succeed from gap")
-assert(timeline_state.playhead_position.frames == 100,
-    string.format("GoToPrevEdit from gap should move to frame 100, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 100,
+    string.format("GoToPrevEdit from gap should move to frame 100, got %d", timeline_state.playhead_position))
 
 -- Test 11: Round-trip navigation
 print("Test 11: Next/Prev round-trip")
-timeline_state.playhead_position = Rational.new(50, 30, 1)
+timeline_state.playhead_position = 50
 command_manager.execute("GoToNextEdit", { project_id = "default_project" })  -- -> 100
 command_manager.execute("GoToPrevEdit", { project_id = "default_project" })  -- -> 0 (not 50, goes to previous edit)
-assert(timeline_state.playhead_position.frames == 0,
-    string.format("Round-trip should end at frame 0, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 0,
+    string.format("Round-trip should end at frame 0, got %d", timeline_state.playhead_position))
 
 -- Test 12: Empty timeline - navigation from any position stays at 0
 print("Test 12: Navigation on empty timeline")
 local saved_clips = timeline_state.clips
 timeline_state.clips = {}
-timeline_state.playhead_position = Rational.new(100, 30, 1)
+timeline_state.playhead_position = 100
 result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success, "GoToNextEdit should succeed on empty timeline")
-assert(timeline_state.playhead_position.frames == 100,
-    string.format("GoToNextEdit on empty timeline should stay at current position, got %d", timeline_state.playhead_position.frames))
+assert(timeline_state.playhead_position == 100,
+    string.format("GoToNextEdit on empty timeline should stay at current position, got %d", timeline_state.playhead_position))
 timeline_state.clips = saved_clips
 
 print("✅ GoToNextEdit/GoToPrevEdit tests passed")

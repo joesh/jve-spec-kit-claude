@@ -4,7 +4,6 @@ local import_schema = require("import_schema")
 local database = require("core.database")
 local timeline_state = require("ui.timeline.timeline_state")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
-local Rational = require("core.rational")
 
 local function with_db(fn)
     local db_path = "/tmp/jve/test_zoom_fit_toggle.db"
@@ -59,8 +58,9 @@ with_db(function(db)
     reload_state()
 
     -- Start from a non-zero viewport so toggle has something to restore
-    timeline_state.set_viewport_start_time(Rational.new(1000, 24, 1))
-    timeline_state.set_viewport_duration(Rational.new(4000, 24, 1))
+    -- All coords are integer frames
+    timeline_state.set_viewport_start_time(1000)
+    timeline_state.set_viewport_duration(4000)
     local initial = capture_view()
 
     local ok1 = keyboard_shortcuts.handle_command("TimelineZoomFit")

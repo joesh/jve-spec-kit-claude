@@ -28,9 +28,9 @@ local function binary_search_first_start_on_or_after(track_clips, target_frames)
         local mid = math.floor((lo + hi) / 2)
         local clip = track_clips[mid]
         assert(clip, "timeline_active_region: nil clip in binary search at index " .. tostring(mid))
-        assert(clip.timeline_start and clip.timeline_start.frames ~= nil,
-            "timeline_active_region: clip missing timeline_start.frames in binary search (id=" .. tostring(clip.id) .. ")")
-        local start_frames = clip.timeline_start.frames
+        assert(type(clip.timeline_start) == "number",
+            "timeline_active_region: clip missing integer timeline_start in binary search (id=" .. tostring(clip.id) .. ")")
+        local start_frames = clip.timeline_start
         if start_frames >= target_frames then
             ans = mid
             hi = mid - 1
@@ -42,24 +42,26 @@ local function binary_search_first_start_on_or_after(track_clips, target_frames)
 end
 
 local function clip_start_frames(clip)
-    return clip and clip.timeline_start and clip.timeline_start.frames or nil
+    if not clip or type(clip.timeline_start) ~= "number" then
+        return nil
+    end
+    return clip.timeline_start
 end
 
 local function clip_end_frames(clip)
     local start_frames = clip_start_frames(clip)
-    local dur_frames = clip and clip.duration and clip.duration.frames or nil
-    if not start_frames or not dur_frames then
+    if not start_frames or type(clip.duration) ~= "number" then
         return nil
     end
-    return start_frames + dur_frames
+    return start_frames + clip.duration
 end
 
 local function edge_point_frames(edge, clip)
-    if not clip or not clip.timeline_start or not clip.duration then
+    if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
         return nil
     end
-    local start_frames = clip.timeline_start.frames
-    local end_frames = start_frames + clip.duration.frames
+    local start_frames = clip.timeline_start
+    local end_frames = start_frames + clip.duration
     local edge_type = edge and edge.edge_type
     if edge_type == "in" or edge_type == "gap_before" then
         return start_frames
@@ -121,10 +123,11 @@ function M.compute_for_edge_drag(state_module, edges, opts)
         local clip = state_module.get_clip_by_id and state_module.get_clip_by_id(edge.clip_id) or nil
         assert(clip, "TimelineActiveRegion.compute_for_edge_drag: missing clip for edge " .. tostring(edge.clip_id))
         assert(clip.track_id, "TimelineActiveRegion.compute_for_edge_drag: clip missing track_id " .. tostring(edge.clip_id))
-        assert(clip.timeline_start and clip.duration, "TimelineActiveRegion.compute_for_edge_drag: clip missing time fields " .. tostring(edge.clip_id))
+        assert(type(clip.timeline_start) == "number" and type(clip.duration) == "number",
+            "TimelineActiveRegion.compute_for_edge_drag: clip missing integer time fields " .. tostring(edge.clip_id))
 
-        local clip_start = clip.timeline_start.frames
-        local clip_end = clip_start + clip.duration.frames
+        local clip_start = clip.timeline_start
+        local clip_end = clip_start + clip.duration
         local point = edge_point_frames(edge, clip)
 
         min_frames = min_frames and math.min(min_frames, clip_start) or clip_start
@@ -222,8 +225,8 @@ function M.build_snapshot_for_region(state_module, region)
                 local first_index_after_end = nil
                 for i = idx, #track_clips do
                     local clip = track_clips[i]
-                    local cs = clip and clip.timeline_start and clip.timeline_start.frames or nil
-                    local cd = clip and clip.duration and clip.duration.frames or nil
+                    local cs = type(clip.timeline_start) == "number" and clip.timeline_start or nil
+                    local cd = type(clip.duration) == "number" and clip.duration or nil
                     if not cs or not cd then
                         goto continue_clip
                     end
@@ -255,8 +258,8 @@ function M.build_snapshot_for_region(state_module, region)
 
     for track_id, list in pairs(track_clip_map) do
         table.sort(list, function(a, b)
-            local a_start = (a.timeline_start and a.timeline_start.frames) or 0
-            local b_start = (b.timeline_start and b.timeline_start.frames) or 0
+            local a_start = type(a.timeline_start) == "number" and a.timeline_start or 0
+            local b_start = type(b.timeline_start) == "number" and b.timeline_start or 0
             if a_start == b_start then
                 return (a.id or "") < (b.id or "")
             end

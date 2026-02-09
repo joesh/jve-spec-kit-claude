@@ -44,7 +44,6 @@ db:exec(string.format([[
 
 -- Stub timeline_state with valid defaults
 local timeline_state = require("ui.timeline.timeline_state")
-local Rational = require("core.rational")
 
 timeline_state.capture_viewport = function()
     return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 1000}
@@ -75,18 +74,18 @@ end, {
     args = { project_id = { required = true } },
 })
 
--- ─── Test 1: Valid playhead (Rational) → command saves OK ───
-print("\n--- valid Rational playhead → save succeeds ---")
+-- ─── Test 1: Valid integer playhead → command saves OK ───
+print("\n--- valid integer playhead → save succeeds ---")
 do
     timeline_state.get_playhead_position = function()
-        return Rational.new(10, 24000, 1001)
+        return 10  -- plain integer frames
     end
     timeline_state.get_sequence_frame_rate = function()
         return {fps_numerator = 24000, fps_denominator = 1001}
     end
 
     local result = command_manager.execute("TestStub", {project_id = "proj1"})
-    check("valid Rational playhead → success", result.success == true)
+    check("valid integer playhead → success", result.success == true)
 end
 
 -- ─── Test 2: Valid numeric playhead → command saves OK ───
@@ -137,11 +136,11 @@ do
     check("error mentions rate", err and tostring(err):find("rate") ~= nil)
 end
 
--- ─── Test 5: Rational with nil frames field → early assert ───
-print("\n--- Rational missing .frames → assert at capture ---")
+-- ─── Test 5: Invalid table playhead (not a number) → early assert ───
+print("\n--- invalid table playhead → assert at capture ---")
 do
     timeline_state.get_playhead_position = function()
-        return {fps_numerator = 24000, fps_denominator = 1001}  -- table but no .frames
+        return {fps_numerator = 24000, fps_denominator = 1001}  -- table, not integer
     end
     timeline_state.get_sequence_frame_rate = function()
         return {fps_numerator = 24000, fps_denominator = 1001}
@@ -151,7 +150,7 @@ do
         command_manager.execute("TestStub", {project_id = "proj1"})
     end)
     rollback_leaked_tx()
-    check("Rational missing frames → error raised", not ok)
+    check("invalid table playhead → error raised", not ok)
     check("error mentions playhead", err and tostring(err):find("playhead") ~= nil)
 end
 

@@ -101,10 +101,10 @@ local overwrite_cmd = Command.create("Overwrite", "default_project")
 overwrite_cmd:set_parameter("sequence_id", "seq1")
 overwrite_cmd:set_parameter("track_id", "v1")
 overwrite_cmd:set_parameter("media_id", "media1")
-overwrite_cmd:set_parameter("overwrite_time", Rational.new(100, 30, 1))  -- Start at frame 100
-overwrite_cmd:set_parameter("duration", Rational.new(50, 30, 1))         -- 50 frames
-overwrite_cmd:set_parameter("source_in", Rational.new(500, 30, 1))       -- Different source range
-overwrite_cmd:set_parameter("source_out", Rational.new(550, 30, 1))
+overwrite_cmd:set_parameter("overwrite_time", 100)  -- Start at frame 100
+overwrite_cmd:set_parameter("duration", 50)         -- 50 frames
+overwrite_cmd:set_parameter("source_in", 500)       -- Different source range
+overwrite_cmd:set_parameter("source_out", 550)
 
 print("Step 1: Execute overwrite that trims existing clip...")
 local result = execute_command(overwrite_cmd)

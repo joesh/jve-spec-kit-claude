@@ -101,15 +101,15 @@ assert(left ~= nil, "Left clip missing after ripple")
 assert(right ~= nil, "Right clip missing after ripple")
 
 -- Temp gap ensures the clip stays anchored in time with identical media bounds.
-assert(left.timeline_start.frames == 0, string.format("Left clip moved to %d", left.timeline_start.frames))
-assert(left.source_in.frames == 0, "Left clip source_in should remain anchored")
-assert(left.source_out.frames == 240, "Left clip duration should not change when closing downstream gap")
-assert(left.duration.frames == 240, "Closing downstream gap must not trim the upstream clip media")
+assert(left.timeline_start == 0, string.format("Left clip moved to %d", left.timeline_start))
+assert(left.source_in == 0, "Left clip source_in should remain anchored")
+assert(left.source_out == 240, "Left clip duration should not change when closing downstream gap")
+assert(left.duration == 240, "Closing downstream gap must not trim the upstream clip media")
 
 -- Downstream clip should shift upstream by the delta but keep its media range.
-assert(right.timeline_start.frames == 600,
-    string.format("Right clip should shift upstream to 600, got %d", right.timeline_start.frames))
-assert(right.source_in.frames == 0 and right.source_out.frames == 240,
+assert(right.timeline_start == 600,
+    string.format("Right clip should shift upstream to 600, got %d", right.timeline_start))
+assert(right.source_in == 0 and right.source_out == 240,
     "Right clip media bounds should stay fixed while the gap closes")
 
 -- Reset to original state and verify dragging the downstream gap handle LEFT (negative delta)
@@ -128,9 +128,9 @@ assert(ok_grow, "BatchRippleEdit gap-before positive delta failed to execute")
 
 local left_after = Clip.load("clip_left", db)
 local right_after = Clip.load("clip_right", db)
-assert(left_after.timeline_start.frames == 0, "Left clip should remain anchored when dragging gap handle right")
-assert(right_after.timeline_start.frames == 600,
-    string.format("Dragging gap handle left should close the gap; expected right clip at 600, got %d", right_after.timeline_start.frames))
+assert(left_after.timeline_start == 0, "Left clip should remain anchored when dragging gap handle right")
+assert(right_after.timeline_start == 600,
+    string.format("Dragging gap handle left should close the gap; expected right clip at 600, got %d", right_after.timeline_start))
 
 os.remove(DB)
 print("✅ BatchRippleEdit materializes gap edges and keeps upstream media untouched")

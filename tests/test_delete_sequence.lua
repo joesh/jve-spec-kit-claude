@@ -12,7 +12,6 @@ local Media = require('models.media')
 local Sequence = require('models.sequence')
 local Track = require('models.track')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 local asserts = require('core.asserts')
 
 -- Mock Qt timer
@@ -94,10 +93,10 @@ local function create_test_sequence(id, name)
         project_id = "project",
         track_id = track.id,
         owner_sequence_id = id,
-        timeline_start = Rational.new(0, 30, 1),
-        duration = Rational.new(100, 30, 1),
-        source_in = Rational.new(0, 30, 1),
-        source_out = Rational.new(100, 30, 1),
+        timeline_start = 0,
+        duration = 100,
+        source_in = 0,
+        source_out = 100,
         enabled = true,
         fps_numerator = 30,
         fps_denominator = 1
@@ -266,10 +265,10 @@ for i = 1, 3 do
             project_id = "project",
             track_id = "multi_track_" .. i,
             owner_sequence_id = "multi_seq",
-            timeline_start = Rational.new((j-1) * 100, 30, 1),
-            duration = Rational.new(100, 30, 1),
-            source_in = Rational.new(0, 30, 1),
-            source_out = Rational.new(100, 30, 1),
+            timeline_start = (j-1) * 100,
+            duration = 100,
+            source_in = 0,
+            source_out = 100,
             enabled = true,
             fps_numerator = 30,
             fps_denominator = 1

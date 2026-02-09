@@ -35,6 +35,8 @@ end
 function timeline_state.capture_viewport()
     return {start_value = 0, duration_value = 400, timebase_type = "video_frames", timebase_rate = 30.0}
 end
+function timeline_state.get_viewport_start_time() return 0 end  -- integer frames
+function timeline_state.get_viewport_duration() return 400 end  -- integer frames
 function timeline_state.push_viewport_guard() end
 function timeline_state.pop_viewport_guard() end
 function timeline_state.restore_viewport(_) end

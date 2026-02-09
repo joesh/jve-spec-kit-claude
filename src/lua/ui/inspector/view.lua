@@ -513,11 +513,9 @@ local function create_inspector_field(section, field, field_widgets)
     local text_value = ""
     if value ~= nil then
       if self.field_type == FIELD_TYPES.TIMECODE then
-        if type(value) == "number" or (type(value) == "table" and value.frames) then
-          text_value = format_timecode(value, current_frame_rate())
-        else
-          text_value = tostring(value)
-        end
+        -- All coords are integer frames
+        assert(type(value) == "number", "inspector view: timecode value must be integer")
+        text_value = format_timecode(value, current_frame_rate())
       else
         text_value = tostring(value)
       end

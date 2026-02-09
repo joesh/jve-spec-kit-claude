@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_state = require("ui.timeline.timeline_state")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -65,7 +64,7 @@ end
 local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
 
 local function build_shift_payload(shift_frames, clamp_map)
-    local new_start = v2_clip.timeline_start + Rational.new(shift_frames, v2_clip.timeline_start.fps_numerator, v2_clip.timeline_start.fps_denominator)
+    local new_start = v2_clip.timeline_start + shift_frames
     local lead_bracket = edge_utils.to_bracket(gap_edge.edge_type)
     local global_sign = sign(-200)
     local shift_sign = sign(shift_frames)
@@ -133,7 +132,7 @@ local function render_with_payload(payload, clamped_ms)
         type = "edges",
         edges = {gap_edge},
         lead_edge = gap_edge,
-        delta_rational = Rational.new(-200, 1000, 1)
+        delta_frames = -200
     }
     view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 200})
     view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -186,7 +185,7 @@ assert(preview_payload and preview_payload.edge_preview and type(preview_payload
     "Stub payload should expose edge_preview.edges for implied edge rendering")
 local implied_meta = preview_payload.edge_preview.edges
 local expected_bracket = edge_utils.to_bracket(gap_edge.edge_type)
-local global_sign = sign(view.drag_state.delta_rational.frames)
+local global_sign = sign(view.drag_state.delta_frames)
 local shift_sign = sign(shift_frames)
 if shift_sign ~= 0 and global_sign ~= 0 and shift_sign ~= global_sign then
     expected_bracket = (expected_bracket == "in") and "out" or "in"

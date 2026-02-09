@@ -14,7 +14,6 @@
 --
 -- @file media.lua
 local uuid = require("uuid")
-local Rational = require("core.rational")
 local logger = require("core.logger")
 
 local M = {}
@@ -61,17 +60,18 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         num, den = rate_from_float(tonumber(fps_input))
     end
     
-    local dur_rational
-    if type(dur_input) == "table" and dur_input.frames then
-        dur_rational = dur_input
-    elseif dur_frames_input then
-        -- If duration_frames provided, treat as frames
-        local frames = assert(tonumber(dur_frames_input), "Media.create: duration_frames must be a number, got " .. tostring(dur_frames_input))
-        dur_rational = Rational.new(frames, num, den)
-    else
-        local dur_ms = assert(tonumber(dur_input), "Media.create: duration must be a number, got " .. tostring(dur_input))
+    local dur_frames
+    if dur_frames_input then
+        -- If duration_frames provided, use directly (integer)
+        dur_frames = assert(tonumber(dur_frames_input), "Media.create: duration_frames must be a number, got " .. tostring(dur_frames_input))
+    elseif dur_input then
+        -- Milliseconds -> frames (I/O boundary conversion)
+        assert(type(dur_input) == "number", "Media.create: duration must be integer ms, got " .. type(dur_input))
+        local dur_ms = dur_input
         local seconds = dur_ms / 1000.0
-        dur_rational = Rational.from_seconds(seconds, num, den)
+        dur_frames = math.floor(seconds * num / den + 0.5)
+    else
+        dur_frames = 0 -- Unknown duration (audio-only, still image)
     end
 
     local media = {
@@ -79,7 +79,7 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         project_id = params.project_id,
         file_path = file_path,
         name = name,
-        duration = dur_rational,
+        duration = dur_frames,  -- integer frames
         frame_rate = { fps_numerator = num, fps_denominator = den },
         width = tonumber(params.width) or 0, -- NSF-OK: 0 = unknown dimension (audio-only media has no width)
         height = tonumber(params.height) or 0, -- NSF-OK: 0 = unknown dimension
@@ -129,7 +129,7 @@ function M.load(media_id)
         project_id = query:value(1),
         name = query:value(2),
         file_path = query:value(3),
-        duration = Rational.new(frames, num, den),
+        duration = frames,  -- integer frames
         frame_rate = { fps_numerator = num, fps_denominator = den },
         width = tonumber(query:value(7)) or 0, -- NSF-OK: 0 = unknown dimension
         height = tonumber(query:value(8)) or 0, -- NSF-OK: 0 = unknown dimension
@@ -155,17 +155,9 @@ function M:save()
         return false
     end
 
-    -- Correctly handle duration (Rational)
-    local dur_frames
-    if type(self.duration) == "table" and self.duration.frames then
-        dur_frames = self.duration.frames
-    elseif type(self.duration) == "number" then
-        dur_frames = self.duration
-    elseif type(self.duration_frames) == "number" then
-        dur_frames = self.duration_frames
-    else
-        error("Media:save: duration is required for media " .. tostring(self.id))
-    end
+    -- Duration is now an integer
+    assert(type(self.duration) == "number", "Media:save: duration must be integer for media " .. tostring(self.id))
+    local dur_frames = self.duration
 
     -- Handle Rate
     local num = (self.frame_rate and self.frame_rate.fps_numerator) or self.fps_numerator

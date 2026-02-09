@@ -17,7 +17,6 @@ local M = {}
 local database = require("core.database")
 local Clip = require("models.clip")
 local command_helper = require("core.command_helper")
-local Rational = require("core.rational")
 
 
 local SPEC = {
@@ -51,9 +50,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local new_clip_id = args.new_clip_id
 
         local clip_name = args.name or args.clip_snapshot.name or "Master Clip Copy"
-        local timeline_start = Rational.new(args.clip_snapshot.start_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
 
-        local source_in_value = args.clip_snapshot.source_in_value
+        -- All coordinates are integer frames
+        local timeline_start = args.clip_snapshot.start_value or 0
+        local source_in_value = args.clip_snapshot.source_in_value or 0
         local source_out_value = args.clip_snapshot.source_out_value
         local duration_value = args.clip_snapshot.duration_value
         if duration_value == nil and source_out_value ~= nil then
@@ -61,19 +61,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         assert(duration_value, "DuplicateMasterClip: missing duration_value (no duration_value and no source_out_value)")
 
-        local duration = Rational.new(duration_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
-        local source_in = Rational.new(source_in_value, args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
-        local source_out = Rational.new(source_out_value or (source_in_value + duration_value), args.clip_snapshot.fps_numerator, args.clip_snapshot.fps_denominator)
-
         local clip_opts = {
             id = new_clip_id,
             project_id = project_id,
             clip_kind = "master",
             source_sequence_id = args.clip_snapshot.source_sequence_id,
             timeline_start = timeline_start,
-            duration = duration,
-            source_in = source_in,
-            source_out = source_out,
+            duration = duration_value,
+            source_in = source_in_value,
+            source_out = source_out_value or (source_in_value + duration_value),
             fps_numerator = args.clip_snapshot.fps_numerator,
             fps_denominator = args.clip_snapshot.fps_denominator,
             enabled = args.clip_snapshot.enabled ~= false,

@@ -36,26 +36,6 @@ end
 
 local M = {}
 
--- Rational serialization helpers for JSON compatibility
--- Rational objects have metatables that don't serialize, so convert to plain tables
-local function serialize_rational(rational_obj)
-    if not rational_obj then return nil end
-
-    -- Rational objects have: frames, fps_numerator, fps_denominator
-    return {
-        frames = rational_obj.frames,
-        num = rational_obj.fps_numerator,
-        den = rational_obj.fps_denominator
-    }
-end
-
-local function deserialize_rational(table_obj)
-    if not table_obj or not table_obj.frames then return nil end
-
-    local Rational = require("core.rational")
-    return Rational.new(table_obj.frames, table_obj.num, table_obj.den)
-end
-
 local function get_active_sequence_rate()
     local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
     if not sequence_id or sequence_id == "" then
@@ -125,9 +105,9 @@ local function copy_timeline_selection()
     for _, raw in ipairs(selected) do
         local clip = resolve_clip_entry(raw)
         if clip and clip.id and clip.track_id and clip.timeline_start then
-            
-            local start_frame = clip.timeline_start.frames
-            
+            assert(type(clip.timeline_start) == "number", "clipboard_actions: clip.timeline_start must be integer")
+            local start_frame = clip.timeline_start
+
             if clip.media_id == nil and clip.parent_clip_id == nil then
                 goto continue
             end
@@ -136,22 +116,25 @@ local function copy_timeline_selection()
 
             assert(clip.rate and clip.rate.fps_numerator and clip.rate.fps_denominator,
                 "clipboard_actions.copy_timeline_selection: clip " .. tostring(clip.id) .. " missing rate metadata")
+            assert(type(clip.duration) == "number", "clipboard_actions: clip.duration must be integer")
+            assert(type(clip.source_in) == "number", "clipboard_actions: clip.source_in must be integer")
+            assert(type(clip.source_out) == "number", "clipboard_actions: clip.source_out must be integer")
             clip_payloads[#clip_payloads + 1] = {
                 original_id = clip.id,
                 track_id = clip.track_id,
                 media_id = clip.media_id,
-                        fps_numerator = clip.rate.fps_numerator,
-                        fps_denominator = clip.rate.fps_denominator,
+                fps_numerator = clip.rate.fps_numerator,
+                fps_denominator = clip.rate.fps_denominator,
                 parent_clip_id = clip.parent_clip_id,
                 source_sequence_id = clip.source_sequence_id,
                 owner_sequence_id = clip.owner_sequence_id,
                 clip_kind = clip.clip_kind,
 
-                -- Serialize Rational objects to plain tables for JSON
-                timeline_start = serialize_rational(clip.timeline_start),
-                duration = serialize_rational(clip.duration),
-                source_in = serialize_rational(clip.source_in),
-                source_out = serialize_rational(clip.source_out),
+                -- All coords are integers
+                timeline_start = clip.timeline_start,
+                duration = clip.duration,
+                source_in = clip.source_in,
+                source_out = clip.source_out,
 
                 name = clip.name,
                 offline = clip.offline,
@@ -166,16 +149,15 @@ local function copy_timeline_selection()
     end
 
     if earliest_start_frame == math.huge then
-        assert(clip_payloads[1].timeline_start and clip_payloads[1].timeline_start.frames,
-            "clipboard_actions: first clip missing timeline_start.frames")
-        earliest_start_frame = clip_payloads[1].timeline_start.frames
+        assert(type(clip_payloads[1].timeline_start) == "number",
+            "clipboard_actions: first clip timeline_start must be integer")
+        earliest_start_frame = clip_payloads[1].timeline_start
     end
 
     for _, entry in ipairs(clip_payloads) do
-        assert(entry.timeline_start and entry.timeline_start.frames ~= nil,
-            "clipboard_actions: clip missing timeline_start.frames for offset calculation")
-        local entry_start_frame = entry.timeline_start.frames
-        entry.offset_frames = entry_start_frame - earliest_start_frame
+        assert(type(entry.timeline_start) == "number",
+            "clipboard_actions: clip timeline_start must be integer for offset calculation")
+        entry.offset_frames = entry.timeline_start - earliest_start_frame
     end
 
     local payload = {
@@ -209,7 +191,6 @@ local function paste_timeline(payload)
     local project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil
     assert(project_id and project_id ~= "", "clipboard_actions.paste_timeline: missing active project_id")
 
-    local Rational = require("core.rational")
     assert(timeline_state.get_playhead_position, "clipboard_actions.paste_timeline: timeline_state missing get_playhead_position")
     local playhead_ms = timeline_state.get_playhead_position()
     assert(playhead_ms ~= nil, "clipboard_actions.paste_timeline: playhead position is nil")
@@ -239,23 +220,16 @@ local function paste_timeline(payload)
             local track = assert(track_lookup[clip_data.track_id], "clipboard_actions.paste_timeline: missing track for clip")
             local track_type = assert(track.track_type, "clipboard_actions.paste_timeline: missing track type")
 
-            -- Deserialize Rational objects from JSON tables
-            local timeline_start = assert(deserialize_rational(clip_data.timeline_start), "clipboard_actions.paste_timeline: missing timeline_start")
-            local duration = assert(deserialize_rational(clip_data.duration), "clipboard_actions.paste_timeline: missing duration")
-            local source_in = assert(deserialize_rational(clip_data.source_in), "clipboard_actions.paste_timeline: missing source_in")
-            local source_out = assert(deserialize_rational(clip_data.source_out), "clipboard_actions.paste_timeline: missing source_out")
+            -- All coords are integers
+            assert(type(clip_data.timeline_start) == "number", "clipboard_actions.paste_timeline: timeline_start must be integer")
+            assert(type(clip_data.duration) == "number", "clipboard_actions.paste_timeline: duration must be integer")
+            assert(type(clip_data.source_in) == "number", "clipboard_actions.paste_timeline: source_in must be integer")
+            assert(type(clip_data.source_out) == "number", "clipboard_actions.paste_timeline: source_out must be integer")
 
             -- Calculate offset from reference point
             assert(clip_data.offset_frames ~= nil, "clipboard_actions.paste_timeline: clip missing offset_frames")
             local offset_frames = clip_data.offset_frames
             local paste_start_frame = playhead_frames + offset_frames
-
-            -- Create new Rational at paste position (preserving original clip's frame rate)
-            local overwrite_time = Rational.new(
-                paste_start_frame,
-                timeline_start.fps_numerator,
-                timeline_start.fps_denominator
-            )
 
             -- Clipboard clips are single video OR audio clips (not linked pairs)
             -- Paste directly using Overwrite command
@@ -268,10 +242,10 @@ local function paste_timeline(payload)
             cmd:set_parameters({
                 sequence_id = active_sequence_id,
                 track_id = track.id,
-                overwrite_time = overwrite_time,
-                duration = duration,
-                source_in = source_in,
-                source_out = source_out,
+                overwrite_time = paste_start_frame,
+                duration = clip_data.duration,
+                source_in = clip_data.source_in,
+                source_out = clip_data.source_out,
                 project_id = project_id,
                 clip_id = clip_id,
             })

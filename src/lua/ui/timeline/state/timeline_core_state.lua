@@ -67,14 +67,14 @@ local function resolve_gap_clip_id(edge)
     local track_id, start_frames, end_frames = parse_temp_gap_identifier(edge.clip_id)
     if not track_id then return nil end
     for _, clip in ipairs(data.state.clips or {}) do
-        if clip.track_id == track_id and clip.timeline_start and clip.duration then
+        if clip.track_id == track_id and type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
             if edge.edge_type == "gap_after" then
                 local clip_end = clip.timeline_start + clip.duration
-                if clip_end.frames == start_frames then
+                if clip_end == start_frames then
                     return clip.id
                 end
             elseif edge.edge_type == "gap_before" then
-                if clip.timeline_start.frames == end_frames then
+                if clip.timeline_start == end_frames then
                     return clip.id
                 end
             end

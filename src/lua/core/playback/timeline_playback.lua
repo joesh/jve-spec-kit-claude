@@ -87,8 +87,7 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
         "timeline_playback.resolve_and_display: fps must be set")
     assert(sequence_id, "timeline_playback.resolve_and_display: sequence_id required")
 
-    local playhead_rat = helpers.frame_to_rational(frame_idx, fps_num, fps_den)
-    local resolved = timeline_resolver.resolve_at_time(playhead_rat, sequence_id)
+    local resolved = timeline_resolver.resolve_at_time(frame_idx, sequence_id)
 
     if resolved then
         -- Check if clip changed - need to switch source

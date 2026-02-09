@@ -37,12 +37,12 @@ local v1_left = Clip.load(clips.v1_left.id, db)
 local v1_right = Clip.load(clips.v1_right.id, db)
 local v2 = Clip.load(clips.v2.id, db)
 
-local gap_size = v1_right.timeline_start.frames - (v1_left.timeline_start.frames + v1_left.duration.frames)
+local gap_size = v1_right.timeline_start - (v1_left.timeline_start + v1_left.duration)
 assert(gap_size == 1000, string.format("Gap should close to 1000 frames, got %d", gap_size))
-assert(v1_right.timeline_start.frames == 2200,
-    string.format("V1 right clip should shift left to 2200, got %d", v1_right.timeline_start.frames))
-assert(v2.duration.frames == 600,
-    string.format("V2 duration should trim to 600, got %d", v2.duration.frames))
+assert(v1_right.timeline_start == 2200,
+    string.format("V1 right clip should shift left to 2200, got %d", v1_right.timeline_start))
+assert(v2.duration == 600,
+    string.format("V2 duration should trim to 600, got %d", v2.duration))
 print("✅ Edge drag opposing handles close the intervening gap")
 
 layout:cleanup()

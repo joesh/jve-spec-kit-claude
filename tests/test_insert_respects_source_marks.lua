@@ -19,7 +19,6 @@ end
 
 print("\n=== B6: Insert respects source viewer marks ===")
 
-local Rational = require("core.rational")
 local Command = require("command")
 
 -- Stub dependencies
@@ -65,7 +64,7 @@ package.loaded["core.focus_manager"] = {
 local mock_timeline_state = {
     get_sequence_id = function() return "seq1" end,
     get_project_id = function() return "proj1" end,
-    get_playhead_position = function() return Rational.new(0, 24, 1) end,
+    get_playhead_position = function() return 0 end,
 }
 
 -- Mock timeline_panel
@@ -85,10 +84,10 @@ local master_clip = {
     project_id = "proj1",
     name = "TestMedia",
     media_id = "media_1",
-    source_in = Rational.new(0, 24, 1),
-    source_out = Rational.new(100, 24, 1),
-    duration = Rational.new(100, 24, 1),
-    timeline_start = Rational.new(0, 24, 1),
+    source_in = 0,
+    source_out = 100,
+    duration = 100,
+    timeline_start = 0,
     rate = {fps_numerator = 24, fps_denominator = 1},
     media = {
         id = "media_1",
@@ -150,8 +149,8 @@ do
 
     local orig_si = master_clip.source_in
     local orig_so = master_clip.source_out
-    check("master_clip.source_in unchanged (0)", orig_si.frames == 0)
-    check("master_clip.source_out unchanged (100)", orig_so.frames == 100)
+    check("master_clip.source_in unchanged (0)", orig_si == 0)
+    check("master_clip.source_out unchanged (100)", orig_so == 100)
 end
 
 -- ─── Test 4: Different clip in viewer → uses original range ───

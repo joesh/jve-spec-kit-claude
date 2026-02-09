@@ -9,7 +9,6 @@ require('test_env')
 local database = require('core.database')
 local timeline_state = require('ui.timeline.timeline_state')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_timeline_viewport_persistence.db"
 os.remove(TEST_DB)
@@ -38,12 +37,12 @@ command_manager.init('default_sequence', 'default_project')
 
 local start_before = timeline_state.get_viewport_start_time()
 local dur_before = timeline_state.get_viewport_duration()
-assert(start_before.frames == 0, "initial viewport start should be 0")
-assert(dur_before.frames == 240, "initial viewport duration should be 240")
+assert(start_before == 0, "initial viewport start should be 0")
+assert(dur_before == 240, "initial viewport duration should be 240")
 
 -- Change zoom window and persist
-local new_start = Rational.new(120, 24, 1)
-local new_dur = Rational.new(600, 24, 1)
+local new_start = 120
+local new_dur = 600
 timeline_state.set_viewport_duration(new_dur)
 timeline_state.set_viewport_start_time(new_start)
 timeline_state.persist_state_to_db(true)
@@ -55,10 +54,10 @@ assert(timeline_state.init('default_sequence'))
 local start_after = timeline_state.get_viewport_start_time()
 local dur_after = timeline_state.get_viewport_duration()
 
-assert(start_after.frames == new_start.frames and start_after.fps_numerator == 24 and start_after.fps_denominator == 1,
-    string.format("restored viewport start mismatch (expected %d, got %s)", new_start.frames, tostring(start_after.frames)))
-assert(dur_after.frames == new_dur.frames and dur_after.fps_numerator == 24 and dur_after.fps_denominator == 1,
-    string.format("restored viewport duration mismatch (expected %d, got %s)", new_dur.frames, tostring(dur_after.frames)))
+assert(start_after == new_start,
+    string.format("restored viewport start mismatch (expected %d, got %s)", new_start, tostring(start_after)))
+assert(dur_after == new_dur,
+    string.format("restored viewport duration mismatch (expected %d, got %s)", new_dur, tostring(dur_after)))
 
 os.remove(TEST_DB)
 print("✅ Timeline viewport start/duration persisted across restart")

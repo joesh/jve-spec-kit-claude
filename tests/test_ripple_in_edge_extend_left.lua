@@ -35,12 +35,12 @@ local updated = Clip.load(clips.v1_right.id, layout.db)
 local expected_start = clips.v1_right.timeline_start
 local expected_duration = clips.v1_right.duration - delta -- subtracting a negative grows length
 
-assert(updated.timeline_start.frames == expected_start,
+assert(updated.timeline_start == expected_start,
     string.format("Ripple should keep clip start anchored; expected %d, got %d",
-        expected_start, updated.timeline_start.frames))
-assert(updated.duration.frames == expected_duration,
+        expected_start, updated.timeline_start))
+assert(updated.duration == expected_duration,
     string.format("Dragging [ left should extend clip duration by -delta; expected %d, got %d",
-        expected_duration, updated.duration.frames))
+        expected_duration, updated.duration))
 
 layout:cleanup()
 print("✅ In-edge ripple extends the clip when dragging [ left")

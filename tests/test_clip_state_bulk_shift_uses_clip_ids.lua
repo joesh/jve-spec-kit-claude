@@ -21,8 +21,8 @@ local function clip(id, start_frames)
     return {
         id = id,
         track_id = "v1",
-        timeline_start = Rational.new(start_frames, 25, 1),
-        duration = Rational.new(10, 25, 1),
+        timeline_start = start_frames,
+        duration = 10,
         enabled = true,
     }
 end
@@ -49,10 +49,10 @@ local mutations = {
 
 clip_state.apply_mutations(mutations)
 
-assert(clip_state.get_by_id("clip_a").timeline_start.frames == 0, "bulk_shift should not move clip_a")
-assert(clip_state.get_by_id("clip_b").timeline_start.frames == 900, "bulk_shift should move clip_b")
-assert(clip_state.get_by_id("clip_c").timeline_start.frames == 1900, "bulk_shift should move clip_c")
-assert(clip_state.get_by_id("clip_d").timeline_start.frames == 3000, "bulk_shift must respect clip_ids and not move clip_d")
+assert(clip_state.get_by_id("clip_a").timeline_start == 0, "bulk_shift should not move clip_a")
+assert(clip_state.get_by_id("clip_b").timeline_start == 900, "bulk_shift should move clip_b")
+assert(clip_state.get_by_id("clip_c").timeline_start == 1900, "bulk_shift should move clip_c")
+assert(clip_state.get_by_id("clip_d").timeline_start == 3000, "bulk_shift must respect clip_ids and not move clip_d")
 
 local undo = {
     bulk_shifts = {
@@ -67,10 +67,10 @@ local undo = {
 
 clip_state.apply_mutations(undo)
 
-assert(clip_state.get_by_id("clip_a").timeline_start.frames == 0, "undo should restore clip_a")
-assert(clip_state.get_by_id("clip_b").timeline_start.frames == 1000, "undo should restore clip_b")
-assert(clip_state.get_by_id("clip_c").timeline_start.frames == 2000, "undo should restore clip_c")
-assert(clip_state.get_by_id("clip_d").timeline_start.frames == 3000, "undo should not move clip_d")
+assert(clip_state.get_by_id("clip_a").timeline_start == 0, "undo should restore clip_a")
+assert(clip_state.get_by_id("clip_b").timeline_start == 1000, "undo should restore clip_b")
+assert(clip_state.get_by_id("clip_c").timeline_start == 2000, "undo should restore clip_c")
+assert(clip_state.get_by_id("clip_d").timeline_start == 3000, "undo should not move clip_d")
 
 print("✅ clip_state bulk_shift honors clip_ids")
 

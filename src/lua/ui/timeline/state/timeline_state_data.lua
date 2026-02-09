@@ -17,7 +17,6 @@
 -- Timeline State Data
 -- Holds the central state table and notification system
 local M = {}
-local Rational = require("core.rational")
 local ui_constants = require("core.ui_constants")
 
 -- State listeners
@@ -47,12 +46,12 @@ local function fresh_state()
         sequence_audio_rate = 48000,
         sequence_timecode_start_frame = 0,
 
-        -- Viewport (Rational)
-        viewport_start_time = Rational.new(0, 1, 1),
-        viewport_duration = Rational.new(300, 1, 1),
+        -- Viewport (integer frames)
+        viewport_start_time = 0,
+        viewport_duration = 300,
 
-        -- Playhead (Rational)
-        playhead_position = Rational.new(0, 1, 1),
+        -- Playhead (integer frame)
+        playhead_position = 0,
 
         -- Selection
         selected_clips = {},

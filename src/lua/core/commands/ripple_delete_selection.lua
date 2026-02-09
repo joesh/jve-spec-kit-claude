@@ -17,7 +17,6 @@ local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local timeline_state = require('ui.timeline.timeline_state')
-local Rational = require("core.rational")
 local logger = require("core.logger")
 
 
@@ -172,22 +171,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local window_start = nil
         local window_end = nil
         local function clip_start_frames(clip)
-            if clip.timeline_start and clip.timeline_start.frames ~= nil then
-                return tonumber(clip.timeline_start.frames)
-            end
-            if clip.start_value ~= nil then
-                return tonumber(clip.start_value)
-            end
-            error("FATAL: RippleDeleteSelection: clip missing timeline_start")
+            assert(type(clip.timeline_start) == "number", "FATAL: RippleDeleteSelection: clip.timeline_start must be integer")
+            return clip.timeline_start
         end
         local function clip_duration_frames(clip)
-            if clip.duration and clip.duration.frames ~= nil then
-                return tonumber(clip.duration.frames)
-            end
-            if clip.duration ~= nil then
-                return tonumber(clip.duration)
-            end
-            error("FATAL: RippleDeleteSelection: clip missing duration")
+            assert(type(clip.duration) == "number", "FATAL: RippleDeleteSelection: clip.duration must be integer")
+            return clip.duration
         end
 
         for _, clip_id in ipairs(clip_ids) do
@@ -314,14 +303,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     while seg_index <= #segments do
                         local seg = segments[seg_index]
                         local seg_end_val = seg.end_time
-                        
-                        if type(seg_end_val) == "table" and seg_end_val.frames then
-                            seg_end_val = seg_end_val.frames
-                        end
-                        
+                        assert(type(seg_end_val) == "number", "FATAL: RippleDeleteSelection: seg.end_time must be integer")
+
                         if seg_end_val <= original_start then
-                            local dur = seg.duration or 0
-                            if type(dur) == "table" and dur.frames then dur = dur.frames end
+                            local dur = seg.duration
+                            assert(type(dur) == "number", "FATAL: RippleDeleteSelection: seg.duration must be integer")
                             cumulative_removed = cumulative_removed + dur
                             seg_index = seg_index + 1
                         else
@@ -337,7 +323,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                                 return false, string.format("ERROR: RippleDeleteSelection: computed negative new_start for %s", tostring(shifted_id))
                             end
 
-                            shift_clip.timeline_start = Rational.new(new_start_frames, sequence_fps_num, sequence_fps_den)
+                            shift_clip.timeline_start = new_start_frames
                             if shift_clip:save({skip_occlusion = true}) then
                                 table.insert(shifted_clips, {
                                     clip_id = shifted_id,
@@ -457,7 +443,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, info in ipairs(shifted_clips) do
             local clip = Clip.load_optional(info.clip_id)
             if clip and info.original_start then
-                clip.timeline_start = Rational.new(info.original_start, sequence_fps_num, sequence_fps_den)
+                clip.timeline_start = info.original_start
                 if not clip:save({skip_occlusion = true}) then
                     logger.warn("ripple_delete_selection", string.format("Undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
                     failed = true
@@ -473,12 +459,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, state in ipairs(deleted_states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
-                if restored.timeline_start and restored.timeline_start.frames ~= nil then
-                    restored.timeline_start = Rational.new(tonumber(restored.timeline_start.frames), sequence_fps_num, sequence_fps_den)
-                end
-                if restored.duration and restored.duration.frames ~= nil then
-                    restored.duration = Rational.new(tonumber(restored.duration.frames), sequence_fps_num, sequence_fps_den)
-                end
+                -- All coords must be integers
+                assert(type(restored.timeline_start) == "number", "FATAL: UndoRippleDeleteSelection: restored.timeline_start must be integer")
+                assert(type(restored.duration) == "number", "FATAL: UndoRippleDeleteSelection: restored.duration must be integer")
+                assert(type(restored.source_in) == "number", "FATAL: UndoRippleDeleteSelection: restored.source_in must be integer")
+                assert(type(restored.source_out) == "number", "FATAL: UndoRippleDeleteSelection: restored.source_out must be integer")
 
                 local ok = restored:save({skip_occlusion = true})
                 if not ok then

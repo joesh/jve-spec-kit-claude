@@ -59,10 +59,10 @@ split_clip.register(executors, undoers, nil, function() end)
 -- Set up: original clip exists, second clip does NOT
 clip_store["clip_orig"] = {
     id = "clip_orig",
-    timeline_start = Rational.new(10, 24, 1),
-    duration = Rational.new(20, 24, 1),  -- post-split: shortened
-    source_in = Rational.new(0, 24, 1),
-    source_out = Rational.new(20, 24, 1),
+    timeline_start = 10,
+    duration = 20,  -- post-split: shortened
+    source_in = 0,
+    source_out = 20,
 }
 -- second clip is MISSING (already deleted)
 
@@ -72,10 +72,10 @@ cmd:set_parameters({
     clip_id = "clip_orig",
     second_clip_id = "clip_second",
     sequence_id = "seq1",
-    original_timeline_start = Rational.new(0, 24, 1),
-    original_duration = Rational.new(50, 24, 1),
-    original_source_in = Rational.new(0, 24, 1),
-    original_source_out = Rational.new(50, 24, 1),
+    original_timeline_start = 0,
+    original_duration = 50,
+    original_source_in = 0,
+    original_source_out = 50,
 })
 
 -- Undo split: should succeed even though second clip is absent
@@ -86,11 +86,11 @@ assert(result == true,
 -- Verify original clip restored to pre-split dimensions
 local restored = clip_store["clip_orig"]
 assert(restored, "Original clip should still exist")
-assert(restored.duration.frames == 50,
+assert(restored.duration == 50,
     string.format("Original duration should be 50, got %s",
-        tostring(restored.duration.frames)))
-assert(restored.timeline_start.frames == 0,
+        tostring(restored.duration)))
+assert(restored.timeline_start == 0,
     string.format("Original timeline_start should be 0, got %s",
-        tostring(restored.timeline_start.frames)))
+        tostring(restored.timeline_start)))
 
 print("✅ test_split_undo_missing_second_clip.lua passed")

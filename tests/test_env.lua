@@ -191,4 +191,61 @@ function M.mock_command_manager()
     return mock, executed
 end
 
+--------------------------------------------------------------------------------
+-- Error Path Testing Helpers (NSF compliance)
+--------------------------------------------------------------------------------
+
+--- Test that a function raises an error.
+-- @param fn Function to call (should error)
+-- @param pattern Optional pattern the error message must match
+-- @return The error message (for further inspection if needed)
+-- @usage expect_error(function() module.func(nil) end, "missing required")
+function M.expect_error(fn, pattern)
+    local ok, err = pcall(fn)
+    if ok then
+        error("expect_error: function did not raise an error", 2)
+    end
+    if pattern then
+        local err_str = tostring(err)
+        if not err_str:match(pattern) then
+            error(string.format(
+                "expect_error: error message did not match pattern\n  pattern: %s\n  got: %s",
+                pattern, err_str), 2)
+        end
+    end
+    return err
+end
+
+--- Assert a value is of expected type with context.
+-- @param val Value to check
+-- @param expected_type Expected type string ("number", "string", "table", etc.)
+-- @param context Description for error message
+-- @usage assert_type(clip.timeline_start, "number", "clip.timeline_start")
+function M.assert_type(val, expected_type, context)
+    local actual = type(val)
+    if actual ~= expected_type then
+        error(string.format(
+            "assert_type: %s expected %s, got %s (%s)",
+            context or "value", expected_type, actual, tostring(val)), 2)
+    end
+    return val
+end
+
+--- Execute raw SQL for test setup (bypasses normal validation).
+-- Use this to inject corrupt data for testing error paths.
+-- For INSERT/UPDATE, use db:exec() with string interpolation.
+-- @param db Database connection
+-- @param sql SQL to execute (use %q for string values that need quoting)
+-- @param ... Values to substitute via string.format
+-- @return true on success, raises on error
+-- @usage raw_sql(db, "INSERT INTO t VALUES (%q, %d)", "text", 123)
+function M.raw_sql(db, sql, ...)
+    local formatted = string.format(sql, ...)
+    local result = db:exec(formatted)
+    if not result then
+        error("raw_sql: exec failed: " .. formatted, 2)
+    end
+    return true
+end
+
 return M

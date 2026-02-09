@@ -13,13 +13,9 @@
 -- Volatility: unknown
 --
 -- @file command_rational_helpers.lua
--- Original intent (unreviewed):
--- - Command Rational Helpers
--- Shared utilities for commands that work with Rational time values and sequence/media frame rates.
--- Extracted from insert.lua and overwrite.lua to eliminate code duplication.
--- Uses assertions for fail-fast debugging during development.
+-- FPS metadata query helpers for commands.
+-- All coordinates are integers now - these just fetch fps_numerator/fps_denominator for clip metadata.
 local M = {}
-local Rational = require("core.rational")
 
 --- Query sequence frame rate from database
 -- @param db Database connection
@@ -78,55 +74,6 @@ function M.require_master_clip_rate(master_clip)
 
     assert(fps_num and fps_den, "require_master_clip_rate: master clip missing fps metadata")
     return fps_num, fps_den
-end
-
---- Hydrate and rescale a value to specified frame rate (required value)
--- @param value Rational|table|number Value to convert
--- @param fps_num number Target fps numerator
--- @param fps_den number Target fps denominator
--- @param label string Optional label for error messages
--- @return Rational Hydrated and rescaled rational
-function M.require_rational_in_rate(value, fps_num, fps_den, label)
-    assert(fps_num and fps_num > 0, "require_rational_in_rate: invalid fps numerator: " .. tostring(fps_num))
-    assert(fps_den and fps_den > 0, "require_rational_in_rate: invalid fps denominator: " .. tostring(fps_den))
-
-    local hydrated = Rational.hydrate(value, fps_num, fps_den)
-    assert(hydrated, "require_rational_in_rate: missing " .. tostring(label or "time") .. " value")
-
-    if hydrated.fps_numerator ~= fps_num or hydrated.fps_denominator ~= fps_den then
-        local rescaled = hydrated:rescale(fps_num, fps_den)
-        assert(rescaled, "require_rational_in_rate: failed to rescale " .. tostring(label or "time") .. " to target frame rate")
-        return rescaled
-    end
-
-    return hydrated
-end
-
---- Hydrate and rescale a value to specified frame rate (optional value)
--- @param value Rational|table|number|nil Value to convert
--- @param fps_num number Target fps numerator
--- @param fps_den number Target fps denominator
--- @return Rational|nil Hydrated and rescaled rational, or nil if input was nil
-function M.optional_rational_in_rate(value, fps_num, fps_den)
-    if not value then
-        return nil
-    end
-
-    assert(fps_num and fps_num > 0, "optional_rational_in_rate: invalid fps numerator: " .. tostring(fps_num))
-    assert(fps_den and fps_den > 0, "optional_rational_in_rate: invalid fps denominator: " .. tostring(fps_den))
-
-    local hydrated = Rational.hydrate(value, fps_num, fps_den)
-    if not hydrated then
-        return nil
-    end
-
-    if hydrated.fps_numerator ~= fps_num or hydrated.fps_denominator ~= fps_den then
-        local rescaled = hydrated:rescale(fps_num, fps_den)
-        assert(rescaled, "optional_rational_in_rate: failed to rescale optional value to target frame rate")
-        return rescaled
-    end
-
-    return hydrated
 end
 
 return M

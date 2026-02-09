@@ -33,7 +33,7 @@ local result = command_manager.execute(cmd)
 assert(result.success, result.error_message or "BatchRippleEdit mixed gap selection failed")
 
 local target_clip = Clip.load(clips.v2.id, db)
-assert(target_clip.duration.frames == 600, string.format("Expected V2 clip to shrink by 200 frames, got %s", tostring(target_clip.duration.frames)))
+assert(target_clip.duration == 600, string.format("Expected V2 clip to shrink by 200 frames, got %s", tostring(target_clip.duration)))
 
 layout:cleanup()
 print("✅ BatchRippleEdit shrinks the dragged clip even when a gap edge is also selected")

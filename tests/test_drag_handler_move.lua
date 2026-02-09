@@ -6,8 +6,6 @@ package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
 local test_env = require("test_env")
 
-local Rational = require("core.rational")
-
 -- Stub timeline geometry
 _G.timeline = {
     get_dimensions = function(_) return 1920, 1080 end
@@ -60,8 +58,8 @@ do
         {
             id = "clip_a",
             track_id = "track_a",
-            timeline_start = Rational.new(0, 24, 1),
-            duration = Rational.new(24, 24, 1)
+            timeline_start = 0,
+            duration = 24
         }
     }
     local view = make_view("track_b", {
@@ -72,7 +70,7 @@ do
         type = "clips",
         clips = clips,
         delta_ms = 20000,
-        delta_rational = Rational.new(480, 24, 1), -- 20s @24fps
+        delta_frames = 480, -- 20s @24fps
         current_y = 100,
         start_y = 90,
     }
@@ -82,7 +80,7 @@ do
     local cmd = executed[1]
     assert(cmd.type == "MoveClipToTrack", "expected MoveClipToTrack for cross-track drag")
     assert(cmd.params.target_track_id == "track_b", "target track should be hovered track")
-    assert(cmd.params.pending_new_start_rat.frames == 480, "move should apply full delta to start")
+    assert(cmd.params.pending_new_start == 480, "move should apply full delta to start")
 end
 
 -- Test 2: Same-track drag issues Nudge with full delta
@@ -92,8 +90,8 @@ do
         {
             id = "clip_a",
             track_id = "track_a",
-            timeline_start = Rational.new(0, 24, 1),
-            duration = Rational.new(24, 24, 1),
+            timeline_start = 0,
+            duration = 24,
         }
     }
     local view = make_view("track_a", {
@@ -104,7 +102,7 @@ do
         type = "clips",
         clips = clips,
         delta_ms = 20000,
-        delta_rational = Rational.new(480, 24, 1), -- 20s @24fps
+        delta_frames = 480, -- 20s @24fps
         current_y = 50,
         start_y = 50,
     }
@@ -113,16 +111,16 @@ do
     assert(#executed == 1, "expected one command executed")
     local cmd = executed[1]
     assert(cmd.type == "Nudge", "expected Nudge for same-track drag")
-    local rat = cmd.params.nudge_amount_rat
-    assert(rat and rat.frames == 480, "nudge should use full drag delta frames")
+    local nudge_amount = cmd.params.nudge_amount
+    assert(nudge_amount == 480, "nudge should use full drag delta frames")
 end
 
 -- Test 3: Multi-clip cross-track drag moves all clips by delta to the new track
 do
     reset_executed()
     local clips = {
-        { id = "clip_a", track_id = "track_a", timeline_start = Rational.new(0, 24, 1), duration = Rational.new(24, 24, 1) },
-        { id = "clip_b", track_id = "track_b", timeline_start = Rational.new(24, 24, 1), duration = Rational.new(24, 24, 1) },
+        { id = "clip_a", track_id = "track_a", timeline_start = 0, duration = 24 },
+        { id = "clip_b", track_id = "track_b", timeline_start = 24, duration = 24 },
     }
     local view = make_view("track_b", {
         { id = "track_a", track_type = "VIDEO" },
@@ -133,7 +131,7 @@ do
         type = "clips",
         clips = clips,
         delta_ms = 10000,
-        delta_rational = Rational.new(240, 24, 1), -- ~10s
+        delta_frames = 240, -- ~10s
         current_y = 100,
         start_y = 90,
     }
@@ -153,7 +151,7 @@ do
         assert(spec.command_type == "MoveClipToTrack", "move specs should be MoveClipToTrack")
         targets[spec.parameters.target_track_id] = true
         local expected = expected_frames[spec.parameters.clip_id]
-        assert(spec.parameters.pending_new_start_rat.frames == expected, "move should carry delta start for each clip")
+        assert(spec.parameters.pending_new_start == expected, "move should carry delta start for each clip")
     end
     assert(targets["track_b"] and targets["track_c"], "moves should land on track_b and track_c maintaining offsets")
 end

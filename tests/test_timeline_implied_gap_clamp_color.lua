@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -69,10 +68,6 @@ timeline = {
     update = function() end
 }
 
-local function rat(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local gap_edge = {
     clip_id = clips.v1_right.id,
     edge_type = "gap_before",
@@ -95,7 +90,7 @@ view.drag_state = {
     type = "edges",
     edges = {gap_edge},
     lead_edge = gap_edge,
-    delta_rational = rat(-1500)
+    delta_frames = -1500
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)

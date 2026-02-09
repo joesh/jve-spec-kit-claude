@@ -10,19 +10,18 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 require("test_env")
 
 local edge_picker = require("ui.timeline.edge_picker")
-local Rational = require("core.rational")
 local ui_constants = require("core.ui_constants")
 
 local clip = {
     id = "clip_a",
     track_id = "v1",
-    timeline_start = Rational.new(120, 24, 1),
-    duration = Rational.new(80, 24, 1)
+    timeline_start = 120,
+    duration = 80
 }
 
 local function time_to_pixel(time_obj, viewport_width)
     -- Treat one frame as one pixel to keep math simple.
-    return math.floor(time_obj.frames)
+    return math.floor(time_obj)
 end
 
 local boundary_px = time_to_pixel(clip.timeline_start, 1000)

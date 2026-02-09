@@ -4,8 +4,6 @@
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
 
-local Rational = require("core.rational")
-
 -- Stub timeline drawing backend
 _G.timeline = {
     get_dimensions = function() return 800, 200 end,
@@ -33,14 +31,14 @@ local state = {
         edge_selected_limit = "#000",
         clip = "#000",
     },
-    get_viewport_start_time = function() return Rational.new(0, 24, 1) end,
-    get_viewport_duration = function() return Rational.new(100, 24, 1) end,
-    get_playhead_position = function() return Rational.new(0, 24, 1) end,
+    get_viewport_start_time = function() return 0 end,
+    get_viewport_duration = function() return 100 end,
+    get_playhead_position = function() return 0 end,
     get_mark_in = function() return nil end,
     get_mark_out = function() return nil end,
     get_sequence_frame_rate = function() return seq_rate end,
-    time_to_pixel = function(rt, width)
-        local frames = rt and rt.frames or 0
+    time_to_pixel = function(t, width)
+        local frames = t or 0
         return (frames / (seq_rate.fps_numerator or 24)) * (width / 100)
     end,
     get_clips = function()

@@ -39,10 +39,10 @@ db:exec([[
 
 -- Mock timeline_state
 local timeline_state = {
-    playhead_position = Rational.new(0, 30, 1),
+    playhead_position = 0,
     clips = {
-        {id = 'clip_a', timeline_start = Rational.new(0, 30, 1), duration = Rational.new(100, 30, 1)},
-        {id = 'clip_b', timeline_start = Rational.new(100, 30, 1), duration = Rational.new(150, 30, 1)},
+        {id = 'clip_a', timeline_start = 0, duration = 100},
+        {id = 'clip_b', timeline_start = 100, duration = 150},
     },
     selected_clips = {},
     selected_edges = {},

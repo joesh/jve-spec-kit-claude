@@ -14,7 +14,6 @@ local timeline_state = require("ui.timeline.timeline_state")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 
 local function setup_db()
     local db_path = "/tmp/jve/test_nudge_ms_input.db"
@@ -52,10 +51,10 @@ local clip = Clip.create("Clip", nil, {
     project_id = "proj",
     track_id = "v1",
     owner_sequence_id = "seq",
-    timeline_start = Rational.new(0, 24, 1),
-    duration = Rational.new(48, 24, 1),
-    source_in = Rational.new(0, 24, 1),
-    source_out = Rational.new(48, 24, 1),
+    timeline_start = 0,
+    duration = 48,
+    source_in = 0,
+    source_out = 48,
     fps_numerator = 24, fps_denominator = 1
 })
 clip:save(db)
@@ -65,15 +64,15 @@ cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("fps_numerator", 24)
 cmd:set_parameter("fps_denominator", 1)
 cmd:set_parameter("selected_clip_ids", {clip.id})
--- Simulate leaf conversion from ms to Rational before calling command
-local nudge_amount_rat = Rational.from_seconds(1000 / 1000.0, 24, 1)
-cmd:set_parameter("nudge_amount_rat", nudge_amount_rat)
+-- Nudge by 24 frames (1 second at 24fps)
+local nudge_amount = 24
+cmd:set_parameter("nudge_amount", nudge_amount)
 
 local res = command_manager.execute(cmd)
 assert(res.success, "Nudge with ms payload should succeed")
 
 local updated = Clip.load(clip.id, db)
-assert(updated.timeline_start.frames == 24, "Clip should move forward by ~24 frames for 1000ms at 24fps")
+assert(updated.timeline_start == 24, "Clip should move forward by ~24 frames for 1000ms at 24fps")
 
 -- Undo to keep DB tidy
 local undo_cmd = Command.deserialize(res.result_data):create_undo()

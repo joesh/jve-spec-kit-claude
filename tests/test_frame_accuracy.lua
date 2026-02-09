@@ -10,7 +10,6 @@ local Sequence = require("models.sequence")
 local Media = require("models.media")
 local Track = require("models.track")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 local Command = require("command")
 
 -- Test Runner State
@@ -117,7 +116,7 @@ local function test_split_clip_command_func()
     assert_not_nil(track.id, "Track ID should not be nil")
 
     -- Media: 10 seconds at 24 FPS
-    local media_duration_rational = Rational.new(240, 24, 1)
+    local media_duration_rational = 240
     local media = Media.create({
         project_id = project.id,
         file_path = "/path/to/split_media.mov",
@@ -141,10 +140,10 @@ local function test_split_clip_command_func()
             sequence_id = sequence.id,
             track_id = track.id,
             media_id = media.id,
-            insert_time = Rational.new(0, sequence_fps_num, sequence_fps_den),
-            duration = Rational.new(initial_clip_duration_frames, sequence_fps_num, sequence_fps_den),
-            source_in = Rational.new(0, 24, 1),  -- source is at media rate
-            source_out = Rational.new(initial_clip_duration_frames, 24, 1),
+            insert_time = 0,
+            duration = initial_clip_duration_frames,
+            source_in = 0,
+            source_out = initial_clip_duration_frames,
             advance_playhead = false,
         }
     }
@@ -162,7 +161,6 @@ local function test_split_clip_command_func()
 
     -- Define split point: 5 seconds (120 frames) into the clip
     local split_frame = 120
-    local split_rational = Rational.new(split_frame, sequence_fps_num, sequence_fps_den)
 
     -- Simulate SplitClip command
     local split_command_data = {
@@ -171,7 +169,7 @@ local function test_split_clip_command_func()
         parameters = {
             clip_id = initial_clip_id,
             project_id = project.id,
-            split_value = split_rational,
+            split_value = split_frame,
             sequence_id = sequence.id, -- Passed for mutation bucket
         }
     }
@@ -189,18 +187,18 @@ local function test_split_clip_command_func()
     -- Verify original clip (first part)
     local first_part_clip = Clip.load(initial_clip_id, db)
     assert_not_nil(first_part_clip, "First part clip should be loadable")
-    assert_eq(first_part_clip.duration.frames, split_frame, "First part duration should be split_frame")
-    assert_eq(first_part_clip.source_out.frames, split_frame, "First part source_out should be split_frame")
-    assert_eq(first_part_clip.timeline_start.frames, 0, "First part timeline_start should be 0")
+    assert_eq(first_part_clip.duration, split_frame, "First part duration should be split_frame")
+    assert_eq(first_part_clip.source_out, split_frame, "First part source_out should be split_frame")
+    assert_eq(first_part_clip.timeline_start, 0, "First part timeline_start should be 0")
     assert_eq(first_part_clip.rate.fps_numerator, sequence_fps_num, "First part fps_numerator")
 
     -- Verify new clip (second part)
     local second_part_clip = Clip.load(second_clip_id, db)
     assert_not_nil(second_part_clip, "Second part clip should be loadable")
-    assert_eq(second_part_clip.timeline_start.frames, split_frame, "Second part timeline_start should be split_frame")
-    assert_eq(second_part_clip.duration.frames, initial_clip_duration_frames - split_frame, "Second part duration")
-    assert_eq(second_part_clip.source_in.frames, split_frame, "Second part source_in should be split_frame")
-    assert_eq(second_part_clip.source_out.frames, initial_clip_duration_frames, "Second part source_out")
+    assert_eq(second_part_clip.timeline_start, split_frame, "Second part timeline_start should be split_frame")
+    assert_eq(second_part_clip.duration, initial_clip_duration_frames - split_frame, "Second part duration")
+    assert_eq(second_part_clip.source_in, split_frame, "Second part source_in should be split_frame")
+    assert_eq(second_part_clip.source_out, initial_clip_duration_frames, "Second part source_out")
     assert_eq(second_part_clip.rate.fps_numerator, sequence_fps_num, "Second part fps_numerator")
 
     -- Test UndoSplitClip
@@ -214,9 +212,9 @@ local function test_split_clip_command_func()
     -- Verify original clip is restored
     local restored_clip = Clip.load(initial_clip_id, db)
     assert_not_nil(restored_clip, "Original clip should be loadable after undo")
-    assert_eq(restored_clip.duration.frames, initial_clip_duration_frames, "Original clip duration restored")
-    assert_eq(restored_clip.source_in.frames, 0, "Original clip source_in restored")
-    assert_eq(restored_clip.source_out.frames, initial_clip_duration_frames, "Original clip source_out restored")
+    assert_eq(restored_clip.duration, initial_clip_duration_frames, "Original clip duration restored")
+    assert_eq(restored_clip.source_in, 0, "Original clip source_in restored")
+    assert_eq(restored_clip.source_out, initial_clip_duration_frames, "Original clip source_out restored")
 
     -- Verify second clip is deleted
     local deleted_clip = Clip.load_optional(second_clip_id, db)
@@ -242,7 +240,7 @@ local function test_ripple_delete_command_func()
         project_id = project.id,
         file_path = "/path/to/ripple_media.mov",
         name = "Ripple Media",
-        duration = Rational.new(2400, 24, 1), -- 100s
+        duration_frames = 2400, -- 100s at 24fps
         fps_numerator = 24,
         fps_denominator = 1,
         width = 1920,
@@ -255,10 +253,10 @@ local function test_ripple_delete_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        timeline_start = Rational.new(0, 24, 1),
-        duration = Rational.new(24, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(24, 24, 1),
+        timeline_start = 0,
+        duration = 24,
+        source_in = 0,
+        source_out = 24,
         fps_numerator = 24, fps_denominator = 1
     })
     clip1:save(db)
@@ -270,17 +268,17 @@ local function test_ripple_delete_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        timeline_start = Rational.new(48, 24, 1),
-        duration = Rational.new(24, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(24, 24, 1),
+        timeline_start = 48,
+        duration = 24,
+        source_in = 0,
+        source_out = 24,
         fps_numerator = 24, fps_denominator = 1
     })
     clip2:save(db)
 
     -- Ripple delete the gap: start=24, duration=24
-    local gap_start = Rational.new(24, 24, 1)
-    local gap_duration = Rational.new(24, 24, 1)
+    local gap_start = 24
+    local gap_duration = 24
 
     local command_data = {
         id = "cmd_ripple_delete",
@@ -302,7 +300,7 @@ local function test_ripple_delete_command_func()
 
     -- Verify Clip 2 moved to frame 24
     local clip2_moved = Clip.load(clip2.id, db)
-    assert_eq(clip2_moved.timeline_start.frames, 24, "Clip 2 should move to frame 24")
+    assert_eq(clip2_moved.timeline_start, 24, "Clip 2 should move to frame 24")
 
     -- Undo
     local undo_cmd = Command.deserialize(success_obj.result_data):create_undo()
@@ -311,7 +309,7 @@ local function test_ripple_delete_command_func()
 
     -- Verify Clip 2 restored to frame 48
     local clip2_restored = Clip.load(clip2.id, db)
-    assert_eq(clip2_restored.timeline_start.frames, 48, "Clip 2 should restore to frame 48")
+    assert_eq(clip2_restored.timeline_start, 48, "Clip 2 should restore to frame 48")
 
     teardown_test_db(db)
 end
@@ -333,7 +331,7 @@ local function test_ripple_edit_command_func()
         project_id = project.id,
         file_path = "/path/to/ripple_edit_media.mov",
         name = "RippleEdit Media",
-        duration = Rational.new(2400, 24, 1), -- 100s
+        duration_frames = 2400, -- 100s at 24fps
         fps_numerator = 24,
         fps_denominator = 1,
         width = 1920,
@@ -346,10 +344,10 @@ local function test_ripple_edit_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        timeline_start = Rational.new(0, 24, 1),
-        duration = Rational.new(48, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(48, 24, 1),
+        timeline_start = 0,
+        duration = 48,
+        source_in = 0,
+        source_out = 48,
         fps_numerator = 24, fps_denominator = 1
     })
     clip1:save(db)
@@ -359,10 +357,10 @@ local function test_ripple_edit_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        timeline_start = Rational.new(48, 24, 1),
-        duration = Rational.new(48, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(48, 24, 1),
+        timeline_start = 48,
+        duration = 48,
+        source_in = 0,
+        source_out = 48,
         fps_numerator = 24, fps_denominator = 1
     })
     clip2:save(db)
@@ -394,12 +392,12 @@ local function test_ripple_edit_command_func()
 
     -- Verify Clip 1 extended
     local clip1_new = Clip.load(clip1.id, db)
-    assert_eq(clip1_new.duration.frames, 72, "Clip 1 duration should increase by 24")
-    assert_eq(clip1_new.source_out.frames, 72, "Clip 1 source_out should increase by 24")
+    assert_eq(clip1_new.duration, 72, "Clip 1 duration should increase by 24")
+    assert_eq(clip1_new.source_out, 72, "Clip 1 source_out should increase by 24")
 
     -- Verify Clip 2 moved
     local clip2_new = Clip.load(clip2.id, db)
-    assert_eq(clip2_new.timeline_start.frames, 72, "Clip 2 start should shift by 24")
+    assert_eq(clip2_new.timeline_start, 72, "Clip 2 start should shift by 24")
 
     -- Undo
     local undo_cmd = Command.deserialize(success_obj.result_data):create_undo()
@@ -408,10 +406,10 @@ local function test_ripple_edit_command_func()
 
     -- Verify restored state
     local clip1_restored = Clip.load(clip1.id, db)
-    assert_eq(clip1_restored.duration.frames, 48, "Clip 1 duration restored")
+    assert_eq(clip1_restored.duration, 48, "Clip 1 duration restored")
     
     local clip2_restored = Clip.load(clip2.id, db)
-    assert_eq(clip2_restored.timeline_start.frames, 48, "Clip 2 start restored")
+    assert_eq(clip2_restored.timeline_start, 48, "Clip 2 start restored")
 
     teardown_test_db(db)
 end
@@ -433,7 +431,7 @@ local function test_nudge_command_func()
         project_id = project.id,
         file_path = "/path/to/nudge_media.mov",
         name = "Nudge Media",
-        duration = Rational.new(2400, 24, 1), -- 100s
+        duration_frames = 2400, -- 100s at 24fps
         fps_numerator = 24,
         fps_denominator = 1,
         width = 1920,
@@ -446,23 +444,23 @@ local function test_nudge_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        timeline_start = Rational.new(0, 24, 1),
-        duration = Rational.new(48, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(48, 24, 1),
+        timeline_start = 0,
+        duration = 48,
+        source_in = 0,
+        source_out = 48,
         fps_numerator = 24, fps_denominator = 1
     })
     clip1:save(db)
 
     -- Nudge clip by +24 frames
-    local nudge_amount = Rational.new(24, 24, 1)
+    local nudge_amount = 24
     local command_data = {
         id = "cmd_nudge_clip",
         type = "Nudge",
         parameters = {
             project_id = project.id,
             selected_clip_ids = {clip1.id},
-            nudge_amount_rat = nudge_amount,
+            nudge_amount = nudge_amount,
             sequence_id = sequence.id
         }
     }
@@ -474,7 +472,7 @@ local function test_nudge_command_func()
     assert_eq(success_obj.success, true, "Nudge command should succeed")
 
     local clip1_nudged = Clip.load(clip1.id, db)
-    assert_eq(clip1_nudged.timeline_start.frames, 24, "Clip 1 timeline_start should be 24")
+    assert_eq(clip1_nudged.timeline_start, 24, "Clip 1 timeline_start should be 24")
 
     -- Undo
     local undo_cmd = Command.deserialize(success_obj.result_data):create_undo()
@@ -482,10 +480,10 @@ local function test_nudge_command_func()
     assert_eq(undo_success.success, true, "Undo Nudge command should succeed")
 
     local clip1_restored = Clip.load(clip1.id, db)
-    assert_eq(clip1_restored.timeline_start.frames, 0, "Clip 1 timeline_start restored to 0")
+    assert_eq(clip1_restored.timeline_start, 0, "Clip 1 timeline_start restored to 0")
 
     -- Nudge clip edge 'out' by +24 frames
-    local nudge_edge_amount = Rational.new(24, 24, 1)
+    local nudge_edge_amount = 24
     local edge_command_data = {
         id = "cmd_nudge_edge",
         type = "Nudge",
@@ -495,7 +493,7 @@ local function test_nudge_command_func()
                 edge_type = "out",
                 track_id = track.id
             }},
-            nudge_amount_rat = nudge_edge_amount,
+            nudge_amount = nudge_edge_amount,
             sequence_id = sequence.id
         }
     }
@@ -504,8 +502,8 @@ local function test_nudge_command_func()
     assert_eq(edge_success_obj.success, true, "Nudge edge command should succeed")
     
     local clip1_edge_nudged = Clip.load(clip1.id, db)
-    assert_eq(clip1_edge_nudged.duration.frames, 72, "Clip 1 duration should be 72 after edge nudge")
-    assert_eq(clip1_edge_nudged.source_out.frames, 72, "Clip 1 source_out should be 72 after edge nudge")
+    assert_eq(clip1_edge_nudged.duration, 72, "Clip 1 duration should be 72 after edge nudge")
+    assert_eq(clip1_edge_nudged.source_out, 72, "Clip 1 source_out should be 72 after edge nudge")
 
     -- Undo Edge Nudge
     local undo_edge_cmd = Command.deserialize(edge_success_obj.result_data):create_undo()
@@ -513,7 +511,7 @@ local function test_nudge_command_func()
     assert_eq(undo_edge_success.success, true, "Undo Nudge edge command should succeed")
     
     local clip1_edge_restored = Clip.load(clip1.id, db)
-    assert_eq(clip1_edge_restored.duration.frames, 48, "Clip 1 duration restored after edge nudge")
+    assert_eq(clip1_edge_restored.duration, 48, "Clip 1 duration restored after edge nudge")
 
     teardown_test_db(db)
 end
@@ -537,7 +535,7 @@ local function test_move_clip_to_track_command_func()
         project_id = project.id,
         file_path = "/path/to/move_media.mov",
         name = "Move Media",
-        duration = Rational.new(2400, 24, 1), -- 100s
+        duration_frames = 2400, -- 100s at 24fps
         fps_numerator = 24,
         fps_denominator = 1,
         width = 1920,
@@ -550,10 +548,10 @@ local function test_move_clip_to_track_command_func()
         project_id = project.id,
         track_id = track1.id,
         owner_sequence_id = sequence.id,
-        timeline_start = Rational.new(0, 24, 1),
-        duration = Rational.new(48, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(48, 24, 1),
+        timeline_start = 0,
+        duration = 48,
+        source_in = 0,
+        source_out = 48,
         fps_numerator = 24, fps_denominator = 1
     })
     clip:save(db)
@@ -578,7 +576,7 @@ local function test_move_clip_to_track_command_func()
 
     local moved_clip = Clip.load(clip.id, db)
     assert_eq(moved_clip.track_id, track2.id, "Clip should be on target track2")
-    assert_eq(moved_clip.timeline_start.frames, 0, "Clip timeline_start should remain 0")
+    assert_eq(moved_clip.timeline_start, 0, "Clip timeline_start should remain 0")
 
     -- Undo
     local undo_cmd = Command.deserialize(success_obj.result_data):create_undo()
@@ -587,10 +585,10 @@ local function test_move_clip_to_track_command_func()
 
     local restored_clip = Clip.load(clip.id, db)
     assert_eq(restored_clip.track_id, track1.id, "Clip should be restored to track1")
-    assert_eq(restored_clip.timeline_start.frames, 0, "Clip timeline_start should remain 0 after undo")
+    assert_eq(restored_clip.timeline_start, 0, "Clip timeline_start should remain 0 after undo")
 
-    -- Test move with pending_new_start_rat
-    local pending_start_rat = Rational.new(72, 24, 1) -- Move to 3s (72 frames)
+    -- Test move with pending_new_start
+    local pending_start = 72 -- Move to 3s (72 frames)
     local command_data_pending = {
         id = "cmd_move_clip_pending",
         type = "MoveClipToTrack",
@@ -599,8 +597,7 @@ local function test_move_clip_to_track_command_func()
             clip_id = clip.id,
             target_track_id = track2.id,
             sequence_id = sequence.id,
-            pending_new_start_rat = pending_start_rat,
-            -- pending_duration_rat is not needed if clip.duration is used
+            pending_new_start = pending_start,
         }
     }
 
@@ -609,7 +606,7 @@ local function test_move_clip_to_track_command_func()
 
     local moved_clip_pending = Clip.load(clip.id, db)
     assert_eq(moved_clip_pending.track_id, track2.id, "Clip should be on track2 after pending move")
-    assert_eq(moved_clip_pending.timeline_start.frames, 72, "Clip timeline_start should be 72 after pending move")
+    assert_eq(moved_clip_pending.timeline_start, 72, "Clip timeline_start should be 72 after pending move")
 
     -- Undo pending move
     local undo_pending_cmd = Command.deserialize(pending_success_obj.result_data):create_undo()
@@ -618,7 +615,7 @@ local function test_move_clip_to_track_command_func()
 
     local restored_clip_pending = Clip.load(clip.id, db)
     assert_eq(restored_clip_pending.track_id, track1.id, "Clip should be restored to track1 after pending undo")
-    assert_eq(restored_clip_pending.timeline_start.frames, 0, "Clip timeline_start should be 0 after pending undo")
+    assert_eq(restored_clip_pending.timeline_start, 0, "Clip timeline_start should be 0 after pending undo")
 
     teardown_test_db(db)
 end

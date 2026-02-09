@@ -16,13 +16,15 @@
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
-local frame_utils = require('core.frame_utils')
 local database = require('core.database')
-local Rational = require('core.rational') -- Added dependency
-local timeline_state
+-- timeline_state is optional (UI layer); nil in headless/test mode
+local timeline_state = nil
 do
     local status, mod = pcall(require, 'ui.timeline.timeline_state')
-    if status then timeline_state = mod end
+    if status then
+        timeline_state = mod
+    end
+    -- NSF: Not asserting here - timeline_state is legitimately optional for headless operation
 end
 
 
@@ -35,7 +37,7 @@ local SPEC = {
         ripple_deleted_clips = {},  -- Set by executor
         ripple_original_clip_state = {},
         ripple_post_states = {},
-        ripple_shift_amount_rat = {},
+        ripple_shift_amount_frames = {},
         sequence_id = {},
     },
     persisted = {
@@ -47,8 +49,10 @@ local SPEC = {
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function append_actions(target, actions)
-        if not actions or target == nil then
-            return
+        -- NSF: nil actions is valid (no occlusions occurred); nil target is caller bug
+        assert(target ~= nil, "append_actions: target table must not be nil")
+        if not actions then
+            return  -- No actions to append is valid
         end
         for _, action in ipairs(actions) do
             target[#target + 1] = action
@@ -78,68 +82,69 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     local function revert_occlusion_actions(actions, command, sequence_id)
         if not actions or #actions == 0 then
-            return
+            return true  -- Nothing to revert is success
         end
+        assert(command ~= nil, "revert_occlusion_actions: command must not be nil")
+        assert(sequence_id and sequence_id ~= "", "revert_occlusion_actions: sequence_id required")
+
         for i = #actions, 1, -1 do
             local action = actions[i]
             if action.type == 'trim' then
                 local restored = command_helper.restore_clip_state(action.before)
-                if restored and command then
-                    restored:save({skip_occlusion = true})
-                    local payload = command_helper.clip_update_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
-                    if payload then
-                        command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                    end
-                end
+                assert(restored, string.format("revert_occlusion_actions: failed to restore trim action.before for action %d", i))
+                local ok, err = restored:save({skip_occlusion = true})
+                assert(ok, string.format("revert_occlusion_actions: save failed for restored clip %s: %s", restored.id, tostring(err)))
+                local payload = command_helper.clip_update_payload(restored, sequence_id)
+                assert(payload, string.format("revert_occlusion_actions: clip_update_payload failed for clip %s", restored.id))
+                command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
             elseif action.type == 'delete' then
                 local restored = command_helper.restore_clip_state(action.clip or action.before)
-                if restored and command then
-                    restored:save({skip_occlusion = true})
-                    local payload = command_helper.clip_insert_payload(restored, sequence_id or restored.owner_sequence_id or restored.track_sequence_id)
-                    if payload then
-                        command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                    end
-                end
+                assert(restored, string.format("revert_occlusion_actions: failed to restore delete action for action %d", i))
+                local ok, err = restored:save({skip_occlusion = true})
+                assert(ok, string.format("revert_occlusion_actions: save failed for restored clip %s: %s", restored.id, tostring(err)))
+                local payload = command_helper.clip_insert_payload(restored, sequence_id)
+                assert(payload, string.format("revert_occlusion_actions: clip_insert_payload failed for clip %s", restored.id))
+                command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
             elseif action.type == 'insert' then
                 local state = action.clip
-                if state then
-                    local clip = Clip.load_optional(state.id)
-                    if clip and clip:delete() and command then
-                        command_helper.add_delete_mutation(command, sequence_id or state.owner_sequence_id or state.track_sequence_id, state.id)
-                    end
+                assert(state, string.format("revert_occlusion_actions: insert action %d missing clip state", i))
+                local clip = Clip.load_optional(state.id)
+                if clip then  -- Clip may already be deleted; that's OK
+                    local deleted = clip:delete()
+                    assert(deleted, string.format("revert_occlusion_actions: delete failed for clip %s", state.id))
+                    command_helper.add_delete_mutation(command, sequence_id, state.id)
                 end
             end
         end
+        return true
     end
 
-    local function apply_edge_ripple(clip, edge_type, delta_rat)
-        -- Ensure we are dealing with Rational objects
-        if not clip.duration or not clip.duration.frames then
-             error("apply_edge_ripple: clip duration is not Rational")
-        end
-        
+    local function apply_edge_ripple(clip, edge_type, delta_frames)
+        -- All coordinates are integers
+        assert(type(clip.duration) == "number", "apply_edge_ripple: clip duration must be integer")
+
         if edge_type == "in" then
             -- Ripple in: shorten duration, advance source_in
-            local new_dur = clip.duration - delta_rat
-            if new_dur.frames < 1 then return nil, false, true end -- Too short
-            
+            local new_dur = clip.duration - delta_frames
+            if new_dur < 1 then return nil, false, true end -- Too short
+
             clip.duration = new_dur
             -- clip.timeline_start UNCHANGED
-            
+
             if clip.media_id then
-                clip.source_in = clip.source_in + delta_rat
+                clip.source_in = clip.source_in + delta_frames
             end
         elseif edge_type == "out" then
             -- Ripple out: change duration
-            local new_dur = clip.duration + delta_rat
-            if new_dur.frames < 1 then return nil, false, true end
-            
+            local new_dur = clip.duration + delta_frames
+            if new_dur < 1 then return nil, false, true end
+
             clip.duration = new_dur
             if clip.media_id then
                 clip.source_out = clip.source_in + new_dur
             end
         end
-        
+
         return clip.timeline_start, true, false
     end
 
@@ -204,73 +209,45 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(seq_fps_num, string.format("RippleEdit: missing fps_numerator for sequence_id=%s", tostring(sequence_id)))
         assert(seq_fps_den, string.format("RippleEdit: missing fps_denominator for sequence_id=%s", tostring(sequence_id)))
         
-        -- Strict input: delta must be Rational via args.delta_ms (Rational/table) or integer frames
-        local delta_rat
-        if args.delta_frames then
-            delta_rat = Rational.new(args.delta_frames, seq_fps_num, seq_fps_den)
-        elseif args.delta_ms then
-            if type(args.delta_ms) == "number" then
-                error("RippleEdit: args.delta_ms must be Rational, not number")
-            end
-            if getmetatable(args.delta_ms) == Rational.metatable then
-                delta_rat = args.delta_ms:rescale(seq_fps_num, seq_fps_den)
-            elseif type(args.delta_ms) == "table" and args.delta_ms.frames then
-                delta_rat = Rational.new(args.delta_ms.frames, args.delta_ms.fps_numerator or seq_fps_num, args.delta_ms.fps_denominator or seq_fps_den)
-            else
-                error("RippleEdit: args.delta_ms must be Rational-like")
-            end
-        end
-        if not delta_rat or not delta_rat.frames then
-            return {success = false, error_message = "RippleEdit missing valid delta"}
-        end
+        -- Delta must be integer frames
+        local delta_frames = args.delta_frames
+        assert(type(delta_frames) == "number", "RippleEdit: delta_frames must be integer")
 
         local clip = Clip.load(edge_info.clip_id)
         if not clip then
              set_last_error("RippleEdit: Clip not found")
              return {success = false, error_message = "Clip not found"}
         end
-        
-        local original_start_rat = clip.timeline_start
-        local original_duration_rat = clip.duration
-        local original_end_rat = original_start_rat + original_duration_rat
 
-        local requested_delta_frames = delta_rat.frames
-        local clamped_delta = delta_rat
+        local original_start = clip.timeline_start
+        local original_duration = clip.duration
+        local original_end = original_start + original_duration
+
+        local requested_delta_frames = delta_frames
+        local clamped_delta_frames = delta_frames
         local is_gap_clip = false -- Simplified
         
-        -- MEDIA BOUNDARY CLAMPING
+        -- MEDIA BOUNDARY CLAMPING (all coords are integers)
         if not is_gap_clip and clip.media_id then
-             local media_stmt = db:prepare("SELECT duration_frames, fps_numerator, fps_denominator FROM media WHERE id = ?")
+             local media_stmt = db:prepare("SELECT duration_frames FROM media WHERE id = ?")
              if media_stmt then
                  media_stmt:bind_value(1, clip.media_id)
                  if media_stmt:exec() and media_stmt:next() then
-                     local m_dur = media_stmt:value(0)
-                     local m_num = media_stmt:value(1)
-                     local m_den = media_stmt:value(2)
-                     if m_dur and m_num and m_den then
-                         -- Media duration in its own timebase
-                         local media_duration = Rational.new(m_dur, m_num, m_den)
-                         
-                         -- Current source out
+                     local media_duration = media_stmt:value(0)
+                     if media_duration then
                          local current_out = clip.source_out
-                         
+
                          if edge_info.edge_type == "out" then
-                             -- Extending tail: New Out = Current Out + Delta
-                             -- Limit: New Out <= Media Duration
-                             -- Current Out + Delta <= Media Duration
-                             -- Delta <= Media Duration - Current Out
+                             -- Extending tail: clamp delta so source_out doesn't exceed media duration
                              local max_delta = media_duration - current_out
-                             if clamped_delta > max_delta then
-                                 clamped_delta = max_delta
+                             if clamped_delta_frames > max_delta then
+                                 clamped_delta_frames = max_delta
                              end
                          elseif edge_info.edge_type == "in" then
-                             -- Extending head (moving In left): New In = Current In + Delta (Delta is negative)
-                             -- Limit: New In >= 0
-                             -- Current In + Delta >= 0
-                             -- Delta >= -Current In
+                             -- Extending head: clamp delta so source_in doesn't go negative
                              local min_delta = -clip.source_in
-                             if clamped_delta < min_delta then
-                                 clamped_delta = min_delta
+                             if clamped_delta_frames < min_delta then
+                                 clamped_delta_frames = min_delta
                              end
                          end
                      end
@@ -279,31 +256,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
              end
         end
 
-        if edge_info.edge_type == "gap_before" and clamped_delta < Rational.new(0, seq_fps_num, seq_fps_den) then
+        if edge_info.edge_type == "gap_before" and clamped_delta_frames < 0 then
             local closest_end = nil
             for _, other in ipairs(all_clips) do
                 if other.track_id == clip.track_id and other.id ~= clip.id then
                     local other_end = other.timeline_start + other.duration
-                    if other_end <= original_start_rat and (not closest_end or other_end > closest_end) then
+                    if other_end <= original_start and (not closest_end or other_end > closest_end) then
                         closest_end = other_end
                     end
                 end
             end
 
             if closest_end then
-                local gap = original_start_rat - closest_end
-                local max_close = Rational.new(-gap.frames, gap.fps_numerator, gap.fps_denominator)
-                if clamped_delta < max_close then
-                    clamped_delta = max_close
+                local gap = original_start - closest_end
+                local max_close = -gap
+                if clamped_delta_frames < max_close then
+                    clamped_delta_frames = max_close
                 end
             end
         end
 
-        if edge_info.edge_type == "gap_after" and clamped_delta > Rational.new(0, seq_fps_num, seq_fps_den) then
+        if edge_info.edge_type == "gap_after" and clamped_delta_frames > 0 then
             local next_start = nil
             for _, other in ipairs(all_clips) do
                 if other.track_id == clip.track_id and other.id ~= clip.id then
-                    if other.timeline_start >= original_end_rat then
+                    if other.timeline_start >= original_end then
                         if not next_start or other.timeline_start < next_start then
                             next_start = other.timeline_start
                         end
@@ -311,15 +288,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
             if next_start then
-                local gap = next_start - original_end_rat
-                if clamped_delta > gap then
-                    clamped_delta = gap
+                local gap = next_start - original_end
+                if clamped_delta_frames > gap then
+                    clamped_delta_frames = gap
                 end
             end
         end
 
-        delta_rat = clamped_delta
-        local clamped_delta_ms = (delta_rat.frames * 1000) / (seq_fps_num / seq_fps_den)
+        delta_frames = clamped_delta_frames
+        local clamped_delta_ms = (delta_frames * 1000) / (seq_fps_num / seq_fps_den)
         command:set_parameter("clamped_delta_ms", clamped_delta_ms)
 
         local original_clip_state = nil
@@ -327,49 +304,49 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             original_clip_state = command_helper.capture_clip_state(clip)
         end
 
-        local ripple_time = original_end_rat
-        local shift_rat
+        local ripple_time = original_end
+        local shift_frames
         local deleted_clip = nil
         local success = true
 
         if edge_info.edge_type == "gap_before" then
             -- Gap closure/expansion: slide the entire clip (and downstream clips) by delta
-            local new_start = clip.timeline_start + delta_rat
-            if new_start < Rational.new(0, seq_fps_num, seq_fps_den) then
+            local new_start = clip.timeline_start + delta_frames
+            if new_start < 0 then
                 local new_end = new_start + clip.duration
-                if new_end <= Rational.new(0, seq_fps_num, seq_fps_den) then
+                if new_end <= 0 then
                     deleted_clip = true
-                    shift_rat = -clip.duration
+                    shift_frames = -clip.duration
                 else
-                    new_start = Rational.new(0, seq_fps_num, seq_fps_den)
-                    shift_rat = new_start - original_start_rat
+                    new_start = 0
+                    shift_frames = new_start - original_start
                     clip.timeline_start = new_start
                 end
             else
-                shift_rat = new_start - original_start_rat
+                shift_frames = new_start - original_start
                 clip.timeline_start = new_start
             end
-            ripple_time = original_start_rat -- shift co-timed clips on other tracks as well
+            ripple_time = original_start -- shift co-timed clips on other tracks as well
         elseif edge_info.edge_type == "gap_after" then
             -- Shift downstream clips relative to the trailing gap after this clip
-            shift_rat = delta_rat * -1
-            ripple_time = original_end_rat
+            shift_frames = -delta_frames
+            ripple_time = original_end
         else
-            local _, apply_ok, apply_deleted = apply_edge_ripple(clip, edge_info.edge_type, delta_rat)
+            local _, apply_ok, apply_deleted = apply_edge_ripple(clip, edge_info.edge_type, delta_frames)
             success = apply_ok
             deleted_clip = apply_deleted
             if not success then
                  return {success = false, error_message = "Ripple operation failed"}
             end
-            local new_end_rat = clip.timeline_start + clip.duration
-            shift_rat = new_end_rat - original_end_rat
-            ripple_time = original_end_rat
+            local new_end = clip.timeline_start + clip.duration
+            shift_frames = new_end - original_end
+            ripple_time = original_end
         end
-        
+
         if not args.dry_run
-            and shift_rat.frames == 0 and not deleted_clip
-            and clip.timeline_start == original_start_rat
-            and clip.duration == original_duration_rat then
+            and shift_frames == 0 and not deleted_clip
+            and clip.timeline_start == original_start
+            and clip.duration == original_duration then
             command:set_parameters({
                 ["__suppress_if_unchanged"] = true,
                 ["__skip_selection_snapshot"] = true,
@@ -378,8 +355,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if not args.dry_run then
-            print(string.format("RippleEdit: edge=%s, delta=%s, shift=%s",
-                edge_info.edge_type, tostring(delta_rat), tostring(shift_rat)))
+            print(string.format("RippleEdit: edge=%s, delta=%d, shift=%d",
+                edge_info.edge_type, delta_frames, shift_frames))
         end
 
         if deleted_clip and not is_gap_clip then
@@ -389,8 +366,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local excluded_ids = {[clip.id] = true}
         local clips_to_shift = collect_downstream_clips(all_clips, excluded_ids, ripple_time)
 
-        if shift_rat.frames < 0 and clips_to_shift and #clips_to_shift > 0 and edge_info.edge_type == "gap_before" then
-            local max_allowed = shift_rat.frames
+        if shift_frames < 0 and clips_to_shift and #clips_to_shift > 0 and edge_info.edge_type == "gap_before" then
+            local max_allowed = shift_frames
             local trimmed_end = clip.timeline_start + clip.duration
             -- Build lookup of downstream clip IDs so we can skip constraints
             -- against predecessors that will shift by the same amount
@@ -422,28 +399,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         ::continue_neighbor::
                     end
                 end
-                local baseline = prev_end or Rational.new(0, seq_fps_num, seq_fps_den)
+                local baseline = prev_end or 0
                 local available = target.timeline_start - baseline
-                local allowed = -(available.frames or 0)
+                local allowed = -available
                 if allowed > max_allowed then
                     max_allowed = allowed
                 end
             end
-            if max_allowed > shift_rat.frames then
-                shift_rat = Rational.new(max_allowed, seq_fps_num, seq_fps_den)
+            if max_allowed > shift_frames then
+                shift_frames = max_allowed
             end
         end
 
         if args.dry_run then
             local clamped_edges = {}
-            if clamped_delta and clamped_delta.frames and requested_delta_frames and clamped_delta.frames ~= requested_delta_frames then
+            if clamped_delta_frames ~= requested_delta_frames then
                 local key = string.format("%s:%s", tostring(edge_info.clip_id or ""), tostring(edge_info.edge_type or ""))
                 clamped_edges[key] = true
             end
             local preview_shifts = {}
             for _, downstream_clip in ipairs(clips_to_shift or {}) do
                 local start_val = downstream_clip.timeline_start or downstream_clip.start_time
-                local new_start = start_val + shift_rat
+                local new_start = start_val + shift_frames
                 table.insert(preview_shifts, {
                     clip_id = downstream_clip.id,
                     new_start_value = new_start,
@@ -451,7 +428,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 })
             end
             return true, {
-                clamped_delta_ms = delta_rat.frames * 1000 / (seq_fps_num/seq_fps_den),
+                clamped_delta_ms = delta_frames * 1000 / (seq_fps_num/seq_fps_den),
                 affected_clip = {
                     clip_id = clip.id,
                     new_start_value = clip.timeline_start,
@@ -494,27 +471,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local function shift_downstream()
             for _, downstream_clip in ipairs(clips_to_shift) do
                 local shift_clip = Clip.load(downstream_clip.id)
-                if shift_clip then
-                    shift_clip.timeline_start = shift_clip.timeline_start + shift_rat
-                    local ok, actions = shift_clip:save()
-                    if ok then
-                        append_actions(occlusion_actions, actions)
-                        local update_payload = command_helper.clip_update_payload(shift_clip, sequence_id)
-                        if update_payload then
-                            command_helper.add_update_mutation(command, update_payload.track_sequence_id or sequence_id, update_payload)
-                        end
-                        post_states[#post_states + 1] = command_helper.capture_clip_state(shift_clip)
-                    else
-                        print(string.format("ERROR: RippleEdit: Failed to shift clip %s", shift_clip.id:sub(1,8)))
-                        return false
-                    end
+                assert(shift_clip, string.format("RippleEdit.shift_downstream: Clip.load failed for downstream clip %s", downstream_clip.id))
+
+                shift_clip.timeline_start = shift_clip.timeline_start + shift_frames
+                local ok, err, actions = shift_clip:save()
+                if not ok then
+                    -- NSF: Return structured error, not just false
+                    return false, string.format("RippleEdit: Failed to shift clip %s: %s", shift_clip.id:sub(1,8), tostring(err))
                 end
+                append_actions(occlusion_actions, actions)
+                local update_payload = command_helper.clip_update_payload(shift_clip, sequence_id)
+                assert(update_payload, string.format("RippleEdit.shift_downstream: clip_update_payload failed for clip %s", shift_clip.id))
+                command_helper.add_update_mutation(command, update_payload.track_sequence_id or sequence_id, update_payload)
+                post_states[#post_states + 1] = command_helper.capture_clip_state(shift_clip)
             end
             return true
         end
 
         local success_op = true
-        if shift_rat > Rational.new(0, 1, 1) then
+        if shift_frames > 0 then
             if not shift_downstream() then return {success = false} end
             if not save_trimmed_clip() then return {success = false} end
         else
@@ -525,9 +500,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if occlusion_actions and #occlusion_actions > 0 then
             record_occlusion_actions(command, sequence_id, occlusion_actions)
         end
-        
+
         command:set_parameters({
-            ["ripple_shift_amount_rat"] = shift_rat,
+            ["ripple_shift_amount_frames"] = shift_frames,
             ["ripple_post_states"] = post_states,
             ["ripple_deleted_clips"] = deleted_clip_ids,
         })
@@ -535,7 +510,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("ripple_original_clip_state", original_clip_state)
         end
 
-        print(string.format("✅ Ripple edit complete: delta=%s, shifted=%d", tostring(shift_rat), #clips_to_shift))
+        print(string.format("✅ Ripple edit complete: delta=%d, shifted=%d", shift_frames, #clips_to_shift))
         return true
     end
 
@@ -543,52 +518,51 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         print("Undoing RippleEdit command")
         local sequence_id = args.sequence_id or command_helper.resolve_sequence_for_track(nil, args.edge_info.track_id)
-        
+        assert(sequence_id and sequence_id ~= "", "UndoRippleEdit: sequence_id required but could not be resolved")
 
+        -- Shift must be integer frames
+        local shift_frames = args.ripple_shift_amount_frames
+        assert(type(shift_frames) == "number", "UndoRippleEdit: ripple_shift_amount_frames must be integer")
 
-        local shift_rat = args.ripple_shift_amount_rat
-        
-        if type(shift_rat) == "table" and shift_rat.frames and (not getmetatable(shift_rat) or not getmetatable(shift_rat).__lt) then
-             shift_rat = Rational.new(shift_rat.frames, shift_rat.fps_numerator, shift_rat.fps_denominator)
-        end
-        
         local function restore_target()
-            if args.ripple_original_clip_state then
-                local restored = command_helper.restore_clip_state(args.ripple_original_clip_state)
-                if restored then
-                    local ok, err = restored:save({skip_occlusion = true}) 
-                    if not ok then
-                         print("ERROR: UndoRippleEdit: restore_target failed: " .. (err or "unknown"))
-                    end
-                    
-                    local payload = command_helper.clip_update_payload(restored, sequence_id)
-                    if payload then
+            if not args.ripple_original_clip_state then
+                return true  -- Nothing to restore
+            end
+            local restored = command_helper.restore_clip_state(args.ripple_original_clip_state)
+            assert(restored, string.format("UndoRippleEdit.restore_target: restore_clip_state failed for clip %s",
+                tostring(args.ripple_original_clip_state.id or "unknown")))
+
+            local ok, err = restored:save({skip_occlusion = true})
+            assert(ok, string.format("UndoRippleEdit.restore_target: save failed for clip %s: %s", restored.id, tostring(err)))
+
+            local payload = command_helper.clip_update_payload(restored, sequence_id)
+            assert(payload, string.format("UndoRippleEdit.restore_target: clip_update_payload failed for clip %s", restored.id))
+            command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
+            return true
+        end
+
+        local function reverse_shift()
+            if not args.ripple_post_states then
+                return true  -- Nothing to reverse
+            end
+            for _, state in ipairs(args.ripple_post_states) do
+                if not args.ripple_original_clip_state or state.id ~= args.ripple_original_clip_state.id then
+                    local clip = Clip.load_optional(state.id)
+                    if clip then  -- Clip may have been deleted; skip if so
+                        clip.timeline_start = clip.timeline_start - shift_frames
+
+                        local ok, err = clip:save({skip_occlusion = true})
+                        assert(ok, string.format("UndoRippleEdit.reverse_shift: save failed for clip %s: %s", clip.id, tostring(err)))
+                        local payload = command_helper.clip_update_payload(clip, sequence_id)
+                        assert(payload, string.format("UndoRippleEdit.reverse_shift: clip_update_payload failed for clip %s", clip.id))
                         command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
                     end
                 end
             end
+            return true
         end
         
-        local function reverse_shift()
-            if args.ripple_post_states then
-                for _, state in ipairs(args.ripple_post_states) do
-                    if not args.ripple_original_clip_state or state.id ~= args.ripple_original_clip_state.id then
-                        local clip = Clip.load_optional(state.id)
-                        if clip then
-                            clip.timeline_start = clip.timeline_start - shift_rat
-                            
-                            clip:save({skip_occlusion = true})
-                            local payload = command_helper.clip_update_payload(clip, sequence_id)
-                            if payload then
-                                command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        
-        if shift_rat > Rational.new(0, 1, 1) then
+        if shift_frames > 0 then
             restore_target()
             reverse_shift()
         else

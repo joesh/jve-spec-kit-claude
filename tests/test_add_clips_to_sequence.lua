@@ -125,10 +125,10 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         project_id = "project",
         track_id = track_id,
         owner_sequence_id = "sequence",
-        timeline_start = Rational.new(start_frame, 30, 1),
-        duration = Rational.new(duration_frames, 30, 1),
-        source_in = Rational.new(0, 30, 1),
-        source_out = Rational.new(duration_frames, 30, 1),
+        timeline_start = start_frame,
+        duration = duration_frames,
+        source_in = 0,
+        source_out = duration_frames,
         enabled = true,
         fps_numerator = 30,
         fps_denominator = 1
@@ -152,21 +152,21 @@ local groups = {
                 master_clip_id = nil,
                 project_id = "project",
                 name = "Test Clip",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(100, 30, 1),
-                duration = Rational.new(100, 30, 1),
+                source_in = 0,
+                source_out = 100,
+                duration = 100,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(100, 30, 1),
+        duration = 100,
     }
 }
 
 local result = execute_command("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 30, 1),
+    position = 0,
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "insert",
@@ -190,21 +190,21 @@ groups = {
                 media_id = "media_1",
                 project_id = "project",
                 name = "Inserted",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(50, 30, 1),
-                duration = Rational.new(50, 30, 1),
+                source_in = 0,
+                source_out = 50,
+                duration = 50,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(50, 30, 1),
+        duration = 50,
     }
 }
 
 result = execute_command("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 30, 1),  -- Insert at start
+    position = 0,  -- Insert at start
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "insert",
@@ -232,21 +232,21 @@ groups = {
                 media_id = "media_1",
                 project_id = "project",
                 name = "Overwritten",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(50, 30, 1),
-                duration = Rational.new(50, 30, 1),
+                source_in = 0,
+                source_out = 50,
+                duration = 50,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(50, 30, 1),
+        duration = 50,
     }
 }
 
 result = execute_command("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 30, 1),
+    position = 0,
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "overwrite",
@@ -272,15 +272,15 @@ groups = {
                 media_id = "media_1",
                 project_id = "project",
                 name = "Clip A",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(100, 30, 1),
-                duration = Rational.new(100, 30, 1),
+                source_in = 0,
+                source_out = 100,
+                duration = 100,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(100, 30, 1),
+        duration = 100,
     },
     {
         clips = {
@@ -289,21 +289,21 @@ groups = {
                 media_id = "media_1",
                 project_id = "project",
                 name = "Clip B",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(50, 30, 1),
-                duration = Rational.new(50, 30, 1),
+                source_in = 0,
+                source_out = 50,
+                duration = 50,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(50, 30, 1),
+        duration = 50,
     }
 }
 
 result = execute_command("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 30, 1),
+    position = 0,
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "insert",
@@ -337,9 +337,9 @@ groups = {
                 media_id = "media_1",
                 project_id = "project",
                 name = "AV Clip",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(100, 30, 1),
-                duration = Rational.new(100, 30, 1),
+                source_in = 0,
+                source_out = 100,
+                duration = 100,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
@@ -350,21 +350,21 @@ groups = {
                 media_id = "media_1",
                 project_id = "project",
                 name = "AV Clip (Audio)",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(100, 30, 1),
-                duration = Rational.new(100, 30, 1),
+                source_in = 0,
+                source_out = 100,
+                duration = 100,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_a1",
             }
         },
-        duration = Rational.new(100, 30, 1),
+        duration = 100,
     }
 }
 
 result = execute_command("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 30, 1),
+    position = 0,
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "insert",
@@ -425,21 +425,21 @@ groups = {
                 media_id = "media_1",
                 project_id = "project",
                 name = "Inserted",
-                source_in = Rational.new(0, 30, 1),
-                source_out = Rational.new(50, 30, 1),
-                duration = Rational.new(50, 30, 1),
+                source_in = 0,
+                source_out = 50,
+                duration = 50,
                 fps_numerator = 30,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(50, 30, 1),
+        duration = 50,
     }
 }
 
 result = execute_command("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 30, 1),
+    position = 0,
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "insert",

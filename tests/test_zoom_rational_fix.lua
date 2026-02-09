@@ -10,7 +10,7 @@ local keyboard_shortcuts = require('core.keyboard_shortcuts')
 
 -- Mock timeline_state
 local mock_state = {}
-mock_state._duration = Rational.new(10000, 30, 1) -- 10s @ 30fps
+mock_state._duration = 10000 -- 10s @ 30fps
 mock_state.get_viewport_duration = function() return mock_state._duration end
 mock_state.set_viewport_duration = function(val) 
     mock_state._duration = val
@@ -18,7 +18,7 @@ mock_state.set_viewport_duration = function(val)
 end
 mock_state.get_viewport_start_time = function() return Rational.new(0, 30, 1) end
 mock_state.set_viewport_start_time = function() end
-mock_state.get_playhead_position = function() return Rational.new(0, 30, 1) end
+mock_state.get_playhead_position = function() return 0 end
 
 -- Inject mock state
 keyboard_shortcuts.init(mock_state, nil, nil, nil)

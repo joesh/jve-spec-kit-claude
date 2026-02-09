@@ -15,9 +15,7 @@
 -- @file move_clip_to_track.lua
 local M = {}
 local Clip = require('models.clip')
-local frame_utils = require('core.frame_utils') -- Still used for legacy/migration. Keep for now.
 local command_helper = require("core.command_helper")
-local Rational = require("core.rational")
 local clip_mutator = require("core.clip_mutator")
 
 
@@ -25,8 +23,8 @@ local SPEC = {
     args = {
         clip_id = { required = true },
         dry_run = { kind = "boolean" },
-        pending_duration_rat = {},
-        pending_new_start_rat = {},
+        pending_duration = { kind = "number" },
+        pending_new_start = { kind = "number" },
         project_id = { required = true },
         sequence_id = {},
         skip_occlusion = { kind = "boolean" },
@@ -34,7 +32,7 @@ local SPEC = {
     },
     persisted = {
         executed_mutations = {},
-        original_timeline_start_rat = {},  -- Set by executor for undo
+        original_timeline_start = {},  -- Set by executor for undo (integer frames)
         original_track_id = {},  -- Set by executor for undo
         pending_clips = {},
     },
@@ -74,37 +72,34 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 
         local clip = Clip.load(clip_id)
+        -- NSF: Clip must exist for move operation
+        assert(clip, string.format("MoveClipToTrack: clip %s not found", clip_id))
 
-        if not clip then
-            print(string.format("WARNING: MoveClipToTrack: Clip %s not found", clip_id))
-            return false
-        end
-
+        -- Resolve mutation_sequence: prefer clip's owner, then lookup from track
         local mutation_sequence = clip.owner_sequence_id or clip.track_sequence_id
         if (not mutation_sequence or mutation_sequence == "") and clip.track_id then
             local seq_lookup = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
-            if seq_lookup then
-                seq_lookup:bind_value(1, clip.track_id)
-                if seq_lookup:exec() and seq_lookup:next() then
-                    mutation_sequence = seq_lookup:value(0)
-                end
-                seq_lookup:finalize()
+            assert(seq_lookup, "MoveClipToTrack: failed to prepare sequence lookup query")
+            seq_lookup:bind_value(1, clip.track_id)
+            if seq_lookup:exec() and seq_lookup:next() then
+                mutation_sequence = seq_lookup:value(0)
             end
+            seq_lookup:finalize()
         end
         if not mutation_sequence or mutation_sequence == "" then
+            -- Try target track as fallback
             local target_lookup = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
-            if target_lookup then
-                target_lookup:bind_value(1, args.target_track_id)
-                if target_lookup:exec() and target_lookup:next() then
-                    mutation_sequence = target_lookup:value(0)
-                end
-                target_lookup:finalize()
+            assert(target_lookup, "MoveClipToTrack: failed to prepare target sequence lookup query")
+            target_lookup:bind_value(1, args.target_track_id)
+            if target_lookup:exec() and target_lookup:next() then
+                mutation_sequence = target_lookup:value(0)
             end
+            target_lookup:finalize()
         end
-        if not mutation_sequence or mutation_sequence == "" then
-            print("WARNING: MoveClipToTrack: Unable to resolve sequence for clip " .. tostring(clip_id))
-            return false
-        end
+        -- NSF: mutation_sequence is required - no fallback
+        assert(mutation_sequence and mutation_sequence ~= "",
+            string.format("MoveClipToTrack: unable to resolve sequence for clip %s (track_id=%s, target_track_id=%s)",
+                clip_id, tostring(clip.track_id), tostring(args.target_track_id)))
         clip.owner_sequence_id = clip.owner_sequence_id or mutation_sequence
         command:set_parameters({
             ["sequence_id"] = mutation_sequence,
@@ -122,26 +117,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local original_timeline_start = clip.timeline_start
         local original_state = command_helper.capture_clip_state(clip)
 
-        -- Check for pending_new_start_value
-        local pending_new_start_rat = args.pending_new_start_rat
-        if type(pending_new_start_rat) == "table" and pending_new_start_rat.frames and not getmetatable(pending_new_start_rat) then
-            pending_new_start_rat = Rational.new(pending_new_start_rat.frames, pending_new_start_rat.fps_numerator, pending_new_start_rat.fps_denominator)
+        -- Pending values must be integers (if provided)
+        local pending_new_start = args.pending_new_start
+        local pending_duration = args.pending_duration
+        if pending_new_start then
+            assert(type(pending_new_start) == "number", "MoveClipToTrack: pending_new_start must be integer")
+        end
+        if pending_duration then
+            assert(type(pending_duration) == "number", "MoveClipToTrack: pending_duration must be integer")
         end
 
-        local pending_duration_rat = args.pending_duration_rat
-        if type(pending_duration_rat) == "table" and pending_duration_rat.frames and not getmetatable(pending_duration_rat) then
-            pending_duration_rat = Rational.new(pending_duration_rat.frames, pending_duration_rat.fps_numerator, pending_duration_rat.fps_denominator)
-        end
-
-        if pending_new_start_rat then
-            -- Store original timeline_start before changing it for a potential move during save
-            command:set_parameter("original_timeline_start_rat", clip.timeline_start)
-            clip.timeline_start = pending_new_start_rat
+        if pending_new_start then
+            command:set_parameter("original_timeline_start", clip.timeline_start)
+            clip.timeline_start = pending_new_start
         end
 
         -- Resolve Occlusions on Target Track
         local target_start = clip.timeline_start
-        local target_duration = pending_duration_rat or clip.duration
+        local target_duration = pending_duration or clip.duration
         local pending_clips = args.pending_clips
 
         local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_occlusions(db, {
@@ -153,8 +146,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         })
         
         if not ok_occ then
-            print(string.format("ERROR: MoveClipToTrack: Failed to resolve occlusions: %s", tostring(err_occ)))
-            return false
+            -- NSF: Return structured error, not just false
+            return {success = false, error_message = string.format("MoveClipToTrack: Failed to resolve occlusions: %s", tostring(err_occ))}
         end
         
         -- Plan the move itself
@@ -171,7 +164,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Execute all mutations
         local ok_apply, apply_err = command_helper.apply_mutations(db, planned_mutations)
         if not ok_apply then
-            return false, "Failed to apply mutations: " .. tostring(apply_err)
+            -- NSF: Return structured error, not tuple
+            return {success = false, error_message = "MoveClipToTrack: Failed to apply mutations: " .. tostring(apply_err)}
         end
 
         command:set_parameter("executed_mutations", planned_mutations)
@@ -216,9 +210,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
         end
-        if sequence_id and sequence_id ~= "" then
-            command:set_parameter("sequence_id", sequence_id)
-        end
+        -- NSF: sequence_id is required for undo - assert we resolved it
+        assert(sequence_id and sequence_id ~= "",
+            "UndoMoveClipToTrack: could not resolve sequence_id from command args or mutations")
+        command:set_parameter("sequence_id", sequence_id)
 
         local started, begin_err = db:begin_transaction()
         if not started then

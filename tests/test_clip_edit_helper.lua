@@ -1,7 +1,6 @@
 require("test_env")
 
 local database = require("core.database")
-local Rational = require("core.rational")
 local Track = require("models.track")
 
 -- Stub timeline_state before clip_edit_helper is required
@@ -10,7 +9,6 @@ local mock_timeline_state = {}
 package.loaded["ui.timeline.timeline_state"] = mock_timeline_state
 
 local clip_edit_helper = require("core.clip_edit_helper")
-local rational_helpers = require("core.command_rational_helpers")
 
 local pass_count = 0
 local fail_count = 0
@@ -219,10 +217,10 @@ check("edit_time=0 → 0 (not nil)", result == 0)
 result = clip_edit_helper.resolve_edit_time(42, nil, "insert_time")
 check("edit_time=42 → 42", result == 42)
 
--- 4b. Rational value → pass through
-local rat = Rational.new(10, 24, 1)
-result = clip_edit_helper.resolve_edit_time(rat, nil, "insert_time")
-check("edit_time Rational → pass through", result == rat)
+-- 4b. Integer value → pass through
+local int_val = 10
+result = clip_edit_helper.resolve_edit_time(int_val, nil, "insert_time")
+check("edit_time integer → pass through", result == int_val)
 
 -- 4c. nil → fallback to timeline_state playhead
 mock_timeline_state.get_playhead_position = function() return 100 end
@@ -275,69 +273,60 @@ check("name priority: master wins", result == "B")
 
 print("\n--- 6. resolve_timing ---")
 
-local seq_fps_num, seq_fps_den = 24, 1
-local media_fps_num, media_fps_den = 24, 1
+-- resolve_timing now returns plain integers: {duration, source_in, source_out}
 
 -- 6a. Explicit duration + source_in → computes source_out
 local timing, timing_err = clip_edit_helper.resolve_timing(
     { duration_value = 100, source_in_value = 10 },
-    nil, nil,
-    seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
+    nil, nil)
 check("explicit timing → success", timing ~= nil)
 check("timing no error", timing_err == nil)
-check("duration_frames = 100", timing.duration_frames == 100)
-check("source_in = 10 frames", timing.source_in_rat.frames == 10)
-check("source_out = 110 frames", timing.source_out_rat.frames == 110)
-check("duration_rat is Rational", timing.duration_rat.frames == 100)
+check("duration = 100", timing.duration == 100)
+check("source_in = 10", timing.source_in == 10)
+check("source_out = 110", timing.source_out == 110)
 
 -- 6b. Explicit source_in + source_out → computes duration
 timing, timing_err = clip_edit_helper.resolve_timing(
     { source_in_value = 0, source_out_value = 50 },
-    nil, nil,
-    seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
-check("in+out → duration", timing ~= nil and timing.duration_frames == 50)
+    nil, nil)
+check("in+out → duration", timing ~= nil and timing.duration == 50)
 
 -- 6c. No duration, no source_out, no media → error
 timing, timing_err = clip_edit_helper.resolve_timing(
-    {}, nil, nil,
-    seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
+    {}, nil, nil)
 check("no timing → nil", timing == nil)
 check("error message", timing_err ~= nil and timing_err:match("invalid duration"))
 
 -- 6d. Fallback to master_clip duration
 local master = {
-    duration = Rational.new(75, 24, 1),
-    source_in = Rational.new(5, 24, 1),
+    duration = 75,
+    source_in = 5,
 }
 timing, timing_err = clip_edit_helper.resolve_timing(
-    {}, master, nil,
-    seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
+    {}, master, nil)
 check("master_clip fallback", timing ~= nil)
-check("master duration_frames", timing.duration_frames == 75)
-check("master source_in", timing.source_in_rat.frames == 5)
+check("master duration", timing.duration == 75)
+check("master source_in", timing.source_in == 5)
 
 -- 6e. Fallback to media duration
 local media_obj = {
-    duration = Rational.new(200, 24, 1),
+    duration = 200,
 }
 timing, timing_err = clip_edit_helper.resolve_timing(
-    {}, nil, media_obj,
-    seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
+    {}, nil, media_obj)
 check("media fallback", timing ~= nil)
-check("media duration_frames", timing.duration_frames == 200)
-check("media default source_in = 0", timing.source_in_rat.frames == 0)
+check("media duration", timing.duration == 200)
+check("media default source_in = 0", timing.source_in == 0)
 
 -- 6f. source_in defaults to 0 when not provided
 timing, timing_err = clip_edit_helper.resolve_timing(
-    { duration_value = 30 }, nil, nil,
-    seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
-check("default source_in = 0", timing.source_in_rat.frames == 0)
-check("source_out = 30", timing.source_out_rat.frames == 30)
+    { duration_value = 30 }, nil, nil)
+check("default source_in = 0", timing.source_in == 0)
+check("source_out = 30", timing.source_out == 30)
 
 -- 6g. Zero duration → error
 timing, timing_err = clip_edit_helper.resolve_timing(
-    { duration_value = 0 }, nil, nil,
-    seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
+    { duration_value = 0 }, nil, nil)
 check("zero duration → nil", timing == nil)
 check("zero duration error", timing_err ~= nil and timing_err:match("invalid duration"))
 
@@ -348,14 +337,14 @@ check("zero duration error", timing_err ~= nil and timing_err:match("invalid dur
 
 print("\n--- 7. create_selected_clip ---")
 
-local dur = Rational.new(100, 24, 1)
-local si = Rational.new(0, 24, 1)
-local so = Rational.new(100, 24, 1)
+local dur = 100
+local si = 0
+local so = 100
 
 -- 7a. Video-only (0 audio channels)
 local sc = clip_edit_helper.create_selected_clip({
     media_id = "med1", master_clip_id = "mc1", project_id = "proj1",
-    duration_rat = dur, source_in_rat = si, source_out_rat = so,
+    duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 0,
 })
 check("has_video → true", sc:has_video() == true)
@@ -369,7 +358,7 @@ check("video.duration", sc.video.duration == dur)
 -- 7b. With audio channels
 sc = clip_edit_helper.create_selected_clip({
     media_id = "med1", master_clip_id = "mc1", project_id = "proj1",
-    duration_rat = dur, source_in_rat = si, source_out_rat = so,
+    duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 2,
 })
 check("has_audio → true", sc:has_audio() == true)
@@ -398,7 +387,7 @@ end, "invalid audio channel")
 -- 7f. Default audio_channels = 0 when nil
 sc = clip_edit_helper.create_selected_clip({
     media_id = "med1", master_clip_id = "mc1", project_id = "proj1",
-    duration_rat = dur, source_in_rat = si, source_out_rat = so,
+    duration = dur, source_in = si, source_out = so,
     clip_name = "Test",
 })
 check("nil audio_channels defaults to 0", sc:audio_channel_count() == 0)
@@ -449,7 +438,7 @@ print("\n--- 9. create_audio_track_resolver ---")
 mock_timeline_state.get_audio_tracks = nil
 
 -- 9a. Resolve existing audio track (index 0 → trk_a1)
-local resolver = clip_edit_helper.create_audio_track_resolver("seq1", db)
+local resolver = clip_edit_helper.create_audio_track_resolver("seq1")
 local track = resolver(nil, 0)
 check("resolver(0) → trk_a1", track.id == "trk_a1")
 
@@ -471,7 +460,7 @@ mock_timeline_state.get_audio_tracks = function()
         { id = "ts_a2", track_type = "AUDIO", track_index = 2 },
     }
 end
-local resolver2 = clip_edit_helper.create_audio_track_resolver("seq1", db)
+local resolver2 = clip_edit_helper.create_audio_track_resolver("seq1")
 track = resolver2(nil, 0)
 check("resolver from timeline_state", track.id == "ts_a1")
 track = resolver2(nil, 1)

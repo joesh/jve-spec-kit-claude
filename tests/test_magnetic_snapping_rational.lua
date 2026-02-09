@@ -1,10 +1,11 @@
 #!/usr/bin/env luajit
 
+-- Test: magnetic_snapping with integer frame coordinates
+-- Verifies snapping works with playhead, clip edges, and snapshot clips
+
 package.path = package.path .. ";src/lua/?.lua;src/lua/?/init.lua;./?.lua;./?/init.lua"
 
 local magnetic_snapping = require("core.magnetic_snapping")
-local time_utils = require("core.time_utils")
-local Rational = require("core.rational")
 
 local function assert_equal(actual, expected, message)
     if actual ~= expected then
@@ -18,38 +19,37 @@ local function assert_true(condition, message)
     end
 end
 
--- Stub state exposing minimal API
+-- Stub state exposing minimal API (all coords are integer frames)
 local sequence_fps_num = 24
 local sequence_fps_den = 1
 local state = {
     get_sequence_fps_numerator = function() return sequence_fps_num end,
     get_sequence_fps_denominator = function() return sequence_fps_den end,
-    get_playhead_position = function() return time_utils.from_frames(12, sequence_fps_num, sequence_fps_den) end, -- 0.5 seconds at 24fps
-    time_to_pixel = function(rt, _viewport_width_px)
-        return time_utils.to_frames(rt, sequence_fps_num, sequence_fps_den)
+    get_playhead_position = function() return 12 end, -- 0.5 seconds at 24fps
+    get_sequence_frame_rate = function() return {fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den} end,
+    time_to_pixel = function(frame, _viewport_width_px)
+        return frame -- 1:1 mapping for testing
     end,
     get_clips = function()
         return {
-            {id = "clip_a", timeline_start = time_utils.from_frames(24, sequence_fps_num, sequence_fps_den), duration = time_utils.from_frames(12, sequence_fps_num, sequence_fps_den)},  -- 1s start, ~0.5s duration
-            {id = "clip_b", timeline_start = time_utils.from_frames(60, sequence_fps_num, sequence_fps_den), duration = time_utils.from_frames(12, sequence_fps_num, sequence_fps_den)},  -- 2.5s start
+            {id = "clip_a", timeline_start = 24, duration = 12},  -- 1s start, ~0.5s duration
+            {id = "clip_b", timeline_start = 60, duration = 12},  -- 2.5s start
         }
     end
 }
 
--- Rational target at 1s should snap to clip_a in edge
-local target_rt = time_utils.from_frames(24, sequence_fps_num, sequence_fps_den) -- 1s
-local snapped_time, info = magnetic_snapping.apply_snap(state, target_rt, true, {}, {}, 50)
-assert_true(getmetatable(snapped_time) == Rational.metatable, "Snapped time should be a Rational object")
-assert_equal(snapped_time.frames, 24, "RationalTime target should snap to clip in-point frames")
-assert_equal(snapped_time.fps_numerator, sequence_fps_num, "RationalTime target should snap to clip in-point fps_numerator")
-assert_equal(info.snapped, true, "Snap should trigger for close rational target")
+-- Integer target at frame 24 should snap to clip_a in edge
+local target = 24
+local snapped_time, info = magnetic_snapping.apply_snap(state, target, true, {}, {}, 50)
+assert_true(type(snapped_time) == "number", "Snapped time should be an integer")
+assert_equal(snapped_time, 24, "Target should snap to clip in-point frame 24")
+assert_equal(info.snapped, true, "Snap should trigger for close target")
 
--- Rational target near playhead should snap to playhead
-local near_playhead = time_utils.from_frames(12, sequence_fps_num, sequence_fps_den) -- 0.5s
+-- Target near playhead (frame 12) should snap to playhead
+local near_playhead = 12
 local snapped_playhead, info2 = magnetic_snapping.apply_snap(state, near_playhead, true, {}, {}, 100)
-assert_true(getmetatable(snapped_playhead) == Rational.metatable, "Snapped playhead should be a Rational object")
-assert_equal(snapped_playhead.frames, 12, "RationalTime near playhead should snap to playhead frame value")
-assert_equal(snapped_playhead.fps_numerator, sequence_fps_num, "RationalTime near playhead should snap to playhead fps_numerator")
+assert_true(type(snapped_playhead) == "number", "Snapped playhead should be an integer")
+assert_equal(snapped_playhead, 12, "Target near playhead should snap to playhead frame 12")
 assert_equal(info2.snapped, true, "Snap should trigger for playhead")
 
 -- Clip snapshot scoping: snapping must not require state.get_clips when an
@@ -57,9 +57,10 @@ assert_equal(info2.snapped, true, "Snap should trigger for playhead")
 local state_without_get_clips = {
     get_sequence_fps_numerator = function() return sequence_fps_num end,
     get_sequence_fps_denominator = function() return sequence_fps_den end,
-    get_playhead_position = function() return time_utils.from_frames(12, sequence_fps_num, sequence_fps_den) end,
-    time_to_pixel = function(rt, _viewport_width_px)
-        return time_utils.to_frames(rt, sequence_fps_num, sequence_fps_den)
+    get_playhead_position = function() return 12 end,
+    get_sequence_frame_rate = function() return {fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den} end,
+    time_to_pixel = function(frame, _viewport_width_px)
+        return frame
     end,
     get_clips = function()
         error("get_clips should not be called when clip_snapshot is provided")
@@ -68,14 +69,14 @@ local state_without_get_clips = {
 
 local snapshot = {
     clips = {
-        {id = "clip_c", timeline_start = time_utils.from_frames(100, sequence_fps_num, sequence_fps_den), duration = time_utils.from_frames(10, sequence_fps_num, sequence_fps_den)}
+        {id = "clip_c", timeline_start = 100, duration = 10}
     }
 }
 
-local target_snapshot_rt = time_utils.from_frames(100, sequence_fps_num, sequence_fps_den)
-local snapped_snapshot, info3 = magnetic_snapping.apply_snap(state_without_get_clips, target_snapshot_rt, true, {}, {}, 100, {clip_snapshot = snapshot})
-assert_true(getmetatable(snapped_snapshot) == Rational.metatable, "Snapshot snap time should be a Rational object")
-assert_equal(snapped_snapshot.frames, 100, "Snapshot target should snap to snapshot clip in-point")
+local target_snapshot = 100
+local snapped_snapshot, info3 = magnetic_snapping.apply_snap(state_without_get_clips, target_snapshot, true, {}, {}, 100, {clip_snapshot = snapshot})
+assert_true(type(snapped_snapshot) == "number", "Snapshot snap time should be an integer")
+assert_equal(snapped_snapshot, 100, "Snapshot target should snap to snapshot clip in-point")
 assert_equal(info3.snapped, true, "Snap should trigger for snapshot clip")
 
-print("✅ magnetic_snapping RationalTime tests passed")
+print("test_magnetic_snapping_rational.lua passed")

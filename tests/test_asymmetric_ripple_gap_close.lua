@@ -24,8 +24,8 @@ local tracks = layout.tracks
 local function current_gap_frames()
     local v1_left = Clip.load(clips.v1_left.id, db)
     local v1_right = Clip.load(clips.v1_right.id, db)
-    return v1_right.timeline_start.frames - (v1_left.timeline_start.frames + v1_left.duration.frames),
-        v1_right.timeline_start.frames
+    return v1_right.timeline_start - (v1_left.timeline_start + v1_left.duration),
+        v1_right.timeline_start
 end
 
 local initial_gap, initial_right_start = current_gap_frames()
@@ -49,8 +49,8 @@ assert(result.success, result.error_message or "BatchRippleEdit failed for asymm
 local v2_after = Clip.load(clips.v2.id, db)
 local gap_after, right_start_after = current_gap_frames()
 
-assert(v2_after.duration.frames == 800,
-    string.format("V2 duration mismatch: expected 800 got %d", v2_after.duration.frames))
+assert(v2_after.duration == 800,
+    string.format("V2 duration mismatch: expected 800 got %d", v2_after.duration))
 assert(gap_after == initial_gap - 200,
     string.format("Gap should shrink by 200 frames: expected %d got %d", initial_gap - 200, gap_after))
 assert(right_start_after == initial_right_start - 200,

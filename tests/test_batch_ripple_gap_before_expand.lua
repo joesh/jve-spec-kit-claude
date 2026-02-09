@@ -64,8 +64,8 @@ assert(result.success, result.error_message or "BatchRippleEdit gap expansion fa
 local target_clip = Clip.load("clip_gap_target", db)
 local downstream_clip = Clip.load("clip_downstream", db)
 
-assert(target_clip.timeline_start.frames == 2100, string.format("Gap target should shift LEFT when upstream [ is dragged right; expected 2100, got %s", tostring(target_clip.timeline_start.frames)))
-assert(downstream_clip.timeline_start.frames == 3600, string.format("Downstream clip should shift by the same delta; expected 3600, got %s", tostring(downstream_clip.timeline_start.frames)))
+assert(target_clip.timeline_start == 2100, string.format("Gap target should shift LEFT when upstream [ is dragged right; expected 2100, got %s", tostring(target_clip.timeline_start)))
+assert(downstream_clip.timeline_start == 3600, string.format("Downstream clip should shift by the same delta; expected 3600, got %s", tostring(downstream_clip.timeline_start)))
 
 os.remove(TEST_DB)
 print("✅ BatchRippleEdit closes gaps from upstream handles and shifts downstream clips on the same track")

@@ -42,17 +42,6 @@ function M.calc_time_us_from_frame(frame, fps_num, fps_den)
     return math.floor(frame * 1000000 * fps_den / fps_num)
 end
 
---- Convert frame index to Rational time
--- @param frame_idx number: Frame index
--- @param fps_num FPS numerator
--- @param fps_den FPS denominator
--- @return Rational: Time at that frame
-function M.frame_to_rational(frame_idx, fps_num, fps_den)
-    assert(fps_num and fps_den, "playback_helpers.frame_to_rational: fps not set")
-    local Rational = require("core.rational")
-    return Rational.new(math.floor(frame_idx), fps_num, fps_den)
-end
-
 --------------------------------------------------------------------------------
 -- Audio Control (transport event helpers)
 --------------------------------------------------------------------------------
@@ -112,20 +101,14 @@ end
 --- Seek to a Rational time position
 -- @param time_rat Rational: Timeline position to seek to
 -- @param fps_num FPS numerator
--- @param fps_den FPS denominator
+
+--- Clamp frame index to valid range
+-- @param frame Frame index (integer)
 -- @param total_frames Total frames in source
--- @return frame_idx Frame index after conversion and clamping
-function M.rational_to_frame_clamped(time_rat, fps_num, fps_den, total_frames)
-    assert(time_rat and time_rat.frames ~= nil,
-        "playback_helpers.rational_to_frame_clamped: time_rat must be a Rational")
-    assert(fps_num and fps_den,
-        "playback_helpers.rational_to_frame_clamped: fps not set")
-
-    -- Convert Rational to frame index
-    local frame_idx = time_rat:rescale(fps_num, fps_den).frames
-    frame_idx = math.max(0, math.min(frame_idx, total_frames - 1))
-
-    return frame_idx
+-- @return frame_idx Clamped frame index
+function M.frame_clamped(frame, total_frames)
+    assert(type(frame) == "number", "playback_helpers.frame_clamped: frame must be integer")
+    return math.max(0, math.min(frame, total_frames - 1))
 end
 
 return M

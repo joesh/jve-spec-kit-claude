@@ -147,16 +147,7 @@ expect_error("serialize nil denominator → error", function()
     cmd:serialize()
 end, "playhead_rate missing fps_denominator")
 
--- 2e. Table playhead_value (Rational-like) → extracts .frames
-cmd = Command.create("TestCmd", "proj1")
-cmd.playhead_value = { frames = 77 }
-cmd.playhead_rate = 24
-cmd.executed_at = os.time()
-json_str = cmd:serialize()
-decoded = json.decode(json_str)
-check("Rational playhead_value.frames extracted", decoded.playhead_value == 77)
-
--- 2f. Ephemeral parameters excluded
+-- 2e. Ephemeral parameters excluded
 cmd = Command.create("TestCmd", "proj1")
 cmd.playhead_value = 0
 cmd.playhead_rate = 24
@@ -167,6 +158,15 @@ json_str = cmd:serialize()
 decoded = json.decode(json_str)
 check("ephemeral excluded from serialize", decoded.parameters.__ephemeral == nil)
 check("visible included in serialize", decoded.parameters.visible_param == "yes")
+
+-- 2f. Table playhead_value (not integer) now asserts
+cmd = Command.create("TestCmd", "proj1")
+cmd.playhead_value = { frames = 77 }  -- legacy Rational-like, now rejected
+cmd.playhead_rate = 24
+cmd.executed_at = os.time()
+local ok_2f, err_2f = pcall(function() cmd:serialize() end)
+check("table playhead_value → assert", not ok_2f)
+check("assert mentions integer", err_2f and tostring(err_2f):find("integer") ~= nil)
 
 
 -- ═══════════════════════════════════════════════════════════════
@@ -414,21 +414,15 @@ check("ephemeral excluded from DB", saved_args.__hidden == nil)
 check("visible included in DB", saved_args.visible == "yes")
 verify:finalize()
 
--- 5i. Rational playhead_value (table with .frames) → extracts frames
+-- 5i. Table playhead_value now asserts (requires integer)
 cmd = Command.create("TestCmd4", "proj1")
-cmd.playhead_value = { frames = 42 }
+cmd.playhead_value = { frames = 42 }  -- legacy format, now rejected
 cmd.playhead_rate = 24
 cmd.executed_at = now
 cmd.sequence_number = 4
-ok = cmd:save(db)
-check("save Rational playhead → true", ok == true)
-
-verify = db:prepare("SELECT playhead_value FROM commands WHERE id = ?")
-assert(verify)
-verify:bind_value(1, cmd.id)
-assert(verify:exec() and verify:next())
-check("saved Rational playhead_value = 42", verify:value(0) == 42)
-verify:finalize()
+local ok_5i, err_5i = pcall(function() cmd:save(db) end)
+check("save table playhead → assert", not ok_5i)
+check("assert mentions playhead", err_5i and tostring(err_5i):find("playhead") ~= nil)
 
 
 -- ═══════════════════════════════════════════════════════════════

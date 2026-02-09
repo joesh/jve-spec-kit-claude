@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -76,10 +75,6 @@ timeline = {
     update = function() end
 }
 
-local function rational(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local limit_color = timeline_state.colors.edge_selected_limit or "#ff0000"
 local avail_color = timeline_state.colors.edge_selected_available or "#00ff00"
 local gap_start_frames = clips.v1_left.timeline_start + clips.v1_left.duration
@@ -113,21 +108,21 @@ local function render_with_edges(edge_list, delta_frames)
         type = "edges",
         edges = edge_list,
         lead_edge = edge_list[#edge_list],
-        delta_rational = rational(delta_frames)
+        delta_frames = delta_frames
     }
     view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, edge_list, {pad_frames = 400})
     view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
     timeline_state.set_edge_selection(edge_list)
     drawn_rects = {}
     timeline_renderer.render(view)
-    return view.drag_state.preview_clamped_delta, drawn_rects
+    return view.drag_state.preview_clamped_delta_frames, drawn_rects
 end
 
 -- Scenario 1: Single edge clamp still flips to limit color
 local single_edge = {{clip_id = clips.v1_left.id, edge_type = "out", track_id = tracks.v1.id, trim_type = "ripple"}}
 local preview_delta = select(1, render_with_edges(single_edge, 1000))
 assert(preview_delta, "preview should record clamped delta")
-assert(preview_delta.frames < 1000, "clamped delta should be smaller than requested delta")
+assert(preview_delta < 1000, "clamped delta should be smaller than requested delta")
 local counts_single = count_edge_rects(drawn_rects, tracks.v1.id)
 assert(counts_single.limit > 0, "Single edge clamp should render using limit color")
 

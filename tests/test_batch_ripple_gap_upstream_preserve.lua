@@ -62,10 +62,10 @@ assert(result.success, result.error_message or "BatchRippleEdit failed")
 local v1_clip = Clip.load("clip_v1_upstream", db)
 local v2_right = Clip.load("clip_v2_right", db)
 
-assert(v1_clip.timeline_start.frames == 100,
-    string.format("Cross-track upstream clip moved from 100 to %d", v1_clip.timeline_start.frames))
-assert(v2_right.timeline_start.frames == 940,
-    string.format("V2 downstream clip should shift upstream to 940 when closing the gap; got %d", v2_right.timeline_start.frames))
+assert(v1_clip.timeline_start == 100,
+    string.format("Cross-track upstream clip moved from 100 to %d", v1_clip.timeline_start))
+assert(v2_right.timeline_start == 940,
+    string.format("V2 downstream clip should shift upstream to 940 when closing the gap; got %d", v2_right.timeline_start))
 
 os.remove(TEST_DB)
 print("✅ BatchRippleEdit keeps cross-track upstream clips anchored when rippling gaps")

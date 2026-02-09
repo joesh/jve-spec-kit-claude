@@ -15,8 +15,6 @@
 -- @file go_to_next_edit.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
-local sequence_frame_rate = require('core.utils.sequence_frame_rate')
-local Rational = require('core.rational')
 
 
 local SPEC = {
@@ -31,44 +29,33 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function collect_edit_points()
         local clips = timeline_state.get_clips() or {}
-        
-        -- Determine rate
-        local fps_num, fps_den = sequence_frame_rate.require_sequence_frame_rate(timeline_state, "GoToNextEdit")
-        local zero = Rational.new(0, fps_num, fps_den)
-        
-        -- Store points as Rationals in a list, sort manually
-        local points = {zero}
 
-        local function add_point(value)
-            if type(value) == "table" and value.frames then
-                table.insert(points, value)
-            elseif type(value) == "number" then
-                table.insert(points, Rational.new(value, fps_num, fps_den))
-            end
-        end
+        -- Collect edit points as integers
+        local points = {0}
 
         for _, clip in ipairs(clips) do
             local start = clip.timeline_start or clip.start_value
             local duration = clip.duration or clip.duration_value
 
-            if start then add_point(start) end
-            if start and duration then
-                add_point(start + duration)
+            if type(start) == "number" then
+                table.insert(points, start)
+                if type(duration) == "number" then
+                    table.insert(points, start + duration)
+                end
             end
         end
 
-        -- Deduplicate and sort
+        -- Sort and deduplicate
         table.sort(points)
-        -- Simple dedupe
         local unique = {}
         local last = nil
         for _, p in ipairs(points) do
-            if not last or p ~= last then
+            if p ~= last then
                 table.insert(unique, p)
                 last = p
             end
         end
-        
+
         return unique
     end
 
@@ -81,13 +68,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local points = collect_edit_points()
         local playhead = timeline_state.get_playhead_position()
-        
-        -- Ensure playhead is Rational
-        if type(playhead) == "number" then
-             -- Should not happen in V5 usually
-             local fps_num, fps_den = sequence_frame_rate.require_sequence_frame_rate(timeline_state, "GoToNextEdit")
-             playhead = Rational.new(playhead, fps_num, fps_den)
-        end
+        assert(type(playhead) == "number", "GoToNextEdit: playhead must be integer frames")
 
         local target = playhead
         for _, point in ipairs(points) do
@@ -103,7 +84,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if target ~= playhead then
             timeline_state.set_playhead_position(target)
-            print(string.format("✅ Moved playhead to next edit (%s)", tostring(target)))
+            print(string.format("✅ Moved playhead to next edit (frame %d)", target))
         end
         return true
     end

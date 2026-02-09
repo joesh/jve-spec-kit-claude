@@ -8,7 +8,6 @@ require("test_env")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state = require("ui.timeline.timeline_state")
 local data = require("ui.timeline.state.timeline_state_data")
-local Rational = require("core.rational")
 local dkjson = require("dkjson")
 local Command = require("command")
 
@@ -25,15 +24,15 @@ local clip = {
     id = "clip_under_playhead",
     track_id = "v1",
     name = "Clip 1",
-    timeline_start = Rational.new(0, 24, 1),
-    duration = Rational.new(48, 24, 1),
-    source_in = Rational.new(0, 24, 1),
-    source_out = Rational.new(48, 24, 1),
+    timeline_start = 0,
+    duration = 48,
+    source_in = 0,
+    source_out = 48,
     enabled = true,
 }
 data.state.clips = { clip }
 data.state.selected_clips = { clip }
-timeline_state.set_playhead_position(Rational.new(10, 24, 1))
+timeline_state.set_playhead_position(10)
 
 -- Stub command manager to capture the dispatched command.
 local captured_command = nil

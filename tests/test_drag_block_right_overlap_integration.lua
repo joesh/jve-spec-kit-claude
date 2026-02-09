@@ -83,7 +83,7 @@ local drag_state = {
         {id = "c2"},
     },
     anchor_clip_id = "c1",
-    delta_rational = Rational.new(120, 24, 1), -- move right ~5 seconds (~120 frames) -> overlaps c3 without occlusion handling
+    delta_frames = 120, -- move right ~5 seconds (~120 frames) -> overlaps c3 without occlusion handling
     current_y = 10,
     start_y = 0
 }

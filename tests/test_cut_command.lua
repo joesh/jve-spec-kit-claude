@@ -53,10 +53,8 @@ local function clip_exists(id)
     return stmt:value(0) > 0
 end
 
-local Rational = require('core.rational')
-
 local timeline_state = {
-    playhead_position = Rational.new(0, 30, 1),  -- Rational, not integer
+    playhead_position = 0,  -- integer frames
     selected_clips = {},
     sequence_frame_rate = 30.0
 }
@@ -151,10 +149,10 @@ local function create_clip_via_insert(spec)
     cmd:set_parameter("track_id", spec.track)
     cmd:set_parameter("media_id", media_id)
     cmd:set_parameter("clip_id", spec.id)
-    cmd:set_parameter("insert_time", Rational.new(spec.start, 30, 1))
-    cmd:set_parameter("duration", Rational.new(spec.duration, 30, 1))
-    cmd:set_parameter("source_in", Rational.new(0, 30, 1))
-    cmd:set_parameter("source_out", Rational.new(spec.duration, 30, 1))
+    cmd:set_parameter("insert_time", spec.start)
+    cmd:set_parameter("duration", spec.duration)
+    cmd:set_parameter("source_in", 0)
+    cmd:set_parameter("source_out", spec.duration)
 
     local result = command_manager.execute(cmd)
     assert(result and result.success, "Insert command failed for " .. spec.id)
@@ -197,7 +195,7 @@ assert(clip_exists("clip_c"), "clip_c should be restored after undo")
 
 -- Test 2: Cut with no selection is a no-op
 timeline_state.set_selection({})
-timeline_state.playhead_position = Rational.new(1300, 30, 1)
+timeline_state.playhead_position = 1300
 local before = clips_snapshot()
 result = command_manager.execute("Cut", {project_id = "default_project"})
 assert(result.success, "Cut with no selection should still succeed")

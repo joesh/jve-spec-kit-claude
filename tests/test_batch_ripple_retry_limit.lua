@@ -36,12 +36,12 @@ do
     local after_right = require("models.clip").load(layout.clips.v1_right.id, layout.db)
     local after_blocker = require("models.clip").load(layout.clips.v1_blocker.id, layout.db)
 
-    assert(after_middle.duration.frames == 1000,
-        string.format("Should extend by full delta (500 frames), got duration=%d", after_middle.duration.frames))
-    assert(after_right.timeline_start.frames == 2600,
-        string.format("Downstream clip should shift by ripple delta; expected start=2600, got %d", after_right.timeline_start.frames))
-    assert(after_blocker.timeline_start.frames == 3700,
-        string.format("Further downstream clip should shift by ripple delta; expected start=3700, got %d", after_blocker.timeline_start.frames))
+    assert(after_middle.duration == 1000,
+        string.format("Should extend by full delta (500 frames), got duration=%d", after_middle.duration))
+    assert(after_right.timeline_start == 2600,
+        string.format("Downstream clip should shift by ripple delta; expected start=2600, got %d", after_right.timeline_start))
+    assert(after_blocker.timeline_start == 3700,
+        string.format("Further downstream clip should shift by ripple delta; expected start=3700, got %d", after_blocker.timeline_start))
 
     layout:cleanup()
 end
@@ -69,8 +69,8 @@ do
 
     local after_right = require("models.clip").load(layout.clips.v1_right.id, layout.db)
     -- Should use forced retry delta (400 frames)
-    assert(after_right.timeline_start.frames == 2400,
-        string.format("Should shift by forced retry delta (400), got start=%d", after_right.timeline_start.frames))
+    assert(after_right.timeline_start == 2400,
+        string.format("Should shift by forced retry delta (400), got start=%d", after_right.timeline_start))
 
     layout:cleanup()
 end

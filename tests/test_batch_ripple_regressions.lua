@@ -10,7 +10,7 @@ local database = require("core.database")
 local SCHEMA_SQL = require("import_schema")
 
 local function compute_gap_frames(left_clip, right_clip)
-    return right_clip.timeline_start.frames - (left_clip.timeline_start.frames + left_clip.duration.frames)
+    return right_clip.timeline_start - (left_clip.timeline_start + left_clip.duration)
 end
 
 local function find_shifted_clip(payload, clip_id)
@@ -99,9 +99,9 @@ do
     local right_after = Clip.load(clips.v1_right.id, layout.db)
     local gap_frames_after = compute_gap_frames(left_after, right_after)
 
-    assert(right_after.timeline_start.frames == right_before.timeline_start.frames - 400,
+    assert(right_after.timeline_start == right_before.timeline_start - 400,
         string.format("gap_before trim should move right clip left; expected %d, got %d",
-            right_before.timeline_start.frames - 400, right_after.timeline_start.frames))
+            right_before.timeline_start - 400, right_after.timeline_start))
     assert(gap_frames_after == gap_frames_before - 400,
         string.format("Gap should shrink by 400 frames; expected %d, got %d",
             gap_frames_before - 400, gap_frames_after))
@@ -144,8 +144,8 @@ do
     assert(result.success, result.error_message or "Gap roll execute failed")
 
     local right_after = Clip.load(clips.v1_right.id, layout.db)
-    assert(right_after.timeline_start.frames == clips.v1_right.timeline_start + 200,
-        string.format("Gap roll should push the trailing clip right by 200, got %d", right_after.timeline_start.frames))
+    assert(right_after.timeline_start == clips.v1_right.timeline_start + 200,
+        string.format("Gap roll should push the trailing clip right by 200, got %d", right_after.timeline_start))
 
     layout:cleanup()
 end
@@ -178,9 +178,9 @@ do
     local left_after = Clip.load(clips.v1_left.id, layout.db)
     local right_after = Clip.load(clips.v1_right.id, layout.db)
 
-    assert(left_after.duration.frames == clips.v1_left.duration,
+    assert(left_after.duration == clips.v1_left.duration,
         "Conflicting roll constraints should leave the first clip unchanged")
-    assert(right_after.timeline_start.frames == clips.v1_right.timeline_start,
+    assert(right_after.timeline_start == clips.v1_right.timeline_start,
         "Conflicting roll constraints should leave the second clip unchanged")
 
     local clamped = cmd:get_parameter("clamped_delta_ms")
@@ -216,7 +216,7 @@ do
     assert(result.success, result.error_message or "Gap partner roll execute failed")
 
     local downstream = Clip.load("clip_downstream", layout.db)
-    assert(downstream.timeline_start.frames == 3200,
+    assert(downstream.timeline_start == 3200,
         "Gap roll with partner clip should not shift downstream clips")
 
     os.remove(TEST_DB)
@@ -250,7 +250,7 @@ do
     assert(result.success, result.error_message or "Retry scenario execute failed")
 
     local blocker_after = Clip.load("clip_blocker", layout.db)
-    assert(blocker_after.timeline_start.frames == 2800,
+    assert(blocker_after.timeline_start == 2800,
         "Downstream clip should shift only by the clamped amount")
 
     os.remove(TEST_DB)
@@ -297,9 +297,9 @@ do
 
     local v1_shift = find_shift("clip_v1_right")
     local v2_shift = find_shift("clip_v2_right")
-    assert(v1_shift and v1_shift.new_start_value.frames == 2900,
+    assert(v1_shift and v1_shift.new_start_value == 2900,
         "Track V1 downstream clip should move right by the delta")
-    assert(v2_shift and v2_shift.new_start_value.frames == 2300,
+    assert(v2_shift and v2_shift.new_start_value == 2300,
         "Track V2 downstream clip should move left because its lead edge is an in-bracket")
 
     os.remove(TEST_DB)
@@ -403,7 +403,7 @@ do
     })
 
     local downstream_before = Clip.load("clip_downstream", layout.db)
-    local downstream_start = downstream_before.timeline_start.frames
+    local downstream_start = downstream_before.timeline_start
 
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
@@ -419,16 +419,16 @@ do
     assert(ok and type(payload) == "table", payload or "Preview clamp dry run failed")
     assert(payload.clamped_delta_ms == -300, "Dry run should report the clamped delta in milliseconds")
     local shift_entry = find_shifted_clip(payload, "clip_downstream")
-    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames == downstream_start - 300,
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value == downstream_start - 300,
         string.format("Preview should clamp downstream clip to %d (got %s)", downstream_start - 300,
-            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames)))
+            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value)))
 
     cmd:set_parameter("dry_run", nil)
     local result = command_manager.execute(cmd)
     assert(result.success, result.error_message or "Preview clamp execute failed")
 
     local downstream_after = Clip.load("clip_downstream", layout.db)
-    assert(downstream_after.timeline_start.frames == downstream_start - 300,
+    assert(downstream_after.timeline_start == downstream_start - 300,
         "Execute path should match preview clamp position")
 
     os.remove(TEST_DB)

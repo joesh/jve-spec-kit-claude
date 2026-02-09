@@ -19,7 +19,6 @@
 local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
 local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
-local Rational = require("core.rational")
 local logger = require("core.logger")
 
 local M = {}
@@ -35,13 +34,13 @@ function M.generate_id()
     return uuid.generate()
 end
 
--- Helper: Validate Rational Input
-local function validate_rational(val, field_name)
-    if not val then 
-        error(string.format("Clip: %s is required", field_name)) 
+-- Helper: Validate integer frame value
+local function validate_frame(val, field_name)
+    if val == nil then
+        error(string.format("Clip: %s is required", field_name))
     end
-    if type(val) ~= "table" or not val.frames then
-        error(string.format("Clip: %s must be a Rational object (got %s)", field_name, type(val)))
+    if type(val) ~= "number" then
+        error(string.format("Clip: %s must be an integer (got %s)", field_name, type(val)))
     end
     return val
 end
@@ -144,11 +143,11 @@ local function load_internal(clip_id, raise_errors)
         parent_clip_id = query:value(7),
         owner_sequence_id = query:value(8),
 
-        -- NEW: Rational Properties (loaded from frames)
-        timeline_start = Rational.new(assert(query:value(9), "Clip.load: timeline_start_frame is NULL"), timeline_fps_numerator, timeline_fps_denominator),
-        duration = Rational.new(assert(query:value(10), "Clip.load: duration_frames is NULL"), timeline_fps_numerator, timeline_fps_denominator),
-        source_in = Rational.new(assert(query:value(11), "Clip.load: source_in_frame is NULL"), fps_numerator, fps_denominator),
-        source_out = Rational.new(assert(query:value(12), "Clip.load: source_out_frame is NULL"), fps_numerator, fps_denominator),
+        -- Integer frame coordinates (fps is metadata in clip.rate and sequence.frame_rate)
+        timeline_start = assert(query:value(9), "Clip.load: timeline_start_frame is NULL"),
+        duration = assert(query:value(10), "Clip.load: duration_frames is NULL"),
+        source_in = assert(query:value(11), "Clip.load: source_in_frame is NULL"),
+        source_out = assert(query:value(12), "Clip.load: source_out_frame is NULL"),
         
         -- Store rate explicitly
         rate = {
@@ -199,11 +198,11 @@ function M.create(name, media_id, opts)
         created_at = opts.created_at or now,
         modified_at = opts.modified_at or now,
         
-        -- Strict Rational Validation
-        timeline_start = validate_rational(opts.timeline_start, "timeline_start"),
-        duration = validate_rational(opts.duration, "duration"),
-        source_in = validate_rational(opts.source_in or Rational.new(0, fps_numerator, fps_denominator), "source_in"),
-        source_out = validate_rational(opts.source_out or opts.duration, "source_out"), -- Default source_out = duration if not set, but must be Rational
+        -- Integer frame coordinates (fps is metadata in clip.rate)
+        timeline_start = validate_frame(opts.timeline_start, "timeline_start"),
+        duration = validate_frame(opts.duration, "duration"),
+        source_in = validate_frame(opts.source_in ~= nil and opts.source_in or 0, "source_in"),
+        source_out = validate_frame(opts.source_out ~= nil and opts.source_out or opts.duration, "source_out"),
         
         rate = {
             fps_numerator = fps_numerator,
@@ -334,13 +333,11 @@ local function save_internal(self, opts)
 
     assert(self.id and self.id ~= "", "Clip.save: clip id is required")
 
-    -- Verify Invariants
-    if type(self.timeline_start) ~= "table" or not self.timeline_start.frames then 
-        error("Clip.save: timeline_start is not Rational (got " .. type(self.timeline_start) .. ")") 
-    end
-    if type(self.duration) ~= "table" or not self.duration.frames then 
-        error("Clip.save: duration is not Rational (got " .. type(self.duration) .. ")") 
-    end
+    -- Verify Invariants: coordinates must be integers
+    assert(type(self.timeline_start) == "number", "Clip.save: timeline_start must be integer (got " .. type(self.timeline_start) .. ")")
+    assert(type(self.duration) == "number", "Clip.save: duration must be integer (got " .. type(self.duration) .. ")")
+    assert(type(self.source_in) == "number", "Clip.save: source_in must be integer (got " .. type(self.source_in) .. ")")
+    assert(type(self.source_out) == "number", "Clip.save: source_out must be integer (got " .. type(self.source_out) .. ")")
 
     ensure_project_context(self, db)
     assert(self.clip_kind, "Clip.save: clip_kind is required for clip " .. tostring(self.id))
@@ -367,13 +364,11 @@ local function save_internal(self, opts)
     -- TODO: Update ClipMutator to use Rational
     -- if not skip_occlusion and self.track_id then ... end
 
-    -- V5: Use Frames
-    -- Since we are in migration, timeline_start is a Rational.
-    -- Rational has .frames (which matches ticks for that rate)
-    local db_start_frame = self.timeline_start.frames
-    local db_duration_frames = self.duration.frames
-    local db_source_in_frame = self.source_in.frames
-    local db_source_out_frame = self.source_out.frames
+    -- Coordinates are now plain integers - no .frames access needed
+    local db_start_frame = self.timeline_start
+    local db_duration_frames = self.duration
+    local db_source_in_frame = self.source_in
+    local db_source_out_frame = self.source_out
     
     local db_fps_num = self.rate.fps_numerator
     local db_fps_den = self.rate.fps_denominator
@@ -501,11 +496,11 @@ end
 --- Find a clip on a track that contains a given timeline time
 -- A clip contains time T if: timeline_start <= T < timeline_start + duration
 -- @param track_id string: Track ID to search
--- @param time_rat Rational: Timeline time to check
+-- @param time_frames number: Timeline frame position to check
 -- @return Clip or nil: First enabled clip containing the time, or nil
-function M.find_at_time(track_id, time_rat)
+function M.find_at_time(track_id, time_frames)
     assert(track_id and track_id ~= "", "Clip.find_at_time: track_id is required")
-    assert(time_rat and time_rat.frames ~= nil, "Clip.find_at_time: time_rat must be a Rational")
+    assert(type(time_frames) == "number", "Clip.find_at_time: time_frames must be a number")
 
     local database = require("core.database")
     local db = database.get_connection()
@@ -513,8 +508,6 @@ function M.find_at_time(track_id, time_rat)
         logger.warn("clip", "Clip.find_at_time: No database connection available")
         return nil
     end
-
-    local time_frames = time_rat.frames
 
     local stmt = db:prepare([[
         SELECT id FROM clips

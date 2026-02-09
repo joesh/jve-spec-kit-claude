@@ -145,15 +145,15 @@ local groups = {
                 master_clip_id = "master_1",
                 project_id = "project",
                 name = "Video 1",
-                source_in = Rational.new(0, 24, 1),
-                source_out = Rational.new(100, 24, 1),
-                duration = Rational.new(100, 24, 1),
+                source_in = 0,
+                source_out = 100,
+                duration = 100,
                 fps_numerator = 24,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(100, 24, 1),
+        duration = 100,
     },
     {
         clips = {
@@ -163,15 +163,15 @@ local groups = {
                 master_clip_id = "master_2",
                 project_id = "project",
                 name = "Video 2",
-                source_in = Rational.new(0, 24, 1),
-                source_out = Rational.new(50, 24, 1),
-                duration = Rational.new(50, 24, 1),
+                source_in = 0,
+                source_out = 50,
+                duration = 50,
                 fps_numerator = 24,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(50, 24, 1),
+        duration = 50,
     },
     {
         clips = {
@@ -181,22 +181,22 @@ local groups = {
                 master_clip_id = "master_3",
                 project_id = "project",
                 name = "Video 3",
-                source_in = Rational.new(0, 24, 1),
-                source_out = Rational.new(75, 24, 1),
-                duration = Rational.new(75, 24, 1),
+                source_in = 0,
+                source_out = 75,
+                duration = 75,
                 fps_numerator = 24,
                 fps_denominator = 1,
                 target_track_id = "track_v1",
             }
         },
-        duration = Rational.new(75, 24, 1),
+        duration = 75,
     },
 }
 
 command_manager.begin_command_event("script")
 local result = command_manager.execute("AddClipsToSequence", {
     groups = groups,
-    position = Rational.new(0, 24, 1),
+    position = 0,
     sequence_id = "sequence",
     project_id = "project",
     edit_type = "insert",

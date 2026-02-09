@@ -69,7 +69,7 @@ local clip_state = {
 
 for _, clip in ipairs(clip_state) do
     assert(clip, "clip should exist after parity scenarios")
-    assert(type(clip.timeline_start.frames) == "number", "clip timeline start should be numeric")
+    assert(type(clip.timeline_start) == "number", "clip timeline start should be numeric")
 end
 
 layout:cleanup()

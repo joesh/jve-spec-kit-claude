@@ -37,8 +37,8 @@ function M.handle_release(view, drag_state, modifiers)
     end
 
     if drag_type == "clips" then
-        local delta_rat = drag_state.delta_rational
-        assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta_rational for clip drag")
+        local delta_frames = drag_state.delta_frames
+        assert(type(delta_frames) == "number", "timeline_view_drag_handler: delta_frames must be integer")
         -- alt-copy semantics are tracked on drag_state for potential future use.
         local active_seq = state_module.get_sequence_id()
         local active_proj = state_module.get_project_id()
@@ -104,7 +104,7 @@ function M.handle_release(view, drag_state, modifiers)
                 end
             end
 
-            if target_track_id == reference_clip.track_id and delta_rat.frames == 0 then
+            if target_track_id == reference_clip.track_id and delta_frames == 0 then
                 goto cleanup
             end
 
@@ -113,7 +113,7 @@ function M.handle_release(view, drag_state, modifiers)
                 ["sequence_id"] = active_seq,
                 ["__snapshot_sequence_ids"] = {active_seq},
                 ["clip_ids"] = ids,
-                ["delta_rat"] = delta_rat,
+                ["delta_frames"] = delta_frames,
                 ["target_track_id"] = target_track_id,
                 ["anchor_clip_id"] = reference_clip.id,
             })
@@ -161,20 +161,10 @@ function M.handle_release(view, drag_state, modifiers)
                                 skip_occlusion = true,
                                 pending_clips = pending_clips
                             }
-                            if delta_rat.frames ~= 0 then
-                                local fps_num = delta_rat.fps_numerator
-                                local fps_den = delta_rat.fps_denominator
-                                local pending_start = clip.timeline_start + delta_rat
-                                params.pending_new_start_rat = {
-                                    frames = pending_start.frames,
-                                    fps_numerator = fps_num,
-                                    fps_denominator = fps_den
-                                }
-                                params.pending_duration_rat = {
-                                    frames = clip.duration.frames,
-                                    fps_numerator = fps_num,
-                                    fps_denominator = fps_den
-                                }
+                            if delta_frames ~= 0 then
+                                local pending_start = clip.timeline_start + delta_frames
+                                params.pending_new_start = pending_start
+                                params.pending_duration = clip.duration
                                 params.sequence_id = active_seq
                                 -- Update pending_clips for this clip to the new start to keep occlusion consistent.
                                 if pending_clips[clip.id] then
@@ -192,19 +182,15 @@ function M.handle_release(view, drag_state, modifiers)
         end
 
         -- Time nudge when staying on the same track.
-        if track_offset == 0 and delta_rat.frames ~= 0 then
+        if track_offset == 0 and delta_frames ~= 0 then
             local ids = {}
             for _, c in ipairs(clips) do table.insert(ids, c.id) end
-            local fps_num = delta_rat.fps_numerator
-            local fps_den = delta_rat.fps_denominator
             table.insert(command_specs, {
                 command_type = "Nudge",
                 parameters = {
                     sequence_id = active_seq,
                     project_id = active_proj,
-                    fps_numerator = fps_num,
-                    fps_denominator = fps_den,
-                    nudge_amount_rat = delta_rat,
+                    nudge_amount = delta_frames,
                     selected_clip_ids = ids
                 }
             })
@@ -248,9 +234,9 @@ function M.handle_release(view, drag_state, modifiers)
 
         if #edges == 0 then goto cleanup end
 
-        local delta_rat = drag_state.preview_clamped_delta or drag_state.delta_rational
-        assert(delta_rat and delta_rat.frames ~= nil, "timeline_view_drag_handler: missing delta for edge drag")
-        if delta_rat.frames == 0 then
+        local delta_frames = drag_state.preview_clamped_delta_frames or drag_state.delta_frames
+        assert(type(delta_frames) == "number", "timeline_view_drag_handler: delta_frames must be integer for edge drag")
+        if delta_frames == 0 then
             goto cleanup
         end
 
@@ -300,7 +286,7 @@ function M.handle_release(view, drag_state, modifiers)
         local params = {
             project_id = active_proj,
             edge_infos = edge_infos,
-            delta_frames = delta_rat.frames,
+            delta_frames = delta_frames,
             -- UI-only optimization: reuse in-memory timeline clip indices (avoid DB reload)
             __use_timeline_state_cache = true,
         }

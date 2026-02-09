@@ -90,10 +90,10 @@ local downstream_clip = Clip.create("Downstream", "media_video", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(200, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1),
+    timeline_start = 200,
+    duration = 100,
+    source_in = 0,
+    source_out = 100,
     enabled = true,
     fps_numerator = 30,
     fps_denominator = 1
@@ -134,10 +134,10 @@ local insert_cmd = Command.create("Insert", "project")
 insert_cmd:set_parameter("media_id", "media_video")
 insert_cmd:set_parameter("track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
-insert_cmd:set_parameter("insert_time", Rational.new(0, 30, 1))
-insert_cmd:set_parameter("duration", Rational.new(50, 30, 1))
-insert_cmd:set_parameter("source_in", Rational.new(0, 30, 1))
-insert_cmd:set_parameter("source_out", Rational.new(50, 30, 1))
+insert_cmd:set_parameter("insert_time", 0)
+insert_cmd:set_parameter("duration", 50)
+insert_cmd:set_parameter("source_in", 0)
+insert_cmd:set_parameter("source_out", 50)
 
 local result = execute_cmd(insert_cmd)
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))
@@ -157,10 +157,10 @@ local insert_cmd2 = Command.create("Insert", "project")
 insert_cmd2:set_parameter("media_id", "media_video")
 insert_cmd2:set_parameter("track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
-insert_cmd2:set_parameter("insert_time", Rational.new(0, 30, 1))
-insert_cmd2:set_parameter("duration", Rational.new(30, 30, 1))
-insert_cmd2:set_parameter("source_in", Rational.new(0, 30, 1))
-insert_cmd2:set_parameter("source_out", Rational.new(30, 30, 1))
+insert_cmd2:set_parameter("insert_time", 0)
+insert_cmd2:set_parameter("duration", 30)
+insert_cmd2:set_parameter("source_in", 0)
+insert_cmd2:set_parameter("source_out", 30)
 
 result = execute_cmd(insert_cmd2)
 assert(result.success, "Second insert should succeed")
@@ -212,7 +212,7 @@ local insert_cmd3 = Command.create("Insert", "project")
 insert_cmd3:set_parameter("media_id", "media_video")
 insert_cmd3:set_parameter("track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
-insert_cmd3:set_parameter("insert_time", Rational.new(0, 30, 1))
+insert_cmd3:set_parameter("insert_time", 0)
 -- No duration specified - should use media duration (100 frames)
 
 result = execute_cmd(insert_cmd3)
@@ -238,10 +238,10 @@ local insert_cmd4 = Command.create("Insert", "project")
 insert_cmd4:set_parameter("media_id", "media_video")
 insert_cmd4:set_parameter("track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
-insert_cmd4:set_parameter("insert_time", Rational.new(200, 30, 1))  -- Exactly at downstream start
-insert_cmd4:set_parameter("duration", Rational.new(50, 30, 1))
-insert_cmd4:set_parameter("source_in", Rational.new(0, 30, 1))
-insert_cmd4:set_parameter("source_out", Rational.new(50, 30, 1))
+insert_cmd4:set_parameter("insert_time", 200)  -- Exactly at downstream start
+insert_cmd4:set_parameter("duration", 50)
+insert_cmd4:set_parameter("source_in", 0)
+insert_cmd4:set_parameter("source_out", 50)
 
 result = execute_cmd(insert_cmd4)
 assert(result.success, "Insert at boundary should succeed")
@@ -259,8 +259,8 @@ asserts._set_enabled_for_tests(false)
 local bad_cmd = Command.create("Insert", "project")
 bad_cmd:set_parameter("track_id", "track_v1")
 bad_cmd:set_parameter("sequence_id", "sequence")
-bad_cmd:set_parameter("insert_time", Rational.new(0, 30, 1))
-bad_cmd:set_parameter("duration", Rational.new(50, 30, 1))
+bad_cmd:set_parameter("insert_time", 0)
+bad_cmd:set_parameter("duration", 50)
 -- No media_id
 
 result = execute_cmd(bad_cmd)
@@ -276,9 +276,9 @@ local bad_cmd2 = Command.create("Insert", "project")
 bad_cmd2:set_parameter("media_id", "media_video")
 bad_cmd2:set_parameter("track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
-bad_cmd2:set_parameter("insert_time", Rational.new(0, 30, 1))
+bad_cmd2:set_parameter("insert_time", 0)
 bad_cmd2:set_parameter("master_clip_id", "nonexistent_master")  -- Should fail
-bad_cmd2:set_parameter("duration", Rational.new(50, 30, 1))
+bad_cmd2:set_parameter("duration", 50)
 
 result = execute_cmd(bad_cmd2)
 asserts._set_enabled_for_tests(true)
@@ -298,10 +298,10 @@ for i = 1, 3 do
     cmd:set_parameter("media_id", "media_video")
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
-    cmd:set_parameter("insert_time", Rational.new(0, 30, 1))
-    cmd:set_parameter("duration", Rational.new(20, 30, 1))
-    cmd:set_parameter("source_in", Rational.new(0, 30, 1))
-    cmd:set_parameter("source_out", Rational.new(20, 30, 1))
+    cmd:set_parameter("insert_time", 0)
+    cmd:set_parameter("duration", 20)
+    cmd:set_parameter("source_in", 0)
+    cmd:set_parameter("source_out", 20)
     result = execute_cmd(cmd)
     assert(result.success, string.format("Insert %d should succeed", i))
 end

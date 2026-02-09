@@ -1,8 +1,8 @@
 #!/usr/bin/env luajit
 
--- Regression: B9 — TrimHead and TrimTail commands trim clip at playhead.
--- TrimHead: removes content before playhead (advances start + source_in).
--- TrimTail: removes content after playhead (shrinks duration + source_out).
+-- Regression: B9 — TrimHead and TrimTail commands trim clips at playhead with ripple.
+-- TrimHead: removes content before playhead (advances start + source_in), ripples downstream.
+-- TrimTail: removes content after playhead (shrinks duration + source_out), ripples downstream.
 
 require("test_env")
 
@@ -20,7 +20,6 @@ end
 
 print("\n=== B9: TrimHead / TrimTail commands ===")
 
-local Rational = require("core.rational")
 local Command = require("command")
 
 -- Stub command_helper
@@ -34,20 +33,29 @@ package.loaded["core.command_helper"] = {
     end,
 }
 
+-- Stub command_manager.execute for RippleDelete
+local ripple_calls = {}
+package.loaded["core.command_manager"] = {
+    execute = function(cmd_type, params)
+        if cmd_type == "RippleDelete" then
+            table.insert(ripple_calls, params)
+            return { success = true }
+        end
+        error("Unexpected command: " .. tostring(cmd_type))
+    end,
+}
+
 -- Clip store
 local clip_store = {}
 
-local function make_clip(id, start, dur, src_in, src_out, fps_num, fps_den)
-    fps_num = fps_num or 24
-    fps_den = fps_den or 1
+-- All coordinates are integer frames
+local function make_clip(id, start, dur, src_in, src_out)
     return {
         id = id,
-        timeline_start = Rational.new(start, fps_num, fps_den),
-        duration = Rational.new(dur, fps_num, fps_den),
-        source_in = Rational.new(src_in, fps_num, fps_den),
-        source_out = Rational.new(src_out, fps_num, fps_den),
-        fps_numerator = fps_num,
-        fps_denominator = fps_den,
+        timeline_start = start,  -- integer frames
+        duration = dur,          -- integer frames
+        source_in = src_in,      -- integer frames
+        source_out = src_out,    -- integer frames
         save = function(self)
             clip_store[self.id] = {
                 id = self.id,
@@ -55,8 +63,6 @@ local function make_clip(id, start, dur, src_in, src_out, fps_num, fps_den)
                 duration = self.duration,
                 source_in = self.source_in,
                 source_out = self.source_out,
-                fps_numerator = self.fps_numerator,
-                fps_denominator = self.fps_denominator,
             }
             return true
         end,
@@ -68,9 +74,8 @@ package.loaded["models.clip"] = {
         local c = clip_store[id]
         if not c then return nil end
         return make_clip(c.id,
-            c.timeline_start.frames, c.duration.frames,
-            c.source_in.frames, c.source_out.frames,
-            c.fps_numerator, c.fps_denominator)
+            c.timeline_start, c.duration,
+            c.source_in, c.source_out)
     end,
 }
 
@@ -84,67 +89,80 @@ require("core.commands.trim_tail").register(executors, undoers, nil, function() 
 -- TrimHead tests
 -- ═══════════════════════════════════════════════════════════
 
-print("\n--- TrimHead: basic trim ---")
+print("\n--- TrimHead: basic trim with ripple ---")
 do
-    -- Clip: start=10, dur=40, source_in=0, source_out=40
-    -- Trim at frame 20 → removes 10 frames from head
+    ripple_calls = {}
+    -- Clip: start=10, dur=40, source_in=0, source_out=40 → frames [10..50)
+    -- Trim at frame 20 → removes 10 frames from head, clip becomes [20..50)
+    -- Then RippleDelete shifts it back to [10..40)
     clip_store["c1"] = {
         id = "c1",
-        timeline_start = Rational.new(10, 24, 1),
-        duration = Rational.new(40, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(40, 24, 1),
-        fps_numerator = 24, fps_denominator = 1,
+        timeline_start = 10,
+        duration = 40,
+        source_in = 0,
+        source_out = 40,
     }
 
     local cmd = Command.create("TrimHead", "proj1")
     cmd:set_parameters({
-        clip_id = "c1", project_id = "proj1", sequence_id = "seq1", trim_frame = 20,
+        clip_ids = {"c1"}, project_id = "proj1", sequence_id = "seq1", trim_frame = 20,
     })
 
     local ok = executors["TrimHead"](cmd)
     check("TrimHead executes", ok == true)
 
+    -- After trim (before ripple moves it back): clip at [20..50)
     local c = clip_store["c1"]
-    check("timeline_start = 20", c.timeline_start.frames == 20)
-    check("duration = 30", c.duration.frames == 30)
-    check("source_in = 10", c.source_in.frames == 10)
-    check("source_out unchanged = 40", c.source_out.frames == 40)
+    check("timeline_start = 20", c.timeline_start == 20)
+    check("duration = 30", c.duration == 30)
+    check("source_in = 10", c.source_in == 10)
+    check("source_out unchanged = 40", c.source_out == 40)
+
+    -- Verify RippleDelete was called with correct gap (integer frames)
+    check("RippleDelete called", #ripple_calls == 1)
+    if #ripple_calls > 0 then
+        check("gap_start = 10", ripple_calls[1].gap_start == 10)
+        check("gap_duration = 10", ripple_calls[1].gap_duration == 10)
+    end
 end
 
 print("\n--- TrimHead: undo restores original ---")
 do
     local undo_cmd = Command.create("TrimHead", "proj1")
     undo_cmd:set_parameters({
-        clip_id = "c1", project_id = "proj1", sequence_id = "seq1", trim_frame = 20,
-        original_timeline_start = Rational.new(10, 24, 1),
-        original_duration = Rational.new(40, 24, 1),
-        original_source_in = Rational.new(0, 24, 1),
-        original_source_out = Rational.new(40, 24, 1),
+        clip_ids = {"c1"}, project_id = "proj1", sequence_id = "seq1", trim_frame = 20,
+        original_states = {
+            {
+                clip_id = "c1",
+                timeline_start = 10,
+                duration = 40,
+                source_in = 0,
+                source_out = 40,
+            }
+        },
     })
     local ok = undoers["TrimHead"](undo_cmd)
     check("TrimHead undo executes", ok == true)
 
     local c = clip_store["c1"]
-    check("undo: start = 10", c.timeline_start.frames == 10)
-    check("undo: duration = 40", c.duration.frames == 40)
-    check("undo: source_in = 0", c.source_in.frames == 0)
+    check("undo: start = 10", c.timeline_start == 10)
+    check("undo: duration = 40", c.duration == 40)
+    check("undo: source_in = 0", c.source_in == 0)
 end
 
 print("\n--- TrimHead: playhead outside clip → fails ---")
 do
     clip_store["c2"] = {
         id = "c2",
-        timeline_start = Rational.new(10, 24, 1),
-        duration = Rational.new(40, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(40, 24, 1),
-        fps_numerator = 24, fps_denominator = 1,
+        timeline_start = 10,
+        duration = 40,
+        source_in = 0,
+        source_out = 40,
     }
 
     local cmd = Command.create("TrimHead", "proj1")
     cmd:set_parameters({
-        clip_id = "c2", project_id = "proj1", sequence_id = "seq1", trim_frame = 5,
+        clip_ids = {"c2"}, project_id = "proj1", sequence_id = "seq1", trim_frame = 5,
     })
 
     local ok = executors["TrimHead"](cmd)
@@ -155,70 +173,121 @@ end
 -- TrimTail tests
 -- ═══════════════════════════════════════════════════════════
 
-print("\n--- TrimTail: basic trim ---")
+print("\n--- TrimTail: basic trim with ripple ---")
 do
-    -- Clip: start=10, dur=40, source_in=0, source_out=40
-    -- Trim at frame 30 → removes 20 frames from tail
+    ripple_calls = {}
+    -- Clip: start=10, dur=40, source_in=0, source_out=40 → frames [10..50)
+    -- Trim at frame 30 → removes 20 frames from tail, clip becomes [10..30)
+    -- Gap is [30..50), 20 frames
     clip_store["c3"] = {
         id = "c3",
-        timeline_start = Rational.new(10, 24, 1),
-        duration = Rational.new(40, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(40, 24, 1),
-        fps_numerator = 24, fps_denominator = 1,
+        timeline_start = 10,
+        duration = 40,
+        source_in = 0,
+        source_out = 40,
     }
 
     local cmd = Command.create("TrimTail", "proj1")
     cmd:set_parameters({
-        clip_id = "c3", project_id = "proj1", sequence_id = "seq1", trim_frame = 30,
+        clip_ids = {"c3"}, project_id = "proj1", sequence_id = "seq1", trim_frame = 30,
     })
 
     local ok = executors["TrimTail"](cmd)
     check("TrimTail executes", ok == true)
 
     local c = clip_store["c3"]
-    check("timeline_start unchanged = 10", c.timeline_start.frames == 10)
-    check("duration = 20", c.duration.frames == 20)
-    check("source_in unchanged = 0", c.source_in.frames == 0)
-    check("source_out = 20", c.source_out.frames == 20)
+    check("timeline_start unchanged = 10", c.timeline_start == 10)
+    check("duration = 20", c.duration == 20)
+    check("source_in unchanged = 0", c.source_in == 0)
+    check("source_out = 20", c.source_out == 20)
+
+    -- Verify RippleDelete was called with correct gap (integer frames)
+    check("RippleDelete called", #ripple_calls == 1)
+    if #ripple_calls > 0 then
+        check("gap_start = 30", ripple_calls[1].gap_start == 30)
+        check("gap_duration = 20", ripple_calls[1].gap_duration == 20)
+    end
 end
 
 print("\n--- TrimTail: undo restores original ---")
 do
     local undo_cmd = Command.create("TrimTail", "proj1")
     undo_cmd:set_parameters({
-        clip_id = "c3", project_id = "proj1", sequence_id = "seq1", trim_frame = 30,
-        original_timeline_start = Rational.new(10, 24, 1),
-        original_duration = Rational.new(40, 24, 1),
-        original_source_in = Rational.new(0, 24, 1),
-        original_source_out = Rational.new(40, 24, 1),
+        clip_ids = {"c3"}, project_id = "proj1", sequence_id = "seq1", trim_frame = 30,
+        original_states = {
+            {
+                clip_id = "c3",
+                timeline_start = 10,
+                duration = 40,
+                source_in = 0,
+                source_out = 40,
+            }
+        },
     })
     local ok = undoers["TrimTail"](undo_cmd)
     check("TrimTail undo executes", ok == true)
 
     local c = clip_store["c3"]
-    check("undo: duration = 40", c.duration.frames == 40)
-    check("undo: source_out = 40", c.source_out.frames == 40)
+    check("undo: duration = 40", c.duration == 40)
+    check("undo: source_out = 40", c.source_out == 40)
 end
 
 print("\n--- TrimTail: playhead outside clip → fails ---")
 do
     clip_store["c4"] = {
         id = "c4",
-        timeline_start = Rational.new(10, 24, 1),
-        duration = Rational.new(40, 24, 1),
-        source_in = Rational.new(0, 24, 1),
-        source_out = Rational.new(40, 24, 1),
-        fps_numerator = 24, fps_denominator = 1,
+        timeline_start = 10,
+        duration = 40,
+        source_in = 0,
+        source_out = 40,
     }
 
     local cmd = Command.create("TrimTail", "proj1")
     cmd:set_parameters({
-        clip_id = "c4", project_id = "proj1", sequence_id = "seq1", trim_frame = 60,
+        clip_ids = {"c4"}, project_id = "proj1", sequence_id = "seq1", trim_frame = 60,
     })
 
     local ok = executors["TrimTail"](cmd)
     check("TrimTail outside clip → false", ok == false)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- Multi-clip tests
+-- ═══════════════════════════════════════════════════════════
+
+print("\n--- TrimHead: multiple clips at same position ---")
+do
+    ripple_calls = {}
+    -- Two clips at same position on different tracks
+    clip_store["m1"] = {
+        id = "m1",
+        timeline_start = 10,
+        duration = 40,
+        source_in = 0,
+        source_out = 40,
+    }
+    clip_store["m2"] = {
+        id = "m2",
+        timeline_start = 10,
+        duration = 40,
+        source_in = 5,
+        source_out = 45,
+    }
+
+    local cmd = Command.create("TrimHead", "proj1")
+    cmd:set_parameters({
+        clip_ids = {"m1", "m2"}, project_id = "proj1", sequence_id = "seq1", trim_frame = 20,
+    })
+
+    local ok = executors["TrimHead"](cmd)
+    check("TrimHead multi executes", ok == true)
+
+    -- Both clips trimmed
+    check("m1 start = 20", clip_store["m1"].timeline_start == 20)
+    check("m2 start = 20", clip_store["m2"].timeline_start == 20)
+
+    -- Only ONE RippleDelete call for both clips
+    check("RippleDelete called once", #ripple_calls == 1)
 end
 
 -- Summary

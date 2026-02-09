@@ -7,7 +7,6 @@ local import_schema = require("import_schema")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 
 local function remove_best_effort(path)
     if not path or path == "" then
@@ -49,10 +48,10 @@ local c1 = Clip.create("C1", "media1", {
     project_id = "proj",
     track_id = "v1",
     owner_sequence_id = "seq",
-    timeline_start = Rational.new(0, 30, 1),
-    duration = Rational.new(10, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(10, 30, 1),
+    timeline_start = 0,
+    duration = 10,
+    source_in = 0,
+    source_out = 10,
     fps_numerator = 30, fps_denominator = 1
 })
 assert(c1:save(db))
@@ -62,10 +61,10 @@ local c2 = Clip.create("C2", "media1", {
     project_id = "proj",
     track_id = "v1",
     owner_sequence_id = "seq",
-    timeline_start = Rational.new(12, 30, 1),
-    duration = Rational.new(10, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(10, 30, 1),
+    timeline_start = 12,
+    duration = 10,
+    source_in = 0,
+    source_out = 10,
     fps_numerator = 30, fps_denominator = 1
 })
 assert(c2:save(db))
@@ -74,7 +73,7 @@ local dup = Command.create("DuplicateClips", "proj")
 dup:set_parameter("project_id", "proj")
 dup:set_parameter("sequence_id", "seq")
 dup:set_parameter("clip_ids", {"c1", "c2"})
-dup:set_parameter("delta_rat", Rational.new(5, 30, 1))
+dup:set_parameter("delta_frames", 5)
 dup:set_parameter("target_track_id", "v1")
 dup:set_parameter("anchor_clip_id", "c1")
 
@@ -85,7 +84,7 @@ local clips = database.load_clips("seq")
 local starts = {}
 for _, clip in ipairs(clips) do
     if clip.track_id == "v1" and clip.clip_kind == "timeline" then
-        starts[clip.id] = clip.timeline_start.frames
+        starts[clip.id] = clip.timeline_start
     end
 end
 

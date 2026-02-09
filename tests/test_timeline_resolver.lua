@@ -74,7 +74,7 @@ local timeline_resolver = require("core.playback.timeline_resolver")
 -- Test 1: Resolve at frame 10 - should return V3 clip (only clip present)
 local function test_resolve_single_clip()
     -- Frame 10 is in V3 only (V3: 0-48, V2: 24-72, V1: 48-96)
-    local playhead = Rational.new(10, 24, 1)
+    local playhead = 10
     local result = timeline_resolver.resolve_at_time(playhead, "seq")
 
     assert(result, "resolve_at_time should return result at frame 10")
@@ -92,7 +92,7 @@ end
 -- Test 2: Resolve at frame 30 - V2 overlaps V3, V2 should win (lower track_index)
 local function test_resolve_overlapping_clips_v2_wins()
     -- Frame 30: V3 (0-48) and V2 (24-72) overlap. V2 has lower track_index, V2 wins.
-    local playhead = Rational.new(30, 24, 1)
+    local playhead = 30
     local result = timeline_resolver.resolve_at_time(playhead, "seq")
 
     assert(result, "resolve_at_time should return result at frame 30")
@@ -105,7 +105,7 @@ end
 -- Test 3: Resolve at frame 60 - V1 overlaps V2, V1 should win
 local function test_resolve_overlapping_clips_v1_wins()
     -- Frame 60: V2 (24-72) and V1 (48-96) overlap. V1 has lower track_index, V1 wins.
-    local playhead = Rational.new(60, 24, 1)
+    local playhead = 60
     local result = timeline_resolver.resolve_at_time(playhead, "seq")
 
     assert(result, "resolve_at_time should return result at frame 60")
@@ -123,7 +123,7 @@ end
 -- Test 4: Resolve at frame 100 - gap, should return nil
 local function test_resolve_gap_returns_nil()
     -- Frame 100 is in gap (all clips end at or before 96)
-    local playhead = Rational.new(100, 24, 1)
+    local playhead = 100
     local result = timeline_resolver.resolve_at_time(playhead, "seq")
 
     assert(result == nil, "resolve_at_time should return nil for gap at frame 100")
@@ -133,7 +133,7 @@ end
 
 -- Test 5: Resolve at frame 0 - edge case at clip start
 local function test_resolve_at_clip_start()
-    local playhead = Rational.new(0, 24, 1)
+    local playhead = 0
     local result = timeline_resolver.resolve_at_time(playhead, "seq")
 
     assert(result, "resolve_at_time should return result at frame 0")

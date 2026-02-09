@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -53,10 +52,6 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local function rat(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
 local clip_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 
@@ -64,7 +59,7 @@ view.drag_state = {
     type = "edges",
     edges = {gap_edge, clip_edge},
     lead_edge = clip_edge,
-    delta_rational = rat(1800)
+    delta_frames = 1800
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -91,10 +86,10 @@ timeline = original_timeline
 layout:cleanup()
 
 assert(ok, "timeline renderer should not error: " .. tostring(err))
-local preview_delta = view.drag_state.preview_clamped_delta
+local preview_delta = view.drag_state.preview_clamped_delta_frames
 assert(preview_delta, "Preview should record clamped delta")
-assert(preview_delta.frames == 1800,
-    string.format("Lead gap drag should not clamp to gap size (expected 1800, got %d)", preview_delta.frames))
+assert(preview_delta == 1800,
+    string.format("Lead gap drag should not clamp to gap size (expected 1800, got %d)", preview_delta))
 local clamped_edges = view.drag_state.clamped_edges or {}
 local gap_key = string.format("%s:%s", clips.v1_left.id, "gap_after")
 assert(not clamped_edges[gap_key], "Gap edge should not be marked clamped when V2 has available media")

@@ -60,17 +60,17 @@ do
     assert(not payload.clamped_edges or next(payload.clamped_edges) == nil,
         "Dragging V2 ] right should not clamp to the gap")
     local shift_entry = find_shifted_clip(payload, clips.v1_right.id)
-    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames == clips.v1_right.timeline_start + 1800,
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value == clips.v1_right.timeline_start + 1800,
         string.format("Preview shift for V1 right should move right by 1800 (expected %d, got %s)",
             clips.v1_right.timeline_start + 1800,
-            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames)))
+            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value)))
 
     -- Execute: V1 right clip should move by the full delta.
-    local before = Clip.load(clips.v1_right.id, layout.db).timeline_start.frames
+    local before = Clip.load(clips.v1_right.id, layout.db).timeline_start
     local cmd = build_command(layout, clips, tracks, 1800, "v2")
     local result = command_manager.execute(cmd)
     assert(result.success, "BatchRippleEdit execute failed for expansion scenario")
-    local after = Clip.load(clips.v1_right.id, layout.db).timeline_start.frames
+    local after = Clip.load(clips.v1_right.id, layout.db).timeline_start
     assert(after - before == 1800,
         string.format("V1 right clip should move by 1800 frames (got %d)", after - before))
 
@@ -131,14 +131,14 @@ do
     local ok, payload = executor(dry_cmd)
     assert(ok and type(payload) == "table", "Dry run should succeed for shrink scenario")
     local shift_entry = find_shifted_clip(payload, clips.v1_right.id)
-    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames == clips.v1_right.timeline_start - 500,
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value == clips.v1_right.timeline_start - 500,
         string.format("Preview shift for V1 right should move left by 500 (expected %d, got %s)",
             clips.v1_right.timeline_start - 500,
-            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value.frames)))
+            tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value)))
 
     local left_before = Clip.load(clips.v1_left.id, layout.db)
     local right_before = Clip.load(clips.v1_right.id, layout.db)
-    local gap_before = right_before.timeline_start.frames - (left_before.timeline_start.frames + left_before.duration.frames)
+    local gap_before = right_before.timeline_start - (left_before.timeline_start + left_before.duration)
 
     local cmd = build_command(layout, clips, tracks, -500, "v2")
     local result = command_manager.execute(cmd)
@@ -146,10 +146,10 @@ do
 
     local left_after = Clip.load(clips.v1_left.id, layout.db)
     local right_after = Clip.load(clips.v1_right.id, layout.db)
-    local gap_after = right_after.timeline_start.frames - (left_after.timeline_start.frames + left_after.duration.frames)
+    local gap_after = right_after.timeline_start - (left_after.timeline_start + left_after.duration)
 
-    assert(right_after.timeline_start.frames == right_before.timeline_start.frames - 500,
-        string.format("V1 right should shift left by 500 (expected %d, got %d)", right_before.timeline_start.frames - 500, right_after.timeline_start.frames))
+    assert(right_after.timeline_start == right_before.timeline_start - 500,
+        string.format("V1 right should shift left by 500 (expected %d, got %d)", right_before.timeline_start - 500, right_after.timeline_start))
     assert(gap_after == gap_before - 500,
         string.format("Gap should shrink by 500 frames (expected %d, got %d)", gap_before - 500, gap_after))
 

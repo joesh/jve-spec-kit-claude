@@ -19,90 +19,40 @@
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")
-local Rational = require("core.rational")
 
--- Normalization helpers
-local function assert_rate(rate, label)
-    if not rate or not rate.fps_numerator or not rate.fps_denominator then
-        error("clip_state: missing " .. tostring(label or "frame") .. " rate", 3)
-    end
-    if rate.fps_denominator == 0 then
-        error("clip_state: invalid " .. tostring(label or "frame") .. " rate (fps_denominator=0)", 3)
-    end
-    return rate
-end
-
-local function ensure_rational(value, rate, label)
-    rate = assert_rate(rate, label)
-    local hydrated = Rational.hydrate(value, rate.fps_numerator, rate.fps_denominator)
-    if not hydrated then
-        error("clip_state: missing " .. tostring(label) .. " value", 3)
-    end
-    return hydrated
-end
-
-local function retag_frames_to_rate(rt, rate)
-    if not rt then
-        return nil
-    end
-    if getmetatable(rt) ~= Rational.metatable then
-        return rt
-    end
-    if rt.fps_numerator == rate.fps_numerator and rt.fps_denominator == rate.fps_denominator then
-        return rt
-    end
-    return Rational.new(rt.frames, rate.fps_numerator, rate.fps_denominator)
-end
-
-local function get_clip_rate(clip)
-    if not clip then
-        error("clip_state: get_clip_rate called with nil clip", 3)
-    end
-
-    local rate = clip.rate
-    if not rate and clip.fps_numerator and clip.fps_denominator then
-        rate = { fps_numerator = clip.fps_numerator, fps_denominator = clip.fps_denominator }
-    end
-    if not rate and getmetatable(clip.source_in) == Rational.metatable then
-        rate = { fps_numerator = clip.source_in.fps_numerator, fps_denominator = clip.source_in.fps_denominator }
-    end
-    if not rate and getmetatable(clip.source_out) == Rational.metatable then
-        rate = { fps_numerator = clip.source_out.fps_numerator, fps_denominator = clip.source_out.fps_denominator }
-    end
-
-    if not rate or not rate.fps_numerator or not rate.fps_denominator then
-        return nil
-    end
-    return assert_rate(rate, "clip")
-end
-
-local function require_clip_rate(clip)
-    local rate = get_clip_rate(clip)
-    if not rate then
-        error("clip_state: missing clip rate", 3)
-    end
-    return rate
-end
-
-local function normalize_clip_rationals(clip, rate)
+-- All coordinates are now integers. No Rational conversion needed.
+-- This function validates and normalizes clip coords from various sources.
+local function normalize_clip_integers(clip)
     if not clip then return false end
-    local sequence_rate = assert_rate(rate or data.state.sequence_frame_rate, "sequence")
 
-    local start_rt = retag_frames_to_rate(ensure_rational(clip.timeline_start or clip.start_value, sequence_rate, "timeline_start"), sequence_rate)
-    local dur_rt = retag_frames_to_rate(ensure_rational(clip.duration or clip.duration_value, sequence_rate, "duration"), sequence_rate)
+    -- Handle various field names from database/mutations
+    local timeline_start = clip.timeline_start or clip.start_value
+    local duration = clip.duration or clip.duration_value
 
-    if not start_rt or not dur_rt or dur_rt.frames <= 0 then
+    -- Assert integer types
+    if type(timeline_start) ~= "number" then
+        clip._invalid = true
+        return false
+    end
+    if type(duration) ~= "number" or duration <= 0 then
         clip._invalid = true
         return false
     end
 
-    clip.timeline_start = start_rt
-    clip.duration = dur_rt
-    if clip.source_in ~= nil or clip.source_out ~= nil then
-        local clip_rate = require_clip_rate(clip)
-        clip.source_in = retag_frames_to_rate(ensure_rational(clip.source_in, clip_rate, "source_in"), clip_rate)
-        clip.source_out = retag_frames_to_rate(ensure_rational(clip.source_out, clip_rate, "source_out"), clip_rate)
+    -- Normalize field names
+    clip.timeline_start = timeline_start
+    clip.duration = duration
+
+    -- source_in/source_out must also be integers if present
+    if clip.source_in ~= nil then
+        assert(type(clip.source_in) == "number",
+            "clip_state: source_in must be integer, got " .. type(clip.source_in))
     end
+    if clip.source_out ~= nil then
+        assert(type(clip.source_out) == "number",
+            "clip_state: source_out must be integer, got " .. type(clip.source_out))
+    end
+
     clip._invalid = nil
     return true
 end
@@ -122,7 +72,7 @@ local function rebuild_clip_indexes()
 
     local normalized = {}
     for _, clip in ipairs(data.state.clips) do
-        if normalize_clip_rationals(clip) and clip.id then
+        if normalize_clip_integers(clip) and clip.id then
             table.insert(normalized, clip)
             clip_lookup[clip.id] = clip
             if clip.track_id then
@@ -139,12 +89,12 @@ local function rebuild_clip_indexes()
 
     for _, list in pairs(track_clip_index) do
         table.sort(list, function(a, b)
-            assert(a.timeline_start and a.timeline_start.frames ~= nil,
-                "clip_state: clip missing timeline_start.frames in sort (id=" .. tostring(a.id) .. ")")
-            assert(b.timeline_start and b.timeline_start.frames ~= nil,
-                "clip_state: clip missing timeline_start.frames in sort (id=" .. tostring(b.id) .. ")")
-            local a_start = a.timeline_start.frames
-            local b_start = b.timeline_start.frames
+            assert(type(a.timeline_start) == "number",
+                "clip_state: clip missing integer timeline_start in sort (id=" .. tostring(a.id) .. ")")
+            assert(type(b.timeline_start) == "number",
+                "clip_state: clip missing integer timeline_start in sort (id=" .. tostring(b.id) .. ")")
+            local a_start = a.timeline_start
+            local b_start = b.timeline_start
             if a_start == b_start then
                 assert(a.id and b.id, "clip_state: clip missing id in sort")
                 return a.id < b.id
@@ -201,35 +151,26 @@ function M.get_track_clip_index(track_id)
     return track_clip_index[track_id]
 end
 
--- Return all clips that span the given time (Rational or frame count).
+-- Return all clips that span the given time (integer frame).
 function M.get_at_time(time_value, candidate_clips)
     local clips = candidate_clips or data.state.clips
     if not clips or #clips == 0 then
         return {}
     end
 
-    local rate = data.state.sequence_frame_rate
-    if not rate or not rate.fps_numerator or not rate.fps_denominator then
-        error("clip_state.get_at_time: missing sequence_frame_rate", 2)
-    end
-    local time_rt = Rational.hydrate(time_value, rate.fps_numerator, rate.fps_denominator)
-    if not time_rt then
-        return {}
-    end
+    assert(type(time_value) == "number", "clip_state.get_at_time: time_value must be integer")
 
     local matches = {}
     for _, clip in ipairs(clips) do
         local start_val = clip.timeline_start or clip.start_value
         local duration_val = clip.duration or clip.duration_value
-        local start_rt = Rational.hydrate(start_val, rate.fps_numerator, rate.fps_denominator)
-        local duration_rt = Rational.hydrate(duration_val, rate.fps_numerator, rate.fps_denominator)
 
-        if not start_rt or not duration_rt or duration_rt.frames <= 0 then
+        if type(start_val) ~= "number" or type(duration_val) ~= "number" or duration_val <= 0 then
             goto continue_clip
         end
 
-        local clip_end = start_rt + duration_rt
-        if time_rt > start_rt and time_rt < clip_end then
+        local clip_end = start_val + duration_val
+        if time_value > start_val and time_value < clip_end then
             table.insert(matches, clip)
         end
         ::continue_clip::
@@ -253,18 +194,12 @@ function M.get_content_end_frame()
     local clips = data.state.clips
     if not clips or #clips == 0 then return 0 end
 
-    local rate = data.state.sequence_frame_rate
-    assert(rate and rate.fps_numerator and rate.fps_denominator,
-        "clip_state.get_content_end_frame: missing sequence_frame_rate")
-
     local max_end = 0
     for _, clip in ipairs(clips) do
         local start_val = clip.timeline_start or clip.start_value
         local duration_val = clip.duration or clip.duration_value
-        local start_rt = Rational.hydrate(start_val, rate.fps_numerator, rate.fps_denominator)
-        local duration_rt = Rational.hydrate(duration_val, rate.fps_numerator, rate.fps_denominator)
-        if start_rt and duration_rt then
-            local clip_end = start_rt.frames + duration_rt.frames
+        if type(start_val) == "number" and type(duration_val) == "number" then
+            local clip_end = start_val + duration_val
             if clip_end > max_end then
                 max_end = clip_end
             end
@@ -287,7 +222,7 @@ function M.hydrate_from_database(clip_id, expected_sequence_id)
             tostring(clip_id), tostring(clip.track_sequence_id), tostring(target_sequence)))
     end
 
-    normalize_clip_rationals(clip)
+    normalize_clip_integers(clip)
     clip._version = state_version
     table.insert(data.state.clips, clip)
     needs_normalization = true
@@ -306,10 +241,6 @@ function M.apply_mutations(mutations, persist_callback)
             return
         end
         ensure_clip_indexes()
-        local fps = data.state.sequence_frame_rate
-        if not fps or not fps.fps_numerator or not fps.fps_denominator then
-            error("clip_state.apply_mutations: missing sequence_frame_rate for bulk_shifts", 2)
-        end
 
         for _, shift in ipairs(mutations.bulk_shifts) do
             if type(shift) ~= "table" then
@@ -320,7 +251,6 @@ function M.apply_mutations(mutations, persist_callback)
 
             local delta_frames = shift.shift_frames
             if delta_frames ~= 0 then
-                local delta = Rational.new(delta_frames, fps.fps_numerator, fps.fps_denominator)
                 if type(shift.clip_ids) == "table" then
                     for _, clip_id in ipairs(shift.clip_ids) do
                         local clip = clip_lookup[clip_id] or M.hydrate_from_database(clip_id)
@@ -330,10 +260,9 @@ function M.apply_mutations(mutations, persist_callback)
                         if clip.track_id ~= shift.track_id then
                             error("clip_state.apply_mutations: bulk_shift clip track mismatch: " .. tostring(clip_id), 2)
                         end
-                        if not clip.timeline_start then
-                            error("clip_state.apply_mutations: bulk_shift clip missing timeline_start: " .. tostring(clip_id), 2)
-                        end
-                        clip.timeline_start = clip.timeline_start + delta
+                        assert(type(clip.timeline_start) == "number",
+                            "clip_state.apply_mutations: bulk_shift clip missing integer timeline_start: " .. tostring(clip_id))
+                        clip.timeline_start = clip.timeline_start + delta_frames
                         changed = true
                     end
                 else
@@ -346,16 +275,15 @@ function M.apply_mutations(mutations, persist_callback)
                         if anchor and anchor.track_id ~= shift.track_id then
                             error("clip_state.apply_mutations: bulk_shift anchor track mismatch", 2)
                         end
-                        if not anchor or not anchor.timeline_start or anchor.timeline_start.frames == nil then
-                            error("clip_state.apply_mutations: bulk_shift anchor clip missing timeline_start", 2)
-                        end
-                        anchor_start = anchor.timeline_start.frames
+                        assert(anchor and type(anchor.timeline_start) == "number",
+                            "clip_state.apply_mutations: bulk_shift anchor clip missing integer timeline_start")
+                        anchor_start = anchor.timeline_start
                     end
 
                     local list = track_clip_index[shift.track_id] or {}
                     for _, clip in ipairs(list) do
-                        if clip.timeline_start and clip.timeline_start.frames and clip.timeline_start.frames >= anchor_start then
-                            clip.timeline_start = clip.timeline_start + delta
+                        if type(clip.timeline_start) == "number" and clip.timeline_start >= anchor_start then
+                            clip.timeline_start = clip.timeline_start + delta_frames
                             changed = true
                         end
                     end
@@ -415,35 +343,40 @@ function M.apply_mutations(mutations, persist_callback)
                         clip.track_id = update.track_id
                         needs_resort = true; changed = true
                     end
-                    -- Apply fps info from update before using it for source_in/source_out
+                    -- Apply fps info from update (metadata, not used for coord conversion)
                     if update.fps_numerator and update.fps_denominator then
                         clip.fps_numerator = update.fps_numerator
                         clip.fps_denominator = update.fps_denominator
                     end
-                    local sequence_rate = assert_rate(data.state.sequence_frame_rate, "sequence")
-                    if update.start_value and (not clip.timeline_start or update.start_value ~= clip.timeline_start.frames) then
-                        clip.timeline_start = Rational.new(update.start_value, sequence_rate.fps_numerator, sequence_rate.fps_denominator)
+                    -- All values are now integers - direct assignment
+                    if update.start_value and update.start_value ~= clip.timeline_start then
+                        assert(type(update.start_value) == "number",
+                            "clip_state.apply_mutations: start_value must be integer")
+                        clip.timeline_start = update.start_value
                         needs_resort = true; changed = true
                     end
-                    if update.duration_value and (not clip.duration or update.duration_value ~= clip.duration.frames) then
-                        clip.duration = Rational.new(update.duration_value, sequence_rate.fps_numerator, sequence_rate.fps_denominator)
+                    if update.duration_value and update.duration_value ~= clip.duration then
+                        assert(type(update.duration_value) == "number",
+                            "clip_state.apply_mutations: duration_value must be integer")
+                        clip.duration = update.duration_value
                         changed = true
                     end
-                    if update.source_in_value and (not clip.source_in or update.source_in_value ~= clip.source_in.frames) then
-                        local clip_rate = require_clip_rate(clip)
-                        clip.source_in = Rational.new(update.source_in_value, clip_rate.fps_numerator, clip_rate.fps_denominator)
+                    if update.source_in_value and update.source_in_value ~= clip.source_in then
+                        assert(type(update.source_in_value) == "number",
+                            "clip_state.apply_mutations: source_in_value must be integer")
+                        clip.source_in = update.source_in_value
                         changed = true
                     end
-                    if update.source_out_value and (not clip.source_out or update.source_out_value ~= clip.source_out.frames) then
-                        local clip_rate = require_clip_rate(clip)
-                        clip.source_out = Rational.new(update.source_out_value, clip_rate.fps_numerator, clip_rate.fps_denominator)
+                    if update.source_out_value and update.source_out_value ~= clip.source_out then
+                        assert(type(update.source_out_value) == "number",
+                            "clip_state.apply_mutations: source_out_value must be integer")
+                        clip.source_out = update.source_out_value
                         changed = true
                     end
                     if update.enabled ~= nil and update.enabled ~= clip.enabled then
                         clip.enabled = update.enabled and true or false
                         changed = true
                     end
-                    normalize_clip_rationals(clip, sequence_rate)
                 elseif not deleted_lookup[clip_id] then
                     -- Record failure
                     -- missing clip; ignore (caller may hydrate later)
@@ -457,7 +390,7 @@ function M.apply_mutations(mutations, persist_callback)
     -- Handle Inserts
     if mutations.inserts then
         for _, clip in ipairs(mutations.inserts) do
-            if normalize_clip_rationals(clip, data.state.sequence_frame_rate) then
+            if normalize_clip_integers(clip) then
                 table.insert(data.state.clips, clip)
                 changed = true
             end

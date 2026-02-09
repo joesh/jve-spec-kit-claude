@@ -1,8 +1,6 @@
 require("test_env")
 
 local database = require("core.database")
-local json = require("dkjson")
-local Rational = require("core.rational")
 
 local pass_count = 0
 local fail_count = 0
@@ -150,12 +148,12 @@ check("clip1.name", c1.name == "My Clip")
 check("clip1.enabled", c1.enabled == true)
 check("clip1.offline", c1.offline == false)
 
--- Rational fields
-check("clip1.timeline_start is Rational", type(c1.timeline_start) == "table" and c1.timeline_start.frames ~= nil)
-check("clip1.timeline_start == 0 frames", c1.timeline_start.frames == 0)
-check("clip1.duration == 100 frames", c1.duration.frames == 100)
-check("clip1.source_in == 0 frames", c1.source_in.frames == 0)
-check("clip1.source_out == 100 frames", c1.source_out.frames == 100)
+-- Integer coordinate fields
+check("clip1.timeline_start is integer", type(c1.timeline_start) == "number")
+check("clip1.timeline_start == 0", c1.timeline_start == 0)
+check("clip1.duration == 100", c1.duration == 100)
+check("clip1.source_in == 0", c1.source_in == 0)
+check("clip1.source_out == 100", c1.source_out == 100)
 check("clip1.rate.fps_numerator", c1.rate.fps_numerator == 24)
 check("clip1.rate.fps_denominator", c1.rate.fps_denominator == 1)
 
@@ -225,8 +223,8 @@ check("seq1.height", seq1.height == 1080)
 
 -- Duration = max(clip_end). All timeline_start/duration stored in sequence fps (24/1):
 -- clip1: 0+100=100, clip2: 100+50=150, clip3: 0+200=200. Max = 200.
-check("seq1.duration is Rational", type(seq1.duration) == "table" and seq1.duration.frames ~= nil)
-check("seq1.duration = 200 frames (max clip end)", seq1.duration.frames == 200)
+check("seq1.duration is integer", type(seq1.duration) == "number")
+check("seq1.duration = 200 frames (max clip end)", seq1.duration == 200)
 
 -- 2c. Empty sequence → duration = Rational(0)
 local seq_empty
@@ -234,7 +232,7 @@ for _, s in ipairs(seqs) do
     if s.id == "seq_empty" then seq_empty = s end
 end
 assert(seq_empty, "seq_empty not found")
-check("empty seq duration == 0", seq_empty.duration.frames == 0)
+check("empty seq duration == 0", seq_empty.duration == 0)
 
 -- 2d. Nonexistent project → empty array
 local ghost_seqs = database.load_sequences("nonexistent_proj")

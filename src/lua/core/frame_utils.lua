@@ -50,6 +50,24 @@ function M.frame_duration_ms(frame_rate)
     return (rate.fps_denominator / rate.fps_numerator) * 1000.0
 end
 
+-- Convert frame count to milliseconds
+-- frames_to_ms = frames * (fps_den / fps_num) * 1000
+function M.frames_to_ms(frames, fps_num, fps_den)
+    assert(type(frames) == "number", "frames_to_ms: frames must be number")
+    assert(type(fps_num) == "number" and fps_num > 0, "frames_to_ms: fps_num must be positive number")
+    assert(type(fps_den) == "number" and fps_den > 0, "frames_to_ms: fps_den must be positive number")
+    return frames * fps_den * 1000.0 / fps_num
+end
+
+-- Convert milliseconds to frame count (rounds to nearest frame)
+-- ms_to_frames = ms * fps_num / (fps_den * 1000)
+function M.ms_to_frames(ms, fps_num, fps_den)
+    assert(type(ms) == "number", "ms_to_frames: ms must be number")
+    assert(type(fps_num) == "number" and fps_num > 0, "ms_to_frames: fps_num must be positive number")
+    assert(type(fps_den) == "number" and fps_den > 0, "ms_to_frames: fps_den must be positive number")
+    return math.floor(ms * fps_num / (fps_den * 1000.0) + 0.5)
+end
+
 -- Convert Rational time to frame number (integer)
 function M.time_to_frame(time_obj, frame_rate)
     local rate = M.normalize_rate(frame_rate)

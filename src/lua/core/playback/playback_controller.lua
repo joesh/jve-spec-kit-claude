@@ -105,21 +105,21 @@ local resolve_and_set_audio_sources
 -- In source mode, returns local _position.
 function M.get_position()
     if M.timeline_mode and timeline_state_ref then
-        local rat = timeline_state_ref.get_playhead_position()
-        return helpers.rational_to_frame_clamped(rat, M.fps_num, M.fps_den, M.total_frames)
+        local frame = timeline_state_ref.get_playhead_position()
+        assert(type(frame) == "number", "playback_controller: playhead must be integer")
+        return helpers.frame_clamped(frame, M.total_frames)
     end
     return M._position
 end
 
 --- Set current frame position and update the viewer when parked.
--- In timeline mode, writes through to timeline_state (int→Rational);
+-- In timeline mode, writes through to timeline_state as integer frame.
 -- the timeline_panel listener handles decimated viewer seek.
 -- In source mode when parked, calls seek() directly to display the frame.
 -- During playback, the tick functions handle display — no seek here.
 function M.set_position(v)
     if M.timeline_mode and timeline_state_ref then
-        local rat = helpers.frame_to_rational(math.floor(v), M.fps_num, M.fps_den)
-        timeline_state_ref.set_playhead_position(rat)
+        timeline_state_ref.set_playhead_position(math.floor(v))
         M._position = v
     else
         M._position = v
@@ -260,10 +260,9 @@ resolve_and_set_audio_sources = function(timeline_frame)
     assert(M.timeline_mode and M.sequence_id,
         "resolve_and_set_audio_sources: not in timeline mode")
 
-    local playhead_rat = helpers.frame_to_rational(
-        math.floor(timeline_frame), M.fps_num, M.fps_den)
+    local playhead_frame = math.floor(timeline_frame)
     local audio_clips = timeline_resolver.resolve_all_audio_at_time(
-        playhead_rat, M.sequence_id)
+        playhead_frame, M.sequence_id)
 
     -- Check if any track is soloed
     local any_soloed = false
@@ -281,14 +280,18 @@ resolve_and_set_audio_sources = function(timeline_frame)
         -- Source frames map 1:1 to timeline frames regardless of source fps.
         -- A 24fps clip on a 30fps timeline plays back faster (24 frames in 24/30 sec).
 
-        -- Timeline start in microseconds (using sequence fps)
-        local timeline_start_us = math.floor(
-            ac.clip.timeline_start.frames * 1000000 * M.fps_den / M.fps_num)
+        -- All coords are integer frames
+        local timeline_start_frames = ac.clip.timeline_start
+        local source_in_frames = ac.clip.source_in
+        local source_out_frames = ac.clip.source_out
+        assert(type(timeline_start_frames) == "number", "playback_controller: timeline_start must be integer")
+        assert(type(source_in_frames) == "number", "playback_controller: source_in must be integer")
+        assert(type(source_out_frames) == "number", "playback_controller: source_out must be integer")
 
-        -- Source frames (these are frame counts, fps is irrelevant for duration calc)
-        local source_in_frames = ac.clip.source_in.frames
-        local source_out_frames = ac.clip.source_out.frames
         local clip_duration_frames = source_out_frames - source_in_frames
+
+        -- Timeline start in microseconds (using sequence fps)
+        local timeline_start_us = math.floor(timeline_start_frames * 1000000 * M.fps_den / M.fps_num)
 
         -- Convert source_in to microseconds using SEQUENCE fps (for audio decode offset)
         local source_in_us = math.floor(source_in_frames * 1000000 * M.fps_den / M.fps_num)
@@ -314,7 +317,7 @@ resolve_and_set_audio_sources = function(timeline_frame)
         logger.debug("playback_controller", string.format(
             "Audio clip %s: tl_start=%d frames, src_in=%d, src_out=%d, duration=%d frames @ seq %d/%d fps → clip_end=%.3fs",
             ac.clip.id:sub(1,8),
-            ac.clip.timeline_start.frames, source_in_frames, source_out_frames,
+            timeline_start_frames, source_in_frames, source_out_frames,
             clip_duration_frames, M.fps_num, M.fps_den, clip_end_us / 1000000))
 
         sources[#sources + 1] = {
@@ -664,27 +667,22 @@ function M.set_timeline_sync_callback(callback)
     M.timeline_sync_callback = callback
 end
 
---- Seek to a Rational time position
-function M.seek_to_rational(time_rat)
-    assert(time_rat and time_rat.frames ~= nil,
-        "playback_controller.seek_to_rational: time_rat must be a Rational")
+--- Seek to a frame position (integer)
+function M.seek_to_frame(frame)
+    assert(type(frame) == "number", "playback_controller.seek_to_frame: frame must be integer")
     assert(M.fps_num and M.fps_den,
-        "playback_controller.seek_to_rational: fps not set (call set_source first)")
+        "playback_controller.seek_to_frame: fps not set (call set_source first)")
 
-    local frame_idx = helpers.rational_to_frame_clamped(time_rat, M.fps_num, M.fps_den, M.total_frames)
+    local frame_idx = helpers.frame_clamped(frame, M.total_frames)
     M.seek(frame_idx)
 end
+
 
 --- Check if playback source is loaded
 function M.has_source()
     return M.total_frames > 0 and M.fps_num and M.fps_num > 0
 end
 
---- Convert frame index to Rational time
-function M.frame_to_rational(frame_idx)
-    assert(M.fps_num and M.fps_den, "playback_controller.frame_to_rational: fps not set")
-    return helpers.frame_to_rational(frame_idx, M.fps_num, M.fps_den)
-end
 
 --------------------------------------------------------------------------------
 -- Boundary Latch (source mode only - controller owns latch state)

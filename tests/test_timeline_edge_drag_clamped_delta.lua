@@ -4,7 +4,6 @@ require("test_env")
 
 local timeline_view_drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
 local command_manager = require("core.command_manager")
-local Rational = require("core.rational")
 
 _G.timeline = {
     get_dimensions = function() return 1000, 200 end
@@ -44,8 +43,8 @@ local drag_state = {
         {clip_id = "clip_a", edge_type = "gap_before", trim_type = "ripple"}
     },
     lead_edge = {clip_id = "clip_a", edge_type = "gap_before", trim_type = "ripple"},
-    delta_rational = Rational.new(100, 24, 1),
-    preview_clamped_delta = Rational.new(60, 24, 1),
+    delta_frames = 100,
+    preview_clamped_delta_frames = 60,
     preloaded_clip_snapshot = {clip_track_lookup = {clip_a = "track_v1"}},
     timeline_active_region = {interaction_start_frames = 0, interaction_end_frames = 100}
 }

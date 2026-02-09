@@ -5,8 +5,6 @@
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
 
-local Rational = require("core.rational")
-
 -- Stub timeline drawing backend
 _G.timeline = {
     get_dimensions = function() return 800, 200 end,
@@ -20,8 +18,8 @@ _G.timeline = {
 local seq_rate = { fps_numerator = 24, fps_denominator = 1 }
 
 local clips = {
-    { id = "c1", track_id = "v1", timeline_start = Rational.new(0, 24, 1), duration = Rational.new(24, 24, 1), enabled = true },
-    { id = "c2", track_id = "v1", timeline_start = Rational.new(48, 24, 1), duration = Rational.new(24, 24, 1), enabled = true },
+    { id = "c1", track_id = "v1", timeline_start = 0, duration = 24, enabled = true },
+    { id = "c2", track_id = "v1", timeline_start = 48, duration = 24, enabled = true },
 }
 
 local state = {
@@ -40,9 +38,9 @@ local state = {
         clip = "#000",
         clip_selected = "#000",
     },
-    get_viewport_start_time = function() return Rational.new(0, 24, 1) end,
-    get_viewport_duration = function() return Rational.new(96, 24, 1) end,
-    get_playhead_position = function() return Rational.new(0, 24, 1) end,
+    get_viewport_start_time = function() return 0 end,
+    get_viewport_duration = function() return 96 end,
+    get_playhead_position = function() return 0 end,
     get_mark_in = function() return nil end,
     get_mark_out = function() return nil end,
     get_sequence_frame_rate = function() return seq_rate end,
@@ -57,8 +55,8 @@ local state = {
     get_selected_edges = function() return {} end,
     get_selected_gaps = function() return {} end,
     get_all_tracks = function() return { { id = "v1", track_type = "VIDEO" } } end,
-    time_to_pixel = function(rt, width)
-        local frames = rt and rt.frames or 0
+    time_to_pixel = function(t, width)
+        local frames = t or 0
         local duration_frames = 96
         return math.floor((frames / duration_frames) * width)
     end,

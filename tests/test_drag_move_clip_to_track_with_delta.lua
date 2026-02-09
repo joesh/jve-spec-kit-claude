@@ -6,7 +6,6 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 
 local test_env = require("test_env")
 
-local Rational = require("core.rational")
 local json = require("dkjson")
 
 _G.timeline = {
@@ -27,7 +26,7 @@ local state = {
     end,
     get_clips = function()
         return {
-            {id = "clip1", track_id = "v1", timeline_start = Rational.new(0,24,1), duration = Rational.new(24,24,1)}
+            {id = "clip1", track_id = "v1", timeline_start = 0, duration = 24}
         }
     end
 }
@@ -44,7 +43,7 @@ local drag_state = {
         {id = "clip1"}
     },
     delta_ms = 1000,
-    delta_rational = Rational.from_seconds(1, 24, 1),
+    delta_frames = 24,
     current_y = 10,
     start_y = 0
 }
@@ -56,7 +55,7 @@ assert(#executed == 1, "Expected one command to execute (MoveClipToTrack)")
 local cmd = executed[1]
 assert(cmd.type == "MoveClipToTrack", "Expected MoveClipToTrack, got " .. tostring(cmd.type))
 assert(cmd.params.target_track_id == "v2", "Move target should be v2")
-assert(cmd.params.pending_new_start_rat.frames == 24, "Move should carry pending start with full delta")
+assert(cmd.params.pending_new_start == 24, "Move should carry pending start with full delta")
 assert(cmd.params.pending_clips and cmd.params.pending_clips["clip1"], "pending_clips should include moving clip for occlusion avoidance")
 
 print("✅ Cross-track drag with delta keeps time via MoveClipToTrack pending_new_start")

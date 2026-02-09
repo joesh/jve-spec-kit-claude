@@ -18,7 +18,6 @@
 -- Mirrors the behaviour of the legacy C++ model closely enough for imports and commands.
 local database = require("core.database")
 local uuid = require("uuid")
-local Rational = require("core.rational")
 
 local Sequence = {}
 Sequence.__index = Sequence
@@ -56,22 +55,11 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     opts = opts or {}
     local now = os.time()
 
-    -- Handle playhead from opts (frame number to Rational)
-    local playhead_pos = Rational.new(0, fr.fps_numerator, fr.fps_denominator)
-    if opts.playhead_frame and opts.playhead_frame > 0 then
-        playhead_pos = Rational.new(opts.playhead_frame, fr.fps_numerator, fr.fps_denominator)
-    end
-
-    -- Handle viewport from opts (frame numbers to Rationals)
-    local viewport_start = Rational.new(0, fr.fps_numerator, fr.fps_denominator)
-    if opts.view_start_frame and opts.view_start_frame > 0 then
-        viewport_start = Rational.new(opts.view_start_frame, fr.fps_numerator, fr.fps_denominator)
-    end
-
-    local viewport_dur = Rational.from_seconds(10.0, fr.fps_numerator, fr.fps_denominator)
-    if opts.view_duration_frames and opts.view_duration_frames > 0 then
-        viewport_dur = Rational.new(opts.view_duration_frames, fr.fps_numerator, fr.fps_denominator)
-    end
+    -- Integer frame coordinates (fps is metadata in frame_rate)
+    local playhead_pos = opts.playhead_frame or 0
+    local viewport_start = opts.view_start_frame or 0
+    -- Default viewport: 10 seconds worth of frames
+    local viewport_dur = opts.view_duration_frames or math.floor(10.0 * fr.fps_numerator / fr.fps_denominator)
 
     local sequence = {
         id = opts.id or uuid.generate(),
@@ -83,13 +71,13 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         height = h,
         audio_sample_rate = opts.audio_rate or 48000,
 
-        -- Rational Properties
+        -- Integer frame coordinates (fps is metadata in frame_rate)
         playhead_position = playhead_pos,
         viewport_start_time = viewport_start,
         viewport_duration = viewport_dur,
 
-        mark_in = nil,
-        mark_out = nil,
+        mark_in = opts.mark_in_frame,   -- nil or integer
+        mark_out = opts.mark_out_frame, -- nil or integer
 
         -- Selection state (JSON strings)
         selected_clip_ids_json = opts.selected_clip_ids_json or "[]",
@@ -150,12 +138,10 @@ function Sequence.load(id)
                 width = stmt:value(6),
                 height = stmt:value(7),
 
-                -- New Rational Properties (loaded from frames)
-                playhead_position = Rational.new(assert(stmt:value(8), "Sequence.load: playhead_frame is NULL for id=" .. tostring(id)), fps_num, fps_den),
-                viewport_start_time = Rational.new(assert(stmt:value(9), "Sequence.load: view_start_frame is NULL for id=" .. tostring(id)), fps_num, fps_den),
-
-                -- Viewport Duration
-                viewport_duration = Rational.new(assert(stmt:value(10), "Sequence.load: view_duration_frames is NULL for id=" .. tostring(id)), fps_num, fps_den),
+                -- Integer frame coordinates (fps is metadata in frame_rate)
+                playhead_position = assert(stmt:value(8), "Sequence.load: playhead_frame is NULL for id=" .. tostring(id)),
+                viewport_start_time = assert(stmt:value(9), "Sequence.load: view_start_frame is NULL for id=" .. tostring(id)),
+                viewport_duration = assert(stmt:value(10), "Sequence.load: view_duration_frames is NULL for id=" .. tostring(id)),
 
                 -- Selection state (JSON strings from database)
                 selected_clip_ids_json = selected_clip_ids,  -- Let caller parse JSON
@@ -165,16 +151,9 @@ function Sequence.load(id)
                 modified_at = os.time()
             }
 
-            -- Optional Marks
-            local raw_mark_in = stmt:value(11)
-            if raw_mark_in then
-                sequence.mark_in = Rational.new(raw_mark_in, fps_num, fps_den)
-            end
-
-            local raw_mark_out = stmt:value(12)
-            if raw_mark_out then
-                sequence.mark_out = Rational.new(raw_mark_out, fps_num, fps_den)
-            end
+            -- Optional Marks (integer frames or nil)
+            sequence.mark_in = stmt:value(11)
+            sequence.mark_out = stmt:value(12)
     stmt:finalize()
     return setmetatable(sequence, Sequence)
 end
@@ -190,19 +169,16 @@ function Sequence:save()
 
     self.modified_at = os.time()
 
-    -- V5: Rational Storage
-    -- We store the Rate (fps_num/den) and the Frames/Ticks directly.
-    
+    -- Coordinates are now plain integers
     local db_fps_num = self.frame_rate.fps_numerator
     local db_fps_den = self.frame_rate.fps_denominator
-    
-    -- Removed db_timecode_start as it's not in schema
-    local db_playhead = self.playhead_position.frames
-    local db_view_start = self.viewport_start_time.frames
-    local db_view_dur = self.viewport_duration.frames
-    
-    local db_mark_in = self.mark_in and self.mark_in.frames or nil
-    local db_mark_out = self.mark_out and self.mark_out.frames or nil
+
+    local db_playhead = self.playhead_position
+    local db_view_start = self.viewport_start_time
+    local db_view_dur = self.viewport_duration
+
+    local db_mark_in = self.mark_in  -- nil or integer
+    local db_mark_out = self.mark_out  -- nil or integer
     
     assert(self.audio_sample_rate, "Sequence.save: audio_sample_rate is required for sequence " .. tostring(self.id))
     local db_audio_rate = self.audio_sample_rate

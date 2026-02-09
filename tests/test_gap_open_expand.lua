@@ -50,7 +50,7 @@ assert(db:exec(seed))
 command_manager.init("default_sequence", "default_project")
 
 local gap_target = Clip.load("clip_right", db)
-assert(gap_target.timeline_start.frames == 400, "initial clip start mismatch")
+assert(gap_target.timeline_start == 400, "initial clip start mismatch")
 
 local cmd = Command.create("RippleEdit", "default_project")
 cmd:set_parameter("edge_info", {
@@ -65,8 +65,8 @@ local result = command_manager.execute(cmd)
 assert(result.success, result.error_message or "RippleEdit gap open failed")
 
 local after = Clip.load(gap_target.id, db)
-assert(after.timeline_start.frames == 352,
-    string.format("Gap open should extend to frame 352, got %d", after.timeline_start.frames))
+assert(after.timeline_start == 352,
+    string.format("Gap open should extend to frame 352, got %d", after.timeline_start))
 
 os.remove(TEST_DB)
 print("✅ RippleEdit gap open (dragging ] left) increases available gap distance")

@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -49,16 +48,12 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local function rat(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local gap_edge = {clip_id = clips.v1_right.id, edge_type = "gap_before", track_id = tracks.v1.id, trim_type = "ripple"}
 view.drag_state = {
     type = "edges",
     edges = {gap_edge},
     lead_edge = gap_edge,
-    delta_rational = rat(-200)
+    delta_frames = -200
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -97,9 +92,9 @@ for _, entry in ipairs(preview.shifted_clips or {}) do
     end
 end
 assert(shift_entry, "Single-clip ripple should preview the clip's new position")
-local expected_start = clips.v1_right.timeline_start + view.drag_state.delta_rational.frames
-assert(shift_entry.new_start_value.frames == expected_start,
+local expected_start = clips.v1_right.timeline_start + view.drag_state.delta_frames
+assert(shift_entry.new_start_value == expected_start,
     string.format("Expected preview shift to %d, got %s",
-        expected_start, tostring(shift_entry.new_start_value.frames)))
+        expected_start, tostring(shift_entry.new_start_value)))
 assert(#rects > 0, "Expected preview rectangles to be drawn")
 print("✅ Single clip with leading gap receives a preview outline when trimmed")

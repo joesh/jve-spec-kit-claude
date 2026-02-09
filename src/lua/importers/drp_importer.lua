@@ -32,7 +32,6 @@
 local M = {}
 
 local xml2 = require("xml2")
-local Rational = require("core.rational")
 
 --- Unzip .drp file to temporary directory
 -- @param drp_path string: Path to .drp file
@@ -147,47 +146,38 @@ local function get_text(elem)
     return elem.text:match("^%s*(.-)%s*$")  -- Trim whitespace
 end
 
---- Parse Resolve timecode string to milliseconds
+--- Parse Resolve timecode string to integer frames
 -- Resolve uses rational notation: "900/30" = frame 900 at 30fps
 -- @param timecode_str string: Timecode string (e.g., "900/30")
 -- @param frame_rate number: Timeline frame rate
--- @return number: Milliseconds
+-- @return number: Integer frames at sequence frame rate
 local function parse_resolve_timecode(timecode_str, frame_rate)
-    local fps_num = math.floor(frame_rate * 1000)
-    local fps_den = 1000
-
     if not timecode_str or timecode_str == "" then
-        return Rational.new(0, fps_num, fps_den)
+        return 0
     end
 
     -- Handle rational notation (frames/divisor)
     local numerator, denominator = timecode_str:match("^(%d+)/(%d+)$")
     if numerator and denominator then
-        local frames = tonumber(numerator)
-        local divisor = tonumber(denominator)
-        -- Resolve's rational format means: frames @ divisor FPS.
-        -- We need to convert this to our internal fps_num/fps_den
-        local temp_rational = Rational.new(frames, divisor, 1)
-        return temp_rational:rescale(fps_num, fps_den)
+        local src_frames = tonumber(numerator)
+        local src_fps = tonumber(denominator)
+        -- Resolve's rational format means: src_frames @ src_fps FPS.
+        -- Rescale to sequence fps: (src_frames / src_fps) * frame_rate
+        return math.floor(src_frames * frame_rate / src_fps + 0.5)
     end
 
     -- Handle absolute frame count
     local frames = tonumber(timecode_str)
     if frames then
-        return Rational.new(frames, fps_num, fps_den)
+        return math.floor(frames + 0.5)
     end
 
-    return Rational.new(0, fps_num, fps_den)
+    return 0
 end
 
-local function frames_to_rational(frames, frame_rate)
-    local fr = frame_rate or 30.0
-    if fr <= 0 then
-        fr = 30.0
-    end
-    local fps_num = math.floor(fr * 1000)
-    local fps_den = 1000
-    return Rational.new(frames, fps_num, fps_den)
+-- All coordinates are now integer frames - this function just returns frames
+local function frames_to_int(frames, _frame_rate)
+    return math.floor(frames + 0.5)
 end
 
 --- Parse project.xml to extract project metadata
@@ -304,9 +294,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
 
             local clip = {
                 name = get_text(find_element(clip_elem, "Name")),
-                start_value = frames_to_rational(start_frames, frame_rate),
-                duration = frames_to_rational(duration_frames, frame_rate),
-                source_in = frames_to_rational(media_start_frames, frame_rate),
+                start_value = start_frames,        -- integer frames
+                duration = duration_frames,        -- integer frames
+                source_in = media_start_frames,    -- integer frames
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
                 file_path = file_path,
                 media_key = file_path,
@@ -314,9 +304,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
                 frame_rate = frame_rate
             }
 
-            if clip.duration.frames <= 0 then
+            if clip.duration <= 0 then
                 -- Ensure duration is at least 1 frame
-                clip.duration = Rational.new(1, clip.duration.fps_numerator, clip.duration.fps_denominator)
+                clip.duration = 1
             end
 
             clip.source_out = clip.source_in + clip.duration
@@ -443,11 +433,6 @@ local function parse_sequence(seq_elem, frame_rate)
         end
 
         if #fallback_clips > 0 then
-            local fps_num = math.floor(frame_rate * 1000)
-            local fps_den = 1000
-            local zero_rational = Rational.new(0, fps_num, fps_den)
-            local default_duration_rational = Rational.new(1000, fps_num, fps_den)
-
             timeline.tracks = {
                 {
                     type = "VIDEO",
@@ -460,17 +445,17 @@ local function parse_sequence(seq_elem, frame_rate)
             }
             timeline.media_files = timeline.media_files or {}
             for _, clip in ipairs(fallback_clips) do
-                -- Ensure Rational types are correctly initialized in fallback clips
-                clip.start_value = clip.start_value or zero_rational
-                clip.duration = clip.duration or default_duration_rational
-                clip.source_in = clip.source_in or zero_rational
-                clip.source_out = clip.source_out or default_duration_rational
+                -- Ensure integer frame values are initialized in fallback clips
+                clip.start_value = clip.start_value or 0
+                clip.duration = clip.duration or 1000
+                clip.source_in = clip.source_in or 0
+                clip.source_out = clip.source_out or 1000
 
                 if clip.media_key and not timeline.media_files[clip.media_key] then
                     timeline.media_files[clip.media_key] = {
                         name = clip.name,
                         path = clip.media_key,
-                        duration = clip.duration, -- Use Rational duration
+                        duration = clip.duration,  -- integer frames
                         frame_rate = frame_rate,
                         width = 1920,
                         height = 1080,
@@ -502,12 +487,10 @@ parse_clip_item = function(clip_elem, frame_rate)
 
     local start_value = parse_resolve_timecode(get_text(start_elem), frame_rate)
     local end_time = parse_resolve_timecode(get_text(end_elem), frame_rate)
-    
-    local fps_num = math.floor(frame_rate * 1000)
-    local fps_den = 1000
 
-    local source_in = in_elem and parse_resolve_timecode(get_text(in_elem), frame_rate) or Rational.new(0, fps_num, fps_den)
-    local source_out = out_elem and parse_resolve_timecode(get_text(out_elem), frame_rate) or Rational.new(0, fps_num, fps_den)
+    -- All coordinates are integer frames
+    local source_in = in_elem and parse_resolve_timecode(get_text(in_elem), frame_rate) or 0
+    local source_out = out_elem and parse_resolve_timecode(get_text(out_elem), frame_rate) or 0
 
     local clip = {
         name = name_elem and get_text(name_elem) or "Untitled Clip",

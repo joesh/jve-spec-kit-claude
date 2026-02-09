@@ -18,7 +18,6 @@ local Clip = require('models.clip')
 local database = require('core.database')
 local frame_utils = require('core.frame_utils')
 local command_helper = require("core.command_helper")
-local Rational = require("core.rational")
 local edge_utils = require("core.edge_utils")
 local ui_constants = require("core.ui_constants")
 local clip_mutator = require('core.clip_mutator') -- New dependency
@@ -150,12 +149,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
         local delta_min = nil
         local delta_max = nil
-        local gap_frames = (clip.duration and clip.duration.frames) or 0
+        assert(type(clip.duration) == "number", "compute_roll_constraint: clip.duration must be integer")
+        local gap_frames = clip.duration or 0
 
-        assert(original and original.timeline_start and original.timeline_start.frames, "compute_roll_constraint: original missing timeline_start.frames")
-        assert(original and original.duration and original.duration.frames, "compute_roll_constraint: original missing duration.frames")
-        local original_start_frames = original.timeline_start.frames
-        local original_end_frames = original_start_frames + original.duration.frames
+        assert(original and type(original.timeline_start) == "number", "compute_roll_constraint: original.timeline_start must be integer")
+        assert(original and type(original.duration) == "number", "compute_roll_constraint: original.duration must be integer")
+        local original_start_frames = original.timeline_start
+        local original_end_frames = original_start_frames + original.duration
 
         if normalized_edge == "in" then
             -- In-point: can't drag left past previous clip
@@ -182,8 +182,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return nil, nil
         end
 
-        local duration = clip.duration and clip.duration.frames
-        if not duration or duration <= 0 then
+        assert(type(clip.duration) == "number", "compute_gap_close_constraint: clip.duration must be integer")
+        local duration = clip.duration
+        if duration <= 0 then
             return nil, nil
         end
 
@@ -281,8 +282,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local start_limit = -timeline_start_frames
         ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, start_limit)
         update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-        if ctx.clamped_delta_rat and ctx.clamped_delta_rat.frames < start_limit then
-            ctx.clamped_delta_rat = Rational.new(start_limit, ctx.seq_fps_num, ctx.seq_fps_den)
+        if ctx.clamped_delta_frames and ctx.clamped_delta_frames < start_limit then
+            ctx.clamped_delta_frames = start_limit
         end
     end
 
@@ -291,8 +292,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return
         end
         local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
-        local effective_delta_positive = (ctx.clamped_delta_rat.frames > 0 and not will_negate)
-            or (ctx.clamped_delta_rat.frames < 0 and will_negate)
+        local effective_delta_positive = (ctx.clamped_delta_frames > 0 and not will_negate)
+            or (ctx.clamped_delta_frames < 0 and will_negate)
         local clip_state = ctx.original_states_map[edge_info.clip_id]
         if not clip_state then
             return
@@ -301,7 +302,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
         if normalized_edge == "in" then
             if not effective_delta_positive and clip_state.source_in then
-                local extend_limit = -clip_state.source_in.frames
+                assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
+                local extend_limit = -clip_state.source_in
                 ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, extend_limit)
                 update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
             end
@@ -311,7 +313,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ctx.preloaded_media[clip.media_id] = media
             end
             if media and media.duration and clip_state.source_in and clip_state.duration then
-                local available_frames = media.duration.frames - clip_state.source_in.frames - clip_state.duration.frames
+                assert(type(media.duration) == "number", "apply_media_limits: media.duration must be integer")
+                assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
+                assert(type(clip_state.duration) == "number", "apply_media_limits: clip_state.duration must be integer")
+                local available_frames = media.duration - clip_state.source_in - clip_state.duration
                 if will_negate then
                     local global_constraint = -available_frames
                     ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_constraint)
@@ -335,11 +340,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local clip_state = ctx.original_states_map[edge_info.clip_id]
-        if not clip_state or not clip_state.duration or not clip_state.duration.frames then
+        if not clip_state or not clip_state.duration then
             return
         end
+        assert(type(clip_state.duration) == "number", "apply_min_duration_limits: clip_state.duration must be integer")
 
-        local duration_frames = clip_state.duration.frames
+        local duration_frames = clip_state.duration
         if duration_frames < 1 then
             return
         end
@@ -425,6 +431,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             for _, track_clips in pairs(ctx.track_clip_map) do
                 table.sort(track_clips, function(a, b)
+                    assert(type(a.timeline_start) == "number", "build_clip_cache: clip a.timeline_start must be integer")
+                    assert(type(b.timeline_start) == "number", "build_clip_cache: clip b.timeline_start must be integer")
                     return a.timeline_start < b.timeline_start
                 end)
             end
@@ -651,11 +659,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 -- Apply the requested trim delta to clip/gap edges and return the ripple start.
 -- Returns nil when the clip collapses (e.g., trim removes media entirely).
-	local function apply_edge_ripple(clip, edge_type, delta_rat, trim_type, raw_edge_type)
-	        if type(clip.duration) ~= "table" or not clip.duration.frames then
-	            error("apply_edge_ripple: Clip missing Rational duration.")
-	        end
-	        assert(clip.duration.fps_numerator and clip.duration.fps_denominator, "apply_edge_ripple: Clip duration missing fps metadata")
+	local function apply_edge_ripple(clip, edge_type, delta_frames, trim_type, raw_edge_type)
+	        assert(type(clip.duration) == "number", "apply_edge_ripple: clip.duration must be integer")
+	        assert(type(clip.timeline_start) == "number", "apply_edge_ripple: clip.timeline_start must be integer")
+	        assert(type(clip.source_in) == "number", "apply_edge_ripple: clip.source_in must be integer")
+	        assert(type(delta_frames) == "number", "apply_edge_ripple: delta_frames must be integer")
 
 	        local new_duration_timeline = clip.duration
 	        local new_source_in = clip.source_in
@@ -664,27 +672,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if is_gap and trim_type == "roll" then
             new_duration_timeline = clip.duration
             if edge_type == "in" then
-                clip.timeline_start = clip.timeline_start + delta_rat
+                clip.timeline_start = clip.timeline_start + delta_frames
             end
         elseif edge_type == "in" then
-            new_duration_timeline = clip.duration - delta_rat
-            new_source_in = clip.source_in + delta_rat
+            new_duration_timeline = clip.duration - delta_frames
+            new_source_in = clip.source_in + delta_frames
             if trim_type == "roll" then
-                clip.timeline_start = clip.timeline_start + delta_rat
+                clip.timeline_start = clip.timeline_start + delta_frames
             end
         elseif edge_type == "out" then
-            new_duration_timeline = clip.duration + delta_rat
+            new_duration_timeline = clip.duration + delta_frames
         else
             error(string.format("apply_edge_ripple: Unsupported edge_type '%s'", edge_type))
         end
 
 	        if is_gap then
-	            if new_duration_timeline.frames and new_duration_timeline.frames < 0 then
-	                new_duration_timeline = Rational.new(0, clip.duration.fps_numerator, clip.duration.fps_denominator)
+	            if new_duration_timeline < 0 then
+	                new_duration_timeline = 0
 	            end
 	        else
-	            if new_duration_timeline.frames < 1 then
-	                clip.duration = Rational.new(0, clip.duration.fps_numerator, clip.duration.fps_denominator)
+	            if new_duration_timeline < 1 then
+	                clip.duration = 0
 	                clip.source_in = new_source_in
 	                clip.source_out = clip.source_in + clip.duration
 	                return clip.timeline_start, true, true
@@ -728,7 +736,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        ctx.clamped_delta_rat = ctx.delta_rat
+        ctx.clamped_delta_frames = ctx.delta_frames
     end
 
 		    local function compute_earliest_ripple_hint(ctx)
@@ -776,10 +784,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
                 local neighbors = ctx.neighbor_bounds_cache and ctx.neighbor_bounds_cache[clip.id]
                 assert(neighbors, "clamp_downstream_overlaps: missing neighbor cache for clip " .. tostring(clip.id))
-                assert(clip.timeline_start and clip.timeline_start.frames, "clamp_downstream_overlaps: clip missing timeline_start.frames")
-                assert(clip.duration and clip.duration.frames, "clamp_downstream_overlaps: clip missing duration.frames")
-                local clip_start_frames = clip.timeline_start.frames
-                local clip_end_frames = clip_start_frames + clip.duration.frames
+                assert(type(clip.timeline_start) == "number", "clamp_downstream_overlaps: clip.timeline_start must be integer")
+                assert(type(clip.duration) == "number", "clamp_downstream_overlaps: clip.duration must be integer")
+                local clip_start_frames = clip.timeline_start
+                local clip_end_frames = clip_start_frames + clip.duration
 
                 local function neighbor_in_shift_region(neighbor_id)
                     if not neighbor_id or not ctx.clip_lookup then
@@ -829,7 +837,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function clamp_delta(ctx)
-        local delta_frames = ctx.clamped_delta_rat.frames
+        local delta_frames = ctx.clamped_delta_frames
         if ctx.global_min_frames ~= -math.huge and ctx.global_max_frames ~= math.huge and ctx.global_min_frames > ctx.global_max_frames then
             delta_frames = 0
         else
@@ -840,18 +848,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 delta_frames = ctx.global_max_frames
             end
         end
-        ctx.clamped_delta_rat = Rational.new(delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
+        ctx.clamped_delta_frames = delta_frames
         ctx.clamp_direction = 0
-        if ctx.delta_rat and ctx.delta_rat.frames and ctx.clamped_delta_rat.frames then
-            local diff = ctx.delta_rat.frames - ctx.clamped_delta_rat.frames
+        if ctx.delta_frames and ctx.clamped_delta_frames then
+            local diff = ctx.delta_frames - ctx.clamped_delta_frames
             if diff > 0 then
                 ctx.clamp_direction = 1
             elseif diff < 0 then
                 ctx.clamp_direction = -1
             end
         end
-        ctx.command:set_parameter("clamped_delta_ms", ctx.clamped_delta_rat:to_milliseconds())
-        ctx.command:set_parameter("clamped_delta_frames", ctx.clamped_delta_rat.frames)
+        local clamped_delta_ms = frame_utils.frames_to_ms(delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
+        ctx.command:set_parameter("clamped_delta_ms", clamped_delta_ms)
+        ctx.command:set_parameter("clamped_delta_frames", ctx.clamped_delta_frames)
         return delta_frames
     end
 
@@ -944,9 +953,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	    end
 
     local function compute_applied_delta(ctx, edge_key)
-        local applied_delta = ctx.clamped_delta_rat
+        local applied_delta = ctx.clamped_delta_frames
         if should_negate_edge(ctx, edge_key) then
-            applied_delta = -ctx.clamped_delta_rat
+            applied_delta = -ctx.clamped_delta_frames
         end
         return applied_delta
     end
@@ -1046,13 +1055,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function compute_gap_shift_value(ctx, gap_id, gap_clip, original_gap)
+        assert(type(original_gap.timeline_start) == "number", "compute_gap_shift_value: original_gap.timeline_start must be integer")
+        assert(type(original_gap.duration) == "number", "compute_gap_shift_value: original_gap.duration must be integer")
+        assert(type(gap_clip.timeline_start) == "number", "compute_gap_shift_value: gap_clip.timeline_start must be integer")
+        assert(type(gap_clip.duration) == "number", "compute_gap_shift_value: gap_clip.duration must be integer")
         local original_end = original_gap.timeline_start + original_gap.duration
         local new_end = gap_clip.timeline_start + gap_clip.duration
         local shift = new_end - original_end
-        if shift.frames == 0 then
+        if shift == 0 then
             shift = gap_clip.timeline_start - original_gap.timeline_start
         end
-        if (not shift.frames or shift.frames == 0) and ctx.gap_applied_delta[gap_id] then
+        if shift == 0 and ctx.gap_applied_delta[gap_id] then
             shift = ctx.gap_applied_delta[gap_id]
         end
         return shift
@@ -1074,7 +1087,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return
         end
         local gap_shift = compute_gap_shift_value(ctx, gap_id, gap_clip, original_gap)
-        if not gap_shift or not gap_shift.frames or gap_shift.frames == 0 then
+        if not gap_shift or gap_shift == 0 then
             return
         end
         local right_clip = ctx.modified_clips[right_id] or ctx.clip_lookup[right_id]
@@ -1088,6 +1101,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ctx.original_states_map[right_id] = ctx.clip_lookup[right_id]
             end
         end
+        assert(type(right_clip.timeline_start) == "number", "move_gap_right_clip: right_clip.timeline_start must be integer")
         right_clip.timeline_start = right_clip.timeline_start + gap_shift
         add_preview_shift(ctx, right_id, right_clip.timeline_start, right_clip.duration)
         ctx.gap_right_moved[right_id] = true
@@ -1103,36 +1117,36 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 	    local function compute_track_shift_amounts(ctx)
 	        if ctx.has_ripple_edge then
-	            assert(ctx.ripple_anchor_applied_delta and ctx.ripple_anchor_applied_delta.frames ~= nil,
-	                "compute_track_shift_amounts: missing ripple_anchor_applied_delta")
+	            assert(type(ctx.ripple_anchor_applied_delta) == "number",
+	                "compute_track_shift_amounts: ripple_anchor_applied_delta must be integer")
 	            local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
-	            ctx.downstream_shift_rat = Rational.new(ctx.ripple_anchor_applied_delta.frames * shift_factor, ctx.seq_fps_num, ctx.seq_fps_den)
+	            ctx.downstream_shift_frames = ctx.ripple_anchor_applied_delta * shift_factor
 
-	            local drag_sign = (ctx.clamped_delta_rat.frames >= 0) and 1 or -1
+	            local drag_sign = (ctx.clamped_delta_frames >= 0) and 1 or -1
 	            for track_id, seed in pairs(ctx.track_shift_seeds) do
-	                if track_id and seed.orientation and seed.applied_delta and seed.applied_delta.frames ~= nil then
+	                if track_id and seed.orientation and type(seed.applied_delta) == "number" then
 	                    local orientation_sign = (seed.orientation == "in") and -1 or 1
 	                    if seed.is_gap then
-	                        ctx.track_shift_amounts[track_id] = Rational.new(seed.applied_delta.frames * orientation_sign, ctx.seq_fps_num, ctx.seq_fps_den)
+	                        ctx.track_shift_amounts[track_id] = seed.applied_delta * orientation_sign
 	                    else
-	                        local magnitude = math.abs(seed.applied_delta.frames)
+	                        local magnitude = math.abs(seed.applied_delta)
 	                        local direction_sign = drag_sign
 	                        if seed.orientation == "out" then
-	                            direction_sign = (seed.applied_delta.frames >= 0) and 1 or -1
+	                            direction_sign = (seed.applied_delta >= 0) and 1 or -1
 	                        end
 	                        local track_shift_frames = magnitude * direction_sign * orientation_sign
-	                        ctx.track_shift_amounts[track_id] = Rational.new(track_shift_frames, ctx.seq_fps_num, ctx.seq_fps_den)
+	                        ctx.track_shift_amounts[track_id] = track_shift_frames
 	                    end
 	                end
 	            end
 	        else
-	            ctx.downstream_shift_rat = Rational.new(0, ctx.seq_fps_num, ctx.seq_fps_den)
+	            ctx.downstream_shift_frames = 0
 	        end
 	    end
 
     local function ensure_earliest_ripple_time(ctx)
         if not ctx.earliest_ripple_time then
-            ctx.earliest_ripple_time = Rational.new(0, ctx.seq_fps_num, ctx.seq_fps_den)
+            ctx.earliest_ripple_time = 0
         end
     end
 
@@ -1183,10 +1197,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
 	            local ripple_point = compute_ripple_point(original, clip, normalized_edge)
-	            if ripple_point and ripple_point.frames and clip.track_id then
+	            if ripple_point and type(ripple_point) == "number" and clip.track_id then
 	                local existing = ctx.track_ripple_start_frames[clip.track_id]
-	                if not existing or ripple_point.frames < existing then
-	                    ctx.track_ripple_start_frames[clip.track_id] = ripple_point.frames
+	                if not existing or ripple_point < existing then
+	                    ctx.track_ripple_start_frames[clip.track_id] = ripple_point
 	                end
 	            end
 	            update_earliest_ripple_time(ctx, ripple_point)
@@ -1239,31 +1253,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local function accumulate_bounds_for_clip(shift_clip_data)
             local neighbors = ctx.neighbor_bounds_cache and ctx.neighbor_bounds_cache[shift_clip_data.id]
             assert(neighbors, "compute_shift_bounds: missing neighbor cache for clip " .. tostring(shift_clip_data.id))
-            assert(shift_clip_data.timeline_start and shift_clip_data.timeline_start.frames, "compute_shift_bounds: clip missing timeline_start.frames")
-            assert(shift_clip_data.duration and shift_clip_data.duration.frames, "compute_shift_bounds: clip missing duration.frames")
+            assert(type(shift_clip_data.timeline_start) == "number", "compute_shift_bounds: clip.timeline_start must be integer")
+            assert(type(shift_clip_data.duration) == "number", "compute_shift_bounds: clip.duration must be integer")
 
-            local start_frames = shift_clip_data.timeline_start.frames
-            local end_frames = start_frames + shift_clip_data.duration.frames
+            local start_frames = shift_clip_data.timeline_start
+            local end_frames = start_frames + shift_clip_data.duration
 
 	            local function current_start_frames(clip_id)
 	                local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
-	                if not clip or not clip.timeline_start or not clip.timeline_start.frames then
+	                if not clip or type(clip.timeline_start) ~= "number" then
 	                    return nil
 	                end
-	                return clip.timeline_start.frames
+	                return clip.timeline_start
 	            end
 
 	            local function current_end_frames(clip_id)
 	                local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
-	                if not clip or not clip.timeline_start or not clip.duration then
+	                if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
 	                    return nil
 	                end
-	                local s = clip.timeline_start.frames
-	                local d = clip.duration.frames
-	                if s == nil or d == nil then
-	                    return nil
-	                end
-	                return s + d
+	                return clip.timeline_start + clip.duration
 	            end
 
 	            local prev_is_shifting = neighbors.prev_id and ctx.shift_lookup and ctx.shift_lookup[neighbors.prev_id]
@@ -1308,8 +1317,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 	    local function build_preview_shift_blocks(ctx)
 	        local blocks = {}
-	        local global_shift = (ctx.downstream_shift_rat and ctx.downstream_shift_rat.frames) or 0
-	        local global_start_frames = ctx.earliest_ripple_time and ctx.earliest_ripple_time.frames
+	        local global_shift = ctx.downstream_shift_frames or 0
+	        local global_start_frames = ctx.earliest_ripple_time
 	        if global_start_frames == nil then
 	            return blocks
 	        end
@@ -1317,12 +1326,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        if global_shift ~= 0 then
 	            table.insert(blocks, {start_frames = global_start_frames, delta_frames = global_shift})
 	        end
-	        for track_id, shift_rat in pairs(ctx.track_shift_amounts or {}) do
-	            assert(shift_rat and shift_rat.frames ~= nil, "build_preview_shift_blocks: track shift missing frames for track " .. tostring(track_id))
-	            local frames = shift_rat.frames
+	        for track_id, shift_frames in pairs(ctx.track_shift_amounts or {}) do
+	            assert(type(shift_frames) == "number", "build_preview_shift_blocks: track shift must be integer for track " .. tostring(track_id))
 	            local start_frames = ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id] or global_start_frames
-	            if frames ~= 0 and (frames ~= global_shift or start_frames ~= global_start_frames) then
-	                table.insert(blocks, {start_frames = start_frames, delta_frames = frames, track_id = track_id})
+	            if shift_frames ~= 0 and (shift_frames ~= global_shift or start_frames ~= global_start_frames) then
+	                table.insert(blocks, {start_frames = start_frames, delta_frames = shift_frames, track_id = track_id})
 	            end
 	        end
 	        return blocks
@@ -1341,11 +1349,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- If nothing is shifting (all shift vectors are zero), skip downstream enumeration.
-        local downstream_shift = (ctx.downstream_shift_rat and ctx.downstream_shift_rat.frames) or 0
+        local downstream_shift = ctx.downstream_shift_frames or 0
         local has_nonzero = downstream_shift ~= 0
         if not has_nonzero and ctx.track_shift_amounts then
-            for _, shift_rat in pairs(ctx.track_shift_amounts) do
-                if shift_rat and shift_rat.frames and shift_rat.frames ~= 0 then
+            for _, shift_frames in pairs(ctx.track_shift_amounts) do
+                if shift_frames and shift_frames ~= 0 then
                     has_nonzero = true
                     break
                 end
@@ -1386,7 +1394,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 	        assert(ctx.clips_to_shift, "compute_downstream_shifts: clips_to_shift is nil")
 	        local min_shift_frames, max_shift_frames = compute_shift_bounds(ctx)
-	        local desired_shift_frames = ctx.downstream_shift_rat.frames
+	        local desired_shift_frames = ctx.downstream_shift_frames
 	        local adjusted_frames = desired_shift_frames
 
         if min_shift_frames ~= -math.huge and desired_shift_frames < min_shift_frames then
@@ -1425,7 +1433,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 goto continue_shift
             end
 
-            local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_rat
+            local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_frames
+            assert(type(shift_clip.timeline_start) == "number", "compute_downstream_shifts: shift_clip.timeline_start must be integer")
             shift_clip.timeline_start = shift_clip.timeline_start + track_shift
             ctx.modified_clips[shift_clip.id] = shift_clip
 
@@ -1441,17 +1450,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            assert(type(ctx.timeline_active_region) == "table" and ctx.timeline_active_region.bulk_shift_start_frames,
 	                "compute_downstream_shifts: missing timeline_active_region.bulk_shift_start_frames for bulk shift")
 	            for track_id, clip_id in pairs(ctx.preloaded_clip_snapshot.post_boundary_first_clip) do
-	                local track_shift = ctx.track_shift_amounts[track_id] or ctx.downstream_shift_rat
-	                local frames = track_shift and track_shift.frames or 0
+	                local track_shift = ctx.track_shift_amounts[track_id] or ctx.downstream_shift_frames
+	                local frames = track_shift or 0
 	                if clip_id and frames ~= 0 then
                         local anchor = ctx.clip_lookup and ctx.clip_lookup[clip_id] or nil
-                        assert(anchor and anchor.timeline_start and anchor.timeline_start.frames, "compute_downstream_shifts: bulk shift anchor clip missing timeline_start.frames " .. tostring(clip_id))
+                        assert(anchor and type(anchor.timeline_start) == "number", "compute_downstream_shifts: bulk shift anchor clip.timeline_start must be integer " .. tostring(clip_id))
 	                    table.insert(ctx.bulk_shift_mutations, {
 	                        type = "bulk_shift",
 	                        track_id = track_id,
 	                        shift_frames = frames,
 	                        first_clip_id = clip_id,
-                            anchor_start_frame = anchor.timeline_start.frames,
+                            anchor_start_frame = anchor.timeline_start,
 	                        start_frames = ctx.timeline_active_region.bulk_shift_start_frames
 	                    })
 	                end
@@ -1478,16 +1487,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        end
 
         ctx.command:set_parameter("delta_frames", retry_delta_frames)
-        local adjusted_rat = Rational.new(adjusted_frames, ctx.seq_fps_num, ctx.seq_fps_den)
-        ctx.command:set_parameter("clamped_delta_ms", adjusted_rat:to_milliseconds())
-        ctx.command:set_parameter("clamped_delta_frames", adjusted_rat.frames)
+        local adjusted_ms = frame_utils.frames_to_ms(adjusted_frames, ctx.seq_fps_num, ctx.seq_fps_den)
+        ctx.command:set_parameter("clamped_delta_ms", adjusted_ms)
+        ctx.command:set_parameter("clamped_delta_frames", adjusted_frames)
 
         return command_executors["BatchRippleEdit"](ctx.command)
     end
 
 		    local function build_planned_mutations(ctx)
-		        local shift_frames = ctx.downstream_shift_rat.frames or 0
-		        local growth_frames = ctx.clamped_delta_rat.frames or 0
+		        local shift_frames = ctx.downstream_shift_frames or 0
+		        local growth_frames = ctx.clamped_delta_frames or 0
 
 		        local temp_gap_mutations = {}
 		        local clip_mutations = {}
@@ -1501,10 +1510,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		                local prev = mut.previous
 		                assert(type(prev) == "table", "build_planned_mutations: delete missing previous state")
 		                local start_value = prev.timeline_start or prev.start_value
-		                if type(start_value) == "table" and start_value.frames ~= nil then
-		                    return start_value.frames
-		                end
-		                assert(type(start_value) == "number", "build_planned_mutations: delete previous missing timeline_start frames")
+		                assert(type(start_value) == "number", "build_planned_mutations: delete previous timeline_start must be integer")
 		                return start_value
 		            end
 		            error("build_planned_mutations: unsupported mutation type for sorting: " .. tostring(mut.type))
@@ -1515,13 +1521,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		            local is_temp_gap_clip = type(id) == "string" and id:find("^temp_gap_")
 		            if clip and is_temp_gap_clip then
 		                if ctx.dry_run then
-		                    assert(clip.timeline_start and clip.timeline_start.frames ~= nil, "build_planned_mutations: temp gap missing timeline_start.frames")
-		                    assert(clip.duration and clip.duration.frames ~= nil, "build_planned_mutations: temp gap missing duration.frames")
+		                    assert(type(clip.timeline_start) == "number", "build_planned_mutations: temp gap timeline_start must be integer")
+		                    assert(type(clip.duration) == "number", "build_planned_mutations: temp gap duration must be integer")
 		                    table.insert(temp_gap_mutations, {
 		                        type = "temp_gap",
 		                        clip_id = id,
-		                        timeline_start_frame = clip.timeline_start.frames,
-		                        duration_frames = clip.duration.frames
+		                        timeline_start_frame = clip.timeline_start,
+		                        duration_frames = clip.duration
 		                    })
 		                end
 		            else
@@ -1586,10 +1592,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		            ctx.preview_shifted_lookup = ctx.preview_shifted_lookup or {}
 		            assert(ctx.clips_to_shift, "build_planned_mutations: clips_to_shift is nil")
 		            for _, shift_clip in ipairs(ctx.clips_to_shift) do
-		                local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_rat
+		                local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_frames
+		                assert(type(shift_clip.timeline_start) == "number", "build_planned_mutations: shift_clip.timeline_start must be integer")
 		                local new_start = shift_clip.timeline_start + track_shift
-		                if new_start.frames < 0 then
-		                    new_start = Rational.new(0, new_start.fps_numerator, new_start.fps_denominator)
+		                if new_start < 0 then
+		                    new_start = 0
 		                end
 		                if not ctx.preview_shifted_lookup[shift_clip.id] then
 		                    add_preview_shift(ctx, shift_clip.id, new_start, shift_clip.duration)
@@ -1647,7 +1654,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 	        if ctx.dry_run then
 	            local clamped_edges = {}
-	            local final_delta = ctx.clamped_delta_rat.frames
+	            local final_delta = ctx.clamped_delta_frames
 	            for edge_key, limits in pairs(ctx.per_edge_constraints) do
 	                local min_hit = (limits.min ~= -math.huge and final_delta == limits.min)
 	                local max_hit = (limits.max ~= math.huge and final_delta == limits.max)
@@ -1679,8 +1686,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                 local function build_edge_preview_payload()
                     local edge_preview = {
-                        requested_delta_frames = ctx.delta_rat and ctx.delta_rat.frames or 0,
-                        clamped_delta_frames = ctx.clamped_delta_rat and ctx.clamped_delta_rat.frames or 0,
+                        requested_delta_frames = ctx.delta_frames or 0,
+                        clamped_delta_frames = ctx.clamped_delta_frames or 0,
                         edges = {},
                         limiter_edge_keys = clamped_edges
                     }
@@ -1704,7 +1711,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         lead_normalized = ctx.lead_edge_entry.normalized_edge
                             or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type)
                     end
-                    local global_sign = signum(ctx.clamped_delta_rat and ctx.clamped_delta_rat.frames or 0)
+                    local global_sign = signum(ctx.clamped_delta_frames or 0)
 
                     -- Selected edges.
                     for _, edge_info in ipairs(ctx.edge_infos or {}) do
@@ -1723,17 +1730,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                                 is_selected = true,
                                 is_implied = false,
                                 is_limiter = clamped_edges[edge_key] == true,
-                                applied_delta_frames = applied and applied.frames or 0
+                                applied_delta_frames = applied or 0
                             })
                         end
                     end
 
                     -- Implied edges from track shifts (Rule 8.5).
-                    local boundary_default = (ctx.earliest_ripple_time and ctx.earliest_ripple_time.frames) or 0
+                    local boundary_default = ctx.earliest_ripple_time or 0
                     for track_id in pairs(ctx.affected_tracks or {}) do
                         if track_id and not (ctx.selected_tracks and ctx.selected_tracks[track_id]) then
-                            local shift = (ctx.track_shift_amounts and ctx.track_shift_amounts[track_id]) or ctx.downstream_shift_rat
-                            local shift_frames = shift and shift.frames or 0
+                            local shift_frames = (ctx.track_shift_amounts and ctx.track_shift_amounts[track_id]) or ctx.downstream_shift_frames or 0
                             if shift_frames ~= 0 then
                                 local desired = infer_implied_normalized_edge(lead_normalized, signum(shift_frames), global_sign)
                                 local raw_edge_type = (desired == "in") and "gap_after" or "gap_before"
@@ -1765,8 +1771,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             if clip_id and edge_type and clip_id ~= "" then
                                 local clip = (ctx.clip_lookup and ctx.clip_lookup[clip_id]) or nil
                                 local track_id = (clip and clip.track_id) or (ctx.clip_track_lookup and ctx.clip_track_lookup[clip_id]) or nil
-                                local shift = track_id and ctx.track_shift_amounts and ctx.track_shift_amounts[track_id] or nil
-                                local shift_frames = shift and shift.frames or 0
+                                local shift_frames = (track_id and ctx.track_shift_amounts and ctx.track_shift_amounts[track_id]) or 0
                                 upsert({
                                     edge_key = key,
                                     clip_id = clip_id,
@@ -1785,13 +1790,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     return edge_preview
                 end
 	
+	            local clamped_ms = frame_utils.frames_to_ms(ctx.clamped_delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
 	            return true, {
 	                planned_mutations = ctx.planned_mutations,
 	                affected_clips = ctx.preview_affected_clips,
                 shifted_clips = ctx.preview_shifted_clips,
                 shift_blocks = ctx.shift_blocks,
-                clamped_delta_ms = ctx.clamped_delta_rat:to_milliseconds(),
-                clamped_delta_frames = ctx.clamped_delta_rat.frames,
+                clamped_delta_ms = clamped_ms,
+                clamped_delta_frames = ctx.clamped_delta_frames,
                 materialized_gaps = ctx.materialized_gap_ids,
                 clamped_edges = clamped_edges,
                 edge_preview = build_edge_preview_payload()
@@ -1840,8 +1846,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            end
 	        end
 
-	        logger.info("ripple", string.format("Batch ripple: processed %d edges, shifted %d downstream clips by %s",
-	            #ctx.edge_infos, #(ctx.clips_to_shift or {}), tostring(ctx.downstream_shift_rat)))
+	        logger.info("ripple", string.format("Batch ripple: processed %d edges, shifted %d downstream clips by %d frames",
+	            #ctx.edge_infos, #(ctx.clips_to_shift or {}), ctx.downstream_shift_frames or 0))
 
 	        return true
 	    end
@@ -1972,10 +1978,10 @@ lower_bound_start_frames = function(track_clips, boundary_frames)
     while lo < hi do
         local mid = math.floor((lo + hi) / 2)
         local clip = track_clips[mid]
-        local start_frames = clip and clip.timeline_start and clip.timeline_start.frames
-        if start_frames == nil then
+        if not clip or type(clip.timeline_start) ~= "number" then
             return 1
         end
+        local start_frames = clip.timeline_start
         if start_frames < boundary_frames then
             lo = mid + 1
         else
@@ -2006,18 +2012,6 @@ create_temp_gap_clip = function(edge_info, clip_lookup, all_clips, seq_fps_num, 
             return nil
         end
 
-	        local function ensure_rational(value)
-	            assert(value ~= nil, "create_temp_gap_clip: missing time value")
-	            if getmetatable(value) == Rational.metatable then
-	                return value:rescale(seq_fps_num, seq_fps_den)
-	            end
-	            if type(value) == "table" and value.frames then
-	                return Rational.new(value.frames, seq_fps_num, seq_fps_den)
-	            end
-	            assert(type(value) == "number", "create_temp_gap_clip: expected number or Rational-like")
-	            return Rational.new(value, seq_fps_num, seq_fps_den)
-	        end
-
         local track_id = edge_info.track_id
         local reference_clip = clip_lookup[edge_info.clip_id]
         if reference_clip and not track_id then
@@ -2034,49 +2028,47 @@ create_temp_gap_clip = function(edge_info, clip_lookup, all_clips, seq_fps_num, 
 
     if edge_info.edge_type == "gap_after" then
         left_clip = reference_clip
-        if not left_clip or not left_clip.timeline_start or not left_clip.duration then
+        if not left_clip or type(left_clip.timeline_start) ~= "number" or type(left_clip.duration) ~= "number" then
             return nil
         end
         gap_start = left_clip.timeline_start + left_clip.duration
         right_clip = find_next_clip_on_track(all_clips, left_clip)
         if right_clip then
+            assert(type(right_clip.timeline_start) == "number", "create_temp_gap_clip: right_clip.timeline_start must be integer")
             gap_end = right_clip.timeline_start
         else
             gap_end = gap_start
         end
     else -- gap_before
         right_clip = reference_clip
-        if not right_clip or not right_clip.timeline_start then
+        if not right_clip or type(right_clip.timeline_start) ~= "number" then
             return nil
         end
         gap_end = right_clip.timeline_start
         left_clip = find_prev_clip_on_track(all_clips, right_clip)
         if left_clip then
+            assert(type(left_clip.timeline_start) == "number", "create_temp_gap_clip: left_clip.timeline_start must be integer")
+            assert(type(left_clip.duration) == "number", "create_temp_gap_clip: left_clip.duration must be integer")
             gap_start = left_clip.timeline_start + left_clip.duration
         else
-            gap_start = Rational.new(0, seq_fps_num, seq_fps_den)
+            gap_start = 0
         end
         end
-
-        gap_start = ensure_rational(gap_start)
-        gap_end = ensure_rational(gap_end)
 
 	        local duration = gap_end - gap_start
-	        assert(duration and duration.frames ~= nil, "create_temp_gap_clip: failed to compute gap duration")
-	        if duration.frames < 0 then
-	            duration = Rational.new(0, seq_fps_num, seq_fps_den)
+	        if duration < 0 then
+	            duration = 0
 	        end
 
-	    assert(gap_start.frames ~= nil and gap_end.frames ~= nil, "create_temp_gap_clip: missing gap_start/gap_end frames")
-	    local temp_id = string.format("temp_gap_%s_%s_%s", tostring(track_id), tostring(gap_start.frames), tostring(gap_end.frames))
+	    local temp_id = string.format("temp_gap_%s_%s_%s", tostring(track_id), tostring(gap_start), tostring(gap_end))
 
     local gap_clip = {
         id = temp_id,
         track_id = track_id,
         timeline_start = gap_start,
         duration = duration,
-        source_in = Rational.new(ui_constants.TIMELINE.GAP_SOURCE_MIN_FRAMES, seq_fps_num, seq_fps_den),
-        source_out = Rational.new(ui_constants.TIMELINE.GAP_SOURCE_MAX_FRAMES, seq_fps_num, seq_fps_den),
+        source_in = ui_constants.TIMELINE.GAP_SOURCE_MIN_FRAMES,
+        source_out = ui_constants.TIMELINE.GAP_SOURCE_MAX_FRAMES,
         fps_numerator = seq_fps_num,
         fps_denominator = seq_fps_den,
         rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
@@ -2100,11 +2092,11 @@ compute_neighbor_bounds = function(all_clips, original_state, clip_id)
     if not start_value or not duration_value then
         return nil, nil, nil, nil
     end
-    assert(type(start_value) == "table" and start_value.frames, "compute_neighbor_bounds: timeline_start must be Rational-like")
-    assert(type(duration_value) == "table" and duration_value.frames, "compute_neighbor_bounds: duration must be Rational-like")
+    assert(type(start_value) == "number", "compute_neighbor_bounds: timeline_start must be integer")
+    assert(type(duration_value) == "number", "compute_neighbor_bounds: duration must be integer")
 
-    local start_frames = start_value.frames
-    local end_frames = start_frames + duration_value.frames
+    local start_frames = start_value
+    local end_frames = start_frames + duration_value
 
     local prev_end_frames = nil
     local next_start_frames = nil
@@ -2114,10 +2106,10 @@ compute_neighbor_bounds = function(all_clips, original_state, clip_id)
     assert(all_clips, "compute_neighbor_bounds: all_clips is nil")
     for _, other in ipairs(all_clips) do
         if other.id ~= clip_id and other.track_id == track_id then
-            assert(other.timeline_start and other.timeline_start.frames, "compute_neighbor_bounds: other clip missing timeline_start.frames")
-            assert(other.duration and other.duration.frames, "compute_neighbor_bounds: other clip missing duration.frames")
-            local other_start_frames = other.timeline_start.frames
-            local other_end_frames = other_start_frames + other.duration.frames
+            assert(type(other.timeline_start) == "number", "compute_neighbor_bounds: other.timeline_start must be integer")
+            assert(type(other.duration) == "number", "compute_neighbor_bounds: other.duration must be integer")
+            local other_start_frames = other.timeline_start
+            local other_end_frames = other_start_frames + other.duration
 
             if other_end_frames <= start_frames then
                 if not prev_end_frames or other_end_frames > prev_end_frames then
@@ -2166,7 +2158,8 @@ should_negate_edge = function(ctx, edge_key)
 end
 
 resolve_gap_timeline_start_frames = function(ctx, clip, edge_info)
-    local start_value = clip.timeline_start and clip.timeline_start.frames
+    assert(type(clip.timeline_start) == "number", "resolve_gap_timeline_start_frames: clip.timeline_start must be integer")
+    local start_value = clip.timeline_start
     if edge_info.edge_type ~= "gap_before" then
         return start_value
     end
@@ -2179,8 +2172,8 @@ resolve_gap_timeline_start_frames = function(ctx, clip, edge_info)
     local right_original = ctx.original_states_map[right_id]
         or ctx.base_clips[right_id]
         or ctx.clip_lookup[right_id]
-    if right_original and right_original.timeline_start and right_original.timeline_start.frames then
-        return right_original.timeline_start.frames
+    if right_original and type(right_original.timeline_start) == "number" then
+        return right_original.timeline_start
     end
     return start_value
 end

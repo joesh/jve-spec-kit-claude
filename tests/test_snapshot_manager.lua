@@ -106,10 +106,10 @@ do
             parent_clip_id = nil,
             source_sequence_id = nil,
             media_id = "med1",
-            timeline_start = Rational.new(0, 24, 1),
-            duration = Rational.new(100, 24, 1),
-            source_in = Rational.new(0, 24, 1),
-            source_out = Rational.new(100, 24, 1),
+            timeline_start = 0,
+            duration = 100,
+            source_in = 0,
+            source_out = 100,
             rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true,
             offline = false,
@@ -145,11 +145,11 @@ do
     check("clip.name", c.name == "My Clip")
     check("clip.track_id", c.track_id == "trk1")
     check("clip.media_id", c.media_id == "med1")
-    check("clip.timeline_start is Rational", c.timeline_start ~= nil and c.timeline_start.frames ~= nil)
-    check("clip.timeline_start.frames == 0", c.timeline_start.frames == 0)
-    check("clip.duration.frames == 100", c.duration.frames == 100)
-    check("clip.source_in.frames == 0", c.source_in.frames == 0)
-    check("clip.source_out.frames == 100", c.source_out.frames == 100)
+    check("clip.timeline_start is Rational", c.timeline_start ~= nil and c.timeline_start ~= nil)
+    check("clip.timeline_start == 0", c.timeline_start == 0)
+    check("clip.duration == 100", c.duration == 100)
+    check("clip.source_in == 0", c.source_in == 0)
+    check("clip.source_out == 100", c.source_out == 100)
     check("clip.rate.fps_numerator", c.rate.fps_numerator == 24)
     check("clip.rate.fps_denominator", c.rate.fps_denominator == 1)
     check("clip.enabled == true", c.enabled == true)
@@ -161,8 +161,8 @@ do
     check("media.id", m.id == "med1")
     check("media.name", m.name == "shot_01.mov")
     check("media.file_path", m.file_path == "/tmp/shot_01.mov")
-    check("media.duration is Rational", m.duration ~= nil and m.duration.frames ~= nil)
-    check("media.duration.frames == 1000", m.duration.frames == 1000)
+    check("media.duration is Rational", m.duration ~= nil and m.duration ~= nil)
+    check("media.duration == 1000", m.duration == 1000)
     check("media.frame_rate.fps_numerator", m.frame_rate.fps_numerator == 24)
     check("media.width", m.width == 1920)
     check("media.audio_channels", m.audio_channels == 2)
@@ -182,10 +182,10 @@ do
             track_id = "trk1",
             owner_sequence_id = "seq1",
             media_id = "med1",
-            timeline_start = Rational.new(200, 24, 1),
-            duration = Rational.new(50, 24, 1),
-            source_in = Rational.new(0, 24, 1),
-            source_out = Rational.new(50, 24, 1),
+            timeline_start = 200,
+            duration = 50,
+            source_in = 0,
+            source_out = 50,
             rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true,
             offline = false,
@@ -314,10 +314,10 @@ do
             track_id = "trk1",
             owner_sequence_id = "seq1",
             media_id = "med1",
-            timeline_start = Rational.new(120, 30, 1),
-            duration = Rational.new(300, 30, 1),
-            source_in = Rational.new(10, 30, 1),
-            source_out = Rational.new(310, 30, 1),
+            timeline_start = 120,
+            duration = 300,
+            source_in = 10,
+            source_out = 310,
             rate = { fps_numerator = 30, fps_denominator = 1 },
             enabled = false,
             offline = true,
@@ -328,10 +328,10 @@ do
     local snap = snapshot_manager.load_snapshot(db, "seq1")
     local c = snap.clips[1]
 
-    check("30fps clip timeline_start.frames", c.timeline_start.frames == 120)
-    check("30fps clip duration.frames", c.duration.frames == 300)
-    check("30fps clip source_in.frames", c.source_in.frames == 10)
-    check("30fps clip source_out.frames", c.source_out.frames == 310)
+    check("30fps clip timeline_start.frames", c.timeline_start == 120)
+    check("30fps clip duration.frames", c.duration == 300)
+    check("30fps clip source_in.frames", c.source_in == 10)
+    check("30fps clip source_out.frames", c.source_out == 310)
     check("30fps clip rate.fps_numerator", c.rate.fps_numerator == 30)
     check("30fps clip rate.fps_denominator", c.rate.fps_denominator == 1)
     check("30fps clip enabled=false", c.enabled == false)
@@ -349,10 +349,10 @@ do
             id = "clip_d1", clip_kind = "timeline", name = "D1",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             media_id = "med1",
-            timeline_start = Rational.new(0, 24, 1),
-            duration = Rational.new(50, 24, 1),
-            source_in = Rational.new(0, 24, 1),
-            source_out = Rational.new(50, 24, 1),
+            timeline_start = 0,
+            duration = 50,
+            source_in = 0,
+            source_out = 50,
             rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true, offline = false,
         },
@@ -360,10 +360,10 @@ do
             id = "clip_d2", clip_kind = "timeline", name = "D2",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             media_id = "med1",
-            timeline_start = Rational.new(50, 24, 1),
-            duration = Rational.new(50, 24, 1),
-            source_in = Rational.new(50, 24, 1),
-            source_out = Rational.new(100, 24, 1),
+            timeline_start = 50,
+            duration = 50,
+            source_in = 50,
+            source_out = 100,
             rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true, offline = false,
         },
@@ -386,10 +386,10 @@ do
             id = "clip_nm", clip_kind = "timeline", name = "No Media",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             media_id = nil,
-            timeline_start = Rational.new(0, 24, 1),
-            duration = Rational.new(30, 24, 1),
-            source_in = Rational.new(0, 24, 1),
-            source_out = Rational.new(30, 24, 1),
+            timeline_start = 0,
+            duration = 30,
+            source_in = 0,
+            source_out = 30,
             rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true, offline = false,
         },
@@ -425,8 +425,8 @@ do
         { id = "cs1", clip_kind = "timeline", name = "S1C",
           project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
           media_id = "med1",
-          timeline_start = Rational.new(0, 24, 1), duration = Rational.new(10, 24, 1),
-          source_in = Rational.new(0, 24, 1), source_out = Rational.new(10, 24, 1),
+          timeline_start = 0, duration = 10,
+          source_in = 0, source_out = 10,
           rate = { fps_numerator = 24, fps_denominator = 1 },
           enabled = true, offline = false },
     })
@@ -434,8 +434,8 @@ do
         { id = "cs2", clip_kind = "timeline", name = "S2C",
           project_id = "proj1", track_id = "trk2", owner_sequence_id = "seq2",
           media_id = "med1",
-          timeline_start = Rational.new(0, 30, 1), duration = Rational.new(20, 30, 1),
-          source_in = Rational.new(0, 30, 1), source_out = Rational.new(20, 30, 1),
+          timeline_start = 0, duration = 20,
+          source_in = 0, source_out = 20,
           rate = { fps_numerator = 30, fps_denominator = 1 },
           enabled = true, offline = false },
     })

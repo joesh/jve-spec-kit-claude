@@ -49,10 +49,10 @@ package.loaded['ui.project_browser'] = project_browser
 
 -- Mock timeline_state
 local timeline_state = {
-    playhead_position = Rational.new(50, 30, 1),
+    playhead_position = 50,
     clips = {
-        {id = 'clip_a', parent_clip_id = 'master_clip_a', timeline_start = Rational.new(0, 30, 1), duration = Rational.new(100, 30, 1)},
-        {id = 'clip_no_parent', timeline_start = Rational.new(100, 30, 1), duration = Rational.new(100, 30, 1)},
+        {id = 'clip_a', parent_clip_id = 'master_clip_a', timeline_start = 0, duration = 100},
+        {id = 'clip_no_parent', timeline_start = 100, duration = 100},
     },
     selected_clips = {},
 }

@@ -50,12 +50,12 @@ db:exec([[
 ]])
 
 local timeline_state = {
-    playhead_position = Rational.new(2500, 1000, 1),
+    playhead_position = 2500,
     clips = {
-        {id = 'clip_a', start_value = 0, duration_value = 1500, timeline_start = Rational.new(0, 1000, 1), duration = Rational.new(1500, 1000, 1)},
-        {id = 'clip_c', start_value = 1200, duration_value = 1200, timeline_start = Rational.new(1200, 1000, 1), duration = Rational.new(1200, 1000, 1)},
-        {id = 'clip_b', start_value = 3000, duration_value = 1500, timeline_start = Rational.new(3000, 1000, 1), duration = Rational.new(1500, 1000, 1)},
-        {id = 'clip_d', start_value = 5000, duration_value = 1200, timeline_start = Rational.new(5000, 1000, 1), duration = Rational.new(1200, 1000, 1)},
+        {id = 'clip_a', start_value = 0, duration_value = 1500, timeline_start = 0, duration = 1500},
+        {id = 'clip_c', start_value = 1200, duration_value = 1200, timeline_start = 1200, duration = 1200},
+        {id = 'clip_b', start_value = 3000, duration_value = 1500, timeline_start = 3000, duration = 1500},
+        {id = 'clip_d', start_value = 5000, duration_value = 1200, timeline_start = 5000, duration = 1200},
     },
     viewport_start_value = 0,
     viewport_duration_frames_value = 10000

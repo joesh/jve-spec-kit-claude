@@ -60,10 +60,10 @@ local clip_a = Clip.create("Clip A", "media_1", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(0, 24, 1),
-    duration = Rational.new(100, 24, 1),
-    source_in = Rational.new(0, 24, 1),
-    source_out = Rational.new(100, 24, 1),
+    timeline_start = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100,
     enabled = true,
     fps_numerator = 24,
     fps_denominator = 1
@@ -75,10 +75,10 @@ local clip_c = Clip.create("Clip C", "media_1", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(200, 24, 1),
-    duration = Rational.new(100, 24, 1),
-    source_in = Rational.new(200, 24, 1),
-    source_out = Rational.new(300, 24, 1),
+    timeline_start = 200,
+    duration = 100,
+    source_in = 200,
+    source_out = 300,
     enabled = true,
     fps_numerator = 24,
     fps_denominator = 1
@@ -96,10 +96,10 @@ local cmd = Command.create("Insert", "project")
 cmd:set_parameter("media_id", "media_1")
 cmd:set_parameter("track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
-cmd:set_parameter("insert_time", Rational.new(50, 24, 1))
-cmd:set_parameter("duration", Rational.new(20, 24, 1))
-cmd:set_parameter("source_in", Rational.new(0, 24, 1))
-cmd:set_parameter("source_out", Rational.new(20, 24, 1))
+cmd:set_parameter("insert_time", 50)
+cmd:set_parameter("duration", 20)
+cmd:set_parameter("source_in", 0)
+cmd:set_parameter("source_out", 20)
 cmd:set_parameter("clip_name", "Clip B")
 
 -- Register Insert Command
@@ -171,49 +171,49 @@ end
 print("\nVerifying state:")
 
 -- Clip A (Left)
-if a_after.duration.frames == 50 then
+if a_after.duration == 50 then
     print("✅ Clip A (Left) duration is 50 (Correct)")
 else
-    print(string.format("❌ Clip A (Left) duration mismatch: expected 50, got %d", a_after.duration.frames))
+    print(string.format("❌ Clip A (Left) duration mismatch: expected 50, got %d", a_after.duration))
     os.exit(1)
 end
 
 -- Clip B (Inserted)
-if b_after.timeline_start.frames == 50 then
+if b_after.timeline_start == 50 then
     print("✅ Clip B start is 50 (Correct)")
 else
-    print(string.format("❌ Clip B start mismatch: expected 50, got %d", b_after.timeline_start.frames))
+    print(string.format("❌ Clip B start mismatch: expected 50, got %d", b_after.timeline_start))
     os.exit(1)
 end
-if b_after.duration.frames == 20 then
+if b_after.duration == 20 then
     print("✅ Clip B duration is 20 (Correct)")
 else
-    print(string.format("❌ Clip B duration mismatch: expected 20, got %d", b_after.duration.frames))
+    print(string.format("❌ Clip B duration mismatch: expected 20, got %d", b_after.duration))
     os.exit(1)
 end
 
 -- Clip A (Right)
 -- Should start at 50 + 20 = 70.
-if a_right_after.timeline_start.frames == 70 then
+if a_right_after.timeline_start == 70 then
     print("✅ Clip A (Right) start is 70 (Correct)")
 else
-    print(string.format("❌ Clip A (Right) start mismatch: expected 70, got %d", a_right_after.timeline_start.frames))
+    print(string.format("❌ Clip A (Right) start mismatch: expected 70, got %d", a_right_after.timeline_start))
     os.exit(1)
 end
 -- Duration should be 100 - 50 = 50.
-if a_right_after.duration.frames == 50 then
+if a_right_after.duration == 50 then
     print("✅ Clip A (Right) duration is 50 (Correct)")
 else
-    print(string.format("❌ Clip A (Right) duration mismatch: expected 50, got %d", a_right_after.duration.frames))
+    print(string.format("❌ Clip A (Right) duration mismatch: expected 50, got %d", a_right_after.duration))
     os.exit(1)
 end
 
 -- Clip C (Rippled)
 -- Should start at 200 + 20 = 220.
-if c_after.timeline_start.frames == 220 then
+if c_after.timeline_start == 220 then
     print("✅ Clip C start is 220 (Correct)")
 else
-    print(string.format("❌ Clip C start mismatch: expected 220, got %d", c_after.timeline_start.frames))
+    print(string.format("❌ Clip C start mismatch: expected 220, got %d", c_after.timeline_start))
     os.exit(1)
 end
 

@@ -9,7 +9,6 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local timeline_state = require('ui.timeline.timeline_state')
 local Sequence = require('models.sequence')
-local Rational = require('core.rational')
 local Command = require('command')
 
 local TEST_DB = "/tmp/jve/test_import_view_state_redo.db"
@@ -115,38 +114,38 @@ local vp_dur = timeline_state.get_viewport_duration()
 local playhead = timeline_state.get_playhead_position()
 
 print(string.format("  After import (timeline_state): viewport_start=%d, viewport_duration=%d, playhead=%d",
-    vp_start.frames, vp_dur.frames, playhead.frames))
+    vp_start, vp_dur, playhead))
 
-assert(vp_dur.frames == 132,
+assert(vp_dur == 132,
     "Initial viewport should be zoom-to-fit (132 frames)")
 
 print("Step 2: User modifies view state via timeline_state")
 -- Simulate user zooming in and moving playhead via timeline_state (like real UI)
 -- Note: set_viewport_duration centers around playhead, so set playhead first
-timeline_state.set_playhead_position(Rational.new(35, 24, 1))
+timeline_state.set_playhead_position(35)
 -- Now set viewport - duration first (which will center around playhead 35)
-timeline_state.set_viewport_duration(Rational.new(40, 24, 1))
+timeline_state.set_viewport_duration(40)
 -- Then adjust start to our desired position
-timeline_state.set_viewport_start_time(Rational.new(20, 24, 1))
+timeline_state.set_viewport_start_time(20)
 timeline_state.persist_state_to_db(true)  -- Force immediate persist
 
 vp_start = timeline_state.get_viewport_start_time()
 vp_dur = timeline_state.get_viewport_duration()
 playhead = timeline_state.get_playhead_position()
 print(string.format("  Modified (timeline_state): viewport_start=%d, viewport_duration=%d, playhead=%d",
-    vp_start.frames, vp_dur.frames, playhead.frames))
+    vp_start, vp_dur, playhead))
 
 -- Verify the database has correct values before undo
 local seq_before_undo = Sequence.load(imported_seq_id)
 print(string.format("  Before undo (database): viewport_start=%d, viewport_duration=%d, playhead=%d",
-    seq_before_undo.viewport_start_time.frames,
-    seq_before_undo.viewport_duration.frames,
-    seq_before_undo.playhead_position.frames))
+    seq_before_undo.viewport_start_time,
+    seq_before_undo.viewport_duration,
+    seq_before_undo.playhead_position))
 
-assert(seq_before_undo.viewport_start_time.frames == 20,
-    string.format("Before undo, DB viewport_start should be 20, got %d", seq_before_undo.viewport_start_time.frames))
-assert(seq_before_undo.playhead_position.frames == 35,
-    string.format("Before undo, DB playhead should be 35, got %d", seq_before_undo.playhead_position.frames))
+assert(seq_before_undo.viewport_start_time == 20,
+    string.format("Before undo, DB viewport_start should be 20, got %d", seq_before_undo.viewport_start_time))
+assert(seq_before_undo.playhead_position == 35,
+    string.format("Before undo, DB playhead should be 35, got %d", seq_before_undo.playhead_position))
 
 print("Step 3: Undo import")
 local undo_result = command_manager.undo()
@@ -167,23 +166,23 @@ vp_start = timeline_state.get_viewport_start_time()
 vp_dur = timeline_state.get_viewport_duration()
 playhead = timeline_state.get_playhead_position()
 print(string.format("  After redo (timeline_state): viewport_start=%d, viewport_duration=%d, playhead=%d",
-    vp_start.frames, vp_dur.frames, playhead.frames))
+    vp_start, vp_dur, playhead))
 -- In the real app, the user is already "viewing" this sequence, so the UI
 -- doesn't know it needs to re-init. timeline_state still has stale cached values.
 
 -- Check that database has the correct restored values BEFORE any persist
 local seq_after_redo = Sequence.load(imported_seq_id)
 print(string.format("  After redo (database): viewport_start=%d, viewport_duration=%d, playhead=%d",
-    seq_after_redo.viewport_start_time.frames,
-    seq_after_redo.viewport_duration.frames,
-    seq_after_redo.playhead_position.frames))
+    seq_after_redo.viewport_start_time,
+    seq_after_redo.viewport_duration,
+    seq_after_redo.playhead_position))
 
-assert(seq_after_redo.viewport_start_time.frames == 20,
-    string.format("DB viewport_start should be 20 after redo, got %d", seq_after_redo.viewport_start_time.frames))
-assert(seq_after_redo.viewport_duration.frames == 40,
-    string.format("DB viewport_duration should be 40 after redo, got %d", seq_after_redo.viewport_duration.frames))
-assert(seq_after_redo.playhead_position.frames == 35,
-    string.format("DB playhead should be 35 after redo, got %d", seq_after_redo.playhead_position.frames))
+assert(seq_after_redo.viewport_start_time == 20,
+    string.format("DB viewport_start should be 20 after redo, got %d", seq_after_redo.viewport_start_time))
+assert(seq_after_redo.viewport_duration == 40,
+    string.format("DB viewport_duration should be 40 after redo, got %d", seq_after_redo.viewport_duration))
+assert(seq_after_redo.playhead_position == 35,
+    string.format("DB playhead should be 35 after redo, got %d", seq_after_redo.playhead_position))
 
 print("Step 5: Simulate user action that triggers persist (without re-init)")
 -- User clicks somewhere, which triggers timeline_state.persist_state_to_db()
@@ -193,16 +192,16 @@ timeline_state.persist_state_to_db(true)
 -- Check that database STILL has correct values (stale cache shouldn't overwrite)
 local seq_after_persist = Sequence.load(imported_seq_id)
 print(string.format("  After persist (database): viewport_start=%d, viewport_duration=%d, playhead=%d",
-    seq_after_persist.viewport_start_time.frames,
-    seq_after_persist.viewport_duration.frames,
-    seq_after_persist.playhead_position.frames))
+    seq_after_persist.viewport_start_time,
+    seq_after_persist.viewport_duration,
+    seq_after_persist.playhead_position))
 
-assert(seq_after_persist.viewport_start_time.frames == 20,
-    string.format("viewport_start should still be 20 after persist, got %d", seq_after_persist.viewport_start_time.frames))
-assert(seq_after_persist.viewport_duration.frames == 40,
-    string.format("viewport_duration should still be 40 after persist, got %d", seq_after_persist.viewport_duration.frames))
-assert(seq_after_persist.playhead_position.frames == 35,
-    string.format("playhead should still be 35 after persist, got %d", seq_after_persist.playhead_position.frames))
+assert(seq_after_persist.viewport_start_time == 20,
+    string.format("viewport_start should still be 20 after persist, got %d", seq_after_persist.viewport_start_time))
+assert(seq_after_persist.viewport_duration == 40,
+    string.format("viewport_duration should still be 40 after persist, got %d", seq_after_persist.viewport_duration))
+assert(seq_after_persist.playhead_position == 35,
+    string.format("playhead should still be 35 after persist, got %d", seq_after_persist.playhead_position))
 
 print("Step 6: Check what UI would display (timeline_state cached values)")
 -- The user sees what timeline_state has in memory, not database values.
@@ -211,15 +210,15 @@ vp_start = timeline_state.get_viewport_start_time()
 vp_dur = timeline_state.get_viewport_duration()
 playhead = timeline_state.get_playhead_position()
 print(string.format("  timeline_state shows: viewport_start=%d, viewport_duration=%d, playhead=%d",
-    vp_start.frames, vp_dur.frames, playhead.frames))
+    vp_start, vp_dur, playhead))
 
 -- These MUST match the restored values, not stale cached values from before undo
-assert(vp_start.frames == 20,
-    string.format("timeline_state viewport_start should be 20, got %d (user sees wrong zoom!)", vp_start.frames))
-assert(vp_dur.frames == 40,
-    string.format("timeline_state viewport_duration should be 40, got %d (user sees wrong zoom!)", vp_dur.frames))
-assert(playhead.frames == 35,
-    string.format("timeline_state playhead should be 35, got %d", playhead.frames))
+assert(vp_start == 20,
+    string.format("timeline_state viewport_start should be 20, got %d (user sees wrong zoom!)", vp_start))
+assert(vp_dur == 40,
+    string.format("timeline_state viewport_duration should be 40, got %d (user sees wrong zoom!)", vp_dur))
+assert(playhead == 35,
+    string.format("timeline_state playhead should be 35, got %d", playhead))
 
 command_manager.end_command_event()
 os.remove(TEST_DB)

@@ -310,7 +310,7 @@ function M.create(opts)
         assert(media and media:save(), "Failed to create media: " .. m.id)
     end
 
-    -- Create clips using model
+    -- Create clips using model (integer frame coordinates)
     for _, key in ipairs(cfg.clips.order or {}) do
         local c = cfg.clips[key]
         local track = cfg.tracks[c.track_key]
@@ -323,10 +323,10 @@ function M.create(opts)
             clip_kind = "timeline",
             track_id = track.id,
             owner_sequence_id = cfg.sequence_id,
-            timeline_start = Rational.new(c.timeline_start, fps_num, fps_den),
-            duration = Rational.new(c.duration, fps_num, fps_den),
-            source_in = Rational.new(c.source_in, fps_num, fps_den),
-            source_out = Rational.new(c.source_in + c.duration, fps_num, fps_den),
+            timeline_start = c.timeline_start,  -- integer
+            duration = c.duration,  -- integer
+            source_in = c.source_in,  -- integer
+            source_out = c.source_in + c.duration,  -- integer
             fps_numerator = fps_num,
             fps_denominator = fps_den
         })

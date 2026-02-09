@@ -55,7 +55,7 @@ cmd:set_parameter("project_id", "proj")
 cmd:set_parameter("fps_numerator", 24)
 cmd:set_parameter("fps_denominator", 1)
 cmd:set_parameter("selected_clip_ids", {"c1"})
-cmd:set_parameter("nudge_amount_rat", Rational.new(24, 24, 1))
+cmd:set_parameter("nudge_amount", 24)
 
 local res = command_manager.execute(cmd)
 assert(res.success, "nudge execution failed: " .. tostring(res.error_message))

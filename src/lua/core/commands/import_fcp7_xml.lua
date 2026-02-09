@@ -18,7 +18,6 @@ local M = {}
 local logger = require("core.logger")
 local command_helper = require("core.command_helper")
 local file_browser = require("core.file_browser")
-local Rational = require("core.rational")
 
 --- Calculate and apply zoom-to-fit viewport for a sequence.
 -- Sets viewport to show all clips with 10% buffer padding.
@@ -59,9 +58,9 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
         return nil
     end
 
-    -- Calculate viewport with 10% buffer
+    -- Calculate viewport with 10% buffer (integer frames)
     local content_duration = max_end - min_start
-    local buffer = content_duration / 10
+    local buffer = math.floor(content_duration / 10)
     local viewport_duration = content_duration + buffer
 
     -- Load and update the sequence
@@ -81,8 +80,8 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
     end
 
     local viewport_data = {
-        start_frames = min_start.frames,
-        duration_frames = viewport_duration.frames,
+        start_frames = min_start,
+        duration_frames = viewport_duration,
     }
 
     logger.info("import_fcp7_xml", string.format(
@@ -224,20 +223,18 @@ function M.register(executors, undoers, db)
                 local Sequence = require("models.sequence")
                 local sequence = Sequence.load(seq_id)
                 if sequence then
-                    local fps_num = sequence.frame_rate.fps_numerator
-                    local fps_den = sequence.frame_rate.fps_denominator
+                    -- Restore viewport (integer frames) - required fields
+                    assert(stored.viewport_start_frames ~= nil, "ImportFCP7XML redo: missing viewport_start_frames for " .. seq_id)
+                    assert(stored.viewport_duration_frames ~= nil, "ImportFCP7XML redo: missing viewport_duration_frames for " .. seq_id)
+                    assert(stored.playhead_frames ~= nil, "ImportFCP7XML redo: missing playhead_frames for " .. seq_id)
 
-                    -- Restore viewport
-                    sequence.viewport_start_time = Rational.new(
-                        stored.viewport_start_frames or 0, fps_num, fps_den)
-                    sequence.viewport_duration = Rational.new(
-                        stored.viewport_duration_frames or 240, fps_num, fps_den)
+                    sequence.viewport_start_time = stored.viewport_start_frames
+                    sequence.viewport_duration = stored.viewport_duration_frames
 
-                    -- Restore playhead
-                    sequence.playhead_position = Rational.new(
-                        stored.playhead_frames or 0, fps_num, fps_den)
+                    -- Restore playhead (integer frame)
+                    sequence.playhead_position = stored.playhead_frames
 
-                    -- Restore selection
+                    -- Restore selection (empty is valid default for redo)
                     sequence.selected_clip_ids_json = stored.selected_clip_ids_json or "[]"
                     sequence.selected_edge_infos_json = stored.selected_edge_infos_json or "[]"
 
@@ -347,12 +344,10 @@ function M.register(executors, undoers, db)
                 local vp_dur = timeline_state.get_viewport_duration and timeline_state.get_viewport_duration()
                 local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
 
-                -- Handle both Rational objects and raw numbers
-                local function get_frames(val)
-                    if type(val) == "table" and val.frames then return val.frames end
-                    if type(val) == "number" then return val end
-                    return 0
-                end
+                -- All viewport values must be integers
+                assert(type(vp_start) == "number", "ImportFCP7XML: viewport_start_time must be integer")
+                assert(type(vp_dur) == "number", "ImportFCP7XML: viewport_duration must be integer")
+                assert(type(playhead) == "number", "ImportFCP7XML: playhead_position must be integer")
 
                 -- Capture selection from cache
                 local selected_clip_ids = {}
@@ -384,9 +379,9 @@ function M.register(executors, undoers, db)
                 local edges_ok, edges_json = pcall(json.encode, edge_descriptors)
 
                 view_state = {
-                    viewport_start_frames = get_frames(vp_start),
-                    viewport_duration_frames = get_frames(vp_dur) or 240,
-                    playhead_frames = get_frames(playhead),
+                    viewport_start_frames = vp_start,
+                    viewport_duration_frames = vp_dur,
+                    playhead_frames = playhead,
                     selected_clip_ids_json = clips_ok and clips_json or "[]",
                     selected_edge_infos_json = edges_ok and edges_json or "[]",
                 }
@@ -395,13 +390,17 @@ function M.register(executors, undoers, db)
                     seq_id, view_state.viewport_start_frames, view_state.viewport_duration_frames, view_state.playhead_frames,
                     #selected_clip_ids, #edge_descriptors))
             else
-                -- Fallback: load from database
+                -- Fallback: load from database (all coords are integers now)
                 local sequence = Sequence.load(seq_id)
                 if sequence then
+                    -- viewport_start_time/playhead_position can be 0 legitimately (start of timeline)
+                    -- viewport_duration must be > 0
+                    assert(sequence.viewport_duration and sequence.viewport_duration > 0,
+                        "ImportFCP7XML: sequence " .. seq_id .. " has invalid viewport_duration")
                     view_state = {
-                        viewport_start_frames = sequence.viewport_start_time and sequence.viewport_start_time.frames or 0,
-                        viewport_duration_frames = sequence.viewport_duration and sequence.viewport_duration.frames or 240,
-                        playhead_frames = sequence.playhead_position and sequence.playhead_position.frames or 0,
+                        viewport_start_frames = sequence.viewport_start_time,
+                        viewport_duration_frames = sequence.viewport_duration,
+                        playhead_frames = sequence.playhead_position,
                         selected_clip_ids_json = sequence.selected_clip_ids_json or "[]",
                         selected_edge_infos_json = sequence.selected_edge_infos_json or "[]",
                     }

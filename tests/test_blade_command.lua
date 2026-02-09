@@ -149,7 +149,7 @@ local function execute_batch_split(split_value_ms, clip_ids)
             command_type = "SplitClip",
             parameters = {
                 clip_id = clip.id or clip,
-                split_value = { frames = frames, fps_numerator = 30, fps_denominator = 1 }
+                split_value = frames  -- integer frames
             }
         })
     end

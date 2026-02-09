@@ -9,7 +9,6 @@ local Command = require('command')
 local Media = require('models.media')
 local Clip = require('models.clip')
 local timeline_state = require('ui.timeline.timeline_state')
-local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_ripple_delete_playhead.db"
 os.remove(TEST_DB)
@@ -58,10 +57,10 @@ local function create_clip(id, track_id, start_value, duration_value, media_id)
         project_id = 'default_project',
         track_id = track_id,
         owner_sequence_id = 'default_sequence',
-        timeline_start = Rational.new(start_value, 30, 1),
-        duration = Rational.new(duration_value, 30, 1),
-        source_in = Rational.new(0, 30, 1),
-        source_out = Rational.new(duration_value, 30, 1),
+        timeline_start = start_value,
+        duration = duration_value,
+        source_in = 0,
+        source_out = duration_value,
         fps_numerator = 30,
         fps_denominator = 1,
         enabled = true,
@@ -91,7 +90,7 @@ local undoers = {}
 -- command_impl.register_commands(executors, undoers, db)
 command_manager.init('default_sequence', 'default_project')
 
-local original_playhead = Rational.new(8888, 30, 1)
+local original_playhead = 8888
 timeline_state.set_playhead_position(original_playhead)
 
 local cmd = Command.create("RippleDeleteSelection", "default_project")
@@ -104,8 +103,7 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed for ripple delete")
 
 local restored = timeline_state.get_playhead_position()
-local restored_frames = (type(restored) == "table" and restored.frames) or restored
-assert(restored_frames == original_playhead.frames,
-    string.format("Undo should restore playhead to %d, got %s", original_playhead.frames, tostring(restored_frames)))
+assert(restored == original_playhead,
+    string.format("Undo should restore playhead to %d, got %s", original_playhead, tostring(restored)))
 
 print("✅ RippleDeleteSelection undo restores playhead using real timeline_state")

@@ -3,8 +3,6 @@
 package.path = package.path .. ";src/lua/?.lua;src/lua/?/init.lua;./?.lua;./?/init.lua"
 
 local timeline_state = require("ui.timeline.timeline_state")
-local time_utils = require("core.time_utils")
-local Rational = require("core.rational")
 local db = require("core.database") -- Require the actual database module
 
 local function assert_equal(actual, expected, message)
@@ -36,8 +34,8 @@ end
 
 db.load_clips = function(sequence_id)
     return {
-        {id = "clip_test_1", track_id = "v1", timeline_start = time_utils.from_frames(10, 24, 1), duration = time_utils.from_frames(20, 24, 1), source_in = time_utils.from_frames(0, 24, 1), source_out = time_utils.from_frames(20, 24, 1)},
-        {id = "clip_test_2", track_id = "a1", timeline_start = time_utils.from_frames(30, 24, 1), duration = time_utils.from_frames(10, 24, 1), source_in = time_utils.from_frames(0, 24, 1), source_out = time_utils.from_frames(10, 24, 1)},
+        {id = "clip_test_1", track_id = "v1", timeline_start = 10, duration = 20, source_in = 0, source_out = 20},
+        {id = "clip_test_2", track_id = "a1", timeline_start = 30, duration = 10, source_in = 0, source_out = 10},
     }
 end
 
@@ -223,37 +221,32 @@ timeline_state.reset()
 
 timeline_state.init("default_sequence") -- Initialize the state, loading default sequence data
 
--- Playhead rational conversion round-trip (frames@24fps)
-local sequence_fps_num = timeline_state.get_sequence_fps_numerator()
-local sequence_fps_den = timeline_state.get_sequence_fps_denominator()
-timeline_state.set_playhead_position(time_utils.from_frames(48, sequence_fps_num, sequence_fps_den)) -- 2s @24fps
-local playhead_rt = timeline_state.get_playhead_position()
-assert_equal(playhead_rt.fps_numerator, sequence_fps_num, "Playhead RationalTime should use sequence frame rate numerator")
-assert_equal(playhead_rt.frames, 48, "Playhead should report native frames")
+-- Playhead integer conversion round-trip (frames@24fps)
+timeline_state.set_playhead_position(48) -- 2s @24fps
+local playhead = timeline_state.get_playhead_position()
+assert_equal(playhead, 48, "Playhead should report native frames")
 
 -- Test set_viewport_start_time
-local initial_viewport_start_rational = time_utils.from_frames(24, sequence_fps_num, sequence_fps_den)
-timeline_state.set_viewport_start_time(initial_viewport_start_rational)
+local initial_viewport_start = 24
+timeline_state.set_viewport_start_time(initial_viewport_start)
 local viewport_start_after_set = timeline_state.get_viewport_start_time()
-assert_equal(viewport_start_after_set.frames, initial_viewport_start_rational.frames, "Viewport start should be set directly")
-assert_equal(viewport_start_after_set.fps_numerator, sequence_fps_num, "Viewport start RationalTime should use sequence frame rate numerator")
+assert_equal(viewport_start_after_set, initial_viewport_start, "Viewport start should be set directly")
 
 -- Test set_viewport_duration and its effect on start time (centers around playhead)
-local viewport_duration_rational = time_utils.from_frames(48, sequence_fps_num, sequence_fps_den) -- 2s
-timeline_state.set_viewport_duration(viewport_duration_rational)
+local viewport_duration = 48 -- 2s @24fps
+timeline_state.set_viewport_duration(viewport_duration)
 
 local viewport_duration_after_set = timeline_state.get_viewport_duration()
-assert_equal(viewport_duration_after_set.frames, viewport_duration_rational.frames, "Viewport duration should be set directly")
-assert_equal(viewport_duration_after_set.fps_numerator, sequence_fps_num, "Viewport duration RationalTime should use sequence frame rate numerator")
+assert_equal(viewport_duration_after_set, viewport_duration, "Viewport duration should be set directly")
 
--- Expect viewport start to be centered around the playhead (72 - 48/2 = 48)
+-- Expect viewport start to be centered around the playhead (48 - 48/2 = 24)
 local expected_start_after_duration_set = 24
 local viewport_start_after_duration_set = timeline_state.get_viewport_start_time()
-assert_equal(viewport_start_after_duration_set.frames, expected_start_after_duration_set, "Viewport start should be adjusted to center playhead")
-assert_equal(viewport_start_after_duration_set.fps_numerator, sequence_fps_num, "Adjusted viewport start RationalTime should use sequence frame rate numerator")
+assert_equal(viewport_start_after_duration_set, expected_start_after_duration_set, "Viewport start should be adjusted to center playhead")
 
--- Coordinate conversions (RationalTime aware)
-local px = timeline_state.time_to_pixel(time_utils.from_frames(36, sequence_fps_num, sequence_fps_den), 240) -- midway through 1s..3s window
-local rt_from_px = timeline_state.pixel_to_time(px, 240)
-assert_equal(rt_from_px.fps_numerator, sequence_fps_num, "pixel_to_rational should use sequence fps")
-assert_equal(rt_from_px.frames, 36, "pixel_to_rational should map back to frame count")
+-- Coordinate conversions (integer aware)
+local px = timeline_state.time_to_pixel(36, 240) -- midway through 1s..3s window
+local frame_from_px = timeline_state.pixel_to_time(px, 240)
+assert_equal(frame_from_px, 36, "pixel_to_time should map back to frame count")
+
+print("✅ test_timeline_state_rational.lua passed")

@@ -2,17 +2,12 @@
 
 package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
-local Rational = require("core.rational")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 
 local colors = {
     edge_selected_available = "#00ff00",
     edge_selected_limit = "#ff0000"
 }
-
-local function rational(frames)
-    return Rational.new(frames, 1000, 1)
-end
 
 local gap_edge = {
     clip_id = "temp_gap_track_v1",
@@ -29,7 +24,7 @@ local clip_edge = {
 }
 
 local lead_edge = gap_edge
-local drag_delta = rational(-400) -- Drag gap [ handle to the left
+local drag_delta = -400 -- Drag gap [ handle to the left (plain integer frames)
 
 local previews = edge_drag_renderer.build_preview_edges(
     {gap_edge, clip_edge},
@@ -47,12 +42,12 @@ end
 assert(by_id[gap_edge.clip_id], "Gap edge preview missing")
 assert(by_id[clip_edge.clip_id], "Clip edge preview missing")
 
-assert(by_id[gap_edge.clip_id].delta.frames == -400,
-    string.format("Gap handle should follow drag delta (-400); got %s", tostring(by_id[gap_edge.clip_id].delta.frames)))
+assert(by_id[gap_edge.clip_id].delta == -400,
+    string.format("Gap handle should follow drag delta (-400); got %s", tostring(by_id[gap_edge.clip_id].delta)))
 
-assert(by_id[clip_edge.clip_id].delta.frames == 400,
+assert(by_id[clip_edge.clip_id].delta == 400,
     string.format("Opposing clip edge should move opposite lead handle; expected 400, got %s",
-        tostring(by_id[clip_edge.clip_id].delta.frames)))
+        tostring(by_id[clip_edge.clip_id].delta)))
 
 assert(by_id[gap_edge.clip_id].color == colors.edge_selected_available,
     string.format("Moving edges should keep configured color; expected %s, got %s",

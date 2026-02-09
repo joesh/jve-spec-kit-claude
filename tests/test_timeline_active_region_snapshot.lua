@@ -2,17 +2,16 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local TimelineActiveRegion = require("core.timeline_active_region")
 
 local function clip(id, track_id, start_frames, duration_frames, fps_num, fps_den)
     return {
         id = id,
         track_id = track_id,
-        timeline_start = Rational.new(start_frames, fps_num, fps_den),
-        duration = Rational.new(duration_frames, fps_num, fps_den),
-        source_in = Rational.new(0, fps_num, fps_den),
-        source_out = Rational.new(duration_frames, fps_num, fps_den),
+        timeline_start = start_frames,
+        duration = duration_frames,
+        source_in = 0,
+        source_out = duration_frames,
         fps_numerator = fps_num,
         fps_denominator = fps_den,
         enabled = 1

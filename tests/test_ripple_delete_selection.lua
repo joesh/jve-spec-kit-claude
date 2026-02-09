@@ -176,16 +176,15 @@ local function create_clip_command(params)
     assert(media, "failed to create media for clip " .. tostring(clip_id))
     assert(media:save(db), "failed to save media for clip " .. tostring(clip_id))
 
-    local Rational = require('core.rational')
     local clip = require('models.clip').create("Test Clip", media_id, {
         id = params.clip_id,
         project_id = 'default_project',
         track_id = params.track_id,
         owner_sequence_id = 'default_sequence',
-        timeline_start = Rational.new(params.start_value, 30, 1),
-        duration = Rational.new(params.duration, 30, 1),
-        source_in = Rational.new(0, 30, 1),
-        source_out = Rational.new(params.duration, 30, 1),
+        timeline_start = params.start_value,
+        duration = params.duration,
+        source_in = 0,
+        source_out = params.duration,
         fps_numerator = 30,
         fps_denominator = 1,
         enabled = true

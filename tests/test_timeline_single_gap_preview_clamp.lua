@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_state = require("ui.timeline.timeline_state")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -57,7 +56,7 @@ view.drag_state = {
     type = "edges",
     edges = {edge},
     lead_edge = edge,
-    delta_rational = Rational.new(-3000, 1000, 1)
+    delta_frames = -3000
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -94,8 +93,8 @@ local clip_shift = shifted_lookup[clips.v2.id]
 assert(clip_shift, "Single gap drag preview should report downstream shift for the trailing clip")
 
 local new_start = clip_shift.new_start_value
-assert(new_start and new_start.frames == 0,
+assert(new_start and new_start == 0,
     string.format("Clamped preview should stop at timeline start (expected 0, got %s)",
-        tostring(new_start and new_start.frames)))
+        tostring(new_start)))
 
 print("✅ Single-edge gap previews clamp to the available gap before execution")

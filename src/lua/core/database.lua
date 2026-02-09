@@ -19,7 +19,6 @@
 local M = {}
 local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
-local Rational = require("core.rational")
 local logger = require("core.logger")
 local path_utils = require("core.path_utils")
 
@@ -336,17 +335,17 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 	        owner_sequence_id = owner_sequence_id,
 	        track_sequence_id = track_sequence_id,
         
-                        -- Rational Properties
-        
-                        -- Timeline positions are in the owning sequence timebase.
-                        timeline_start = Rational.new(query:value(10) or 0, sequence_fps_num, sequence_fps_den),
+                        -- Integer frame coordinates (required - corrupt DB if missing)
 
-                        duration = Rational.new(query:value(11) or 0, sequence_fps_num, sequence_fps_den),
+                        -- Timeline positions are in the owning sequence timebase.
+                        timeline_start = assert(query:value(10), string.format("load_clips: clip %s missing timeline_start", clip_id)),
+
+                        duration = assert(query:value(11), string.format("load_clips: clip %s missing duration", clip_id)),
 
                         -- Source bounds are in the clip timebase (media/source rate).
-                        source_in = Rational.new(query:value(12) or 0, clip_fps_num, clip_fps_den),
+                        source_in = assert(query:value(12), string.format("load_clips: clip %s missing source_in", clip_id)),
 
-                        source_out = Rational.new(query:value(13) or 0, clip_fps_num, clip_fps_den),
+                        source_out = assert(query:value(13), string.format("load_clips: clip %s missing source_out", clip_id)),
         
                         
         
@@ -1028,7 +1027,7 @@ function M.load_media()
                 name = query:value(2),
                 file_name = query:value(2),
                 file_path = query:value(3),
-                duration = Rational.new(query:value(4), num, den),
+                duration = query:value(4),  -- integer frames
                 frame_rate = { fps_numerator = num, fps_denominator = den },
                 width = query:value(7),
                 height = query:value(8),
@@ -1186,7 +1185,7 @@ function M.load_master_clips(project_id)
 	                name = media_name,
 	                file_name = media_name,
 	                file_path = media_path,
-	                duration = Rational.new(media_duration_frames, media_fps_num, media_fps_den),
+	                duration = media_duration_frames,  -- integer frames
 	                frame_rate = { fps_numerator = media_fps_num, fps_denominator = media_fps_den },
 	                width = media_width,
 	                height = media_height,
@@ -1216,10 +1215,10 @@ function M.load_master_clips(project_id)
                 media_id = media_id,
                 source_sequence_id = source_sequence_id,
                 
-	                timeline_start = Rational.new(start_frame, clip_fps_num, clip_fps_den),
-	                duration = Rational.new(duration_frames, clip_fps_num, clip_fps_den),
-                source_in = Rational.new(source_in_frame, clip_fps_num, clip_fps_den),
-                source_out = Rational.new(source_out_frame, clip_fps_num, clip_fps_den),
+	                timeline_start = start_frame,  -- integer frames
+	                duration = duration_frames,
+                source_in = source_in_frame,
+                source_out = source_out_frame,
                 
                 rate = { fps_numerator = clip_fps_num, fps_denominator = clip_fps_den },
                 
@@ -1291,8 +1290,7 @@ function M.load_sequences(project_id)
     -- Compute duration for each sequence (max clip end)
     for _, sequence in ipairs(sequences) do
         local clips = M.load_clips(sequence.id)
-        -- Initialize max_end as Rational 0
-        local max_end = Rational.new(0, sequence.frame_rate.fps_numerator, sequence.frame_rate.fps_denominator)
+        local max_end = 0  -- integer frames
         for _, clip in ipairs(clips) do
             if clip.timeline_start and clip.duration then
                 local clip_end = clip.timeline_start + clip.duration

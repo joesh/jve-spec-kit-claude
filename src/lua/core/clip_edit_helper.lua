@@ -12,7 +12,6 @@ local M = {}
 local Clip = require('models.clip')
 local Media = require('models.media')
 local Track = require('models.track')
-local Rational = require('core.rational')
 local command_helper = require('core.command_helper')
 local rational_helpers = require('core.command_rational_helpers')
 
@@ -118,75 +117,65 @@ function M.resolve_edit_time(edit_time, command, param_name)
     return edit_time
 end
 
---- Resolve all timing parameters (duration, source_in, source_out)
--- @param params table Parameters containing duration/source values
+--- Resolve all timing parameters (duration, source_in, source_out) as integers
+-- @param params table Parameters containing duration/source values (integers)
 -- @param master_clip table|nil Master clip for fallback values
 -- @param media table|nil Media for fallback duration
--- @param seq_fps_num number Sequence FPS numerator
--- @param seq_fps_den number Sequence FPS denominator
--- @param media_fps_num number Media FPS numerator
--- @param media_fps_den number Media FPS denominator
--- @return table Resolved timing {duration_rat, source_in_rat, source_out_rat, duration_frames}
+-- @return table Resolved timing {duration, source_in, source_out} as integers
 -- @return string|nil Error message if invalid
-function M.resolve_timing(params, master_clip, media, seq_fps_num, seq_fps_den, media_fps_num, media_fps_den)
-    local duration_raw = params.duration_value or params.duration
-    local source_in_raw = params.source_in_value or params.source_in
-    local source_out_raw = params.source_out_value or params.source_out
-
-    local source_in_rat = rational_helpers.optional_rational_in_rate(source_in_raw, media_fps_num, media_fps_den)
-    local source_out_rat = rational_helpers.optional_rational_in_rate(source_out_raw, media_fps_num, media_fps_den)
-
-    local duration_frames = nil
-    do
-        local duration_rat = rational_helpers.optional_rational_in_rate(duration_raw, seq_fps_num, seq_fps_den)
-        if duration_rat and duration_rat.frames and duration_rat.frames > 0 then
-            duration_frames = duration_rat.frames
-        end
+function M.resolve_timing(params, master_clip, media)
+    -- Extract integer values from params (support both _value suffix and direct)
+    local function to_int(val, label)
+        if val == nil then return nil end
+        assert(type(val) == "number", string.format("clip_edit_helper.resolve_timing: %s must be integer, got %s", label, type(val)))
+        return val
     end
 
-    -- Fallback to master_clip values
+    local duration = to_int(params.duration_value or params.duration, "duration")
+    local source_in = to_int(params.source_in_value or params.source_in, "source_in")
+    local source_out = to_int(params.source_out_value or params.source_out, "source_out")
+
+    -- Fallback to master_clip values (already integers after model refactor)
     if master_clip then
-        if not source_in_rat then
-            source_in_rat = master_clip.source_in or Rational.new(0, media_fps_num, media_fps_den)
+        if source_in == nil then
+            source_in = master_clip.source_in or 0
         end
-        if (not duration_frames or duration_frames <= 0) and master_clip.duration and master_clip.duration.frames and master_clip.duration.frames > 0 then
-            duration_frames = master_clip.duration.frames
+        if (duration == nil or duration <= 0) and master_clip.duration and master_clip.duration > 0 then
+            duration = master_clip.duration
         end
-        if not source_out_rat and (not duration_frames or duration_frames <= 0) and master_clip.source_out then
-            source_out_rat = master_clip.source_out
-        end
-    end
-
-    -- Fallback to media duration
-    if (not duration_frames or duration_frames <= 0) and media then
-        if media.duration and media.duration.frames and media.duration.frames > 0 then
-            duration_frames = media.duration.frames
+        if source_out == nil and (duration == nil or duration <= 0) and master_clip.source_out then
+            source_out = master_clip.source_out
         end
     end
 
-    if not source_in_rat then
-        source_in_rat = Rational.new(0, media_fps_num, media_fps_den) -- NSF-OK: source_in=0 means "start of media"
+    -- Fallback to media duration (already integer after model refactor)
+    if (duration == nil or duration <= 0) and media then
+        if media.duration and media.duration > 0 then
+            duration = media.duration
+        end
+    end
+
+    -- Default source_in to 0 (start of media)
+    if source_in == nil then
+        source_in = 0
     end
 
     -- Calculate missing values from available ones
-    if source_out_rat and (not duration_frames or duration_frames <= 0) then
-        duration_frames = source_out_rat.frames - source_in_rat.frames
+    if source_out and (duration == nil or duration <= 0) then
+        duration = source_out - source_in
     end
-    if not source_out_rat and duration_frames and duration_frames > 0 then
-        source_out_rat = Rational.new(source_in_rat.frames + duration_frames, media_fps_num, media_fps_den)
-    end
-
-    if not duration_frames or duration_frames <= 0 then
-        return nil, string.format("invalid duration_frames=%s", tostring(duration_frames))
+    if source_out == nil and duration and duration > 0 then
+        source_out = source_in + duration
     end
 
-    local duration_rat = Rational.new(duration_frames, seq_fps_num, seq_fps_den)
+    if not duration or duration <= 0 then
+        return nil, string.format("invalid duration=%s", tostring(duration))
+    end
 
     return {
-        duration_rat = duration_rat,
-        duration_frames = duration_frames,
-        source_in_rat = source_in_rat,
-        source_out_rat = source_out_rat
+        duration = duration,
+        source_in = source_in,
+        source_out = source_out
     }, nil
 end
 
@@ -206,7 +195,7 @@ function M.resolve_clip_name(args, master_clip, media, caller_name)
 end
 
 --- Create a selected_clip object with video and audio support
--- @param params table {media_id, master_clip_id, project_id, duration_rat, source_in_rat, source_out_rat, clip_name, clip_id, audio_channels}
+-- @param params table {media_id, master_clip_id, project_id, duration, source_in, source_out, clip_name, clip_id, audio_channels}
 -- @return table selected_clip object with has_video, has_audio, audio_channel_count, audio methods
 function M.create_selected_clip(params)
     local audio_channels = params.audio_channels or 0
@@ -216,9 +205,9 @@ function M.create_selected_clip(params)
         media_id = params.media_id,
         master_clip_id = params.master_clip_id,
         project_id = params.project_id,
-        duration = params.duration_rat,
-        source_in = params.source_in_rat,
-        source_out = params.source_out_rat,
+        duration = params.duration,
+        source_in = params.source_in,
+        source_out = params.source_out,
         clip_name = params.clip_name,
         clip_id = params.clip_id
     }
@@ -246,9 +235,9 @@ function M.create_selected_clip(params)
             media_id = params.media_id,
             master_clip_id = params.master_clip_id,
             project_id = params.project_id,
-            duration = params.duration_rat,
-            source_in = params.source_in_rat,
-            source_out = params.source_out_rat,
+            duration = params.duration,
+            source_in = params.source_in,
+            source_out = params.source_out,
             clip_name = params.clip_name .. " (Audio)",
             channel = ch
         }

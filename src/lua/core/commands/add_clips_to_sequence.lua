@@ -13,7 +13,7 @@
 --
 -- Invariants:
 -- - All clips in a group must have valid target_track_id
--- - Position must be a Rational
+-- - Position must be an integer frame
 -- - Edit type must be "insert" or "overwrite"
 -- - Arrangement must be "serial" or "stacked"
 --
@@ -22,7 +22,6 @@
 local M = {}
 
 local Clip = require('models.clip')
-local Rational = require('core.rational')
 local uuid = require('uuid')
 local command_helper = require('core.command_helper')
 local clip_mutator = require('core.clip_mutator')
@@ -40,7 +39,6 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
 
     for _, mut in ipairs(mutations) do
         if mut.type == "insert" then
-            -- Insert mutation: add the new clip to UI cache
             command_helper.add_insert_mutation(command, sequence_id, {
                 id = mut.clip_id,
                 track_id = mut.track_id,
@@ -56,7 +54,6 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
                 fps_denominator = mut.fps_denominator,
             })
         elseif mut.type == "update" then
-            -- Update mutation: update clip in UI cache
             command_helper.add_update_mutation(command, sequence_id, {
                 clip_id = mut.clip_id,
                 track_id = mut.track_id,
@@ -66,7 +63,6 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
                 source_out_value = mut.source_out_frame,
             })
         elseif mut.type == "delete" then
-            -- Delete mutation: remove from UI cache
             command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
         end
     end
@@ -77,8 +73,8 @@ local SPEC = {
         advance_playhead = { kind = "boolean" },  -- Advance playhead to end of clips
         arrangement = {},           -- "serial" or "stacked"
         edit_type = { required = true }, -- "insert" or "overwrite"
-        groups = { required = true },     -- array of {clips = [...], duration = Rational}
-        position = { required = true },   -- Rational timeline position
+        groups = { required = true },     -- array of {clips = [...], duration = integer}
+        position = { required = true },   -- Integer timeline frame
         project_id = { required = true },
         sequence_id = { required = true },
     },
@@ -89,25 +85,24 @@ local SPEC = {
     },
 }
 
---- Phase 1: Compute space requirements
+--- Phase 1: Compute space requirements (all coordinates are integers)
 -- @param groups array of clip groups
 -- @param arrangement "serial" or "stacked"
--- @return total_duration Rational, track_map table mapping track_id -> list of {start, end, clip_desc}
-local function compute_space_needs(groups, arrangement, position, seq_fps_num, seq_fps_den)
-    local total_duration = Rational.new(0, seq_fps_num, seq_fps_den)
+-- @param position integer frame position
+-- @return total_duration integer, track_map table mapping track_id -> list of {start, ["end"], clip_desc}
+local function compute_space_needs(groups, arrangement, position)
+    local total_duration = 0
     local track_map = {}  -- track_id -> list of intervals
 
     if arrangement == "serial" then
         -- Groups placed back-to-back
-        -- NOTE: Frames are the source of truth. We add frame counts directly,
-        -- NOT Rational addition which rescales based on fps. Clips play at sequence rate.
-        local current_frame = position.frames
+        local current_frame = position
         for _, group in ipairs(groups) do
-            local group_frames = group.duration.frames
-            assert(group_frames and group_frames > 0, "AddClipsToSequence: group missing valid duration")
+            local group_frames = group.duration
+            assert(type(group_frames) == "number" and group_frames > 0, "AddClipsToSequence: group.duration must be positive integer")
 
-            local start_pos = Rational.new(current_frame, seq_fps_num, seq_fps_den)
-            local end_pos = Rational.new(current_frame + group_frames, seq_fps_num, seq_fps_den)
+            local start_pos = current_frame
+            local end_pos = current_frame + group_frames
 
             for _, clip_desc in ipairs(group.clips) do
                 local track_id = assert(clip_desc.target_track_id, "AddClipsToSequence: clip missing target_track_id")
@@ -121,21 +116,20 @@ local function compute_space_needs(groups, arrangement, position, seq_fps_num, s
             end
 
             current_frame = current_frame + group_frames
-            total_duration = Rational.new(current_frame - position.frames, seq_fps_num, seq_fps_den)
+            total_duration = current_frame - position
         end
     else
         -- Stacked: all groups at same position, different tracks
-        -- Track destinations should already be resolved by gather_context
         local max_frames = 0
         for _, group in ipairs(groups) do
-            local group_frames = group.duration.frames
-            assert(group_frames and group_frames > 0, "AddClipsToSequence: group missing valid duration")
+            local group_frames = group.duration
+            assert(type(group_frames) == "number" and group_frames > 0, "AddClipsToSequence: group.duration must be positive integer")
 
             if group_frames > max_frames then
                 max_frames = group_frames
             end
 
-            local end_pos = Rational.new(position.frames + group_frames, seq_fps_num, seq_fps_den)
+            local end_pos = position + group_frames
             for _, clip_desc in ipairs(group.clips) do
                 local track_id = assert(clip_desc.target_track_id, "AddClipsToSequence: clip missing target_track_id")
                 track_map[track_id] = track_map[track_id] or {}
@@ -147,7 +141,7 @@ local function compute_space_needs(groups, arrangement, position, seq_fps_num, s
                 })
             end
         end
-        total_duration = Rational.new(max_frames, seq_fps_num, seq_fps_den)
+        total_duration = max_frames
     end
 
     return total_duration, track_map
@@ -157,8 +151,8 @@ end
 -- @param db database connection
 -- @param edit_type "insert" or "overwrite"
 -- @param sequence_id string
--- @param position Rational
--- @param total_duration Rational
+-- @param position integer frame
+-- @param total_duration integer frames
 -- @param track_map table from compute_space_needs
 -- @return mutations array, error string|nil
 local function carve_space(db, edit_type, sequence_id, position, total_duration, track_map)
@@ -166,7 +160,6 @@ local function carve_space(db, edit_type, sequence_id, position, total_duration,
 
     if edit_type == "insert" then
         -- Insert: ripple ALL tracks in sequence at position
-        -- Load all tracks in sequence
         local Track = require('models.track')
         local all_tracks = Track.find_by_sequence(sequence_id)
 
@@ -199,7 +192,7 @@ local function carve_space(db, edit_type, sequence_id, position, total_duration,
             end
 
             local span_duration = max_end - min_start
-            if span_duration.frames > 0 then
+            if span_duration > 0 then
                 local ok, err, mutations = clip_mutator.resolve_occlusions(db, {
                     track_id = track_id,
                     timeline_start = min_start,
@@ -246,19 +239,17 @@ local function place_clips(db, track_map, project_id, sequence_id, redo_clip_ids
         if a.track_id ~= b.track_id then
             return a.track_id < b.track_id
         end
-        return a.interval.start.frames < b.interval.start.frames
+        return a.interval.start < b.interval.start
     end)
 
     for _, placement in ipairs(all_placements) do
         local interval = placement.interval
         local clip_desc = interval.clip_desc
-        local group = interval.group
 
         -- Determine clip_id: prefer explicit from clip_desc, then redo, then generate
         local clip_id
         if clip_desc.clip_id and clip_desc.clip_id ~= "" then
             clip_id = clip_desc.clip_id
-            -- Skip redo index if we use explicit ID
             if redo_clip_ids and redo_idx <= #redo_clip_ids then
                 redo_idx = redo_idx + 1
             end
@@ -269,7 +260,11 @@ local function place_clips(db, track_map, project_id, sequence_id, redo_clip_ids
             clip_id = uuid.generate()
         end
 
-        -- Create clip
+        -- Create clip (all coordinates must be integers)
+        assert(type(clip_desc.duration) == "number", "AddClipsToSequence: clip_desc.duration must be integer")
+        assert(type(clip_desc.source_in) == "number", "AddClipsToSequence: clip_desc.source_in must be integer")
+        assert(type(clip_desc.source_out) == "number", "AddClipsToSequence: clip_desc.source_out must be integer")
+
         local clip = Clip.create(clip_desc.name or "Timeline Clip", clip_desc.media_id, {
             id = clip_id,
             project_id = project_id,
@@ -289,9 +284,9 @@ local function place_clips(db, track_map, project_id, sequence_id, redo_clip_ids
         table.insert(created_clips, {
             clip_id = clip_id,
             clip = clip,
-            group = group,
+            group = interval.group,
             role = clip_desc.role,
-            master_clip_id = clip_desc.master_clip_id,  -- For property copying
+            master_clip_id = clip_desc.master_clip_id,
         })
     end
 
@@ -342,25 +337,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local groups = assert(args.groups, this_func_label .. ": groups required")
         assert(#groups > 0, this_func_label .. ": groups must not be empty")
 
-        -- Hydrate Rational fields in groups (needed for redo when deserialized from JSON)
+        -- Validate all coordinate fields are integers
         for _, group in ipairs(groups) do
-            if group.duration and getmetatable(group.duration) ~= Rational.metatable then
-                group.duration = Rational.hydrate(group.duration)
-            end
+            assert(type(group.duration) == "number", this_func_label .. ": group.duration must be integer")
             for _, clip_desc in ipairs(group.clips or {}) do
-                if clip_desc.source_in and getmetatable(clip_desc.source_in) ~= Rational.metatable then
-                    clip_desc.source_in = Rational.hydrate(clip_desc.source_in)
-                end
-                if clip_desc.source_out and getmetatable(clip_desc.source_out) ~= Rational.metatable then
-                    clip_desc.source_out = Rational.hydrate(clip_desc.source_out)
-                end
-                if clip_desc.duration and getmetatable(clip_desc.duration) ~= Rational.metatable then
-                    clip_desc.duration = Rational.hydrate(clip_desc.duration)
-                end
+                assert(type(clip_desc.source_in) == "number", this_func_label .. ": clip_desc.source_in must be integer")
+                assert(type(clip_desc.source_out) == "number", this_func_label .. ": clip_desc.source_out must be integer")
+                assert(type(clip_desc.duration) == "number", this_func_label .. ": clip_desc.duration must be integer")
             end
         end
 
-        local position = assert(args.position, this_func_label .. ": position required")
+        local position = args.position
+        assert(type(position) == "number", this_func_label .. ": position must be integer frames")
+
         local sequence_id = assert(args.sequence_id, this_func_label .. ": sequence_id required")
         local project_id = assert(args.project_id or command.project_id, this_func_label .. ": project_id required")
         local edit_type = assert(args.edit_type, this_func_label .. ": edit_type required")
@@ -368,21 +357,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local arrangement = args.arrangement or "serial"
         assert(arrangement == "serial" or arrangement == "stacked", this_func_label .. ": arrangement must be serial or stacked")
-
-        -- Ensure position is Rational
-        if getmetatable(position) ~= Rational.metatable then
-            if type(position) == "table" and position.frames then
-                position = Rational.new(position.frames, position.fps_numerator, position.fps_denominator)
-            else
-                error(this_func_label .. ": position must be a Rational")
-            end
-        end
-
-        -- Get sequence FPS
-        local Sequence = require('models.sequence')
-        local sequence = assert(Sequence.load(sequence_id), this_func_label .. ": sequence not found: " .. tostring(sequence_id))
-        local seq_fps_num = assert(sequence.frame_rate and sequence.frame_rate.fps_numerator, this_func_label .. ": sequence missing fps_numerator")
-        local seq_fps_den = assert(sequence.frame_rate and sequence.frame_rate.fps_denominator, this_func_label .. ": sequence missing fps_denominator")
 
         command:set_parameter("project_id", project_id)
         command.project_id = project_id
@@ -396,7 +370,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local redo_clip_ids = args.created_clip_ids
 
         -- Phase 1: Compute space needs
-        local total_duration, track_map = compute_space_needs(groups, arrangement, position, seq_fps_num, seq_fps_den)
+        local total_duration, track_map = compute_space_needs(groups, arrangement, position)
 
         -- Phase 2: Carve space
         local carve_mutations, carve_err = carve_space(db, edit_type, sequence_id, position, total_duration, track_map)
@@ -462,20 +436,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("created_link_group_ids", link_group_ids)
 
         -- Advance playhead to end of clips if requested
-        local advance_playhead = args.advance_playhead
-        if advance_playhead then
+        if args.advance_playhead then
             local ok_ts, timeline_state = pcall(require, 'ui.timeline.timeline_state')
             if ok_ts and timeline_state and timeline_state.set_playhead_position then
                 local new_playhead = position + total_duration
                 timeline_state.set_playhead_position(new_playhead)
-                -- Store for redo restoration (normally captured by command_manager for non-nested)
-                command.playhead_value_post = new_playhead.frames
+                command.playhead_value_post = new_playhead
             end
         end
 
         logger.debug("add_clips_to_sequence", string.format(
-            "Added %d clips at %s (%s, %s)",
-            #created_clips, tostring(position), edit_type, arrangement
+            "Added %d clips at frame %d (%s, %s)",
+            #created_clips, position, edit_type, arrangement
         ))
 
         return true

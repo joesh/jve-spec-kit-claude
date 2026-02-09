@@ -41,9 +41,10 @@ function M.build_neighbor_bounds_cache(track_clip_map)
 
     for _, clips in pairs(track_clip_map) do
         for index, clip in ipairs(clips) do
+            -- All coords are integer frames
             assert(clip and clip.id, "build_neighbor_bounds_cache: clip missing id")
-            assert(clip.timeline_start and clip.timeline_start.frames, "build_neighbor_bounds_cache: clip missing timeline_start.frames")
-            assert(clip.duration and clip.duration.frames, "build_neighbor_bounds_cache: clip missing duration.frames")
+            assert(type(clip.timeline_start) == "number", "build_neighbor_bounds_cache: clip.timeline_start must be integer")
+            assert(type(clip.duration) == "number", "build_neighbor_bounds_cache: clip.duration must be integer")
 
             local prev_clip = clips[index - 1]
             local next_clip = clips[index + 1]
@@ -51,17 +52,17 @@ function M.build_neighbor_bounds_cache(track_clip_map)
             local prev_end_frames = nil
             local prev_id = nil
             if prev_clip then
-                assert(prev_clip.timeline_start and prev_clip.timeline_start.frames, "build_neighbor_bounds_cache: prev clip missing timeline_start.frames")
-                assert(prev_clip.duration and prev_clip.duration.frames, "build_neighbor_bounds_cache: prev clip missing duration.frames")
-                prev_end_frames = prev_clip.timeline_start.frames + prev_clip.duration.frames
+                assert(type(prev_clip.timeline_start) == "number", "build_neighbor_bounds_cache: prev_clip.timeline_start must be integer")
+                assert(type(prev_clip.duration) == "number", "build_neighbor_bounds_cache: prev_clip.duration must be integer")
+                prev_end_frames = prev_clip.timeline_start + prev_clip.duration
                 prev_id = prev_clip.id
             end
 
             local next_start_frames = nil
             local next_id = nil
             if next_clip then
-                assert(next_clip.timeline_start and next_clip.timeline_start.frames, "build_neighbor_bounds_cache: next clip missing timeline_start.frames")
-                next_start_frames = next_clip.timeline_start.frames
+                assert(type(next_clip.timeline_start) == "number", "build_neighbor_bounds_cache: next_clip.timeline_start must be integer")
+                next_start_frames = next_clip.timeline_start
                 next_id = next_clip.id
             end
 

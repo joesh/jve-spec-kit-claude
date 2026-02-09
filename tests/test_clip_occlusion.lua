@@ -11,7 +11,6 @@ local Command = require('command')
 local timeline_constraints = require('core.timeline_constraints')
 local command_manager = require('core.command_manager')
 local timeline_state = require('ui.timeline.timeline_state')
-local Rational = require('core.rational')
 
 -- Mock Qt timer for command_manager/state
 _G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end
@@ -158,10 +157,10 @@ local clip_a = Clip.create("A", "media_A", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(0, 30, 1),
-    duration = Rational.new(120, 30, 1), -- 4000ms
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(120, 30, 1),
+    timeline_start = 0,
+    duration = 120, -- 4000ms
+    source_in = 0,
+    source_out = 120,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -173,10 +172,10 @@ local clip_b = Clip.create("B", "media_B", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(180, 30, 1), -- 6000ms
-    duration = Rational.new(90, 30, 1), -- 3000ms
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(90, 30, 1),
+    timeline_start = 180, -- 6000ms
+    duration = 90, -- 3000ms
+    source_in = 0,
+    source_out = 90,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -192,10 +191,10 @@ local mover_clip = Clip.create("Mover", "media_C", {
     project_id = "project",
     track_id = "track_v2",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(60, 30, 1), -- 2000ms
-    duration = Rational.new(120, 30, 1), -- 4000ms
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(120, 30, 1),
+    timeline_start = 60, -- 2000ms
+    duration = 120, -- 4000ms
+    source_in = 0,
+    source_out = 120,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -235,10 +234,10 @@ local base_left = Clip.create("Base Left", "media_C", {
     project_id = "project",
     track_id = "track_nudge_v1",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(30, 30, 1), -- 1000ms
-    duration = Rational.new(90, 30, 1), -- 3000ms
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(90, 30, 1),
+    timeline_start = 30, -- 1000ms
+    duration = 90, -- 3000ms
+    source_in = 0,
+    source_out = 90,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -250,10 +249,10 @@ local base_right = Clip.create("Base Right", "media_C", {
     project_id = "project",
     track_id = "track_nudge_v1",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(180, 30, 1), -- 6000ms
-    duration = Rational.new(90, 30, 1), -- 3000ms
-    source_in = Rational.new(90, 30, 1),
-    source_out = Rational.new(180, 30, 1),
+    timeline_start = 180, -- 6000ms
+    duration = 90, -- 3000ms
+    source_in = 90,
+    source_out = 180,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -265,10 +264,10 @@ local mover_for_nudge = Clip.create("Mover Nudge", "media_C", {
     project_id = "project",
     track_id = "track_nudge_v2",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(105, 30, 1), -- 3500ms
-    duration = Rational.new(120, 30, 1), -- 4000ms
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(120, 30, 1),
+    timeline_start = 105, -- 3500ms
+    duration = 120, -- 4000ms
+    source_in = 0,
+    source_out = 120,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -283,8 +282,8 @@ local res = command_manager.execute(move_cmd)
 assert(res.success, "Move command should succeed: " .. tostring(res.error_message))
 
 local nudge_cmd = Command.create("Nudge", "project")
--- Nudge amount in Rational
-nudge_cmd:set_parameter("nudge_amount_rat", Rational.new(-75, 30, 1)) -- -2500ms
+-- Nudge amount in frames (30fps, -75 frames = -2500ms)
+nudge_cmd:set_parameter("nudge_amount", -75)
 nudge_cmd:set_parameter("nudge_axis", "time")
 nudge_cmd:set_parameter("selected_clip_ids", {mover_for_nudge.id})
 nudge_cmd:set_parameter("selected_edges", {})
@@ -310,8 +309,9 @@ local media_row = Media.create({
     project_id = "project",
     file_path = "/tmp/jve/media_ripple.mov",
     file_name = "media_ripple.mov",
-    duration = Rational.new(150, 30, 1),
-    frame_rate = 30.0,
+    duration_frames = 150, -- 150 frames so delta 45 gets clamped to 30
+    fps_numerator = 30,
+    fps_denominator = 1,
     created_at = os.time(),
     modified_at = os.time()
 })
@@ -321,10 +321,10 @@ local ripple_clip = Clip.create("Ripple Clip", "media_ripple", {
     track_id = "track_ripple_test",
     project_id = "project",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(0, 30, 1),
-    duration = Rational.new(120, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(120, 30, 1),
+    timeline_start = 0,
+    duration = 120,
+    source_in = 0,
+    source_out = 120,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -339,24 +339,25 @@ ripple_cmd:set_parameter("sequence_id", "sequence")
 local ripple_result = command_manager.execute(ripple_cmd)
 assert(ripple_result.success, "RippleEdit should succeed with clamped delta")
 local ripple_after = fetch_clip(db, ripple_clip.id)
-assert(ripple_after.duration == 5000, string.format("ripple duration should clamp to media length (5000), got %d", ripple_after.duration))
+-- Clamped: max extension = 150 - 120 = 30 frames, so new duration = 120 + 30 = 150 frames = 5000ms
+assert(ripple_after.duration == 5000, string.format("ripple duration should clamp to media length (5000ms), got %d", ripple_after.duration))
 
 print("✅ RippleEdit clamps extension to media duration")
 
 print("Test 5: Insert splits overlapping clip")
-local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", file_name = "base.mov", duration = Rational.new(180, 30, 1), frame_rate = 30, created_at = os.time(), modified_at = os.time()})
+local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", file_name = "base.mov", duration = 180, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
 assert(base_media:save(db), "failed to save base media")
-local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", file_name = "new.mov", duration = Rational.new(30, 30, 1), frame_rate = 30, created_at = os.time(), modified_at = os.time()})
+local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", file_name = "new.mov", duration = 30, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
 assert(new_media:save(db), "failed to save new media")
 
 local base_clip = Clip.create("Base Split", "media_split_base", {
     track_id = "track_v3",
     project_id = "project",
     owner_sequence_id = "sequence",
-    timeline_start = Rational.new(0, 30, 1),
-    duration = Rational.new(180, 30, 1), -- 6000ms
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(180, 30, 1),
+    timeline_start = 0,
+    duration = 180, -- 6000ms
+    source_in = 0,
+    source_out = 180,
     fps_numerator = 30,
     fps_denominator = 1,
     enabled = true
@@ -366,10 +367,10 @@ assert(base_clip:save(db), "failed saving base clip for split test")
 local insert_split = Command.create("Insert", "project")
 insert_split:set_parameter("media_id", "media_split_new")
 insert_split:set_parameter("track_id", "track_v3")
-insert_split:set_parameter("insert_time", Rational.new(60, 30, 1)) -- 2000ms
-insert_split:set_parameter("duration", Rational.new(30, 30, 1)) -- 1000ms
-insert_split:set_parameter("source_in", Rational.new(0, 30, 1))
-insert_split:set_parameter("source_out", Rational.new(30, 30, 1))
+insert_split:set_parameter("insert_time", 60) -- 2000ms
+insert_split:set_parameter("duration", 30) -- 1000ms
+insert_split:set_parameter("source_in", 0)
+insert_split:set_parameter("source_out", 30)
 insert_split:set_parameter("sequence_id", "sequence")
 assert(command_manager.execute(insert_split).success, "Insert command failed")
 

@@ -127,7 +127,7 @@ end
 
 -- Mock timeline_state for timeline mode (uses real Rational for rescale support)
 local Rational = require("core.rational")
-local mock_playhead_position = Rational.new(0, 24, 1)
+local mock_playhead_position = 0
 local mock_timeline_state = {
     get_playhead_position = function()
         return mock_playhead_position
@@ -160,7 +160,7 @@ pc.set_timeline_mode(true, "seq_001", { fps_num = 24, fps_den = 1, total_frames 
 print("Test 1: external playhead move during playback re-anchors audio")
 
 -- Start playback at frame 0
-mock_playhead_position = Rational.new(0, 24, 1)
+mock_playhead_position = 0
 pc.play()
 assert(pc.state == "playing", "Should be playing")
 
@@ -181,7 +181,7 @@ assert(pos_after_first_tick == 10,
 
 -- Now simulate external move: user presses frame-forward, writing directly
 -- to timeline_state (bypassing playback_controller)
-mock_playhead_position = Rational.new(50, 24, 1)
+mock_playhead_position = 50
 -- Audio still reports old time (frame 10 area)
 -- mock_audio_time_us stays at frame 10
 

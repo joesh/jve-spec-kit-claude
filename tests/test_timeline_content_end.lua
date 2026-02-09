@@ -85,10 +85,10 @@ do
     data.state.clips = {
         {
             id = "c1", track_id = "t1",
-            timeline_start = Rational.new(10, 24, 1),
-            duration = Rational.new(90, 24, 1),
-            source_in = Rational.new(0, 24, 1),
-            source_out = Rational.new(90, 24, 1),
+            timeline_start = 10,
+            duration = 90,
+            source_in = 0,
+            source_out = 90,
             fps_numerator = 24, fps_denominator = 1,
         },
     }

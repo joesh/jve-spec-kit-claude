@@ -411,11 +411,10 @@ function M:serialize()
         playhead_rate_val = self.playhead_rate.fps_numerator / self.playhead_rate.fps_denominator
     end
 
-    local db_playhead_value = nil
-    if type(self.playhead_value) == "number" then
-        db_playhead_value = self.playhead_value
-    elseif type(self.playhead_value) == "table" and self.playhead_value.frames ~= nil then
-        db_playhead_value = self.playhead_value.frames
+    -- playhead_value must be integer frames
+    local db_playhead_value = self.playhead_value
+    if db_playhead_value ~= nil then
+        assert(type(db_playhead_value) == "number", "Command:serialize: playhead_value must be integer")
     end
 
     local command_data_for_json = {
@@ -519,14 +518,9 @@ function M:save(db)
         playhead_rate_val = self.playhead_rate.fps_numerator / self.playhead_rate.fps_denominator
     end
 
-    local db_playhead_value = nil
-    if type(self.playhead_value) == "number" then
-        db_playhead_value = self.playhead_value
-    elseif type(self.playhead_value) == "table" and self.playhead_value.frames ~= nil then
-        db_playhead_value = self.playhead_value.frames
-    end
-
-    assert(db_playhead_value ~= nil, string.format(
+    -- playhead_value must be integer frames
+    local db_playhead_value = self.playhead_value
+    assert(type(db_playhead_value) == "number", string.format(
         "FATAL: Command.save: missing playhead_value (command_type=%s, playhead_value=%s)",
         tostring(self.type), tostring(self.playhead_value)))
     assert(playhead_rate_val > 0, string.format(
@@ -534,11 +528,9 @@ function M:save(db)
         tostring(self.type), tostring(playhead_rate_val)))
 
     -- Post-execution playhead (optional - only captured for commands that advance playhead)
-    local db_playhead_value_post = nil
-    if type(self.playhead_value_post) == "number" then
-        db_playhead_value_post = self.playhead_value_post
-    elseif type(self.playhead_value_post) == "table" and self.playhead_value_post.frames ~= nil then
-        db_playhead_value_post = self.playhead_value_post.frames
+    local db_playhead_value_post = self.playhead_value_post
+    if db_playhead_value_post ~= nil then
+        assert(type(db_playhead_value_post) == "number", "Command.save: playhead_value_post must be integer")
     end
 
     local playhead_rate_post_val = 0

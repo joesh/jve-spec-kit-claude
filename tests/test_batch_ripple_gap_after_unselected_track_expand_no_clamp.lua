@@ -58,14 +58,14 @@ do
         "Expected no clamped edges when opening lead gap_after")
 
     local v1_shifted = find_shifted_clip(payload, layout.clips.v1_right.id)
-    assert(v1_shifted and v1_shifted.new_start_value and v1_shifted.new_start_value.frames == 2500,
+    assert(v1_shifted and v1_shifted.new_start_value and v1_shifted.new_start_value == 2500,
         string.format("Expected V1 right clip to shift right by 500 (to 2500); got %s",
-            tostring(v1_shifted and v1_shifted.new_start_value and v1_shifted.new_start_value.frames)))
+            tostring(v1_shifted and v1_shifted.new_start_value and v1_shifted.new_start_value)))
 
     local v2_shifted = find_shifted_clip(payload, layout.clips.v2_shift.id)
-    assert(v2_shifted and v2_shifted.new_start_value and v2_shifted.new_start_value.frames == 2000,
+    assert(v2_shifted and v2_shifted.new_start_value and v2_shifted.new_start_value == 2000,
         string.format("Expected V2 shift clip to shift right by 500 (to 2000); got %s",
-            tostring(v2_shifted and v2_shifted.new_start_value and v2_shifted.new_start_value.frames)))
+            tostring(v2_shifted and v2_shifted.new_start_value and v2_shifted.new_start_value)))
 
     layout:cleanup()
 end

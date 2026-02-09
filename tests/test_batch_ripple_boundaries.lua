@@ -29,15 +29,15 @@ do
     assert(result.success, "In-point trim at t=0 should clamp to available handle")
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.timeline_start.frames == 0,
+    assert(after.timeline_start == 0,
         "Clip at t=0 should stay anchored")
-    assert(after.source_in.frames >= 0,
-        string.format("source_in should not go negative, got %d", after.source_in.frames))
+    assert(after.source_in >= 0,
+        string.format("source_in should not go negative, got %d", after.source_in))
     -- Delta was -200, with source_in at 500, can extend by 200 frames (clamps to not exceed handle)
-    assert(after.duration.frames == 1200,
-        string.format("Should extend by delta (200 frames), got duration=%d", after.duration.frames))
-    assert(after.source_in.frames == 300,
-        string.format("source_in should move by delta, got %d", after.source_in.frames))
+    assert(after.duration == 1200,
+        string.format("Should extend by delta (200 frames), got duration=%d", after.duration))
+    assert(after.source_in == 300,
+        string.format("source_in should move by delta, got %d", after.source_in))
 
     layout:cleanup()
 end
@@ -66,10 +66,10 @@ do
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
     -- Should clamp to available handle (500 frames)
-    assert(after.duration.frames == 2000,
-        string.format("Should clamp to media duration (2000 frames total), got %d", after.duration.frames))
-    assert(after.source_out.frames <= 2000,
-        string.format("source_out should not exceed media duration, got %d", after.source_out.frames))
+    assert(after.duration == 2000,
+        string.format("Should clamp to media duration (2000 frames total), got %d", after.duration))
+    assert(after.source_out <= 2000,
+        string.format("source_out should not exceed media duration, got %d", after.source_out))
 
     layout:cleanup()
 end
@@ -98,7 +98,7 @@ do
         local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
         -- Clip should expand only until it touches right clip
-        assert(after_left.timeline_start.frames + after_left.duration.frames <= after_right.timeline_start.frames,
+        assert(after_left.timeline_start + after_left.duration <= after_right.timeline_start,
             "Huge delta should clamp to prevent overlap")
     else
         -- Failure is acceptable for absurd values
@@ -133,7 +133,7 @@ do
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
     -- Current behavior: Constraint system doesn't limit gap operations properly
     -- Delta applied in full, creating unrealistic timeline positions
-    assert(after_right.timeline_start.frames ~= 1000,
+    assert(after_right.timeline_start ~= 1000,
         "Current behavior: huge deltas NOT clamped to gap size (known issue)")
 
     layout:cleanup()
@@ -164,10 +164,10 @@ do
     local after_v2 = Clip.load(layout.clips.v2.id, layout.db)
 
     -- Both should stay at t=0 and extend by available handle
-    assert(after_v1.timeline_start.frames == 0, "V1 should stay at t=0")
-    assert(after_v2.timeline_start.frames == 0, "V2 should stay at t=0")
-    assert(after_v1.source_in.frames >= 0, "V1 source_in should not go negative")
-    assert(after_v2.source_in.frames >= 0, "V2 source_in should not go negative")
+    assert(after_v1.timeline_start == 0, "V1 should stay at t=0")
+    assert(after_v2.timeline_start == 0, "V2 should stay at t=0")
+    assert(after_v1.source_in >= 0, "V1 source_in should not go negative")
+    assert(after_v2.source_in >= 0, "V2 source_in should not go negative")
 
     layout:cleanup()
 end
@@ -196,7 +196,7 @@ do
     -- Offline clips have no media constraint, should succeed or fail gracefully
     if result.success then
         local after = Clip.load(layout.clips.v1_left.id, layout.db)
-        assert(after.duration.frames >= 1000, "Offline clip should extend without media constraint")
+        assert(after.duration >= 1000, "Offline clip should extend without media constraint")
     else
         print("Note: Offline clip trim failed (acceptable if media validation required)")
     end

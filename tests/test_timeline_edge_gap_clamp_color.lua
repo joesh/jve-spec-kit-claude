@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -68,10 +67,6 @@ timeline = {
     update = function() end
 }
 
-local function rat(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
 local clip_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 
@@ -101,7 +96,7 @@ local function render_with_edges(edges, lead_edge, delta_frames)
         type = "edges",
         edges = edges,
         lead_edge = lead_edge,
-        delta_rational = rat(delta_frames)
+        delta_frames = delta_frames
     }
     view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, edges, {pad_frames = 400})
     view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -110,11 +105,11 @@ local function render_with_edges(edges, lead_edge, delta_frames)
     timeline_renderer.render(view)
     local gap_counts = count_track_colors(tracks.v1.id)
     local clip_counts = count_track_colors(tracks.v2.id)
-    return view.drag_state.preview_clamped_delta, view.drag_state.clamped_edges or {}, gap_counts, clip_counts
+    return view.drag_state.preview_clamped_delta_frames, view.drag_state.clamped_edges or {}, gap_counts, clip_counts
 end
 
 local gap_limited_delta, gap_map, gap_counts2, clip_counts2 = render_with_edges({gap_edge, clip_edge}, gap_edge, 2000)
-assert(gap_limited_delta and gap_limited_delta.frames ~= 2000, "Gap-limited scenario should clamp delta")
+assert(gap_limited_delta and gap_limited_delta ~= 2000, "Gap-limited scenario should clamp delta")
 assert(gap_counts2.limit > 0, "Gap edge should render with limit color when gap space is exhausted")
 assert(clip_counts2.limit == 0, "Clip edge should remain available when the gap is the limiter")
 assert(gap_map[gap_key], "Dragged gap edge should report the clamp to highlight the user's handle")

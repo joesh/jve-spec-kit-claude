@@ -2,11 +2,10 @@
 --
 -- Responsibilities:
 -- - Reduce viewport duration by 20% (multiply by 0.8)
--- - Enforce minimum 1 second viewport
+-- - Enforce minimum 30 frames viewport
 --
 -- @file timeline_zoom_in.lua
 local M = {}
-local Rational = require('core.rational')
 
 local SPEC = {
     undoable = false,
@@ -37,15 +36,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local dur = timeline_state.get_viewport_duration()
-        local new_dur = dur * 0.8
+        assert(type(dur) == "number", "TimelineZoomIn: viewport_duration must be integer frames")
 
-        -- Enforce minimum 1 second viewport
-        if type(new_dur) == "table" and new_dur.frames then
-            local min_dur = Rational.from_seconds(1.0, new_dur.fps_numerator, new_dur.fps_denominator)
-            new_dur = Rational.max(min_dur, new_dur)
-        else
-            new_dur = math.max(1000, new_dur)
-        end
+        -- Reduce by 20%, enforce minimum 30 frames (~1 second at 30fps)
+        local new_dur = math.floor(dur * 0.8)
+        new_dur = math.max(30, new_dur)
 
         timeline_state.set_viewport_duration(new_dur)
         return true

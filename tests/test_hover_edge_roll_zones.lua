@@ -9,29 +9,28 @@ require("test_env")
 local ui_constants = require("core.ui_constants")
 local edge_utils = require("ui.timeline.edge_utils")
 local roll_detector = require("ui.timeline.roll_detector")
-local Rational = require("core.rational")
 
 -- Build a tiny viewport with two adjacent clips
 local clips = {
     {
         id = "a",
         track_id = "v1",
-        timeline_start = Rational.new(0, 24, 1),
-        duration = Rational.new(100, 24, 1)
+        timeline_start = 0,
+        duration = 100
     },
     {
         id = "b",
         track_id = "v1",
-        timeline_start = Rational.new(100, 24, 1),
-        duration = Rational.new(80, 24, 1)
+        timeline_start = 100,
+        duration = 80
     }
 }
 
 -- Compute pixel positions given a fake viewport width
 local width = 1000
-local function time_to_px(rat)
+local function time_to_px(frames)
     local total_frames = 200
-    return math.floor((rat.frames / total_frames) * width + 0.5)
+    return math.floor((frames / total_frames) * width + 0.5)
 end
 
 -- Build entries as timeline_view_input would

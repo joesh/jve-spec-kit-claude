@@ -62,7 +62,7 @@ local function test_construction()
     assert_eq(t1.fps_denominator, 1, "t1.fps_denominator (default)")
 
     -- 2. Valid NTSC
-    local t2 = Rational.new(1001, 30000, 1001)
+    local t2 = Rational.new(1, 30000, 1001)
     assert_eq(t2.fps_numerator, 30000, "NTSC Num")
     assert_eq(t2.fps_denominator, 1001, "NTSC Den")
 
@@ -161,16 +161,15 @@ local function test_ntsc_math()
 
     -- Convert to seconds (Float check)
     local seconds = ntsc_time:to_seconds()
-    local diff = math.abs(seconds - 3600.0)
-    
+
     -- 107892 frames is actually slightly less than 3600s because 29.97 is slower than 30.
     -- 107892 * 1001 / 30000 = 3599.999...
     -- Wait, Drop Frame timecode *skips* numbers to match wall clock, but the *rate* is constant.
     -- 1 hour of wall clock time contains ~107892 frames.
-    
+
     -- Let's verify the math library calculation, not the physics.
     -- 107892 / (29.97002997...) = 3599.996
-    
+
     local expected = 107892 * 1001 / 30000
     assert_eq(math.abs(seconds - expected) < 0.000001, true, "NTSC float conversion accurate")
 end

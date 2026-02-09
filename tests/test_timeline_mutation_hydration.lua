@@ -89,6 +89,6 @@ assert(reload_count == 0, "Hydrated mutation should not trigger reload fallback"
 
 local hydrated_clip = timeline_state.get_clip_by_id('clip_b')
 assert(hydrated_clip, "clip_b should be hydrated back into state")
-assert(hydrated_clip.duration.frames < 4000, "Ripple trim should update hydrated clip")
+assert(hydrated_clip.duration < 4000, "Ripple trim should update hydrated clip")
 
 print("✅ Timeline state hydrates missing clips during mutation replay without reload fallback")

@@ -13,7 +13,6 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
 local Command = require('command')
-local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_track_move_nudge.db"
 os.remove(TEST_DB)
@@ -67,27 +66,27 @@ local timeline_state = {
     set_selection = function() end,
     reload_clips = function() end,
     persist_state_to_db = function() end,
-    get_playhead_position = function() return Rational.new(0, 30, 1) end,
+    get_playhead_position = function() return 0 end,
     set_playhead_position = function() end,
     get_sequence_frame_rate = function() return {fps_numerator = 30, fps_denominator = 1} end,
     get_sequence_audio_sample_rate = function() return 48000 end,
-    viewport_start_value = Rational.new(0, 30, 1),
-    viewport_duration_frames_value = Rational.new(240, 30, 1),
+    viewport_start_value = 0,
+    viewport_duration_frames_value = 240,
     get_clips = function()
         local clips = {}
         local stmt = db:prepare("SELECT id, track_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator FROM clips ORDER BY timeline_start_frame")
         if stmt and stmt:exec() then
             while stmt:next() do
-                local fps_num = stmt:value(7) or 30
-                local fps_den = stmt:value(8) or 1
                 clips[#clips + 1] = {
                     id = stmt:value(0),
                     track_id = stmt:value(1),
                     owner_sequence_id = stmt:value(2),
-                    timeline_start = Rational.new(stmt:value(3), fps_num, fps_den),
-                    duration = Rational.new(stmt:value(4), fps_num, fps_den),
-                    source_in = Rational.new(stmt:value(5), fps_num, fps_den),
-                    source_out = Rational.new(stmt:value(6), fps_num, fps_den)
+                    timeline_start = stmt:value(3),  -- integer frames
+                    duration = stmt:value(4),        -- integer frames
+                    source_in = stmt:value(5),       -- integer frames
+                    source_out = stmt:value(6),      -- integer frames
+                    fps_numerator = stmt:value(7) or 30,
+                    fps_denominator = stmt:value(8) or 1
                 }
             end
         end
@@ -157,8 +156,8 @@ local commands_json = dkjson.encode({
             clip_id = "clip_move",
             target_track_id = "track_v2",
             skip_occlusion = true,
-            pending_new_start_rat = {frames = clip_move_start + nudge_amount_frames, fps_numerator = 30, fps_denominator = 1},
-            pending_duration_rat = {frames = clip_move_duration, fps_numerator = 30, fps_denominator = 1}
+            pending_new_start = clip_move_start + nudge_amount_frames,
+            pending_duration = clip_move_duration
         }
     },
     {

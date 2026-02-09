@@ -57,8 +57,8 @@ insert_clip("c2", 200, 100)
 selection_state.set_gap_selection({
     {
         track_id = "v1",
-        start_value = Rational.new(100, 24, 1),
-        duration = Rational.new(100, 24, 1),
+        start_value = 100,
+        duration = 100,
     }
 })
 
@@ -66,8 +66,8 @@ command_manager.init("seq", "proj")
 
 local cmd = Command.create("RippleDelete", "proj")
 cmd:set_parameter("track_id", "v1")
-cmd:set_parameter("gap_start", Rational.new(100, 24, 1))
-cmd:set_parameter("gap_duration", Rational.new(100, 24, 1))
+cmd:set_parameter("gap_start", 100)
+cmd:set_parameter("gap_duration", 100)
 cmd:set_parameter("sequence_id", "seq")
 
 local res = command_manager.execute(cmd)

@@ -5,18 +5,17 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 require("test_env")
 
 local roll_detector = require("ui.timeline.roll_detector")
-local Rational = require("core.rational")
 
 -- Two clips on the same track with a gap between them; roll should NOT be detected.
 local clips = {
-    {id = "a", track_id = "v1", timeline_start = Rational.new(0,24,1), duration = Rational.new(100,24,1)},
-    {id = "b", track_id = "v1", timeline_start = Rational.new(120,24,1), duration = Rational.new(80,24,1)}, -- 20-frame gap
+    {id = "a", track_id = "v1", timeline_start = 0, duration = 100},
+    {id = "b", track_id = "v1", timeline_start = 120, duration = 80}, -- 20-frame gap
 }
 
 local width = 1000
-local function time_to_px(rat)
+local function time_to_px(frames)
     local total_frames = 300
-    return math.floor((rat.frames / total_frames) * width + 0.5)
+    return math.floor((frames / total_frames) * width + 0.5)
 end
 
 local entries = {}

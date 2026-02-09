@@ -18,7 +18,6 @@
 -- Handles periodic state snapshots for fast event replay
 -- Part of the event sourcing architecture
 local uuid = require("uuid")
-local Rational = require("core.rational")
 local asserts = require("core.asserts")
 local logger = require("core.logger")
 
@@ -162,16 +161,10 @@ local function build_snapshot_payload(db, sequence_id, clips)
     for _, clip in ipairs(clips) do
         require_field("build_snapshot_payload", "clip", "id", clip.id)
         require_field("build_snapshot_payload", "clip", "clip_kind", clip.clip_kind)
-        -- V5: Use Rational properties
-        -- Ensure we extract frames/ticks for storage
-        local start_frame = clip.timeline_start and clip.timeline_start.frames
-        local dur_frames = clip.duration and clip.duration.frames
-        local src_in_frame = clip.source_in and clip.source_in.frames
-        local src_out_frame = clip.source_out and clip.source_out.frames
-        
-        assert(start_frame ~= nil, string.format(
-            "snapshot_manager.build_snapshot_payload: clip %s missing timeline_start.frames", tostring(clip.id)))
-        
+        -- All coords are integer frames
+        assert(type(clip.timeline_start) == "number", string.format(
+            "snapshot_manager.build_snapshot_payload: clip %s timeline_start must be integer", tostring(clip.id)))
+
         table.insert(clip_data, {
             id = clip.id,
             clip_kind = clip.clip_kind,
@@ -182,15 +175,15 @@ local function build_snapshot_payload(db, sequence_id, clips)
             parent_clip_id = clip.parent_clip_id,
             source_sequence_id = clip.source_sequence_id,
             media_id = clip.media_id,
-            
-            timeline_start_frame = start_frame,
-            duration_frames = dur_frames,
-            source_in_frame = src_in_frame,
-            source_out_frame = src_out_frame,
-            
+
+            timeline_start_frame = clip.timeline_start,
+            duration_frames = clip.duration,
+            source_in_frame = clip.source_in,
+            source_out_frame = clip.source_out,
+
             fps_numerator = clip.rate and clip.rate.fps_numerator,
             fps_denominator = clip.rate and clip.rate.fps_denominator,
-            
+
             enabled = clip.enabled and 1 or 0,
             offline = clip.offline and 1 or 0
         })
@@ -203,7 +196,7 @@ local function build_snapshot_payload(db, sequence_id, clips)
                     project_id = media.project_id,
                     name = media.name,
                     file_path = media.file_path,
-                    duration_frames = media.duration and media.duration.frames,
+                    duration_frames = media.duration,  -- integer frames
                     fps_numerator = media.frame_rate and media.frame_rate.fps_numerator,
                     fps_denominator = media.frame_rate and media.frame_rate.fps_denominator,
                     width = media.width,
@@ -320,10 +313,10 @@ local function deserialize_snapshot_payload(json_str)
                 track_id = data.track_id,
                 media_id = data.media_id,
                 
-                timeline_start = Rational.new(data.timeline_start_frame or 0, num, den),
-                duration = Rational.new(data.duration_frames or 0, num, den),
-                source_in = Rational.new(data.source_in_frame or 0, num, den),
-                source_out = Rational.new(data.source_out_frame or 0, num, den),
+                timeline_start = require_field("deserialize_snapshot_payload", "clip " .. data.id, "timeline_start_frame", data.timeline_start_frame),
+                duration = require_field("deserialize_snapshot_payload", "clip " .. data.id, "duration_frames", data.duration_frames),
+                source_in = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_in_frame", data.source_in_frame),
+                source_out = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_out_frame", data.source_out_frame),
                 
                 rate = { fps_numerator = num, fps_denominator = den },
                 
@@ -347,7 +340,7 @@ local function deserialize_snapshot_payload(json_str)
                 name = media_data.name,
                 file_path = media_data.file_path,
                 
-                duration = Rational.new(media_data.duration_frames or 0, num, den),
+                duration = require_field("deserialize_snapshot_payload", "media " .. media_data.id, "duration_frames", media_data.duration_frames),
                 frame_rate = { fps_numerator = num, fps_denominator = den },
                 
                 width = media_data.width,

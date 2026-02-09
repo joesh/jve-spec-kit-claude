@@ -31,7 +31,7 @@ local state = {
     end,
     get_clips = function()
         return {
-            {id = "clip1", track_id = "v1", timeline_start = Rational.new(0,24,1), duration = Rational.new(24,24,1)}
+            {id = "clip1", track_id = "v1", timeline_start = 0, duration = 24}
         }
     end
 }
@@ -48,7 +48,7 @@ local drag_state = {
         {id = "clip1"}
     },
     delta_ms = 0,
-    delta_rational = Rational.new(0,24,1),
+    delta_frames = 0,
     current_y = 10,
     start_y = 0
 }

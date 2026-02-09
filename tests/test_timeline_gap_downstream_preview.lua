@@ -2,7 +2,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
 local timeline_state = require("ui.timeline.timeline_state")
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -28,10 +27,10 @@ local downstream = Clip.create("V2 Downstream", clips.v2.media_id, {
     track_id = tracks.v2.id,
     fps_numerator = 1000,
     fps_denominator = 1,
-    timeline_start = Rational.new(2600, 1000, 1),
-    duration = Rational.new(600, 1000, 1),
-    source_in = Rational.new(0, 1000, 1),
-    source_out = Rational.new(600, 1000, 1)
+    timeline_start = 2600,
+    duration = 600,
+    source_in = 0,
+    source_out = 600
 })
 assert(downstream:save(layout.db), "Failed to insert downstream clip")
 
@@ -71,10 +70,6 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local function rat(frames)
-    return Rational.new(frames, 1000, 1)
-end
-
 local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
 local clip_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 
@@ -82,7 +77,7 @@ view.drag_state = {
     type = "edges",
     edges = {gap_edge, clip_edge},
     lead_edge = gap_edge,
-    delta_rational = rat(-200)
+    delta_frames = -200
 }
 view.drag_state.timeline_active_region = TimelineActiveRegion.compute_for_edge_drag(timeline_state, view.drag_state.edges, {pad_frames = 400})
 view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_for_region(timeline_state, view.drag_state.timeline_active_region)
@@ -126,11 +121,11 @@ end
 local active_block = track_block or global
 assert(active_block and active_block.delta_frames and active_block.start_frames, "Expected a usable shift block for V2")
 
-local shifted_start_frames = downstream.timeline_start.frames
+local shifted_start_frames = downstream.timeline_start
 if shifted_start_frames >= active_block.start_frames then
     shifted_start_frames = shifted_start_frames + active_block.delta_frames
 end
-local shifted_px = timeline_state.time_to_pixel(Rational.new(shifted_start_frames, 1000, 1), width)
+local shifted_px = timeline_state.time_to_pixel(shifted_start_frames, width)
 
 local preview_color = "#ffff00"
 local v2_entry = view.track_layout_cache.by_id[tracks.v2.id]

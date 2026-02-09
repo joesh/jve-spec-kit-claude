@@ -51,9 +51,9 @@ do
     local after_prev = Clip.load(layout.clips.v2_prev.id, layout.db)
     local after_next = Clip.load(layout.clips.v2_next.id, layout.db)
 
-    assert(after_edit.duration.frames == 500, "V1 edit should clamp to delta=-1000 (duration 500)")
-    assert(after_prev.timeline_start.frames == 0, "V2 prev should not shift (before ripple point)")
-    assert(after_next.timeline_start.frames == 1000, "V2 next should clamp to start=1000 (no overlap)")
+    assert(after_edit.duration == 500, "V1 edit should clamp to delta=-1000 (duration 500)")
+    assert(after_prev.timeline_start == 0, "V2 prev should not shift (before ripple point)")
+    assert(after_next.timeline_start == 1000, "V2 next should clamp to start=1000 (no overlap)")
 
     layout:cleanup()
 end

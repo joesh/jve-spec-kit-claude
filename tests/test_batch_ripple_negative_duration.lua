@@ -33,14 +33,14 @@ do
     assert(result.success, "Trim beyond minimum should clamp and succeed")
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 1,
-        string.format("Clamped trim should stop at 1 frame, got %d frames", after.duration.frames))
-    assert(after.timeline_start.frames == before_left.timeline_start.frames,
+    assert(after.duration == 1,
+        string.format("Clamped trim should stop at 1 frame, got %d frames", after.duration))
+    assert(after.timeline_start == before_left.timeline_start,
         "In-edge trim should not move timeline_start for ripple edits")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start.frames == before_right.timeline_start.frames - 9,
-        string.format("Downstream clip should ripple left by 9 frames, got %d", after_right.timeline_start.frames))
+    assert(after_right.timeline_start == before_right.timeline_start - 9,
+        string.format("Downstream clip should ripple left by 9 frames, got %d", after_right.timeline_start))
 
     layout:cleanup()
 end
@@ -68,14 +68,14 @@ do
     assert(result.success, "Trim beyond minimum should clamp and succeed")
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 1,
-        string.format("Clamped trim should stop at 1 frame, got %d", after.duration.frames))
-    assert(after.timeline_start.frames == before_left.timeline_start.frames,
+    assert(after.duration == 1,
+        string.format("Clamped trim should stop at 1 frame, got %d", after.duration))
+    assert(after.timeline_start == before_left.timeline_start,
         "Out-edge trim should not move timeline_start")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start.frames == before_right.timeline_start.frames - 9,
-        string.format("Downstream clip should ripple left by 9 frames, got %d", after_right.timeline_start.frames))
+    assert(after_right.timeline_start == before_right.timeline_start - 9,
+        string.format("Downstream clip should ripple left by 9 frames, got %d", after_right.timeline_start))
 
     layout:cleanup()
 end
@@ -90,7 +90,7 @@ do
     })
 
     local before = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(before.duration.frames == 1, "Setup: clip should be 1 frame")
+    assert(before.duration == 1, "Setup: clip should be 1 frame")
 
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
@@ -103,8 +103,8 @@ do
     assert(result.success, "Trim of single-frame clip should clamp to no-op")
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.duration.frames == 1,
-        string.format("Clamped operation leaves single-frame clip unchanged, got %d", after.duration.frames))
+    assert(after.duration == 1,
+        string.format("Clamped operation leaves single-frame clip unchanged, got %d", after.duration))
 
     layout:cleanup()
 end
@@ -130,9 +130,9 @@ do
     assert(result.success, "Gap closure should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start.frames == 1000,
+    assert(after_right.timeline_start == 1000,
         string.format("Right clip should butt against left clip (gap=0), got start=%d",
-            after_right.timeline_start.frames))
+            after_right.timeline_start))
 
     layout:cleanup()
 end
@@ -159,9 +159,9 @@ do
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
     -- Should clamp to gap size (500 frames) max closure
-    assert(after_right.timeline_start.frames == 1000,
+    assert(after_right.timeline_start == 1000,
         string.format("Should clamp to butt against left clip, got start=%d",
-            after_right.timeline_start.frames))
+            after_right.timeline_start))
 
     layout:cleanup()
 end
@@ -190,12 +190,12 @@ do
     local after_left = Clip.load(layout.clips.v1_left.id, layout.db)
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    assert(after_left.duration.frames == 9,
-        string.format("Left clip should extend by 4 frames (clamped), got %d", after_left.duration.frames))
-    assert(after_right.duration.frames == 1,
-        string.format("Right clip should shrink to 1 frame (clamped), got %d", after_right.duration.frames))
-    assert(after_right.timeline_start.frames == 9,
-        string.format("Right clip should roll to start at 9, got %d", after_right.timeline_start.frames))
+    assert(after_left.duration == 9,
+        string.format("Left clip should extend by 4 frames (clamped), got %d", after_left.duration))
+    assert(after_right.duration == 1,
+        string.format("Right clip should shrink to 1 frame (clamped), got %d", after_right.duration))
+    assert(after_right.timeline_start == 9,
+        string.format("Right clip should roll to start at 9, got %d", after_right.timeline_start))
 
     layout:cleanup()
 end

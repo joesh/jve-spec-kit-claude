@@ -20,7 +20,6 @@
 -- Dynamically scales tick marks and labels based on zoom level
 local M = {}
 local timecode = require("core.timecode")
-local Rational = require("core.rational")
 local frame_utils = require("core.frame_utils")
 local profile_scope = require("core.profile_scope")
 
@@ -82,23 +81,23 @@ function M.create(widget, state_module)
         -- Clear previous drawing commands
         timeline.clear_commands(ruler.widget)
 
-        -- Get viewport state (Rational)
-        local viewport_start_rt = state_module.get_viewport_start_time()
-        local viewport_duration_rt = state_module.get_viewport_duration()
-        local viewport_end_rt = viewport_start_rt + viewport_duration_rt
-        local playhead_rt = state_module.get_playhead_position()
+        -- Get viewport state (integer frames)
+        local viewport_start_frames = state_module.get_viewport_start_time()
+        local viewport_duration_frames = state_module.get_viewport_duration()
+        local viewport_end_frames = viewport_start_frames + viewport_duration_frames
+        local playhead_frame = state_module.get_playhead_position()
 
         -- Ruler background
         timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
         timeline.add_rect(ruler.widget, 0, M.RULER_HEIGHT - BASELINE_HEIGHT, width, BASELINE_HEIGHT, BASELINE_COLOR)
 
-        local mark_in_rt = state_module.get_mark_in and state_module.get_mark_in()
-        local mark_out_rt = state_module.get_mark_out and state_module.get_mark_out()
+        local mark_in_frame = state_module.get_mark_in and state_module.get_mark_in()
+        local mark_out_frame = state_module.get_mark_out and state_module.get_mark_out()
         local explicit_mark_in = state_module.has_explicit_mark_in and state_module.has_explicit_mark_in()
         local explicit_mark_out = state_module.has_explicit_mark_out and state_module.has_explicit_mark_out()
 
         local function draw_mark_region()
-            if (not mark_in_rt) and (not mark_out_rt) then
+            if (not mark_in_frame) and (not mark_out_frame) then
                 return
             end
 
@@ -110,11 +109,11 @@ function M.create(widget, state_module)
             local edge_color = colors.mark_range_edge or colors.playhead or "#ff6b6b"
             local handle_width = 2
 
-            if mark_in_rt and mark_out_rt and mark_out_rt > mark_in_rt then
-                local visible_start = mark_in_rt
-                if visible_start < viewport_start_rt then visible_start = viewport_start_rt end
-                local visible_end = mark_out_rt
-                if visible_end > viewport_end_rt then visible_end = viewport_end_rt end
+            if mark_in_frame and mark_out_frame and mark_out_frame > mark_in_frame then
+                local visible_start = mark_in_frame
+                if visible_start < viewport_start_frames then visible_start = viewport_start_frames end
+                local visible_end = mark_out_frame
+                if visible_end > viewport_end_frames then visible_end = viewport_end_frames end
                 if visible_end > visible_start then
                     local start_x = state_module.time_to_pixel(visible_start, width)
                     local end_x = state_module.time_to_pixel(visible_end, width)
@@ -129,14 +128,14 @@ function M.create(widget, state_module)
                 end
             end
 
-            local function draw_handle(time_rt)
-                if not time_rt then
+            local function draw_handle(time_frame)
+                if not time_frame then
                     return
                 end
-                if time_rt < viewport_start_rt or time_rt > viewport_end_rt then
+                if time_frame < viewport_start_frames or time_frame > viewport_end_frames then
                     return
                 end
-                local x = state_module.time_to_pixel(time_rt, width)
+                local x = state_module.time_to_pixel(time_frame, width)
                 local handle_x = x - math.floor(handle_width / 2)
                 if handle_x < 0 then
                     handle_x = 0
@@ -145,10 +144,10 @@ function M.create(widget, state_module)
             end
 
             if explicit_mark_in then
-                draw_handle(mark_in_rt)
+                draw_handle(mark_in_frame)
             end
             if explicit_mark_out then
-                draw_handle(mark_out_rt)
+                draw_handle(mark_out_frame)
             end
         end
 
@@ -160,10 +159,7 @@ function M.create(widget, state_module)
             frame_rate = frame_utils.default_frame_rate
         end
 
-        -- Calculate appropriate frame-based interval
-        local viewport_start_frames = viewport_start_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
-        local viewport_end_frames = viewport_end_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
-        local viewport_duration_frames = viewport_duration_rt:rescale(frame_rate.fps_numerator, frame_rate.fps_denominator).frames
+        -- All viewport values are already integer frames
         if viewport_duration_frames <= 0 then
             return
         end
@@ -214,8 +210,8 @@ function M.create(widget, state_module)
             if frame_pos < viewport_start_frames or frame_pos > viewport_end_frames then
                 return nil
             end
-            local tick_rt = Rational.new(frame_pos, frame_rate.fps_numerator, frame_rate.fps_denominator)
-            local x = state_module.time_to_pixel(tick_rt, width)
+            -- time_to_pixel now accepts integer frames directly
+            local x = state_module.time_to_pixel(frame_pos, width)
             if x < 0 or x > width then
                 return nil
             end
@@ -277,15 +273,15 @@ function M.create(widget, state_module)
         end
 
         -- Draw playhead marker if in visible range
-        if playhead_rt >= viewport_start_rt and playhead_rt <= viewport_end_rt then
-            local playhead_x = state_module.time_to_pixel(playhead_rt, width)
+        if playhead_frame >= viewport_start_frames and playhead_frame <= viewport_end_frames then
+            local playhead_x = state_module.time_to_pixel(playhead_frame, width)
 
             -- DEBUG: Log ruler width and playhead position
             if os.getenv("JVE_DEBUG_PLAYHEAD") == "1" then
                 local logger = require("core.logger")
                 logger.debug("playhead_debug", string.format(
                     "RULER: width=%d playhead_x=%d playhead_frames=%d",
-                    width, playhead_x, playhead_rt.frames or -1
+                    width, playhead_x, playhead_frame
                 ))
             end
 
@@ -333,17 +329,17 @@ function M.create(widget, state_module)
                 pc.stop()
             end
 
-            -- Check if clicking on playhead
-            local playhead_rat = state_module.get_playhead_position()
-            local playhead_x = state_module.time_to_pixel(playhead_rat, width)
+            -- Check if clicking on playhead (now integer frame)
+            local playhead_frame = state_module.get_playhead_position()
+            local playhead_x = state_module.time_to_pixel(playhead_frame, width)
 
             if math.abs(x - playhead_x) < 10 then
                 state_module.set_dragging_playhead(true)
             else
-                -- Click anywhere on ruler to set playhead (snap to frame)
-                local time_rat = state_module.pixel_to_time(x, width)
-                local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
-                state_module.set_playhead_position(snapped_rat)
+                -- Click anywhere on ruler to set playhead
+                -- pixel_to_time now returns integer frame, already snapped
+                local snapped_frame = state_module.pixel_to_time(x, width)
+                state_module.set_playhead_position(snapped_frame)
                 state_module.set_dragging_playhead(true)
             end
 
@@ -358,9 +354,9 @@ function M.create(widget, state_module)
                     scrub_mode_active = true
                 end
 
-                local time_rat = state_module.pixel_to_time(x, width)
-                local snapped_rat = frame_utils.snap_to_frame(time_rat, frame_rate)
-                state_module.set_playhead_position(snapped_rat)
+                -- pixel_to_time returns integer frame, already snapped
+                local snapped_frame = state_module.pixel_to_time(x, width)
+                state_module.set_playhead_position(snapped_frame)
             end
 
         elseif event_type == "release" then

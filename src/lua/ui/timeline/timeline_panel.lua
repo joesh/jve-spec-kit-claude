@@ -1638,36 +1638,31 @@ function M.create(opts)
 
     -- Wire playback sync callback for timeline playback mode
     local playback_controller = require("core.playback.playback_controller")
-    local Rational = require("core.rational")
 
     -- Set timeline sync callback: handles page-scroll only.
     -- Playhead position is already updated by set_position() in the playback tick.
     playback_controller.set_timeline_sync_callback(function(frame_idx)
-        local rate = state.get_sequence_frame_rate()
-        if not rate or not rate.fps_numerator or not rate.fps_denominator then
-            return
-        end
-
-        local playhead_rat = Rational.new(math.floor(frame_idx), rate.fps_numerator, rate.fps_denominator)
+        local playhead_frame = math.floor(frame_idx)
 
         -- Page-scroll: jump viewport when playhead exits visible area
+        -- All viewport coords are now integers (frames)
         local vp_start = state.get_viewport_start_time()
         local vp_duration = state.get_viewport_duration()
         local vp_end = vp_start + vp_duration
 
-        if playhead_rat < vp_start or playhead_rat >= vp_end then
+        if playhead_frame < vp_start or playhead_frame >= vp_end then
             -- Playhead outside viewport - page to follow it
             local new_start
-            if playhead_rat < vp_start then
+            if playhead_frame < vp_start then
                 -- Scrolling backward: put playhead at 75% of viewport
-                new_start = playhead_rat - vp_duration * Rational.new(75, 100, 1)
+                new_start = playhead_frame - math.floor(vp_duration * 0.75)
             else
                 -- Scrolling forward: put playhead at 25% of viewport
-                new_start = playhead_rat - vp_duration * Rational.new(25, 100, 1)
+                new_start = playhead_frame - math.floor(vp_duration * 0.25)
             end
             -- Clamp to 0
-            if new_start.frames < 0 then
-                new_start = Rational.new(0, new_start.fps_numerator, new_start.fps_denominator)
+            if new_start < 0 then
+                new_start = 0
             end
             state.set_viewport_start_time(new_start)
         end
@@ -1702,7 +1697,7 @@ function M.create(opts)
                     local target = viewer_seek_target
                     if target == last_viewer_playhead then return end
                     last_viewer_playhead = target
-                    playback_controller.seek_to_rational(target)
+                    playback_controller.seek_to_frame(target)
                 end)
             end
         end

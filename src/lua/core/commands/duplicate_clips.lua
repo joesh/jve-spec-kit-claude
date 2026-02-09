@@ -18,15 +18,13 @@ local M = {}
 local Clip = require("models.clip")
 local command_helper = require("core.command_helper")
 local clip_mutator = require("core.clip_mutator")
-local Rational = require("core.rational")
-local rational_helpers = require("core.command_rational_helpers")
 
 
 local SPEC = {
     args = {
         anchor_clip_id = { required = true },
         clip_ids = {},
-        delta_rat = {},
+        delta_frames = { kind = "number" },
         project_id = { required = true },
         sequence_id = { required = true },
         target_track_id = { required = true },
@@ -61,12 +59,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, "DuplicateClips: missing target_track_id"
         end
 
-        local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
-        local delta_rat = args.delta_rat
-        delta_rat = Rational.hydrate(delta_rat, seq_fps_num, seq_fps_den) or Rational.new(0, seq_fps_num, seq_fps_den)
-        if delta_rat.fps_numerator ~= seq_fps_num or delta_rat.fps_denominator ~= seq_fps_den then
-            delta_rat = Rational.new(delta_rat.frames, seq_fps_num, seq_fps_den)
-        end
+        -- Delta must be integer frames
+        local delta_frames = args.delta_frames or 0
+        assert(type(delta_frames) == "number", "DuplicateClips: delta_frames must be integer")
 
         local anchor_clip_id = args.anchor_clip_id or clip_ids[1]
         if not anchor_clip_id or anchor_clip_id == "" then
@@ -76,7 +71,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local ok_plan, plan_err, plan = clip_mutator.plan_duplicate_block(db, {
             sequence_id = sequence_id,
             clip_ids = clip_ids,
-            delta_rat = delta_rat,
+            delta_frames = delta_frames,
             target_track_id = target_track_id,
             anchor_clip_id = anchor_clip_id,
         })

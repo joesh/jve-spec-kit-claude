@@ -71,8 +71,8 @@ command_manager.init("seq1", "proj1")
 -- Record original positions
 local video_before = Clip.load("clip_v")
 local audio_before = Clip.load("clip_a")
-assert(video_before.timeline_start.frames == 0, "video should start at 0")
-assert(audio_before.timeline_start.frames == 0, "audio should start at 0")
+assert(video_before.timeline_start == 0, "video should start at 0")
+assert(audio_before.timeline_start == 0, "audio should start at 0")
 
 -- Nudge ONLY the video clip by 10 frames
 local result = command_manager.execute("Nudge", {
@@ -80,7 +80,7 @@ local result = command_manager.execute("Nudge", {
     sequence_id = "seq1",
     fps_numerator = 24000,
     fps_denominator = 1001,
-    nudge_amount_rat = { frames = 10, fps_numerator = 24000, fps_denominator = 1001 },
+    nudge_amount = 10,
     selected_clip_ids = { "clip_v" },  -- ONLY video selected
 })
 assert(result.success, "Nudge should succeed: " .. (result.error_message or ""))
@@ -90,11 +90,11 @@ local video_after = Clip.load("clip_v")
 local audio_after = Clip.load("clip_a")
 
 -- Video should have moved
-assert(video_after.timeline_start.frames == 10,
-    string.format("video should be at frame 10, got %d", video_after.timeline_start.frames))
+assert(video_after.timeline_start == 10,
+    string.format("video should be at frame 10, got %d", video_after.timeline_start))
 
 -- Audio should NOT have moved (it was not selected)
-assert(audio_after.timeline_start.frames == 0,
-    string.format("audio should still be at frame 0 (not selected), got %d", audio_after.timeline_start.frames))
+assert(audio_after.timeline_start == 0,
+    string.format("audio should still be at frame 0 (not selected), got %d", audio_after.timeline_start))
 
 print("✅ test_nudge_respects_selection.lua passed")

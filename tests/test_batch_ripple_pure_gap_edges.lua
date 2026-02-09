@@ -31,8 +31,8 @@ do
     assert(result.success, "Pure gap_after ripple should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start.frames == 1700,
-        string.format("Right clip should shift left by 300, got %d", after_right.timeline_start.frames))
+    assert(after_right.timeline_start == 1700,
+        string.format("Right clip should shift left by 300, got %d", after_right.timeline_start))
 
     layout:cleanup()
 end
@@ -58,8 +58,8 @@ do
     assert(result.success, "Pure gap_before ripple should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start.frames == 2100,
-        string.format("Right clip should shift left by 400, got %d", after_right.timeline_start.frames))
+    assert(after_right.timeline_start == 2100,
+        string.format("Right clip should shift left by 400, got %d", after_right.timeline_start))
 
     layout:cleanup()
 end
@@ -90,10 +90,10 @@ do
     local after_downstream = Clip.load(layout.clips.v1_downstream.id, layout.db)
 
     -- Roll: right clip moves, but downstream should NOT shift (timeline length unchanged)
-    assert(after_right.timeline_start.frames == 2200,
-        string.format("Right clip should move right by 200 (roll), got %d", after_right.timeline_start.frames))
-    assert(after_downstream.timeline_start.frames == 4000,
-        string.format("Downstream clip should NOT shift in roll, got %d", after_downstream.timeline_start.frames))
+    assert(after_right.timeline_start == 2200,
+        string.format("Right clip should move right by 200 (roll), got %d", after_right.timeline_start))
+    assert(after_downstream.timeline_start == 4000,
+        string.format("Downstream clip should NOT shift in roll, got %d", after_downstream.timeline_start))
 
     layout:cleanup()
 end
@@ -125,10 +125,10 @@ do
     local after_v2_right = Clip.load(layout.clips.v2_right.id, layout.db)
 
     -- Should clamp to smallest gap (700 frames on V2)
-    assert(after_v1_right.timeline_start.frames == 1300,
-        string.format("V1 should shift by clamped delta (700), got %d", after_v1_right.timeline_start.frames))
-    assert(after_v2_right.timeline_start.frames == 2300,
-        string.format("V2 should shift by same clamped delta (700), got %d", after_v2_right.timeline_start.frames))
+    assert(after_v1_right.timeline_start == 1300,
+        string.format("V1 should shift by clamped delta (700), got %d", after_v1_right.timeline_start))
+    assert(after_v2_right.timeline_start == 2300,
+        string.format("V2 should shift by same clamped delta (700), got %d", after_v2_right.timeline_start))
 
     layout:cleanup()
 end
@@ -162,10 +162,10 @@ do
     local after_v2_right = Clip.load(layout.clips.v2_right.id, layout.db)
 
     -- Both clips shift together due to cross-track ripple
-    assert(after_v1_right.timeline_start.frames == 1700,
-        string.format("V1 right should shift left by 300, got %d", after_v1_right.timeline_start.frames))
-    assert(after_v2_right.timeline_start.frames == 2200,
-        string.format("V2 right should shift left by 300, got %d", after_v2_right.timeline_start.frames))
+    assert(after_v1_right.timeline_start == 1700,
+        string.format("V1 right should shift left by 300, got %d", after_v1_right.timeline_start))
+    assert(after_v2_right.timeline_start == 2200,
+        string.format("V2 right should shift left by 300, got %d", after_v2_right.timeline_start))
 
     layout:cleanup()
 end

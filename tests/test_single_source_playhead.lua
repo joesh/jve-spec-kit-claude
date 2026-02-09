@@ -43,11 +43,9 @@ _G.qt_create_single_shot_timer = function(interval, callback)
     -- Don't execute timers automatically
 end
 
-local Rational = require("core.rational")
-
 -- Create a mock timeline_state with playhead tracking
 local mock_timeline_state = {
-    _playhead = Rational.new(0, 24, 1),
+    _playhead = 0,
     _listeners = {},
 }
 
@@ -94,15 +92,15 @@ print("  ✓ Source mode: get_position returns local value")
 
 print("\nTest 3: In timeline mode, get_position reads from timeline_state")
 pc.set_timeline_mode(true, "test_seq", { fps_num = 24, fps_den = 1, total_frames = 1000 })
--- Set timeline_state playhead to frame 50
-mock_timeline_state.set_playhead_position(Rational.new(50, 24, 1))
+-- Set timeline_state playhead to frame 50 (integer)
+mock_timeline_state.set_playhead_position(50)
 local pos = pc.get_position()
 assert(pos == 50, "get_position should read frame 50 from timeline_state, got: " .. tostring(pos))
 print("  ✓ Timeline mode: get_position reads from timeline_state")
 
 print("\nTest 4: External playhead change is visible via get_position")
 -- Simulate a command changing the playhead (e.g. GoToStart)
-mock_timeline_state.set_playhead_position(Rational.new(0, 24, 1))
+mock_timeline_state.set_playhead_position(0)
 pos = pc.get_position()
 assert(pos == 0, "get_position should reflect external change to frame 0, got: " .. tostring(pos))
 print("  ✓ External playhead change reflected immediately")
@@ -110,12 +108,12 @@ print("  ✓ External playhead change reflected immediately")
 print("\nTest 5: set_position in timeline mode writes to timeline_state")
 pc.set_position(75)
 local playhead = mock_timeline_state.get_playhead_position()
-assert(playhead.frames == 75, "timeline_state playhead should be at frame 75, got: " .. tostring(playhead.frames))
+assert(playhead == 75, "timeline_state playhead should be at frame 75, got: " .. tostring(playhead))
 print("  ✓ set_position writes through to timeline_state")
 
 print("\nTest 6: Simulated playback tick uses get_position, not stale cache")
 -- Set playhead to frame 100 via timeline_state (simulating a command)
-mock_timeline_state.set_playhead_position(Rational.new(100, 24, 1))
+mock_timeline_state.set_playhead_position(100)
 -- Verify get_position sees it (would have been stale before this refactor)
 pos = pc.get_position()
 assert(pos == 100, "After external set to 100, get_position should return 100, got: " .. tostring(pos))

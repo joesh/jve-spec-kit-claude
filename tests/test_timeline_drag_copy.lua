@@ -7,7 +7,6 @@ local import_schema = require("import_schema")
 local timeline_state = require("ui.timeline.timeline_state")
 local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 local timeline_view_drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
 
 local function remove_best_effort(path)
@@ -53,10 +52,10 @@ local clip1 = Clip.create("Clip1", "media1", {
     project_id = "proj",
     track_id = "v1",
     owner_sequence_id = "seq",
-    timeline_start = Rational.new(0, 30, 1),
-    duration = Rational.new(100, 30, 1),
-    source_in = Rational.new(0, 30, 1),
-    source_out = Rational.new(100, 30, 1),
+    timeline_start = 0,
+    duration = 100,
+    source_in = 0,
+    source_out = 100,
     fps_numerator = 30, fps_denominator = 1
 })
 clip1:save(db)
@@ -81,7 +80,7 @@ local drag_state = {
     start_y = 0,
     current_y = 100,
     delta_ms = 1000, -- Shift by 1 second (30 frames at 30fps)
-    delta_rational = Rational.new(30, 30, 1),
+    delta_frames = 30,
     clips = {{id = clip1.id}},
     anchor_clip_id = clip1.id,
     alt_copy = true
@@ -93,7 +92,7 @@ timeline_view_drag_handler.handle_release(mock_view, drag_state)
 local loaded_clip1 = Clip.load(clip1.id, db)
 assert(loaded_clip1, "Original clip should exist")
 assert(loaded_clip1.track_id == 'v1', "Original clip should stay on V1")
-assert(loaded_clip1.timeline_start.frames == 0, "Original clip should stay at 0")
+assert(loaded_clip1.timeline_start == 0, "Original clip should stay at 0")
 
 -- New clip should exist on V2 at 30 frames
 local all_clips = database.load_clips("seq")
@@ -107,7 +106,7 @@ end
 
 assert(new_clip, "A new clip should have been created (Copy)")
 assert(new_clip.track_id == 'v2', "New clip should be on V2")
-assert(new_clip.timeline_start.frames == 30, "New clip should be at 30 frames (got " .. tostring(new_clip.timeline_start.frames) .. ")")
+assert(new_clip.timeline_start == 30, "New clip should be at 30 frames (got " .. tostring(new_clip.timeline_start) .. ")")
 assert(new_clip.media_id == 'media1', "New clip should reference same media")
 
 cleanup_db_artifacts(db_path)

@@ -68,13 +68,13 @@ local SOURCE_IN_FRAMES = 0
 local SOURCE_OUT_FRAMES = 528  -- 22.0s at 24fps
 local DURATION_FRAMES = SOURCE_OUT_FRAMES - SOURCE_IN_FRAMES
 package.loaded["core.playback.timeline_resolver"] = {
-    resolve_all_audio_at_time = function(playhead_rat, sequence_id)
+    resolve_all_audio_at_time = function(playhead_frame, sequence_id)
         return {{
             clip = {
                 id = CLIP_ID,
-                timeline_start = { frames = TIMELINE_START_FRAMES, to_seconds = function() return 70.0 end },
-                source_in = { frames = SOURCE_IN_FRAMES, to_seconds = function() return 0 end },
-                source_out = { frames = SOURCE_OUT_FRAMES, to_seconds = function() return 22.0 end },
+                timeline_start = TIMELINE_START_FRAMES,
+                source_in = SOURCE_IN_FRAMES,
+                source_out = SOURCE_OUT_FRAMES,
             },
             track = { volume = 1.0, muted = false, soloed = false },
             media_path = "/test/clip.mp4",
@@ -84,14 +84,14 @@ package.loaded["core.playback.timeline_resolver"] = {
 
 -- Mock helpers
 package.loaded["core.playback.playback_helpers"] = {
-    frame_to_rational = function(f, num, den)
-        return { frames = f, fps_num = num, fps_den = den }
-    end,
     calc_time_us_from_frame = function(f, num, den)
         return math.floor(f * 1000000 * den / num)
     end,
-    rational_to_frame_clamped = function(rat, num, den, total)
-        return rat and rat.frames or 0
+    calc_frame_from_time_us = function(t_us, num, den)
+        return math.floor(t_us * num / (1000000 * den))
+    end,
+    frame_clamped = function(frame, total)
+        return math.max(0, math.min(frame, total - 1))
     end,
     sync_audio = function() end,
     stop_audio = function() end,
@@ -104,7 +104,7 @@ package.loaded["core.logger"] = {
 package.loaded["core.playback.source_playback"] = { get_unlatch_resume_time = function() return 0 end }
 package.loaded["core.playback.timeline_playback"] = {}
 package.loaded["ui.timeline.timeline_state"] = {
-    get_playhead_position = function() return { frames = 2000 } end,
+    get_playhead_position = function() return 2000 end,
     set_playhead_position = function() end,
     get_sequence_frame_rate = function() return { fps_numerator = 24, fps_denominator = 1 } end,
 }

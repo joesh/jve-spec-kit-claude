@@ -3,24 +3,23 @@
 require("test_env")
 
 local edge_picker = require("ui.timeline.edge_picker")
-local Rational = require("core.rational")
 
 local track_clips = {
     {
         id = "clip_gap_right",
         name = "Right Clip",
         track_id = "track_v1",
-        timeline_start = Rational.new(2000, 1000, 1),
-        duration = Rational.new(600, 1000, 1)
+        timeline_start = 2000,
+        duration = 600
     }
 }
 
 local viewport_width = 4000
 local function time_to_pixel(time)
-    return time.frames
+    return time
 end
 
-local boundary_px = track_clips[1].timeline_start.frames
+local boundary_px = track_clips[1].timeline_start
 local result = edge_picker.pick_edges(track_clips, boundary_px, viewport_width, {
     edge_zone = 20,
     roll_zone = 20,
