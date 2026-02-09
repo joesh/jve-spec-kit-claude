@@ -1327,6 +1327,12 @@ function M.get_selection_snapshot()
     return snapshot
 end
 
+-- Set the active project ID (call before refresh when switching projects)
+function M.set_project_id(project_id)
+    assert(project_id and project_id ~= "", "project_browser.set_project_id: project_id required")
+    M.project_id = project_id
+end
+
 -- Refresh media list from database
 function M.refresh()
     ensure_command_listener()

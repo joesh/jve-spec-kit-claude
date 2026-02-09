@@ -299,4 +299,30 @@ function Sequence.ensure_default(project_id)
     return nil
 end
 
+-- Find the most recently modified sequence in the database
+-- Returns sequence object, or nil if none exist
+function Sequence.find_most_recent()
+    local conn = resolve_db()
+
+    local stmt = assert(conn:prepare([[
+        SELECT id FROM sequences
+        ORDER BY modified_at DESC, created_at DESC, id ASC
+        LIMIT 1
+    ]]), "Sequence.find_most_recent: failed to prepare query")
+
+    if not stmt:exec() or not stmt:next() then
+        stmt:finalize()
+        return nil
+    end
+
+    local id = stmt:value(0)
+    stmt:finalize()
+
+    if not id or id == "" then
+        return nil
+    end
+
+    return Sequence.load(id)
+end
+
 return Sequence
