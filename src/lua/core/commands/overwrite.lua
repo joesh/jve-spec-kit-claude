@@ -148,7 +148,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             clip_id = args.clip_id,  -- Preserve clip_id if specified
         })
 
-        -- Audio clips
+        -- Audio clips: use sample_rate/1 as rate (source units are samples)
         if audio_channels > 0 then
             local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
             for ch = 0, audio_channels - 1 do
@@ -163,8 +163,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     source_in = timing.source_in,
                     source_out = timing.source_out,
                     duration = timing.duration,
-                    fps_numerator = media_fps_num,
-                    fps_denominator = media_fps_den,
+                    fps_numerator = 48000,
+                    fps_denominator = 1,
                     target_track_id = audio_track.id,
                 })
             end

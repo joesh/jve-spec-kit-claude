@@ -953,7 +953,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return media.id
     end
 
-    local function create_clip(track_id, clip_info, clip_key, master_bin_id)
+    local function create_clip(track_id, clip_info, clip_key, master_bin_id, track_type)
         local media_id = ensure_media(clip_info)
         local master_clip_id = ensure_master_clip(clip_info, clip_key, media_id)
 
@@ -969,8 +969,16 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             end
         end
 
-        local fps_num = math.floor(clip_info.frame_rate * 1000)
-        local fps_den = 1000
+        -- Audio clips use sample_rate/1 as rate (source units are samples)
+        -- Video clips use frame_rate as rate (source units are frames)
+        local fps_num, fps_den
+        if track_type == "AUDIO" then
+            fps_num = 48000
+            fps_den = 1
+        else
+            fps_num = math.floor(clip_info.frame_rate * 1000)
+            fps_den = 1000
+        end
 
         -- All values are integer frames
         local start_value = clip_info.start_value or 0
@@ -1017,13 +1025,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         return true
     end
 
-    local function create_clip_set(sequence_key, track_key, track_id, clips, master_bin_id, sequence_id)
+    local function create_clip_set(sequence_key, track_key, track_id, clips, master_bin_id, sequence_id, track_type)
         for clip_index, clip_info in ipairs(clips or {}) do
             local clip_key = track_key .. "::" .. (clip_info.original_id or clip_index)
             if not clip_info.owner_sequence_id or clip_info.owner_sequence_id == "" then
                 clip_info.owner_sequence_id = sequence_id or result.sequence_id_map[sequence_key]
             end
-            local ok, err = create_clip(track_id, clip_info, clip_key, master_bin_id)
+            local ok, err = create_clip(track_id, clip_info, clip_key, master_bin_id, track_type)
             if not ok then
                 return false, err
             end
@@ -1071,7 +1079,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         table.insert(result.track_ids, track.id)
         result.track_id_map[track_key] = track.id
 
-        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips, master_bin_id, sequence_id)
+        local ok, err = create_clip_set(sequence_key, track_key, track.id, track_info.clips, master_bin_id, sequence_id, kind)
         if not ok then
             return false, err
         end
