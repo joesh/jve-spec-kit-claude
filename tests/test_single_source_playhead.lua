@@ -28,6 +28,7 @@ package.loaded["core.media.media_cache"] = {
     is_loaded = function() return false end,
     set_playhead = function() end,
     activate = function() end,
+    stop_all_prefetch = function() end,
 }
 
 -- Mock viewer_panel

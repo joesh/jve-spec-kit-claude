@@ -193,13 +193,13 @@ assert(undo_result.success, "Undo Cut should succeed")
 assert(clip_exists("clip_a"), "clip_a should be restored after undo")
 assert(clip_exists("clip_c"), "clip_c should be restored after undo")
 
--- Test 2: Cut with no selection is a no-op
+-- Test 2: Cut with no selection returns false (nothing to do = not undoable)
 timeline_state.set_selection({})
 timeline_state.playhead_position = 1300
 local before = clips_snapshot()
 result = command_manager.execute("Cut", {project_id = "default_project"})
-assert(result.success, "Cut with no selection should still succeed")
+assert(not result.success, "Cut with no selection should return false (nothing to do)")
 local after = clips_snapshot()
 
 assert(#before == #after, "No clips should be removed when nothing is selected")
-print("✅ Cut removes only selected clips and does nothing when nothing is selected")
+print("✅ Cut removes only selected clips and returns false when nothing is selected")

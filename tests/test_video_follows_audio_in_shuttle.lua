@@ -63,6 +63,7 @@ local mock_media_cache = {
     is_loaded = function() return true end,
     set_playhead = function() end,
     get_asset_info = function() return { fps_num = 25, fps_den = 1 } end,
+    stop_all_prefetch = function() end,
 }
 package.loaded["core.media.media_cache"] = mock_media_cache
 

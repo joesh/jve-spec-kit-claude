@@ -42,6 +42,7 @@ package.loaded["core.media.media_cache"] = {
     end,
     activate = function() end,
     ensure_audio_pooled = function() end,
+    stop_all_prefetch = function() end,
 }
 
 _G.qt_create_single_shot_timer = function() end

@@ -50,11 +50,12 @@ local mock_audio_pb = {
 package.loaded["core.media.audio_playback"] = mock_audio_pb
 
 package.loaded["core.media.media_cache"] = {
-    ensure_audio_pooled = function() return { has_audio = true, audio_sample_rate = 48000 } end,
-    get_asset_info = function() return { has_audio = true, audio_sample_rate = 48000, duration_us = 60000000 } end,
+    ensure_audio_pooled = function() return { has_audio = true, audio_sample_rate = 48000, duration_us = 600000000 } end,
+    get_asset_info = function() return { has_audio = true, audio_sample_rate = 48000, duration_us = 600000000 } end,
     get_file_path = function() return "/test/media.mp4" end,
     is_loaded = function() return true end,
     set_playhead = function() end,
+    stop_all_prefetch = function() end,
 }
 
 -- Mock timeline_resolver with source_in > 0
@@ -79,6 +80,7 @@ package.loaded["core.playback.timeline_resolver"] = {
                 timeline_start = TIMELINE_START_FRAMES,
                 source_in = SOURCE_IN_FRAMES,
                 source_out = SOURCE_OUT_FRAMES,
+                rate = { fps_numerator = FPS, fps_denominator = 1 },
             },
             track = { volume = 1.0, muted = false, soloed = false },
             media_path = "/test/clip.mp4",

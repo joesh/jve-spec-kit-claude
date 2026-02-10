@@ -49,6 +49,7 @@ package.loaded["core.media.media_cache"] = {
         return { has_audio = true, audio_sample_rate = 48000, duration_us = 10000000 }
     end,
     get_file_path = function() return "/mock/media.mov" end,
+    stop_all_prefetch = function() end,
 }
 
 -- Mock timeline_resolver
