@@ -58,6 +58,32 @@ local root_selected_edges_pre = nil
 local root_selected_gaps_pre = nil
 
 
+-------------------------------------------------------------------------------
+-- ARCHITECTURAL NOTE: Implicit vs Explicit Command Parameters
+-------------------------------------------------------------------------------
+-- Many selection-based commands (Cut, Delete, ToggleClipEnabled, etc.) derive
+-- their target clip_ids from timeline_state.get_selected_clips() if not
+-- explicitly provided. This is the "implicit derivation" pattern.
+--
+-- How it works:
+--   1. UI calls execute("Cut", {project_id, sequence_id})  -- no clip_ids
+--   2. Executor calls timeline_state.get_selected_clips() to get targets
+--   3. Executor PERSISTS the derived values to the command for undo/redo
+--   4. Undo/redo uses persisted values, NOT current selection
+--
+-- This pattern is SAFE for undo/redo because step 3 captures the state.
+--
+-- FUTURE CONSIDERATION: Macro Recording / Command Sourcing
+-- If we implement macro recording or command sourcing (replaying commands from
+-- logs), this implicit pattern will need attention:
+--   - Option A: Macros capture the RESULT of execution (with persisted values)
+--   - Option B: Refactor all commands to require explicit parameters
+--   - Option C: Macro system resolves selection at record time, stores explicit IDs
+--
+-- See: toggle_clip_enabled.lua for an example with detailed comments.
+-- See also: cut.lua, delete_clip.lua, ripple_delete_selection.lua
+-------------------------------------------------------------------------------
+
 
 local function bug_result(message)
     assert(message, "command_manager.bug_result: message is required")

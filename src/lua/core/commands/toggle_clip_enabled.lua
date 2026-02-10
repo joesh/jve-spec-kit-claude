@@ -25,6 +25,7 @@ local SPEC = {
         --
         -- clip_ids: convenience input. Executor derives clip_toggles (with before/after) and
         --           persists them onto the command for replay/undo.
+        -- If neither provided, executor derives from timeline selection.
         clip_ids = { kind = "table" },
         dry_run = { kind = "boolean" },
         project_id = { required = true },
@@ -34,9 +35,7 @@ local SPEC = {
         -- Derived output (and accepted as an input for replay): list of {clip_id, enabled_before, enabled_after}.
         clip_toggles = { kind = "table" },
     },
-    requires_any = {
-        { "clip_ids", "clip_toggles" },
-    },
+    -- Note: requires_any removed - executor derives clip_ids from selection if not provided
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)

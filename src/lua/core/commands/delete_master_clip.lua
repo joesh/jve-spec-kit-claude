@@ -20,9 +20,14 @@ local set_error
 local SPEC = {
     args = {
         master_clip_id = { required = true },
-        master_clip_properties = {},
-        master_clip_snapshot = { required = true },
         project_id = { required = true },
+        force = { kind = "boolean" },  -- If true, also delete timeline clips that reference this master
+    },
+    persisted = {
+        -- Computed during execution for undo
+        master_clip_snapshot = {},
+        master_clip_properties = {},
+        deleted_timeline_clips = {},  -- Snapshots of timeline clips deleted when force=true
     }
 }
 
@@ -76,12 +81,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
+        -- Check for timeline clips referencing this master
+        local timeline_clip_snapshots = {}
         if clip.source_sequence_id and clip.source_sequence_id ~= "" then
             local ref_query = db:prepare([[
-                SELECT COUNT(*) FROM clips
-                WHERE parent_clip_id = ?
-                  AND clip_kind = 'timeline'
-                  AND (owner_sequence_id IS NULL OR owner_sequence_id <> ?)
+                SELECT c.id, c.track_id, c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
+                       c.enabled, c.offline, c.fps_numerator, c.fps_denominator, c.name, c.owner_sequence_id, t.sequence_id
+                FROM clips c
+                JOIN tracks t ON c.track_id = t.id
+                WHERE c.parent_clip_id = ?
+                  AND c.clip_kind = 'timeline'
+                  AND (c.owner_sequence_id IS NULL OR c.owner_sequence_id <> ?)
             ]])
             if not ref_query then
                 set_error(set_last_error, "DeleteMasterClip: Failed to prepare reference check")
@@ -89,15 +99,57 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             ref_query:bind_value(1, args.master_clip_id)
             ref_query:bind_value(2, clip.source_sequence_id)
-            local in_use = 0
-            if ref_query:exec() and ref_query:next() then
-                in_use = ref_query:value(0) or 0
+            if ref_query:exec() then
+                while ref_query:next() do
+                    table.insert(timeline_clip_snapshots, {
+                        id = ref_query:value(0),
+                        track_id = ref_query:value(1),
+                        timeline_start = ref_query:value(2),
+                        duration = ref_query:value(3),
+                        source_in = ref_query:value(4),
+                        source_out = ref_query:value(5),
+                        enabled = ref_query:value(6) == 1,
+                        offline = ref_query:value(7) == 1,
+                        fps_numerator = ref_query:value(8),
+                        fps_denominator = ref_query:value(9),
+                        name = ref_query:value(10),
+                        owner_sequence_id = ref_query:value(11),
+                        sequence_id = ref_query:value(12),  -- For cache invalidation
+                        parent_clip_id = args.master_clip_id,
+                        media_id = clip.media_id,
+                        clip_kind = "timeline",
+                    })
+                end
             end
             ref_query:finalize()
 
-            if in_use > 0 then
-                set_error(set_last_error, "DeleteMasterClip: Clip still referenced in timeline")
-                return false
+            if #timeline_clip_snapshots > 0 then
+                if not args.force then
+                    -- Return special error that UI can detect
+                    set_error(set_last_error, string.format(
+                        "DeleteMasterClip: Clip referenced by %d timeline clip(s). Use force=true to delete anyway.",
+                        #timeline_clip_snapshots))
+                    return { success = false, in_use_count = #timeline_clip_snapshots }
+                end
+
+                -- force=true: Delete timeline clips first
+                local affected_sequences = {}
+                for _, snap in ipairs(timeline_clip_snapshots) do
+                    if not delete_clip_with_metadata(snap.id) then
+                        set_error(set_last_error, "DeleteMasterClip: Failed to delete timeline clip " .. snap.id)
+                        return false
+                    end
+                    if snap.sequence_id then
+                        affected_sequences[snap.sequence_id] = true
+                    end
+                end
+                command:set_parameter("deleted_timeline_clips", timeline_clip_snapshots)
+
+                -- Invalidate timeline cache for affected sequences
+                local command_helper = require("core.command_helper")
+                for seq_id, _ in pairs(affected_sequences) do
+                    command_helper.reload_timeline(seq_id)
+                end
             end
         end
 
@@ -256,7 +308,46 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             insert_prop:finalize()
         end
 
-        print(string.format("UNDO: Restored master clip %s", args.master_clip_snapshot.name or args.master_clip_snapshot.id))
+        -- Restore timeline clips that were deleted with force=true
+        local deleted_timeline_clips = args.deleted_timeline_clips or {}
+        local affected_sequences = {}
+        for _, snap in ipairs(deleted_timeline_clips) do
+            local timeline_clip = Clip.create(snap.name or "Timeline Clip", snap.media_id, {
+                id = snap.id,
+                clip_kind = snap.clip_kind,
+                track_id = snap.track_id,
+                parent_clip_id = snap.parent_clip_id,
+                owner_sequence_id = snap.owner_sequence_id,
+                timeline_start = snap.timeline_start,
+                duration = snap.duration,
+                source_in = snap.source_in,
+                source_out = snap.source_out,
+                enabled = snap.enabled ~= false,
+                offline = snap.offline,
+                fps_numerator = snap.fps_numerator,
+                fps_denominator = snap.fps_denominator,
+            })
+            if not timeline_clip:save() then
+                set_error(set_last_error, "UndoDeleteMasterClip: Failed to restore timeline clip " .. snap.id)
+                return false
+            end
+            if snap.sequence_id then
+                affected_sequences[snap.sequence_id] = true
+            end
+        end
+
+        -- Invalidate timeline cache for affected sequences
+        if next(affected_sequences) then
+            local command_helper = require("core.command_helper")
+            for seq_id, _ in pairs(affected_sequences) do
+                command_helper.reload_timeline(seq_id)
+            end
+        end
+
+        local timeline_msg = #deleted_timeline_clips > 0
+            and string.format(" and %d timeline clip(s)", #deleted_timeline_clips)
+            or ""
+        print(string.format("UNDO: Restored master clip %s%s", args.master_clip_snapshot.name or args.master_clip_snapshot.id, timeline_msg))
         return true
     end
 

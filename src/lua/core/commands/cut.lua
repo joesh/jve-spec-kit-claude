@@ -60,7 +60,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not args.dry_run then
                 print("Cut: nothing selected")
             end
-            return true
+            return false  -- Nothing to do = command did not execute
         end
 
         if args.dry_run then
