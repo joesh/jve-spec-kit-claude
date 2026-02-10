@@ -176,6 +176,10 @@ function M.register(executors, undoers, db, set_last_error)
             return { success = false, error_message = "Sequence missing project_id" }
         end
 
+        -- Notify all interested modules of project change (stops playback, clears caches)
+        local Signals = require("core.signals")
+        Signals.emit("project_changed", sequence.project_id)
+
         -- Re-initialize command manager with new database
         local command_manager = require("core.command_manager")
         command_manager.init(sequence.id, sequence.project_id)

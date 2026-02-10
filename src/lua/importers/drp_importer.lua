@@ -282,6 +282,177 @@ local function parse_media_pool(media_pool_elem)
 end
 
 -- ---------------------------------------------------------------------------
+-- MediaPool Folder/Bin Hierarchy Parsing
+-- ---------------------------------------------------------------------------
+--
+-- Resolve's MediaPool stores master clips in a folder hierarchy:
+--
+--   MediaPool/Master/MpFolder.xml              → Root "Master" folder
+--   MediaPool/Master/000_02 Footage/MpFolder.xml → "02 Footage" subfolder
+--   MediaPool/Master/001_03 Sound/MpFolder.xml   → "03 Sound" subfolder
+--
+-- Each MpFolder.xml contains:
+--   <Sm2MpFolder DbId="...">
+--     <Name>Folder Name</Name>
+--     <MpFolder>parent-folder-id</MpFolder>   (reference to parent)
+--     <MediaVec>
+--       <Element><Sm2MpVideoClip>...</Sm2MpVideoClip></Element>
+--       <Element><Sm2MpAudioClip>...</Sm2MpAudioClip></Element>
+--     </MediaVec>
+--   </Sm2MpFolder>
+--
+-- Master clips have marks and media references:
+--   <Sm2MpVideoClip DbId="...">
+--     <Name>Clip Name</Name>
+--     <MpFolder>parent-folder-id</MpFolder>
+--     <MarkIn>frame-value</MarkIn>
+--     <MarkOut>frame-value</MarkOut>
+--     <CurPlayheadPosition>frame-value</CurPlayheadPosition>
+--     <Video><BtVideoInfo>...</BtVideoInfo></Video>
+--   </Sm2MpVideoClip>
+
+--- Parse a master clip element (Sm2MpVideoClip or Sm2MpAudioClip)
+-- @param clip_elem table: XML element for master clip
+-- @param folder_id string: Parent folder ID
+-- @return table: Master clip data
+local function parse_master_clip_element(clip_elem, folder_id)
+    local db_id = clip_elem.attrs and clip_elem.attrs.DbId
+    if not db_id then return nil end
+
+    local name_elem = find_direct_child(clip_elem, "Name")
+    local mark_in_elem = find_direct_child(clip_elem, "MarkIn")
+    local mark_out_elem = find_direct_child(clip_elem, "MarkOut")
+    local playhead_elem = find_direct_child(clip_elem, "CurPlayheadPosition")
+
+    -- Extract file path from Video/BtVideoInfo or embedded audio
+    local file_path = nil
+    local video_info = find_element(clip_elem, "BtVideoInfo")
+    if video_info then
+        -- Video clips have path encoded in Clip field (binary) - we'll match by name later
+        -- For now, we rely on the name matching the media file
+    end
+
+    -- Parse duration from Video/BtVideoInfo/Time if available
+    local duration_frames = nil
+    local fps_num, fps_den = nil, nil
+
+    local master_clip = {
+        id = db_id,
+        name = name_elem and get_text(name_elem) or "Untitled",
+        folder_id = folder_id,
+        mark_in = mark_in_elem and tonumber(get_text(mark_in_elem)) or nil,
+        mark_out = mark_out_elem and tonumber(get_text(mark_out_elem)) or nil,
+        playhead = playhead_elem and tonumber(get_text(playhead_elem)) or nil,
+        clip_type = clip_elem.tag == "Sm2MpVideoClip" and "video" or "audio",
+    }
+
+    return master_clip
+end
+
+--- Parse a single MpFolder.xml file
+-- @param mp_file_path string: Path to MpFolder.xml
+-- @param parent_folder_path string: Filesystem parent path (for deriving hierarchy)
+-- @return table: { folder = {...}, master_clips = {...} }
+local function parse_mp_folder_file(mp_file_path, parent_folder_path)
+    local mp_root = parse_xml_file(mp_file_path)
+    if not mp_root then
+        return { folder = nil, master_clips = {} }
+    end
+
+    local result = { folder = nil, master_clips = {} }
+
+    -- Find the Sm2MpFolder element
+    local folder_elem = find_element(mp_root, "Sm2MpFolder")
+    if folder_elem then
+        local db_id = folder_elem.attrs and folder_elem.attrs.DbId
+        local name_elem = find_direct_child(folder_elem, "Name")
+        local parent_ref_elem = find_direct_child(folder_elem, "MpFolder")
+        local color_elem = find_direct_child(folder_elem, "ColorTag")
+
+        result.folder = {
+            id = db_id,
+            name = name_elem and get_text(name_elem) or "Untitled",
+            parent_ref = parent_ref_elem and get_text(parent_ref_elem) or nil,
+            color = color_elem and get_text(color_elem) or nil,
+            path = parent_folder_path,
+        }
+
+        -- Find master clips in MediaVec
+        local media_vec = find_direct_child(folder_elem, "MediaVec")
+        if media_vec then
+            for _, element in ipairs(media_vec.children or {}) do
+                if element.tag == "Element" then
+                    for _, child in ipairs(element.children or {}) do
+                        if child.tag == "Sm2MpVideoClip" or child.tag == "Sm2MpAudioClip" then
+                            local master_clip = parse_master_clip_element(child, db_id)
+                            if master_clip then
+                                table.insert(result.master_clips, master_clip)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+--- Parse full MediaPool hierarchy recursively
+-- @param tmp_dir string: Extracted .drp temp directory
+-- @return table: { folders = {...}, master_clips = {...}, folder_map = {...} }
+local function parse_media_pool_hierarchy(tmp_dir)
+    local folders = {}
+    local master_clips = {}
+    local folder_map = {}  -- id -> folder
+
+    -- Find all MpFolder.xml files recursively
+    local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
+    local find_handle = io.popen(find_cmd)
+    if not find_handle then
+        return { folders = folders, master_clips = master_clips, folder_map = folder_map }
+    end
+
+    local mp_files = find_handle:read("*all")
+    find_handle:close()
+
+    -- Parse each MpFolder.xml
+    for mp_file in mp_files:gmatch("[^\n]+") do
+        -- Derive parent path from file location
+        local parent_path = mp_file:match("^(.+)/MpFolder%.xml$") or ""
+        local relative_path = parent_path:gsub(tmp_dir .. "/MediaPool/Master/?", "")
+
+        local parsed = parse_mp_folder_file(mp_file, relative_path)
+
+        if parsed.folder then
+            table.insert(folders, parsed.folder)
+            folder_map[parsed.folder.id] = parsed.folder
+        end
+
+        for _, clip in ipairs(parsed.master_clips) do
+            table.insert(master_clips, clip)
+        end
+    end
+
+    -- Resolve parent relationships using folder_map
+    -- Each folder has parent_ref pointing to parent's DbId
+    for _, folder in ipairs(folders) do
+        if folder.parent_ref and folder_map[folder.parent_ref] then
+            folder.parent_id = folder.parent_ref
+            folder.parent_name = folder_map[folder.parent_ref].name
+        else
+            folder.parent_id = nil  -- Root folder
+        end
+    end
+
+    return {
+        folders = folders,
+        master_clips = master_clips,
+        folder_map = folder_map,
+    }
+end
+
+-- ---------------------------------------------------------------------------
 -- Timeline Name Resolution
 -- ---------------------------------------------------------------------------
 --
@@ -363,14 +534,61 @@ local function extract_sequence_ref_id(seq_container_elem)
     return nil
 end
 
-local function parse_resolve_tracks(seq_elem, frame_rate)
+--- Infer frame rate from 1-hour timecode start position
+-- Professional timelines typically start at 01:00:00:00 TC.
+-- The frame count at 1 hour differs by frame rate:
+--   24 fps → 86400, 25 fps → 90000, 30 fps → 108000, etc.
+-- @param min_start_frame number: Earliest clip start position
+-- @return number: Inferred fps (24, 25, 30, etc.) or 30 as fallback
+local function infer_fps_from_one_hour_tc(min_start_frame)
+    if not min_start_frame or min_start_frame <= 0 then
+        return 30  -- fallback
+    end
+    -- Known 1-hour frame counts with 1% tolerance
+    local markers = {
+        { 86400, 24 },    -- 24 fps
+        { 86314, 24 },    -- 23.976 fps (treat as 24)
+        { 90000, 25 },    -- 25 fps
+        { 108000, 30 },   -- 30 fps
+        { 107892, 30 },   -- 29.97 fps (treat as 30)
+    }
+    for _, m in ipairs(markers) do
+        local diff = math.abs(min_start_frame - m[1]) / m[1]
+        if diff < 0.01 then
+            return m[2]
+        end
+    end
+    return 30  -- fallback
+end
+
+local function parse_resolve_tracks(seq_elem, frame_rate_hint)
     local video_tracks = {}
     local audio_tracks = {}
     local media_lookup = {}
     local video_index = 1
     local audio_index = 1
 
+    -- First pass: find earliest clip start to infer actual fps
+    local min_start = nil
     local track_elements = find_all_elements(seq_elem, "Sm2TiTrack")
+    for _, track_elem in ipairs(track_elements) do
+        for _, clip_elem in ipairs(find_all_elements(track_elem, "Sm2TiVideoClip")) do
+            local start = tonumber(get_text(find_element(clip_elem, "Start"))) or 0
+            if not min_start or start < min_start then
+                min_start = start
+            end
+        end
+        for _, clip_elem in ipairs(find_all_elements(track_elem, "Sm2TiAudioClip")) do
+            local start = tonumber(get_text(find_element(clip_elem, "Start"))) or 0
+            if not min_start or start < min_start then
+                min_start = start
+            end
+        end
+    end
+
+    -- Infer fps from 1-hour TC, fall back to hint if inference fails
+    local frame_rate = infer_fps_from_one_hour_tc(min_start) or frame_rate_hint or 30
+
     for _, track_elem in ipairs(track_elements) do
         local type_value = tonumber(get_text(find_element(track_elem, "Type"))) or 0
         local track_type = (type_value == 1) and "AUDIO" or "VIDEO"
@@ -391,14 +609,34 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
         for _, clip_elem in ipairs(clip_elements) do
             local file_path = get_text(find_element(clip_elem, "MediaFilePath"))
             local start_frames = math.floor(tonumber(get_text(find_element(clip_elem, "Start"))) or 0)
-            local duration_frames = math.floor(tonumber(get_text(find_element(clip_elem, "Duration"))) or 0)
+            local duration_raw = math.floor(tonumber(get_text(find_element(clip_elem, "Duration"))) or 0)
+            -- MediaStartTime is absolute TC (frames from midnight) - use as source_in_tc
             local media_start_frames = math.floor(tonumber(get_text(find_element(clip_elem, "MediaStartTime"))) or 0)
+
+            -- DRP stores Start/Duration in TIMELINE FRAMES for both video and audio
+            -- (confirmed: clips are contiguous with Start[n+1] = Start[n] + Duration[n])
+            -- source_in/source_out are in native units (samples for audio @ 48kHz, frames for video)
+            local duration_timeline_frames = duration_raw  -- already in timeline frames
+            local source_duration  -- in native units (samples or frames)
+            if track_type == "AUDIO" then
+                -- Audio source_in/source_out are in samples (48kHz)
+                -- Convert timeline duration (frames) to source duration (samples)
+                source_duration = math.floor(duration_raw * 48000 / frame_rate + 0.5)
+            else
+                -- Video source coords are in frames (same as timeline)
+                source_duration = duration_raw
+            end
 
             local clip = {
                 name = get_text(find_element(clip_elem, "Name")),
-                start_value = start_frames,        -- integer frames
-                duration = duration_frames,        -- integer frames
-                source_in = media_start_frames,    -- integer frames
+                start_value = start_frames,        -- timeline position (integer frames)
+                duration = duration_timeline_frames,  -- duration on timeline (integer frames)
+                -- Absolute timecode addressing for source selection:
+                source_in_tc = media_start_frames, -- absolute TC (samples for audio, frames for video)
+                source_length = source_duration,   -- duration in source units
+                -- Legacy aliases (deprecated - use source_in_tc/source_length)
+                source_in = media_start_frames,
+                source_out = media_start_frames + source_duration,
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
                 file_path = file_path,
                 media_key = file_path,
@@ -409,9 +647,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
             if clip.duration <= 0 then
                 -- Ensure duration is at least 1 frame
                 clip.duration = 1
+                clip.source_length = 1
             end
-
-            clip.source_out = clip.source_in + clip.duration
 
             table.insert(track_info.clips, clip)
             clip_count = clip_count + 1
@@ -624,7 +861,10 @@ end
 --     error = "error message" (if failed),
 --     project = { name, settings },
 --     media_items = { {name, file_path, duration}, ... },
---     timelines = { {name, duration, tracks}, ... }
+--     timelines = { {name, duration, tracks}, ... },
+--     folders = { {id, name, parent_id, color}, ... },  -- MediaPool bin hierarchy
+--     pool_master_clips = { {id, name, folder_id, mark_in, mark_out, playhead}, ... },
+--     folder_map = { [folder_id] = folder, ... },  -- Lookup by ID
 --   }
 function M.parse_drp_file(drp_path)
     -- Extract .drp archive
@@ -753,6 +993,9 @@ function M.parse_drp_file(drp_path)
         end
     end
 
+    -- Parse MediaPool folder hierarchy for bins and master clips
+    local media_pool_hierarchy = parse_media_pool_hierarchy(tmp_dir)
+
     -- Cleanup temp directory
     os.execute("rm -rf " .. tmp_dir)
 
@@ -760,7 +1003,11 @@ function M.parse_drp_file(drp_path)
         success = true,
         project = project,
         media_items = media_items,
-        timelines = timelines
+        timelines = timelines,
+        -- New: folder/bin hierarchy and master clips from MediaPool
+        folders = media_pool_hierarchy.folders,
+        pool_master_clips = media_pool_hierarchy.master_clips,
+        folder_map = media_pool_hierarchy.folder_map,
     }
 end
 

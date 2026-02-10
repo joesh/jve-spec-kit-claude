@@ -348,6 +348,10 @@ function M.convert(drp_path, jvp_path)
                     track_count = track_count + 1
 
                     -- Import clips
+                    -- Video clips use timeline fps; audio clips use sample rate
+                    local clip_rate_num = track_data.type == "VIDEO" and fps_num or 48000
+                    local clip_rate_den = track_data.type == "VIDEO" and fps_den or 1
+
                     for _, clip_data in ipairs(track_data.clips) do
                         -- Find media by file path
                         local media_id = nil
@@ -366,8 +370,8 @@ function M.convert(drp_path, jvp_path)
                             duration = clip_data.duration,
                             source_in = clip_data.source_in,
                             source_out = source_out,
-                            fps_numerator = fps_num,
-                            fps_denominator = fps_den,
+                            fps_numerator = clip_rate_num,
+                            fps_denominator = clip_rate_den,
                         })
 
                         if clip:save() then

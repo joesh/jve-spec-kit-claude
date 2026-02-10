@@ -225,14 +225,19 @@ function M.register(executors, undoers, db)
                                 source_out = clip_data.source_in + clip_data.duration
                             end
 
+                            -- Audio clips use 48000/1 rate (source coords in samples)
+                            -- Video clips use timeline fps (source coords in frames)
+                            local clip_fps_num = track_data.type == "AUDIO" and 48000 or fps_num
+                            local clip_fps_den = track_data.type == "AUDIO" and 1 or fps_den
+
                             local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
                                 timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
                                 source_out = source_out,
-                                fps_numerator = fps_num,
-                                fps_denominator = fps_den,
+                                fps_numerator = clip_fps_num,
+                                fps_denominator = clip_fps_den,
                             })
 
                             if clip:save() then
@@ -472,14 +477,19 @@ function M.register(executors, undoers, db)
                                 source_out = clip_data.source_in + clip_data.duration
                             end
 
+                            -- Audio clips use 48000/1 rate (source coords in samples)
+                            -- Video clips use timeline fps (source coords in frames)
+                            local clip_fps_num = track_data.type == "AUDIO" and 48000 or fps_num
+                            local clip_fps_den = track_data.type == "AUDIO" and 1 or fps_den
+
                             local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
                                 track_id = track_id,
                                 timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,
                                 source_in = clip_data.source_in,
                                 source_out = source_out,
-                                fps_numerator = fps_num,
-                                fps_denominator = fps_den,
+                                fps_numerator = clip_fps_num,
+                                fps_denominator = clip_fps_den,
                             })
 
                             if clip:save() then
