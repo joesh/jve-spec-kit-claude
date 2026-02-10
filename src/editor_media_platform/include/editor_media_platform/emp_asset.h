@@ -29,6 +29,10 @@ struct AssetInfo {
     // Conservative: may be true even for CFR files
     bool is_vfr;
 
+    // Start timecode in frames at media's native rate
+    // Extracted from stream start_time (e.g., 86400 for 01:00:00:00 @ 24fps)
+    int64_t start_tc;
+
     // Audio stream info
     bool has_audio;
     int32_t audio_sample_rate;  // Source sample rate (e.g., 48000)

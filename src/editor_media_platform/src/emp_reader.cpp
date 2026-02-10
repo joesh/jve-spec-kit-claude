@@ -204,32 +204,35 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<Asset> asset) {
     if (!asset) {
         return Error::invalid_arg("Asset is null");
     }
-    if (!asset->info().has_video) {
-        return Error::unsupported("Asset has no video stream");
+    if (!asset->info().has_video && !asset->info().has_audio) {
+        return Error::unsupported("Asset has no video or audio stream");
     }
 
     auto impl = std::make_unique<ReaderImpl>();
 
     // Get format context from asset (requires friend access)
     AssetImpl* asset_impl = asset->impl_ptr();
-    AVCodecParameters* params = asset_impl->fmt_ctx.video_codec_params();
 
-    // Initialize codec
-    auto codec_result = impl->codec_ctx.init(params);
-    if (codec_result.is_error()) {
-        return codec_result.error();
-    }
+    // Initialize video codec if asset has video
+    if (asset->info().has_video) {
+        AVCodecParameters* params = asset_impl->fmt_ctx.video_codec_params();
 
-    // Only initialize software scaler if NOT using hw accel
-    // (hw path uses GPU YUV→RGB, sw path needs swscale BGRA conversion)
-    if (!impl->codec_ctx.is_hw_accelerated()) {
-        auto scale_result = impl->scale_ctx.init(
-            params->width, params->height,
-            static_cast<AVPixelFormat>(params->format),
-            params->width, params->height
-        );
-        if (scale_result.is_error()) {
-            return scale_result.error();
+        auto codec_result = impl->codec_ctx.init(params);
+        if (codec_result.is_error()) {
+            return codec_result.error();
+        }
+
+        // Only initialize software scaler if NOT using hw accel
+        // (hw path uses GPU YUV→RGB, sw path needs swscale BGRA conversion)
+        if (!impl->codec_ctx.is_hw_accelerated()) {
+            auto scale_result = impl->scale_ctx.init(
+                params->width, params->height,
+                static_cast<AVPixelFormat>(params->format),
+                params->width, params->height
+            );
+            if (scale_result.is_error()) {
+                return scale_result.error();
+            }
         }
     }
 
@@ -253,6 +256,10 @@ Result<void> Reader::Seek(FrameTime t) {
 }
 
 Result<void> Reader::SeekUS(TimeUS t_us) {
+    if (!m_asset->info().has_video) {
+        return Error::unsupported("Seek requires video stream");
+    }
+
     AssetImpl* asset_impl = m_asset->impl_ptr();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
 
@@ -364,6 +371,10 @@ int64_t Reader::PrefetchFramesDecoded() const {
 }
 
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
+    if (!m_asset->info().has_video) {
+        return Error::unsupported("DecodeAt requires video stream");
+    }
+
     AssetImpl* asset_impl = m_asset->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
@@ -852,6 +863,11 @@ void Reader::StartPrefetch(int direction) {
 
     if (direction == 0) {
         StopPrefetch();
+        return;
+    }
+
+    // Prefetch is for video frames - skip for audio-only files
+    if (!m_asset->info().has_video) {
         return;
     }
 

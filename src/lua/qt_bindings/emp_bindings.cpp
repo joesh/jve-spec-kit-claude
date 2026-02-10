@@ -119,6 +119,10 @@ static int lua_emp_asset_info(lua_State* L) {
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
 
+    // Start timecode in frames at media's native rate
+    lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
+    lua_setfield(L, -2, "start_tc");
+
     // Audio fields
     lua_pushboolean(L, info.has_audio);
     lua_setfield(L, -2, "has_audio");

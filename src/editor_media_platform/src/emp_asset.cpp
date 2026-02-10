@@ -76,51 +76,85 @@ Result<std::shared_ptr<Asset>> Asset::Open(const std::string& path) {
         return open_result.error();
     }
 
-    // Find video stream
-    auto stream_result = impl->fmt_ctx.find_video_stream();
-    if (stream_result.is_error()) {
-        return stream_result.error();
-    }
-
-    AVStream* video_stream = impl->fmt_ctx.video_stream();
-    AVCodecParameters* params = impl->fmt_ctx.video_codec_params();
-
     // Build AssetInfo
     AssetInfo info;
     info.path = path;
-    info.has_video = true;
-    info.video_width = params->width;
-    info.video_height = params->height;
 
-    // Duration in microseconds
-    AVFormatContext* fmt = impl->fmt_ctx.get();
-    if (fmt->duration != AV_NOPTS_VALUE) {
-        info.duration_us = av_rescale_q(fmt->duration, AV_TIME_BASE_Q, {1, 1000000});
-    } else if (video_stream->duration != AV_NOPTS_VALUE) {
-        info.duration_us = impl::stream_pts_to_us(video_stream->duration, video_stream);
+    // Try to find video stream (optional - audio-only files are valid)
+    AVStream* video_stream = nullptr;
+    auto stream_result = impl->fmt_ctx.find_video_stream();
+    if (stream_result.is_ok()) {
+        video_stream = impl->fmt_ctx.video_stream();
+        AVCodecParameters* params = impl->fmt_ctx.video_codec_params();
+        info.has_video = true;
+        info.video_width = params->width;
+        info.video_height = params->height;
+
+        // Nominal rate with canonical snapping
+        bool is_vfr = false;
+        Rate nominal = select_nominal_rate(video_stream, &is_vfr);
+        info.video_fps_num = nominal.num;
+        info.video_fps_den = nominal.den;
+        info.is_vfr = is_vfr;
     } else {
-        // Estimate from bitrate if available
-        info.duration_us = 0;
+        info.has_video = false;
+        info.video_width = 0;
+        info.video_height = 0;
+        // fps will be set below for audio-only files (use sample rate)
+        info.video_fps_num = 0;
+        info.video_fps_den = 1;
+        info.is_vfr = false;
     }
 
-    // Nominal rate with canonical snapping
-    bool is_vfr = false;
-    Rate nominal = select_nominal_rate(video_stream, &is_vfr);
-    info.video_fps_num = nominal.num;
-    info.video_fps_den = nominal.den;
-    info.is_vfr = is_vfr;
-
-    // Find audio stream (optional - not an error if missing)
+    // Find audio stream (optional - video-only files are valid)
+    AVStream* audio_stream = nullptr;
     int audio_idx = impl->fmt_ctx.find_audio_stream();
     if (audio_idx >= 0) {
+        audio_stream = impl->fmt_ctx.audio_stream();
         AVCodecParameters* audio_params = impl->fmt_ctx.audio_codec_params();
         info.has_audio = true;
         info.audio_sample_rate = audio_params->sample_rate;
         info.audio_channels = audio_params->ch_layout.nb_channels;
+
+        // For audio-only files, use sample rate as pseudo-fps for time calculations
+        if (!info.has_video && info.audio_sample_rate > 0) {
+            info.video_fps_num = info.audio_sample_rate;
+            info.video_fps_den = 1;
+        }
     } else {
         info.has_audio = false;
         info.audio_sample_rate = 0;
         info.audio_channels = 0;
+    }
+
+    // Require at least one stream
+    if (!info.has_video && !info.has_audio) {
+        return Error::unsupported("No video or audio stream found");
+    }
+
+    // Duration in microseconds - try format, then video stream, then audio stream
+    AVFormatContext* fmt = impl->fmt_ctx.get();
+    if (fmt->duration != AV_NOPTS_VALUE) {
+        info.duration_us = av_rescale_q(fmt->duration, AV_TIME_BASE_Q, {1, 1000000});
+    } else if (video_stream && video_stream->duration != AV_NOPTS_VALUE) {
+        info.duration_us = impl::stream_pts_to_us(video_stream->duration, video_stream);
+    } else if (audio_stream && audio_stream->duration != AV_NOPTS_VALUE) {
+        info.duration_us = impl::stream_pts_to_us(audio_stream->duration, audio_stream);
+    } else {
+        info.duration_us = 0;
+    }
+
+    // Start timecode in frames at media's native rate
+    // Use video stream start_time if available, else audio stream, else 0
+    info.start_tc = 0;
+    if (video_stream && video_stream->start_time != AV_NOPTS_VALUE) {
+        TimeUS start_us = impl::stream_pts_to_us(video_stream->start_time, video_stream);
+        // frames = (us / 1000000) * (fps_num / fps_den)
+        //        = us * fps_num / (1000000 * fps_den)
+        info.start_tc = (start_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
+    } else if (audio_stream && audio_stream->start_time != AV_NOPTS_VALUE) {
+        TimeUS start_us = impl::stream_pts_to_us(audio_stream->start_time, audio_stream);
+        info.start_tc = (start_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
     }
 
     return std::make_shared<Asset>(std::move(impl), std::move(info));
