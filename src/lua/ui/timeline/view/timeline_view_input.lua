@@ -27,6 +27,8 @@ local command_manager = require("core.command_manager")
 
 local RIGHT_MOUSE_BUTTON = 2
 local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
+local qt_constants = require("core.qt_constants")
+local logger = require("core.logger")
 
 local function edges_match(a, b)
     return a and b
@@ -193,6 +195,174 @@ local function clone_edge(edge)
     }
 end
 
+--- Show context menu for timeline clips
+-- @param view Timeline view
+-- @param x Mouse x position (widget-local)
+-- @param y Mouse y position (widget-local)
+-- @param clicked_clip The clip under cursor (or nil)
+-- @param event The mouse event object (may contain global_x, global_y)
+local function show_clip_context_menu(view, x, y, clicked_clip, event)
+    local state = view.state
+    local width, height = timeline.get_dimensions(view.widget)
+
+    -- Get global mouse position for popup
+    -- First check if event has global coordinates (like project_browser)
+    local global_x = event and event.global_x and math.floor(event.global_x) or nil
+    local global_y = event and event.global_y and math.floor(event.global_y) or nil
+
+    -- Fall back to coordinate conversion
+    if (not global_x or not global_y) and qt_constants.WIDGET and qt_constants.WIDGET.MAP_TO_GLOBAL then
+        global_x, global_y = qt_constants.WIDGET.MAP_TO_GLOBAL(view.widget, math.floor(x), math.floor(y))
+    end
+
+    -- Last resort: use local coords (won't be positioned correctly)
+    if not global_x or not global_y then
+        global_x, global_y = math.floor(x), math.floor(y)
+    end
+
+    -- If right-clicking on a clip that's not selected, select it first
+    local selected_clips = state.get_selected_clips and state.get_selected_clips() or {}
+    if clicked_clip then
+        local is_selected = false
+        for _, s in ipairs(selected_clips) do
+            if s.id == clicked_clip.id then is_selected = true; break end
+        end
+        if not is_selected then
+            command_manager.execute("SelectClips", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+                target_clip_ids = { clicked_clip.id },
+            })
+            selected_clips = state.get_selected_clips and state.get_selected_clips() or {}
+        end
+    end
+
+    if #selected_clips == 0 then
+        return  -- No clips selected, no menu
+    end
+
+    local actions = {}
+
+    -- Reveal in Filesystem (only for clips with media)
+    local has_media = false
+    for _, clip in ipairs(selected_clips) do
+        if clip.media_id then has_media = true; break end
+    end
+    if has_media then
+        table.insert(actions, {
+            label = "Reveal in Filesystem",
+            handler = function()
+                local result = command_manager.execute("RevealInFilesystem", {
+                    project_id = state.get_project_id(),
+                    sequence_id = state.get_sequence_id(),
+                    source = "timeline",
+                })
+                if result and not result.success then
+                    logger.warn("timeline_clip_context", "Reveal failed: " .. (result.error_message or "unknown"))
+                end
+            end
+        })
+    end
+
+    -- Match Frame
+    table.insert(actions, {
+        label = "Match Frame",
+        handler = function()
+            command_manager.execute("MatchFrame", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+            })
+        end
+    })
+
+    -- Separator (visual grouping)
+    table.insert(actions, { separator = true })
+
+    -- Split at Playhead
+    table.insert(actions, {
+        label = "Split at Playhead",
+        shortcut = "S",
+        handler = function()
+            command_manager.execute("Split", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+            })
+        end
+    })
+
+    -- Delete
+    table.insert(actions, {
+        label = "Delete",
+        shortcut = "Delete",
+        handler = function()
+            command_manager.execute("DeleteClip", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+            })
+        end
+    })
+
+    -- Ripple Delete
+    table.insert(actions, {
+        label = "Ripple Delete",
+        shortcut = "Shift+Delete",
+        handler = function()
+            command_manager.execute("RippleDeleteSelection", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+            })
+        end
+    })
+
+    table.insert(actions, { separator = true })
+
+    -- Enable/Disable
+    table.insert(actions, {
+        label = "Toggle Enabled",
+        shortcut = "D",
+        handler = function()
+            command_manager.execute("ToggleClipEnabled", {
+                project_id = state.get_project_id(),
+                sequence_id = state.get_sequence_id(),
+            })
+        end
+    })
+
+    if #actions == 0 then
+        return
+    end
+
+    -- Create and show the menu
+    -- The timeline's custom OpenGL widget may not work as a menu parent.
+    -- Use the project_browser's tree widget which is known to work.
+    local parent = view.widget
+    local ok, project_browser = pcall(require, "ui.project_browser")
+    if ok and project_browser and project_browser.tree then
+        parent = project_browser.tree
+    end
+    local menu = qt_constants.MENU.CREATE_MENU(parent, "TimelineClipContext")
+    for _, action_def in ipairs(actions) do
+        if action_def.separator then
+            qt_constants.MENU.ADD_MENU_SEPARATOR(menu)
+        else
+            local label = action_def.label
+            if action_def.shortcut then
+                label = label .. "\t" .. action_def.shortcut
+            end
+            local qt_action = qt_constants.MENU.CREATE_MENU_ACTION(menu, label)
+            if action_def.enabled == false then
+                qt_constants.MENU.SET_ACTION_ENABLED(qt_action, false)
+            else
+                qt_constants.MENU.CONNECT_MENU_ACTION(qt_action, function()
+                    action_def.handler()
+                end)
+            end
+        end
+    end
+
+    qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
+end
+
 function M.handle_mouse(view, event_type, x, y, button, modifiers)
     local state = view.state
     local width, height = timeline.get_dimensions(view.widget)
@@ -201,7 +371,13 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         view.pending_gap_click = nil
         if focus_manager and focus_manager.set_focused_panel then pcall(focus_manager.set_focused_panel, "timeline") end
         if qt_set_focus then pcall(qt_set_focus, view.widget) end
-        if button == RIGHT_MOUSE_BUTTON then return end -- Context menu handled separately
+
+        -- Right-click: show context menu
+        if button == RIGHT_MOUSE_BUTTON then
+            local clicked_clip = find_clip_under_cursor(view, x, y, width, height)
+            show_clip_context_menu(view, x, y, clicked_clip, modifiers)  -- modifiers is the event object
+            return
+        end
 
         local track_id = view.get_track_id_at_y(y, height)
         local picked_edges = pick_edges_for_track(state, track_id, x, width)

@@ -1759,4 +1759,29 @@ function M.get_focus_widgets()
     return widgets
 end
 
+--- Clear state that shouldn't persist across projects
+function M.on_project_change()
+    -- Close each tab's UI elements
+    for _, tab in pairs(open_tabs) do
+        if qt_constants.WIDGET.SET_PARENT then
+            qt_constants.WIDGET.SET_PARENT(tab.container, nil)
+        end
+        if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+            qt_constants.DISPLAY.SET_VISIBLE(tab.container, false)
+        end
+        if tab.handler then
+            _G[tab.handler] = nil
+        end
+        if tab.close_handler then
+            _G[tab.close_handler] = nil
+        end
+    end
+    open_tabs = {}
+    tab_order = {}
+end
+
+-- Register for project_changed signal
+local Signals = require("core.signals")
+Signals.connect("project_changed", M.on_project_change, 50)
+
 return M

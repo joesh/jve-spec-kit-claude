@@ -213,4 +213,13 @@ function M.clear_marks()
     schedule_persist()
 end
 
+--- Clear state that shouldn't persist across projects
+function M.on_project_change()
+    M.unload()
+end
+
+-- Register for project_changed signal
+local Signals = require("core.signals")
+Signals.connect("project_changed", M.on_project_change, 50)
+
 return M

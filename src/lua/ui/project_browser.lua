@@ -2013,9 +2013,48 @@ function M.delete_selected_items()
             if clip then
                 local project_id = clip.project_id or M.project_id or db.get_current_project_id()
                 assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteMasterClip " .. tostring(item.clip_id))
+
+                -- Check if clip is used in any sequences
+                local Clip = require("models.clip")
+                local usage = Clip.get_master_clip_usage(clip.clip_id)
+
+                local force = false
+                if #usage > 0 then
+                    -- Build message with affected sequences
+                    local seq_lines = {}
+                    local total_clips = 0
+                    for _, u in ipairs(usage) do
+                        table.insert(seq_lines, string.format("• %s (%d clip%s)",
+                            u.sequence_name, u.clip_count, u.clip_count == 1 and "" or "s"))
+                        total_clips = total_clips + u.clip_count
+                    end
+                    local seq_list = table.concat(seq_lines, "\n")
+
+                    local clip_name = clip.name or clip.clip_id:sub(1, 8)
+                    local accepted = qt_constants.DIALOG.SHOW_CONFIRM({
+                        title = "Delete Master Clip",
+                        message = string.format(
+                            'Deleting "%s" will remove %d clip%s from %d sequence%s.',
+                            clip_name, total_clips, total_clips == 1 and "" or "s",
+                            #usage, #usage == 1 and "" or "s"),
+                        informative_text = "Affected sequences:\n" .. seq_list,
+                        confirm_text = "Delete Anyway",
+                        cancel_text = "Cancel",
+                        icon = "warning",
+                        default_button = "cancel"
+                    })
+
+                    if not accepted then
+                        -- User cancelled - skip this clip
+                        goto continue_master_clip
+                    end
+                    force = true
+                end
+
                 local result = command_manager.execute("DeleteMasterClip", {
                     master_clip_id = clip.clip_id,
                     project_id = project_id,
+                    force = force,
                 })
                 if result and result.success then
                     deleted = deleted + 1
@@ -2024,6 +2063,7 @@ function M.delete_selected_items()
                     clip_failures = clip_failures + 1
                 end
             end
+            ::continue_master_clip::
         elseif item.type == "timeline" and item.id then
             local sequence_id = item.id
             if not handled_sequences[sequence_id] then
@@ -2337,5 +2377,27 @@ end
 -- (see src/lua/core/commands/activate_browser_selection.lua)
 
 command_scope.register(ACTIVATE_COMMAND, {scope = "panel", panel_id = "project_browser"})
+
+--- Clear state that shouldn't persist across projects
+function M.on_project_change(project_id)
+    -- Clear all caches
+    M.item_lookup = {}
+    M.media_map = {}
+    M.master_clip_map = {}
+    M.sequence_map = {}
+    M.bin_map = {}
+    M.bin_tree_map = {}
+    M.bins = {}
+    M.media_bin_map = {}
+    M.selected_item = nil
+    M.selected_items = {}
+    M.pending_rename = nil
+    -- Set new project (refresh happens separately via open_project)
+    M.project_id = project_id
+end
+
+-- Register for project_changed signal
+local Signals = require("core.signals")
+Signals.connect("project_changed", M.on_project_change, 50)
 
 return M
