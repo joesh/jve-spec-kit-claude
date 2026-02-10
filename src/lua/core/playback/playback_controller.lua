@@ -222,6 +222,16 @@ function M.shutdown_audio_session()
     end
 end
 
+--- Clear state that shouldn't persist across projects
+function M.on_project_change()
+    M.stop()
+    M.timeline_mode = false
+    M.sequence_id = nil
+    M.current_clip_id = nil
+    M.current_audio_clip_ids = {}
+    timeline_state_ref = nil
+end
+
 --------------------------------------------------------------------------------
 -- Frame/Time Conversion (delegates to helpers, but exposed for backward compat)
 --------------------------------------------------------------------------------
@@ -273,31 +283,56 @@ resolve_and_set_audio_sources = function(timeline_frame)
     -- Build source list for audio_playback
     local sources = {}
     for _, ac in ipairs(audio_clips) do
-        -- Ensure media is in pool
-        media_cache.ensure_audio_pooled(ac.media_path)
+        -- Ensure media is in pool and get media info
+        local media_info = media_cache.ensure_audio_pooled(ac.media_path)
 
-        -- ALL clips play at SEQUENCE rate, not their native rate.
-        -- Source frames map 1:1 to timeline frames regardless of source fps.
-        -- A 24fps clip on a 30fps timeline plays back faster (24 frames in 24/30 sec).
-
-        -- All coords are integer frames
+        -- All coords are integer frames/samples
         local timeline_start_frames = ac.clip.timeline_start
         local source_in_frames = ac.clip.source_in
         local source_out_frames = ac.clip.source_out
+        local media_start_tc = media_info and media_info.start_tc or 0
         assert(type(timeline_start_frames) == "number", "playback_controller: timeline_start must be integer")
         assert(type(source_in_frames) == "number", "playback_controller: source_in must be integer")
         assert(type(source_out_frames) == "number", "playback_controller: source_out must be integer")
 
         local clip_duration_frames = source_out_frames - source_in_frames
 
-        -- Timeline start in microseconds (using sequence fps)
+        -- Derive seek frame: absolute TC → relative to file start
+        -- DRP stores source_in as absolute timecode (e.g., 86400 frames = 01:00:00:00 @ 24fps)
+        -- media_start_tc is the embedded timecode (from stream->start_time)
+        local seek_frame = source_in_frames - media_start_tc
+        if seek_frame < 0 then
+            logger.warn("playback_controller", string.format(
+                "clip %s source_in (%d) before media start_tc (%d), clamping to 0",
+                ac.clip.id:sub(1,8), source_in_frames, media_start_tc))
+            seek_frame = 0
+        end
+
+        -- CLIP rate for source coords
+        -- Native JVE clips: fps_numerator/fps_denominator is timeline fps (e.g. 24/1)
+        -- DRP audio clips: fps_numerator = sample_rate, fps_denominator = 1 (e.g. 48000/1)
+        local clip_fps_num = ac.clip.rate and ac.clip.rate.fps_numerator or M.fps_num
+        local clip_fps_den = ac.clip.rate and ac.clip.rate.fps_denominator or M.fps_den
+
+        -- Timeline start in microseconds (using SEQUENCE fps)
         local timeline_start_us = math.floor(timeline_start_frames * 1000000 * M.fps_den / M.fps_num)
 
-        -- Convert source_in to microseconds using SEQUENCE fps (for audio decode offset)
-        local source_in_us = math.floor(source_in_frames * 1000000 * M.fps_den / M.fps_num)
+        -- Source coords in microseconds using CLIP rate
+        -- seek_frame and clip_duration_frames are in clip.rate units
+        local seek_us = math.floor(seek_frame * 1000000 * clip_fps_den / clip_fps_num)
+        local source_duration_us = math.floor(clip_duration_frames * 1000000 * clip_fps_den / clip_fps_num)
+        local source_end_us = seek_us + source_duration_us
 
-        -- source_offset = timeline_start - source_in (both in sequence time)
-        local source_offset_us = timeline_start_us - source_in_us
+        -- Validate source positions don't exceed media duration
+        local media_duration_us = media_info and media_info.duration_us or 0
+        if media_duration_us > 0 and source_end_us > media_duration_us + 1000 then
+            logger.warn("playback_controller", string.format(
+                "clip %s source_end (%.3fs) exceeds media duration (%.3fs) for '%s'",
+                ac.clip.id:sub(1,8), source_end_us / 1000000, media_duration_us / 1000000, ac.media_path))
+        end
+
+        -- source_offset relates timeline time to source time (both in microseconds)
+        local source_offset_us = timeline_start_us - seek_us
 
         -- Effective volume respects solo/mute
         local effective_volume
@@ -307,25 +342,25 @@ resolve_and_set_audio_sources = function(timeline_frame)
             effective_volume = ac.track.muted and 0 or ac.track.volume
         end
 
-        -- Clip duration in microseconds using SEQUENCE fps
-        local clip_duration_us = math.floor(clip_duration_frames * 1000000 * M.fps_den / M.fps_num)
+        -- Timeline duration uses CLIP rate (source_out - source_in is in clip units)
+        -- For audio clips: samples at 48000Hz. For video clips: frames at timeline fps.
+        local timeline_duration_us = math.floor(clip_duration_frames * 1000000 * clip_fps_den / clip_fps_num)
+        local clip_end_us = timeline_start_us + timeline_duration_us
 
-        -- EXPLICIT BOUNDARY: clip_end in timeline microseconds
-        local clip_end_us = timeline_start_us + clip_duration_us
-
-        -- Debug: show calculation with sequence fps
+        -- Debug: show seek derivation
         logger.debug("playback_controller", string.format(
-            "Audio clip %s: tl_start=%d frames, src_in=%d, src_out=%d, duration=%d frames @ seq %d/%d fps → clip_end=%.3fs",
+            "Audio clip %s: tl_start=%d, src_in=%d, media_start_tc=%d → seek=%d @ %d/%d, duration=%d → tl_end=%.3fs",
             ac.clip.id:sub(1,8),
-            timeline_start_frames, source_in_frames, source_out_frames,
-            clip_duration_frames, M.fps_num, M.fps_den, clip_end_us / 1000000))
+            timeline_start_frames, source_in_frames, media_start_tc, seek_frame,
+            clip_fps_num, clip_fps_den, clip_duration_frames, clip_end_us / 1000000))
 
         sources[#sources + 1] = {
             path = ac.media_path,
             source_offset_us = source_offset_us,
             volume = effective_volume,
-            duration_us = clip_duration_us,
-            clip_end_us = clip_end_us,  -- Explicit boundary from engine
+            duration_us = source_duration_us,  -- SOURCE duration (in clip rate)
+            clip_start_us = timeline_start_us,  -- TIMELINE start (for forward entry clamping)
+            clip_end_us = clip_end_us,  -- TIMELINE end (for reverse entry clamping)
         }
     end
 
@@ -558,10 +593,8 @@ function M.stop()
 
     stop_audio()
 
-    -- Stop prefetch thread — set_playhead with direction=0 triggers READER_STOP_PREFETCH
-    if not M.timeline_mode and media_cache.is_loaded() then
-        media_cache.set_playhead(math.floor(M.get_position()), 0, 0)
-    end
+    -- Stop all prefetch threads (both source and timeline mode)
+    media_cache.stop_all_prefetch()
 
     -- Park mode: only BGRA-convert the target frame, skip intermediates
     qt_constants.EMP.SET_DECODE_MODE("park")
@@ -956,5 +989,11 @@ function M._schedule_tick()
         M._tick()
     end)
 end
+
+--------------------------------------------------------------------------------
+-- Register for project_changed signal (stop playback first, priority 10)
+--------------------------------------------------------------------------------
+local Signals = require("core.signals")
+Signals.connect("project_changed", M.on_project_change, 10)
 
 return M

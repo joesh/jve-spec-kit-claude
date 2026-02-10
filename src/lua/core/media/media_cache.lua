@@ -425,6 +425,23 @@ function M.cleanup()
     logger.debug("media_cache", "Cleaned up all pooled readers")
 end
 
+--- Clear state that shouldn't persist across projects
+function M.on_project_change()
+    M.cleanup()
+end
+
+--- Stop all prefetch threads (without closing readers).
+-- Called when playback stops to prevent runaway prefetch loops.
+function M.stop_all_prefetch()
+    for path, entry in pairs(M.reader_pool) do
+        if entry.video_reader then
+            qt_constants.EMP.READER_STOP_PREFETCH(entry.video_reader)
+        end
+    end
+    M.last_prefetch_direction = 0
+    logger.debug("media_cache", "Stopped all prefetch threads")
+end
+
 --------------------------------------------------------------------------------
 -- Audio Pool Access (multi-track, does NOT change active_path)
 --------------------------------------------------------------------------------
@@ -482,25 +499,28 @@ function M.get_audio_pcm_for_path(file_path, start_us, end_us, out_sample_rate)
         cache.pcm = nil
     end
 
-    -- Convert time to frames for EMP API
-    local us_per_frame = (entry.info.fps_den * 1000000) / entry.info.fps_num
-    local frame_start = math.floor(start_us / us_per_frame)
-    local frame_end = math.ceil(end_us / us_per_frame)
+    -- Convert time to samples using AUDIO sample rate (not video fps).
+    -- For A/V files, fps_num is video fps, but we're decoding audio.
+    -- Always use audio_sample_rate as the timebase for audio decode.
+    local audio_rate = entry.info.audio_sample_rate
+    local us_per_sample = 1000000 / audio_rate
+    local sample_start = math.floor(start_us / us_per_sample)
+    local sample_end = math.ceil(end_us / us_per_sample)
 
     -- Decode audio range (resample to out_sample_rate if provided)
-    local decode_rate = out_sample_rate or entry.info.audio_sample_rate
+    local decode_rate = out_sample_rate or audio_rate
     local pcm, err = qt_constants.EMP.READER_DECODE_AUDIO_RANGE(
         entry.audio_reader,
-        frame_start,
-        frame_end,
-        entry.info.fps_num,
-        entry.info.fps_den,
+        sample_start,
+        sample_end,
+        audio_rate,  -- Always interpret as samples, not video frames
+        1,
         decode_rate,
         entry.info.audio_channels
     )
     assert(pcm, string.format(
         "media_cache.get_audio_pcm_for_path: READER_DECODE_AUDIO_RANGE failed [%d-%d] for '%s': %s",
-        frame_start, frame_end, file_path, err and err.msg or "unknown error"))
+        sample_start, sample_end, file_path, err and err.msg or "unknown error"))
 
     -- Cache the result in per-entry cache
     local info = qt_constants.EMP.PCM_INFO(pcm)
@@ -660,25 +680,27 @@ function M.get_audio_pcm(start_us, end_us, out_sample_rate)
         M.audio_cache.pcm = nil
     end
 
-    -- Convert time to frames for EMP API
-    local us_per_frame = (entry.info.fps_den * 1000000) / entry.info.fps_num
-    local frame_start = math.floor(start_us / us_per_frame)
-    local frame_end = math.ceil(end_us / us_per_frame)
+    -- Convert time to samples using AUDIO sample rate (not video fps).
+    -- For A/V files, fps_num is video fps, but we're decoding audio.
+    local audio_rate = entry.info.audio_sample_rate
+    local us_per_sample = 1000000 / audio_rate
+    local sample_start = math.floor(start_us / us_per_sample)
+    local sample_end = math.ceil(end_us / us_per_sample)
 
     -- Decode audio range (resample to out_sample_rate if provided)
-    local decode_rate = out_sample_rate or entry.info.audio_sample_rate
+    local decode_rate = out_sample_rate or audio_rate
     local pcm, err = qt_constants.EMP.READER_DECODE_AUDIO_RANGE(
         entry.audio_reader,
-        frame_start,
-        frame_end,
-        entry.info.fps_num,
-        entry.info.fps_den,
+        sample_start,
+        sample_end,
+        audio_rate,  -- Always interpret as samples, not video frames
+        1,
         decode_rate,
         entry.info.audio_channels
     )
     assert(pcm, string.format(
         "media_cache.get_audio_pcm: READER_DECODE_AUDIO_RANGE failed [%d-%d]: %s",
-        frame_start, frame_end, err and err.msg or "unknown error"))
+        sample_start, sample_end, err and err.msg or "unknown error"))
 
     -- Cache the result
     local info = qt_constants.EMP.PCM_INFO(pcm)
@@ -755,5 +777,11 @@ function M.set_playhead(frame_idx, direction, speed)
     -- Update cache center
     M.video_cache.center_idx = frame_idx
 end
+
+--------------------------------------------------------------------------------
+-- Register for project_changed signal (priority 20: after playback stops)
+--------------------------------------------------------------------------------
+local Signals = require("core.signals")
+Signals.connect("project_changed", M.on_project_change, 20)
 
 return M

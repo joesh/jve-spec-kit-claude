@@ -126,6 +126,46 @@ local function get_min_clip_end_us()
     return min_end
 end
 
+--- Clamp time to source boundaries based on playback direction.
+-- When entering a clip from the right (reverse), clamp to clip_end.
+-- When entering from the left (forward), clamp to clip_start.
+-- @param time_us number: time to clamp
+-- @param sources table: list of audio sources
+-- @param speed number: signed speed (negative = reverse)
+-- @return number: clamped time
+local function clamp_to_source_boundaries(time_us, sources, speed)
+    if #sources == 0 then return time_us end
+
+    -- Compute the intersection of all clip boundaries
+    local max_start = 0
+    local min_end = M.max_media_time_us
+    for _, src in ipairs(sources) do
+        if src.clip_start_us and src.clip_start_us > max_start then
+            max_start = src.clip_start_us
+        end
+        if src.clip_end_us and src.clip_end_us < min_end then
+            min_end = src.clip_end_us
+        end
+    end
+
+    -- Clamp based on direction
+    if speed < 0 and time_us > min_end then
+        -- Reverse playback entering clip from right edge
+        logger.debug("audio_playback", string.format(
+            "Clamping restart time from %.3fs to clip_end %.3fs (reverse entry)",
+            time_us / 1000000, min_end / 1000000))
+        return min_end
+    elseif speed > 0 and time_us < max_start then
+        -- Forward playback entering clip from left edge
+        logger.debug("audio_playback", string.format(
+            "Clamping restart time from %.3fs to clip_start %.3fs (forward entry)",
+            time_us / 1000000, max_start / 1000000))
+        return max_start
+    end
+
+    return time_us
+end
+
 --- Trim frames to not exceed clip boundary.
 -- The decoder may return more frames than requested (AAC packet alignment).
 -- @param pb_actual_start number: playback start time in us
@@ -433,6 +473,11 @@ function M.set_audio_sources(sources, cache, restart_time_us)
         qt_constants.SSE.RESET(M.sse)
 
         if was_playing and M.has_audio then
+            -- Clamp restart time to new source boundaries before reanchoring.
+            -- Fixes: when entering a clip from the right edge (reverse playback),
+            -- the old restart_time may be past the new clip's end boundary.
+            M.media_time_us = clamp_to_source_boundaries(M.media_time_us, sources, M.speed)
+
             -- Restart playback with new sources
             reanchor(M.media_time_us, M.speed, M.quality_mode)
             M._ensure_pcm_cache()
@@ -955,7 +1000,10 @@ function M._ensure_pcm_cache()
         -- Single-source fast path (most common: source mode, or timeline with 1 audio clip)
         local src = M.audio_sources[1]
         local src_start = math.max(0, pb_start - src.source_offset_us)
-        local src_end = math.min(src.duration_us, pb_end - src.source_offset_us)
+        -- Compute source end from clip_end_us (timeline boundary) and source_offset_us
+        -- This correctly handles clips with source_in > 0
+        local source_end_us = src.clip_end_us - src.source_offset_us
+        local src_end = math.min(source_end_us, pb_end - src.source_offset_us)
 
         if src_end <= src_start then
             -- Source has no data in this range
@@ -1011,7 +1059,9 @@ function M._ensure_pcm_cache()
         for _, src in ipairs(M.audio_sources) do
             -- Convert playback range → source range
             local src_start = math.max(0, pb_start - src.source_offset_us)
-            local src_end = math.min(src.duration_us, pb_end - src.source_offset_us)
+            -- Compute source end from clip_end_us (timeline boundary) and source_offset_us
+            local source_end_us = src.clip_end_us - src.source_offset_us
+            local src_end = math.min(source_end_us, pb_end - src.source_offset_us)
             if src_end <= src_start then goto continue end
 
             local pcm_ptr, frames, actual_start = M.media_cache_ref.get_audio_pcm_for_path(
