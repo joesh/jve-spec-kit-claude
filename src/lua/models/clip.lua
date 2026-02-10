@@ -540,4 +540,57 @@ function M.find_at_time(track_id, time_frames)
     return M.load(clip_id)
 end
 
+--- Get sequences where a master clip is used (has timeline clips)
+-- @param master_clip_id string: The master clip ID to check
+-- @return table: Array of {sequence_id, sequence_name, clip_count} for each affected sequence
+function M.get_master_clip_usage(master_clip_id)
+    assert(master_clip_id and master_clip_id ~= "", "Clip.get_master_clip_usage: missing master_clip_id")
+
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        logger.warn("clip", "Clip.get_master_clip_usage: No database connection available")
+        return {}
+    end
+
+    -- Get the master clip's source sequence (to exclude it from results)
+    local master = M.load_optional(master_clip_id)
+    local source_seq_id = master and master.source_sequence_id or ""
+
+    -- Find all sequences that have timeline clips referencing this master clip
+    local query = db:prepare([[
+        SELECT s.id, s.name, COUNT(c.id) as clip_count
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        JOIN sequences s ON t.sequence_id = s.id
+        WHERE c.parent_clip_id = ?
+          AND c.clip_kind = 'timeline'
+          AND (c.owner_sequence_id IS NULL OR c.owner_sequence_id <> ?)
+        GROUP BY s.id, s.name
+        ORDER BY s.name
+    ]])
+
+    if not query then
+        logger.warn("clip", "Clip.get_master_clip_usage: Failed to prepare query")
+        return {}
+    end
+
+    query:bind_value(1, master_clip_id)
+    query:bind_value(2, source_seq_id)
+
+    local results = {}
+    if query:exec() then
+        while query:next() do
+            table.insert(results, {
+                sequence_id = query:value(0),
+                sequence_name = query:value(1),
+                clip_count = query:value(2),
+            })
+        end
+    end
+    query:finalize()
+
+    return results
+end
+
 return M
