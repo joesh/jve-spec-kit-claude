@@ -917,6 +917,13 @@ function M._tick()
             resolve_and_set_audio_sources(result.frame_idx)
         end
 
+        -- If audio sources appeared but audio isn't playing (e.g., entering clip
+        -- from gap), start it now. set_audio_sources only restarts if was_playing,
+        -- which is false when entering from a gap (no sources → not playing).
+        if audio_playback and audio_playback.has_audio and not audio_playback.playing then
+            start_audio()
+        end
+
         if result.continue then
             -- Ordering invariant: resolve already done inside tick → now commit position → sync
             M.set_position(result.new_pos)
