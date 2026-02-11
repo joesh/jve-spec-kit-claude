@@ -2,7 +2,7 @@
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
@@ -350,6 +350,10 @@ assert(base_media:save(db), "failed to save base media")
 local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", file_name = "new.mov", duration = 30, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
 assert(new_media:save(db), "failed to save new media")
 
+-- Create masterclip sequence for the new media (required for Insert)
+local split_master_clip_id = test_env.create_test_masterclip_sequence(
+    'project', 'Split New Master', 30, 1, 30, 'media_split_new')
+
 local base_clip = Clip.create("Base Split", "media_split_base", {
     track_id = "track_v3",
     project_id = "project",
@@ -365,7 +369,7 @@ local base_clip = Clip.create("Base Split", "media_split_base", {
 assert(base_clip:save(db), "failed saving base clip for split test")
 
 local insert_split = Command.create("Insert", "project")
-insert_split:set_parameter("media_id", "media_split_new")
+insert_split:set_parameter("master_clip_id", split_master_clip_id)
 insert_split:set_parameter("track_id", "track_v3")
 insert_split:set_parameter("insert_time", 60) -- 2000ms
 insert_split:set_parameter("duration", 30) -- 1000ms

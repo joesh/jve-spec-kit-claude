@@ -4,7 +4,7 @@
 -- and the head of the second clip when overwriting across their boundary.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
@@ -54,6 +54,10 @@ local media = Media.create({
 })
 media:save(db)
 
+-- Create masterclip sequence for this media (required for Overwrite)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    "project", "Media 1 Master", 24, 1, 1000, "media_1")
+
 -- Create Clip A (0-100 frames)
 local clip_a = Clip.create("Clip A", "media_1", {
     project_id = "project",
@@ -92,7 +96,7 @@ print("Created Clip A (0-100) and Clip B (100-200)")
 -- New Clip C inserted at 50-150.
 
 local cmd = Command.create("Overwrite", "project")
-cmd:set_parameter("media_id", "media_1")
+cmd:set_parameter("master_clip_id", master_clip_id)
 cmd:set_parameter("track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("overwrite_time", 50)

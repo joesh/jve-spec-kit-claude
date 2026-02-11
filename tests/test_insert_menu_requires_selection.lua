@@ -8,7 +8,7 @@
 -- without: duration param, source_out param, or master_clip_id with duration.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require("test_env")
+local test_env = require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
@@ -44,6 +44,10 @@ db:exec(string.format([[
 
 command_manager.init("sequence", "project")
 
+-- Create masterclip sequence for the media (required for Insert)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    'project', 'Valid Media Master', 30, 1, 300, 'media_valid')
+
 -- Register Insert command
 local insert_cmd = require("core.commands.insert")
 local ret = insert_cmd.register({}, {}, db, command_manager.set_last_error)
@@ -51,14 +55,15 @@ command_manager.register_executor("Insert", ret.executor, ret.undoer)
 
 print("\n=== Insert with media_id but no duration/source_out ===")
 
--- Simulate menu dispatch: media_id is known but no duration info provided.
+-- Simulate menu dispatch: master_clip_id is known but no duration info provided.
 -- This happens when user clicks Insert without setting in/out marks.
+-- Insert should infer duration from the masterclip's stream clips.
 local cmd = Command.create("Insert", "project")
 cmd:set_parameter("project_id", "project")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("track_id", "track_v1")
-cmd:set_parameter("media_id", "media_valid")
--- NOTE: no duration, source_in, source_out, or master_clip_id provided
+cmd:set_parameter("master_clip_id", master_clip_id)
+-- NOTE: no duration, source_in, source_out provided - should infer from masterclip
 
 command_manager.begin_command_event("script")
 local result = command_manager.execute(cmd)
@@ -77,4 +82,4 @@ if not result.success then
     os.exit(1)
 end
 
-print("Test passed: Insert uses media duration when no explicit duration provided")
+print("Test passed: Insert uses masterclip stream duration when no explicit duration provided")

@@ -590,6 +590,10 @@ assert(#video_tracks >= 2, "Importer should provide at least two video tracks")
 local media_ids = fetch_media_ids(1)
 assert(#media_ids >= 1, "Importer should provide media rows for insert operations")
 
+-- Create masterclip sequence for the media (required for Insert after IS-a refactor)
+local insert_master_clip_id = test_env.create_test_masterclip_sequence(
+    'default_project', 'Test Insert Master', 30, 1, 10000, media_ids[1])
+
 -- Simulate additional editing commands to mirror real-world history.
 local clip_for_move = fetch_single_clip_id()
 
@@ -620,7 +624,7 @@ toggle_cmd:set_parameter("clip_ids", {clip_for_move})
 assert(command_manager.execute(toggle_cmd).success, "ToggleClipEnabled should succeed for regression setup")
 
 local insert_cmd = Command.create("Insert", "default_project")
-insert_cmd:set_parameter("media_id", media_ids[1])
+insert_cmd:set_parameter("master_clip_id", insert_master_clip_id)
 insert_cmd:set_parameter("track_id", video_tracks[1])
 insert_cmd:set_parameter("insert_time", 800000)  -- far enough to avoid collisions
 insert_cmd:set_parameter("duration", 1000)

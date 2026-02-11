@@ -9,7 +9,7 @@
 -- Fix: Update mutations now include fps info, and clip_state.apply_mutations
 -- applies fps to the clip before using it for source bounds.
 
-require("test_env")
+local test_env = require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
@@ -65,6 +65,10 @@ end
 
 local db = setup_database("/tmp/jve/test_undo_mutations_fps.db")
 
+-- Create masterclip sequence for the media (required for Overwrite)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    'default_project', 'Test Media Master', 30, 1, 3000, 'media1')
+
 -- Helper: execute command with proper event wrapping
 local function execute_command(cmd)
     command_manager.begin_command_event("script")
@@ -100,7 +104,7 @@ end
 local overwrite_cmd = Command.create("Overwrite", "default_project")
 overwrite_cmd:set_parameter("sequence_id", "seq1")
 overwrite_cmd:set_parameter("track_id", "v1")
-overwrite_cmd:set_parameter("media_id", "media1")
+overwrite_cmd:set_parameter("master_clip_id", master_clip_id)
 overwrite_cmd:set_parameter("overwrite_time", 100)  -- Start at frame 100
 overwrite_cmd:set_parameter("duration", 50)         -- 50 frames
 overwrite_cmd:set_parameter("source_in", 500)       -- Different source range

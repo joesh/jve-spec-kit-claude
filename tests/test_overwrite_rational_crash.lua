@@ -3,7 +3,7 @@
 -- Reproduces "compare number with table" in clip_mutator during Overwrite
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
@@ -71,6 +71,10 @@ local media = Media.create({
 })
 media:save(db)
 
+-- Create masterclip sequence for this media (required for Overwrite)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    "project", "Media 1 Master", 24, 1, 240, "media_1")
+
 -- Create Existing Clip (0-100 frames)
 local clip_existing = Clip.create("Existing", "media_1", {
     project_id = "project",
@@ -91,7 +95,7 @@ print("Created existing clip at 0-100 frames")
 -- Execute Overwrite (Overlap 50-150)
 -- This triggers clip_mutator to resolve occlusion (trim existing clip)
 local cmd = Command.create("Overwrite", "project")
-cmd:set_parameter("media_id", "media_1")
+cmd:set_parameter("master_clip_id", master_clip_id)
 cmd:set_parameter("track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 -- Rationals

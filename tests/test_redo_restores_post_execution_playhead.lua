@@ -6,7 +6,7 @@
 -- This test verifies that playhead_value_post is captured and restored on redo,
 -- independent of the executor's advance_playhead behavior.
 
-require("test_env")
+local test_env = require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
@@ -99,6 +99,11 @@ local function teardown_mock_timeline_state()
 end
 
 local db = setup_database("/tmp/jve/test_redo_playhead.db")
+
+-- Create masterclip sequence for the media (required for Insert)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    'default_project', 'Test Media Master', 30, 1, 3000, 'media1')
+
 local mock_timeline = setup_mock_timeline_state()
 
 -- Helper: execute command with proper event wrapping
@@ -139,7 +144,7 @@ print(string.format("Initial playhead position: %s", tostring(playhead_position)
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("track_id", "v1")
-insert_cmd:set_parameter("media_id", "media1")
+insert_cmd:set_parameter("master_clip_id", master_clip_id)
 insert_cmd:set_parameter("insert_time", 0)
 insert_cmd:set_parameter("duration", 100)
 insert_cmd:set_parameter("source_in", 0)

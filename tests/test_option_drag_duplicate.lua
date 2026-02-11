@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
-require('test_env')
+local test_env = require('test_env')
 
 local json = require('dkjson')
 local database = require('core.database')
@@ -37,7 +37,12 @@ local function setup_database(path)
     assert(db:exec(SCHEMA_SQL))
     assert(db:exec(BASE_DATA_SQL))
     command_manager.init('default_sequence', 'default_project')
+    -- Clear masterclip cache for new database
+    masterclip_ids = {}
 end
+
+-- Table to store masterclip IDs by media_id
+local masterclip_ids = {}
 
 local function create_clip(params)
     local media = Media.create({
@@ -51,6 +56,11 @@ local function create_clip(params)
     assert(media)
     assert(media:save(db))
 
+    -- Create masterclip sequence for this media (required for Overwrite)
+    local master_clip_id = test_env.create_test_masterclip_sequence(
+        'default_project', params.media_id .. ' Master', 30, 1, params.duration_value, params.media_id)
+    masterclip_ids[params.media_id] = master_clip_id
+
     local Clip = require('models.clip')
     local clip = Clip.create(params.name or params.clip_id, params.media_id, {
         id = params.clip_id,
@@ -63,7 +73,8 @@ local function create_clip(params)
         source_out = params.source_out_value or params.duration_value or 0,
         fps_numerator = 30,
         fps_denominator = 1,
-        parent_clip_id = params.parent_clip_id
+        parent_clip_id = params.parent_clip_id,
+        master_clip_id = master_clip_id,
     })
     assert(clip and clip:save(db, {skip_occlusion = true}))
     return clip
@@ -76,12 +87,12 @@ create_clip({clip_id = 'clip_src', media_id = 'media_src', track_id = 'video1', 
 create_clip({clip_id = 'clip_tgt', media_id = 'media_tgt', track_id = 'video2', start_value = 3000, duration_value = 1000})
 
 local overwrite_cmd = Command.create('Overwrite', 'default_project')
-overwrite_cmd:set_parameter('media_id', 'media_src')
+overwrite_cmd:set_parameter('master_clip_id', masterclip_ids['media_src'])
 overwrite_cmd:set_parameter('track_id', 'video2')
 overwrite_cmd:set_parameter('overwrite_time', 1000)
-overwrite_cmd:set_parameter('duration_value', 1000)
-overwrite_cmd:set_parameter('source_in_value', 0)
-overwrite_cmd:set_parameter('source_out_value', 1000)
+overwrite_cmd:set_parameter('duration', 1000)
+overwrite_cmd:set_parameter('source_in', 0)
+overwrite_cmd:set_parameter('source_out', 1000)
 overwrite_cmd:set_parameter('project_id', 'default_project')
 overwrite_cmd:set_parameter('sequence_id', 'default_sequence')
 overwrite_cmd:set_parameter('advance_playhead', false)
@@ -117,13 +128,12 @@ local command_specs = {
     {
         command_type = "Overwrite",
         parameters = {
-            media_id = 'media_src_a',
             track_id = 'video2',
             overwrite_time = 500,
-            duration_value = 1000,
-            source_in_value = 0,
-            source_out_value = 1000,
-            master_clip_id = 'clip_src_a',
+            duration = 1000,
+            source_in = 0,
+            source_out = 1000,
+            master_clip_id = masterclip_ids['media_src_a'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
             advance_playhead = false,
@@ -132,13 +142,12 @@ local command_specs = {
     {
         command_type = "Overwrite",
         parameters = {
-            media_id = 'media_src_b',
             track_id = 'video2',
             overwrite_time = 3200,
-            duration_value = 1200,
-            source_in_value = 0,
-            source_out_value = 1200,
-            master_clip_id = 'clip_src_b',
+            duration = 1200,
+            source_in = 0,
+            source_out = 1200,
+            master_clip_id = masterclip_ids['media_src_b'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
             advance_playhead = false,

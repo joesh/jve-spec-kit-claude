@@ -2,7 +2,7 @@
 
 package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;../tests/?.lua"
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -78,6 +78,9 @@ media_cmd:set_parameter("frame_rate", 30)
 local media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
+-- Create masterclip sequence for the media (required for Insert)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    'default_project', 'Media Src Master', 30, 1, 10000000, 'media_src')
 
 local function exec(cmd)
     local result = command_manager.execute(cmd)
@@ -86,7 +89,7 @@ local function exec(cmd)
 end
 
 local function clip_count()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'")
     assert(stmt:exec(), "Failed to count clips")
     assert(stmt:next(), "Count query produced no rows")
     local count = stmt:value(0)
@@ -95,7 +98,7 @@ local function clip_count()
 end
 
 local insert_cmd = Command.create("Insert", "default_project")
-insert_cmd:set_parameter("media_id", "media_src")
+insert_cmd:set_parameter("master_clip_id", master_clip_id)
 insert_cmd:set_parameter("track_id", "track_default_v1")
 insert_cmd:set_parameter("insert_time", 0)
 insert_cmd:set_parameter("duration", 4543560)
@@ -138,7 +141,7 @@ local function snapshot_clips()
     local stmt = db:prepare([[
         SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips
-        WHERE clip_kind = 'timeline'
+        WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
         ORDER BY track_id, timeline_start_frame
     ]])
     assert(stmt:exec(), "Failed to fetch clips for snapshot")
@@ -207,9 +210,13 @@ media_cmd:set_parameter("frame_rate", 30)
 media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
+-- Create masterclip sequence for the media (required for Insert)
+master_clip_id = test_env.create_test_masterclip_sequence(
+    'default_project', 'Media Src Master', 30, 1, 10000000, 'media_src')
+
 local function insert_clip(start_value, duration, source_in)
     local cmd = Command.create("Insert", "default_project")
-    cmd:set_parameter("media_id", "media_src")
+    cmd:set_parameter("master_clip_id", master_clip_id)
     cmd:set_parameter("track_id", "track_default_v1")
     cmd:set_parameter("insert_time", start_value)
     cmd:set_parameter("duration", duration)
@@ -223,7 +230,7 @@ local function fetch_clips_ordered()
     local stmt = db:prepare([[
         SELECT id, timeline_start_frame, duration_frames
         FROM clips
-        WHERE clip_kind = 'timeline'
+        WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
         ORDER BY timeline_start_frame
     ]])
     assert(stmt:exec(), "Failed to fetch clip ordering")

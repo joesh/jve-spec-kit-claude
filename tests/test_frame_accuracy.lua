@@ -2,6 +2,7 @@
 
 -- Adjust package path to find the libraries if running from project root
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua;src/?.lua"
+local test_env = require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
@@ -130,6 +131,10 @@ local function test_split_clip_command_func()
     media:save(db)
     assert_not_nil(media.id, "Media ID should not be nil")
 
+    -- Create masterclip sequence for this media (required for Insert)
+    local master_clip_id = test_env.create_test_masterclip_sequence(
+        project.id, "Split Media Master", 24, 1, 240, media.id)
+
     -- Insert an initial clip: 10 seconds (240 frames) from media start
     local initial_clip_duration_frames = 240
     local insert_command_data = {
@@ -139,7 +144,7 @@ local function test_split_clip_command_func()
             project_id = project.id,
             sequence_id = sequence.id,
             track_id = track.id,
-            media_id = media.id,
+            master_clip_id = master_clip_id,
             insert_time = 0,
             duration = initial_clip_duration_frames,
             source_in = 0,

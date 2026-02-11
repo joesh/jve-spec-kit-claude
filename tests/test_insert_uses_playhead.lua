@@ -4,7 +4,7 @@
 -- Bug: insert_time had default=0 in SPEC, so it was never nil, and playhead was never consulted
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
@@ -59,6 +59,10 @@ local media = Media.create({
     fps_denominator = 1
 })
 media:save(db)
+
+-- Create masterclip sequence for this media (required for Insert)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    "project", "Video Master", 30, 1, 100, "media_video")
 
 -- Mock timeline_state to provide playhead position
 local mock_playhead = 150  -- Playhead at frame 150
@@ -141,7 +145,7 @@ print("Test: Insert without insert_time uses playhead position")
 
 -- NOTE: insert_time is NOT provided - should use playhead (frame 150)
 local result = execute_insert({
-    media_id = "media_video",
+    master_clip_id = master_clip_id,
     track_id = "track_v1",
     sequence_id = "sequence",
     project_id = "project",

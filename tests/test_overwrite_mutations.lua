@@ -6,7 +6,7 @@ package.path = package.path
     .. ";./?.lua"
     .. ";./?/init.lua"
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -109,6 +109,10 @@ local db = init_database(TEST_DB)
 command_manager.init("default_sequence", "default_project")
 command_manager.activate_timeline_stack("default_sequence")
 
+-- Create masterclip sequence for the media (required for Overwrite)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    'default_project', 'Stub Master', 30, 1, 2000, 'media_stub')
+
 local function reset_timeline_stub()
     timeline_state.reload_calls = 0
     timeline_state.applied_buckets = {}
@@ -125,11 +129,11 @@ reset_timeline_stub()
 local overwrite_cmd = Command.create("Overwrite", "default_project")
 overwrite_cmd:set_parameter("track_id", "track_v1")
 overwrite_cmd:set_parameter("sequence_id", "default_sequence")
-overwrite_cmd:set_parameter("media_id", "media_stub")
+overwrite_cmd:set_parameter("master_clip_id", master_clip_id)
 overwrite_cmd:set_parameter("overwrite_time", 400)
-overwrite_cmd:set_parameter("duration_value", 300)
-overwrite_cmd:set_parameter("source_in_value", 0)
-overwrite_cmd:set_parameter("source_out_value", 300)
+overwrite_cmd:set_parameter("duration", 300)
+overwrite_cmd:set_parameter("source_in", 0)
+overwrite_cmd:set_parameter("source_out", 300)
 
 local overwrite_result = command_manager.execute(overwrite_cmd)
 assert(overwrite_result.success, overwrite_result.error_message or "Overwrite execution failed")
@@ -153,7 +157,7 @@ assert(deleted_lookup[inserted_clip_id], "Undo Overwrite should delete the inser
 local stmt = db:prepare([[
     SELECT id, timeline_start_frame, duration_frames
     FROM clips
-    WHERE clip_kind = 'timeline'
+    WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
     ORDER BY timeline_start_frame
 ]])
 assert(stmt and stmt:exec(), "Failed to query clips after undo")

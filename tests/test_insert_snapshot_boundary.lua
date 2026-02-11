@@ -4,7 +4,7 @@
 -- that Insert commands work correctly when hitting a snapshot boundary.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require("test_env")
+local test_env = require("test_env")
 
 local database = require("core.database")
 local Command = require("command")
@@ -59,6 +59,10 @@ local media = Media.create({
 })
 assert(media:save(db), "Failed to save media_1")
 
+-- Create masterclip sequence for this media (required for Insert)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    "project", "Media 1 Master", 24, 1, 240, "media_1")
+
 -- Advance sequence numbering to just before the snapshot interval so the next command triggers it.
 local interval = snapshot_manager.SNAPSHOT_INTERVAL or 50
 for _ = 1, interval - 1 do
@@ -66,7 +70,7 @@ for _ = 1, interval - 1 do
 end
 
 local cmd = Command.create("Insert", "project")
-cmd:set_parameter("media_id", "media_1")
+cmd:set_parameter("master_clip_id", master_clip_id)
 cmd:set_parameter("track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("insert_time", 0)
