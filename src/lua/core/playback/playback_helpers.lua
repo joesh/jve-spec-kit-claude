@@ -11,8 +11,6 @@
 --
 -- @file playback_helpers.lua
 
-local logger = require("core.logger")
-
 local M = {}
 
 --------------------------------------------------------------------------------

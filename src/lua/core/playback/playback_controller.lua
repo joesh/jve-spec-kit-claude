@@ -32,8 +32,6 @@ local timeline_playback = require("core.playback.timeline_playback")
 local timeline_resolver = require("core.playback.timeline_resolver")
 local helpers = require("core.playback.playback_helpers")
 
-local SECONDS_PER_DAY = 86400
-
 local M = {
     state = "stopped",  -- "stopped" | "playing"
     direction = 0,      -- -1=reverse, 0=stopped, 1=forward
@@ -103,11 +101,12 @@ local resolve_and_set_audio_sources
 --- Get current frame position.
 -- In timeline mode, reads from timeline_state (Rational→int).
 -- In source mode, returns local _position.
+-- No clamping - user can position playhead anywhere on timeline.
 function M.get_position()
     if M.timeline_mode and timeline_state_ref then
         local frame = timeline_state_ref.get_playhead_position()
         assert(type(frame) == "number", "playback_controller: playhead must be integer")
-        return helpers.frame_clamped(frame, M.total_frames)
+        return frame
     end
     return M._position
 end
@@ -432,6 +431,16 @@ local function stop_audio()
     helpers.stop_audio(audio_playback)
 end
 
+--- Get content end frame dynamically from clip_state (timeline mode only)
+-- Returns 0 for empty timeline (no clips)
+local function get_content_end_frame()
+    local ok, clip_state = pcall(require, "ui.timeline.state.clip_state")
+    if ok and clip_state and clip_state.get_content_end_frame then
+        return clip_state.get_content_end_frame() or 0
+    end
+    return 0
+end
+
 --------------------------------------------------------------------------------
 -- Source Configuration
 --------------------------------------------------------------------------------
@@ -608,6 +617,21 @@ function M.play()
         return
     end
 
+    -- In timeline mode, refuse to play if at last frame or beyond (nothing to play forward)
+    if M.timeline_mode then
+        local content_end = get_content_end_frame()
+        local pos = math.floor(M.get_position())
+        logger.debug("playback_controller", string.format(
+            "Play check: pos=%d, content_end=%d, timeline_mode=%s",
+            pos, content_end, tostring(M.timeline_mode)))
+        -- content_end is exclusive (frame count), so last playable frame is content_end - 1
+        -- At last frame, there's nothing ahead to play
+        if content_end > 0 and pos >= content_end - 1 then
+            logger.debug("playback_controller", "Play refused: at or beyond last frame")
+            return
+        end
+    end
+
     M.direction = 1
     M.speed = 1
     M.state = "playing"
@@ -664,20 +688,12 @@ function M.set_timeline_mode(enabled, sequence_id, sequence_info)
             string.format("playback_controller.set_timeline_mode: fps_num must be > 0 for sequence %s, got %s", sequence_id, tostring(fps_num)))
         assert(fps_den and fps_den > 0,
             string.format("playback_controller.set_timeline_mode: fps_den must be > 0 for sequence %s, got %s", sequence_id, tostring(fps_den)))
-        -- Query actual content end from clip_state; fall back to scrub limit for empty timelines
+        -- Content end is queried dynamically in _tick(); set initial value from clip_state
         if not total_frames then
-            local ok, clip_state = pcall(require, "ui.timeline.state.clip_state")
-            if ok and clip_state and clip_state.get_content_end_frame then
-                local content_end = clip_state.get_content_end_frame()
-                if content_end and content_end > 0 then
-                    total_frames = content_end
-                end
-            end
+            total_frames = get_content_end_frame()
         end
-        if not total_frames then
-            total_frames = math.floor(SECONDS_PER_DAY * fps_num / fps_den)
-        end
-        M.set_source(total_frames, fps_num, fps_den)
+        -- Minimum 1 frame for set_source (boundary check uses dynamic value)
+        M.set_source(math.max(1, total_frames), fps_num, fps_den)
 
         -- Set audio max time for timeline mode
         if audio_playback and audio_playback.session_initialized then
@@ -706,8 +722,8 @@ function M.seek_to_frame(frame)
     assert(M.fps_num and M.fps_den,
         "playback_controller.seek_to_frame: fps not set (call set_source first)")
 
-    local frame_idx = helpers.frame_clamped(frame, M.total_frames)
-    M.seek(frame_idx)
+    -- No clamping - user can seek anywhere on timeline
+    M.seek(math.floor(frame))
 end
 
 
@@ -736,13 +752,13 @@ function M.seek(frame_idx)
     assert(frame_idx, "playback_controller.seek: frame_idx is nil")
     assert(frame_idx >= 0, "playback_controller.seek: frame_idx must be >= 0")
 
-    local clamped = math.min(frame_idx, M.total_frames - 1)
-    local clamped_int = math.floor(clamped)
+    -- No clamping - user can seek anywhere on timeline (beyond content shows gap)
+    local frame = math.floor(frame_idx)
 
     -- Skip redundant decode when stopped and already displaying this frame.
     -- Prevents double-decode when keyboard handler seeks directly and the
     -- debounced viewer listener fires again for the same position.
-    if M.state ~= "playing" and clamped_int == M._last_committed_frame then
+    if M.state ~= "playing" and frame == M._last_committed_frame then
         return
     end
 
@@ -750,9 +766,9 @@ function M.seek(frame_idx)
 
     -- Silent: in timeline mode, the caller already set
     -- timeline_state.playhead_position; in source mode, no listeners to fire.
-    M.set_position_silent(clamped)
-    M._last_committed_frame = clamped_int
-    M._last_tick_frame = clamped_int
+    M.set_position_silent(frame)
+    M._last_committed_frame = frame
+    M._last_tick_frame = frame
 
     -- If playing, stop audio first to flush hardware buffer.
     -- Without this, get_time_us() returns stale time on the next tick
@@ -767,21 +783,21 @@ function M.seek(frame_idx)
         if viewer_panel then
             M.current_clip_id = timeline_playback.resolve_and_display(
                 M.fps_num, M.fps_den, M.sequence_id, M.current_clip_id,
-                nil, nil, viewer_panel, nil, math.floor(clamped))
+                nil, nil, viewer_panel, nil, frame)
 
             -- Resolve audio independently (video clip switch doesn't affect audio)
-            resolve_and_set_audio_sources(math.floor(clamped))
+            resolve_and_set_audio_sources(frame)
         end
     else
         -- Source mode: direct frame display
         if viewer_panel then
-            viewer_panel.show_frame(math.floor(clamped))
+            viewer_panel.show_frame(frame)
         end
 
         -- Sync source viewer state (mark bar playhead) on seek
         local svs = require("ui.source_viewer_state")
         if svs.has_clip() then
-            svs.set_playhead(math.floor(clamped))
+            svs.set_playhead(frame)
         end
     end
 
@@ -790,13 +806,13 @@ function M.seek(frame_idx)
         start_audio()
     else
         -- Parked: just seek audio for scrub
-        local time_us = calc_time_us_from_frame(clamped)
+        local time_us = calc_time_us_from_frame(frame)
         if audio_playback and audio_playback.is_ready() then
             audio_playback.seek(time_us)
         end
     end
 
-    logger.debug("playback_controller", string.format("Seek to frame %d", math.floor(clamped)))
+    logger.debug("playback_controller", string.format("Seek to frame %d", frame))
 end
 
 --------------------------------------------------------------------------------
@@ -888,13 +904,19 @@ function M._tick()
         end
 
         -- Timeline mode: build tick_in, call tick, own the ordering
+        -- Query content end dynamically (clips may be added/removed during playback)
+        -- Fall back to cached total_frames if clip_state not populated (e.g., tests)
+        local content_end = get_content_end_frame()
+        if content_end <= 0 then
+            content_end = M.total_frames
+        end
         local tick_in = {
             pos = current_pos,
             direction = M.direction,
             speed = M.speed,
             fps_num = M.fps_num,
             fps_den = M.fps_den,
-            total_frames = M.total_frames,
+            total_frames = content_end,
             sequence_id = M.sequence_id,
             current_clip_id = M.current_clip_id,
         }

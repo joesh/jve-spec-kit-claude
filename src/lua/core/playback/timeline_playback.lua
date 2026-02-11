@@ -149,18 +149,38 @@ function M.tick(tick_in, audio_playback, viewer_panel)
     assert_tick_in(tick_in)
 
     -- Frame advancement: video ALWAYS follows audio when audio is active (Rule V1)
+    -- Exceptions that switch to frame-based timing:
+    --   1. No audio sources at current position (gap, J-cut)
+    --   2. Audio has reached clip boundary (exhausted, no more PCM)
     local pos
-    if audio_playback and audio_playback.is_ready() and audio_playback.playing then
+    local audio_can_drive = audio_playback and audio_playback.is_ready()
+        and audio_playback.playing and audio_playback.has_audio
+    local audio_exhausted = audio_can_drive and audio_playback.is_at_clip_boundary
+        and audio_playback.is_at_clip_boundary()
+    if audio_can_drive and not audio_exhausted then
         -- AUDIO ACTIVE: Video follows audio time (spec Rule V1)
         -- Audio now tracks playback time directly (timeline time in timeline mode).
         local timeline_time_us = audio_playback.get_time_us()
         pos = helpers.calc_frame_from_time_us(timeline_time_us, tick_in.fps_num, tick_in.fps_den)
     else
-        -- NO AUDIO: Advance frame independently (fallback only)
+        -- NO AUDIO or AUDIO EXHAUSTED: Advance frame independently
+        -- (covers: no audio source, J-cut, audio at clip boundary, audio disabled)
         pos = tick_in.pos + (tick_in.direction * tick_in.speed)
     end
 
-    -- Clamp to valid range
+    -- If already beyond content end, stop immediately without moving playhead
+    -- (e.g., user clicked beyond content then hit play)
+    if tick_in.total_frames > 0 and pos >= tick_in.total_frames then
+        logger.debug("timeline_playback", "Position beyond content end - stopping")
+        return {
+            continue = false,
+            new_pos = tick_in.pos,  -- Keep original position, don't clamp
+            current_clip_id = tick_in.current_clip_id,
+            frame_idx = math.floor(tick_in.pos),
+        }
+    end
+
+    -- Clamp to valid range (for positions within content)
     pos = math.max(0, math.min(pos, tick_in.total_frames - 1))
 
     -- Boundary detection (timeline stops at boundaries, no latching)

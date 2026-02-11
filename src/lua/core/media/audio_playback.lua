@@ -550,6 +550,18 @@ function M.is_ready()
     return M.session_initialized and M.has_audio
 end
 
+--- Check if audio has reached clip boundary (exhausted)
+-- Returns true when current audio time >= clip end time.
+-- Used by timeline_playback to switch to frame-based timing.
+function M.is_at_clip_boundary()
+    if not M.session_initialized then return false end
+    if #M.audio_sources == 0 then return true end  -- no sources = at boundary
+    local clip_end = get_min_clip_end_us()
+    local current_time = M.get_time_us()
+    -- Consider "at boundary" if within 50ms of clip end
+    return current_time >= clip_end - 50000
+end
+
 --- Set max playback time (called by playback_controller)
 -- Required for time clamping.
 -- @param max_us Maximum playback time in microseconds
