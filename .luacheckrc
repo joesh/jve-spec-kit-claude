@@ -117,6 +117,10 @@ include_files = {
 }
 
 files = {
+    ["src/lua/dkjson.lua"] = {
+        -- Third-party JSON library - suppress all warnings
+        ignore = { "211", "212", "213", "311", "312", "411", "421", "431" },
+    },
     ["src/lua/core/command_implementations.lua"] = {
         ignore = { "211", "311", "241", "421", "431", "511" },
     },
