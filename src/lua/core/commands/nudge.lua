@@ -18,8 +18,6 @@ local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local clip_mutator = require("core.clip_mutator")
 local timeline_state = require('ui.timeline.timeline_state')
-local frame_utils = require('core.frame_utils')
-
 
 local SPEC = {
     args = {
@@ -43,26 +41,7 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     local TIMELINE_CLIP_KIND = "timeline"
 
-    local function record_occlusion_actions(command, sequence_id, actions)
-        if not actions or #actions == 0 then
-            return
-        end
-        for _, action in ipairs(actions) do
-            if action.type == "delete" and action.clip and action.clip.id then
-                command_helper.add_delete_mutation(command, sequence_id, action.clip.id)
-            elseif action.type == "trim" and action.after then
-                local update = command_helper.clip_update_payload(action.after, sequence_id)
-                if update then
-                    command_helper.add_update_mutation(command, update.track_sequence_id or sequence_id, update)
-                end
-            elseif action.type == "insert" and action.clip then
-                local insert_payload = command_helper.clip_insert_payload(action.clip, sequence_id)
-                if insert_payload then
-                    command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
-                end
-            end
-        end
-    end
+    -- Note: record_occlusion_actions removed - occlusion system is disabled
 
     command_executors["Nudge"] = function(command)
         local args = command:get_all_parameters()
@@ -75,7 +54,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local nudge_frames = args.nudge_amount
         assert(type(nudge_frames) == "number", "Nudge: nudge_amount must be integer frames")
 
-        local nudge_type = "none"
+        local nudge_type
         local updates_by_clip = {}
         local mutated_clip_ids = {}
         
@@ -262,7 +241,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             local move_targets = {}
-            local neighbor_clip_ids = {}
             local track_groups = {}
             local any_change = false
             local preview_clips = {}
@@ -293,7 +271,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
                 clip.__new_start = new_start
                 mutated_clip_ids[clip.id] = true
-                neighbor_clip_ids[#neighbor_clip_ids + 1] = clip.id
                 table.insert(move_targets, clip)
                 table.insert(preview_clips, {
                     clip_id = clip.id,
