@@ -1,11 +1,12 @@
---- Insert command - thin wrapper for AddClipsToSequence(edit_type="insert")
+--- Insert command - wrapper for AddClipsToSequence(edit_type="insert")
 --
 -- Responsibilities:
--- - Provide backward compatibility for direct Insert command calls
--- - Gather clip info and delegate to AddClipsToSequence
+-- - Load master clip and resolve stream timing
+-- - Delegate to AddClipsToSequence for actual insertion
 --
--- Non-goals:
--- - Does not implement insertion logic (AddClipsToSequence does that)
+-- Invariants:
+-- - Requires master_clip_id with video stream
+-- - Timing comes from stream clips in native units (frames for video, samples for audio)
 --
 -- @file insert.lua
 
@@ -13,9 +14,8 @@ local M = {}
 
 local Clip = require('models.clip')
 local Media = require('models.media')
-local Track = require('models.track')
-local rational_helpers = require('core.command_rational_helpers')
 local clip_edit_helper = require('core.clip_edit_helper')
+local rational_helpers = require('core.command_rational_helpers')
 local logger = require('core.logger')
 
 local SPEC = {
@@ -60,12 +60,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         logger.debug("insert", "Executing Insert command (via AddClipsToSequence)")
 
-        -- Resolve parameters from UI context if not provided
-        local media_id = clip_edit_helper.resolve_media_id_from_ui(args.media_id, command)
         local track_id = args.track_id
-
-        assert(media_id and media_id ~= "",
-            "Insert command: media_id required but not provided and no media selected in project browser")
 
         -- Resolve sequence_id
         local sequence_id = clip_edit_helper.resolve_sequence_id(args, track_id, command)
@@ -80,45 +75,45 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Resolve insert_time from playhead
         local insert_time = clip_edit_helper.resolve_edit_time(args.insert_time, command, "insert_time")
 
-        -- Get sequence FPS
-        local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
-
-        -- Load master clip if specified
+        -- Load master clip - REQUIRED
         local master_clip_id = args.master_clip_id
-        local master_clip = nil
-        if master_clip_id and master_clip_id ~= "" then
-            master_clip = Clip.load_optional(master_clip_id)
-            assert(master_clip, string.format(
-                "Insert command: master_clip_id=%s not found in database",
-                tostring(master_clip_id)
-            ))
-        end
+        assert(master_clip_id and master_clip_id ~= "",
+            "Insert command: master_clip_id is required")
+        local master_clip = Clip.load(master_clip_id)
+        assert(master_clip:is_master_clip(), string.format(
+            "Insert command: clip %s is not a master clip (kind=%s)",
+            master_clip_id, tostring(master_clip.clip_kind)))
 
-        -- Get project_id
-        local project_id = command.project_id or args.project_id
-        if master_clip then
-            project_id = project_id or master_clip.project_id
-            if (not media_id or media_id == "") and master_clip.media_id then
-                media_id = master_clip.media_id
-            end
-        end
-
+        -- Get project_id from master clip
+        local project_id = command.project_id or args.project_id or master_clip.project_id
         assert(project_id and project_id ~= "", "Insert: missing project_id")
         command:set_parameter("project_id", project_id)
         command.project_id = project_id
 
-        -- Get media FPS
-        local media_fps_num, media_fps_den = clip_edit_helper.get_media_fps(db, master_clip, media_id, seq_fps_num, seq_fps_den)
+        -- Get media_id from master clip
+        local media_id = master_clip.media_id
+        assert(media_id and media_id ~= "", string.format(
+            "Insert command: master_clip %s has no media_id", master_clip_id))
 
-        -- Load media for duration and audio channel info
+        -- Load media for audio channel info
         local media = Media.load(media_id)
 
-        -- Resolve timing parameters (all integers)
-        local timing, timing_err = clip_edit_helper.resolve_timing(args, master_clip, media)
-        if not timing then
-            set_last_error("Insert: " .. timing_err)
-            return false, "Insert: " .. timing_err
-        end
+        -- Resolve timing from stream clips in their native units
+        local timing_overrides = {
+            source_in = args.source_in_value or args.source_in,
+            source_out = args.source_out_value or args.source_out,
+            duration = args.duration_value or args.duration,
+        }
+
+        -- Get video timing if video stream exists (may be nil for audio-only)
+        local video_timing = clip_edit_helper.resolve_video_stream_timing(master_clip, timing_overrides)
+
+        -- Get audio timing if audio stream exists (may be nil for video-only)
+        local audio_timing = clip_edit_helper.resolve_audio_stream_timing(master_clip, timing_overrides)
+
+        -- Must have at least one stream
+        assert(video_timing or audio_timing, string.format(
+            "Insert command: master_clip %s has no video or audio streams", master_clip_id))
 
         -- insert_time must be integer
         assert(insert_time == nil or type(insert_time) == "number", "Insert: insert_time must be integer")
@@ -131,25 +126,29 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Build clips for the group
         local clips = {}
+        local group_duration
 
-        -- Video clip
-        table.insert(clips, {
-            role = "video",
-            media_id = media_id,
-            master_clip_id = master_clip_id,
-            project_id = project_id,
-            name = clip_name,
-            source_in = timing.source_in,
-            source_out = timing.source_out,
-            duration = timing.duration,
-            fps_numerator = media_fps_num,
-            fps_denominator = media_fps_den,
-            target_track_id = track_id,
-            clip_id = args.clip_id,  -- Preserve clip_id if specified
-        })
+        -- Video clip (if video stream exists)
+        if video_timing then
+            table.insert(clips, {
+                role = "video",
+                media_id = media_id,
+                master_clip_id = master_clip_id,
+                project_id = project_id,
+                name = clip_name,
+                source_in = video_timing.source_in,
+                source_out = video_timing.source_out,
+                duration = video_timing.duration,
+                fps_numerator = video_timing.fps_numerator,
+                fps_denominator = video_timing.fps_denominator,
+                target_track_id = track_id,
+                clip_id = args.clip_id,  -- Preserve clip_id if specified
+            })
+            group_duration = video_timing.duration
+        end
 
-        -- Audio clips: use sample_rate/1 as rate (source units are samples)
-        if audio_channels > 0 then
+        -- Audio clips (if audio stream exists)
+        if audio_channels > 0 and audio_timing then
             local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
             for ch = 0, audio_channels - 1 do
                 local audio_track = audio_track_resolver(nil, ch)
@@ -160,21 +159,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     master_clip_id = master_clip_id,
                     project_id = project_id,
                     name = clip_name .. " (Audio)",
-                    source_in = timing.source_in,
-                    source_out = timing.source_out,
-                    duration = timing.duration,
-                    fps_numerator = 48000,
-                    fps_denominator = 1,
+                    source_in = audio_timing.source_in,
+                    source_out = audio_timing.source_out,
+                    duration = audio_timing.duration,
+                    fps_numerator = audio_timing.fps_numerator,
+                    fps_denominator = audio_timing.fps_denominator,
                     target_track_id = audio_track.id,
                 })
             end
+            -- For audio-only, convert samples to timeline frames for group duration
+            if not group_duration then
+                local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
+                local sample_rate = audio_timing.fps_numerator
+                -- frames = samples * fps / sample_rate
+                group_duration = math.floor(audio_timing.duration * seq_fps_num / (seq_fps_den * sample_rate))
+            end
         end
+
+        assert(#clips > 0, string.format(
+            "Insert command: no clips to insert for master_clip %s", master_clip_id))
 
         -- Build group
         local groups = {
             {
                 clips = clips,
-                duration = timing.duration,
+                duration = group_duration,
                 master_clip_id = master_clip_id,
             }
         }

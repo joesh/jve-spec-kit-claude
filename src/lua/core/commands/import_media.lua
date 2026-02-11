@@ -218,7 +218,9 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
         "ImportMedia: missing or zero duration_ms in metadata for " .. tostring(file_path))
     -- Convert duration_ms to integer frames (for video) and samples (for audio)
     local duration_frames = frame_utils.ms_to_frames(metadata.duration_ms, fps_num, fps_den)
-    local sample_rate = 48000
+    -- Use actual sample rate from metadata (supports 44100, 48000, 96000, etc.)
+    local sample_rate = (metadata.audio and metadata.audio.sample_rate) or 48000
+    assert(sample_rate > 0, "ImportMedia: invalid sample_rate for " .. tostring(file_path))
     local duration_samples = math.floor(metadata.duration_ms * sample_rate / 1000 + 0.5)
 
     local base_name = extract_filename(file_path)

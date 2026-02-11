@@ -114,6 +114,77 @@ function M.resolve_edit_time(edit_time, command, param_name)
     return edit_time
 end
 
+--- Resolve timing for video stream from master clip
+-- Pulls source_in/out from the video stream clip in native video frame units
+-- @param master_clip table Master clip with source sequence
+-- @param params table Optional overrides {source_in, source_out, duration}
+-- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
+-- @return string|nil Error message if failed
+function M.resolve_video_stream_timing(master_clip, params)
+    params = params or {}
+    local video = master_clip:video_stream()
+    if not video then
+        return nil, "No video stream in master clip"
+    end
+
+    local source_in = params.source_in or video.source_in
+    local source_out = params.source_out or video.source_out
+    local duration = params.duration or (source_out - source_in)
+
+    return {
+        source_in = source_in,
+        source_out = source_out,
+        duration = duration,
+        fps_numerator = video.rate.fps_numerator,
+        fps_denominator = video.rate.fps_denominator,
+    }, nil
+end
+
+--- Resolve timing for audio stream from master clip
+-- Pulls source_in/out from the first audio stream clip in native sample units
+-- @param master_clip table Master clip with source sequence
+-- @param params table Optional overrides in VIDEO frames (will be converted)
+-- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
+-- @return string|nil Error message if failed
+function M.resolve_audio_stream_timing(master_clip, params)
+    params = params or {}
+    local audio_streams = master_clip:audio_streams()
+    if #audio_streams == 0 then
+        return nil, "No audio streams in master clip"
+    end
+
+    local audio = audio_streams[1]
+
+    -- If params provided, they're in video frames - convert to samples
+    local source_in, source_out
+    if params.source_in then
+        source_in = master_clip:frame_to_samples(params.source_in)
+        assert(source_in, string.format(
+            "clip_edit_helper.resolve_audio_stream_timing: frame_to_samples failed for source_in=%d",
+            params.source_in))
+    else
+        source_in = audio.source_in
+    end
+    if params.source_out then
+        source_out = master_clip:frame_to_samples(params.source_out)
+        assert(source_out, string.format(
+            "clip_edit_helper.resolve_audio_stream_timing: frame_to_samples failed for source_out=%d",
+            params.source_out))
+    else
+        source_out = audio.source_out
+    end
+
+    local duration = source_out - source_in
+
+    return {
+        source_in = source_in,
+        source_out = source_out,
+        duration = duration,
+        fps_numerator = audio.rate.fps_numerator,
+        fps_denominator = audio.rate.fps_denominator,
+    }, nil
+end
+
 --- Resolve all timing parameters (duration, source_in, source_out) as integers
 -- @param params table Parameters containing duration/source values (integers)
 -- @param master_clip table|nil Master clip for fallback values
