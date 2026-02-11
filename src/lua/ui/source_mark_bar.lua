@@ -71,8 +71,8 @@ function M.create(widget)
         -- Clip duration strip
         timeline.add_rect(bar.widget, 0, 0, width, M.BAR_HEIGHT, DURATION_BAR_COLOR)
 
-        local mark_in = source_viewer_state.mark_in
-        local mark_out = source_viewer_state.mark_out
+        local mark_in = source_viewer_state.get_mark_in()
+        local mark_out = source_viewer_state.get_mark_out()
 
         -- Mark range fill
         if mark_in and mark_out and mark_out > mark_in then

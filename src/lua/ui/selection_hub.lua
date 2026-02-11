@@ -35,11 +35,8 @@ local function notify(panel_id)
     local items = get_items(panel_id)
     for token, callback in pairs(listeners) do
         if type(callback) == "function" then
-            local ok, err = pcall(callback, items, panel_id)
-            if not ok then
-                logger.error("selection_hub", string.format(
-                    "listener %s raised error: %s", tostring(token), tostring(err)))
-            end
+            -- Fail-fast: don't swallow errors from listeners
+            callback(items, panel_id)
         end
     end
 end

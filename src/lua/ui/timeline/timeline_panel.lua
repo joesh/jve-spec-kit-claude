@@ -1662,13 +1662,37 @@ function M.create(opts)
         end
     end)
 
-    -- Restore timeline viewer when timeline panel regains focus after source viewing.
+    -- Switch viewer mode based on panel focus.
     -- selection_hub fires on every active-panel change (focus_manager → set_active_panel).
     selection_hub.register_listener(function(_, panel_id)
+        logger.info("timeline_panel", string.format("FOCUS: panel_id=%s", tostring(panel_id)))
         if panel_id == "timeline" then
+            -- Timeline focus → Timeline Viewer
             local seq_id = state.get_sequence_id and state.get_sequence_id()
+            logger.info("timeline_panel", string.format("FOCUS: timeline, seq_id=%s", tostring(seq_id)))
             if seq_id and seq_id ~= "" then
                 M.load_sequence(seq_id)
+            end
+        elseif panel_id == "viewer" or panel_id == "project_browser" then
+            -- Viewer/Browser focus → Source Viewer (if clip loaded)
+            local source_viewer_state = require("ui.source_viewer_state")
+            local pc = require("core.playback.playback_controller")
+            local has_clip = source_viewer_state.has_clip()
+            local tl_mode = pc.timeline_mode
+            logger.info("timeline_panel", string.format("FOCUS: %s, has_clip=%s, timeline_mode=%s",
+                panel_id, tostring(has_clip), tostring(tl_mode)))
+            if has_clip and tl_mode then
+                logger.info("timeline_panel", "FOCUS: switching to source viewer")
+                pc.set_timeline_mode(false)
+                local viewer_panel = require("ui.viewer_panel")
+                -- Restore source viewer display (title + selection)
+                -- The frame display is handled by playback_controller mode switch
+                if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
+                    local title_widget = viewer_panel.get_title_widget and viewer_panel.get_title_widget()
+                    if title_widget then
+                        qt_constants.PROPERTIES.SET_TEXT(title_widget, "Source Viewer")
+                    end
+                end
             end
         end
     end)
@@ -1685,19 +1709,21 @@ function M.load_sequence(sequence_id)
 
     local current = state.get_sequence_id and state.get_sequence_id()
     if current == sequence_id then
-        -- Restore timeline mode (may have been cleared by source viewer).
-        -- Only restore the viewer display if source viewer does NOT have a clip
-        -- loaded — otherwise we'd clobber "Source Viewer" title with "Timeline Viewer".
+        -- Restore timeline mode when timeline panel regains focus.
+        -- Always ensure viewer shows timeline - title must be updated even if mode unchanged.
+        local viewer_panel = require("ui.viewer_panel")
+        if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
+            local title_widget = viewer_panel.get_title_widget and viewer_panel.get_title_widget()
+            if title_widget then
+                qt_constants.PROPERTIES.SET_TEXT(title_widget, "Timeline Viewer")
+            end
+        end
         if not playback_controller.timeline_mode then
             playback_controller.set_timeline_mode(true, sequence_id)
-            local source_viewer_state = require("ui.source_viewer_state")
-            if not source_viewer_state.has_clip() then
-                local Sequence = require("models.sequence")
-                local seq = Sequence.load(sequence_id)
-                if seq then
-                    local viewer_panel = require("ui.viewer_panel")
-                    viewer_panel.show_timeline(seq)
-                end
+            local Sequence = require("models.sequence")
+            local seq = Sequence.load(sequence_id)
+            if seq then
+                viewer_panel.show_timeline(seq)
             end
         end
         return

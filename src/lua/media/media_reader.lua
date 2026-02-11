@@ -232,8 +232,8 @@ function M.probe_file(file_path)
 
     if audio_stream then
         metadata.audio = {
-            channels = audio_stream.channels or 0,
-            sample_rate = audio_stream.sample_rate or 0,
+            channels = tonumber(audio_stream.channels) or 0,
+            sample_rate = tonumber(audio_stream.sample_rate) or 0,
             codec = audio_stream.codec_name or "unknown"
         }
     end

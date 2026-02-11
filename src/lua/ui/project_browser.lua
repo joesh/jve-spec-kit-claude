@@ -1786,16 +1786,20 @@ function M.add_selected_to_timeline(command_type, options)
         local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
 
         -- Apply source viewer marks if the viewer is showing this clip
+        -- IS-a refactor: masterclip IS a sequence, so compare current_sequence_id
+        -- Marks are methods now: get_mark_in() / get_mark_out()
         local marks_applied = false
         local source_in_mark, source_out_mark, duration_mark
         local svs_ok, source_viewer_state = pcall(require, "ui.source_viewer_state")
+        local viewer_mark_in = svs_ok and source_viewer_state.get_mark_in and source_viewer_state.get_mark_in()
+        local viewer_mark_out = svs_ok and source_viewer_state.get_mark_out and source_viewer_state.get_mark_out()
         if svs_ok and source_viewer_state
-            and source_viewer_state.current_clip_id == clip.clip_id
-            and source_viewer_state.mark_in ~= nil and source_viewer_state.mark_out ~= nil then
+            and source_viewer_state.current_sequence_id == clip.clip_id
+            and viewer_mark_in ~= nil and viewer_mark_out ~= nil then
             -- mark_in/mark_out are integer frames
-            source_in_mark = source_viewer_state.mark_in
-            source_out_mark = source_viewer_state.mark_out
-            duration_mark = source_viewer_state.mark_out - source_viewer_state.mark_in
+            source_in_mark = viewer_mark_in
+            source_out_mark = viewer_mark_out
+            duration_mark = viewer_mark_out - viewer_mark_in
             marks_applied = true
         end
 
@@ -1853,13 +1857,17 @@ function M.add_selected_to_timeline(command_type, options)
 
             -- Determine source marks: use viewer marks only for first clip if showing it
             local source_in, source_out, duration
+            -- IS-a refactor: masterclip IS a sequence, so compare current_sequence_id
+            -- Marks are methods now: get_mark_in() / get_mark_out()
+            local viewer_mark_in = svs_ok and source_viewer_state.get_mark_in and source_viewer_state.get_mark_in()
+            local viewer_mark_out = svs_ok and source_viewer_state.get_mark_out and source_viewer_state.get_mark_out()
             if i == 1 and svs_ok and source_viewer_state
-                and source_viewer_state.current_clip_id == clip.clip_id
-                and source_viewer_state.mark_in ~= nil and source_viewer_state.mark_out ~= nil then
+                and source_viewer_state.current_sequence_id == clip.clip_id
+                and viewer_mark_in ~= nil and viewer_mark_out ~= nil then
                 -- mark_in/mark_out are integer frames
-                source_in = source_viewer_state.mark_in
-                source_out = source_viewer_state.mark_out
-                duration = source_viewer_state.mark_out - source_viewer_state.mark_in
+                source_in = viewer_mark_in
+                source_out = viewer_mark_out
+                duration = viewer_mark_out - viewer_mark_in
             else
                 -- Use clip's existing source in/out or full media duration
                 -- All coords are integer frames

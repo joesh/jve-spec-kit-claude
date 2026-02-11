@@ -95,9 +95,17 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
             current_clip_id = resolved.clip.id
             -- Activate reader in pool (pool lookup, no I/O if cached)
             media_cache.activate(resolved.media_path)
+
+            -- Apply rotation from media metadata (phone footage portrait/landscape)
+            local asset_info = media_cache.get_asset_info()
+            if asset_info then
+                viewer_panel.set_rotation(asset_info.rotation or 0)
+            end
+
             logger.debug("timeline_playback",
-                string.format("Switched to clip %s at media %s",
-                    resolved.clip.id:sub(1,8), resolved.media_path))
+                string.format("Switched to clip %s at media %s (rotation=%d)",
+                    resolved.clip.id:sub(1,8), resolved.media_path,
+                    asset_info and asset_info.rotation or 0))
         end
 
         -- Show the correct source frame (using source_time_us)

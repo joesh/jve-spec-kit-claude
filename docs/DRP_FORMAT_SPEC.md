@@ -32,7 +32,10 @@ Timelines are referenced in MpFolder.xml via `<Sm2Timeline>` elements:
 <Sm2Timeline DbId="...">
   <Name>My Timeline</Name>
   <Sequence>
-    <Sm2Sequence DbId="abc-123-..."/>  <!-- Links to SeqContainer file -->
+    <Sm2Sequence DbId="abc-123-...">
+      <FrameRate>00000000000038400000000000000000</FrameRate>  <!-- 24.0 fps -->
+      <Resolution>00000000000007800000000000000438</Resolution>  <!-- 1920×1080 -->
+    </Sm2Sequence>
   </Sequence>
 </Sm2Timeline>
 ```
@@ -41,6 +44,8 @@ Timelines are referenced in MpFolder.xml via `<Sm2Timeline>` elements:
 - `DbId` - Unique identifier for the timeline object
 - `Name` - Display name shown in Resolve's UI
 - `Sequence/Sm2Sequence@DbId` - Reference to sequence data in SeqContainer/
+- `Sequence/Sm2Sequence/FrameRate` - Timeline fps (hex-encoded IEEE 754 double)
+- `Sequence/Sm2Sequence/Resolution` - Timeline resolution (hex-encoded width/height)
 
 ### Sequences (SeqContainer/\*.xml)
 
@@ -140,7 +145,7 @@ Most professional projects start at 01:00:00:00 TC.
 | DRP Field | JVE Field | Notes |
 |-----------|-----------|-------|
 | `Sm2Timeline/Name` | `sequences.name` | Display name |
-| `FrameRate` | `sequences.fps_numerator/fps_denominator` | Inferred from 1-hour TC |
+| `Sm2Sequence/FrameRate` | `sequences.fps_numerator/fps_denominator` | From hex metadata (fallback: 1-hour TC inference) |
 | - | `sequences.width/height` | Defaults to 1920×1080 |
 | - | `sequences.audio_rate` | Always 48000 |
 
@@ -190,7 +195,36 @@ source_out = source_in + source_duration_samples
 
 ## Frame Rate Detection
 
-DRP stores frame rate in binary `FieldsBlob` which is difficult to parse. JVE infers fps from the earliest clip's Start position using the 1-hour timecode convention:
+### Primary: Hex-Encoded FPS in Sm2Sequence
+
+DRP stores frame rate in `<FrameRate>` elements inside `<Sm2Sequence>` as 128-bit hex strings. Format: two big-endian IEEE 754 doubles (first is fps, second is usually 0).
+
+**Example values:**
+| Hex String | FPS Value |
+|------------|-----------|
+| `00000000000038400000000000000000` | 24.0 |
+| `00000000000039400000000000000000` | 25.0 |
+| `0000000000003e400000000000000000` | 30.0 |
+| `00000000000049400000000000000000` | 50.0 |
+| `0000000000004e400000000000000000` | 60.0 |
+
+**Decoding algorithm:**
+```lua
+local function decode_hex_double(hex_str)
+    if not hex_str or #hex_str < 16 then return nil end
+    -- Take first 16 chars (first double), decode big-endian IEEE 754
+    local bytes = {}
+    for i = 1, 16, 2 do
+        bytes[#bytes + 1] = tonumber(hex_str:sub(i, i+1), 16)
+    end
+    -- Use string.pack/unpack (Lua 5.3+) or bit manipulation
+    return decode_ieee754_be(bytes)
+end
+```
+
+### Fallback: 1-Hour Timecode Inference
+
+When `<FrameRate>` is unavailable or empty, infer from earliest clip's Start position using the 1-hour timecode convention:
 
 | Start Frame | Frame Rate | Notes |
 |-------------|------------|-------|
@@ -199,52 +233,49 @@ DRP stores frame rate in binary `FieldsBlob` which is difficult to parse. JVE in
 | 90,000 | 25 fps | PAL |
 | ~107,892 | 29.97 fps | NTSC video (30000/1001) |
 | 108,000 | 30 fps | |
+| 180,000 | 50 fps | PAL high frame rate |
+| ~215,784 | 59.94 fps | NTSC high frame rate |
+| 216,000 | 60 fps | |
 
-**Detection algorithm** (with 1% tolerance):
+**Inference algorithm** (with 1% tolerance):
 ```lua
-local markers = {
-    { 86400, 24 },   -- 24 fps
-    { 86314, 24 },   -- 23.976 (treat as 24)
-    { 90000, 25 },   -- 25 fps
-    { 108000, 30 },  -- 30 fps
-    { 107892, 30 },  -- 29.97 (treat as 30)
-}
 for _, m in ipairs(markers) do
     if math.abs(min_start - m[1]) / m[1] < 0.01 then
         return m[2]
     end
 end
-return 30  -- fallback
+return 30  -- final fallback
 ```
 
-**Important**: This inference happens in BOTH drp_importer (for source_duration calc) AND drp_project_converter (for sequence fps). Both must use the same inferred fps or audio durations will be wrong.
+**Important**: FPS detection happens in BOTH drp_importer (for source_duration calc) AND drp_project_converter (for sequence fps). Both must use the same fps or audio durations will be wrong.
 
 ## Import Flow
 
 ```
 drp_importer.parse_drp_file(path)
-    ├── extract_drp()           # Unzip to temp dir
-    ├── parse_project_xml()     # Get project name
-    ├── build_timeline_name_map() # Sequence ID → Name
-    ├── parse_media_pool_hierarchy() # Bins + master clips
-    └── parse_all_timelines()   # Tracks + clips
-        └── parse_resolve_tracks() # Per-sequence parsing
+    ├── extract_drp()                  # Unzip to temp dir
+    ├── parse_project_xml()            # Get project name
+    ├── build_timeline_metadata_map()  # Sequence ID → {name, fps}
+    ├── parse_media_pool_hierarchy()   # Bins + master clips
+    └── parse_all_timelines()          # Tracks + clips
+        └── parse_resolve_tracks()     # Per-sequence parsing (uses fps from metadata)
 
 drp_project_converter.convert(parse_result, output_path)
     ├── Create new SQLite database
     ├── Insert project, sequences, tracks
     ├── Insert media (with file path lookup)
-    └── Insert clips (with unit conversion)
+    ├── Insert clips (with unit conversion)
+    └── Create A/V link groups
 ```
 
 ## Known Limitations
 
-1. **No FPS in XML** - Frame rate inferred from timecode, may fail for non-standard starts
-2. **No resolution metadata** - Defaults to 1920×1080
+1. ~~**No FPS in XML**~~ - FIXED: FPS parsed from `<FrameRate>` hex in `<Sm2Sequence>`; 1-hour TC inference as fallback
+2. ~~**No resolution metadata**~~ - FIXED: Resolution parsed from `<Resolution>` hex in `<Sm2Sequence>`
 3. **No marks import** - In/out marks not yet supported
-4. **No A/V linking** - Sync groups not preserved
-5. **No rotation metadata** - Phone footage orientation lost
-6. **Sample rate assumed** - Always 48kHz
+4. ~~**No A/V linking**~~ - FIXED: Clips grouped by `(file_path, timeline_start)` and linked via `clip_link.create_link_group()`
+5. ~~**No rotation metadata**~~ - FIXED: Rotation extracted via FFmpeg `coded_side_data` display matrix; applied during timeline playback on clip switch
+6. **Sample rate** - Uses media's rate if available, else 48kHz default
 
 ## Version Notes
 

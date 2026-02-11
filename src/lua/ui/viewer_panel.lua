@@ -238,10 +238,15 @@ function M.show_source_clip(media)
     -- Load per-masterclip marks/playhead from DB into source_viewer_state
     -- sequence_id is the masterclip sequence (IS-a model: masterclip IS a sequence)
     local sequence_id = media.sequence_id or media.masterclip_sequence_id or media.id
+    logger.info("viewer_panel", string.format("show_source_clip: sequence_id=%s, info=%s",
+        tostring(sequence_id), tostring(info ~= nil)))
     if sequence_id and info then
         local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
+        logger.info("viewer_panel", string.format("show_source_clip: total_frames=%d", total_frames))
         if total_frames > 0 then
             source_viewer_state.load_masterclip(sequence_id, total_frames, info.fps_num, info.fps_den)
+            logger.info("viewer_panel", string.format("show_source_clip: loaded, has_clip=%s",
+                tostring(source_viewer_state.has_clip())))
 
             -- Seek to restored playhead position
             local restored_playhead = source_viewer_state.playhead
@@ -336,7 +341,7 @@ function M.show_timeline(sequence)
 
     -- Save current source clip state before switching to timeline
     if source_viewer_state.has_clip() then
-        source_viewer_state.save_to_db()
+        source_viewer_state.save_playhead_to_db()
     end
 
     if qt_constants.PROPERTIES.SET_TEXT then
@@ -406,6 +411,15 @@ function M.show_frame_at_time(source_time_us)
         qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
     end
     current_frame_idx = frame_idx
+end
+
+--- Set video surface rotation (for phone footage portrait/landscape)
+-- @param degrees number Rotation in degrees (0, 90, 180, 270)
+function M.set_rotation(degrees)
+    ensure_created()
+    if video_surface and qt_constants.EMP and qt_constants.EMP.SURFACE_SET_ROTATION then
+        qt_constants.EMP.SURFACE_SET_ROTATION(video_surface, degrees or 0)
+    end
 end
 
 --- Show gap (black frame) when playhead is at a gap in timeline

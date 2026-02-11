@@ -17,16 +17,6 @@ local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local database = require('core.database')
--- timeline_state is optional (UI layer); nil in headless/test mode
-local timeline_state = nil
-do
-    local status, mod = pcall(require, 'ui.timeline.timeline_state')
-    if status then
-        timeline_state = mod
-    end
-    -- NSF: Not asserting here - timeline_state is legitimately optional for headless operation
-end
-
 
 local SPEC = {
     args = {
@@ -80,44 +70,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
-    local function revert_occlusion_actions(actions, command, sequence_id)
-        if not actions or #actions == 0 then
-            return true  -- Nothing to revert is success
-        end
-        assert(command ~= nil, "revert_occlusion_actions: command must not be nil")
-        assert(sequence_id and sequence_id ~= "", "revert_occlusion_actions: sequence_id required")
-
-        for i = #actions, 1, -1 do
-            local action = actions[i]
-            if action.type == 'trim' then
-                local restored = command_helper.restore_clip_state(action.before)
-                assert(restored, string.format("revert_occlusion_actions: failed to restore trim action.before for action %d", i))
-                local ok, err = restored:save({skip_occlusion = true})
-                assert(ok, string.format("revert_occlusion_actions: save failed for restored clip %s: %s", restored.id, tostring(err)))
-                local payload = command_helper.clip_update_payload(restored, sequence_id)
-                assert(payload, string.format("revert_occlusion_actions: clip_update_payload failed for clip %s", restored.id))
-                command_helper.add_update_mutation(command, payload.track_sequence_id or sequence_id, payload)
-            elseif action.type == 'delete' then
-                local restored = command_helper.restore_clip_state(action.clip or action.before)
-                assert(restored, string.format("revert_occlusion_actions: failed to restore delete action for action %d", i))
-                local ok, err = restored:save({skip_occlusion = true})
-                assert(ok, string.format("revert_occlusion_actions: save failed for restored clip %s: %s", restored.id, tostring(err)))
-                local payload = command_helper.clip_insert_payload(restored, sequence_id)
-                assert(payload, string.format("revert_occlusion_actions: clip_insert_payload failed for clip %s", restored.id))
-                command_helper.add_insert_mutation(command, payload.track_sequence_id or sequence_id, payload)
-            elseif action.type == 'insert' then
-                local state = action.clip
-                assert(state, string.format("revert_occlusion_actions: insert action %d missing clip state", i))
-                local clip = Clip.load_optional(state.id)
-                if clip then  -- Clip may already be deleted; that's OK
-                    local deleted = clip:delete()
-                    assert(deleted, string.format("revert_occlusion_actions: delete failed for clip %s", state.id))
-                    command_helper.add_delete_mutation(command, sequence_id, state.id)
-                end
-            end
-        end
-        return true
-    end
+    -- Note: revert_occlusion_actions removed - occlusion system is disabled
 
     local function apply_edge_ripple(clip, edge_type, delta_frames)
         -- All coordinates are integers
@@ -304,10 +257,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             original_clip_state = command_helper.capture_clip_state(clip)
         end
 
-        local ripple_time = original_end
+        local ripple_time
         local shift_frames
         local deleted_clip = nil
-        local success = true
+        local success
 
         if edge_info.edge_type == "gap_before" then
             -- Gap closure/expansion: slide the entire clip (and downstream clips) by delta
@@ -488,7 +441,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        local success_op = true
         if shift_frames > 0 then
             if not shift_downstream() then return {success = false} end
             if not save_trimmed_clip() then return {success = false} end

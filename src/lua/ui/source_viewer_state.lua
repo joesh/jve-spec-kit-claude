@@ -261,4 +261,31 @@ end
 local Signals = require("core.signals")
 Signals.connect("project_changed", M.on_project_change, 50)
 
+-- FAIL-FAST: Guard against deprecated API usage
+-- IS-a refactor changed properties to methods - accessing old props should crash loudly
+local DEPRECATED_PROPS = {
+    current_clip_id = "use current_sequence_id instead (IS-a refactor: masterclip IS a sequence)",
+    mark_in = "use get_mark_in() method instead (marks are stored in stream clips)",
+    mark_out = "use get_mark_out() method instead (marks are stored in stream clips)",
+}
+
+setmetatable(M, {
+    __index = function(t, k)
+        local msg = DEPRECATED_PROPS[k]
+        if msg then
+            error(string.format(
+                "source_viewer_state.%s is DEPRECATED: %s", k, msg), 2)
+        end
+        return rawget(t, k)
+    end,
+    __newindex = function(t, k, v)
+        local msg = DEPRECATED_PROPS[k]
+        if msg then
+            error(string.format(
+                "source_viewer_state.%s is DEPRECATED: %s", k, msg), 2)
+        end
+        rawset(t, k, v)
+    end,
+})
+
 return M
