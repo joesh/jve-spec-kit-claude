@@ -325,4 +325,299 @@ function Sequence.find_most_recent()
     return Sequence.load(id)
 end
 
+-- =============================================================================
+-- MASTERCLIP SEQUENCE METHODS (for kind="masterclip")
+-- =============================================================================
+
+--- Check if this is a masterclip sequence (appears in project browser as source)
+-- @return boolean true if kind == "masterclip"
+function Sequence:is_masterclip()
+    return self.kind == "masterclip"
+end
+
+--- Ensure stream clips are loaded and cached for this masterclip sequence
+-- Asserts if called on non-masterclip sequence
+-- @return table {video_clips = {...}, audio_clips = {...}}
+local function ensure_stream_clips(self)
+    assert(self.kind == "masterclip", string.format(
+        "Sequence.ensure_stream_clips: sequence %s is not a masterclip (kind=%s)",
+        tostring(self.id), tostring(self.kind)))
+
+    -- Check cache
+    if self._cached_stream_clips then
+        return self._cached_stream_clips
+    end
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local conn = resolve_db()
+
+    -- Get all tracks in this sequence
+    local video_tracks = Track.find_by_sequence(self.id, "VIDEO")
+    local audio_tracks = Track.find_by_sequence(self.id, "AUDIO")
+
+    local video_clips = {}
+    local audio_clips = {}
+
+    -- Find clips on video tracks (for masterclip, just get all clips on track)
+    for _, track in ipairs(video_tracks) do
+        local stmt = conn:prepare([[
+            SELECT id FROM clips
+            WHERE track_id = ?
+            ORDER BY timeline_start_frame ASC
+        ]])
+        assert(stmt, "Sequence.ensure_stream_clips: Failed to prepare video query")
+        stmt:bind_value(1, track.id)
+        local exec_ok = stmt:exec()
+        assert(exec_ok, string.format(
+            "Sequence.ensure_stream_clips: video query exec failed for track_id=%s",
+            tostring(track.id)))
+        while stmt:next() do
+            local clip_id = stmt:value(0)
+            local clip = Clip.load(clip_id)
+            assert(clip, string.format(
+                "Sequence.ensure_stream_clips: Failed to load video stream clip %s",
+                tostring(clip_id)))
+            video_clips[#video_clips + 1] = clip
+        end
+        stmt:finalize()
+    end
+
+    -- Find clips on audio tracks
+    for _, track in ipairs(audio_tracks) do
+        local stmt = conn:prepare([[
+            SELECT id FROM clips
+            WHERE track_id = ?
+            ORDER BY timeline_start_frame ASC
+        ]])
+        assert(stmt, "Sequence.ensure_stream_clips: Failed to prepare audio query")
+        stmt:bind_value(1, track.id)
+        local exec_ok = stmt:exec()
+        assert(exec_ok, string.format(
+            "Sequence.ensure_stream_clips: audio query exec failed for track_id=%s",
+            tostring(track.id)))
+        while stmt:next() do
+            local clip_id = stmt:value(0)
+            local clip = Clip.load(clip_id)
+            assert(clip, string.format(
+                "Sequence.ensure_stream_clips: Failed to load audio stream clip %s",
+                tostring(clip_id)))
+            audio_clips[#audio_clips + 1] = clip
+        end
+        stmt:finalize()
+    end
+
+    local result = {
+        video_clips = video_clips,
+        audio_clips = audio_clips,
+    }
+
+    -- Cache for subsequent calls
+    self._cached_stream_clips = result
+    return result
+end
+
+--- Get the video stream clip from this masterclip sequence
+-- Asserts if called on non-masterclip sequence
+-- @return Clip|nil Video clip or nil if no video stream exists
+function Sequence:video_stream()
+    local streams = ensure_stream_clips(self)
+    return streams.video_clips[1]
+end
+
+--- Get all audio stream clips from this masterclip sequence
+-- Asserts if called on non-masterclip sequence
+-- @return table Array of audio clips (may be empty)
+function Sequence:audio_streams()
+    local streams = ensure_stream_clips(self)
+    return streams.audio_clips
+end
+
+--- Get the number of audio streams
+-- @return number Count of audio streams
+function Sequence:num_audio_streams()
+    return #self:audio_streams()
+end
+
+--- Invalidate the cached stream clips (call after modifying stream clips)
+function Sequence:invalidate_stream_cache()
+    self._cached_stream_clips = nil
+end
+
+-- =============================================================================
+-- TIMEBASE CONVERSION (for masterclip sequences)
+-- =============================================================================
+
+--- Convert video frames to audio samples using this sequence's video rate
+-- and the first audio stream's sample rate
+-- @param frame number Frame position in video timebase
+-- @return number|nil Sample position, or nil if no audio stream
+function Sequence:frame_to_samples(frame)
+    assert(type(frame) == "number", "Sequence:frame_to_samples: frame must be a number")
+
+    local audio = self:audio_streams()[1]
+    if not audio then
+        return nil
+    end
+
+    -- audio.rate.fps_numerator = sample_rate (e.g., 48000, 44100, 96000)
+    -- audio.rate.fps_denominator = 1
+    -- self.frame_rate.fps_numerator = video fps numerator
+    -- self.frame_rate.fps_denominator = video fps denominator
+    local sample_rate = audio.rate.fps_numerator
+    local video_fps_num = self.frame_rate.fps_numerator
+    local video_fps_den = self.frame_rate.fps_denominator
+
+    -- samples = frame * (sample_rate / video_fps)
+    --         = frame * sample_rate * video_fps_den / video_fps_num
+    return math.floor(frame * sample_rate * video_fps_den / video_fps_num)
+end
+
+--- Convert audio samples to video frames using this sequence's video rate
+-- and the first audio stream's sample rate
+-- @param samples number Sample position in audio timebase
+-- @return number|nil Frame position, or nil if no audio stream
+function Sequence:samples_to_frame(samples)
+    assert(type(samples) == "number", "Sequence:samples_to_frame: samples must be a number")
+
+    local audio = self:audio_streams()[1]
+    if not audio then
+        return nil
+    end
+
+    local sample_rate = audio.rate.fps_numerator
+    local video_fps_num = self.frame_rate.fps_numerator
+    local video_fps_den = self.frame_rate.fps_denominator
+
+    -- frame = samples * video_fps / sample_rate
+    --       = samples * video_fps_num / (video_fps_den * sample_rate)
+    return math.floor(samples * video_fps_num / (video_fps_den * sample_rate))
+end
+
+-- =============================================================================
+-- STREAM MARK METHODS (set/get source_in/source_out on stream clips)
+-- =============================================================================
+
+--- Set in point for all streams in sync
+-- Asserts if called on non-masterclip sequence
+-- Video stream gets frame value; audio streams get converted sample value
+-- @param frame number Frame position in video timebase
+function Sequence:set_all_streams_in(frame)
+    assert(type(frame) == "number", "Sequence:set_all_streams_in: frame must be a number")
+    assert(self:is_masterclip(), string.format(
+        "Sequence:set_all_streams_in: sequence %s is not a masterclip", tostring(self.id)))
+
+    local video = self:video_stream()
+    local audio_streams = self:audio_streams()
+
+    -- Must have at least one stream
+    assert(video or #audio_streams > 0, string.format(
+        "Sequence:set_all_streams_in: masterclip %s has no streams", tostring(self.id)))
+
+    if video then
+        video.source_in = frame
+        video:save()
+    end
+
+    local samples = self:frame_to_samples(frame)
+    if samples then
+        for _, audio in ipairs(audio_streams) do
+            audio.source_in = samples
+            audio:save()
+        end
+    end
+
+    -- Invalidate cache since we modified stream clips
+    self:invalidate_stream_cache()
+end
+
+--- Set out point for all streams in sync
+-- Asserts if called on non-masterclip sequence
+-- Video stream gets frame value; audio streams get converted sample value
+-- @param frame number Frame position in video timebase
+function Sequence:set_all_streams_out(frame)
+    assert(type(frame) == "number", "Sequence:set_all_streams_out: frame must be a number")
+    assert(self:is_masterclip(), string.format(
+        "Sequence:set_all_streams_out: sequence %s is not a masterclip", tostring(self.id)))
+
+    local video = self:video_stream()
+    local audio_streams = self:audio_streams()
+
+    -- Must have at least one stream
+    assert(video or #audio_streams > 0, string.format(
+        "Sequence:set_all_streams_out: masterclip %s has no streams", tostring(self.id)))
+
+    if video then
+        video.source_out = frame
+        video:save()
+    end
+
+    local samples = self:frame_to_samples(frame)
+    if samples then
+        for _, audio in ipairs(audio_streams) do
+            audio.source_out = samples
+            audio:save()
+        end
+    end
+
+    -- Invalidate cache since we modified stream clips
+    self:invalidate_stream_cache()
+end
+
+--- Get the synced in point for all streams (video frame value)
+-- Asserts if called on non-masterclip sequence
+-- For A/V: Returns video stream's source_in if all streams synchronized
+-- For audio-only: Returns nil (no video frame reference)
+-- @return number|nil Video frame position, or nil if not synced or audio-only
+function Sequence:get_all_streams_in()
+    assert(self:is_masterclip(), string.format(
+        "Sequence:get_all_streams_in: sequence %s is not a masterclip", tostring(self.id)))
+
+    local video = self:video_stream()
+    if not video then
+        return nil  -- Audio-only: no video frame reference
+    end
+
+    local video_in = video.source_in
+    local expected_samples = self:frame_to_samples(video_in)
+
+    if expected_samples then
+        for _, audio in ipairs(self:audio_streams()) do
+            if audio.source_in ~= expected_samples then
+                return nil  -- Not synced
+            end
+        end
+    end
+
+    return video_in
+end
+
+--- Get the synced out point for all streams (video frame value)
+-- Asserts if called on non-masterclip sequence
+-- For A/V: Returns video stream's source_out if all streams synchronized
+-- For audio-only: Returns nil (no video frame reference)
+-- @return number|nil Video frame position, or nil if not synced or audio-only
+function Sequence:get_all_streams_out()
+    assert(self:is_masterclip(), string.format(
+        "Sequence:get_all_streams_out: sequence %s is not a masterclip", tostring(self.id)))
+
+    local video = self:video_stream()
+    if not video then
+        return nil  -- Audio-only: no video frame reference
+    end
+
+    local video_out = video.source_out
+    local expected_samples = self:frame_to_samples(video_out)
+
+    if expected_samples then
+        for _, audio in ipairs(self:audio_streams()) do
+            if audio.source_out ~= expected_samples then
+                return nil  -- Not synced
+            end
+        end
+    end
+
+    return video_out
+end
+
 return Sequence

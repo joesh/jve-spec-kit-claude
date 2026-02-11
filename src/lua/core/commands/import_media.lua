@@ -3,21 +3,23 @@
 -- Responsibilities:
 -- - Show file picker dialog when interactive=true
 -- - Import single or multiple media files
--- - Create master clips with source sequences
+-- - Create masterclip sequences (sequence.kind="masterclip")
 --
 -- Non-goals:
 -- - Media transcoding or proxy generation (future feature)
 --
 -- Invariants:
 -- - Must receive file_paths array (or gathered from dialog)
--- - Each imported file creates a master clip with source sequence
+-- - Each imported file creates a masterclip sequence with stream clips
 --
--- Architectural note (metadata snapshots):
--- Clips snapshot fps_numerator/fps_denominator at creation time. This is intentional:
--- the snapshot captures "what was true when the clip was created." If the master clip
--- or media is later re-probed with different values, we want to DETECT that divergence
--- and let the user decide whether to repair, not silently change behavior.
--- TODO: Implement divergence detection (compare clip.fps to master_clip.fps) and repair UI.
+-- Architectural note (IS-a model):
+-- A masterclip IS a sequence (kind="masterclip"), not a clip wrapping a sequence.
+-- Stream clips on the sequence's tracks represent video/audio streams.
+-- Timeline clips reference the masterclip via source_sequence_id.
+--
+-- Metadata snapshots:
+-- Stream clips snapshot fps_numerator/fps_denominator at creation time.
+-- TODO: Implement divergence detection and repair UI.
 --
 -- Size: ~300 LOC
 -- Volatility: low
@@ -44,12 +46,11 @@ local SPEC = {
     persisted = {
         -- Arrays of IDs for each imported file (parallel arrays)
         media_ids = {},
-        master_clip_ids = {},
-        master_sequence_ids = {},
-        master_video_track_ids = {},
-        master_video_clip_ids = {},
-        master_audio_track_ids = {},    -- Array of arrays
-        master_audio_clip_ids = {},     -- Array of arrays
+        masterclip_sequence_ids = {},   -- The masterclip sequences (IS the master clip)
+        video_track_ids = {},
+        video_clip_ids = {},            -- Stream clips for video
+        audio_track_ids = {},           -- Array of arrays
+        audio_clip_ids = {},            -- Array of arrays (stream clips for audio)
         media_metadata = {},            -- Array of metadata objects
     },
 }
@@ -66,14 +67,17 @@ local function extract_filename(path)
     return name
 end
 
--- Helper: Find existing master clip and related entities by media_id
--- Returns nil if no master clip exists for this media
-local function find_existing_master_clip(db, media_id)
-    -- Find master clip
+-- Helper: Find existing masterclip sequence and related entities by media_id
+-- Returns nil if no masterclip sequence exists for this media
+local function find_existing_masterclip(db, media_id)
+    -- Find masterclip sequence via a stream clip that references this media
+    -- Stream clips are on tracks belonging to masterclip sequences
     local stmt = db:prepare([[
-        SELECT id, source_sequence_id, fps_numerator, fps_denominator
-        FROM clips
-        WHERE media_id = ? AND clip_kind = 'master'
+        SELECT s.id, s.fps_numerator, s.fps_denominator
+        FROM sequences s
+        JOIN tracks t ON t.sequence_id = s.id
+        JOIN clips c ON c.track_id = t.id AND c.media_id = ?
+        WHERE s.kind = 'masterclip'
         LIMIT 1
     ]])
     if not stmt then return nil end
@@ -82,10 +86,9 @@ local function find_existing_master_clip(db, media_id)
         stmt:finalize()
         return nil
     end
-    local master_clip_id = stmt:value(0)
-    local source_sequence_id = stmt:value(1)
-    local old_fps_num = stmt:value(2)
-    local old_fps_den = stmt:value(3)
+    local masterclip_sequence_id = stmt:value(0)
+    local old_fps_num = stmt:value(1)
+    local old_fps_den = stmt:value(2)
     stmt:finalize()
 
     -- Find video track and clip
@@ -93,13 +96,12 @@ local function find_existing_master_clip(db, media_id)
     stmt = db:prepare([[
         SELECT t.id, c.id
         FROM tracks t
-        LEFT JOIN clips c ON c.track_id = t.id AND c.parent_clip_id = ?
-        WHERE t.sequence_id = ? AND t.kind = 'video'
+        LEFT JOIN clips c ON c.track_id = t.id
+        WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
         LIMIT 1
     ]])
     if stmt then
-        stmt:bind_value(1, master_clip_id)
-        stmt:bind_value(2, source_sequence_id)
+        stmt:bind_value(1, masterclip_sequence_id)
         if stmt:exec() and stmt:next() then
             video_track_id = stmt:value(0)
             video_clip_id = stmt:value(1)
@@ -113,13 +115,12 @@ local function find_existing_master_clip(db, media_id)
     stmt = db:prepare([[
         SELECT t.id, c.id
         FROM tracks t
-        LEFT JOIN clips c ON c.track_id = t.id AND c.parent_clip_id = ?
-        WHERE t.sequence_id = ? AND t.kind = 'audio'
-        ORDER BY t.index
+        LEFT JOIN clips c ON c.track_id = t.id
+        WHERE t.sequence_id = ? AND t.track_type = 'AUDIO'
+        ORDER BY t.track_index
     ]])
     if stmt then
-        stmt:bind_value(1, master_clip_id)
-        stmt:bind_value(2, source_sequence_id)
+        stmt:bind_value(1, masterclip_sequence_id)
         if stmt:exec() then
             while stmt:next() do
                 table.insert(audio_track_ids, stmt:value(0))
@@ -130,28 +131,27 @@ local function find_existing_master_clip(db, media_id)
     end
 
     return {
-        master_clip_id = master_clip_id,
-        master_sequence_id = source_sequence_id,
-        master_video_track_id = video_track_id,
-        master_video_clip_id = video_clip_id,
-        master_audio_track_ids = audio_track_ids,
-        master_audio_clip_ids = audio_clip_ids,
+        masterclip_sequence_id = masterclip_sequence_id,
+        video_track_id = video_track_id,
+        video_clip_id = video_clip_id,
+        audio_track_ids = audio_track_ids,
+        audio_clip_ids = audio_clip_ids,
         old_fps_num = old_fps_num,
         old_fps_den = old_fps_den,
     }
 end
 
--- Helper: Update master clip fps values
-local function update_master_clip_fps(db, master_clip_id, fps_num, fps_den)
+-- Helper: Update masterclip sequence fps values
+local function update_masterclip_fps(db, sequence_id, fps_num, fps_den)
     local stmt = db:prepare([[
-        UPDATE clips SET fps_numerator = ?, fps_denominator = ?, modified_at = ?
+        UPDATE sequences SET fps_numerator = ?, fps_denominator = ?, modified_at = ?
         WHERE id = ?
     ]])
     if not stmt then return false end
     stmt:bind_value(1, fps_num)
     stmt:bind_value(2, fps_den)
     stmt:bind_value(3, os.time())
-    stmt:bind_value(4, master_clip_id)
+    stmt:bind_value(4, sequence_id)
     local ok = stmt:exec()
     stmt:finalize()
     return ok
@@ -161,14 +161,14 @@ end
 -- @param file_path string: Path to media file
 -- @param project_id string: Project ID
 -- @param db userdata: Database connection
--- @param replay_ids table: Optional IDs to reuse on replay { media_id, master_clip_id, ... }
+-- @param replay_ids table: Optional IDs to reuse on replay
 -- @param set_last_error function: Error handler
 -- @return table|nil: Created entity IDs or nil on failure
 local function import_single_file(file_path, project_id, db, replay_ids, set_last_error)
     replay_ids = replay_ids or {}
 
     -- TODO: Conflict resolution dialog here (future)
-    -- Currently auto-updates existing master clip. Later: show dialog with Skip/Replace/Keep Both.
+    -- Currently auto-updates existing masterclip. Later: show dialog with Skip/Replace/Keep Both.
     local media_id, metadata, err = MediaReader.import_media(file_path, db, project_id, replay_ids.media_id)
     if not media_id then
         logger.error("import_media", string.format("Failed to import %s: %s", file_path, err or "unknown error"))
@@ -189,27 +189,26 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
         error("ImportMedia: unrecognized frame_rate format for " .. tostring(file_path))
     end
 
-    -- Check if master clip already exists for this media
-    local existing = find_existing_master_clip(db, media_id)
+    -- Check if masterclip sequence already exists for this media
+    local existing = find_existing_masterclip(db, media_id)
     if existing then
-        -- Update master clip fps if changed
+        -- Update masterclip fps if changed
         if existing.old_fps_num ~= fps_num or existing.old_fps_den ~= fps_den then
             logger.info("import_media", string.format(
-                "Updating master clip fps: %d/%d -> %d/%d for %s",
+                "Updating masterclip fps: %d/%d -> %d/%d for %s",
                 existing.old_fps_num, existing.old_fps_den, fps_num, fps_den, file_path))
-            update_master_clip_fps(db, existing.master_clip_id, fps_num, fps_den)
+            update_masterclip_fps(db, existing.masterclip_sequence_id, fps_num, fps_den)
         else
-            logger.debug("import_media", string.format("Master clip already exists for %s, no fps change", file_path))
+            logger.debug("import_media", string.format("Masterclip already exists for %s, no fps change", file_path))
         end
         -- Return existing IDs - skip creating new entities
         return {
             media_id = media_id,
-            master_clip_id = existing.master_clip_id,
-            master_sequence_id = existing.master_sequence_id,
-            master_video_track_id = existing.master_video_track_id,
-            master_video_clip_id = existing.master_video_clip_id,
-            master_audio_track_ids = existing.master_audio_track_ids,
-            master_audio_clip_ids = existing.master_audio_clip_ids,
+            masterclip_sequence_id = existing.masterclip_sequence_id,
+            video_track_id = existing.video_track_id,
+            video_clip_id = existing.video_clip_id,
+            audio_track_ids = existing.audio_track_ids,
+            audio_clip_ids = existing.audio_clip_ids,
             metadata = metadata,
         }
     end
@@ -225,21 +224,22 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
 
     local base_name = extract_filename(file_path)
 
-    -- Create master sequence
-    local sequence = Sequence.create(base_name .. " (Source)", project_id,
+    -- Create masterclip sequence (IS the master clip - no wrapper Clip needed)
+    local sequence = Sequence.create(base_name, project_id,
         {fps_numerator = fps_num, fps_denominator = fps_den},
         assert(metadata and metadata.video and metadata.video.width, "ImportMedia: missing video.width for " .. tostring(file_path)),
         assert(metadata and metadata.video and metadata.video.height, "ImportMedia: missing video.height for " .. tostring(file_path)),
         {
-            id = replay_ids.master_sequence_id,
-            kind = "master"
+            id = replay_ids.masterclip_sequence_id,
+            kind = "masterclip",
+            audio_rate = sample_rate,
         })
     if not sequence then
-        set_last_error("ImportMediaFiles: Failed to create master sequence object")
+        set_last_error("ImportMedia: Failed to create masterclip sequence object")
         return nil
     end
     if not sequence:save() then
-        set_last_error("ImportMediaFiles: Failed to save master sequence")
+        set_last_error("ImportMedia: Failed to save masterclip sequence")
         return nil
     end
 
@@ -248,18 +248,18 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
     local video_track_id = nil
     if metadata and metadata.has_video then
         video_track = Track.create_video("Video 1", sequence.id, {
-            id = replay_ids.master_video_track_id,
+            id = replay_ids.video_track_id,
             index = 1
         })
         if not video_track or not video_track:save() then
-            set_last_error("ImportMediaFiles: Failed to create master video track")
+            set_last_error("ImportMedia: Failed to create video track")
             return nil
         end
         video_track_id = video_track.id
     end
 
     -- Create audio tracks
-    local stored_audio_track_ids = replay_ids.master_audio_track_ids or {}
+    local stored_audio_track_ids = replay_ids.audio_track_ids or {}
     local audio_track_ids = {}
     if metadata and metadata.has_audio then
         local channels = metadata.audio and metadata.audio.channels or 1
@@ -272,42 +272,20 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
                 index = channel
             })
             if not track or not track:save() then
-                set_last_error("ImportMediaFiles: Failed to create master audio track")
+                set_last_error("ImportMedia: Failed to create audio track")
                 return nil
             end
             audio_track_ids[channel] = track.id
         end
     end
 
-    -- Create master clip
-    local master_clip = Clip.create(base_name, media_id, {
-        id = replay_ids.master_clip_id,
-        project_id = project_id,
-        clip_kind = "master",
-        source_sequence_id = sequence.id,
-        timeline_start = 0,
-        duration = duration_frames,
-        source_in = 0,
-        source_out = duration_frames,
-        enabled = true,
-        offline = false,
-        fps_numerator = fps_num,
-        fps_denominator = fps_den
-    })
-    local ok_master, occlusion_actions = master_clip:save({skip_occlusion = true})
-    if not ok_master then
-        set_last_error("ImportMediaFiles: Failed to persist master clip")
-        return nil
-    end
-
-    -- Create video clip in master sequence
+    -- Create video stream clip (no parent_clip_id - the sequence IS the masterclip)
     local video_clip_id = nil
     if video_track then
-        local video_clip = Clip.create(master_clip.name .. " (Video)", media_id, {
-            id = replay_ids.master_video_clip_id,
+        local video_clip = Clip.create(base_name .. " (Video)", media_id, {
+            id = replay_ids.video_clip_id,
             project_id = project_id,
             track_id = video_track.id,
-            parent_clip_id = master_clip.id,
             owner_sequence_id = sequence.id,
             timeline_start = 0,
             duration = duration_frames,
@@ -319,22 +297,20 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
             fps_denominator = fps_den
         })
         if not video_clip:save({skip_occlusion = true}) then
-            set_last_error("ImportMediaFiles: Failed to create master video clip")
+            set_last_error("ImportMedia: Failed to create video stream clip")
             return nil
         end
         video_clip_id = video_clip.id
     end
 
-    -- Create audio clips (use sample rate, not video fps)
-    -- Audio source_in/source_out are in samples at 48kHz
-    local stored_audio_clip_ids = replay_ids.master_audio_clip_ids or {}
+    -- Create audio stream clips (no parent_clip_id)
+    local stored_audio_clip_ids = replay_ids.audio_clip_ids or {}
     local audio_clip_ids = {}
     for index, track_id in ipairs(audio_track_ids) do
-        local audio_clip = Clip.create(string.format("%s (Audio %d)", master_clip.name, index), media_id, {
+        local audio_clip = Clip.create(string.format("%s (Audio %d)", base_name, index), media_id, {
             id = stored_audio_clip_ids[index],
             project_id = project_id,
             track_id = track_id,
-            parent_clip_id = master_clip.id,
             owner_sequence_id = sequence.id,
             timeline_start = 0,
             duration = duration_samples,
@@ -346,7 +322,7 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
             fps_denominator = 1
         })
         if not audio_clip:save({skip_occlusion = true}) then
-            set_last_error("ImportMediaFiles: Failed to create master audio clip")
+            set_last_error("ImportMedia: Failed to create audio stream clip")
             return nil
         end
         audio_clip_ids[index] = audio_clip.id
@@ -354,12 +330,11 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
 
     return {
         media_id = media_id,
-        master_clip_id = master_clip.id,
-        master_sequence_id = sequence.id,
-        master_video_track_id = video_track_id,
-        master_video_clip_id = video_clip_id,
-        master_audio_track_ids = audio_track_ids,
-        master_audio_clip_ids = audio_clip_ids,
+        masterclip_sequence_id = sequence.id,
+        video_track_id = video_track_id,
+        video_clip_id = video_clip_id,
+        audio_track_ids = audio_track_ids,
+        audio_clip_ids = audio_clip_ids,
         metadata = metadata,
     }
 end
@@ -436,29 +411,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Arrays to track all created entities
         local media_ids = args.media_ids or {}
-        local master_clip_ids = args.master_clip_ids or {}
-        local master_sequence_ids = args.master_sequence_ids or {}
-        local master_video_track_ids = args.master_video_track_ids or {}
-        local master_video_clip_ids = args.master_video_clip_ids or {}
-        local master_audio_track_ids = args.master_audio_track_ids or {}
-        local master_audio_clip_ids = args.master_audio_clip_ids or {}
+        local masterclip_sequence_ids = args.masterclip_sequence_ids or {}
+        local video_track_ids = args.video_track_ids or {}
+        local video_clip_ids = args.video_clip_ids or {}
+        local audio_track_ids = args.audio_track_ids or {}
+        local audio_clip_ids = args.audio_clip_ids or {}
         local media_metadata = args.media_metadata or {}
 
         local success_count = 0
         local error_messages = {}
 
         for i, file_path in ipairs(file_paths) do
-            logger.debug("import_media", string.format("ImportMediaFiles[%d]: %s", i, tostring(file_path)))
+            logger.debug("import_media", string.format("ImportMedia[%d]: %s", i, tostring(file_path)))
 
             -- Build replay IDs for deterministic replay
             local replay_ids = {
                 media_id = media_ids[i],
-                master_clip_id = master_clip_ids[i],
-                master_sequence_id = master_sequence_ids[i],
-                master_video_track_id = master_video_track_ids[i],
-                master_video_clip_id = master_video_clip_ids[i],
-                master_audio_track_ids = master_audio_track_ids[i],
-                master_audio_clip_ids = master_audio_clip_ids[i],
+                masterclip_sequence_id = masterclip_sequence_ids[i],
+                video_track_id = video_track_ids[i],
+                video_clip_id = video_clip_ids[i],
+                audio_track_ids = audio_track_ids[i],
+                audio_clip_ids = audio_clip_ids[i],
             }
 
             local result = import_single_file(file_path, project_id, db, replay_ids, set_last_error)
@@ -466,12 +439,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if result then
                 -- Store created IDs
                 media_ids[i] = result.media_id
-                master_clip_ids[i] = result.master_clip_id
-                master_sequence_ids[i] = result.master_sequence_id
-                master_video_track_ids[i] = result.master_video_track_id
-                master_video_clip_ids[i] = result.master_video_clip_id
-                master_audio_track_ids[i] = result.master_audio_track_ids
-                master_audio_clip_ids[i] = result.master_audio_clip_ids
+                masterclip_sequence_ids[i] = result.masterclip_sequence_id
+                video_track_ids[i] = result.video_track_id
+                video_clip_ids[i] = result.video_clip_id
+                audio_track_ids[i] = result.audio_track_ids
+                audio_clip_ids[i] = result.audio_clip_ids
                 media_metadata[i] = result.metadata
 
                 success_count = success_count + 1
@@ -484,12 +456,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Persist all created IDs for undo/redo
         command:set_parameters({
             media_ids = media_ids,
-            master_clip_ids = master_clip_ids,
-            master_sequence_ids = master_sequence_ids,
-            master_video_track_ids = master_video_track_ids,
-            master_video_clip_ids = master_video_clip_ids,
-            master_audio_track_ids = master_audio_track_ids,
-            master_audio_clip_ids = master_audio_clip_ids,
+            masterclip_sequence_ids = masterclip_sequence_ids,
+            video_track_ids = video_track_ids,
+            video_clip_ids = video_clip_ids,
+            audio_track_ids = audio_track_ids,
+            audio_clip_ids = audio_clip_ids,
             media_metadata = media_metadata,
         })
 
@@ -512,21 +483,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_undoers["ImportMedia"] = function(command)
         local args = command:get_all_parameters()
-        logger.info("import_media", "Undoing ImportMediaFiles command")
+        logger.info("import_media", "Undoing ImportMedia command")
 
         -- Delete in reverse order: clips, tracks, sequences, media
-        local master_clip_ids = args.master_clip_ids or {}
-        local master_video_clip_ids = args.master_video_clip_ids or {}
-        local master_audio_clip_ids = args.master_audio_clip_ids or {}
-        local master_video_track_ids = args.master_video_track_ids or {}
-        local master_audio_track_ids = args.master_audio_track_ids or {}
-        local master_sequence_ids = args.master_sequence_ids or {}
+        local video_clip_ids = args.video_clip_ids or {}
+        local audio_clip_ids = args.audio_clip_ids or {}
+        local video_track_ids = args.video_track_ids or {}
+        local audio_track_ids = args.audio_track_ids or {}
+        local masterclip_sequence_ids = args.masterclip_sequence_ids or {}
         local media_ids = args.media_ids or {}
 
-        -- Delete audio clips
-        for i, audio_clip_ids in ipairs(master_audio_clip_ids) do
-            if type(audio_clip_ids) == "table" then
-                for _, clip_id in ipairs(audio_clip_ids) do
+        -- Delete audio stream clips
+        for _, clip_ids_for_file in ipairs(audio_clip_ids) do
+            if type(clip_ids_for_file) == "table" then
+                for _, clip_id in ipairs(clip_ids_for_file) do
                     if clip_id and clip_id ~= "" then
                         local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
                             "UndoImportMedia: failed to prepare audio clip DELETE for " .. tostring(clip_id))
@@ -538,8 +508,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        -- Delete video clips
-        for _, clip_id in ipairs(master_video_clip_ids) do
+        -- Delete video stream clips
+        for _, clip_id in ipairs(video_clip_ids) do
             if clip_id and clip_id ~= "" then
                 local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
                     "UndoImportMedia: failed to prepare video clip DELETE for " .. tostring(clip_id))
@@ -549,21 +519,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        -- Delete master clips
-        for _, clip_id in ipairs(master_clip_ids) do
-            if clip_id and clip_id ~= "" then
-                local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
-                    "UndoImportMedia: failed to prepare master clip DELETE for " .. tostring(clip_id))
-                stmt:bind_value(1, clip_id)
-                assert(stmt:exec(), "UndoImportMedia: master clip DELETE failed for " .. tostring(clip_id))
-                stmt:finalize()
-            end
-        end
-
         -- Delete audio tracks
-        for i, audio_track_ids in ipairs(master_audio_track_ids) do
-            if type(audio_track_ids) == "table" then
-                for _, track_id in ipairs(audio_track_ids) do
+        for _, track_ids_for_file in ipairs(audio_track_ids) do
+            if type(track_ids_for_file) == "table" then
+                for _, track_id in ipairs(track_ids_for_file) do
                     if track_id and track_id ~= "" then
                         local stmt = assert(db:prepare("DELETE FROM tracks WHERE id = ?"),
                             "UndoImportMedia: failed to prepare audio track DELETE for " .. tostring(track_id))
@@ -576,7 +535,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Delete video tracks
-        for _, track_id in ipairs(master_video_track_ids) do
+        for _, track_id in ipairs(video_track_ids) do
             if track_id and track_id ~= "" then
                 local stmt = assert(db:prepare("DELETE FROM tracks WHERE id = ?"),
                     "UndoImportMedia: failed to prepare video track DELETE for " .. tostring(track_id))
@@ -586,8 +545,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        -- Delete sequences
-        for _, seq_id in ipairs(master_sequence_ids) do
+        -- Delete masterclip sequences
+        for _, seq_id in ipairs(masterclip_sequence_ids) do
             if seq_id and seq_id ~= "" then
                 local stmt = assert(db:prepare("DELETE FROM sequences WHERE id = ?"),
                     "UndoImportMedia: failed to prepare sequence DELETE for " .. tostring(seq_id))

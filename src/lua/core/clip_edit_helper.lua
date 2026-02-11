@@ -114,17 +114,18 @@ function M.resolve_edit_time(edit_time, command, param_name)
     return edit_time
 end
 
---- Resolve timing for video stream from master clip
+--- Resolve timing for video stream from source (masterclip sequence or legacy master clip)
 -- Pulls source_in/out from the video stream clip in native video frame units
--- @param master_clip table Master clip with source sequence
+-- Duck-typed: works with any object that has :video_stream() method
+-- @param source table Masterclip sequence or master clip with :video_stream() method
 -- @param params table Optional overrides {source_in, source_out, duration}
 -- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
 -- @return string|nil Error message if failed
-function M.resolve_video_stream_timing(master_clip, params)
+function M.resolve_video_stream_timing(source, params)
     params = params or {}
-    local video = master_clip:video_stream()
+    local video = source:video_stream()
     if not video then
-        return nil, "No video stream in master clip"
+        return nil, "No video stream in source"
     end
 
     local source_in = params.source_in or video.source_in
@@ -140,17 +141,18 @@ function M.resolve_video_stream_timing(master_clip, params)
     }, nil
 end
 
---- Resolve timing for audio stream from master clip
+--- Resolve timing for audio stream from source (masterclip sequence or legacy master clip)
 -- Pulls source_in/out from the first audio stream clip in native sample units
--- @param master_clip table Master clip with source sequence
+-- Duck-typed: works with any object that has :audio_streams() and :frame_to_samples() methods
+-- @param source table Masterclip sequence or master clip with stream methods
 -- @param params table Optional overrides in VIDEO frames (will be converted)
 -- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
 -- @return string|nil Error message if failed
-function M.resolve_audio_stream_timing(master_clip, params)
+function M.resolve_audio_stream_timing(source, params)
     params = params or {}
-    local audio_streams = master_clip:audio_streams()
+    local audio_streams = source:audio_streams()
     if #audio_streams == 0 then
-        return nil, "No audio streams in master clip"
+        return nil, "No audio streams in source"
     end
 
     local audio = audio_streams[1]
@@ -158,7 +160,7 @@ function M.resolve_audio_stream_timing(master_clip, params)
     -- If params provided, they're in video frames - convert to samples
     local source_in, source_out
     if params.source_in then
-        source_in = master_clip:frame_to_samples(params.source_in)
+        source_in = source:frame_to_samples(params.source_in)
         assert(source_in, string.format(
             "clip_edit_helper.resolve_audio_stream_timing: frame_to_samples failed for source_in=%d",
             params.source_in))
@@ -166,7 +168,7 @@ function M.resolve_audio_stream_timing(master_clip, params)
         source_in = audio.source_in
     end
     if params.source_out then
-        source_out = master_clip:frame_to_samples(params.source_out)
+        source_out = source:frame_to_samples(params.source_out)
         assert(source_out, string.format(
             "clip_edit_helper.resolve_audio_stream_timing: frame_to_samples failed for source_out=%d",
             params.source_out))
@@ -259,6 +261,19 @@ function M.resolve_clip_name(args, master_clip, media, caller_name)
         or (media and media.name)
         or caller_name
     assert(name, "clip_edit_helper.resolve_clip_name: unable to determine clip name from args, master_clip, media, or caller")
+    return name
+end
+
+--- Resolve clip name from args or source sequence
+-- @param args table Command args (may have clip_name)
+-- @param source_sequence table Masterclip sequence
+-- @param media table|nil Media for fallback name
+-- @return string Resolved clip name
+function M.resolve_clip_name_for_sequence(args, source_sequence, media)
+    local name = args.clip_name
+        or (source_sequence and source_sequence.name)
+        or (media and media.name)
+    assert(name, "clip_edit_helper.resolve_clip_name_for_sequence: unable to determine clip name from args, source_sequence, or media")
     return name
 end
 

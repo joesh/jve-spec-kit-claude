@@ -225,12 +225,13 @@ function M.show_source_clip(media)
     -- Load and display video frame (asserts on failure)
     local info = load_video_frame(media.file_path)
 
-    -- Load per-clip marks/playhead from DB into source_viewer_state
-    local clip_id = media.clip_id or media.id
-    if clip_id and info then
+    -- Load per-masterclip marks/playhead from DB into source_viewer_state
+    -- sequence_id is the masterclip sequence (IS-a model: masterclip IS a sequence)
+    local sequence_id = media.sequence_id or media.masterclip_sequence_id or media.id
+    if sequence_id and info then
         local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
         if total_frames > 0 then
-            source_viewer_state.load_clip(clip_id, total_frames, info.fps_num, info.fps_den)
+            source_viewer_state.load_masterclip(sequence_id, total_frames, info.fps_num, info.fps_den)
 
             -- Seek to restored playhead position
             local restored_playhead = source_viewer_state.playhead

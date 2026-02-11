@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS sequences (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'timeline', -- 'timeline', 'compound', 'multicam'
+    kind TEXT NOT NULL DEFAULT 'timeline', -- 'masterclip', 'timeline', 'compound', 'multicam'
     
     -- Sequence Video Timebase (The Master Clock)
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),

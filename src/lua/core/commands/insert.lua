@@ -1,18 +1,18 @@
 --- Insert command - wrapper for AddClipsToSequence(edit_type="insert")
 --
 -- Responsibilities:
--- - Load master clip and resolve stream timing
+-- - Load masterclip sequence and resolve stream timing
 -- - Delegate to AddClipsToSequence for actual insertion
 --
 -- Invariants:
--- - Requires master_clip_id with video stream
+-- - Requires source_sequence_id (masterclip sequence)
 -- - Timing comes from stream clips in native units (frames for video, samples for audio)
 --
 -- @file insert.lua
 
 local M = {}
 
-local Clip = require('models.clip')
+local Sequence = require('models.sequence')
 local Media = require('models.media')
 local clip_edit_helper = require('core.clip_edit_helper')
 local rational_helpers = require('core.command_rational_helpers')
@@ -27,8 +27,8 @@ local SPEC = {
         duration = {},
         duration_value = {},
         insert_time = {},
-        master_clip_id = {},
-        media_id = { required = true },
+        source_sequence_id = {},  -- Masterclip sequence (replaces master_clip_id)
+        media_id = {},
         project_id = { required = true },
         sequence_id = {},
         source_in = {},
@@ -75,25 +75,29 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Resolve insert_time from playhead
         local insert_time = clip_edit_helper.resolve_edit_time(args.insert_time, command, "insert_time")
 
-        -- Load master clip - REQUIRED
-        local master_clip_id = args.master_clip_id
-        assert(master_clip_id and master_clip_id ~= "",
-            "Insert command: master_clip_id is required")
-        local master_clip = Clip.load(master_clip_id)
-        assert(master_clip:is_master_clip(), string.format(
-            "Insert command: clip %s is not a master clip (kind=%s)",
-            master_clip_id, tostring(master_clip.clip_kind)))
+        -- Load masterclip sequence - REQUIRED
+        local source_sequence_id = args.source_sequence_id
+        assert(source_sequence_id and source_sequence_id ~= "",
+            "Insert command: source_sequence_id is required")
+        local source_sequence = Sequence.load(source_sequence_id)
+        assert(source_sequence, string.format(
+            "Insert command: sequence %s not found", source_sequence_id))
+        assert(source_sequence:is_masterclip(), string.format(
+            "Insert command: sequence %s is not a masterclip (kind=%s)",
+            source_sequence_id, tostring(source_sequence.kind)))
 
-        -- Get project_id from master clip
-        local project_id = command.project_id or args.project_id or master_clip.project_id
+        -- Get project_id from masterclip sequence
+        local project_id = command.project_id or args.project_id or source_sequence.project_id
         assert(project_id and project_id ~= "", "Insert: missing project_id")
         command:set_parameter("project_id", project_id)
         command.project_id = project_id
 
-        -- Get media_id from master clip
-        local media_id = master_clip.media_id
+        -- Get media_id from video or audio stream clip
+        local video_stream = source_sequence:video_stream()
+        local audio_streams = source_sequence:audio_streams()
+        local media_id = (video_stream and video_stream.media_id) or (audio_streams[1] and audio_streams[1].media_id)
         assert(media_id and media_id ~= "", string.format(
-            "Insert command: master_clip %s has no media_id", master_clip_id))
+            "Insert command: masterclip %s has no media_id in streams", source_sequence_id))
 
         -- Load media for audio channel info
         local media = Media.load(media_id)
@@ -106,20 +110,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         }
 
         -- Get video timing if video stream exists (may be nil for audio-only)
-        local video_timing = clip_edit_helper.resolve_video_stream_timing(master_clip, timing_overrides)
+        local video_timing = clip_edit_helper.resolve_video_stream_timing(source_sequence, timing_overrides)
 
         -- Get audio timing if audio stream exists (may be nil for video-only)
-        local audio_timing = clip_edit_helper.resolve_audio_stream_timing(master_clip, timing_overrides)
+        local audio_timing = clip_edit_helper.resolve_audio_stream_timing(source_sequence, timing_overrides)
 
         -- Must have at least one stream
         assert(video_timing or audio_timing, string.format(
-            "Insert command: master_clip %s has no video or audio streams", master_clip_id))
+            "Insert command: masterclip %s has no video or audio streams", source_sequence_id))
 
         -- insert_time must be integer
         assert(insert_time == nil or type(insert_time) == "number", "Insert: insert_time must be integer")
 
         -- Resolve clip name
-        local clip_name = clip_edit_helper.resolve_clip_name(args, master_clip, media)
+        local clip_name = clip_edit_helper.resolve_clip_name_for_sequence(args, source_sequence, media)
 
         -- Determine audio channels (skip if this is a per-track call from a higher-level command)
         local audio_channels = (media and media.audio_channels) or 0
@@ -133,7 +137,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             table.insert(clips, {
                 role = "video",
                 media_id = media_id,
-                master_clip_id = master_clip_id,
+                source_sequence_id = source_sequence_id,
                 project_id = project_id,
                 name = clip_name,
                 source_in = video_timing.source_in,
@@ -156,7 +160,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     role = "audio",
                     channel = ch,
                     media_id = media_id,
-                    master_clip_id = master_clip_id,
+                    source_sequence_id = source_sequence_id,
                     project_id = project_id,
                     name = clip_name .. " (Audio)",
                     source_in = audio_timing.source_in,
@@ -177,14 +181,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         assert(#clips > 0, string.format(
-            "Insert command: no clips to insert for master_clip %s", master_clip_id))
+            "Insert command: no clips to insert for masterclip %s", source_sequence_id))
 
         -- Build group
         local groups = {
             {
                 clips = clips,
                 duration = group_duration,
-                master_clip_id = master_clip_id,
+                source_sequence_id = source_sequence_id,
             }
         }
 
