@@ -82,6 +82,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true, { target = target }
         end
 
+        -- Stop playback before navigating (NLE convention)
+        local ok, pc = pcall(require, 'core.playback.playback_controller')
+        if ok and pc and pc.state == "playing" then
+            pc.stop()
+        end
+
         if target ~= playhead then
             timeline_state.set_playhead_position(target)
             print(string.format("✅ Moved playhead to next edit (frame %d)", target))

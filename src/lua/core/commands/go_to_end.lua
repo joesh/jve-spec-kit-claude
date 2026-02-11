@@ -52,6 +52,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true, { timeline_end = max_end }
         end
 
+        -- Stop playback before navigating (NLE convention)
+        local ok, pc = pcall(require, 'core.playback.playback_controller')
+        if ok and pc and pc.state == "playing" then
+            pc.stop()
+        end
+
         timeline_state.set_playhead_position(max_end)
         print(string.format("✅ Moved playhead to timeline end (%s)", tostring(max_end)))
         return true

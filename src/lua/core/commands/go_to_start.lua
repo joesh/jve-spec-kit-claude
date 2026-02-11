@@ -38,6 +38,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
+        -- Stop playback before navigating (NLE convention)
+        local ok, pc = pcall(require, 'core.playback.playback_controller')
+        if ok and pc and pc.state == "playing" then
+            pc.stop()
+        end
+
         timeline_state.set_playhead_position(0)
         print("✅ Moved playhead to start")
         return true
