@@ -304,8 +304,10 @@ end
 function Sequence.find_most_recent()
     local conn = resolve_db()
 
+    -- Filter out masterclip sequences - only return timeline sequences
     local stmt = assert(conn:prepare([[
         SELECT id FROM sequences
+        WHERE kind IS NULL OR kind != 'masterclip'
         ORDER BY modified_at DESC, created_at DESC, id ASC
         LIMIT 1
     ]]), "Sequence.find_most_recent: failed to prepare query")
