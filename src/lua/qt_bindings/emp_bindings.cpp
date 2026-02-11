@@ -123,6 +123,10 @@ static int lua_emp_asset_info(lua_State* L) {
     lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
     lua_setfield(L, -2, "start_tc");
 
+    // Rotation in degrees (0, 90, 180, 270) from display matrix
+    lua_pushinteger(L, info.rotation);
+    lua_setfield(L, -2, "rotation");
+
     // Audio fields
     lua_pushboolean(L, info.has_audio);
     lua_setfield(L, -2, "has_audio");
@@ -517,6 +521,22 @@ static int lua_emp_reader_set_max_cache(lua_State* L) {
     return 0;
 }
 
+// EMP.SURFACE_SET_ROTATION(surface_widget, degrees)
+// Set rotation for video surface (0, 90, 180, 270)
+// Currently only CPUVideoSurface supports rotation
+static int lua_emp_surface_set_rotation(lua_State* L) {
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    int degrees = static_cast<int>(luaL_checkinteger(L, 2));
+
+    CPUVideoSurface* cpu_surface = qobject_cast<CPUVideoSurface*>(qwidget);
+    if (cpu_surface) {
+        cpu_surface->setRotation(degrees);
+    }
+    // GPU surface rotation not yet implemented - silently ignore
+    return 0;
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -643,6 +663,8 @@ void register_emp_bindings(lua_State* L) {
     // Surface functions
     lua_pushcfunction(L, lua_emp_surface_set_frame);
     lua_setfield(L, -2, "SURFACE_SET_FRAME");
+    lua_pushcfunction(L, lua_emp_surface_set_rotation);
+    lua_setfield(L, -2, "SURFACE_SET_ROTATION");
 
     lua_setfield(L, -2, "EMP");
 

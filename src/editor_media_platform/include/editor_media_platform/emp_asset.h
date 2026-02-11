@@ -33,6 +33,10 @@ struct AssetInfo {
     // Extracted from stream start_time (e.g., 86400 for 01:00:00:00 @ 24fps)
     int64_t start_tc;
 
+    // Rotation in degrees (0, 90, 180, 270) from display matrix metadata
+    // Applies to phone footage recorded in portrait/landscape modes
+    int rotation;
+
     // Audio stream info
     bool has_audio;
     int32_t audio_sample_rate;  // Source sample rate (e.g., 48000)

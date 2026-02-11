@@ -83,6 +83,7 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         frame_rate = { fps_numerator = num, fps_denominator = den },
         width = tonumber(params.width) or 0, -- NSF-OK: 0 = unknown dimension (audio-only media has no width)
         height = tonumber(params.height) or 0, -- NSF-OK: 0 = unknown dimension
+        rotation = tonumber(params.rotation) or 0, -- NSF-OK: 0 = no rotation
         audio_channels = tonumber(params.audio_channels) or 0, -- NSF-OK: 0 = unknown/not applicable
         codec = params.codec or "", -- NSF-OK: "" = unknown codec
         created_at = params.created_at or os.time(),
@@ -103,7 +104,7 @@ function M.load(media_id)
 
     local query = assert(db:prepare([[
         SELECT id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
-               width, height, audio_channels, codec, created_at, modified_at, metadata
+               width, height, rotation, audio_channels, codec, created_at, modified_at, metadata
         FROM media WHERE id = ?
     ]]), string.format("Media.load: failed to prepare query for media_id=%s", media_id))
 
@@ -133,11 +134,12 @@ function M.load(media_id)
         frame_rate = { fps_numerator = num, fps_denominator = den },
         width = tonumber(query:value(7)) or 0, -- NSF-OK: 0 = unknown dimension
         height = tonumber(query:value(8)) or 0, -- NSF-OK: 0 = unknown dimension
-        audio_channels = tonumber(query:value(9)) or 0, -- NSF-OK: 0 = unknown
-        codec = query:value(10),
-        created_at = query:value(11),
-        modified_at = query:value(12),
-        metadata = query:value(13)
+        rotation = tonumber(query:value(9)) or 0, -- NSF-OK: 0 = no rotation
+        audio_channels = tonumber(query:value(10)) or 0, -- NSF-OK: 0 = unknown
+        codec = query:value(11),
+        created_at = query:value(12),
+        modified_at = query:value(13),
+        metadata = query:value(14)
     }
     
     query:finalize()
@@ -169,8 +171,8 @@ function M:save()
     end
     
     local query = db:prepare([[
-        INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, rotation, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -180,6 +182,7 @@ function M:save()
             fps_denominator = excluded.fps_denominator,
             width = excluded.width,
             height = excluded.height,
+            rotation = excluded.rotation,
             audio_channels = excluded.audio_channels,
             codec = excluded.codec,
             modified_at = excluded.modified_at,
@@ -200,11 +203,12 @@ function M:save()
     query:bind_value(7, den)
     query:bind_value(8, self.width)
     query:bind_value(9, self.height)
-    query:bind_value(10, self.audio_channels)
-    query:bind_value(11, self.codec)
-    query:bind_value(12, self.created_at)
-    query:bind_value(13, self.modified_at)
-    query:bind_value(14, self.metadata)
+    query:bind_value(10, self.rotation or 0)
+    query:bind_value(11, self.audio_channels)
+    query:bind_value(12, self.codec)
+    query:bind_value(13, self.created_at)
+    query:bind_value(14, self.modified_at)
+    query:bind_value(15, self.metadata)
 
     if not query:exec() then
         logger.warn("media", string.format("Media:save: Query execution failed: %s", query:last_error()))

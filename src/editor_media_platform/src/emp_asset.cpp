@@ -96,6 +96,24 @@ Result<std::shared_ptr<Asset>> Asset::Open(const std::string& path) {
         info.video_fps_num = nominal.num;
         info.video_fps_den = nominal.den;
         info.is_vfr = is_vfr;
+
+        // Extract rotation from display matrix side data (phone footage)
+        // FFmpeg 7+: side data is in codecpar->coded_side_data
+        info.rotation = 0;
+        AVCodecParameters* params_for_rotation = impl->fmt_ctx.video_codec_params();
+        for (int i = 0; i < params_for_rotation->nb_coded_side_data; i++) {
+            AVPacketSideData* sd = &params_for_rotation->coded_side_data[i];
+            if (sd->type == AV_PKT_DATA_DISPLAYMATRIX && sd->size >= sizeof(int32_t) * 9) {
+                double theta = av_display_rotation_get(reinterpret_cast<const int32_t*>(sd->data));
+                // Normalize to 0, 90, 180, 270 (FFmpeg returns negative for CW rotation)
+                int rot = static_cast<int>(-theta);
+                while (rot < 0) rot += 360;
+                while (rot >= 360) rot -= 360;
+                // Snap to nearest 90° increment
+                info.rotation = ((rot + 45) / 90) * 90 % 360;
+                break;
+            }
+        }
     } else {
         info.has_video = false;
         info.video_width = 0;
@@ -104,6 +122,7 @@ Result<std::shared_ptr<Asset>> Asset::Open(const std::string& path) {
         info.video_fps_num = 0;
         info.video_fps_den = 1;
         info.is_vfr = false;
+        info.rotation = 0;
     }
 
     // Find audio stream (optional - video-only files are valid)

@@ -49,14 +49,32 @@ void CPUVideoSurface::clearFrame() {
     update();
 }
 
+void CPUVideoSurface::setRotation(int degrees) {
+    // Normalize to 0, 90, 180, 270
+    int normalized = degrees % 360;
+    if (normalized < 0) normalized += 360;
+    normalized = (normalized / 90) * 90;  // Snap to nearest 90
+    if (m_rotation != normalized) {
+        m_rotation = normalized;
+        update();
+    }
+}
+
 void CPUVideoSurface::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.fillRect(rect(), Qt::black);
 
     if (m_image.isNull()) return;
 
-    // Letterbox
-    double frame_aspect = (double)m_image.width() / m_image.height();
+    // For 90/270 rotation, effective dimensions are swapped
+    int img_w = m_image.width();
+    int img_h = m_image.height();
+    bool swap_dims = (m_rotation == 90 || m_rotation == 270);
+    double frame_w = swap_dims ? img_h : img_w;
+    double frame_h = swap_dims ? img_w : img_h;
+
+    // Letterbox with effective dimensions
+    double frame_aspect = frame_w / frame_h;
     double widget_aspect = (double)width() / height();
 
     QRect dest;
@@ -69,5 +87,27 @@ void CPUVideoSurface::paintEvent(QPaintEvent*) {
     }
 
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    painter.drawImage(dest, m_image);
+
+    if (m_rotation == 0) {
+        painter.drawImage(dest, m_image);
+    } else {
+        // Apply rotation transform
+        painter.save();
+        painter.translate(dest.center());
+        painter.rotate(m_rotation);
+        // After rotation, draw centered on origin
+        QRectF src_rect(0, 0, img_w, img_h);
+        QRectF dst_rect;
+        if (swap_dims) {
+            // 90/270: dest rect has swapped effective size
+            dst_rect = QRectF(-dest.height() / 2.0, -dest.width() / 2.0,
+                              dest.height(), dest.width());
+        } else {
+            // 180: dest rect is same
+            dst_rect = QRectF(-dest.width() / 2.0, -dest.height() / 2.0,
+                              dest.width(), dest.height());
+        }
+        painter.drawImage(dst_rect, m_image, src_rect);
+        painter.restore();
+    }
 }

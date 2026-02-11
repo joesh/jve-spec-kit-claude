@@ -91,6 +91,35 @@ local function run_ffprobe(file_path)
     return data, nil
 end
 
+--- Extract rotation from video stream
+-- FFprobe stores rotation in side_data_list (displaymatrix) or stream tags
+-- @param stream table Video stream data from FFprobe
+-- @return number Rotation in degrees (0, 90, 180, 270)
+local function extract_rotation(stream)
+    -- Check side_data_list for displaymatrix
+    if stream.side_data_list then
+        for _, sd in ipairs(stream.side_data_list) do
+            if sd.side_data_type == "Display Matrix" and sd.rotation then
+                local rot = tonumber(sd.rotation) or 0
+                -- Normalize to 0, 90, 180, 270
+                rot = math.floor(rot + 0.5)
+                while rot < 0 do rot = rot + 360 end
+                rot = rot % 360
+                return ((rot + 45) / 90) * 90 % 360
+            end
+        end
+    end
+    -- Check stream tags for rotation
+    if stream.tags and stream.tags.rotate then
+        local rot = tonumber(stream.tags.rotate) or 0
+        rot = math.floor(rot + 0.5)
+        while rot < 0 do rot = rot + 360 end
+        rot = rot % 360
+        return ((rot + 45) / 90) * 90 % 360
+    end
+    return 0
+end
+
 --- Find first video stream in probe data
 -- @param probe_data table FFprobe output data
 -- @return table|nil Video stream data, or nil if no video found
@@ -196,7 +225,8 @@ function M.probe_file(file_path)
             width = video_stream.width or 0,
             height = video_stream.height or 0,
             frame_rate = video_stream.frame_rate or 0,
-            codec = video_stream.codec_name or "unknown"
+            codec = video_stream.codec_name or "unknown",
+            rotation = extract_rotation(video_stream)
         }
     end
 
@@ -252,6 +282,7 @@ function M.import_media(file_path, db, project_id, existing_media_id)
         frame_rate = metadata.video and metadata.video.frame_rate or 0,
         width = metadata.video and metadata.video.width or 0,
         height = metadata.video and metadata.video.height or 0,
+        rotation = metadata.video and metadata.video.rotation or 0,
         audio_channels = metadata.audio and metadata.audio.channels or 0,
         codec = primary_codec,
         created_at = os.time(),

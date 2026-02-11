@@ -56,6 +56,11 @@ local function load_video_frame(file_path)
     -- Activate via media_cache pool (opens dual assets, or pool-hit if cached)
     local info = media_cache.activate(file_path)
 
+    -- Apply rotation from media metadata (phone footage portrait/landscape)
+    if qt_constants.EMP.SURFACE_SET_ROTATION then
+        qt_constants.EMP.SURFACE_SET_ROTATION(video_surface, info.rotation or 0)
+    end
+
     -- Get and display frame 0
     if not SKIP_VIDEO then
         local frame = media_cache.get_video_frame(0)
@@ -76,8 +81,13 @@ end
 -- Clear video surface
 local function clear_video_surface()
     cleanup()
-    if video_surface and qt_constants.EMP and qt_constants.EMP.SURFACE_SET_FRAME then
-        qt_constants.EMP.SURFACE_SET_FRAME(video_surface, nil)
+    if video_surface and qt_constants.EMP then
+        if qt_constants.EMP.SURFACE_SET_ROTATION then
+            qt_constants.EMP.SURFACE_SET_ROTATION(video_surface, 0)
+        end
+        if qt_constants.EMP.SURFACE_SET_FRAME then
+            qt_constants.EMP.SURFACE_SET_FRAME(video_surface, nil)
+        end
     end
 end
 

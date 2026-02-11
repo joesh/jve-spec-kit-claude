@@ -349,6 +349,12 @@ function M.get_file_path()
     return M.active_path
 end
 
+function M.get_rotation()
+    if not M.is_loaded() then return 0 end
+    local info = active_entry().info
+    return info and info.rotation or 0
+end
+
 --------------------------------------------------------------------------------
 -- Lifecycle: Pool-based activate / cleanup
 --------------------------------------------------------------------------------

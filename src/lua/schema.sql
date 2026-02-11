@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS media (
     -- Metadata
     width INTEGER DEFAULT 0,
     height INTEGER DEFAULT 0,
+    rotation INTEGER DEFAULT 0, -- 0, 90, 180, 270 from display matrix
     audio_channels INTEGER DEFAULT 0,
     codec TEXT DEFAULT '',
     metadata TEXT DEFAULT '{}', -- JSON

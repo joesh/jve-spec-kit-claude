@@ -25,6 +25,10 @@ public:
     // Clear display
     void clearFrame();
 
+    // Set rotation (0, 90, 180, 270 degrees)
+    void setRotation(int degrees);
+    int rotation() const { return m_rotation; }
+
     int frameWidth() const { return m_frameWidth; }
     int frameHeight() const { return m_frameHeight; }
 
@@ -35,4 +39,5 @@ private:
     QImage m_image;
     int m_frameWidth = 0;
     int m_frameHeight = 0;
+    int m_rotation = 0;  // 0, 90, 180, 270
 };
