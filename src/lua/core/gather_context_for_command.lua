@@ -18,11 +18,9 @@
 
 local M = {}
 
-local Track = require("models.track")
 local Media = require("models.media")
 local clip_media = require("core.utils.clip_media")
 local track_resolver = require("core.utils.track_resolver")
-local logger = require("core.logger")
 
 --- Get the clip's stored marks or fall back to full duration
 -- @param clip table Master clip with source_in, source_out, duration fields
@@ -39,20 +37,15 @@ local function resolve_clip_marks(clip, media, fps_num, fps_den)
     local source_out = clip.source_out
     local duration = clip.duration
 
-    -- Normalize source_in to integer
-    if type(source_in) == "number" then
-        -- Already integer, good
-    elseif source_in == nil then
-        -- Fall back to start of media
+    -- Normalize source_in to integer (number = valid, nil = fallback to 0)
+    if source_in == nil then
         source_in = 0
-    else
+    elseif type(source_in) ~= "number" then
         error("gather_context: source_in must be integer, got " .. type(source_in))
     end
 
-    -- Normalize source_out to integer
-    if type(source_out) == "number" then
-        -- Already integer, good
-    elseif source_out == nil then
+    -- Normalize source_out to integer (number = valid, nil = derive from duration)
+    if source_out == nil then
         -- Derive from duration or media duration
         if duration then
             assert(type(duration) == "number", "gather_context: duration must be integer")
@@ -62,7 +55,7 @@ local function resolve_clip_marks(clip, media, fps_num, fps_den)
             assert(type(media.duration) == "number", "gather_context: media.duration must be integer")
             source_out = source_in + media.duration
         end
-    else
+    elseif type(source_out) ~= "number" then
         error("gather_context: source_out must be integer, got " .. type(source_out))
     end
 
