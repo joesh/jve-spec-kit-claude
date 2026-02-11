@@ -82,6 +82,10 @@ local M = {
     aop_epoch_playhead_us = 0,   -- AOP playhead reading at last reanchor
     max_media_time_us = 0,       -- Max playback time (set by controller)
 
+    -- Exhaustion tracking (set by pump, read by is_exhausted)
+    -- SSE.STARVED flag gets cleared by pump, so we track state here
+    _exhausted_at_boundary = false,
+
     -- Export constants for tests/external access
     Q1 = Q1,
     Q2 = Q2,
@@ -289,6 +293,9 @@ local function reanchor(new_media_time_us, new_signed_speed, new_quality_mode)
     -- Clear cached PCM range (will refetch around new position)
     last_pcm_range = { start_us = 0, end_us = 0 }
     last_fetch_pb_start_us = nil
+
+    -- Clear exhaustion flag (new transport event = fresh start)
+    M._exhausted_at_boundary = false
 
     logger.debug("audio_playback", ("reanchor: t=%.3fs speed=%.2f Q%d")
         :format(new_media_time_us / 1000000, new_signed_speed, new_quality_mode))
@@ -550,16 +557,17 @@ function M.is_ready()
     return M.session_initialized and M.has_audio
 end
 
---- Check if audio has reached clip boundary (exhausted)
--- Returns true when current audio time >= clip end time.
--- Used by timeline_playback to switch to frame-based timing.
-function M.is_at_clip_boundary()
+--- Check if audio is exhausted (SSE starved at clip boundary).
+-- Unlike stuckness detection (same frame twice), this detects when SSE has
+-- no more PCM to render. AOP playhead keeps advancing (playing silence),
+-- so time-based stuckness won't trigger. This is the authoritative signal.
+-- Note: Uses _exhausted_at_boundary flag set by pump, NOT SSE.STARVED()
+-- (which gets cleared by pump before tick() can check it).
+-- @return boolean true if SSE starved at boundary (no more audio to play)
+function M.is_exhausted()
     if not M.session_initialized then return false end
-    if #M.audio_sources == 0 then return true end  -- no sources = at boundary
-    local clip_end = get_min_clip_end_us()
-    local current_time = M.get_time_us()
-    -- Consider "at boundary" if within 50ms of clip end
-    return current_time >= clip_end - 50000
+    if #M.audio_sources == 0 then return true end  -- no sources = exhausted
+    return M._exhausted_at_boundary
 end
 
 --- Set max playback time (called by playback_controller)
@@ -676,6 +684,9 @@ function M.stop()
     -- Store captured time for resume
     M.media_time_us = heard_time
     M.media_anchor_us = heard_time
+
+    -- Clear exhaustion flag
+    M._exhausted_at_boundary = false
 
     logger.debug("audio_playback", ("Stopped at %.3fs"):format(heard_time / 1000000))
 end
@@ -1176,13 +1187,15 @@ function M._pump_tick()
                     qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
             end
 
-            -- SSE starvation logging (NSF: always log, never silently clear)
+            -- SSE starvation detection + exhaustion tracking
             if qt_constants.SSE.STARVED(M.sse) then
                 local render_pos = qt_constants.SSE.CURRENT_TIME_US(M.sse)
                 local margin_us = 50000  -- 50ms margin for packet alignment
                 local at_boundary = render_pos <= last_pcm_range.start_us + margin_us or
                                     render_pos >= last_pcm_range.end_us - margin_us
                 if at_boundary then
+                    -- Set exhaustion flag for is_exhausted() (SSE.STARVED gets cleared below)
+                    M._exhausted_at_boundary = true
                     logger.debug("audio_playback", ("SSE starved at boundary (render_pos=%.3fs, cache=[%.3fs,%.3fs], speed=%.2f)")
                         :format(render_pos / 1000000, last_pcm_range.start_us / 1000000,
                             last_pcm_range.end_us / 1000000, M.speed))

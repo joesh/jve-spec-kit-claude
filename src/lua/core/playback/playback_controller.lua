@@ -612,24 +612,11 @@ function M.stop()
 end
 
 --- Play forward at 1x speed (Spacebar play)
+-- No pre-check for boundary position - first tick() handles it naturally via
+-- stuckness detection: at last frame, audio is stuck, boundary check stops playback.
 function M.play()
     if M.state == "playing" then
         return
-    end
-
-    -- In timeline mode, refuse to play if at last frame or beyond (nothing to play forward)
-    if M.timeline_mode then
-        local content_end = get_content_end_frame()
-        local pos = math.floor(M.get_position())
-        logger.debug("playback_controller", string.format(
-            "Play check: pos=%d, content_end=%d, timeline_mode=%s",
-            pos, content_end, tostring(M.timeline_mode)))
-        -- content_end is exclusive (frame count), so last playable frame is content_end - 1
-        -- At last frame, there's nothing ahead to play
-        if content_end > 0 and pos >= content_end - 1 then
-            logger.debug("playback_controller", "Play refused: at or beyond last frame")
-            return
-        end
     end
 
     M.direction = 1
@@ -877,14 +864,22 @@ function M._tick()
 
         -- Same-frame skip: if audio hasn't advanced past the last displayed frame
         -- AND no external move occurred, skip this tick (avoids redundant decode).
+        -- EXCEPTION: When audio is exhausted, we must let tick() run to handle
+        -- the transition to frame-based advancement and eventual boundary stop.
         if not external_move
            and audio_playback and audio_playback.is_ready() and audio_playback.playing then
             local audio_time = audio_playback.get_time_us()
             local audio_frame = helpers.calc_frame_from_time_us(
                 audio_time, M.fps_num, M.fps_den)
             if M._last_tick_frame ~= nil and audio_frame == M._last_tick_frame then
-                M._schedule_tick()
-                return
+                -- Check if audio is exhausted - if so, don't skip
+                local audio_exhausted = audio_playback.is_exhausted
+                    and audio_playback.is_exhausted()
+                if not audio_exhausted then
+                    M._schedule_tick()
+                    return
+                end
+                -- Audio exhausted: let tick() run to stop playback
             end
         end
 
@@ -919,6 +914,7 @@ function M._tick()
             total_frames = content_end,
             sequence_id = M.sequence_id,
             current_clip_id = M.current_clip_id,
+            last_tick_frame = M._last_tick_frame,
         }
         local result = timeline_playback.tick(tick_in, audio_playback, viewer_panel)
 
