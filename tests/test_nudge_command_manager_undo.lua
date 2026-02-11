@@ -8,7 +8,6 @@ local database = require("core.database")
 local import_schema = require("import_schema")
 local command_manager = require("core.command_manager")
 local Command = require("command")
-local Rational = require("core.rational")
 
 local DB_PATH = "/tmp/jve/test_nudge_cmd_mgr_undo.db"
 os.remove(DB_PATH)

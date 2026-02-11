@@ -9,7 +9,6 @@ require('test_env')
 local database = require('core.database')
 local Media = require('models.media')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 
 print("=== AddClipsToSequence Redo Hydration Test ===\n")
 
@@ -52,15 +51,10 @@ local media = Media.create({
 })
 media:save(db)
 
--- Create master clips (required by foreign key)
-db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-    VALUES ('master_1', 'project', 'master', 'Master 1', 'media_1', 0, 100, 0, 100, 24, 1, 1, %d, %d);
-]], now, now))
-db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-    VALUES ('master_2', 'project', 'master', 'Master 2', 'media_1', 0, 100, 0, 100, 24, 1, 1, %d, %d);
-]], now, now))
+-- Create masterclip sequences (IS-a refactor: masterclip IS a sequence)
+local test_env = require("test_env")
+local master_1 = test_env.create_test_masterclip_sequence("project", "Master 1", 24, 1, 100, "media_1")
+local master_2 = test_env.create_test_masterclip_sequence("project", "Master 2", 24, 1, 100, "media_1")
 
 -- Helper: count timeline clips
 local function count_timeline_clips()
@@ -80,13 +74,13 @@ print("Test: AddClipsToSequence execute → undo → redo cycle")
 -- Build groups with Rational durations
 local groups = {
     {
-        master_clip_id = "master_1",
+        master_clip_id = master_1,  -- variable, not string
         duration = 50,
         clips = {
             {
                 role = "video",
                 media_id = "media_1",
-                master_clip_id = "master_1",
+                master_clip_id = master_1,  -- variable, not string
                 project_id = "project",
                 name = "Clip 1",
                 source_in = 0,
@@ -99,13 +93,13 @@ local groups = {
         }
     },
     {
-        master_clip_id = "master_2",
+        master_clip_id = master_2,  -- variable, not string
         duration = 75,
         clips = {
             {
                 role = "video",
                 media_id = "media_1",
-                master_clip_id = "master_2",
+                master_clip_id = master_2,  -- variable, not string
                 project_id = "project",
                 name = "Clip 2",
                 source_in = 0,

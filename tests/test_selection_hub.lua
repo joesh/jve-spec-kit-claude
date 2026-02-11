@@ -201,26 +201,25 @@ do
 end
 
 -- ============================================================
--- listeners — error isolation
+-- listeners — fail-fast (no error isolation)
 -- ============================================================
-print("\n--- listener error isolation ---")
+print("\n--- listener fail-fast ---")
 do
     fresh()
     selection_hub.set_active_panel("timeline")
 
-    local good_called = false
+    -- Register a listener that crashes
     local should_crash = false
-
-    -- Register a listener that only crashes after we enable it (avoid crash during registration callback)
     selection_hub.register_listener(function()
         if should_crash then error("listener crash") end
     end)
-    selection_hub.register_listener(function() good_called = true end)
 
-    -- Now enable crash and trigger notification
+    -- Enable crash - should propagate up (fail-fast policy)
     should_crash = true
-    selection_hub.update_selection("timeline", {"test"})
-    check("good listener called despite crash", good_called)
+    local ok, err = pcall(function()
+        selection_hub.update_selection("timeline", {"test"})
+    end)
+    check("listener errors propagate (fail-fast)", not ok and err:find("listener crash"))
 end
 
 -- ============================================================

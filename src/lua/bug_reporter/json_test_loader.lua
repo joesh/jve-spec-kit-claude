@@ -41,7 +41,7 @@ function JsonTestLoader.load(json_path)
     file:close()
 
     -- Parse JSON
-    local test, pos, err = dkjson.decode(content)
+    local test, _, err = dkjson.decode(content)
     if not test then
         return nil, "Failed to parse JSON: " .. (err or "unknown error")
     end

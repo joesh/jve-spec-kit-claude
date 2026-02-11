@@ -8,7 +8,6 @@ require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
-local Rational = require("core.rational")
 local import_schema = require("import_schema")
 
 local DB_PATH = "/tmp/jve/test_nudge_undo_occlusion.db"

@@ -9,7 +9,6 @@ require('test_env')
 
 local database = require("core.database")
 local import_schema = require("import_schema")
-local Rational = require("core.rational")
 
 -- Initialize database
 local DB_PATH = "/tmp/jve/test_timeline_playback_resolve.db"
@@ -93,6 +92,9 @@ local function make_mock_viewer()
         show_gap = function()
             table.insert(calls, {fn = "show_gap"})
         end,
+        set_rotation = function(degrees)
+            table.insert(calls, {fn = "set_rotation", degrees = degrees})
+        end,
     }
 end
 
@@ -114,16 +116,18 @@ local function test_clip_at_playhead()
     assert(activate_calls[1] == "/test/clip_a.mov",
         "Should activate clip_a media, got " .. tostring(activate_calls[1]))
 
-    -- viewer_panel should get show_frame_at_time
-    assert(#viewer.calls == 1,
-        string.format("Expected 1 viewer call (show_frame_at_time), got %d", #viewer.calls))
-    assert(viewer.calls[1].fn == "show_frame_at_time",
-        "Call should be show_frame_at_time, got " .. viewer.calls[1].fn)
+    -- viewer_panel should get set_rotation + show_frame_at_time (in that order on clip switch)
+    assert(#viewer.calls == 2,
+        string.format("Expected 2 viewer calls (set_rotation, show_frame_at_time), got %d", #viewer.calls))
+    assert(viewer.calls[1].fn == "set_rotation",
+        "First call should be set_rotation, got " .. viewer.calls[1].fn)
+    assert(viewer.calls[2].fn == "show_frame_at_time",
+        "Second call should be show_frame_at_time, got " .. viewer.calls[2].fn)
 
     -- source_time_us for frame 10 with source_in=0: frame 10 -> 10/24 * 1e6
     local expected_us = math.floor(10 * 1000000 / 24)
-    assert(math.abs(viewer.calls[1].source_time_us - expected_us) < 1000,
-        string.format("source_time_us: expected ~%d, got %d", expected_us, viewer.calls[1].source_time_us))
+    assert(math.abs(viewer.calls[2].source_time_us - expected_us) < 1000,
+        string.format("source_time_us: expected ~%d, got %d", expected_us, viewer.calls[2].source_time_us))
 
     -- Returned clip id should track current clip
     assert(new_clip_id == "clip_a",
@@ -204,14 +208,14 @@ local function test_clip_switch_triggers_source_change()
     assert(activate_calls[1] == "/test/clip_b.mov",
         "Should activate clip_b media, got " .. tostring(activate_calls[1]))
 
-    assert(#viewer.calls == 1,
-        string.format("Expected 1 viewer call (show_frame_at_time), got %d", #viewer.calls))
+    assert(#viewer.calls == 2,
+        string.format("Expected 2 viewer calls (set_rotation, show_frame_at_time), got %d", #viewer.calls))
 
     -- source_time_us for frame 80: offset = 80-72 = 8 frames, source_in=10, so source_frame=18
     -- 18/24 * 1e6
     local expected_us = math.floor(18 * 1000000 / 24)
-    assert(math.abs(viewer.calls[1].source_time_us - expected_us) < 1000,
-        string.format("source_time_us: expected ~%d, got %d", expected_us, viewer.calls[1].source_time_us))
+    assert(math.abs(viewer.calls[2].source_time_us - expected_us) < 1000,
+        string.format("source_time_us: expected ~%d, got %d", expected_us, viewer.calls[2].source_time_us))
 
     assert(new_clip_id == "clip_b",
         "new_clip_id should be clip_b, got " .. tostring(new_clip_id))

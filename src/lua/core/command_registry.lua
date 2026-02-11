@@ -44,6 +44,13 @@ local module_aliases = {
     -- Link/Unlink live in link_clips.lua
     LinkClips = "core.commands.link_clips",
     UnlinkClips = "core.commands.link_clips",
+
+    -- Source viewer mark commands live in source_marks.lua
+    SourceViewerSetMarkIn = "core.commands.source_marks",
+    SourceViewerSetMarkOut = "core.commands.source_marks",
+    SourceViewerGoToMarkIn = "core.commands.source_marks",
+    SourceViewerGoToMarkOut = "core.commands.source_marks",
+    SourceViewerClearMarks = "core.commands.source_marks",
 }
 function M.init(database, set_last_error_fn)
     db = database

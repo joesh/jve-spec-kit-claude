@@ -94,7 +94,6 @@ local renderer_utils = require("ui.timeline.view.timeline_view_renderer")
 -- that the renderer will consume. The renderer's build_preview_from_payload() filters gaps.
 
 -- Simulate what build_preview_from_payload does:
-local Rational = require("core.rational")
 local filtered_affected = {}
 for _, entry in ipairs(payload.affected_clips or {}) do
     local is_gap = false

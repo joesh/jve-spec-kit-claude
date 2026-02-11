@@ -164,6 +164,50 @@ local function get_text(elem)
     return elem.text:match("^%s*(.-)%s*$")  -- Trim whitespace
 end
 
+--- Decode a big-endian IEEE 754 double from hex string at given offset
+-- @param hex_str string: Hex string containing doubles
+-- @param offset number: Character offset (0 = first double, 16 = second double)
+-- @return number|nil: Decoded double value, or nil if invalid
+local function decode_hex_double_at(hex_str, offset)
+    if not hex_str or #hex_str < offset + 16 then return nil end
+
+    local ffi = require("ffi")
+
+    -- Parse 16 hex chars (8 bytes) into byte array starting at offset
+    -- DRP stores doubles in little-endian byte order (x86 native), no reversal needed
+    local bytes = ffi.new("uint8_t[8]")
+    for i = 0, 7 do
+        local hex_byte = hex_str:sub(offset + i * 2 + 1, offset + i * 2 + 2)
+        local byte_val = tonumber(hex_byte, 16)
+        if not byte_val then return nil end
+        bytes[i] = byte_val
+    end
+
+    -- Cast directly to double (already little-endian)
+    local double_ptr = ffi.cast("double*", bytes)
+    return double_ptr[0]
+end
+
+--- Decode a big-endian IEEE 754 double from 16-char hex string
+-- DRP stores fps/resolution as 128-bit hex: two doubles, we take the first
+-- Example: "00000000000038400000000000000000" = 24.0 (fps)
+-- @param hex_str string: 32-char hex string (first 16 chars used)
+-- @return number|nil: Decoded double value, or nil if invalid
+local function decode_hex_double(hex_str)
+    return decode_hex_double_at(hex_str, 0)
+end
+
+--- Decode resolution from 32-char hex string (two doubles: width, height)
+-- Example: "00000000000087400000000000e08640" = 1920×1080
+-- @param hex_str string: 32-char hex string
+-- @return number|nil, number|nil: width, height (or nil if invalid)
+local function decode_hex_resolution(hex_str)
+    if not hex_str or #hex_str < 32 then return nil, nil end
+    local width = decode_hex_double_at(hex_str, 0)
+    local height = decode_hex_double_at(hex_str, 16)
+    return width, height
+end
+
 --- Parse Resolve timecode string to integer frames
 -- Resolve uses rational notation: "900/30" = frame 900 at 30fps
 -- @param timecode_str string: Timecode string (e.g., "900/30")
@@ -191,11 +235,6 @@ local function parse_resolve_timecode(timecode_str, frame_rate)
     end
 
     return 0
-end
-
--- All coordinates are now integer frames - this function just returns frames
-local function frames_to_int(frames, _frame_rate)
-    return math.floor(frames + 0.5)
 end
 
 --- Parse project.xml to extract project metadata
@@ -324,17 +363,11 @@ local function parse_master_clip_element(clip_elem, folder_id)
     local mark_out_elem = find_direct_child(clip_elem, "MarkOut")
     local playhead_elem = find_direct_child(clip_elem, "CurPlayheadPosition")
 
-    -- Extract file path from Video/BtVideoInfo or embedded audio
-    local file_path = nil
-    local video_info = find_element(clip_elem, "BtVideoInfo")
-    if video_info then
-        -- Video clips have path encoded in Clip field (binary) - we'll match by name later
-        -- For now, we rely on the name matching the media file
-    end
+    -- TODO: Extract file path from Video/BtVideoInfo or embedded audio
+    -- Video clips have path encoded in Clip field (binary) - we'll match by name later
+    -- For now, we rely on the name matching the media file
 
-    -- Parse duration from Video/BtVideoInfo/Time if available
-    local duration_frames = nil
-    local fps_num, fps_den = nil, nil
+    -- TODO: Parse duration from Video/BtVideoInfo/Time if available
 
     local master_clip = {
         id = db_id,
@@ -453,7 +486,7 @@ local function parse_media_pool_hierarchy(tmp_dir)
 end
 
 -- ---------------------------------------------------------------------------
--- Timeline Name Resolution
+-- Timeline Metadata Resolution
 -- ---------------------------------------------------------------------------
 --
 -- Resolve's .drp format stores timeline metadata separately from sequence data:
@@ -464,25 +497,26 @@ end
 --   MediaPool/**/*.xml     → Contains Sm2Timeline elements with:
 --                            - <Name> (the timeline's display name)
 --                            - <Sequence><Sm2Sequence DbId="..."> (the sequence ID)
+--                            - <Sequence><Sm2Sequence><FrameRate> (hex-encoded fps)
 --
--- To get timeline names, we must:
+-- To get timeline metadata, we must:
 -- 1. Recursively scan all MpFolder.xml files in MediaPool/
 -- 2. Find all <Sm2Timeline> elements
--- 3. Extract the nested <Sm2Sequence DbId> and <Name>
--- 4. Build a map: Sequence ID → Timeline Name
--- 5. When parsing SeqContainer, look up names using track's <Sequence> ref
+-- 3. Extract <Name>, <Sm2Sequence DbId>, and <FrameRate>
+-- 4. Build a map: Sequence ID → {name, fps}
+-- 5. When parsing SeqContainer, look up metadata using track's <Sequence> ref
 --
 -- @param tmp_dir string: Extracted .drp temp directory
--- @return table: Map of sequence_id → timeline_name
+-- @return table: Map of sequence_id → {name=string, fps=number|nil}
 --
-local function build_timeline_name_map(tmp_dir)
-    local name_map = {}
+local function build_timeline_metadata_map(tmp_dir)
+    local metadata_map = {}
 
     -- Find all MpFolder.xml files recursively
     local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
     local find_handle = io.popen(find_cmd)
     if not find_handle then
-        return name_map
+        return metadata_map
     end
 
     local mp_files = find_handle:read("*all")
@@ -499,14 +533,36 @@ local function build_timeline_name_map(tmp_dir)
                 local timeline_name = name_elem and get_text(name_elem) or nil
 
                 if timeline_name and timeline_name ~= "" then
-                    -- Find the nested Sm2Sequence to get its DbId
-                    -- Structure: <Sm2Timeline><Sequence><Sm2Sequence DbId="...">
+                    -- Find the nested Sm2Sequence to get its DbId and FrameRate
+                    -- Structure: <Sm2Timeline><Sequence><Sm2Sequence DbId="..."><FrameRate>hex</FrameRate>
                     local seq_wrapper = find_direct_child(timeline_elem, "Sequence")
                     if seq_wrapper then
                         local sm2_seq = find_direct_child(seq_wrapper, "Sm2Sequence")
                         if sm2_seq and sm2_seq.attrs and sm2_seq.attrs.DbId then
                             local seq_id = sm2_seq.attrs.DbId
-                            name_map[seq_id] = timeline_name
+
+                            -- Extract frame rate from hex-encoded double
+                            local fps = nil
+                            local frame_rate_elem = find_direct_child(sm2_seq, "FrameRate")
+                            if frame_rate_elem then
+                                local hex_str = get_text(frame_rate_elem)
+                                fps = decode_hex_double(hex_str)
+                            end
+
+                            -- Extract resolution from hex-encoded double pair
+                            local width, height = nil, nil
+                            local resolution_elem = find_direct_child(sm2_seq, "Resolution")
+                            if resolution_elem then
+                                local hex_str = get_text(resolution_elem)
+                                width, height = decode_hex_resolution(hex_str)
+                            end
+
+                            metadata_map[seq_id] = {
+                                name = timeline_name,
+                                fps = fps,
+                                width = width,
+                                height = height
+                            }
                         end
                     end
                 end
@@ -514,7 +570,7 @@ local function build_timeline_name_map(tmp_dir)
         end
     end
 
-    return name_map
+    return metadata_map
 end
 
 -- Extract the sequence reference ID from a SeqContainer
@@ -534,63 +590,30 @@ local function extract_sequence_ref_id(seq_container_elem)
     return nil
 end
 
---- Infer frame rate from 1-hour timecode start position
--- Professional timelines typically start at 01:00:00:00 TC.
--- The frame count at 1 hour differs by frame rate:
---   24 fps → 86400, 25 fps → 90000, 30 fps → 108000, etc.
--- @param min_start_frame number: Earliest clip start position
--- @return number: Inferred fps (24, 25, 30, etc.) or 30 as fallback
-local function infer_fps_from_one_hour_tc(min_start_frame)
-    if not min_start_frame or min_start_frame <= 0 then
-        return 30  -- fallback
-    end
-    -- Known 1-hour frame counts with 1% tolerance
-    local markers = {
-        { 86400, 24 },    -- 24 fps
-        { 86314, 24 },    -- 23.976 fps (treat as 24)
-        { 90000, 25 },    -- 25 fps
-        { 108000, 30 },   -- 30 fps
-        { 107892, 30 },   -- 29.97 fps (treat as 30)
-    }
-    for _, m in ipairs(markers) do
-        local diff = math.abs(min_start_frame - m[1]) / m[1]
-        if diff < 0.01 then
-            return m[2]
-        end
-    end
-    return 30  -- fallback
-end
+--- Parse Resolve tracks from sequence element
+-- NSF: frame_rate is REQUIRED - DRP reliably encodes fps in metadata
+-- @param seq_elem table: XML sequence element
+-- @param frame_rate number: Frame rate from DRP metadata (required)
+-- @return video_tracks, audio_tracks, media_lookup
+local function parse_resolve_tracks(seq_elem, frame_rate)
+    -- NSF: frame_rate is required, no fallbacks
+    assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
+        "parse_resolve_tracks: frame_rate is required (got %s) - DRP must provide fps metadata",
+        tostring(frame_rate)))
 
-local function parse_resolve_tracks(seq_elem, frame_rate_hint)
     local video_tracks = {}
     local audio_tracks = {}
     local media_lookup = {}
     local video_index = 1
     local audio_index = 1
 
-    -- First pass: find earliest clip start to infer actual fps
-    local min_start = nil
     local track_elements = find_all_elements(seq_elem, "Sm2TiTrack")
-    for _, track_elem in ipairs(track_elements) do
-        for _, clip_elem in ipairs(find_all_elements(track_elem, "Sm2TiVideoClip")) do
-            local start = tonumber(get_text(find_element(clip_elem, "Start"))) or 0
-            if not min_start or start < min_start then
-                min_start = start
-            end
-        end
-        for _, clip_elem in ipairs(find_all_elements(track_elem, "Sm2TiAudioClip")) do
-            local start = tonumber(get_text(find_element(clip_elem, "Start"))) or 0
-            if not min_start or start < min_start then
-                min_start = start
-            end
-        end
-    end
-
-    -- Infer fps from 1-hour TC, fall back to hint if inference fails
-    local frame_rate = infer_fps_from_one_hour_tc(min_start) or frame_rate_hint or 30
 
     for _, track_elem in ipairs(track_elements) do
-        local type_value = tonumber(get_text(find_element(track_elem, "Type"))) or 0
+        local type_elem = find_element(track_elem, "Type")
+        assert(type_elem, "parse_resolve_tracks: track missing Type element")
+        local type_value = tonumber(get_text(type_elem))
+        assert(type_value, "parse_resolve_tracks: track Type element has no numeric value")
         local track_type = (type_value == 1) and "AUDIO" or "VIDEO"
         local track_index = track_type == "AUDIO" and audio_index or video_index
         local track_info = {
@@ -608,10 +631,40 @@ local function parse_resolve_tracks(seq_elem, frame_rate_hint)
 
         for _, clip_elem in ipairs(clip_elements) do
             local file_path = get_text(find_element(clip_elem, "MediaFilePath"))
-            local start_frames = math.floor(tonumber(get_text(find_element(clip_elem, "Start"))) or 0)
-            local duration_raw = math.floor(tonumber(get_text(find_element(clip_elem, "Duration"))) or 0)
-            -- MediaStartTime is absolute TC (frames from midnight) - use as source_in_tc
-            local media_start_frames = math.floor(tonumber(get_text(find_element(clip_elem, "MediaStartTime"))) or 0)
+            local clip_name = get_text(find_element(clip_elem, "Name")) or file_path or "unnamed"
+
+            -- NSF: Assert on missing required clip fields
+            local start_elem = find_element(clip_elem, "Start")
+            local duration_elem = find_element(clip_elem, "Duration")
+            local media_start_elem = find_element(clip_elem, "MediaStartTime")
+
+            assert(start_elem, string.format(
+                "parse_resolve_tracks: clip '%s' missing Start element", clip_name))
+            assert(duration_elem, string.format(
+                "parse_resolve_tracks: clip '%s' missing Duration element", clip_name))
+            -- MediaStartTime can be 0 for clips starting at media beginning, but element must exist
+            assert(media_start_elem, string.format(
+                "parse_resolve_tracks: clip '%s' missing MediaStartTime element", clip_name))
+
+            -- DRP format: some values use "frames|metadata" format (e.g., "2699|00e0401cd451d83f")
+            -- Extract numeric portion before pipe
+            local function parse_drp_numeric(text, field_name)
+                if not text then return nil end
+                local num_str = text:match("^(%d+)") -- extract leading digits
+                local num = tonumber(num_str)
+                assert(num, string.format(
+                    "parse_resolve_tracks: clip '%s' %s has no numeric value (raw='%s')",
+                    clip_name, field_name, text))
+                return num
+            end
+
+            local start_frames = parse_drp_numeric(get_text(start_elem), "Start")
+            local duration_raw = parse_drp_numeric(get_text(duration_elem), "Duration")
+            local media_start_frames = parse_drp_numeric(get_text(media_start_elem), "MediaStartTime")
+
+            start_frames = math.floor(start_frames)
+            duration_raw = math.floor(duration_raw)
+            media_start_frames = math.floor(media_start_frames)
 
             -- DRP stores Start/Duration in TIMELINE FRAMES for both video and audio
             -- (confirmed: clips are contiguous with Start[n+1] = Start[n] + Duration[n])
@@ -628,7 +681,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate_hint)
             end
 
             local clip = {
-                name = get_text(find_element(clip_elem, "Name")),
+                name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
                 duration = duration_timeline_frames,  -- duration on timeline (integer frames)
                 -- Absolute timecode addressing for source selection:
@@ -644,11 +697,10 @@ local function parse_resolve_tracks(seq_elem, frame_rate_hint)
                 frame_rate = frame_rate
             }
 
-            if clip.duration <= 0 then
-                -- Ensure duration is at least 1 frame
-                clip.duration = 1
-                clip.source_length = 1
-            end
+            -- NSF: Assert on invalid duration (no silent fix to 1)
+            assert(clip.duration > 0, string.format(
+                "parse_resolve_tracks: clip '%s' has invalid duration=%d",
+                clip_name, clip.duration))
 
             table.insert(track_info.clips, clip)
             clip_count = clip_count + 1
@@ -686,10 +738,16 @@ end
 local parse_clip_item
 
 --- Parse sequence XML to extract timeline data
+-- NSF: frame_rate is REQUIRED - DRP reliably encodes fps
 -- @param seq_elem table: XML element for <Sequence>
--- @param frame_rate number: Project frame rate
+-- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @return table: Timeline data
 local function parse_sequence(seq_elem, frame_rate)
+    -- NSF: frame_rate is required
+    assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
+        "parse_sequence: frame_rate is required (got %s) - DRP must provide fps metadata",
+        tostring(frame_rate)))
+
     -- Use find_direct_child for sequence properties to avoid picking up
     -- nested <Name>/<Duration> elements from clips
     local name_elem = find_direct_child(seq_elem, "Name")
@@ -753,60 +811,8 @@ local function parse_sequence(seq_elem, frame_rate)
         end
     end
 
-    if #timeline.tracks == 0 then
-        local fallback_clips = {}
-        local media_nodes = find_all_elements(seq_elem, "MediaFilePath")
-        for _, node in ipairs(media_nodes) do
-            local path = get_text(node)
-            if path and path ~= "" then
-                local clip = {
-                    name = path:match("([^/\\]+)$") or path,
-                    start_value = 0,
-                    duration = 1000,
-                    source_in = 0,
-                    source_out = 1000,
-                    file_path = path,
-                    media_key = path,
-                    frame_rate = frame_rate
-                }
-                table.insert(fallback_clips, clip)
-            end
-        end
-
-        if #fallback_clips > 0 then
-            timeline.tracks = {
-                {
-                    type = "VIDEO",
-                    index = 1,
-                    name = "VIDEO 1",
-                    enabled = true,
-                    locked = false,
-                    clips = fallback_clips
-                }
-            }
-            timeline.media_files = timeline.media_files or {}
-            for _, clip in ipairs(fallback_clips) do
-                -- Ensure integer frame values are initialized in fallback clips
-                clip.start_value = clip.start_value or 0
-                clip.duration = clip.duration or 1000
-                clip.source_in = clip.source_in or 0
-                clip.source_out = clip.source_out or 1000
-
-                if clip.media_key and not timeline.media_files[clip.media_key] then
-                    timeline.media_files[clip.media_key] = {
-                        name = clip.name,
-                        path = clip.media_key,
-                        duration = clip.duration,  -- integer frames
-                        frame_rate = frame_rate,
-                        width = 1920,
-                        height = 1080,
-                        audio_channels = 0,
-                        key = clip.media_key
-                    }
-                end
-            end
-        end
-    end
+    -- NSF: If no tracks were parsed, that's an error - no silent fallback with dummy data
+    -- (Empty timeline with 0 tracks is valid - it means the timeline exists but has no content)
 
     return timeline
 end
@@ -875,10 +881,10 @@ function M.parse_drp_file(drp_path)
 
     -- Parse project.xml
     local project_xml_path = tmp_dir .. "/project.xml"
-    local project_root, err = parse_xml_file(project_xml_path)
+    local project_root, parse_err = parse_xml_file(project_xml_path)
     if not project_root then
         os.execute("rm -rf " .. tmp_dir)
-        return {success = false, error = "Failed to parse project.xml: " .. tostring(err)}
+        return {success = false, error = "Failed to parse project.xml: " .. tostring(parse_err)}
     end
 
     local project_elem = find_element(project_root, "Project")
@@ -900,14 +906,14 @@ function M.parse_drp_file(drp_path)
     -- Parse MediaPool XML for master clips
     local media_pool_path = tmp_dir .. "/MediaPool/Master/MpFolder.xml"
     local media_items = {}
-    local media_pool_root, err = parse_xml_file(media_pool_path)
+    local media_pool_root = parse_xml_file(media_pool_path)
     if media_pool_root then
         media_items = parse_media_pool(media_pool_root)
     end
 
-    -- Build timeline name map by scanning all MediaPool folders
-    -- This maps Sequence IDs to their display names from Sm2Timeline elements
-    local timeline_name_map = build_timeline_name_map(tmp_dir)
+    -- Build timeline metadata map by scanning all MediaPool folders
+    -- This maps Sequence IDs to {name, fps} from Sm2Timeline/Sm2Sequence elements
+    local timeline_metadata_map = build_timeline_metadata_map(tmp_dir)
 
     -- Parse sequence XMLs
     local timelines = {}
@@ -922,7 +928,7 @@ function M.parse_drp_file(drp_path)
 
     for seq_file in seq_files:gmatch("[^\n]+") do
         table.insert(sequence_file_list, seq_file)
-        local seq_root, err = parse_xml_file(seq_file)
+        local seq_root = parse_xml_file(seq_file)
         if seq_root then
             local seq_elem = find_element(seq_root, "Sequence")
             if seq_elem then
@@ -935,13 +941,29 @@ function M.parse_drp_file(drp_path)
                 seq_elem = find_element(seq_root, "Sm2SequenceContainer") or seq_root
             end
             if seq_elem then
-                local timeline = parse_sequence(seq_elem, project.settings.frame_rate)
-
-                -- Look up the timeline's display name using the sequence reference
+                -- Look up the timeline's metadata (name + fps) using the sequence reference
                 local seq_ref_id = extract_sequence_ref_id(seq_elem)
-                if seq_ref_id and timeline_name_map[seq_ref_id] then
-                    timeline.name = timeline_name_map[seq_ref_id]
+                local metadata = seq_ref_id and timeline_metadata_map[seq_ref_id]
+
+                -- NSF: fps MUST come from DRP metadata - no fallbacks
+                local fps_for_parsing = metadata and metadata.fps
+                assert(fps_for_parsing and fps_for_parsing > 0, string.format(
+                    "parse_drp_file: timeline '%s' (seq_ref_id=%s) missing fps in DRP metadata",
+                    seq_file:match("([^/]+)%.xml$") or seq_file,
+                    tostring(seq_ref_id)))
+                local timeline = parse_sequence(seq_elem, fps_for_parsing)
+
+                -- Apply timeline name from metadata
+                if metadata and metadata.name then
+                    timeline.name = metadata.name
                 end
+
+                -- Store the fps for downstream use
+                timeline.fps = fps_for_parsing
+
+                -- Store resolution from metadata (or use project defaults)
+                timeline.width = (metadata and metadata.width) or project.settings.width
+                timeline.height = (metadata and metadata.height) or project.settings.height
 
                 table.insert(timelines, timeline)
             end

@@ -8,7 +8,6 @@ local function check(label, cond)
     else failed = failed + 1; print("FAIL: " .. label) end
 end
 
-local Rational = require("core.rational")
 local frame_utils = require("core.frame_utils")
 
 -- Test 1: nil frame_rate with a Rational duration should assert

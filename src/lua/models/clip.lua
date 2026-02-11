@@ -18,7 +18,6 @@
 -- Provides CRUD operations for clips following the Lua-for-logic, C++-for-performance architecture
 local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
-local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
 local logger = require("core.logger")
 
 local M = {}
@@ -117,8 +116,6 @@ local function load_internal(clip_id, raise_errors)
         error(string.format("Clip.load_failed: Clip %s has invalid frame rate denominator (%s)", clip_id, tostring(fps_denominator)))
     end
 
-    local timeline_fps_numerator = fps_numerator
-    local timeline_fps_denominator = fps_denominator
     if clip_kind ~= "master" then
         if not sequence_fps_numerator or not sequence_fps_denominator then
             query:finalize()
@@ -128,8 +125,6 @@ local function load_internal(clip_id, raise_errors)
             query:finalize()
             error(string.format("Clip.load_failed: Clip %s has invalid owning sequence frame rate (%s/%s)", clip_id, tostring(sequence_fps_numerator), tostring(sequence_fps_denominator)))
         end
-        timeline_fps_numerator = sequence_fps_numerator
-        timeline_fps_denominator = sequence_fps_denominator
     end
 
     local clip = {
@@ -178,7 +173,6 @@ function M.create(name, media_id, opts)
     assert(opts.fps_denominator, "Clip.create: fps_denominator is required")
     local fps_numerator = opts.fps_numerator
     local fps_denominator = opts.fps_denominator
-    local default_rate = {fps_numerator = fps_numerator, fps_denominator = fps_denominator}
 
     -- FAIL FAST: Check for legacy keys
     if opts.start_value or opts.duration_value or opts.source_in_value or opts.source_out_value then
@@ -324,12 +318,11 @@ local function ensure_project_context(self, db)
 end
 
 -- Save clip to database (INSERT or UPDATE)
-local function save_internal(self, opts)
+-- opts.skip_occlusion: when true, skip occlusion checks (currently disabled, will be used when re-enabled)
+local function save_internal(self, _opts)
     local database = require("core.database")
     local db = database.get_connection()
     assert(db, "Clip.save: No database connection available")
-
-    opts = opts or {}
 
     assert(self.id and self.id ~= "", "Clip.save: clip id is required")
 
@@ -355,14 +348,10 @@ local function save_internal(self, opts)
     end
     exists_query:finalize()
 
-    -- OCCLUSION LOGIC (Temporarily Disabled/Modified for Rational)
-    -- ClipMutator needs to be updated to handle Rational before we re-enable this fully.
-    -- For now, we pass if skip_occlusion is true, or warn.
-    local skip_occlusion = opts.skip_occlusion == true
+    -- OCCLUSION LOGIC (Temporarily Disabled)
+    -- TODO: Update ClipMutator to handle occlusion properly
+    -- opts.skip_occlusion controls whether to skip occlusion checks (when re-enabled)
     local occlusion_actions = nil
-    
-    -- TODO: Update ClipMutator to use Rational
-    -- if not skip_occlusion and self.track_id then ... end
 
     -- Coordinates are now plain integers - no .frames access needed
     local db_start_frame = self.timeline_start

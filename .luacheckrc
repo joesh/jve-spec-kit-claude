@@ -89,6 +89,17 @@ exclude_files = {
     "**/*.sh",
     "**/*.sql",
     "**/*.db",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.webp",
+    "**/*.wav",
+    "**/*.mp3",
+    "**/*.mov",
+    "**/*.avi",
+    "**/*.drp",
+    "**/*.jvp",
     ".git/**",
     -- autogen contains Qt moc files, not Lua
     "tests/autogen/**",
@@ -96,6 +107,8 @@ exclude_files = {
     "tests/ad_hoc/**",
     -- fixture files are test data, not Lua
     "tests/fixtures/**",
+    -- captures contains screenshot PNGs and recordings
+    "tests/captures/**",
 }
 
 include_files = {

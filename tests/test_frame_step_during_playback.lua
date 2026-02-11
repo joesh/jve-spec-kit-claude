@@ -73,6 +73,7 @@ local mock_viewer = {
     show_frame_at_time = function(t) table.insert(frames_shown, "t:" .. t) end,
     show_gap = function() table.insert(frames_shown, "gap") end,
     has_media = function() return true end,
+    set_rotation = function() end,  -- No-op for test
 }
 
 -- Prevent timer recursion
@@ -127,7 +128,6 @@ function mock_audio.get_time_us()
 end
 
 -- Mock timeline_state for timeline mode (uses real Rational for rescale support)
-local Rational = require("core.rational")
 local mock_playhead_position = 0
 local mock_timeline_state = {
     get_playhead_position = function()

@@ -7,7 +7,6 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 
 local test_env = require("test_env")
 
-local Rational = require("core.rational")
 local json = require("dkjson")
 
 _G.timeline = {

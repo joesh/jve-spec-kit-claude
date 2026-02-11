@@ -8,7 +8,6 @@ local function check(label, cond)
     else failed = failed + 1; print("FAIL: " .. label) end
 end
 
-local Rational = require("core.rational")
 
 -- Build minimal stubs for ripple_edit registration
 local clip_store = {}

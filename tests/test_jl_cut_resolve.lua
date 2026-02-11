@@ -7,7 +7,6 @@ require('test_env')
 
 local database = require("core.database")
 local import_schema = require("import_schema")
-local Rational = require("core.rational")
 
 -- Initialize database
 local DB_PATH = "/tmp/jve/test_jl_cut_resolve.db"

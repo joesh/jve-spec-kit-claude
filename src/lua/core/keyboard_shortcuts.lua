@@ -17,7 +17,6 @@
 -- Keyboard Shortcuts Module
 -- Centralized keyboard shortcut handling for JVE
 local keyboard_shortcuts = {}
-local frame_utils = require("core.frame_utils")
 local shortcut_registry = require("core.keyboard_shortcut_registry")
 local panel_manager = require("ui.panel_manager")
 
@@ -27,7 +26,7 @@ local playback_controller = nil
 -- Self-managed arrow key repeat: bypasses macOS key repeat rate (~12/sec)
 -- with our own timer at ~30fps. Detects keyDown → start timer, keyUp → stop.
 local ARROW_STEP_MS = 33            -- ~30fps stepping (matches NLE convention)
-local ARROW_INITIAL_DELAY_MS = 100  -- delay before repeat starts
+local ARROW_INITIAL_DELAY_MS = 200  -- delay before repeat starts
 local arrow_repeat_active = false   -- true while arrow key is held and timer is running
 local arrow_repeat_dir = 0          -- 1=right, -1=left
 local arrow_repeat_shift = false    -- shift held = 1-second jumps
@@ -454,30 +453,6 @@ local function get_current_sequence_position()
     return nil
 end
 
-local function get_active_frame_rate()
-    assert(timeline_state and timeline_state.get_sequence_frame_rate,
-        "get_active_frame_rate: timeline_state or get_sequence_frame_rate not available")
-    local rate = timeline_state.get_sequence_frame_rate()
-    assert(rate, "get_active_frame_rate: get_sequence_frame_rate returned nil")
-    if type(rate) == "table" then
-        return rate
-    elseif type(rate) == "number" and rate > 0 then
-        return { fps_numerator = math.floor(rate + 0.5), fps_denominator = 1 }
-    end
-    error(string.format("get_active_frame_rate: invalid rate type %s: %s", type(rate), tostring(rate)))
-end
-
-local function get_fps_float(rate)
-    assert(rate ~= nil, "get_fps_float: rate must not be nil")
-    if type(rate) == "table" and rate.fps_numerator then
-        assert(rate.fps_denominator ~= 0, "get_fps_float: fps_denominator is zero")
-        return rate.fps_numerator / rate.fps_denominator
-    elseif type(rate) == "number" then
-        return rate
-    end
-    error(string.format("get_fps_float: unrecognized rate type: %s", type(rate)))
-end
-
 -- Initialize with references to other modules
 function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     timeline_state = state
@@ -612,7 +587,6 @@ function keyboard_shortcuts.perform_delete_action(opts)
     end
 
     if selected_clips and #selected_clips > 0 then
-        local Command = require("command")
         local json = require("dkjson")
         local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
         local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
@@ -703,7 +677,6 @@ end
 local function handle_key_impl(event)
     local key = event.key
     local modifiers = event.modifiers
-    local text = event.text
 
     local modifier_meta = has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)
     local modifier_shift = has_modifier(modifiers, MOD.Shift)
@@ -936,15 +909,9 @@ local function handle_key_impl(event)
     if key == KEY.I and panel_active_viewer and source_state.has_clip() then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
-                -- Shift+I: go to mark in
-                if source_state.mark_in then
-                    local pc = get_playback_controller()
-                    source_state.set_playhead(source_state.mark_in)
-                    pc.set_position(source_state.mark_in)
-                end
+                execute_command("SourceViewerGoToMarkIn", {})
             else
-                -- I: set mark in at playhead
-                source_state.set_mark_in(source_state.playhead)
+                execute_command("SourceViewerSetMarkIn", {})
             end
             return true
         end
@@ -953,15 +920,9 @@ local function handle_key_impl(event)
     if key == KEY.O and panel_active_viewer and source_state.has_clip() then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
-                -- Shift+O: go to mark out
-                if source_state.mark_out then
-                    local pc = get_playback_controller()
-                    source_state.set_playhead(source_state.mark_out)
-                    pc.set_position(source_state.mark_out)
-                end
+                execute_command("SourceViewerGoToMarkOut", {})
             else
-                -- O: set mark out at playhead
-                source_state.set_mark_out(source_state.playhead)
+                execute_command("SourceViewerSetMarkOut", {})
             end
             return true
         end
@@ -969,8 +930,7 @@ local function handle_key_impl(event)
 
     if key == KEY.X and panel_active_viewer and source_state.has_clip() then
         if modifier_alt and not modifier_meta then
-            -- Alt+X: clear marks
-            source_state.clear_marks()
+            execute_command("SourceViewerClearMarks", {})
             return true
         end
     end
@@ -1099,7 +1059,6 @@ local function handle_key_impl(event)
     -- Comma (,) = left, Period (.) = right
     -- Without Shift: 1 frame, With Shift: 5 frames
     if (key == KEY.Comma or key == KEY.Period) and timeline_state and command_manager and panel_active_timeline and not modifier_meta and not modifier_alt then
-        local frame_rate = get_active_frame_rate()
         -- All coords are integer frames
         local nudge_frames = modifier_shift and 5 or 1
         if key == KEY.Comma then
@@ -1114,7 +1073,6 @@ local function handle_key_impl(event)
         local selected_clips = timeline_state.get_selected_clips()
         local selected_edges = timeline_state.get_selected_edges()
 
-        local Command = require("command")
         local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
         local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
         assert(project_id and project_id ~= "", "keyboard_shortcuts.handle_key: missing active project_id for ripple/nudge")
@@ -1211,7 +1169,6 @@ local function handle_key_impl(event)
             end
 
             local json = require("dkjson")
-            local Command = require("command")
             local specs = {}
 
             for _, clip in ipairs(target_clips) do

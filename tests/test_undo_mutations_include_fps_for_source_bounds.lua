@@ -14,7 +14,6 @@ local test_env = require("test_env")
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
-local Rational = require("core.rational")
 local command_helper = require("core.command_helper")
 
 local SCHEMA_SQL = require("import_schema")

@@ -32,61 +32,68 @@ local Track = require('models.track')
 --- Find source stream clip inside a masterclip sequence by role
 -- IS-a refactor: master_clip_id is now a sequence ID. This function finds
 -- the stream clip (video or audio) inside that sequence.
+-- NSF: Asserts on invalid inputs and database errors. Returns nil only if
+-- the stream genuinely doesn't exist (e.g., video-only masterclip has no audio).
 -- @param db database connection
--- @param masterclip_sequence_id string - the masterclip sequence ID
--- @param role string - "video" or "audio"
--- @return clip_id string or nil
+-- @param masterclip_sequence_id string - the masterclip sequence ID (required)
+-- @param role string - "video" or "audio" (required)
+-- @return clip_id string, or nil if stream doesn't exist in masterclip
 local function find_source_stream_clip(db, masterclip_sequence_id, role)
-    if not masterclip_sequence_id or masterclip_sequence_id == "" then
-        return nil
-    end
-    if not role then
-        return nil
-    end
+    -- NSF: Assert on invalid inputs - these are programming errors
+    assert(masterclip_sequence_id and masterclip_sequence_id ~= "", string.format(
+        "find_source_stream_clip: masterclip_sequence_id is required (got %s)",
+        tostring(masterclip_sequence_id)))
+    assert(role == "video" or role == "audio", string.format(
+        "find_source_stream_clip: role must be 'video' or 'audio' (got %s)",
+        tostring(role)))
 
     -- Find the appropriate track in the masterclip sequence
     local track_type = (role == "video") and "VIDEO" or "AUDIO"
-    local track_stmt = db:prepare([[
+    local track_stmt = assert(db:prepare([[
         SELECT id FROM tracks
         WHERE sequence_id = ? AND track_type = ?
         ORDER BY track_index ASC LIMIT 1
-    ]])
-    if not track_stmt then
-        logger.warn("add_clips_to_sequence", "find_source_stream_clip: failed to prepare track query")
-        return nil
-    end
+    ]]), "find_source_stream_clip: failed to prepare track query")
     track_stmt:bind_value(1, masterclip_sequence_id)
     track_stmt:bind_value(2, track_type)
 
+    local exec_ok = track_stmt:exec()
+    assert(exec_ok, string.format(
+        "find_source_stream_clip: track query failed for masterclip=%s role=%s",
+        masterclip_sequence_id, role))
+
     local track_id = nil
-    if track_stmt:exec() and track_stmt:next() then
+    if track_stmt:next() then
         track_id = track_stmt:value(0)
     end
     track_stmt:finalize()
 
     if not track_id then
+        -- No track of this type in masterclip - valid for video-only or audio-only media
         return nil
     end
 
     -- Find the stream clip on that track
-    local clip_stmt = db:prepare([[
+    local clip_stmt = assert(db:prepare([[
         SELECT id FROM clips
         WHERE owner_sequence_id = ? AND track_id = ?
         LIMIT 1
-    ]])
-    if not clip_stmt then
-        logger.warn("add_clips_to_sequence", "find_source_stream_clip: failed to prepare clip query")
-        return nil
-    end
+    ]]), "find_source_stream_clip: failed to prepare clip query")
     clip_stmt:bind_value(1, masterclip_sequence_id)
     clip_stmt:bind_value(2, track_id)
 
+    exec_ok = clip_stmt:exec()
+    assert(exec_ok, string.format(
+        "find_source_stream_clip: clip query failed for masterclip=%s track=%s",
+        masterclip_sequence_id, track_id))
+
     local clip_id = nil
-    if clip_stmt:exec() and clip_stmt:next() then
+    if clip_stmt:next() then
         clip_id = clip_stmt:value(0)
     end
     clip_stmt:finalize()
 
+    -- nil if no clip on track (shouldn't happen for well-formed masterclip, but not fatal)
     return clip_id
 end
 
@@ -469,22 +476,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Phase 5: Copy properties from source stream clips
         -- IS-a refactor: master_clip_id is now a sequence ID. To copy properties,
         -- we must find the source stream clip (video or audio) inside that sequence.
+        -- NSF: Assert if the stream clip doesn't exist - this indicates a malformed masterclip.
         for _, created in ipairs(created_clips) do
             if created.master_clip_id and created.master_clip_id ~= "" then
                 -- Find source stream clip in the masterclip sequence
                 local source_clip_id = find_source_stream_clip(db, created.master_clip_id, created.role)
-                if source_clip_id then
-                    local copied_props = command_helper.ensure_copied_properties(command, source_clip_id)
-                    if #copied_props > 0 then
-                        command_helper.delete_properties_for_clip(created.clip_id)
-                        local props_ok = command_helper.insert_properties_for_clip(created.clip_id, copied_props)
-                        if not props_ok then
-                            logger.warn("add_clips_to_sequence", string.format(
-                                "Failed to copy properties from source_clip_id=%s to clip_id=%s",
-                                tostring(source_clip_id), tostring(created.clip_id)
-                            ))
-                        end
-                    end
+                -- NSF: If we're creating a clip of this role, the masterclip MUST have a stream of that role
+                assert(source_clip_id, string.format(
+                    "AddClipsToSequence: masterclip %s has no %s stream clip - malformed masterclip",
+                    created.master_clip_id, created.role))
+
+                local copied_props = command_helper.ensure_copied_properties(command, source_clip_id)
+                if #copied_props > 0 then
+                    command_helper.delete_properties_for_clip(created.clip_id)
+                    local props_ok = command_helper.insert_properties_for_clip(created.clip_id, copied_props)
+                    assert(props_ok, string.format(
+                        "AddClipsToSequence: failed to copy properties from source_clip_id=%s to clip_id=%s",
+                        source_clip_id, created.clip_id))
                 end
             end
         end

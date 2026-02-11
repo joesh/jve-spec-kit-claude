@@ -3,7 +3,6 @@ local M = {}
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 local timeline_state = require("ui.timeline.timeline_state")
-local Rational = require("core.rational")
 local Project = require("models.project")
 local Sequence = require("models.sequence")
 local Track = require("models.track")

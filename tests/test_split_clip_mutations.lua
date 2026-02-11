@@ -12,7 +12,6 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
 local SCHEMA_SQL = require('import_schema')
-local Rational = require('core.rational')
 
 local timeline_state = {
     sequence_id = "default_sequence",

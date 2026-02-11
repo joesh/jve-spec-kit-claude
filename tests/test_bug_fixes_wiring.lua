@@ -39,7 +39,6 @@ end
 
 -- Also verify auto-load path resolves correctly
 do
-    local Rational = require("core.rational")
     local executors = {}
     local undoers = {}
     local mod_h = require("core.commands.trim_head")
@@ -100,31 +99,26 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════
--- B5: timeline restore doesn't clobber viewer title
+-- B5: viewer switching based on panel focus
 -- ═══════════════════════════════════════════════════════════
-print("\n=== B5: timeline restore doesn't clobber viewer title ===")
+print("\n=== B5: viewer switches based on panel focus ===")
 do
     local f = io.open("../src/lua/ui/timeline/timeline_panel.lua", "r")
     assert(f, "Cannot open timeline_panel.lua")
     local content = f:read("*a")
     f:close()
 
-    -- The restore path should NOT unconditionally call show_timeline
-    -- It should check whether the source viewer is active first
-    -- Look for a guard condition near the show_timeline call in the restore block
-    local restore_section = content:match("Restore timeline mode.-return")
-    if restore_section then
-        -- Should NOT have an unguarded show_timeline in the restore path
-        -- The fix should either remove show_timeline or guard it with source_viewer check
-        local has_guard = restore_section:find("has_clip")
-            or restore_section:find("source_viewer")
-            or not restore_section:find("show_timeline")
-        check("restore path guards show_timeline", has_guard)
-    else
-        -- If the restore section was rewritten, just verify show_timeline
-        -- isn't called unconditionally when timeline_mode is being re-enabled
-        check("restore path restructured", true)
-    end
+    -- Timeline focus should restore timeline viewer (call show_timeline)
+    -- Viewer/Browser focus should restore source viewer (if has_clip)
+    -- The selection_hub listener should handle both directions
+    local has_timeline_restore = content:find('panel_id == "timeline"')
+        and content:find("load_sequence")
+    check("timeline focus restores timeline viewer", has_timeline_restore)
+
+    local has_viewer_restore = content:find('panel_id == "viewer"')
+        and content:find("has_clip")
+        and content:find("set_timeline_mode%(false%)")
+    check("viewer focus restores source viewer", has_viewer_restore)
 end
 
 -- Summary

@@ -42,16 +42,26 @@ end
 mock_cm.begin_command_event = function() end
 mock_cm.end_command_event = function() end
 
--- Mock source_viewer_state
+-- Mock source_viewer_state (IS-a refactor: methods, not properties)
+local _mock_mark_in = 10
+local _mock_mark_out = 50
 local source_viewer_state = {
-    current_clip_id = "master_1",
-    mark_in = 10,
-    mark_out = 50,
+    current_sequence_id = "master_1",  -- IS-a: masterclip IS a sequence
     total_frames = 100,
     fps_num = 24,
     fps_den = 1,
     has_clip = function() return true end,
+    get_mark_in = function() return _mock_mark_in end,
+    get_mark_out = function() return _mock_mark_out end,
 }
+-- Helper to set mock marks (test code uses these)
+local function set_mock_marks(mark_in, mark_out)
+    _mock_mark_in = mark_in
+    _mock_mark_out = mark_out
+end
+local function set_mock_sequence_id(id)
+    source_viewer_state.current_sequence_id = id
+end
 package.loaded["ui.source_viewer_state"] = source_viewer_state
 
 -- Mock focus_manager
@@ -103,9 +113,8 @@ project_browser.selected_items = {{ type = "master_clip", clip_id = "master_1" }
 print("\n--- insert with source marks → uses marks ---")
 do
     captured_params = nil
-    source_viewer_state.current_clip_id = "master_1"
-    source_viewer_state.mark_in = 10
-    source_viewer_state.mark_out = 50
+    set_mock_sequence_id("master_1")
+    set_mock_marks(10, 50)
 
     project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
 
@@ -123,9 +132,8 @@ end
 print("\n--- insert without marks → uses original range ---")
 do
     captured_params = nil
-    source_viewer_state.current_clip_id = "master_1"
-    source_viewer_state.mark_in = nil
-    source_viewer_state.mark_out = nil
+    set_mock_sequence_id("master_1")
+    set_mock_marks(nil, nil)
 
     project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
 
@@ -141,9 +149,8 @@ end
 -- ─── Test 3: Insert doesn't mutate the master clip object ───
 print("\n--- insert doesn't mutate master_clip ---")
 do
-    source_viewer_state.current_clip_id = "master_1"
-    source_viewer_state.mark_in = 10
-    source_viewer_state.mark_out = 50
+    set_mock_sequence_id("master_1")
+    set_mock_marks(10, 50)
 
     project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
 
@@ -157,9 +164,8 @@ end
 print("\n--- different clip in viewer → original range ---")
 do
     captured_params = nil
-    source_viewer_state.current_clip_id = "other_clip"  -- Not the selected master clip
-    source_viewer_state.mark_in = 10
-    source_viewer_state.mark_out = 50
+    set_mock_sequence_id("other_clip")  -- Not the selected master clip
+    set_mock_marks(10, 50)
 
     project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
 

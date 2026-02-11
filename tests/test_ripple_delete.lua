@@ -10,7 +10,6 @@ local database = require('core.database')
 local Clip = require('models.clip')
 local Media = require('models.media')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 local asserts = require('core.asserts')
 
 -- Mock Qt timer

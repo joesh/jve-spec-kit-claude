@@ -12,7 +12,6 @@ local Media = require('models.media')
 local Sequence = require('models.sequence')
 local Track = require('models.track')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 local asserts = require('core.asserts')
 
 -- Mock Qt timer

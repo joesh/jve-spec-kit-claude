@@ -112,10 +112,13 @@ assert(px >= -1 and px <= 1, string.format("clip should render at viewport origi
 
 -- Playhead should advance to the end of the inserted clip when requested
 local final_playhead = timeline_state.get_playhead_position()
--- Playhead advances by clip.duration (integer frames in sequence timebase)
--- The Insert command uses the provided duration directly without rescaling
-assert(final_playhead == media.duration,
-    string.format("playhead should advance to clip end (%d), got %s", media.duration, tostring(final_playhead)))
+-- clip.duration is now in TIMELINE frames (not source frames)
+-- Source: 114567 frames at 25fps = 4582.68 seconds
+-- Timeline: 24fps → 4582.68 * 24 = 109984 frames
+local expected_timeline_duration = math.floor(media.duration * 24 / 25 + 0.5)
+assert(final_playhead == expected_timeline_duration,
+    string.format("playhead should advance to timeline end (%d), got %s",
+        expected_timeline_duration, tostring(final_playhead)))
 
 print("✅ Insert at playhead origin renders at timeline start")
 os.remove(DB_PATH)

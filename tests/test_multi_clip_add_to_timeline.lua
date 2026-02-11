@@ -10,7 +10,6 @@ local database = require('core.database')
 local Media = require('models.media')
 local Track = require('models.track')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 
 -- Mock Qt timer
 _G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end
@@ -88,19 +87,11 @@ local media3 = Media.create({
 })
 media3:save(db)
 
--- Create master clips for each media
-db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-    VALUES ('master_1', 'project', 'master', 'Video 1', 'media_1', 0, 100, 0, 100, 24, 1, 1, %d, %d);
-]], now, now))
-db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-    VALUES ('master_2', 'project', 'master', 'Video 2', 'media_2', 0, 50, 0, 50, 24, 1, 1, %d, %d);
-]], now, now))
-db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-    VALUES ('master_3', 'project', 'master', 'Video 3', 'media_3', 0, 75, 0, 75, 24, 1, 1, %d, %d);
-]], now, now))
+-- Create masterclip sequences (IS-a refactor: masterclip IS a sequence)
+local test_env = require("test_env")
+local master_1 = test_env.create_test_masterclip_sequence("project", "Video 1", 24, 1, 100, "media_1")
+local master_2 = test_env.create_test_masterclip_sequence("project", "Video 2", 24, 1, 50, "media_2")
+local master_3 = test_env.create_test_masterclip_sequence("project", "Video 3", 24, 1, 75, "media_3")
 
 -- Helper: count clips on track
 local function count_clips(track_id)
@@ -138,11 +129,12 @@ print("Test: Multi-clip insert (3 clips, serial arrangement)")
 -- Build groups for 3 clips
 local groups = {
     {
+        master_clip_id = master_1,
         clips = {
             {
                 role = "video",
                 media_id = "media_1",
-                master_clip_id = "master_1",
+                master_clip_id = master_1,
                 project_id = "project",
                 name = "Video 1",
                 source_in = 0,
@@ -156,11 +148,12 @@ local groups = {
         duration = 100,
     },
     {
+        master_clip_id = master_2,
         clips = {
             {
                 role = "video",
                 media_id = "media_2",
-                master_clip_id = "master_2",
+                master_clip_id = master_2,
                 project_id = "project",
                 name = "Video 2",
                 source_in = 0,
@@ -174,11 +167,12 @@ local groups = {
         duration = 50,
     },
     {
+        master_clip_id = master_3,
         clips = {
             {
                 role = "video",
                 media_id = "media_3",
-                master_clip_id = "master_3",
+                master_clip_id = master_3,
                 project_id = "project",
                 name = "Video 3",
                 source_in = 0,

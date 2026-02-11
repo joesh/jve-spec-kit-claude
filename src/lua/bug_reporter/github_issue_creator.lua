@@ -173,7 +173,7 @@ function GitHubIssueCreator.create_issue(issue_data)
     handle:close()
 
     -- Parse response
-    local data, pos, err = dkjson.decode(response)
+    local data, _, err = dkjson.decode(response)
     if not data then
         return nil, "Failed to parse GitHub response: " .. (err or "unknown error")
     end
@@ -231,7 +231,7 @@ function GitHubIssueCreator.add_comment(issue_number, comment)
     local response = handle:read("*a")
     handle:close()
 
-    local data, pos, err = dkjson.decode(response)
+    local data, _, err = dkjson.decode(response)
     if not data then
         return nil, "Failed to parse response: " .. (err or "unknown error")
     end
@@ -275,7 +275,7 @@ function GitHubIssueCreator.search_issues(search_term)
     local response = handle:read("*a")
     handle:close()
 
-    local data, pos, err = dkjson.decode(response)
+    local data, _, err = dkjson.decode(response)
     if not data then
         return nil, "Failed to parse response: " .. (err or "unknown error")
     end

@@ -13,7 +13,6 @@ local command_manager = require('core.command_manager')
 local Command = require('command')
 local Media = require("models.media")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 
 local TEST_DB = "/tmp/jve/test_insert_undo_imported_sequence.db"
 os.remove(TEST_DB)

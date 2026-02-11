@@ -8,7 +8,6 @@ local function check(label, cond)
     else failed = failed + 1; print("FAIL: " .. label) end
 end
 
-local Rational = require("core.rational")
 
 -- Test 1: Media.load with NULL fps_numerator in DB should assert
 -- Mock database to return a row with NULL fps columns

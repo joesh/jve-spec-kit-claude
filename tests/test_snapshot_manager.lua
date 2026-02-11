@@ -1,7 +1,6 @@
 require("test_env")
 
 local database = require("core.database")
-local Rational = require("core.rational")
 local snapshot_manager = require("core.snapshot_manager")
 
 local pass_count = 0

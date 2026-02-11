@@ -10,7 +10,6 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local import_schema = require("import_schema")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
 
 local DB_PATH = "/tmp/jve/test_drag_block_right_overlap_integration.db"

@@ -26,6 +26,7 @@ local Media = require("models.media")
 local Sequence = require("models.sequence")
 local Track = require("models.track")
 local Clip = require("models.clip")
+local clip_link = require("models.clip_link")
 
 -- ---------------------------------------------------------------------------
 -- Conversion Dialog
@@ -262,24 +263,36 @@ function M.convert(drp_path, jvp_path)
         end
 
         -- =====================================================================
-        -- STEP 2: Determine frame rate (prefer inference over project default)
+        -- STEP 2: Determine frame rate
         -- =====================================================================
-        -- Resolve's .drp format stores frame rate in binary FieldsBlob, which
-        -- is difficult to parse. Instead, we use a heuristic: if clips start
-        -- at or near 1:00:00:00 timecode (common professional practice), we
-        -- can infer the frame rate from the frame count at that 1-hour mark.
+        -- Priority: 1) Explicit fps from DRP <FrameRate> element (hex-decoded)
+        --           2) 1-hour TC inference (fallback heuristic)
+        --           3) Project settings (last resort)
         --
         local fps_num, fps_den
-        local inferred_fps, inferred_num, inferred_den = infer_fps_from_one_hour_start(min_start_frame)
 
-        if inferred_fps then
-            -- Successfully inferred from 1-hour timecode start
-            fps_num, fps_den = inferred_num, inferred_den
+        if timeline_data.fps and timeline_data.fps > 0 then
+            -- Use explicit fps from DRP metadata (already parsed from hex in drp_importer)
+            fps_num, fps_den = frame_rate_to_rational(timeline_data.fps)
+            logger.info("drp_project_converter",
+                string.format("Using explicit fps from DRP metadata: %.3f (%d/%d)",
+                    timeline_data.fps, fps_num, fps_den))
         else
-            -- Fall back to project settings (may be wrong, but it's all we have)
-            fps_num, fps_den = frame_rate_to_rational(parse_result.project.settings.frame_rate)
-            logger.debug("drp_project_converter",
-                string.format("Using project default fps: %d/%d", fps_num, fps_den))
+            -- Fall back to 1-hour TC inference
+            local inferred_fps, inferred_num, inferred_den = infer_fps_from_one_hour_start(min_start_frame)
+
+            if inferred_fps then
+                fps_num, fps_den = inferred_num, inferred_den
+                logger.info("drp_project_converter",
+                    string.format("Inferred fps from 1-hour TC: %.3f (%d/%d)",
+                        inferred_fps, fps_num, fps_den))
+            else
+                -- Last resort: project settings
+                fps_num, fps_den = frame_rate_to_rational(parse_result.project.settings.frame_rate)
+                logger.warn("drp_project_converter",
+                    string.format("No fps metadata, no 1-hour TC; using project default: %d/%d",
+                        fps_num, fps_den))
+            end
         end
 
         -- =====================================================================
@@ -307,12 +320,16 @@ function M.convert(drp_path, jvp_path)
         -- =====================================================================
         -- STEP 4: Create the sequence with computed settings
         -- =====================================================================
+        -- Use per-timeline resolution if available, else fall back to project defaults
+        local seq_width = timeline_data.width or settings.width
+        local seq_height = timeline_data.height or settings.height
+
         local sequence = Sequence.create(
             timeline_data.name,
             project.id,
             { fps_numerator = fps_num, fps_denominator = fps_den },
-            settings.width,
-            settings.height,
+            seq_width,
+            seq_height,
             {
                 audio_rate = 48000,
                 view_start_frame = view_start,
@@ -326,8 +343,11 @@ function M.convert(drp_path, jvp_path)
         else
             timeline_count = timeline_count + 1
             logger.info("drp_project_converter",
-                string.format("  Created timeline: %s @ %d/%d fps, viewport [%d..%d]",
-                    timeline_data.name, fps_num, fps_den, view_start, view_start + view_duration))
+                string.format("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
+                    timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration))
+
+            -- Track clips for A/V linking (populated during clip creation)
+            local clips_for_linking = {}
 
             -- Import tracks via model
             for _, track_data in ipairs(timeline_data.tracks) do
@@ -348,15 +368,27 @@ function M.convert(drp_path, jvp_path)
                     track_count = track_count + 1
 
                     -- Import clips
-                    -- Video clips use timeline fps; audio clips use sample rate
-                    local clip_rate_num = track_data.type == "VIDEO" and fps_num or 48000
-                    local clip_rate_den = track_data.type == "VIDEO" and fps_den or 1
-
                     for _, clip_data in ipairs(track_data.clips) do
                         -- Find media by file path
+                        local media = nil
                         local media_id = nil
                         if clip_data.file_path and media_by_path[clip_data.file_path] then
-                            media_id = media_by_path[clip_data.file_path].id
+                            media = media_by_path[clip_data.file_path]
+                            media_id = media.id
+                        end
+
+                        -- Determine clip rate: video uses timeline fps, audio uses media sample rate
+                        local clip_rate_num, clip_rate_den
+                        if track_data.type == "VIDEO" then
+                            clip_rate_num, clip_rate_den = fps_num, fps_den
+                        else
+                            -- Audio: use media's rate if available (sample_rate/1), else 48kHz default
+                            if media and media.frame_rate then
+                                clip_rate_num = media.frame_rate.fps_numerator
+                                clip_rate_den = media.frame_rate.fps_denominator
+                            else
+                                clip_rate_num, clip_rate_den = 48000, 1  -- Professional audio standard
+                            end
                         end
 
                         local source_out = clip_data.source_out
@@ -376,11 +408,63 @@ function M.convert(drp_path, jvp_path)
 
                         if clip:save() then
                             clip_count = clip_count + 1
+
+                            -- Track clip for A/V linking (if it has media)
+                            if clip_data.file_path then
+                                table.insert(clips_for_linking, {
+                                    clip_id = clip.id,
+                                    file_path = clip_data.file_path,
+                                    timeline_start = clip_data.start_value,
+                                    role = track_data.type == "VIDEO" and "video" or "audio"
+                                })
+                            end
                         else
                             logger.warn("drp_project_converter", string.format("Failed to import clip: %s", clip_data.name))
                         end
                     end
                 end
+            end
+
+            -- =====================================================================
+            -- STEP 6: Create A/V link groups
+            -- =====================================================================
+            -- Group clips by (file_path, timeline_start) - clips from the same media
+            -- at the same timeline position should be linked as A/V sync groups.
+            --
+            local link_groups_by_key = {}
+            for _, clip_info in ipairs(clips_for_linking) do
+                local key = clip_info.file_path .. ":" .. tostring(clip_info.timeline_start)
+                link_groups_by_key[key] = link_groups_by_key[key] or {}
+                table.insert(link_groups_by_key[key], clip_info)
+            end
+
+            local link_count = 0
+            for _, group in pairs(link_groups_by_key) do
+                if #group >= 2 then
+                    -- Format clips for clip_link.create_link_group()
+                    local clips_to_link = {}
+                    for _, info in ipairs(group) do
+                        table.insert(clips_to_link, {
+                            clip_id = info.clip_id,
+                            role = info.role,
+                            time_offset = 0
+                        })
+                    end
+
+                    -- clip_link model handles db connection internally
+                    local link_id, err = clip_link.create_link_group(clips_to_link)
+                    if link_id then
+                        link_count = link_count + 1
+                    else
+                        logger.warn("drp_project_converter",
+                            string.format("Failed to create link group: %s", err or "unknown error"))
+                    end
+                end
+            end
+
+            if link_count > 0 then
+                logger.info("drp_project_converter",
+                    string.format("Created %d A/V link groups for timeline: %s", link_count, timeline_data.name))
             end
         end
     end

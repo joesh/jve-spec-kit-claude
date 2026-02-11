@@ -8,7 +8,6 @@ require('test_env')
 
 local database = require("core.database")
 local import_schema = require("import_schema")
-local Rational = require("core.rational")
 local helpers = require("core.playback.playback_helpers")
 
 -- Initialize database
@@ -88,6 +87,7 @@ local function make_mock_viewer()
     return {
         show_frame_at_time = function() end,
         show_gap = function() end,
+        set_rotation = function() end,
     }
 end
 

@@ -34,20 +34,20 @@ function M.run(ctx, db, ops)
     ops.assign_edge_tracks(ctx)
     ops.determine_lead_edge(ctx)
     ops.analyze_selection(ctx)
-    ops.compute_constraints(ctx, db)
+    ops.compute_constraints(ctx)
 
-    local ok_edges, edge_err = ops.process_edge_trims(ctx, db)
+    local ok_edges, edge_err = ops.process_edge_trims(ctx)
     if not ok_edges then
         return false, "Failed to process edge trims: " .. tostring(edge_err)
     end
 
-    local ok_shift, adjusted_frames = ops.compute_downstream_shifts(ctx, db)
+    local ok_shift, adjusted_frames = ops.compute_downstream_shifts(ctx)
     if not ok_shift then
         return ops.retry_with_adjusted_delta(ctx, adjusted_frames)
     end
 
     ops.build_planned_mutations(ctx)
-    return ops.finalize_execution(ctx, db)
+    return ops.finalize_execution(ctx)
 end
 
 return M

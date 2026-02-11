@@ -107,9 +107,17 @@ local fps_den = q:value(4)
 assert(not q:next(), "Expected exactly one timeline clip on video1")
 q:finalize()
 
-assert(duration_frames == 2500, string.format("Expected timeline duration to conform (2500 frames @24fps), got %s", tostring(duration_frames)))
+-- clip.duration is in TIMELINE frames (sequence timebase), not source frames
+-- Source is 2500 frames at 25fps = 100 seconds
+-- Timeline is 24fps, so 100 seconds = 2400 timeline frames
+local expected_timeline_duration = math.floor(2500 * 24 / 25 + 0.5)  -- 2400
+assert(duration_frames == expected_timeline_duration, string.format(
+    "Expected timeline duration %d (source 2500@25fps on 24fps timeline), got %s",
+    expected_timeline_duration, tostring(duration_frames)))
+-- Source bounds stay in source units (for playback)
 assert(source_in_frame == 0 and source_out_frame == 2500, string.format("Expected source bounds to remain 0-2500 @25fps, got %s-%s", tostring(source_in_frame), tostring(source_out_frame)))
+-- clip.rate preserves source fps (needed for source_in/out interpretation)
 assert(fps_num == 25 and fps_den == 1, string.format("Expected clip rate to preserve source fps 25/1, got %s/%s", tostring(fps_num), tostring(fps_den)))
 
-print("✅ Insert conforms master clip (preserves frame count, plays at sequence fps)")
+print("✅ Insert converts duration to timeline frames, preserves source bounds and rate")
 

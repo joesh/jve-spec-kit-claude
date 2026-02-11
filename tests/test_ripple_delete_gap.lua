@@ -8,7 +8,6 @@ local command_impl = require('core.command_implementations')
 local Command = require('command')
 local Clip = require('models.clip')
 local Media = require('models.media')
-local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_ripple_delete_gap.db"
 os.remove(TEST_DB)

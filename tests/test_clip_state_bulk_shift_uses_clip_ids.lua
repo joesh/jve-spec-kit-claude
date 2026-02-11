@@ -6,7 +6,6 @@
 
 require("test_env")
 
-local Rational = require("core.rational")
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")
 

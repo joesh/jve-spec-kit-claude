@@ -7,7 +7,6 @@ require("test_env")
 
 print("\n=== B8: SplitClip undo with missing second clip ===")
 
-local Rational = require("core.rational")
 
 -- Stub command_helper
 package.loaded["core.command_helper"] = {

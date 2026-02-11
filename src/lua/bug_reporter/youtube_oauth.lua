@@ -110,7 +110,7 @@ function YouTubeOAuth.exchange_code_for_tokens(auth_code)
     handle:close()
 
     -- Parse JSON response
-    local tokens, pos, err = dkjson.decode(response)
+    local tokens, _, err = dkjson.decode(response)
     if not tokens then
         return nil, "Failed to parse token response: " .. (err or "unknown error")
     end
@@ -156,7 +156,7 @@ function YouTubeOAuth.refresh_access_token()
     local response = handle:read("*a")
     handle:close()
 
-    local new_tokens, pos, err = dkjson.decode(response)
+    local new_tokens, _, err = dkjson.decode(response)
     if not new_tokens then
         return nil, "Failed to parse refresh response: " .. (err or "unknown error")
     end
@@ -225,7 +225,7 @@ function YouTubeOAuth.load_tokens()
     local content = file:read("*a")
     file:close()
 
-    local tokens, pos, err = dkjson.decode(content)
+    local tokens, _, err = dkjson.decode(content)
     return tokens
 end
 

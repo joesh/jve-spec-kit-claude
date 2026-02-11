@@ -28,7 +28,6 @@ local ripple_undo = require("core.ripple.undo_hydrator")
 local batch_context = require("core.ripple.batch.context")
 local batch_pipeline = require("core.ripple.batch.pipeline")
 
-local get_edge_track_id = ripple_edge.get_edge_track_id
 local compute_edge_boundary_time = ripple_edge.compute_edge_boundary_time
 local build_edge_key = ripple_edge.build_edge_key
 local bracket_for_normalized_edge = ripple_edge.bracket_for_normalized_edge
@@ -92,7 +91,7 @@ local SPEC = {
 }
 function M.register(command_executors, command_undoers, db, set_last_error)
     -- Helper: Load clip and capture original state if not already cached
-    local function ensure_clip_loaded(ctx, clip_id, db)
+    local function ensure_clip_loaded(ctx, clip_id)
         local clip = ctx.base_clips[clip_id]
         if not clip then
             local is_temp_gap = type(clip_id) == "string" and clip_id:find("^temp_gap_")
@@ -593,7 +592,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
-    local function load_clip_for_edit(ctx, clip_id, db)
+    local function load_clip_for_edit(ctx, clip_id)
         local clip = ctx.modified_clips[clip_id]
         if clip then
             return clip
@@ -660,25 +659,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         ctx.modified_clips[clip_id] = clip
         return clip
-    end
-
-    local function fetch_clip(ctx, clip_id, db)
-        local clip = ctx.base_clips[clip_id]
-        if clip then
-            return clip
-        end
-        local cached = ctx.clip_lookup and ctx.clip_lookup[clip_id] or nil
-        if cached then
-            local is_temp_gap = type(clip_id) == "string" and clip_id:find("^temp_gap_")
-            if is_temp_gap or (cached.rate and cached.rate.fps_numerator and cached.rate.fps_denominator) then
-                return cached
-            end
-        end
-        local is_temp_gap = type(clip_id) == "string" and clip_id:find("^temp_gap_")
-        if is_temp_gap then
-            return cached
-        end
-        return Clip.load_optional(clip_id)
     end
 
 -- Apply the requested trim delta to clip/gap edges and return the ripple start.
@@ -908,7 +888,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return delta_frames
     end
 
-    local function compute_constraints(ctx, db)
+    local function compute_constraints(ctx)
         ctx.global_min_frames = -math.huge
         ctx.global_max_frames = math.huge
         ctx.global_min_edge_keys = {}
@@ -916,7 +896,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         assert(ctx.edge_infos, "compute_constraints: edge_infos is nil")
         for _, edge_info in ipairs(ctx.edge_infos) do
-            local clip = ensure_clip_loaded(ctx, edge_info.clip_id, db)
+            local clip = ensure_clip_loaded(ctx, edge_info.clip_id)
             if clip then
                 local neighbors = ensure_neighbor_bounds(ctx, edge_info.clip_id)
                 local edge_key = build_edge_key(edge_info)
@@ -1243,13 +1223,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
-    local function process_edge_trims(ctx, db)
+    local function process_edge_trims(ctx)
         reset_ripple_processing_state(ctx)
 
         assert(ctx.edge_infos, "process_edge_trims: edge_infos is nil")
         for _, edge_info in ipairs(ctx.edge_infos) do
             local clip_id = edge_info.clip_id
-            local clip = load_clip_for_edit(ctx, clip_id, db)
+            local clip = load_clip_for_edit(ctx, clip_id)
             if not clip then
                 logger.warn("ripple", string.format("BatchRippleEdit: Clip %s not found. Skipping.", tostring(clip_id)))
                 goto continue_edge_process
@@ -1264,7 +1244,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local key = build_edge_key(edge_info)
             local applied_delta = compute_applied_delta(ctx, key, edge_info)
 
-            local ripple_start, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
+            local _, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
             if not success then
                 logger.error("ripple", string.format("Ripple failed for clip %s (edge=%s trim=%s delta=%s)",
                     tostring(clip.id),
@@ -1429,7 +1409,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        return blocks
 	    end
 
-    local function compute_downstream_shifts(ctx, db)
+    local function compute_downstream_shifts(ctx)
         -- Roll-only operations do not ripple-shift downstream clips. Avoid scanning the
         -- entire timeline to build a no-op shift list (can be thousands of clips).
         if not ctx.has_ripple_edge then
@@ -1518,7 +1498,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     shift_clip = snapshot_clip_for_gap(ctx, base_clip)
                 end
             else
-                shift_clip = load_clip_for_edit(ctx, shift_clip_data.id, db)
+                shift_clip = load_clip_for_edit(ctx, shift_clip_data.id)
             end
 
             if not shift_clip then
@@ -1727,7 +1707,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return false
     end
 
-	    local function finalize_execution(ctx, db)
+	    local function finalize_execution(ctx)
 	        ctx.command:set_parameter("original_states", ctx.original_states_map)
 	        if ctx.bulk_shift_mutations and #ctx.bulk_shift_mutations > 0 then
 	            ctx.command:set_parameter("bulk_shifts", ctx.bulk_shift_mutations)
@@ -1946,7 +1926,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	    end
 
     command_executors["BatchRippleEdit"] = function(command)
-        local args = command:get_all_parameters()
         local ctx = batch_context.create(command)
 
         if not ctx.edge_infos or #ctx.edge_infos == 0 then

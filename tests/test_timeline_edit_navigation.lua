@@ -8,7 +8,6 @@ require('test_env')
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')
-local Rational = require('core.rational')
 
 local TEST_DB = "/tmp/jve/test_timeline_edit_navigation.db"
 os.remove(TEST_DB)

@@ -95,13 +95,16 @@ print("  ✓ no-clip render is background only")
 
 print("\nTest 1.3: Render with clip shows playhead")
 -- IS-a refactor: has_clip() checks current_sequence_id, not current_clip_id
+-- Marks are now methods: get_mark_in() / get_mark_out()
 source_viewer_state.current_sequence_id = "test_masterclip_1"
 source_viewer_state.total_frames = 100
 source_viewer_state.fps_num = 30
 source_viewer_state.fps_den = 1
 source_viewer_state.playhead = 50
-source_viewer_state.mark_in = nil
-source_viewer_state.mark_out = nil
+-- Mock mark methods (IS-a refactor: marks are methods, not properties)
+local _mock_mark_in, _mock_mark_out = nil, nil
+source_viewer_state.get_mark_in = function() return _mock_mark_in end
+source_viewer_state.get_mark_out = function() return _mock_mark_out end
 
 draw_log = {}
 bar.render()
@@ -132,8 +135,8 @@ assert(triangle_cmd.x3 == 200,
 print("  ✓ playhead at correct pixel position")
 
 print("\nTest 1.5: Render with marks shows mark handles + range fill")
-source_viewer_state.mark_in = 20
-source_viewer_state.mark_out = 80
+_mock_mark_in = 20
+_mock_mark_out = 80
 
 draw_log = {}
 bar.render()

@@ -92,11 +92,15 @@ end
 
 -- Create a new link group between clips
 -- clips: array of {clip_id, role, time_offset?}
+-- db: optional database connection (uses get_connection() if not provided)
 -- Returns: link_group_id or nil on failure
 function M.create_link_group(clips, db)
     if not clips or #clips < 2 then
         return nil, "At least 2 clips required for a link group"
     end
+
+    -- Use provided db or get connection (models are allowed to call get_connection)
+    db = db or database.get_connection()
 
     -- Generate new link group ID
     local link_group_id = uuid.generate()

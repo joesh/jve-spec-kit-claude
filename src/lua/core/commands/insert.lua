@@ -132,8 +132,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local clips = {}
         local group_duration
 
+        -- Get timeline frame rate for duration conversion
+        -- clip.duration must be in TIMELINE frames (sequence timebase), not source units
+        local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
+
         -- Video clip (if video stream exists)
         if video_timing then
+            -- Convert video duration (source frames) to timeline frames
+            local video_fps = video_timing.fps_numerator / video_timing.fps_denominator
+            local timeline_fps = seq_fps_num / seq_fps_den
+            local video_duration_timeline = math.floor(video_timing.duration * timeline_fps / video_fps + 0.5)
+
             table.insert(clips, {
                 role = "video",
                 media_id = media_id,
@@ -142,17 +151,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 name = clip_name,
                 source_in = video_timing.source_in,
                 source_out = video_timing.source_out,
-                duration = video_timing.duration,
+                duration = video_duration_timeline,  -- Timeline frames, not source frames
                 fps_numerator = video_timing.fps_numerator,
                 fps_denominator = video_timing.fps_denominator,
                 target_track_id = track_id,
                 clip_id = args.clip_id,  -- Preserve clip_id if specified
             })
-            group_duration = video_timing.duration
+            group_duration = video_duration_timeline
         end
 
         -- Audio clips (if audio stream exists)
         if audio_channels > 0 and audio_timing then
+            -- Convert audio duration (samples) to timeline frames
+            local sample_rate = audio_timing.fps_numerator
+            local timeline_fps = seq_fps_num / seq_fps_den
+            local audio_duration_timeline = math.floor(audio_timing.duration * timeline_fps / sample_rate + 0.5)
+
             local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
             for ch = 0, audio_channels - 1 do
                 local audio_track = audio_track_resolver(nil, ch)
@@ -165,18 +179,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     name = clip_name .. " (Audio)",
                     source_in = audio_timing.source_in,
                     source_out = audio_timing.source_out,
-                    duration = audio_timing.duration,
+                    duration = audio_duration_timeline,  -- Timeline frames, not samples
                     fps_numerator = audio_timing.fps_numerator,
                     fps_denominator = audio_timing.fps_denominator,
                     target_track_id = audio_track.id,
                 })
             end
-            -- For audio-only, convert samples to timeline frames for group duration
+            -- For audio-only, use the converted timeline duration
             if not group_duration then
-                local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
-                local sample_rate = audio_timing.fps_numerator
-                -- frames = samples * fps / sample_rate
-                group_duration = math.floor(audio_timing.duration * seq_fps_num / (seq_fps_den * sample_rate))
+                group_duration = audio_duration_timeline
             end
         end
 

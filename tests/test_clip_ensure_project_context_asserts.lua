@@ -8,7 +8,6 @@ local function check(label, cond)
     else failed = failed + 1; print("FAIL: " .. label) end
 end
 
-local Rational = require("core.rational")
 
 -- Mock database that returns no results for project lookups
 local empty_query = {

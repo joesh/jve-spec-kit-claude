@@ -118,7 +118,7 @@ if json_path then
 
         -- Parse JSON
         local dkjson = require("dkjson")
-        local data, pos, err = dkjson.decode(content)
+        local data, _, err = dkjson.decode(content)
 
         if data then
             assert_equal(data.test_format_version, "1.0", "Format version is 1.0")

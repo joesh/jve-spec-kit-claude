@@ -11,7 +11,6 @@ local Clip = require('models.clip')
 local Media = require('models.media')
 local Command = require('command')
 local command_manager = require('core.command_manager')
-local Rational = require('core.rational')
 
 -- Mock Qt timer
 _G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end

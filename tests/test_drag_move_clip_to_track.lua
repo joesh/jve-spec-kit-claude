@@ -16,7 +16,6 @@ _G.timeline = {
 
 local _, executed = test_env.mock_command_manager()
 
-local Rational = require("core.rational")
 local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")
 
 local state = {

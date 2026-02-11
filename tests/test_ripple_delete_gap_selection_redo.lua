@@ -10,7 +10,6 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local import_schema = require("import_schema")
 local Command = require("command")
-local Rational = require("core.rational")
 local selection_state = require("ui.timeline.state.selection_state")
 
 local DB_PATH = "/tmp/jve/test_ripple_delete_gap_selection_redo.db"

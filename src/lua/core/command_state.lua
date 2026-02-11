@@ -23,17 +23,6 @@ local profile_scope = require("core.profile_scope")
 local json = require("dkjson")
 local logger = require("core.logger")
 
--- State tracking
-local current_state_hash = ""
-local state_hash_cache = {}
-
-local sequence_initial_state = {
-    clips = {},
-    media = {},
-    master = {},
-    timeline = {}
-}
-
 local TEMP_GAP_PREFIX = "temp_gap_"
 
 local function parse_temp_gap_identifier(clip_id)
@@ -78,8 +67,6 @@ end
 
 function M.init(database)
     db = database
-    current_state_hash = ""
-    state_hash_cache = {}
 end
 
 -- Calculate state hash for a project
@@ -247,7 +234,7 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
         if not json_text or json_text == "" then
             return {}
         end
-        local value, pos, err = json.decode(json_text)
+        local value, _, err = json.decode(json_text)
         assert(value ~= nil, "command_state.decode: corrupt JSON in undo record: " .. tostring(err))
         assert(type(value) == "table", "command_state.decode: expected table from JSON, got " .. type(value))
         return value

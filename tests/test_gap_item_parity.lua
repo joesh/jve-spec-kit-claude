@@ -6,7 +6,6 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
-local Rational = require("core.rational")
 
 local TEST_DB = "/tmp/jve/test_gap_item_parity.db"
 local layout = ripple_layout.create({db_path = TEST_DB})

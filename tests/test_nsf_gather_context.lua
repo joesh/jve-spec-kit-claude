@@ -59,7 +59,6 @@ local function test_gather_context_asserts_on_missing_video_dimensions()
     media:save()
 
     -- Create master clip referencing this media (also no dimensions)
-    local Rational = require("core.rational")
     local master_clip = Clip.create("Test Clip", media.id, {
         id = uuid.generate(),
         project_id = project_id,
@@ -158,7 +157,6 @@ local function test_gather_context_valid_video_only_media()
     media:save()
 
     -- Create master clip
-    local Rational = require("core.rational")
     local master_clip = Clip.create("Video Only Clip", media.id, {
         id = uuid.generate(),
         project_id = project_id,

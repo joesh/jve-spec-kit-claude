@@ -190,7 +190,7 @@ function YouTubeUploader.upload_video_file(session_uri, video_path)
     handle:close()
 
     -- Parse response
-    local data, pos, err = dkjson.decode(response)
+    local data, _, err = dkjson.decode(response)
     if not data then
         return nil, "Failed to parse upload response: " .. (err or "unknown error")
     end
@@ -322,7 +322,7 @@ function YouTubeUploader.simple_upload(video_path, metadata)
     os.remove(temp_file)
 
     -- Parse response
-    local data, pos, err = dkjson.decode(response)
+    local data, _, err = dkjson.decode(response)
     if not data then
         return nil, "Failed to parse response: " .. (err or "unknown error")
     end
