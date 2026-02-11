@@ -18,13 +18,13 @@ check("nil rate asserts", not ok1)
 check("error mentions rate", err1 and tostring(err1):find("rate") ~= nil)
 
 -- Test 2: string rate should error (unrecognized type)
-local ok2, err2 = pcall(function()
+local ok2 = pcall(function()
     frame_utils.normalize_rate("24fps")
 end)
 check("string rate errors", not ok2)
 
 -- Test 3: boolean rate should error
-local ok3, err3 = pcall(function()
+local ok3 = pcall(function()
     frame_utils.normalize_rate(true)
 end)
 check("boolean rate errors", not ok3)

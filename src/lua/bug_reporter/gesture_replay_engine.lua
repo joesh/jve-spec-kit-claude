@@ -26,8 +26,8 @@ local has_qt_bindings = type(post_mouse_event) == "function"
 -- @return: Event type and parameters table for qt_bindings
 function GestureReplayEngine.gesture_to_event_params(gesture_entry)
     local gesture = gesture_entry.gesture
-    local event_type = nil
-    local params = {}
+    local event_type
+    local params
 
     if gesture.type == "mouse_press" then
         event_type = "QMouseEvent"
@@ -185,9 +185,9 @@ function GestureReplayEngine.replay_gestures(gesture_log, options)
             sleep_ms(delay_ms)
         end
 
-        local success, err = GestureReplayEngine.post_gesture_event(gesture_log[i])
-        if not success then
-            return false, err
+        local ok, post_err = GestureReplayEngine.post_gesture_event(gesture_log[i])
+        if not ok then
+            return false, post_err
         end
 
         if process_events_enabled then

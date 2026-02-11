@@ -91,7 +91,7 @@ cmd:set_parameter("edge_infos", {
 })
 cmd:set_parameter("delta_frames", 120) -- drag [ right to close part of the gap and pull downstream clips upstream
 
-local ok, payload = executor(cmd)
+local ok, _ = executor(cmd)
 assert(ok, "BatchRippleEdit gap-after ripple failed to execute")
 
 local left = Clip.load("clip_left", db)

@@ -90,9 +90,9 @@ local function count_edge_rects(rects, clip_track_id)
         return counts
     end
     local track_y = track_entry.y
-    local height = track_entry.height
+    local track_height = track_entry.height
     for _, rect in ipairs(rects) do
-        if rect.y >= track_y and rect.y <= track_y + height then
+        if rect.y >= track_y and rect.y <= track_y + track_height then
             if rect.color == limit_color then
                 counts.limit = counts.limit + 1
             elseif rect.color == avail_color then

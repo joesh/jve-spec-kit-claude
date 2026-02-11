@@ -13,11 +13,9 @@ end
 
 -- Mock history module
 local current_group_id = "group_42"
-local group_ended = false
 package.loaded["core.command_history"] = {
-    begin_undo_group = function(label) return current_group_id end,
+    begin_undo_group = function() return current_group_id end,
     end_undo_group = function()
-        group_ended = true
         local gid = current_group_id
         current_group_id = nil  -- simulate outermost group closing
         return gid
@@ -67,7 +65,6 @@ local command_manager = require("core.command_manager")
 -- Test 1: commit failure propagates as error
 commit_should_fail = true
 current_group_id = "group_42"
-group_ended = false
 
 -- begin_undo_group to set up state
 command_manager.begin_undo_group("test group")

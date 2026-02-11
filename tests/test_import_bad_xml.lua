@@ -4,7 +4,7 @@ require('test_env')
 
 local database = require('core.database')
 local fcp7_importer = require('importers.fcp7_xml_importer')
-local Command = require('command')
+local _Command = require('command')  -- luacheck: no unused
 
 local function write_bad_xml(path)
     local handle = assert(io.open(path, 'w'))

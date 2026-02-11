@@ -397,13 +397,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         logger.info("import_media", "Executing ImportMedia command")
 
-        local file_paths = args.file_paths
+        -- Re-check file_paths (may have been set by dialog above)
+        file_paths = args.file_paths
         if not file_paths or type(file_paths) ~= "table" or #file_paths == 0 then
             set_last_error("ImportMediaFiles: No file paths provided")
             return { success = false, error_message = "No file paths provided" }
         end
 
-        local project_id = args.project_id
+        -- Re-check project_id (already validated but need local reference)
+        project_id = args.project_id
         if not project_id or project_id == "" then
             set_last_error("ImportMediaFiles: missing project_id")
             return { success = false, error_message = "Missing project_id" }

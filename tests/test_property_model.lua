@@ -3,7 +3,7 @@ require("test_env")
 local database = require("core.database")
 local Property = require("models.property")
 local json = require("dkjson")
-local uuid = require("uuid")
+require("uuid")  -- Load but don't use directly
 
 local pass_count = 0
 local fail_count = 0

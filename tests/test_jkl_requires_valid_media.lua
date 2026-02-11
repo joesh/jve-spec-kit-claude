@@ -7,7 +7,8 @@ print("=== Test JKL Requires Valid Media ===")
 
 _G.qt_create_single_shot_timer = function(interval, callback) end
 
--- Track what happens
+-- Track what happens (variables needed for mock callbacks but not read in test)
+-- luacheck: ignore shuttle_called assert_fired
 local shuttle_called = false
 local assert_fired = false
 
@@ -25,15 +26,16 @@ package.loaded["ui.panel_manager"] = { toggle_active_panel = function() end }
 package.loaded["ui.focus_manager"] = { get_focused_panel = function() return "viewer" end }
 
 -- Mock playback_controller - track if shuttle is called without proper init
-local mock_pc = {
+local mock_pc
+mock_pc = {
     total_frames = 0,  -- Not initialized
     frame = 0,
     init = function() end,
-    set_source = function(total, fps)
+    set_source = function(total, _fps)
         mock_pc.total_frames = total
     end,
     stop = function() end,
-    shuttle = function(dir)
+    shuttle = function(_dir)
         shuttle_called = true
         -- In real code, this would schedule _tick which fails
     end,

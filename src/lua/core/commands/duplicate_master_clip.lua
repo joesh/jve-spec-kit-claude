@@ -79,12 +79,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local clip = Clip.create(clip_name, media_id, clip_opts)
         command:set_parameter("project_id", project_id)
 
-        local ok, actions = clip:save({skip_occlusion = true})
+        local ok = clip:save({skip_occlusion = true})
         if not ok then
             set_last_error("DuplicateMasterClip: Failed to save duplicated clip")
             return false
-        end
-        if actions and #actions > 0 then
         end
 
 

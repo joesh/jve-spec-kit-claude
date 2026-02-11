@@ -225,7 +225,7 @@ function YouTubeOAuth.load_tokens()
     local content = file:read("*a")
     file:close()
 
-    local tokens, _, err = dkjson.decode(content)
+    local tokens = dkjson.decode(content)
     return tokens
 end
 
@@ -280,10 +280,10 @@ done
 
     -- Return function to check for code
     return function()
-        local file = io.open(code_file, "r")
-        if file then
-            local code = file:read("*a"):gsub("%s+", "")
-            file:close()
+        local code_handle = io.open(code_file, "r")
+        if code_handle then
+            local code = code_handle:read("*a"):gsub("%s+", "")
+            code_handle:close()
             os.remove(code_file)
             os.remove(response_file)
             os.execute("pkill -f jve_oauth_server")

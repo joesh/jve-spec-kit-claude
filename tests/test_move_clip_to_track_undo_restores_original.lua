@@ -74,7 +74,7 @@ cmd:set_parameter("target_track_id", "v2")
 local exec = command_manager.execute(cmd)
 assert(exec and exec.success, "move execution failed")
 
-local track_after, start_after, dur_after = fetch_clip("c1")
+local track_after = fetch_clip("c1")
 assert(track_after == "v2", "clip not moved to v2")
 
 -- Undo should restore c1 to v1 and reinstate any occluded clips.

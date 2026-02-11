@@ -248,7 +248,7 @@ end
 -- All inputs/outputs are in frames (integers) except hint value which is expressed in hint units.
 -- Returns: interval_frames, format_hint ("frames"/"seconds"/"minutes"), interval_value (in hint units)
 function M.get_ruler_interval(viewport_duration_frames, frame_rate, target_pixels, pixels_per_frame)
-    local target_frames = target_pixels / (pixels_per_frame > 0 and pixels_per_frame or 1)
+    local _target_frames = target_pixels / (pixels_per_frame > 0 and pixels_per_frame or 1)  -- luacheck: ignore 211 (computed for reference)
     local rate = M.normalize_rate(frame_rate)
     local fps = rate.fps_numerator / rate.fps_denominator
     if fps <= 0 then

@@ -70,9 +70,9 @@ function JsonExporter.export(capture_data, metadata, output_dir)
     local capture_id = "capture-" .. utils.human_datestamp_for_filename(timestamp) .. "-" .. uuid.generate():sub(1, 8)
     local capture_dir = output_dir .. "/" .. capture_id
 
-    local success, err = utils.mkdir_p(capture_dir)
-    if not success then
-        return nil, err or ("Failed to create output directory: " .. capture_dir)
+    local dir_ok, dir_err = utils.mkdir_p(capture_dir)
+    if not dir_ok then
+        return nil, dir_err or ("Failed to create output directory: " .. capture_dir)
     end
 
     -- Export screenshots to disk
@@ -91,7 +91,7 @@ function JsonExporter.export(capture_data, metadata, output_dir)
     local slideshow_path = nil
     if screenshot_count > 0 then
         local slideshow_generator = require("bug_reporter.slideshow_generator")
-        local video_path, err = slideshow_generator.generate(
+        local video_path, gen_err = slideshow_generator.generate(
             screenshot_dir,
             screenshot_count
         )
@@ -100,7 +100,7 @@ function JsonExporter.export(capture_data, metadata, output_dir)
             slideshow_path = video_path
             logger.info("bug_reporter", "Slideshow video generated: " .. video_path)
         else
-            logger.warn("bug_reporter", "Slideshow generation failed: " .. (err or "unknown"))
+            logger.warn("bug_reporter", "Slideshow generation failed: " .. (gen_err or "unknown"))
         end
     end
 
@@ -151,9 +151,9 @@ function JsonExporter.export(capture_data, metadata, output_dir)
 
     -- Write JSON file
     local json_path = capture_dir .. "/capture.json"
-    local json_str, err = dkjson.encode(json_data, { indent = true })
+    local json_str, encode_err = dkjson.encode(json_data, { indent = true })
     if not json_str then
-        return nil, "Failed to encode JSON: " .. (err or "unknown error")
+        return nil, "Failed to encode JSON: " .. (encode_err or "unknown error")
     end
 
     local file = io.open(json_path, "w")

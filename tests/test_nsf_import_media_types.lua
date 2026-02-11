@@ -7,7 +7,7 @@ Catches regressions like sample_rate being returned as "48000" instead of 48000.
 
 require("test_env")
 
-local MediaReader = require("media.media_reader")
+require("media.media_reader") -- luacheck: ignore 411
 
 -- Test: probe_file returns numeric sample_rate
 local function test_probe_audio_sample_rate_is_number()

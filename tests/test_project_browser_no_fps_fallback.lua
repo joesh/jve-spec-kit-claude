@@ -34,12 +34,12 @@ check("asserts on clip with no fps", not ok1)
 check("error mentions fps_numerator", err1 and tostring(err1):find("fps_numerator") ~= nil)
 
 -- Test 2: clip with rate works
-local si, so = apply_source_marks_pattern(
+local si = apply_source_marks_pattern(
     { clip_id = "clip2", rate = { fps_numerator = 48, fps_denominator = 1 } }, 0, 100)
 check("clip with rate works", si.fps_numerator == 48)
 
 -- Test 3: clip with fps_numerator (no rate table) works
-local si2, so2 = apply_source_marks_pattern(
+local si2 = apply_source_marks_pattern(
     { clip_id = "clip3", fps_numerator = 25, fps_denominator = 1 }, 0, 100)
 check("clip with fps_numerator works", si2.fps_numerator == 25)
 

@@ -27,7 +27,7 @@ local command_helper = require('core.command_helper')
 local clip_mutator = require('core.clip_mutator')
 local clip_link = require('models.clip_link')
 local logger = require('core.logger')
-local Track = require('models.track')
+local _Track = require('models.track')  -- luacheck: ignore 211 (unused, required for model registration)
 
 --- Find source stream clip inside a masterclip sequence by role
 -- IS-a refactor: master_clip_id is now a sequence ID. This function finds
@@ -229,8 +229,8 @@ local function carve_space(db, edit_type, sequence_id, position, total_duration,
 
     if edit_type == "insert" then
         -- Insert: ripple ALL tracks in sequence at position
-        local Track = require('models.track')
-        local all_tracks = Track.find_by_sequence(sequence_id)
+        local TrackModel = require('models.track')
+        local all_tracks = TrackModel.find_by_sequence(sequence_id)
 
         for _, track in ipairs(all_tracks) do
             local ok, err, mutations = clip_mutator.resolve_ripple(db, {

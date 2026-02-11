@@ -312,9 +312,8 @@ function M.create(widget, state_module)
     local scrub_mode_active = false
 
     -- Mouse event handler for playhead dragging
-    local function on_mouse_event(event_type, x, y, button, modifiers)
+    local function on_mouse_event(event_type, x, y, _button, modifiers)
         local width = select(1, timeline.get_dimensions(ruler.widget))
-        local frame_rate = get_frame_rate()
 
         if event_type == "press" then
             -- Don't set scrub mode yet — a click (press+release) should use

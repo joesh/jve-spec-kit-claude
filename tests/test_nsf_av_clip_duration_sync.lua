@@ -16,7 +16,7 @@ local Track = require("models.track")
 local Clip = require("models.clip")
 local Media = require("models.media")
 local command_manager = require("core.command_manager")
-local uuid = require("uuid")
+require("uuid") -- luacheck: ignore 411
 
 local db_path = "/tmp/jve/test_av_duration_sync.db"
 os.remove(db_path)
@@ -211,8 +211,8 @@ local function test_timeline_clips_visual_sync()
     assert(video_stmt:exec(), "Video clip query failed")
     assert(video_stmt:next(), "No video clip created on timeline")
     local vc_duration = video_stmt:value(0)
-    local vc_fps_num = video_stmt:value(1)
-    local vc_fps_den = video_stmt:value(2)
+    local _ = video_stmt:value(1) -- fps_num (unused)
+    local _ = video_stmt:value(2) -- fps_den (unused)  -- luacheck: ignore 411
     local vc_start = video_stmt:value(3)
     video_stmt:finalize()
 
@@ -226,8 +226,8 @@ local function test_timeline_clips_visual_sync()
     assert(audio_stmt:exec(), "Audio clip query failed")
     assert(audio_stmt:next(), "No audio clip created on timeline")
     local ac_duration = audio_stmt:value(0)
-    local ac_fps_num = audio_stmt:value(1)
-    local ac_fps_den = audio_stmt:value(2)
+    local _ = audio_stmt:value(1) -- fps_num (unused)
+    local _ = audio_stmt:value(2) -- fps_den (unused)  -- luacheck: ignore 411
     local ac_start = audio_stmt:value(3)
     audio_stmt:finalize()
 

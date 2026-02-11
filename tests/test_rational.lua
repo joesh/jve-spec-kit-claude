@@ -1,7 +1,6 @@
 -- Tests for Rational Time Library
 -- Defines the expected behavior for frame-accurate time calculations.
 
-local rational_path = "src/lua/core/rational.lua"
 local Rational
 
 -- Helper to load the library safely

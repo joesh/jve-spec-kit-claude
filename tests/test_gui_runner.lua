@@ -73,11 +73,11 @@ local key_press = {
     }
 }
 
-local event_type, params = gesture_replay_engine.gesture_to_event_params(key_press)
-assert_true(event_type == "QKeyEvent", "Key event type correct")
-assert_true(params.event_type == "KeyPress", "Key press type correct")
-assert_true(params.key == "a", "Key correct")
-assert_true(params.text == "a", "Text correct")
+local event_type2, params2 = gesture_replay_engine.gesture_to_event_params(key_press)
+assert_true(event_type2 == "QKeyEvent", "Key event type correct")
+assert_true(params2.event_type == "KeyPress", "Key press type correct")
+assert_true(params2.key == "a", "Key correct")
+assert_true(params2.text == "a", "Text correct")
 print()
 
 -- Test 4: Timing statistics
@@ -117,16 +117,16 @@ print()
 -- Test 7: Qt bindings detection
 print("Test 7: Qt bindings detection")
 -- These should fail gracefully when not running in JVE
-local success, err = gesture_replay_engine.post_gesture_event(mouse_press)
-assert_true(not success, "Gracefully fails without Qt bindings")
-assert_true(err:match("Qt bindings not available"), "Error message correct")
+local success7, err7 = gesture_replay_engine.post_gesture_event(mouse_press)
+assert_true(not success7, "Gracefully fails without Qt bindings")
+assert_true(err7:match("Qt bindings not available"), "Error message correct")
 print()
 
 -- Test 8: Replay without Qt
 print("Test 8: Replay without Qt")
-local success, err = gesture_replay_engine.replay_gestures(gesture_log)
-assert_true(not success, "Replay fails without Qt bindings")
-assert_true(err:match("Qt bindings not available"), "Error message correct")
+local success8, err8 = gesture_replay_engine.replay_gestures(gesture_log)
+assert_true(not success8, "Replay fails without Qt bindings")
+assert_true(err8:match("Qt bindings not available"), "Error message correct")
 print()
 
 -- Summary

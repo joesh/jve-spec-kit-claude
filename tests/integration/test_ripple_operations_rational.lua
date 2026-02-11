@@ -3,7 +3,6 @@
 -- Verifies that RippleEdit and BatchRippleEdit work correctly with Rational objects.
 
 local Rational = require("core.rational")
-local time_utils = require("core.time_utils")
 
 print("=== Ripple Operations (Rational) Test Suite ===\n")
 
@@ -42,21 +41,9 @@ local function assert_eq_rational(actual, expected, message)
     end
 end
 
--- Setup Mock Database and Timeline State
-local mock_db = {
+-- Setup Mock Database (clips storage for potential future tests)
+local mock_db = {  -- luacheck: ignore
     clips = {},
-    load_clips = function(self) 
-        local list = {}
-        for _, c in pairs(self.clips) do table.insert(list, c) end
-        return list
-    end
-}
-
--- Mock Timeline State (minimal)
-local timeline_state = {
-    get_sequence_frame_rate = function()
-        return {fps_numerator = 30, fps_denominator = 1}
-    end
 }
 
 -- Helper to create a clip with Rational times
@@ -80,7 +67,6 @@ end
 -- This mimics the core logic in BatchRippleEdit/RippleEdit commands
 local function apply_edge_ripple_rational(clip, edge_type, delta_rational)
     local new_duration
-    local new_start = clip.timeline_start
     
     if edge_type == "in" then
         -- Dragging In-point: Start moves, Duration changes inverse to drag
@@ -114,7 +100,7 @@ print("\n" .. current_test .. ": Ripple Out-Point (Extend)")
 local clip1 = create_clip("c1", 0, 30) -- 0-1s
 local delta = Rational.new(15, 30, 1) -- +0.5s
 
-local success, err = apply_edge_ripple_rational(clip1, "out", delta)
+local success, _ = apply_edge_ripple_rational(clip1, "out", delta)
 
 assert_true(success, "Ripple should succeed")
 assert_eq_rational(clip1.duration, Rational.new(45, 30, 1), "Duration should be 45 frames")
@@ -129,7 +115,7 @@ print("\n" .. current_test .. ": Ripple In-Point (Trim)")
 local clip2 = create_clip("c2", 30, 60) -- 1s-3s (2s dur)
 local delta_trim = Rational.new(15, 30, 1) -- +0.5s (drag right)
 
-success, err = apply_edge_ripple_rational(clip2, "in", delta_trim)
+success, _ = apply_edge_ripple_rational(clip2, "in", delta_trim)
 
 assert_true(success, "Ripple should succeed")
 assert_eq_rational(clip2.timeline_start, Rational.new(45, 30, 1), "Start should move to 45 frames")
@@ -147,7 +133,7 @@ local clip3 = create_clip("c3", 60, 30) -- 2s-3s
 -- The simplified logic doesn't check source bounds (that's in constraints), but let's verify arithmetic.
 local delta_neg = Rational.new(-10, 30, 1) 
 
-success, err = apply_edge_ripple_rational(clip3, "in", delta_neg)
+success, _ = apply_edge_ripple_rational(clip3, "in", delta_neg)
 
 assert_true(success, "Ripple should succeed")
 assert_eq_rational(clip3.timeline_start, Rational.new(50, 30, 1), "Start should move left to 50 frames")

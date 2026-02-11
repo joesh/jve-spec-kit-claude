@@ -77,7 +77,7 @@ if WIDGET.CREATE_LABEL then
 end
 
 if label then
-    local status2, err2 = pcall(function()
+    local status2 = pcall(function()
         EMP.SURFACE_SET_FRAME(label, nil)
     end)
     assert(not status2, "SURFACE_SET_FRAME on non-surface should error")
@@ -92,7 +92,7 @@ end
 
 print("  Testing: SURFACE_SET_FRAME with invalid frame handle")
 -- Create a fake userdata that isn't a valid frame
-local status3, err3 = pcall(function()
+local status3 = pcall(function()
     -- Pass something that's not a frame
     EMP.SURFACE_SET_FRAME(surface, "not a frame")
 end)

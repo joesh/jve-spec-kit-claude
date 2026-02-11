@@ -20,10 +20,10 @@ end
 print("\n=== B2: Menu action dispatch table ===")
 
 -- Stub keyboard_shortcuts.perform_delete_action
-local delete_called = false
+local delete_call_count = 0
 package.loaded["core.keyboard_shortcuts"] = {
     perform_delete_action = function(_opts)
-        delete_called = true
+        delete_call_count = delete_call_count + 1
         return true
     end,
 }
@@ -73,10 +73,10 @@ menu_system.init(nil, mock_cm)
 -- ─── Test 1: "Delete" → dispatches to perform_delete_action ───
 print("\n--- Delete → perform_delete_action ---")
 do
-    delete_called = false
+    local before = delete_call_count
     local cb = menu_system._test_get_action_callback("Delete")
     cb()
-    check("Delete dispatched to keyboard_shortcuts", delete_called)
+    check("Delete dispatched to keyboard_shortcuts", delete_call_count > before)
     check("Delete NOT sent to command_manager", #executed_commands == 0)
 end
 

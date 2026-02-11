@@ -18,7 +18,7 @@
 -- Bug reporter preferences UI panel (pure Lua + Qt bindings)
 local youtube_oauth = require("bug_reporter.youtube_oauth")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
-local bug_submission = require("bug_reporter.bug_submission")
+local _bug_submission = require("bug_reporter.bug_submission")  -- luacheck: ignore (loaded for side effects)
 local utils = require("bug_reporter.utils")
 local logger = require("core.logger")
 local qt = require("bug_reporter.qt_compat")
@@ -259,7 +259,7 @@ function PreferencesPanel.save_preferences(preferences)
     local json = dkjson.encode(preferences, {indent = true})
 
     -- Use secure file write to prevent race condition
-    local success, err = utils.write_secure_file(prefs_file, json)
+    local success = utils.write_secure_file(prefs_file, json)
     return success
 end
 

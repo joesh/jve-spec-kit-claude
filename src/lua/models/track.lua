@@ -288,8 +288,8 @@ end
 function Track.count_for_sequence(sequence_id)
     assert(sequence_id, "Track.count_for_sequence: sequence_id is required")
 
-    local database = require("core.database")
-    local conn = assert(database.get_connection(), "Track.count_for_sequence: no database connection")
+    local db = require("core.database")
+    local conn = assert(db.get_connection(), "Track.count_for_sequence: no database connection")
     local stmt = assert(conn:prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?"),
         "Track.count_for_sequence: failed to prepare query for sequence_id=" .. tostring(sequence_id))
 

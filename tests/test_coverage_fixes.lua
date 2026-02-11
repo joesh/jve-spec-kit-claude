@@ -173,10 +173,10 @@ do
     local c = 20
 
     check("T11: equal integers are equal", a == b)
-    check("T11: unequal integers are not equal", not (a == c))
+    check("T11: unequal integers are not equal", a ~= c)
     check("T11: less than works", a < c)
-    check("T11: not less than when equal", not (a < b))
-    check("T11: not less than when greater", not (c < a))
+    check("T11: not less than when equal", a >= b)
+    check("T11: not less than when greater", c >= a)
 
     -- Same value integers are equal
     local d = 10

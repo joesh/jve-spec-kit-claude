@@ -11,6 +11,7 @@ local function assert_equal(actual, expected, message)
     end
 end
 
+-- luacheck: ignore 211 (unused local variable)
 local function assert_true(condition, message)
     if not condition then
         error(string.format("Assertion failed: %s\nCondition was false.", message or ""))
@@ -198,7 +199,7 @@ db.get_connection = function() return mock_conn end
 
 
 -- Restore original db functions after tests (good practice)
-
+-- luacheck: ignore 211 (unused local variable)
 local function cleanup_db_mocks()
 
     db.load_tracks = original_load_tracks

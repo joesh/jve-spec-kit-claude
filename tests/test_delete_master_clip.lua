@@ -251,7 +251,7 @@ assert(not result.success, "DeleteMasterClip should fail for nonexistent clip")
 -- =============================================================================
 print("Test 6: Cannot delete master clip in use by timeline")
 reset_test_data()
-local master = create_master_clip("master_inuse", "In Use Clip")
+create_master_clip("master_inuse", "In Use Clip")
 
 -- Create a timeline clip that references this master
 local timeline_clip = Clip.create("Timeline Instance", "media_dmc", {

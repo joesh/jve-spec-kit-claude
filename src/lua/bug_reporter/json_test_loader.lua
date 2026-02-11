@@ -41,9 +41,9 @@ function JsonTestLoader.load(json_path)
     file:close()
 
     -- Parse JSON
-    local test, _, err = dkjson.decode(content)
+    local test, _, parse_err = dkjson.decode(content)
     if not test then
-        return nil, "Failed to parse JSON: " .. (err or "unknown error")
+        return nil, "Failed to parse JSON: " .. (parse_err or "unknown error")
     end
 
     -- Validate schema version
@@ -92,13 +92,13 @@ function JsonTestLoader.load_directory(dir_path)
     local errors = {}
 
     for _, file_path in ipairs(test_files) do
-        local test, err = JsonTestLoader.load(file_path)
+        local test, load_err = JsonTestLoader.load(file_path)
         if test then
             table.insert(tests, test)
         else
             table.insert(errors, {
                 file = file_path,
-                error = err
+                error = load_err
             })
         end
     end

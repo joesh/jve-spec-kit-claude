@@ -137,12 +137,10 @@ print("\n--- listeners ---")
 do
     fresh()
     local received_items = nil
-    local received_panel = nil
     local call_count = 0
 
-    local token = selection_hub.register_listener(function(items, panel_id)
+    local token = selection_hub.register_listener(function(items, _panel_id)
         received_items = items
-        received_panel = panel_id
         call_count = call_count + 1
     end)
 

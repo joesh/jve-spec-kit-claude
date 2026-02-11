@@ -29,7 +29,7 @@ assert(err.msg ~= nil, "Error should have message")
 print("  ✓ FileNotFound error returned correctly for missing file")
 
 -- Test 3: Invalid asset handle errors are caught
-local status, result = pcall(function()
+local status = pcall(function()
     -- Try to get info on nil
     return qt_constants.EMP.ASSET_INFO(nil)
 end)

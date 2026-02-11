@@ -72,7 +72,7 @@ end
 --- @role internal
 --- @idiom Only used for error messages; accepts nil.
 
-local function describe(v)
+local function _describe(v)  -- luacheck: ignore 211 (kept for future use)
     if v == nil then
         return "nil"
     end
@@ -84,7 +84,7 @@ end
 --- @role internal
 --- @idiom Type checking helper for validating parameter kinds.
 
-local function is_kind(expected_kind, value)
+local function _is_kind(expected_kind, value)  -- luacheck: ignore 211 (kept for future use)
     return type(value) == expected_kind
 end
 
@@ -380,14 +380,14 @@ function M.validate_and_normalize(command_name, spec, params, opts)
     -- Cross-field constraints: requires_any groups
     if spec.requires_any ~= nil then
         for _, group in ipairs(spec.requires_any) do
-            local ok = false
+            local group_ok = false
             for _, key in ipairs(group) do
                 if is_present(params[key]) then
-                    ok = true
+                    group_ok = true
                     break
                 end
             end
-            if not ok then
+            if not group_ok then
                 return fail(string.format(
                     "Command '%s' requires at least one of: %s",
                     tostring(command_name),

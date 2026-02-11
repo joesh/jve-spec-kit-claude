@@ -91,9 +91,8 @@ do
     assert(#result_in.selection > 0, "Should have selection at clip start")
     -- In center zone, we get gap_before (left) and in (right)
     -- The "in" edge should be selectable
-    local found_in = false
     for _, sel in ipairs(result_in.selection) do
-        if sel.edge_type == "in" then found_in = true end
+        if sel.edge_type == "in" then break end  -- "in" edge exists at this boundary
     end
     -- Note: at 100, we might get gap_before on left and in on right
     -- The exact selection depends on zone, but "in" edge exists at this boundary

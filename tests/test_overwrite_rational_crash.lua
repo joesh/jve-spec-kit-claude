@@ -43,7 +43,7 @@ db:exec([[
 command_manager.init('sequence', 'project')
 
 -- Register Overwrite Command
-local registry = require('core.command_registry')
+require('core.command_registry') -- luacheck: ignore 411
 local overwrite_cmd = require('core.commands.overwrite')
 -- Pass dummy tables, then register with manager
 local ret = overwrite_cmd.register({}, {}, db, command_manager.set_last_error)

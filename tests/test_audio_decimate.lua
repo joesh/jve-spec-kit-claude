@@ -138,7 +138,7 @@ clear_sse_calls()
 
 print("\nTest 2.1: Speed 2x selects Q1 mode")
 audio_playback.set_speed(2.0)
-local call = last_set_target()
+last_set_target()  -- Call to verify no error; result not needed
 -- When not playing, set_speed just stores; we need to check mode on next start
 assert(audio_playback.quality_mode == Q1, "2x should use Q1, got " .. tostring(audio_playback.quality_mode))
 print("  ok 2x -> Q1")

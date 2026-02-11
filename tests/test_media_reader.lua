@@ -152,7 +152,7 @@ local ffmpeg_audio_cmd = string.format(
 print("  Generating audio-only test file...")
 os.execute(ffmpeg_audio_cmd)
 
-local audio_metadata, audio_err = media_reader.probe_file(test_audio_path)
+local audio_metadata = media_reader.probe_file(test_audio_path)
 if audio_metadata then
     assert_eq(audio_metadata.has_video, false, "No video stream")
     assert_eq(audio_metadata.has_audio, true, "Has audio stream")
@@ -193,7 +193,7 @@ package.loaded["models.media"] = {
 }
 
 local mock_db = {}  -- db parameter is no longer used by save()
-local media_id, import_err = media_reader.import_media(test_video_path, mock_db, "test_project")
+local media_id = media_reader.import_media(test_video_path, mock_db, "test_project")
 assert_not_nil(media_id, "Media ID returned")
 assert_eq(#mock_saved_media, 1, "One media record saved to database")
 

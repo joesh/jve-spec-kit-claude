@@ -53,8 +53,8 @@ if not db_conn then
     os.exit(1)
 end
 
-local ok, err = db_conn:exec(schema_sql)
-if not ok then
+local schema_ok, err = db_conn:exec(schema_sql)
+if not schema_ok then
     print("FATAL: Schema application failed: " .. tostring(err))
     os.exit(1)
 end
@@ -121,8 +121,8 @@ local clip_id = create_cmd:get_parameter("clip_id") -- Get ID from command objec
 if not clip_id then
     -- Fallback: try to parse result_data if it's the command JSON
     local json = require("dkjson")
-    local ok, cmd_data = pcall(json.decode, result.result_data)
-    if ok and cmd_data and cmd_data.parameters then
+    local decode_ok, cmd_data = pcall(json.decode, result.result_data)
+    if decode_ok and cmd_data and cmd_data.parameters then
         clip_id = cmd_data.parameters.clip_id
     end
 end

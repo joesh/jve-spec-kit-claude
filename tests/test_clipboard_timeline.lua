@@ -8,7 +8,7 @@ local command_manager = require("core.command_manager")
 -- require("core.command_implementations")
 
 local Command = require("command")
-local timeline_state = require("ui.timeline.timeline_state")
+local _ = require("ui.timeline.timeline_state") -- Load for side effects, replaced below
 local clipboard = require('core.clipboard')
 local json = require('dkjson')
 
@@ -105,8 +105,6 @@ local function setup_database(path)
         );
     ]]))
     assert(conn:exec(BASE_DATA_SQL))
-    local executors = {}
-    local undoers = {}
     -- command_impl.register_commands(executors, undoers, db) -- Removed
     command_manager.init('default_sequence', 'default_project')
 
@@ -119,10 +117,6 @@ end
 
 local function reopen_database(path)
     assert(database.set_path(path))
-    local conn = database.get_connection()
-
-    local executors = {}
-    local undoers = {}
     -- command_impl.register_commands(executors, undoers, db)
     command_manager.init('default_sequence', 'default_project')
 

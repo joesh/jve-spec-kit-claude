@@ -15,7 +15,7 @@ local function check(label, condition)
     end
 end
 
-local function expect_error(label, fn, pattern)
+local function _expect_error(label, fn, pattern)  -- luacheck: no unused
     local ok, err = pcall(fn)
     if not ok then
         if pattern and not tostring(err):match(pattern) then

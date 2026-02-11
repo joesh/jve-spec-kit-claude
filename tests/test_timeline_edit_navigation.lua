@@ -7,7 +7,7 @@ require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
+require('core.command_implementations')
 
 local TEST_DB = "/tmp/jve/test_timeline_edit_navigation.db"
 os.remove(TEST_DB)
@@ -109,8 +109,9 @@ end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
-local executors = {}
-local undoers = {}
+-- luacheck: ignore 211 (unused local variable)
+local executors = {}  -- placeholder for potential future use
+local undoers = {}    -- placeholder for potential future use
 -- command_impl.register_commands(executors, undoers, db)
 
 command_manager.init('default_sequence', 'default_project')

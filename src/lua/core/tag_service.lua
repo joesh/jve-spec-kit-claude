@@ -76,7 +76,7 @@ end
 
 function M.create_bin(project_id, params)
     params = params or {}
-    local namespace_id, _, namespace_opts = normalize_namespace(params)
+    local _, _, namespace_opts = normalize_namespace(params)
     local bins = database.load_bins(project_id, namespace_opts)
 
     local name = trim(params.name)

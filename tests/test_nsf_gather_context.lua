@@ -39,7 +39,7 @@ end
 local function test_gather_context_asserts_on_missing_video_dimensions()
     local db = setup_test_db()
     local project_id = create_test_project(db)
-    local sequence_id, track_id = create_test_sequence(db, project_id)
+    local sequence_id = create_test_sequence(db, project_id)
 
     command_manager.init(sequence_id, project_id)
 
@@ -137,7 +137,7 @@ end
 local function test_gather_context_valid_video_only_media()
     local db = setup_test_db()
     local project_id = create_test_project(db)
-    local sequence_id, track_id = create_test_sequence(db, project_id)
+    local sequence_id = create_test_sequence(db, project_id)
 
     command_manager.init(sequence_id, project_id)
 

@@ -150,11 +150,9 @@ function project_browser.focus_bin() end
 
 package.loaded['ui.project_browser'] = project_browser
 
+command_manager.init('default_sequence', 'default_project')
 local executors = {}
 local undoers = {}
-command_manager.init('default_sequence', 'default_project')
-executors = {}
-undoers = {}
 command_impl.register_commands(executors, undoers, db)
 
 local function count_rows(table_name)
@@ -190,16 +188,6 @@ local function fetch_clip_ids(limit)
     end
     stmt:finalize()
     return ids
-end
-
-local function fetch_project_settings()
-    local stmt = db:prepare([[SELECT settings FROM projects WHERE id = 'default_project']])
-    assert(stmt:exec() and stmt:next(), "Project settings query should succeed")
-    local raw = stmt:value(0) or "{}"
-    stmt:finalize()
-    local ok, decoded = pcall(json.decode, raw)
-    assert(ok and type(decoded) == "table", "Project settings should decode into a table")
-    return decoded
 end
 
 local initial_counts = {
@@ -264,7 +252,6 @@ assert(master_bin_id, "Importer should create a '<sequence name> Master Clips' b
 
 local sample_master_stmt = db:prepare([[SELECT id FROM clips WHERE clip_kind = 'master' ORDER BY id LIMIT 1]])
 assert(sample_master_stmt:exec() and sample_master_stmt:next(), "Should fetch at least one master clip")
-local sample_master_id = sample_master_stmt:value(0)
 sample_master_stmt:finalize()
 local media_bin_map = database.load_master_clip_bin_map("default_project")
 local assigned_count = 0
@@ -619,9 +606,9 @@ local move_nudge_cmd = Command.create("BatchCommand", "default_project")
 move_nudge_cmd:set_parameter("commands_json", move_nudge_spec)
 assert(command_manager.execute(move_nudge_cmd).success, "MoveClipToTrack + Nudge batch should succeed")
 
-local toggle_cmd = Command.create("ToggleClipEnabled", "default_project")
-toggle_cmd:set_parameter("clip_ids", {clip_for_move})
-assert(command_manager.execute(toggle_cmd).success, "ToggleClipEnabled should succeed for regression setup")
+local toggle_cmd2 = Command.create("ToggleClipEnabled", "default_project")
+toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
+assert(command_manager.execute(toggle_cmd2).success, "ToggleClipEnabled should succeed for regression setup")
 
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("master_clip_id", insert_master_clip_id)

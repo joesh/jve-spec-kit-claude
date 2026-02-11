@@ -13,7 +13,8 @@ local database = require("core.database")
 -- local command_impl = require("core.command_implementations")
 local Command = require("command")
 
-local SCHEMA_SQL = [[
+-- luacheck: ignore 211 (_SCHEMA_SQL kept for documentation)
+local _SCHEMA_SQL = [[
     CREATE TABLE projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,

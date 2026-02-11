@@ -60,7 +60,7 @@ end
 -- Unlike debounce, this guarantees execution at regular intervals during activity
 function M.throttle(fn, interval_ms)
     local last_execution = 0
-    local pending_call = nil
+    local _pending_call = nil  -- luacheck: ignore 231
 
     return function(...)
         local now = os.clock() * 1000
@@ -70,10 +70,10 @@ function M.throttle(fn, interval_ms)
             -- Enough time has passed, execute immediately
             fn(...)
             last_execution = now
-            pending_call = nil
+            _pending_call = nil
         else
             -- Too soon, store pending call
-            pending_call = {...}
+            _pending_call = {...}
         end
     end
 end

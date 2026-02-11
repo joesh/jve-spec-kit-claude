@@ -207,7 +207,7 @@ end
 -- Private: Add automatic suggestions based on error patterns
 function ErrorBuilder:_addAutomaticSuggestions()
     local message = self.error_data.message:lower()
-    local code = self.error_data.code
+    local _code = self.error_data.code  -- luacheck: ignore 211 (kept for future use)
     
     -- Widget creation failures
     if string.find(message, "widget.*creation") or string.find(message, "failed.*create") then

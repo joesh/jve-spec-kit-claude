@@ -1,6 +1,6 @@
 require('test_env')
 
-local json = require("dkjson")
+require("dkjson")  -- load module for persistence (module needed, not return value)
 
 -- Use isolated temp dir for persistence file
 local test_dir = "/tmp/jve/test_file_browser_" .. os.clock()
@@ -112,8 +112,8 @@ print("  ✓ open_directory")
 -----------------------------------------------------------------------
 print("  test cancelled dialog preserves path...")
 -- Set up a dialog that returns nil (user cancelled)
-_G.qt_constants.FILE_DIALOG.OPEN_FILE = function(parent, title, filter, dir)
-    table.insert(dialog_calls, { type = "OPEN_FILE", dir = dir })
+_G.qt_constants.FILE_DIALOG.OPEN_FILE = function(_parent, _title, _filter, returned_dir)
+    table.insert(dialog_calls, { type = "OPEN_FILE", dir = returned_dir })
     return nil
 end
 
@@ -123,8 +123,8 @@ local cancelled = file_browser.open_file("test_import", nil, "Open", "All (*)")
 assert(cancelled == nil, "should return nil on cancel")
 
 -- Restore working dialog and verify path still persisted
-_G.qt_constants.FILE_DIALOG.OPEN_FILE = function(parent, title, filter, dir)
-    table.insert(dialog_calls, { type = "OPEN_FILE", dir = dir })
+_G.qt_constants.FILE_DIALOG.OPEN_FILE = function(_parent, _title, _filter, restored_dir)
+    table.insert(dialog_calls, { type = "OPEN_FILE", dir = restored_dir })
     return "/somewhere/else/file.txt"
 end
 dialog_calls = {}
@@ -144,8 +144,8 @@ file_browser2._set_persistence_path(test_json_path)
 
 -- Should load paths saved by previous instance
 dialog_calls = {}
-_G.qt_constants.FILE_DIALOG.OPEN_FILE = function(parent, title, filter, dir)
-    table.insert(dialog_calls, { type = "OPEN_FILE", dir = dir })
+_G.qt_constants.FILE_DIALOG.OPEN_FILE = function(_parent, _title, _filter, loaded_dir)
+    table.insert(dialog_calls, { type = "OPEN_FILE", dir = loaded_dir })
     return "/dummy"
 end
 file_browser2.open_file("test_import", nil, "Open", "All (*)")

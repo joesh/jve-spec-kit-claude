@@ -16,7 +16,6 @@
 local M = {}
 
 local logger = require("core.logger")
-local time_utils = require("core.time_utils")
 
 -- Check if a file is locked by any process (returns true if locked, false if stale)
 local function is_file_locked(path)

@@ -138,7 +138,7 @@ local function map_resolve_command(resolve_cmd)
         markClip = "MarkClip",
         markResetInOut = "ClearInOut",
         markFlagAdd = "AddFlag",
-        modifyMarker = "ModifyMarker",
+        -- modifyMarker moved to Viewer/Context section (line 251)
 
         -- Clip operations
         clipRetimeControls = "RetimeControls",
@@ -163,7 +163,7 @@ local function map_resolve_command(resolve_cmd)
         trimSelectAudioEditPoint = "SelectAudioEditPoint",
         trimSelectVideoEditPoint = "SelectVideoEditPoint",
         trimMoveEditSelectionToNextEdit = "NextEditPoint",
-        trimMoveEditSelectionToPreviousEdit = "PreviousEditPoint",
+        -- trimMoveEditSelectionToPreviousEdit moved to Fairlight section as PreviousAudioEdit
 
         -- Insert/Overwrite
         editInsertOverwriteActionInsert = "Insert",
@@ -327,7 +327,7 @@ local function parse_shortcut(shortcut_int)
             [0x7F] = "Delete",
             [0x08] = "Backspace",
             [0x0D] = "Enter",
-            [0x20] = "Space",
+            -- [0x20] = "Space",  -- duplicate, already defined above
             [0x1B] = "Escape"
         }
         key_name = special_keys[key_code]
@@ -360,12 +360,12 @@ local function parse_preset_blob(blob_hex)
     -- Skip header (12 bytes = 24 hex chars)
     pos = pos + 24
 
-    -- Read preset name length (4 bytes big-endian)
-    local name_length = read_be_int32(blob_hex, pos)
+    -- Read preset name length (4 bytes big-endian) - skip 8 hex chars
+    read_be_int32(blob_hex, pos)  -- luacheck: ignore 211 (name_length reserved for debug)
     pos = pos + 8
 
     -- Extract preset name (UTF-16 BE, null-terminated)
-    local preset_name, name_end_pos = extract_utf16_string(blob_hex, pos)
+    local _, name_end_pos = extract_utf16_string(blob_hex, pos)  -- luacheck: ignore 211
     pos = name_end_pos
 
     -- Skip metadata bytes (varies, scan for next length field)

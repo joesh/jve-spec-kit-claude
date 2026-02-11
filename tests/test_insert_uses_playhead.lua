@@ -7,9 +7,9 @@ package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 local test_env = require('test_env')
 
 local database = require('core.database')
-local Clip = require('models.clip')
+require('models.clip')
 local Media = require('models.media')
-local Command = require('command')
+require('command')
 local command_manager = require('core.command_manager')
 local Rational = require('core.rational')
 

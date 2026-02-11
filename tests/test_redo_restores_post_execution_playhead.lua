@@ -103,7 +103,7 @@ local db = setup_database("/tmp/jve/test_redo_playhead.db")
 local master_clip_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Media Master', 30, 1, 3000, 'media1')
 
-local mock_timeline = setup_mock_timeline_state()
+setup_mock_timeline_state()
 
 -- Helper: execute command with proper event wrapping
 local function execute_command(cmd)

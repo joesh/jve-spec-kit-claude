@@ -116,9 +116,9 @@ function M.on_filter_changed(text)
   -- Update view filter without triggering the callback (to prevent circular calls)
   M._view._filter = text or ""
   
-  -- Update search input widget if it exists
+  -- Update search input widget if it exists (placeholder for future widget_set_text)
+  -- luacheck: ignore 542
   if M._view._search_input then
-    -- This would update the actual Qt widget text (if we had the widget_set_text function available)
   end
   
   -- Apply the filter through the adapter

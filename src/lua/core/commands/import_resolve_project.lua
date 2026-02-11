@@ -55,7 +55,7 @@ local SPEC_DB = {
 }
 
 function M.register(executors, undoers, db)
-    local sqlite3 = require("lsqlite3")
+    local _sqlite3 = require("lsqlite3")  -- luacheck: ignore 211 (unused, required for module init)
 
     -- =========================================================================
     -- ImportResolveProject: Import .drp file with optional interactive dialog
@@ -144,8 +144,7 @@ function M.register(executors, undoers, db)
         local created_track_ids = {}
         local created_clip_ids = {}
 
-        -- Import media items
-        local media_id_map = {}
+        -- Import media items (media_id_map unused - resolve_id not currently looked up)
         for _, media_item in ipairs(parse_result.media_items) do
             local media = Media.create({
                 project_id = project.id,
@@ -159,9 +158,6 @@ function M.register(executors, undoers, db)
 
             if media:save() then
                 table.insert(created_media_ids, media.id)
-                if media_item.resolve_id then
-                    media_id_map[media_item.resolve_id] = media.id
-                end
                 logger.debug("import_resolve", string.format("  Imported media: %s", media.name))
             else
                 logger.warn("import_resolve", string.format("Failed to import media: %s", media_item.name))

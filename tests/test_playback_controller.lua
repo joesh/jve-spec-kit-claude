@@ -44,15 +44,6 @@ _G.qt_create_single_shot_timer = function(interval, callback)
     table.insert(timer_intervals, interval)
 end
 
-local function run_timers(count)
-    for i = 1, count do
-        if #timer_callbacks > 0 then
-            local t = table.remove(timer_callbacks, 1)
-            t.callback()
-        end
-    end
-end
-
 local function clear_timers()
     timer_callbacks = {}
     timer_intervals = {}

@@ -82,6 +82,7 @@ local mock_audio_time_us = 31000000  -- 31s timeline time
 
 local mock_audio = {
     playing = true,
+    has_audio = true,  -- has audio sources at current position
     is_ready = function() return true end,
     get_time_us = function() return mock_audio_time_us end,
     get_media_time_us = function() return mock_audio_time_us end,  -- alias

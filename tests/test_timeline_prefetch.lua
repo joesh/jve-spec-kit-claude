@@ -8,7 +8,7 @@ require('test_env')
 
 local database = require("core.database")
 local import_schema = require("import_schema")
-local helpers = require("core.playback.playback_helpers")
+require("core.playback.playback_helpers")
 
 -- Initialize database
 local DB_PATH = "/tmp/jve/test_timeline_prefetch.db"

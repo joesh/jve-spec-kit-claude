@@ -9,7 +9,7 @@ local test_env = require('test_env')
 local database = require('core.database')
 local Clip = require('models.clip')
 local Media = require('models.media')
-local Track = require('models.track')
+require('models.track') -- luacheck: ignore 411
 local command_manager = require('core.command_manager')
 local asserts = require('core.asserts')
 
@@ -236,7 +236,7 @@ local redo_result = redo()
 assert(redo_result.success, "Redo should succeed: " .. tostring(redo_result.error_message))
 
 -- Original should be trimmed again
-start, dur = get_clip_position("trim_start")
+start = get_clip_position("trim_start") -- luacheck: ignore 411
 assert(start == 50, string.format("Original should be at 50 after redo, got %s", tostring(start)))
 
 -- Overwrite clip should be back
@@ -319,8 +319,8 @@ result = execute_command("Overwrite", {
 assert(result.success, "Overwrite should succeed with duration inference: " .. tostring(result.error_message))
 
 -- Clip should have masterclip's stream duration (500 frames)
-start, dur = get_clip_position("fallback_dur_clip")
-assert(dur == 500, string.format("Clip should use masterclip stream duration (500), got %s", tostring(dur)))
+local _, dur2 = get_clip_position("fallback_dur_clip"); _ = _ -- luacheck: ignore 311
+assert(dur2 == 500, string.format("Clip should use masterclip stream duration (500), got %s", tostring(dur2)))
 
 -- =============================================================================
 -- TEST 10: Multiple overwrites in sequence

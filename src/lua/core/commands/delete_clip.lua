@@ -93,7 +93,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Replace forward-delete mutations with an insert mutation for this undo.
         local seq_id = args.sequence_id or args.deleted_clip_state.owner_sequence_id or args.deleted_clip_state.track_sequence_id
         local restored_clip = Clip.load_optional(args.deleted_clip_state.id)
-        local payload = nil
+        local payload
         local target_seq = seq_id
         if restored_clip then
             payload = command_helper.clip_insert_payload(restored_clip, seq_id)

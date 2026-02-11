@@ -154,7 +154,7 @@ local function build_config(opts)
         end
 
         for key, override in pairs(opts.clips) do
-            if key == "order" then
+            if key == "order" then  -- luacheck: ignore 542
                 -- Already handled above
             elseif cfg.clips[key] then
                 -- Merge with existing default clip
@@ -188,7 +188,7 @@ local function build_config(opts)
     return cfg
 end
 
-local function build_clip_sql(cfg, clip)
+local function build_clip_sql(cfg, clip)  -- luacheck: ignore 211
     local track = cfg.tracks[clip.track_key]
     local media = cfg.media[clip.media_key]
     assert(track, string.format("missing track for clip %s", clip.id))
@@ -222,7 +222,7 @@ local function build_clip_sql(cfg, clip)
     )
 end
 
-local function build_media_sql(cfg, media)
+local function build_media_sql(cfg, media)  -- luacheck: ignore 211
     local created_at = os.time()
     local modified_at = created_at
     return string.format([[INSERT INTO media (
@@ -247,7 +247,7 @@ local function build_media_sql(cfg, media)
     )
 end
 
-local function build_track_sql(cfg, track)
+local function build_track_sql(cfg, track)  -- luacheck: ignore 211
     return string.format([[INSERT INTO tracks (
         id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('%s', '%s', '%s', '%s', %d, %d);

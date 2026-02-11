@@ -17,7 +17,7 @@
 -- Selection Hub
 -- Centralizes active selection state across panels and notifies interested listeners.
 local M = {}
-local logger = require("core.logger")
+require("core.logger")  -- luacheck: ignore 211 (reserved for debug logging)
 
 local selections = {}
 local listeners = {}

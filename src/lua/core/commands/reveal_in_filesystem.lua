@@ -43,10 +43,10 @@ local function get_timeline_file_path()
     return nil
 end
 
-function M.register(command_executors, command_undoers, db, set_last_error)
+function M.register(command_executors, _command_undoers, _db, set_last_error)
     command_executors["RevealInFilesystem"] = function(command)
         local args = command:get_all_parameters()
-        local file_path = nil
+        local file_path
 
         -- Check source hint or try both
         if args.source == "timeline" then

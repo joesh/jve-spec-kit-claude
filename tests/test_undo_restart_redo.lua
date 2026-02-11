@@ -158,7 +158,7 @@ print("=== Undo/Restart Redo Regression ===\n")
 local DB_PATH = "/tmp/jve/test_undo_restart_redo.db"
 
 install_timeline_stub()
-local db = init_database(DB_PATH)
+init_database(DB_PATH)
 
 local command_manager = require('core.command_manager')
 command_manager.init('default_sequence', 'default_project')

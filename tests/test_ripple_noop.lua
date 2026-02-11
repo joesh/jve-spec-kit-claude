@@ -40,7 +40,7 @@ end
 package.loaded["ui.timeline.timeline_state"] = timeline_state
 
 local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
+local _ = require('core.command_implementations') -- load for side effects
 
 local function setup_db(path)
     os.remove(path)

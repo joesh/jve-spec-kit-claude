@@ -8,9 +8,9 @@ local database = require('core.database')
 local Clip = require('models.clip')
 local Media = require('models.media')
 local Command = require('command')
-local timeline_constraints = require('core.timeline_constraints')
+require('core.timeline_constraints')
 local command_manager = require('core.command_manager')
-local timeline_state = require('ui.timeline.timeline_state')
+require('ui.timeline.timeline_state')
 
 -- Mock Qt timer for command_manager/state
 _G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end
@@ -274,11 +274,11 @@ local mover_for_nudge = Clip.create("Mover Nudge", "media_C", {
 })
 assert(mover_for_nudge:save(db), "failed saving mover clip for nudge test")
 
-local move_cmd = Command.create("MoveClipToTrack", "project")
-move_cmd:set_parameter("clip_id", mover_for_nudge.id)
-move_cmd:set_parameter("target_track_id", "track_nudge_v1")
-move_cmd:set_parameter("sequence_id", "sequence")
-local res = command_manager.execute(move_cmd)
+local move_cmd2 = Command.create("MoveClipToTrack", "project")
+move_cmd2:set_parameter("clip_id", mover_for_nudge.id)
+move_cmd2:set_parameter("target_track_id", "track_nudge_v1")
+move_cmd2:set_parameter("sequence_id", "sequence")
+local res = command_manager.execute(move_cmd2)
 assert(res.success, "Move command should succeed: " .. tostring(res.error_message))
 
 local nudge_cmd = Command.create("Nudge", "project")

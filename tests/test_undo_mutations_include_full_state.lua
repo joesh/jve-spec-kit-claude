@@ -45,14 +45,14 @@ local BASE_DATA_SQL = [[
 local function setup_database(path)
     os.remove(path)
     assert(database.init(path))
-    local db = database.get_connection()
-    assert(db:exec(SCHEMA_SQL))
-    assert(db:exec(BASE_DATA_SQL))
+    local db_conn = database.get_connection()
+    assert(db_conn:exec(SCHEMA_SQL))
+    assert(db_conn:exec(BASE_DATA_SQL))
     command_manager.init("seq1", "default_project")
-    return db
+    return db_conn
 end
 
-local db = setup_database("/tmp/jve/test_undo_mutations_regression.db")
+setup_database("/tmp/jve/test_undo_mutations_regression.db")
 
 -- Create masterclip sequence for the media (required for Overwrite)
 local master_clip_id = test_env.create_test_masterclip_sequence(
@@ -65,9 +65,9 @@ print("This test ensures undo mutations include full clip state for UI cache upd
 local captured_undo_mutations = nil
 local original_revert_mutations = command_helper.revert_mutations
 
-command_helper.revert_mutations = function(db, mutations, command, sequence_id)
+command_helper.revert_mutations = function(db_conn, mutations, command, sequence_id)  -- luacheck: ignore 431 (shadowing)
     -- Call the original function
-    local ok, err = original_revert_mutations(db, mutations, command, sequence_id)
+    local ok, err = original_revert_mutations(db_conn, mutations, command, sequence_id)
 
     -- Capture the mutations that were added to the command
     if ok and command then

@@ -267,8 +267,8 @@ end
 
 -- Count all sequences in the database
 function Sequence.count()
-    local database = require("core.database")
-    local conn = assert(database.get_connection(), "Sequence.count: no database connection")
+    local db = require("core.database")
+    local conn = assert(db.get_connection(), "Sequence.count: no database connection")
     local stmt = assert(conn:prepare("SELECT COUNT(*) FROM sequences"), "Sequence.count: failed to prepare query")
     assert(stmt:exec(), "Sequence.count: query execution failed")
     assert(stmt:next(), "Sequence.count: no result row")

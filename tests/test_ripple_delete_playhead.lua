@@ -4,7 +4,7 @@ require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
+local _ = require('core.command_implementations') -- load for side effects
 local Command = require('command')
 local Media = require('models.media')
 local Clip = require('models.clip')
@@ -85,9 +85,7 @@ end
 
 timeline_state.init('default_sequence')
 
-local executors = {}
-local undoers = {}
--- command_impl.register_commands(executors, undoers, db)
+-- command_impl.register_commands({}, {}, db)
 command_manager.init('default_sequence', 'default_project')
 
 local original_playhead = 8888

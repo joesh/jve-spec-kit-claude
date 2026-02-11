@@ -40,6 +40,7 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
+    -- luacheck: ignore 211 (record_occlusion_actions - prepared for future occlusion handling)
     local function record_occlusion_actions(command, sequence_id, actions)
         if not actions or #actions == 0 then return end
         for _, action in ipairs(actions) do
@@ -113,7 +114,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             }
         end
 
-        local original_timeline_start = clip.timeline_start
+        local _original_timeline_start = clip.timeline_start  -- preserved for future undo enhancement
         local original_state = command_helper.capture_clip_state(clip)
 
         -- Pending values must be integers (if provided)

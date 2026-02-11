@@ -37,6 +37,7 @@ local function edges_match(a, b)
         and (a.trim_type or "ripple") == (b.trim_type or "ripple")
 end
 
+-- luacheck: ignore 211 (selection_contains_all - unused for now, kept for future use)
 local function selection_contains_all(existing, target_edges)
     if not existing or not target_edges then return false end
     for _, target in ipairs(target_edges) do
@@ -203,7 +204,7 @@ end
 -- @param event The mouse event object (may contain global_x, global_y)
 local function show_clip_context_menu(view, x, y, clicked_clip, event)
     local state = view.state
-    local width, height = timeline.get_dimensions(view.widget)
+    local _width, _height = timeline.get_dimensions(view.widget)
 
     -- Get global mouse position for popup
     -- First check if event has global coordinates (like project_browser)

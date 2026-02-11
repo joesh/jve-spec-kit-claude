@@ -4,10 +4,10 @@ require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
+require('core.command_implementations')  -- Load but don't use directly
 local Command = require('command')
-local Clip = require('models.clip')
-local Media = require('models.media')
+require('models.clip')   -- Load but don't use directly
+require('models.media')  -- Load but don't use directly
 
 local TEST_DB = "/tmp/jve/test_ripple_delete_gap.db"
 os.remove(TEST_DB)
@@ -145,8 +145,6 @@ function timeline_state.pixel_to_time(x, _) return x end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
-local executors = {}
-local undoers = {}
 -- command_impl.register_commands(executors, undoers, db)
 command_manager.init('default_sequence', 'default_project')
 

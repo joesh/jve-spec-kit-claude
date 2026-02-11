@@ -75,7 +75,7 @@ local mock_media_cache = {
 package.loaded["core.media.media_cache"] = mock_media_cache
 
 local timeline_playback = require("core.playback.timeline_playback")
-local helpers = require("core.playback.playback_helpers")
+require("core.playback.playback_helpers")
 
 --------------------------------------------------------------------------------
 -- Mock viewer_panel: records calls for verification

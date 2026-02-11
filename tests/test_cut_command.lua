@@ -121,9 +121,9 @@ end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
-local executors = {}
-local undoers = {}
--- command_impl.register_commands(executors, undoers, db)
+local _executors = {} -- luacheck: ignore 211 (unused, legacy code)
+local _undoers = {} -- luacheck: ignore 211 (unused, legacy code)
+-- command_impl.register_commands(_executors, _undoers, db)
 
 command_manager.init('default_sequence', 'default_project')
 

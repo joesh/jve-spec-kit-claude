@@ -58,7 +58,7 @@ local SQLITE_DONE = 101
 local SQLITE_INTEGER = 1
 local SQLITE_FLOAT = 2
 local SQLITE_TEXT = 3
-local SQLITE_BLOB = 4
+local SQLITE_BLOB = 4  -- luacheck: ignore 211 (reserved for future use)
 local SQLITE_NULL = 5
 local SQLITE_TRANSIENT = ffi.cast("void(*)(void*)", -1)
 
@@ -165,7 +165,7 @@ function Database:exec(sql)
     local rc = sqlite3_lib.sqlite3_exec(self._db, sql, nil, nil, errmsg)
 
     if rc ~= SQLITE_OK then
-        local message = nil
+        local message
         if errmsg[0] ~= nil then
             message = ffi.string(errmsg[0])
             sqlite3_lib.sqlite3_free(errmsg[0])
@@ -216,7 +216,7 @@ function Statement:bind_value(index, value)
 end
 
 function Statement:reset()
-    local rc = sqlite3_lib.sqlite3_reset(self._stmt)
+    sqlite3_lib.sqlite3_reset(self._stmt)
     self._current_row = 0
     self._has_row = false
     -- sqlite3_reset returns the result code from the most recent sqlite3_step call.

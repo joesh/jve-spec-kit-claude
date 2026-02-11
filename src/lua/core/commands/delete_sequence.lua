@@ -288,9 +288,10 @@ fetch_sequence_tracks = function(db, sequence_id)
     return tracks
 end
 
-fetch_clip_properties = function(db, clip_id)
+-- luacheck: ignore 211 (fetch_clip_properties defined but unused - kept for future use)
+fetch_clip_properties = function(db_conn, clip_id)
     local props = {}
-    local stmt = db:prepare([[
+    local stmt = db_conn:prepare([[
         SELECT id, property_name, property_value, property_type, default_value
         FROM properties
         WHERE clip_id = ?

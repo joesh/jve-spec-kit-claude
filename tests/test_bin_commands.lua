@@ -66,7 +66,7 @@ local function find_bin_by_id(id)
     return nil
 end
 
-local function find_bin_by_name(name)
+local function find_bin_by_name(name)  -- luacheck: ignore 211
     for _, bin in ipairs(get_bins()) do
         if bin.name == name then
             return bin

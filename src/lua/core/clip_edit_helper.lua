@@ -9,8 +9,8 @@
 
 local M = {}
 
-local Clip = require('models.clip')
-local Media = require('models.media')
+local _Clip = require('models.clip')  -- luacheck: ignore 211 (loaded for side effects)
+local _Media = require('models.media')  -- luacheck: ignore 211 (loaded for side effects)
 local Track = require('models.track')
 local command_helper = require('core.command_helper')
 local rational_helpers = require('core.command_rational_helpers')
@@ -334,7 +334,7 @@ end
 -- @return function(self, index) Returns track object for audio channel index
 function M.create_audio_track_resolver(sequence_id)
     -- Initial list of audio tracks
-    local audio_tracks = {}
+    local audio_tracks
     local timeline_state = get_timeline_state()
     if timeline_state and timeline_state.get_audio_tracks then
         audio_tracks = timeline_state.get_audio_tracks() or {}

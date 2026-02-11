@@ -255,7 +255,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         assert(type(playhead) == "number", "Split: playhead must be integer frames")
 
-        local json = require("dkjson")
+        local _json = require("dkjson")  -- luacheck: ignore 211 (unused, required for module init)
         local Command = require("command")
 
         -- Get all clips under the playhead

@@ -171,9 +171,9 @@ result = execute_command("RippleDelete", {
 assert(result.success, "RippleDelete should succeed")
 
 -- B: 150-50=100, C: 250-50=200
-local b_start, _ = get_clip_position("clip_b")
+local b_start2, _ = get_clip_position("clip_b")
 local c_start, _ = get_clip_position("clip_c")
-assert(b_start == 100, string.format("Clip B should shift to 100, got %d", b_start))
+assert(b_start2 == 100, string.format("Clip B should shift to 100, got %d", b_start2))
 assert(c_start == 200, string.format("Clip C should shift to 200, got %d", c_start))
 
 -- =============================================================================

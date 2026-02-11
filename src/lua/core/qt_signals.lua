@@ -19,7 +19,6 @@
 -- Uses the general signals module for consistency with user-defined signals
 local signals = require("core.signals")
 local error_system = require("core.error_system")
-local qt_constants = require("core.qt_constants")
 
 local QtSignals = {}
 
@@ -236,12 +235,7 @@ function QtSignals.disconnect(widget, signal_name)
     qt_connections[widget][signal_name] = nil
     
     -- Clean up empty widget entries
-    local has_connections = false
-    for _ in pairs(qt_connections[widget]) do
-        has_connections = true
-        break
-    end
-    if not has_connections then
+    if next(qt_connections[widget]) == nil then
         qt_connections[widget] = nil
     end
     

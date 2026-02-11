@@ -68,7 +68,7 @@ check("error mentions fps or rate_from_float",
     err2 and (tostring(err2):find("fps") ~= nil or tostring(err2):find("rate_from_float") ~= nil))
 
 -- Test 3: rate_from_float with 0 should assert
-local ok3, err3 = pcall(function()
+local ok3 = pcall(function()
     Media.create({
         file_path = "/test.mov",
         name = "test",

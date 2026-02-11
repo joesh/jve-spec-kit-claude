@@ -63,7 +63,7 @@ function M.parse_from_query(query, project_id)
             column_count = rec:count()
         end
     end
-    local command = nil
+    local command
 
     -- Two supported layouts:
     -- 1) SELECT * FROM commands (schema order)

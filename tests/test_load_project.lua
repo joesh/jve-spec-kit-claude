@@ -115,7 +115,7 @@ assert(result.success, "LoadProject should succeed")
 -- Attempting undo after LoadProject - it may succeed (no-op) or fail
 -- depending on implementation. The key is it shouldn't error.
 command_manager.begin_command_event("script")
-local undo_result = command_manager.undo()
+command_manager.undo()
 command_manager.end_command_event()
 -- We don't assert on undo success/failure since LoadProject is read-only
 

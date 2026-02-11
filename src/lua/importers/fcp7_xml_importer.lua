@@ -639,11 +639,12 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     end
     local bins_dirty = false
 
-    local project_settings = database.get_project_settings(project_id) or {}
+    -- Reserved for future use (project-level import settings)
+    database.get_project_settings(project_id)  -- luacheck: ignore 211
     local pending_bin_assignments = {}
     local bin_assignment_dirty = false
 
-    local sequence_master_bins = {}
+    local sequence_master_bins = {}  -- luacheck: ignore 241 (stored for future use in undo)
 
     local function ensure_master_bin(sequence_name)
         local base_name = (sequence_name and sequence_name ~= "") and sequence_name or "Imported Sequence"
@@ -1191,14 +1192,14 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             local master_bin_id = ensure_master_bin(seq_info.name)
             sequence_master_bins[sequence_key] = master_bin_id
 
-            for track_index, track_info in ipairs(seq_info.video_tracks or {}) do
+            for _, track_info in ipairs(seq_info.video_tracks or {}) do
                 local success, track_err = create_track(sequence_key, sequence.id, track_info, "VIDEO", master_bin_id)
                 if not success then
                     error(track_err)
                 end
             end
 
-            for track_index, track_info in ipairs(seq_info.audio_tracks or {}) do
+            for _, track_info in ipairs(seq_info.audio_tracks or {}) do
                 local success, track_err = create_track(sequence_key, sequence.id, track_info, "AUDIO", master_bin_id)
                 if not success then
                     error(track_err)
@@ -1222,25 +1223,25 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
     local bins_saved = true
     if bins_dirty then
-        local ok, err = tag_service.save_hierarchy(project_id, bins)
-        if not ok then
+        local save_ok, save_err = tag_service.save_hierarchy(project_id, bins)
+        if not save_ok then
             bins_saved = false
-            logger.warn("import_fcp7", "Failed to persist bin hierarchy: " .. tostring(err))
+            logger.warn("import_fcp7", "Failed to persist bin hierarchy: " .. tostring(save_err))
         end
     end
     if bin_assignment_dirty and bins_saved then
-        for bin_id, clip_lookup in pairs(pending_bin_assignments) do
-            if type(bin_id) == "string" and bin_id ~= "" then
-                local clip_ids = {}
+        for iter_bin_id, clip_lookup in pairs(pending_bin_assignments) do
+            if type(iter_bin_id) == "string" and iter_bin_id ~= "" then
+                local iter_clip_ids = {}
                 for clip_id in pairs(clip_lookup) do
-                    table.insert(clip_ids, clip_id)
+                    table.insert(iter_clip_ids, clip_id)
                 end
-                if #clip_ids > 0 then
-                    local ok, assign_err = tag_service.assign_master_clips(project_id, clip_ids, bin_id)
-                    if not ok then
+                if #iter_clip_ids > 0 then
+                    local assign_ok, assign_err = tag_service.assign_master_clips(project_id, iter_clip_ids, iter_bin_id)
+                    if not assign_ok then
                         logger.warn("import_fcp7", string.format(
                             "Failed to persist %d master clip assignments for bin %s: %s",
-                            #clip_ids, tostring(bin_id), tostring(assign_err or "unknown error")))
+                            #iter_clip_ids, tostring(iter_bin_id), tostring(assign_err or "unknown error")))
                     end
                 end
             end

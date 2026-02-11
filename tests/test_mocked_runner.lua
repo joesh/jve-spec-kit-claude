@@ -70,7 +70,7 @@ print()
 -- Test 2: JSON test loader
 print("Test 2: JSON test loader")
 if test_path then
-    local test, err = json_test_loader.load(test_path)
+    local test = json_test_loader.load(test_path)
     assert_not_nil(test, "Test loaded successfully")
 
     if test then

@@ -59,8 +59,7 @@ local delete_sequence = require("core.commands.delete_sequence")
 -- Register with executors/undoers tables
 local executors = {}
 local undoers = {}
-local last_error = nil
-local reg = delete_sequence.register(executors, undoers, db, function(msg) last_error = msg end)
+delete_sequence.register(executors, undoers, db, function() end)
 
 -- Verify the sequence was fetched with exact values (not fallbacks)
 -- We'll test by doing a full delete → undo → verify cycle

@@ -42,7 +42,8 @@ local SPEC = {
     },
 }
 
-local function get_timeline_state()
+-- luacheck: ignore 211 (_get_timeline_state defined but unused - kept for future use)
+local function _get_timeline_state()
     local ok, mod = pcall(require, 'ui.timeline.timeline_state')
     return ok and mod or nil
 end
@@ -52,7 +53,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_executors["Insert"] = function(command)
         local args = command:get_all_parameters()
-        local this_func_label = "Insert"
+        local _this_func_label = "Insert"  -- luacheck: ignore 211 (kept for future error messages)
 
         if args.dry_run then
             return true

@@ -15,6 +15,7 @@ local function check(label, condition)
     end
 end
 
+-- luacheck: ignore expect_error (kept for future use)
 local function expect_error(label, fn, pattern)
     local ok, err = pcall(fn)
     if not ok then
@@ -30,6 +31,7 @@ local function expect_error(label, fn, pattern)
     end
     return err
 end
+local _ = expect_error -- suppress unused warning
 
 print("\n=== Signals Tests (T13) ===")
 

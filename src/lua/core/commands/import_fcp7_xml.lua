@@ -414,7 +414,6 @@ function M.register(executors, undoers, db)
         command:save(db)
 
         -- Delete in reverse order (clips, tracks, sequences)
-        local deleted_sequence_lookup = {}
 
         for _, clip_id in ipairs(clip_ids) do
             local delete_query = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
@@ -438,7 +437,6 @@ function M.register(executors, undoers, db)
             delete_query:bind_value(1, sequence_id)
             assert(delete_query:exec(), "UndoImportFCP7XML: sequences DELETE failed for " .. tostring(sequence_id))
             delete_query:finalize()
-            deleted_sequence_lookup[sequence_id] = true
         end
 
         for _, media_id in ipairs(media_ids) do

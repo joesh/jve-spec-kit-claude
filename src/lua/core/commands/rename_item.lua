@@ -88,8 +88,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         else
             return false, "RenameItem: Unsupported target type"
         end
-
-        return true, new_name
     end
 
     command_executors["RenameItem"] = function(command)

@@ -8,7 +8,7 @@ require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
-local Command = require("command")
+local _ = require("command")  -- luacheck: ignore 211
 local timeline_state = require("ui.timeline.timeline_state")
 
 print("\n=== BatchRippleEdit: Multi-track roll with independent constraints ===")

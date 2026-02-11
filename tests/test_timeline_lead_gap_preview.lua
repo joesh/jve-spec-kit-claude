@@ -67,10 +67,9 @@ view.drag_state.preloaded_clip_snapshot = TimelineActiveRegion.build_snapshot_fo
 timeline_state.set_edge_selection({gap_edge, clip_edge})
 
 local original_timeline = timeline
-local drawn_rects = {}
 timeline = {
     get_dimensions = function() return width, height end,
-    clear_commands = function() drawn_rects = {} end,
+    clear_commands = function() end,
     add_rect = function() end,
     add_line = function() end,
     add_text = function() end,

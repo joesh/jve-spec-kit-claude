@@ -8,7 +8,7 @@ local test_env = require("test_env")
 
 local database = require("core.database")
 local Command = require("command")
-local Clip = require("models.clip")
+require("models.clip")
 local Media = require("models.media")
 local command_history = require("core.command_history")
 local command_manager = require("core.command_manager")

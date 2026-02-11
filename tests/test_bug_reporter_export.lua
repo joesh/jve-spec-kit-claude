@@ -118,7 +118,7 @@ if json_path then
 
         -- Parse JSON
         local dkjson = require("dkjson")
-        local data, _, err = dkjson.decode(content)
+        local data, _, parse_err = dkjson.decode(content)
 
         if data then
             assert_equal(data.test_format_version, "1.0", "Format version is 1.0")
@@ -143,7 +143,7 @@ if json_path then
             assert_equal(first_log.level, "info", "First log level correct")
             assert_equal(first_log.message, "Test info message 1", "First log message correct")
         else
-            print("✗ Failed to parse JSON: " .. (err or "unknown"))
+            print("✗ Failed to parse JSON: " .. (parse_err or "unknown"))
         end
     else
         print("✗ Failed to read JSON file")

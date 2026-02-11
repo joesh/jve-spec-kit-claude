@@ -17,7 +17,6 @@ local M = {}
 local Track = require("models.track")
 local Clip = require("models.clip")
 local Media = require("models.media")
-local logger = require("core.logger")
 
 --------------------------------------------------------------------------------
 -- Internal: Calculate source time for a clip at a given playhead position

@@ -64,9 +64,9 @@ function YouTubeUploader.upload_video(video_path, metadata)
     metadata = metadata or {}
 
     -- Get access token
-    local access_token, err = youtube_oauth.get_access_token()
+    local access_token, token_err = youtube_oauth.get_access_token()
     if not access_token then
-        return nil, err
+        return nil, token_err
     end
 
     -- Prepare metadata
@@ -88,23 +88,23 @@ function YouTubeUploader.upload_video(video_path, metadata)
     -- Create multipart upload
     -- YouTube API requires resumable upload for videos
     -- Step 1: Initiate resumable upload session
-    local session_uri, err = YouTubeUploader.initiate_resumable_upload(
+    local session_uri, session_err = YouTubeUploader.initiate_resumable_upload(
         access_token,
         metadata_json
     )
 
     if not session_uri then
-        return nil, err
+        return nil, session_err
     end
 
     -- Step 2: Upload video file
-    local video_id, err = YouTubeUploader.upload_video_file(
+    local video_id, upload_err = YouTubeUploader.upload_video_file(
         session_uri,
         video_path
     )
 
     if not video_id then
-        return nil, err
+        return nil, upload_err
     end
 
     -- Return video URL
@@ -185,9 +185,9 @@ function YouTubeUploader.upload_video_file(session_uri, video_path)
         video_path
     )
 
-    local handle = io.popen(cmd)
-    local response = handle:read("*a")
-    handle:close()
+    local upload_handle = io.popen(cmd)
+    local response = upload_handle:read("*a")
+    upload_handle:close()
 
     -- Parse response
     local data, _, err = dkjson.decode(response)
@@ -298,12 +298,12 @@ function YouTubeUploader.simple_upload(video_path, metadata)
     os.execute(string.format("cat '%s' >> '%s'", video_path, temp_file))
 
     -- Append closing boundary
-    local file = io.open(temp_file, "a")
-    file:write(string.format("\r\n--%s--\r\n", boundary))
-    file:close()
+    local append_file = io.open(temp_file, "a")
+    append_file:write(string.format("\r\n--%s--\r\n", boundary))
+    append_file:close()
 
     -- Upload
-    local cmd = string.format(
+    local upload_cmd = string.format(
         "curl -s -X POST '%s?uploadType=multipart&part=snippet,status' " ..
         "-H 'Authorization: Bearer %s' " ..
         "-H 'Content-Type: multipart/related; boundary=%s' " ..
@@ -314,17 +314,17 @@ function YouTubeUploader.simple_upload(video_path, metadata)
         temp_file
     )
 
-    local handle = io.popen(cmd)
-    local response = handle:read("*a")
-    handle:close()
+    local upload_handle = io.popen(upload_cmd)
+    local response = upload_handle:read("*a")
+    upload_handle:close()
 
     -- Cleanup
     os.remove(temp_file)
 
     -- Parse response
-    local data, _, err = dkjson.decode(response)
+    local data, _, parse_err = dkjson.decode(response)
     if not data then
-        return nil, "Failed to parse response: " .. (err or "unknown error")
+        return nil, "Failed to parse response: " .. (parse_err or "unknown error")
     end
 
     if data.error then

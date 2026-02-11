@@ -25,8 +25,6 @@ require("test_env")
 -- Mock infrastructure
 --------------------------------------------------------------------------------
 
-local captured_sources = nil
-
 local mock_qt_constants = {
     SSE = { CREATE = function() return {} end },
     AOP = { OPEN = function() return {} end },
@@ -35,6 +33,7 @@ local mock_qt_constants = {
 _G.qt_constants = mock_qt_constants
 package.loaded["core.qt_constants"] = mock_qt_constants
 
+local captured_sources
 local mock_audio_pb = {
     session_initialized = true,
     set_audio_sources = function(sources, cache, restart_time)

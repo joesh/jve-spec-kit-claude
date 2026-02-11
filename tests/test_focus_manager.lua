@@ -29,9 +29,9 @@ local function make_widget(name)
 end
 
 -- Track stylesheets set on widgets
-local widget_stylesheets = {}
+local widget_stylesheets
 -- Track properties set on widgets
-local widget_properties = {}
+local widget_properties
 
 -- Mock qt_constants
 local mock_qt_constants = {
@@ -67,7 +67,7 @@ package.loaded["core.ui_constants"] = {
     COLORS = { FOCUS_BORDER_COLOR = "#0078d4" },
 }
 
-local active_panel_set = nil
+local active_panel_set
 package.loaded["ui.selection_hub"] = {
     set_active_panel = function(panel_id) active_panel_set = panel_id end,
 }
@@ -118,7 +118,7 @@ local inspector_widget = make_widget("inspector")
 local timeline_widget = make_widget("timeline")
 
 reset_calls()
-widget_stylesheets = {}
+widget_stylesheets = {}  -- luacheck: no unused
 widget_properties = {}
 
 focus_manager.register_panel("project_browser", browser_widget, nil, "Project Browser")
@@ -237,7 +237,7 @@ print("  ✓ selection_hub notified")
 print("\n  test: borders use qt_set_widget_property not stylesheets...")
 reset_calls()
 widget_properties = {}
-widget_stylesheets = {}
+widget_stylesheets = {}  -- luacheck: no unused
 focus_manager.set_focused_panel("inspector")
 
 local prop_calls = find_calls("qt_set_widget_property")

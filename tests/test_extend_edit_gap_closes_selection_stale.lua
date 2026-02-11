@@ -8,7 +8,7 @@ require("test_env")
 
 local command_manager = require("core.command_manager")
 local timeline_state = require("ui.timeline.timeline_state")
-local Command = require("command")
+require("command")  -- load module (needed for command_manager)
 local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
 

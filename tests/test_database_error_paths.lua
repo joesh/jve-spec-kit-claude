@@ -317,7 +317,7 @@ check("save_bins(nil) → false", ok == false)
 check("save_bins(nil) reason", type(reason) == "string" and reason:match("Missing project_id"))
 
 -- 4b. empty project_id → (false, reason)
-ok, reason = database.save_bins("", {})
+ok = database.save_bins("", {})
 check("save_bins('') → false", ok == false)
 
 -- 4c. Empty bins list → success (no bins inserted, but no error)
@@ -409,7 +409,7 @@ check("assign(nil proj) → false", ok == false)
 check("assign(nil proj) reason", type(reason) == "string" and reason:match("Missing project_id"))
 
 -- 5b. empty project_id → (false, reason)
-ok, reason = database.assign_master_clips_to_bin("", {"clip1"}, "bin_x")
+ok = database.assign_master_clips_to_bin("", {"clip1"}, "bin_x")
 check("assign('' proj) → false", ok == false)
 
 -- 5c. Empty clip_ids → (true) no-op
@@ -426,7 +426,7 @@ check("assign invalid bin → false", ok == false)
 check("assign invalid bin → reason", type(reason) == "string" and reason:match("invalid bin"))
 
 -- 5f. Empty-string bin_id → (false, reason)
-ok, reason = database.assign_master_clips_to_bin("proj1", {"clip1"}, "")
+ok = database.assign_master_clips_to_bin("proj1", {"clip1"}, "")
 check("assign empty bin_id → false", ok == false)
 
 -- 5g. Valid assignment → success

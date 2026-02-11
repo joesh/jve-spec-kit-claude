@@ -43,7 +43,7 @@ local krono_ok, krono = pcall(require, "core.krono")
 	end
 
 -- Assert value is integer frames
-local function assert_int(val, label)
+local function _assert_int(val, label)  -- luacheck: ignore 211
     assert(type(val) == "number", "clip_mutator: " .. (label or "value") .. " must be integer")
     return val
 end
@@ -292,12 +292,13 @@ function ClipMutator.resolve_occlusions(db, params)
 
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
     local krono_start = krono_enabled and krono.now and krono.now() or nil
-    local track_clips, load_err = nil, nil
+    local track_clips
     local window_cache = params.pending_clips and params.pending_clips.__window_cache
     if window_cache and window_cache[track_id] then
         track_clips = window_cache[track_id]
     end
     if not track_clips then
+        local load_err
         track_clips, load_err = load_track_clips(db, track_id)
         if not track_clips then
             return false, load_err

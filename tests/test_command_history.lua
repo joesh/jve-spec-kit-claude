@@ -296,7 +296,7 @@ do
     command_history.init(db, sequence_id, project_id)
 
     -- nil current_sequence_number
-    local gid = command_history.begin_undo_group("nil cursor")
+    command_history.begin_undo_group("nil cursor")
     check("cursor nil when no current", command_history.get_undo_group_cursor_on_entry() == nil)
     command_history.end_undo_group()
 end

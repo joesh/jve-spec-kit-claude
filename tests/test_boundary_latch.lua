@@ -44,8 +44,8 @@ _G.qt_create_single_shot_timer = function(interval, callback)
     table.insert(timer_callbacks, {interval = interval, callback = callback})
 end
 
-local function run_timers(count)
-    for i = 1, count do
+local function run_timers(count)  -- luacheck: ignore 211
+    for _ = 1, count do
         if #timer_callbacks > 0 then
             local t = table.remove(timer_callbacks, 1)
             t.callback()

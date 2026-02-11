@@ -19,7 +19,7 @@ end
 
 print("\n=== B6: Insert respects source viewer marks ===")
 
-local Command = require("command")
+require("command")
 
 -- Stub dependencies
 package.loaded["core.logger"] = {
@@ -29,8 +29,8 @@ package.loaded["core.logger"] = {
 }
 
 -- Capture what Insert/Overwrite command receives
-local captured_params = nil
-local mock_cm, _executed = require("test_env").mock_command_manager()
+local captured_params
+local mock_cm = require("test_env").mock_command_manager()
 mock_cm.execute = function(cmd_or_type, params)
     if type(cmd_or_type) == "table" and cmd_or_type.get_all_parameters then
         captured_params = cmd_or_type:get_all_parameters()

@@ -79,8 +79,8 @@ batch:set_parameter("sequence_id", "seq")
 local exec = command_manager.execute(batch)
 assert(exec and exec.success, "batch move execution failed")
 
-local t1, s1, d1 = fetch_clip("c1")
-local t2, s2, d2 = fetch_clip("c2")
+local t1 = fetch_clip("c1")
+local t2 = fetch_clip("c2")
 assert(t1 == "v2" and t2 == "v2", "clips not moved to v2")
 
 -- Undo batch

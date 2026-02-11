@@ -128,8 +128,7 @@ end
 -- skip_adjacent_check: if true, skip adjacent clip constraints (for ripple edits where clips move downstream)
 -- Returns: {min_delta, max_delta, limit_reason}
 function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, skip_adjacent_check)
-    local min_delta = -math.huge
-    local max_delta = math.huge
+    local min_delta, max_delta  -- initialized per constraint below
     local limit_left = nil  -- What's limiting us on the left
     local limit_right = nil  -- What's limiting us on the right
 
@@ -174,14 +173,13 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
             end
         else  -- edge_type == "out"
             -- Can't drag right beyond source media end
-            local media_record = nil
             assert(database_module and database_module.get_connection,
                 "timeline_constraints: database_module.get_connection unavailable")
             local db_connection = database_module.get_connection()
             assert(db_connection, "timeline_constraints: no active database connection")
 
             assert(Media and Media.load, "timeline_constraints: Media.load unavailable")
-            media_record = Media.load(clip.media_id, db_connection)
+            local media_record = Media.load(clip.media_id, db_connection)
             if not media_record then
                 if database_module.ensure_media_record then
                     local restored = database_module.ensure_media_record(clip.media_id)

@@ -17,7 +17,7 @@ require("test_env")
 --------------------------------------------------------------------------------
 
 local set_sources_call_count = 0
-local last_sources_duration_us = nil
+local last_sources_duration_us
 local audio_session_ready = false
 
 local mock_qt_constants = {
@@ -160,7 +160,7 @@ print(string.format("    current_audio_clip_ids has CLIP_ID: %s",
 -- With the FIX: clip ID should NOT be cached (session wasn't ready, set_audio_sources wasn't called)
 -- With the BUG: clip ID IS cached even though set_audio_sources wasn't called
 
-local phase1_clip_cached = (pc.current_audio_clip_ids[CLIP_ID] == true)
+local _ = (pc.current_audio_clip_ids[CLIP_ID] == true)  -- luacheck: ignore 311 (computed but not used - just checking state)
 
 --------------------------------------------------------------------------------
 -- Phase 2: Session NOW ready

@@ -8,7 +8,7 @@ require('test_env')
 
 local database = require('core.database')
 local Media = require('models.media')
-local Track = require('models.track')
+require('models.track')  -- ensure Track model is loaded
 local command_manager = require('core.command_manager')
 
 -- Mock Qt timer

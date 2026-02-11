@@ -130,7 +130,7 @@ do
 
     -- Same height → no change
     track_state.clear_layout_dirty()
-    notified = false
+    notified = false  -- luacheck: ignore 311 (value assigned is overwritten)
     track_state.set_height("v1", 120)
     check("same height no-op dirty", track_state.is_layout_dirty() == false)
 

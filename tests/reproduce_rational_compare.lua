@@ -34,7 +34,7 @@ try_comp("PlainTable < Number", t, n)
 -- clip_start (Rational) < start_value (Rational)
 -- If metatables are lost?
 
-local r_nometa = {frames=10, fps_numerator=30, fps_denominator=1}
+local _ = {frames=10, fps_numerator=30, fps_denominator=1}  -- r_nometa for manual testing
 -- simulate lost metatable
 -- but row.start_value printed as "Rational(...)" in log, so it HAD metatable.
 

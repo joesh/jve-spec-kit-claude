@@ -90,8 +90,8 @@ print("This test ensures undo mutations include fps info for source bounds\n")
 local captured_undo_mutations = nil
 local original_revert_mutations = command_helper.revert_mutations
 
-command_helper.revert_mutations = function(db, mutations, command, sequence_id)
-    local ok, err = original_revert_mutations(db, mutations, command, sequence_id)
+command_helper.revert_mutations = function(db_conn, mutations, command, sequence_id)  -- luacheck: ignore 431 (shadowing)
+    local ok, err = original_revert_mutations(db_conn, mutations, command, sequence_id)
     if ok and command then
         captured_undo_mutations = command:get_parameter("__timeline_mutations")
     end

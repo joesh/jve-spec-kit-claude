@@ -6,7 +6,7 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 
 local test_env = require("test_env")
 
-local json = require("dkjson")
+require("dkjson")
 
 _G.timeline = {
     get_dimensions = function() return 1000, 1000 end

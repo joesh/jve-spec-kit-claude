@@ -46,11 +46,9 @@ assert(ok and type(payload) == "table", "Dry run should return payload table")
 -- Note: Command payload WILL contain temp gaps - renderer filters them
 -- Let's verify the gap IS present in raw payload
 local gap_found_in_payload = false
-local gap_clip_id = nil
 for _, entry in ipairs(payload.affected_clips or {}) do
     if type(entry.clip_id) == "string" and entry.clip_id:find("^temp_gap_") then
         gap_found_in_payload = true
-        gap_clip_id = entry.clip_id
         break
     end
 end
@@ -88,8 +86,8 @@ assert(v1_right_found, "v1_right should be in shifted_clips")
 assert(type(payload.materialized_gaps) == "table" and #payload.materialized_gaps >= 1,
     "materialized_gaps should contain at least one gap ID")
 
--- Test renderer gap filtering
-local renderer_utils = require("ui.timeline.view.timeline_view_renderer")
+-- Test renderer gap filtering (require for side effects, renderer tested elsewhere)
+require("ui.timeline.view.timeline_view_renderer")
 -- We can't directly test the renderer here, but we can verify the payload structure
 -- that the renderer will consume. The renderer's build_preview_from_payload() filters gaps.
 

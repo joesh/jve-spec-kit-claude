@@ -92,7 +92,7 @@ local function find_test_video()
             local path = handle:read("*l")
             handle:close()
             if path and path ~= "" then
-                local asset, err = EMP.ASSET_OPEN(path)
+                local asset = EMP.ASSET_OPEN(path)
                 if asset then
                     local info = EMP.ASSET_INFO(asset)
                     if info and info.has_video then
@@ -132,8 +132,8 @@ print("    ✓ Reader created successfully")
 -- ============================================================================
 
 print("  Testing: READER_DECODE_FRAME first frame")
-local frame, err = EMP.READER_DECODE_FRAME(reader, 0, test_info.fps_num, test_info.fps_den)
-assert(frame ~= nil, "Should decode frame 0, got: " .. tostring(err and err.msg))
+local frame, frame_err = EMP.READER_DECODE_FRAME(reader, 0, test_info.fps_num, test_info.fps_den)
+assert(frame ~= nil, "Should decode frame 0, got: " .. tostring(frame_err and frame_err.msg))
 print("    ✓ First frame decoded")
 
 -- ============================================================================
@@ -178,7 +178,7 @@ print("    ✓ Multiple DATA_PTR calls return same pointer")
 print("  Testing: FRAME_RELEASE")
 EMP.FRAME_RELEASE(frame)
 -- After release, operations on frame should fail
-local status_after, _ = pcall(function() return EMP.FRAME_INFO(frame) end)
+pcall(function() return EMP.FRAME_INFO(frame) end)
 -- Note: This might not fail if the handle is still technically valid but stale
 -- The test just ensures RELEASE doesn't crash
 print("    ✓ FRAME_RELEASE completed")
@@ -206,7 +206,7 @@ print("    ✓ Sequential frames decoded")
 -- ============================================================================
 
 print("  Testing: READER_SEEK_FRAME")
-local seek_result, seek_err = EMP.READER_SEEK_FRAME(reader, 0, test_info.fps_num, test_info.fps_den)
+local seek_result = EMP.READER_SEEK_FRAME(reader, 0, test_info.fps_num, test_info.fps_den)
 assert(seek_result, "Seek to frame 0 should succeed")
 print("    ✓ READER_SEEK_FRAME to frame 0")
 
@@ -215,7 +215,7 @@ print("    ✓ READER_SEEK_FRAME to frame 0")
 -- ============================================================================
 
 print("  Testing: Seek negative frame")
-local neg_result, neg_err = EMP.READER_SEEK_FRAME(reader, -10, test_info.fps_num, test_info.fps_den)
+local neg_result = EMP.READER_SEEK_FRAME(reader, -10, test_info.fps_num, test_info.fps_den)
 assert(neg_result, "Seek to negative should succeed (clamps)")
 print("    ✓ Negative seek handled")
 
@@ -224,7 +224,7 @@ print("    ✓ Negative seek handled")
 -- ============================================================================
 
 print("  Testing: Decode negative frame index")
-local neg_frame, neg_frame_err = EMP.READER_DECODE_FRAME(reader, -5, test_info.fps_num, test_info.fps_den)
+local neg_frame = EMP.READER_DECODE_FRAME(reader, -5, test_info.fps_num, test_info.fps_den)
 if neg_frame then
     local neg_info = EMP.FRAME_INFO(neg_frame)
     assert(neg_info.source_pts_us >= 0, "Negative decode should return frame with pts >= 0")
@@ -259,9 +259,7 @@ print("  Testing: Random access pattern")
 local access_pattern = {0, 10, 2, 15, 0, 5}
 for _, idx in ipairs(access_pattern) do
     local f, e = EMP.READER_DECODE_FRAME(reader, idx, test_info.fps_num, test_info.fps_den)
-    if e and e.code == "EOFReached" then
-        -- Skip if video too short
-    else
+    if not (e and e.code == "EOFReached") then
         assert(f ~= nil, "Random access to frame " .. idx .. " failed")
         EMP.FRAME_RELEASE(f)
     end
@@ -318,9 +316,7 @@ local f2 = EMP.READER_DECODE_FRAME(reader2, 0, test_info.fps_num, test_info.fps_
 local f3 = EMP.READER_DECODE_FRAME(reader3, 5, test_info.fps_num, test_info.fps_den)
 
 assert(f2, "Reader2 should decode")
-if f3 == nil then
-    -- Video might be short
-else
+if f3 ~= nil then
     EMP.FRAME_RELEASE(f3)
 end
 EMP.FRAME_RELEASE(f2)

@@ -284,7 +284,8 @@ print("  ✓ get_current_frame() = 42")
 print("\nTest 4.3: show_frame caches frames in sliding window")
 -- With media_cache, frames are kept in a cache window (not released immediately)
 -- This is correct behavior for smooth scrubbing
-local first_frame = mock_frames_decoded[1]
+-- Note: first_frame is captured for potential future assertions
+local _ = mock_frames_decoded[1]  -- luacheck: ignore 311 (unused value)
 mock_frames_decoded = {}
 viewer_panel.show_frame(50)
 -- Frame 42 is within the cache window of frame 50, so it should NOT be released

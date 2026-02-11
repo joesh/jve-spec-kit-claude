@@ -7,7 +7,6 @@ package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require('test_env')
 
 local database = require('core.database')
-local Clip = require('models.clip')
 local Media = require('models.media')
 local command_manager = require('core.command_manager')
 
@@ -134,7 +133,6 @@ print_timeline("after step 1")
 
 local clips_after_step1 = get_all_clips()
 assert(#clips_after_step1 == 1, "Should have 1 clip after step 1")
-local original_clip_id = clips_after_step1[1].id
 
 -- =============================================================================
 -- STEP 2: Insert second clip at frame 50 (splits original)

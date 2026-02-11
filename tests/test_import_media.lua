@@ -189,8 +189,6 @@ assert(new_media == 3, string.format("Should have added 3 media, added %d", new_
 -- =============================================================================
 print("Test 3: Undo removes imported media")
 local before_undo_media = count_media()
-local before_undo_clips = count_clips()
-local before_undo_sequences = count_sequences()
 
 local undo_result = undo()
 assert(undo_result.success, "Undo should succeed: " .. tostring(undo_result.error_message))

@@ -77,7 +77,7 @@ function M.encode_property_json(raw)
     if type(raw) == "string" then
         return raw
     end
-    local encoded, err = json.encode({ value = raw })
+    local encoded = json.encode({ value = raw })
     if not encoded then
         return json.encode({ value = nil })
     end

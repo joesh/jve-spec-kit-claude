@@ -106,7 +106,7 @@ function BugReporter.capture_screenshot()
 end
 
 -- Update capture_manager to store QPixmap
-local original_capture_screenshot = capture_manager.capture_screenshot
+local _original_capture_screenshot = capture_manager.capture_screenshot  -- luacheck: ignore (kept for potential future use)
 function capture_manager:capture_screenshot(pixmap)
     if not self.capture_enabled then
         return

@@ -106,7 +106,7 @@ cmd:set_parameter("source_out", 20)
 cmd:set_parameter("clip_name", "Clip B")
 
 -- Register Insert Command
-local registry = require('core.command_registry')
+require('core.command_registry')
 local insert_cmd = require('core.commands.insert')
 -- Pass dummy tables, then register with manager
 local ret = insert_cmd.register({}, {}, db, command_manager.set_last_error)

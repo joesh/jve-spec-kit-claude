@@ -82,12 +82,11 @@ for i = 2, #clips do
     assert(prev.start + prev.dur <= cur.start, "clips on v2 should not overlap after move")
 end
 
-local found_c1, found_c2, found_dest = false, false, false
+local found_c1, found_c2 = false, false
 for _, c in ipairs(clips) do
     if c.id == "c1" then found_c1 = true end
     if c.id == "c2" then found_c2 = true end
     if c.id == "dest" then
-        found_dest = true
         assert(c.start >= 100, "dest clip should be trimmed to avoid overlap")
         assert(c.dur <= 120, "dest clip duration should not grow")
     end

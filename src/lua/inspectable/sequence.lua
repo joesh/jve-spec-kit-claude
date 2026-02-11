@@ -14,7 +14,7 @@
 --
 -- @file sequence.lua
 local database = require("core.database")
-local Command = require("command")
+require("command")  -- luacheck: ignore 211 (reserved for future use)
 local command_manager = require("core.command_manager")
 local metadata_schemas = require("ui.metadata_schemas")
 local timeline_state = require("ui.timeline.timeline_state")

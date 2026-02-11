@@ -13,7 +13,7 @@ local frame_utils = require("core.frame_utils")
 local Rational = require("core.rational")
 
 local rate_24 = { fps_numerator = 24, fps_denominator = 1 }
-local rate_2997 = { fps_numerator = 30000, fps_denominator = 1001 }
+local _rate_2997 = { fps_numerator = 30000, fps_denominator = 1001 }  -- luacheck: no unused
 
 -- ============================================================================
 -- time_to_frame tests
@@ -36,7 +36,7 @@ print("Test: time_to_frame rescales different rates")
 -- 30 frames at 30fps needs to be expressed at 24fps
 -- 30 frames * (24/30) = 24 frames
 local r_30fps = Rational.new(30, 30, 1)
-frame, success = frame_utils.time_to_frame(r_30fps, rate_24)
+frame = frame_utils.time_to_frame(r_30fps, rate_24)
 check("30 frames at 30fps -> 24 at 24fps", frame == 24)
 print("  ✓ time_to_frame rescales")
 
@@ -49,7 +49,7 @@ check("error mentions hydrate", err and tostring(err):find("hydrate") ~= nil)
 print("  ✓ time_to_frame validates time_obj")
 
 print("Test: time_to_frame with invalid rate asserts via normalize_rate")
-ok, err = pcall(function()
+ok = pcall(function()
     frame_utils.time_to_frame(100, nil)
 end)
 check("nil rate asserts", not ok)
@@ -131,9 +131,9 @@ print("  ✓ snap_delta_to_frame hydrates integer")
 -- ============================================================================
 
 print("Test: frame_to_time -> time_to_frame round-trip")
-for _, original in ipairs({0, 1, 100, 1000, -50}) do
+for _, original in ipairs({0, 1, 100, 1000, -50}) do  -- luacheck: ignore _
     time_obj = frame_utils.frame_to_time(original, rate_24)
-    frame, _ = frame_utils.time_to_frame(time_obj, rate_24)
+    frame = frame_utils.time_to_frame(time_obj, rate_24)
     check(string.format("round-trip preserves %d", original), frame == original)
 end
 print("  ✓ round-trip preserves frame values")
@@ -144,10 +144,10 @@ print("Test: round-trip through different rates")
 local rate_30 = { fps_numerator = 30, fps_denominator = 1 }
 local original = 120
 time_obj = frame_utils.frame_to_time(original, rate_24)
-frame, _ = frame_utils.time_to_frame(time_obj, rate_30)
+frame = frame_utils.time_to_frame(time_obj, rate_30)
 check("120@24fps -> 150@30fps", frame == 150)
 local back = frame_utils.frame_to_time(frame, rate_30)
-local final, _ = frame_utils.time_to_frame(back, rate_24)
+local final = frame_utils.time_to_frame(back, rate_24)
 check("150@30fps -> 120@24fps", final == 120)
 print("  ✓ cross-rate round-trip works")
 

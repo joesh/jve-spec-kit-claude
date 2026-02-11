@@ -223,7 +223,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local sequence_fps_num, sequence_fps_den = load_sequence_rate(sequence_id)
+        local _sequence_fps_num, _sequence_fps_den = load_sequence_rate(sequence_id)  -- luacheck: ignore 211 (fps loaded to validate sequence, not used directly)
 
         if args.dry_run then
             return true, {
@@ -434,7 +434,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             error("FATAL: RippleDeleteSelection undo requires ripple_selection_sequence_id")
         end
 
-        local sequence_fps_num, sequence_fps_den = load_sequence_rate(args.ripple_selection_sequence_id)
+        local _undo_fps_num, _undo_fps_den = load_sequence_rate(args.ripple_selection_sequence_id)  -- luacheck: ignore 211 (fps loaded to validate sequence, not used directly)
 
         table.sort(shifted_clips, function(a, b)
             return require_number(a.original_start, "shifted_clip.original_start") > require_number(b.original_start, "shifted_clip.original_start")

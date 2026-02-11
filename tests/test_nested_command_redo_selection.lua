@@ -14,7 +14,7 @@
 require("test_env")
 
 local command_manager = require("core.command_manager")
-local command_history = require("core.command_history")
+require("core.command_history")  -- ensure module is loaded
 local ripple_layout = require("tests.helpers.ripple_layout")
 local timeline_state = require("ui.timeline.timeline_state")
 

@@ -9,8 +9,8 @@ local Command = require("command")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
 local timeline_state = require("ui.timeline.timeline_state")
-local last_edge_selection = nil
-local current_edges = nil
+local last_edge_selection
+local current_edges
 
 timeline_state.set_edge_selection = function(edges)
     last_edge_selection = edges
@@ -51,7 +51,7 @@ local layout = ripple_layout.create({
         v2 = {timeline_start = 900, duration = 900, fps_numerator = 30, fps_denominator = 1}
     }
 })
-local db = layout.db
+local _ = layout.db  -- luacheck: ignore 211
 local clips = layout.clips
 local tracks = layout.tracks
 

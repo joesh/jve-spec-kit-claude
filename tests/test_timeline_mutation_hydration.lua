@@ -5,7 +5,7 @@ require('test_env')
 local database = require('core.database')
 local Command = require('command')
 local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
+require('core.command_implementations')
 
 local TEST_DB = "/tmp/jve/test_timeline_mutation_hydration.db"
 

@@ -266,7 +266,6 @@ local function paste_timeline(payload)
 
             new_selection[#new_selection + 1] = {id = clip_id}
         end
-        ::continue::
     end
 
     if #new_selection == 0 then

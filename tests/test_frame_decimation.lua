@@ -182,7 +182,7 @@ mock_audio.playing = true
 -- Run first tick: should show frame 49
 run_timers(1)
 assert(#frames_shown > 0, "First tick should show a frame")
-local first_frame = frames_shown[#frames_shown]
+local _first_frame = frames_shown[#frames_shown]  -- luacheck: no unused
 
 -- Audio hasn't advanced (still same frame)
 clear_frames()

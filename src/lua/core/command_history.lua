@@ -25,7 +25,7 @@ local db = nil
 -- State tracking
 local last_sequence_number = 0
 local active_sequence_id = nil
-local active_project_id = nil
+local _active_project_id = nil  -- luacheck: ignore 231
 
 -- Undo group tracking (Emacs-style)
 local undo_group_stack = {}
@@ -45,7 +45,7 @@ local undo_stack_states = {
 
 local active_stack_id = GLOBAL_STACK_ID
 local current_sequence_number = undo_stack_states[GLOBAL_STACK_ID].current_sequence_number
-local current_branch_path = undo_stack_states[GLOBAL_STACK_ID].current_branch_path
+local current_branch_path = undo_stack_states[GLOBAL_STACK_ID].current_branch_path  -- luacheck: ignore 231
 
 local multi_stack_enabled = false
 if os and os.getenv then
@@ -64,7 +64,7 @@ function M.init(database, sequence_id, project_id)
         error("CommandHistory.init: project_id is required", 2)
     end
     active_sequence_id = sequence_id
-    active_project_id = project_id
+    _active_project_id = project_id
     
     M.reset()
 

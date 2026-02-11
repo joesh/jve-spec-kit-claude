@@ -42,7 +42,7 @@ asserts_mod._set_enabled_for_tests(false)
 -- ============================================================
 print("\n--- nil spec ---")
 do
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", nil, {})
+    local ok, _, err = command_schema.validate_and_normalize("TestCmd", nil, {})
     check("nil spec fails", ok == false)
     check("nil spec error msg", err:find("No schema registered") ~= nil)
 end
@@ -53,11 +53,11 @@ end
 print("\n--- non-table params ---")
 do
     local spec = { args = { name = { kind = "string" } } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, "not a table")
+    local ok, _, err = command_schema.validate_and_normalize("TestCmd", spec, "not a table")
     check("string params fails", ok == false)
     check("string params error msg", err:find("params must be a table") ~= nil)
 
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, nil)
+    ok, _, _ = command_schema.validate_and_normalize("TestCmd", spec, nil)
     check("nil params fails", ok == false)
 end
 
@@ -67,7 +67,7 @@ end
 print("\n--- unknown param rejection ---")
 do
     local spec = { args = { name = { kind = "string" } } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { name = "ok", bogus = 42 })
+    local ok, _, err = command_schema.validate_and_normalize("TestCmd", spec, { name = "ok", bogus = 42 })
     check("unknown param fails", ok == false)
     check("unknown param msg", err:find("unknown param 'bogus'") ~= nil)
 end
@@ -78,7 +78,7 @@ end
 print("\n--- ephemeral keys ---")
 do
     local spec = { args = { name = { kind = "string" } } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { name = "ok", __scratch = true })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, { name = "ok", __scratch = true })
     check("ephemeral key allowed", ok == true)
 end
 
@@ -88,7 +88,7 @@ end
 print("\n--- global allowed keys ---")
 do
     local spec = { args = { name = { kind = "string" } } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { name = "ok", sequence_id = "seq1" })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, { name = "ok", sequence_id = "seq1" })
     check("sequence_id allowed globally", ok == true)
 end
 
@@ -99,7 +99,7 @@ print("\n--- alias normalization ---")
 do
     local spec = { args = { clip_name = { kind = "string", aliases = { "name" } } } }
     local params = { name = "test" }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, params)
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, params)
     check("alias normalizes", ok == true)
     check("alias canonical set", params.clip_name == "test")
     check("alias original removed", params.name == nil)
@@ -111,7 +111,7 @@ end
 print("\n--- alias + canonical conflict ---")
 do
     local spec = { args = { clip_name = { kind = "string", aliases = { "name" } } } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { clip_name = "a", name = "b" })
+    local ok, _, err = command_schema.validate_and_normalize("TestCmd", spec, { clip_name = "a", name = "b" })
     check("alias conflict fails", ok == false)
     check("alias conflict msg", err:find("both.*and alias") ~= nil)
 end
@@ -122,7 +122,7 @@ end
 print("\n--- bare spec normalization ---")
 do
     local spec = { clip_id = { kind = "string" } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "c1" })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "c1" })
     check("bare spec normalizes", ok == true)
 end
 
@@ -135,14 +135,15 @@ do
         mode = { kind = "string", default = "normal" },
         count = { kind = "number", default = 1 },
     } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, {}, { apply_defaults = true })
+    local ok, out = command_schema.validate_and_normalize("TestCmd", spec, {}, { apply_defaults = true })
     check("defaults applied success", ok == true)
     check("default mode", out.mode == "normal")
     check("default count", out.count == 1)
 
     -- Caller-provided values not overwritten
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { mode = "custom" }, { apply_defaults = true })
-    check("caller value preserved", out.mode == "custom")
+    local ok2
+    ok2, out = command_schema.validate_and_normalize("TestCmd", spec, { mode = "custom" }, { apply_defaults = true })
+    check("caller value preserved", ok2 and out.mode == "custom")
     check("missing default still applied", out.count == 1)
 end
 
@@ -155,7 +156,7 @@ do
         name = { kind = "string", empty_as_nil = true },
     } }
     local params = { name = "" }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, params, { apply_defaults = false })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, params, { apply_defaults = false })
     check("empty_as_nil success", ok == true)
     check("empty string converted to nil", params.name == nil)
 end
@@ -175,16 +176,17 @@ do
     }
 
     -- At least one present → success
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "c1" })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "c1" })
     check("requires_any satisfied", ok == true)
 
     -- Neither present → failure
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { name = "x" })
+    local err
+    ok, err = select(1, command_schema.validate_and_normalize("TestCmd", spec, { name = "x" })), select(3, command_schema.validate_and_normalize("TestCmd", spec, { name = "x" }))
     check("requires_any fails", ok == false)
     check("requires_any msg", err:find("requires at least one of") ~= nil)
 
     -- Empty string not considered present
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "" })
+    ok = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "" })
     check("requires_any empty string not present", ok == false)
 end
 
@@ -198,7 +200,7 @@ do
         persisted = { original_state = { kind = "table" } },
     }
     -- persisted key allowed (not rejected as unknown)
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "c1", original_state = {} })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, { clip_id = "c1", original_state = {} })
     check("persisted key allowed", ok == true)
 end
 
@@ -209,22 +211,22 @@ print("\n--- apply_rules validation ---")
 do
     -- Required field missing → fails
     local spec = { args = { clip_id = { kind = "string", required = true } } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, {})
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, {})
     check("required field missing fails", ok == false)
 
     -- Wrong kind → fails
     spec = { args = { count = { kind = "number" } } }
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { count = "not_a_number" })
+    ok = command_schema.validate_and_normalize("TestCmd", spec, { count = "not_a_number" })
     check("wrong kind fails", ok == false)
 
     -- one_of violation → fails
     spec = { args = { mode = { kind = "string", one_of = { "a", "b" } } } }
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { mode = "c" })
+    ok = command_schema.validate_and_normalize("TestCmd", spec, { mode = "c" })
     check("one_of violation fails", ok == false)
 
     -- Nested required field missing → fails
     spec = { args = { data = { kind = "table", fields = { id = { required = true, kind = "string" } } } } }
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { data = {} })
+    ok = command_schema.validate_and_normalize("TestCmd", spec, { data = {} })
     check("nested required missing fails", ok == false)
 end
 
@@ -240,14 +242,14 @@ do
         },
     } }
     local params = { data = { name = "legacy" } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, params)
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, params)
     check("legacy key success", ok == true)
     check("legacy key copied to canonical", params.data.clip_name == "legacy")
 
     -- canonical already present → not overwritten
     params = { data = { clip_name = "canonical", name = "legacy" } }
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, params)
-    check("canonical preserved", params.data.clip_name == "canonical")
+    local ok2 = command_schema.validate_and_normalize("TestCmd", spec, params)
+    check("canonical preserved", ok2 and params.data.clip_name == "canonical")
 end
 
 -- ============================================================
@@ -258,11 +260,11 @@ do
     local spec = { args = {
         data = { kind = "table", requires_fields = { "id", "name" } },
     } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { data = { id = "x" } })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, { data = { id = "x" } })
     check("requires_fields missing fails", ok == false)
 
     -- When all fields present → obviously passes
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { data = { id = "x", name = "y" } })
+    ok = command_schema.validate_and_normalize("TestCmd", spec, { data = { id = "x", name = "y" } })
     check("requires_fields all present", ok == true)
 end
 
@@ -275,11 +277,11 @@ do
         obj = { kind = "table", requires_methods = { "execute" } },
     } }
     -- With method → passes
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { obj = { execute = function() end } })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, { obj = { execute = function() end } })
     check("requires_methods present", ok == true)
 
     -- Missing method → fails
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, { obj = {} })
+    ok = command_schema.validate_and_normalize("TestCmd", spec, { obj = {} })
     check("requires_methods missing fails", ok == false)
 end
 
@@ -298,7 +300,7 @@ do
         },
     } }
     local params = { data = {} }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, params, { apply_defaults = true })
+    local ok, out = command_schema.validate_and_normalize("TestCmd", spec, params, { apply_defaults = true })
     check("nested defaults success", ok == true)
     check("nested default mode", out.data.mode == "auto")
     check("nested default count", out.data.count == 0)
@@ -318,7 +320,7 @@ do
         },
     } }
     local params = { data = { tag = "" } }
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, params)
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, params)
     check("nested empty_as_nil", ok == true)
     check("nested tag converted to nil", params.data.tag == nil)
 end
@@ -333,11 +335,11 @@ do
     } }
 
     -- Non-UI context: required → fails when missing
-    local ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, {}, { is_ui_context = false })
+    local ok = command_schema.validate_and_normalize("TestCmd", spec, {}, { is_ui_context = false })
     check("required_outside_ui_context missing fails", ok == false)
 
     -- UI context: not required → passes
-    ok, out, err = command_schema.validate_and_normalize("TestCmd", spec, {}, { is_ui_context = true })
+    ok = command_schema.validate_and_normalize("TestCmd", spec, {}, { is_ui_context = true })
     check("ui context not required", ok == true)
 end
 
@@ -380,7 +382,7 @@ do
         args = { clip_id = { kind = "string" } },
         persisted = { snapshot = { kind = "table" } },
     }
-    local ok, out, err = command_schema.validate_and_normalize(
+    local ok = command_schema.validate_and_normalize(
         "TestCmd", spec,
         { clip_id = "c1", snapshot = { x = 1 } }
     )

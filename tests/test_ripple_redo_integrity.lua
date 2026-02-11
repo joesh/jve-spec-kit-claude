@@ -6,7 +6,7 @@ local test_env = require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
+local _ = require('core.command_implementations') -- load for side effects
 local Command = require('command')
 local timeline_state = require('ui.timeline.timeline_state')
 local Media = require('models.media')
@@ -26,8 +26,7 @@ INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, loc
 VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     ]]))
 
-    local executors, undoers = {}, {}
-    -- command_impl.register_commands(executors, undoers, conn)
+    -- command_impl.register_commands({}, {}, conn)
     command_manager.init('default_sequence', 'default_project')
     timeline_state.init('default_sequence')
 
@@ -112,14 +111,14 @@ assert(stmt:exec() and stmt:next(), "Inserted clip not found")
 local clip_id = stmt:value(0)
 stmt:finalize()
 
-local function delete_delta_frames(clip_id)
+local function delete_delta_frames(target_clip_id)
     local dur_stmt = db:prepare([[
         SELECT duration_frames, fps_numerator, fps_denominator
         FROM clips
         WHERE id = ?
     ]])
     assert(dur_stmt, "failed to prepare clip duration lookup")
-    assert(dur_stmt:bind_value(1, clip_id))
+    assert(dur_stmt:bind_value(1, target_clip_id))
     assert(dur_stmt:exec() and dur_stmt:next(), "Failed to load clip duration for ripple delete")
     local duration_frames = dur_stmt:value(0)
     local fps_num = dur_stmt:value(1)
@@ -138,27 +137,27 @@ ripple_cmd:set_parameter("sequence_id", "default_sequence")
 exec(ripple_cmd)
 
 local function snapshot_clips()
-    local stmt = db:prepare([[
+    local snap_stmt = db:prepare([[
         SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips
         WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
         ORDER BY track_id, timeline_start_frame
     ]])
-    assert(stmt:exec(), "Failed to fetch clips for snapshot")
+    assert(snap_stmt:exec(), "Failed to fetch clips for snapshot")
 
-    local clips = {}
-    while stmt:next() do
-        clips[#clips + 1] = {
-            id = stmt:value(0),
-            track_id = stmt:value(1),
-            start_value = stmt:value(2),
-            duration_value = stmt:value(3),
-            source_in_value = stmt:value(4),
-            source_out_value = stmt:value(5),
+    local snap_clips = {}
+    while snap_stmt:next() do
+        snap_clips[#snap_clips + 1] = {
+            id = snap_stmt:value(0),
+            track_id = snap_stmt:value(1),
+            start_value = snap_stmt:value(2),
+            duration_value = snap_stmt:value(3),
+            source_in_value = snap_stmt:value(4),
+            source_out_value = snap_stmt:value(5),
         }
     end
-    stmt:finalize()
-    return clips
+    snap_stmt:finalize()
+    return snap_clips
 end
 
 local function states_match(expected, actual)
@@ -227,23 +226,23 @@ local function insert_clip(start_value, duration, source_in)
 end
 
 local function fetch_clips_ordered()
-    local stmt = db:prepare([[
+    local order_stmt = db:prepare([[
         SELECT id, timeline_start_frame, duration_frames
         FROM clips
         WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
         ORDER BY timeline_start_frame
     ]])
-    assert(stmt:exec(), "Failed to fetch clip ordering")
-    local clips = {}
-    while stmt:next() do
-        clips[#clips + 1] = {
-            id = stmt:value(0),
-            start_value = stmt:value(1),
-            duration_value = stmt:value(2)
+    assert(order_stmt:exec(), "Failed to fetch clip ordering")
+    local ordered_clips = {}
+    while order_stmt:next() do
+        ordered_clips[#ordered_clips + 1] = {
+            id = order_stmt:value(0),
+            start_value = order_stmt:value(1),
+            duration_value = order_stmt:value(2)
         }
     end
-    stmt:finalize()
-    return clips
+    order_stmt:finalize()
+    return ordered_clips
 end
 
 insert_clip(0, 1713800, 0)

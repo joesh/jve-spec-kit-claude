@@ -8,7 +8,7 @@ require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
-local Command = require("command")
+require("command") -- Loaded for side effects
 
 local pass_count = 0
 local fail_count = 0

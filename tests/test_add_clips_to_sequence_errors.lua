@@ -76,7 +76,7 @@ print("  ✓ Asserts on nil groups")
 --------------------------------------------------------------------------------
 print("\nTest: AddClipsToSequence with empty groups asserts")
 command_manager.begin_command_event("test")
-result = command_manager.execute("AddClipsToSequence", {
+local result = command_manager.execute("AddClipsToSequence", {
     groups = {},
     position = 0,
     sequence_id = "sequence",
@@ -140,7 +140,7 @@ print("  ✓ Asserts on nil edit_type")
 --------------------------------------------------------------------------------
 print("\nTest: AddClipsToSequence with invalid edit_type asserts")
 command_manager.begin_command_event("test")
-result = command_manager.execute("AddClipsToSequence", {
+local result2 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
         role = "video", media_id = "media_1", master_clip_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
@@ -152,9 +152,9 @@ result = command_manager.execute("AddClipsToSequence", {
     edit_type = "invalid",
 })
 command_manager.end_command_event()
-assert(not result.success, "Should fail with invalid edit_type")
-assert(result.error_message:match("edit_type must be insert or overwrite"),
-    "Error should mention valid edit_types, got: " .. tostring(result.error_message))
+assert(not result2.success, "Should fail with invalid edit_type")
+assert(result2.error_message:match("edit_type must be insert or overwrite"),
+    "Error should mention valid edit_types, got: " .. tostring(result2.error_message))
 print("  ✓ Asserts on invalid edit_type")
 
 --------------------------------------------------------------------------------
@@ -162,7 +162,7 @@ print("  ✓ Asserts on invalid edit_type")
 --------------------------------------------------------------------------------
 print("\nTest: AddClipsToSequence with invalid arrangement asserts")
 command_manager.begin_command_event("test")
-result = command_manager.execute("AddClipsToSequence", {
+local result3 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
         role = "video", media_id = "media_1", master_clip_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
@@ -175,9 +175,9 @@ result = command_manager.execute("AddClipsToSequence", {
     arrangement = "invalid",
 })
 command_manager.end_command_event()
-assert(not result.success, "Should fail with invalid arrangement")
-assert(result.error_message:match("arrangement must be serial or stacked"),
-    "Error should mention valid arrangements, got: " .. tostring(result.error_message))
+assert(not result3.success, "Should fail with invalid arrangement")
+assert(result3.error_message:match("arrangement must be serial or stacked"),
+    "Error should mention valid arrangements, got: " .. tostring(result3.error_message))
 print("  ✓ Asserts on invalid arrangement")
 
 --------------------------------------------------------------------------------
@@ -185,7 +185,7 @@ print("  ✓ Asserts on invalid arrangement")
 --------------------------------------------------------------------------------
 print("\nTest: AddClipsToSequence with non-integer position asserts")
 command_manager.begin_command_event("test")
-result = command_manager.execute("AddClipsToSequence", {
+local result4 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
         role = "video", media_id = "media_1", master_clip_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
@@ -197,9 +197,9 @@ result = command_manager.execute("AddClipsToSequence", {
     edit_type = "insert",
 })
 command_manager.end_command_event()
-assert(not result.success, "Should fail with non-integer position")
-assert(result.error_message:match("position must be integer"),
-    "Error should mention position type, got: " .. tostring(result.error_message))
+assert(not result4.success, "Should fail with non-integer position")
+assert(result4.error_message:match("position must be integer"),
+    "Error should mention position type, got: " .. tostring(result4.error_message))
 print("  ✓ Asserts on non-integer position")
 
 --------------------------------------------------------------------------------
@@ -207,7 +207,7 @@ print("  ✓ Asserts on non-integer position")
 --------------------------------------------------------------------------------
 print("\nTest: AddClipsToSequence with clip missing target_track_id asserts")
 command_manager.begin_command_event("test")
-result = command_manager.execute("AddClipsToSequence", {
+local result5 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
         role = "video", media_id = "media_1", master_clip_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
@@ -220,9 +220,9 @@ result = command_manager.execute("AddClipsToSequence", {
     edit_type = "insert",
 })
 command_manager.end_command_event()
-assert(not result.success, "Should fail with missing target_track_id")
-assert(result.error_message:match("target_track_id"),
-    "Error should mention target_track_id, got: " .. tostring(result.error_message))
+assert(not result5.success, "Should fail with missing target_track_id")
+assert(result5.error_message:match("target_track_id"),
+    "Error should mention target_track_id, got: " .. tostring(result5.error_message))
 print("  ✓ Asserts on missing target_track_id")
 
 --------------------------------------------------------------------------------
@@ -230,7 +230,7 @@ print("  ✓ Asserts on missing target_track_id")
 --------------------------------------------------------------------------------
 print("\nTest: AddClipsToSequence with non-integer group.duration asserts")
 command_manager.begin_command_event("test")
-result = command_manager.execute("AddClipsToSequence", {
+local result6 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = "fifty", clips = {{
         role = "video", media_id = "media_1", master_clip_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
@@ -242,9 +242,9 @@ result = command_manager.execute("AddClipsToSequence", {
     edit_type = "insert",
 })
 command_manager.end_command_event()
-assert(not result.success, "Should fail with non-integer group.duration")
-assert(result.error_message:match("group.duration must be integer"),
-    "Error should mention group.duration type, got: " .. tostring(result.error_message))
+assert(not result6.success, "Should fail with non-integer group.duration")
+assert(result6.error_message:match("group.duration must be integer"),
+    "Error should mention group.duration type, got: " .. tostring(result6.error_message))
 print("  ✓ Asserts on non-integer group.duration")
 
 --------------------------------------------------------------------------------
@@ -252,7 +252,7 @@ print("  ✓ Asserts on non-integer group.duration")
 --------------------------------------------------------------------------------
 print("\nTest: AddClipsToSequence with non-integer clip.source_in asserts")
 command_manager.begin_command_event("test")
-result = command_manager.execute("AddClipsToSequence", {
+local result7 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
         role = "video", media_id = "media_1", master_clip_id = master_1,
         project_id = "project", name = "Clip", source_in = "zero", source_out = 50,
@@ -264,9 +264,9 @@ result = command_manager.execute("AddClipsToSequence", {
     edit_type = "insert",
 })
 command_manager.end_command_event()
-assert(not result.success, "Should fail with non-integer source_in")
-assert(result.error_message:match("source_in must be integer"),
-    "Error should mention source_in type, got: " .. tostring(result.error_message))
+assert(not result7.success, "Should fail with non-integer source_in")
+assert(result7.error_message:match("source_in must be integer"),
+    "Error should mention source_in type, got: " .. tostring(result7.error_message))
 print("  ✓ Asserts on non-integer source_in")
 
 print("\n✅ test_add_clips_to_sequence_errors.lua passed")

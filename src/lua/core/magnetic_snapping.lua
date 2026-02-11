@@ -16,7 +16,6 @@
 -- Original intent (unreviewed):
 -- Magnetic snapping: Find snap points for clip edges and playhead
 -- Provides snap detection logic for drag operations in the timeline
-local time_utils = require("core.time_utils")
 local logger = require("core.logger")
 
 local M = {}

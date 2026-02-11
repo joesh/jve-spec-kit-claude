@@ -452,12 +452,12 @@ function M.convert(drp_path, jvp_path)
                     end
 
                     -- clip_link model handles db connection internally
-                    local link_id, err = clip_link.create_link_group(clips_to_link)
+                    local link_id, link_err = clip_link.create_link_group(clips_to_link)
                     if link_id then
                         link_count = link_count + 1
                     else
                         logger.warn("drp_project_converter",
-                            string.format("Failed to create link group: %s", err or "unknown error"))
+                            string.format("Failed to create link group: %s", link_err or "unknown error"))
                     end
                 end
             end

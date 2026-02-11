@@ -10,7 +10,7 @@ local function assert_equal(actual, expected, message)
     end
 end
 
-local function assert_close(actual, expected, tolerance, message)
+local function _assert_close(actual, expected, tolerance, message)  -- luacheck: no unused
     tolerance = tolerance or 1
     if math.abs(actual - expected) > tolerance then
         error(string.format("Assertion failed: %s\nExpected: %s ±%s\nActual:   %s", message or "", tostring(expected), tostring(tolerance), tostring(actual)))

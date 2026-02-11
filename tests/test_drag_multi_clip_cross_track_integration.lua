@@ -94,7 +94,7 @@ local drag_state = {
     start_y = 0
 }
 
-local result = drag_handler.handle_release(view, drag_state, {})
+drag_handler.handle_release(view, drag_state, {})
 -- Execute was invoked synchronously inside handle_release; verify DB.
 local q = db:prepare("SELECT id, track_id FROM clips WHERE id IN ('c1','c2') ORDER BY id")
 assert(q:exec(), "query failed")

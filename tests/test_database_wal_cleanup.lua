@@ -15,13 +15,13 @@ local open_calls = 0
 local removed_paths = {}
 
 -- Stub os.remove so we can assert the cleanup behaviour without touching real files.
-os.remove = function(path)
+os.remove = function(path) -- luacheck: ignore 122
     table.insert(removed_paths, path)
     return true
 end
 
 -- Prevent macl detection from running external commands inside the test.
-io.popen = function()
+io.popen = function() -- luacheck: ignore 122
     return nil
 end
 
@@ -74,7 +74,7 @@ assert(#removed_paths == 0, "database.set_path must not delete WAL/SHM sidecars 
 print("✅ database.set_path does not perform implicit WAL/SHM cleanup fallbacks")
 
 -- Restore globals/modules for safety.
-os.remove = original_os_remove
-io.popen = original_io_popen
+os.remove = original_os_remove -- luacheck: ignore 122
+io.popen = original_io_popen -- luacheck: ignore 122
 package.loaded["core.sqlite3"] = original_sqlite3
 package.loaded["core.database"] = original_database

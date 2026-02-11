@@ -17,8 +17,9 @@
 -- scripts/core/widget_parenting.lua
 -- PURPOSE: Smart widget parenting system for Qt widgets
 local error_system = require("core.error_system")
-local logger = require("core.logger")
-local ui_constants = require("core.ui_constants")
+-- Keeping these requires for future use when widget parenting is fully implemented
+require("core.logger")  -- luacheck: ignore 211
+require("core.ui_constants")  -- luacheck: ignore 211
 
 local M = {}
 

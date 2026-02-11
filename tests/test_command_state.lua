@@ -282,7 +282,7 @@ do
     }
     package.loaded["ui.timeline.timeline_state"] = mock_timeline
 
-    local clips_json, edges_json, _ = command_state.capture_selection_snapshot()
+    local _, edges_json = command_state.capture_selection_snapshot()
     local edges = _G.qt_json_decode(edges_json)
     check("2 edges captured", #edges == 2)
     check("edge[1] clip_id", edges[1].clip_id == "clip_e1")

@@ -93,7 +93,7 @@ for _, command_name in ipairs(commands) do
         }
 
         -- Validate schema accepts these params (specifically checking for "unknown param" errors)
-        local ok, normalized, validation_err = command_schema.validate_and_normalize(
+        local ok, _, validation_err = command_schema.validate_and_normalize(
             command_name,
             spec,
             test_params,

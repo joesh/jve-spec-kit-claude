@@ -17,7 +17,7 @@ local M = {}
 local json = require("dkjson")
 local uuid = require("uuid")
 local Clip = require("models.clip")
-local command_helper = require("core.command_helper")
+local _command_helper = require("core.command_helper")  -- luacheck: ignore 211 (unused, required for module init)
 
 
 local SPEC = {
@@ -81,10 +81,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         select_stmt:bind_value(1, clip_id)
         select_stmt:bind_value(2, property_name)
 
-        local property_id = nil
-        local previous_value = nil
-        local previous_type = nil
-        local previous_default = nil
+        local property_id
+        local previous_value
+        local previous_type
+        local previous_default
         local existing_property = false
 
         local function decode_property(raw)
@@ -120,7 +120,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local default_json = nil
+        local default_json
         do
             local encoded_default, default_err = json.encode({ value = args.default_value })
             if not encoded_default then

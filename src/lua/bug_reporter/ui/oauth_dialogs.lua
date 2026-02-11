@@ -17,7 +17,7 @@
 -- oauth_dialogs.lua
 -- OAuth configuration dialogs for YouTube and GitHub
 local youtube_oauth = require("bug_reporter.youtube_oauth")
-local github_issue_creator = require("bug_reporter.github_issue_creator")
+local _github_issue_creator = require("bug_reporter.github_issue_creator")  -- luacheck: ignore (loaded for side effects)
 local logger = require("core.logger")
 local qt = require("bug_reporter.qt_compat")
 

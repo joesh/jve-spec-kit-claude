@@ -113,10 +113,10 @@ local function clip_exists_at(track_id, start_ms)
 end
 
 local TEST_DB = "/tmp/jve/test_blade_command.db"
-local db = setup_db(TEST_DB)
+setup_db(TEST_DB)
 
 database.init(TEST_DB) -- ensure database module uses this db
-db = database.get_connection()
+local db = database.get_connection()
 command_manager.init('default_sequence', 'default_project')
 
 -- Stub timeline state

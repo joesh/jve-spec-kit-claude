@@ -177,16 +177,16 @@ fetch_log = {}
 audio_playback._ensure_pcm_cache()
 
 assert(#fetch_log > 0, "Expected fetch")
-local fetch_src_end = fetch_log[1].src_end
+local fetch_src_end2 = fetch_log[1].src_end
 local clip_src_end = CLIP_END_US - SOURCE_OFFSET_US  -- 21.933s
 
 print(string.format("  src_end=%.3fs, clip_end_in_src=%.3fs",
-    fetch_src_end / 1000000, clip_src_end / 1000000))
+    fetch_src_end2 / 1000000, clip_src_end / 1000000))
 
 -- Fetch should NOT extend past the clip end (the bug was it would reach 25.8s)
-assert(fetch_src_end <= clip_src_end + 100000,
+assert(fetch_src_end2 <= clip_src_end + 100000,
     string.format("BUG: Fetch extends past clip! src_end=%.3fs > clip_end=%.3fs",
-        fetch_src_end / 1000000, clip_src_end / 1000000))
+        fetch_src_end2 / 1000000, clip_src_end / 1000000))
 print("  ✓ Fetch limited at clip boundary (no audio bleeding)")
 
 audio_playback.shutdown_session()

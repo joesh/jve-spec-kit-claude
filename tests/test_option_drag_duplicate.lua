@@ -2,7 +2,7 @@
 
 local test_env = require('test_env')
 
-local json = require('dkjson')
+require('dkjson') -- luacheck: ignore 411
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
@@ -38,7 +38,7 @@ local function setup_database(path)
     assert(db:exec(BASE_DATA_SQL))
     command_manager.init('default_sequence', 'default_project')
     -- Clear masterclip cache for new database
-    masterclip_ids = {}
+    masterclip_ids = {} -- luacheck: ignore 111
 end
 
 -- Table to store masterclip IDs by media_id

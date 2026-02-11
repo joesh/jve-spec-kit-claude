@@ -248,13 +248,13 @@ do
     -- Unequal durations
     -- 24 frames @ 24fps = 1s; 29 frames @ 30fps = 0.967s
     local c = Rational.new(29, 30)
-    check("cross-rate neq", not (a == c))
+    check("cross-rate neq", a ~= c)
 
     -- Less-than cross-rate
     -- 23 frames @ 24fps < 30 frames @ 30fps → 23/24 < 30/30 → 0.958 < 1.0
     local d = Rational.new(23, 24)
     check("cross-rate lt", d < b)
-    check("cross-rate not lt (equal)", not (a < b))
+    check("cross-rate not lt (equal)", a >= b)
     check("cross-rate gt via lt", b > d)
 
     -- NTSC cross-rate equality

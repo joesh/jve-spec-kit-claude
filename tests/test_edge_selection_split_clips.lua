@@ -150,11 +150,11 @@ timeline_state.get_clip_by_id = function(clip_id)
     return nil
 end
 timeline_state.get_clips_for_track = function(track_id)
-    local result = {}
+    local track_clips = {}
     for _, clip in ipairs(mock_clips) do
-        if clip.track_id == track_id then table.insert(result, clip) end
+        if clip.track_id == track_id then table.insert(track_clips, clip) end
     end
-    return result
+    return track_clips
 end
 
 -- Test: Select edge on second video clip and expand to linked

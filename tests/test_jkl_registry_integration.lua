@@ -85,7 +85,6 @@ package.loaded["ui.viewer_panel"] = {
 -- Load keyboard_shortcuts fresh
 package.loaded["core.keyboard_shortcuts"] = nil
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
-local KEY = keyboard_shortcuts.KEY
 
 -- Initialize with mocks
 keyboard_shortcuts.init(nil, nil, nil, nil)

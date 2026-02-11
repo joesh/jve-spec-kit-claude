@@ -168,7 +168,7 @@ os.execute("rm -f " .. test_db_path .. "*")
 
 local database = require("core.database")
 database.init(test_db_path)
-local db = database.get_connection()
+database.get_connection()  -- verify connection works
 
 -- DON'T call command_manager.init - simulates no active project
 -- command_manager.init(db, sequence_id, project_id)

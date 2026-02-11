@@ -113,7 +113,7 @@ local function count_clips(track_id)
 end
 
 -- Helper: get clip position
-local function get_clip_position(clip_id)
+local function get_clip_position(clip_id) -- luacheck: ignore 211
     local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
@@ -280,7 +280,7 @@ assert(not result.success, "DuplicateClips without target_track_id should fail")
 -- =============================================================================
 print("Test 9: Duplicate preserves clip properties")
 reset_timeline()
-local original = create_clip("clip_orig", "track_v1", 0, 100)
+create_clip("clip_orig", "track_v1", 0, 100)
 
 result = execute_command("DuplicateClips", {
     project_id = "project",
@@ -293,7 +293,7 @@ result = execute_command("DuplicateClips", {
 assert(result.success, "DuplicateClips should succeed")
 
 -- Find the duplicated clip
-local stmt = db:prepare([[
+stmt = db:prepare([[
     SELECT duration_frames, source_in_frame, source_out_frame, media_id
     FROM clips WHERE track_id = 'track_v2' LIMIT 1
 ]])

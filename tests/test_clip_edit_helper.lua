@@ -1,7 +1,7 @@
 require("test_env")
 
 local database = require("core.database")
-local Track = require("models.track")
+local _ = require("models.track")  -- luacheck: ignore 211
 
 -- Stub timeline_state before clip_edit_helper is required
 -- (it loads via pcall, so we can control what it sees)
@@ -181,8 +181,9 @@ check("no error", err == nil)
 
 -- 3b. Nil → resolve first VIDEO track
 cmd = mock_command()
-track_id, err = clip_edit_helper.resolve_track_id(nil, "seq1", cmd)
-check("track_id resolved from seq", track_id == "trk_v1")
+local track_id2
+track_id2, err = clip_edit_helper.resolve_track_id(nil, "seq1", cmd)
+check("track_id resolved from seq", track_id2 == "trk_v1")
 check("track_id set on command", cmd.params.track_id == "trk_v1")
 check("no error on resolve", err == nil)
 
@@ -192,8 +193,9 @@ check("no VIDEO tracks → nil", track_id == nil)
 check("error message", err ~= nil and err:match("no VIDEO tracks"))
 
 -- 3d. Empty string track_id → resolve
-track_id, err = clip_edit_helper.resolve_track_id("", "seq1", nil)
-check("empty string → resolves", track_id == "trk_v1")
+local track_id3
+track_id3, err = clip_edit_helper.resolve_track_id("", "seq1", nil)
+check("empty string → resolves", track_id3 == "trk_v1" and err == nil)
 
 
 -- ═══════════════════════════════════════════════════════════════
@@ -281,7 +283,7 @@ check("source_out = 110", timing.source_out == 110)
 timing, timing_err = clip_edit_helper.resolve_timing(
     { source_in_value = 0, source_out_value = 50 },
     nil, nil)
-check("in+out → duration", timing ~= nil and timing.duration == 50)
+check("in+out → duration", timing ~= nil and timing.duration == 50 and timing_err == nil)
 
 -- 6c. No duration, no source_out, no media → error
 timing, timing_err = clip_edit_helper.resolve_timing(
@@ -296,7 +298,7 @@ local master = {
 }
 timing, timing_err = clip_edit_helper.resolve_timing(
     {}, master, nil)
-check("master_clip fallback", timing ~= nil)
+check("master_clip fallback", timing ~= nil and timing_err == nil)
 check("master duration", timing.duration == 75)
 check("master source_in", timing.source_in == 5)
 
@@ -306,14 +308,14 @@ local media_obj = {
 }
 timing, timing_err = clip_edit_helper.resolve_timing(
     {}, nil, media_obj)
-check("media fallback", timing ~= nil)
+check("media fallback", timing ~= nil and timing_err == nil)
 check("media duration", timing.duration == 200)
 check("media default source_in = 0", timing.source_in == 0)
 
 -- 6f. source_in defaults to 0 when not provided
 timing, timing_err = clip_edit_helper.resolve_timing(
     { duration_value = 30 }, nil, nil)
-check("default source_in = 0", timing.source_in == 0)
+check("default source_in = 0", timing.source_in == 0 and timing_err == nil)
 check("source_out = 30", timing.source_out == 30)
 
 -- 6g. Zero duration → error
@@ -412,7 +414,7 @@ check("fps fallback to seq den", fps_d == 1)
 
 -- 8d. Empty media_id → sequence fps fallback
 fps_n, fps_d = clip_edit_helper.get_media_fps(db, nil, "", 25, 1)
-check("fps empty media_id → seq", fps_n == 25)
+check("fps empty media_id → seq", fps_n == 25 and fps_d == 1)
 
 -- 8e. master_clip without rate → assert
 expect_error("master_clip no rate → assert", function()

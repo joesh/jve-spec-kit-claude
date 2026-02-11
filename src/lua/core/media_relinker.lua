@@ -52,7 +52,8 @@ end
 --- Normalize path for comparison (handle case sensitivity, separators)
 -- @param path string File path
 -- @return string Normalized path
-local function normalize_path(path)
+-- luacheck: ignore 211 (unused function reserved for future use)
+local function _normalize_path(path)
     -- Convert backslashes to forward slashes
     local normalized = path:gsub("\\", "/")
     -- Remove trailing slashes
@@ -71,12 +72,11 @@ local function scan_directory(root_dir, extensions, max_depth)
     local results = {}
 
     -- Use find command for efficiency (Lua's directory traversal is slow)
-    local ext_pattern = ""
     local ext_list = {}
     for ext, _ in pairs(extensions) do
         table.insert(ext_list, string.format("-name '*.%s'", ext))
     end
-    ext_pattern = table.concat(ext_list, " -o ")
+    local ext_pattern = table.concat(ext_list, " -o ")
 
     local cmd = string.format('find "%s" -maxdepth %d -type f \\( %s \\) 2>/dev/null',
         root_dir, max_depth, ext_pattern)
@@ -291,7 +291,7 @@ local function extract_timecode(media, file_path)
         if type(metadata) == "string" then
             -- Parse JSON if stored as string
             local json = require("dkjson")
-            local parsed, err = json.decode(metadata)
+            local parsed = json.decode(metadata)
             if parsed and parsed.timecode then
                 return parsed.timecode
             end
@@ -332,7 +332,7 @@ local function extract_reel_name(media, file_path)
         local metadata = media.metadata
         if type(metadata) == "string" then
             local json = require("dkjson")
-            local parsed, err = json.decode(metadata)
+            local parsed = json.decode(metadata)
             if parsed and parsed.reel_name then
                 return parsed.reel_name
             end
@@ -432,7 +432,7 @@ local function relink_by_metadata(media, search_paths, candidate_files, media_re
     -- Check each candidate
     for _, file_path in ipairs(files_to_check) do
         if file_exists(file_path) then
-            local new_metadata, err = media_reader.probe_file(file_path)
+            local new_metadata = media_reader.probe_file(file_path)
 
             -- Create temporary media record for extraction functions
             local temp_media = {

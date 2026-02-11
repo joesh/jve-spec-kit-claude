@@ -26,7 +26,7 @@ package.loaded["core.logger"] = {
 
 -- First test with working JSON encoder — should succeed
 local command_state = require("core.command_state")
-local clips_json, edges_json, gaps_json = command_state.capture_selection_snapshot()
+local clips_json = command_state.capture_selection_snapshot()
 check("valid clips JSON not empty", clips_json ~= "[]")
 check("clips JSON contains clip1", clips_json:find("clip1") ~= nil)
 

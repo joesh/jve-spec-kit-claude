@@ -152,7 +152,7 @@ function CaptureManager:trim_buffers()
     local cutoff_time = current_time - self.max_time_ms
 
     -- Helper: Find number of items to remove from start of buffer
-    local function count_removals(buffer, cutoff_time, max_count)
+    local function count_removals(buffer, time_cutoff, max_count)
         local count_remove = 0
         local time_remove = 0
 
@@ -163,7 +163,7 @@ function CaptureManager:trim_buffers()
 
         -- Count items older than cutoff time
         for i, entry in ipairs(buffer) do
-            if entry.timestamp_ms >= cutoff_time then
+            if entry.timestamp_ms >= time_cutoff then
                 break
             end
             time_remove = i

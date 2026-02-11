@@ -389,8 +389,8 @@ print("\n--- Section 9: Diagnostic Function Guards (NSF: must be initialized) --
 
 reset_module_state()
 
--- Helper to test that a function asserts
-local function expect_assert(fn, msg)
+-- Helper for Section 9: returns the error message
+local function expect_assert_return_err(fn, msg)
     local ok, err = pcall(fn)
     assert(not ok, msg .. " (expected assert but got success)")
     return err
@@ -398,7 +398,7 @@ end
 
 print("\nTest 9.1: get_playhead_us when no session ASSERTS (NSF)")
 audio_playback.session_initialized = false
-local err = expect_assert(function()
+local err = expect_assert_return_err(function()
     audio_playback.get_playhead_us()
 end, "get_playhead_us should assert when no session")
 assert(err:match("session not initialized"), "Error should mention 'session not initialized'")
@@ -407,7 +407,7 @@ print("  ✓ get_playhead_us asserts when no session (NSF)")
 print("\nTest 9.2: get_playhead_us when no aop ASSERTS (NSF)")
 audio_playback.session_initialized = true
 audio_playback.aop = nil
-err = expect_assert(function()
+err = expect_assert_return_err(function()
     audio_playback.get_playhead_us()
 end, "get_playhead_us should assert when no aop")
 assert(err:match("aop is nil"), "Error should mention 'aop is nil'")
@@ -415,7 +415,7 @@ print("  ✓ get_playhead_us asserts when no aop (NSF)")
 
 print("\nTest 9.3: had_underrun when no session ASSERTS (NSF)")
 audio_playback.session_initialized = false
-err = expect_assert(function()
+err = expect_assert_return_err(function()
     audio_playback.had_underrun()
 end, "had_underrun should assert when no session")
 assert(err:match("session not initialized"), "Error should mention 'session not initialized'")
@@ -424,7 +424,7 @@ print("  ✓ had_underrun asserts when no session (NSF)")
 print("\nTest 9.4: had_underrun when no aop ASSERTS (NSF)")
 audio_playback.session_initialized = true
 audio_playback.aop = nil
-err = expect_assert(function()
+err = expect_assert_return_err(function()
     audio_playback.had_underrun()
 end, "had_underrun should assert when no aop")
 assert(err:match("aop is nil"), "Error should mention 'aop is nil'")
@@ -432,7 +432,7 @@ print("  ✓ had_underrun asserts when no aop (NSF)")
 
 print("\nTest 9.5: clear_underrun when no session ASSERTS (NSF)")
 audio_playback.session_initialized = false
-err = expect_assert(function()
+err = expect_assert_return_err(function()
     audio_playback.clear_underrun()
 end, "clear_underrun should assert when no session")
 assert(err:match("session not initialized"), "Error should mention 'session not initialized'")
@@ -441,7 +441,7 @@ print("  ✓ clear_underrun asserts when no session (NSF)")
 print("\nTest 9.6: clear_underrun when no aop ASSERTS (NSF)")
 audio_playback.session_initialized = true
 audio_playback.aop = nil
-err = expect_assert(function()
+err = expect_assert_return_err(function()
     audio_playback.clear_underrun()
 end, "clear_underrun should assert when no aop")
 assert(err:match("aop is nil"), "Error should mention 'aop is nil'")

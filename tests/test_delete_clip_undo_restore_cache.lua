@@ -186,7 +186,7 @@ assert(timeline_state.apply_called, "Undo should call timeline_state.apply_mutat
 local applied_bucket = timeline_state.last_mutations
 if applied_bucket and not applied_bucket.sequence_id and not applied_bucket.inserts and not applied_bucket.deletes then
     -- If map keyed by sequence, pick the first bucket
-    for _, bucket in pairs(applied_bucket) do
+    for _, bucket in pairs(applied_bucket) do -- luacheck: ignore 512
         applied_bucket = bucket
         break
     end

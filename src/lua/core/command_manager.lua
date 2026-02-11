@@ -395,15 +395,15 @@ local function normalize_command(command_or_name, params)
 
         local spec = registry.get_spec(spec_command_type)
 
-        local params = command.parameters or {}
-        if not (params.project_id and params.project_id ~= "") then
-            params.project_id = param_project_id
+        local cmd_params = command.parameters or {}
+        if not (cmd_params.project_id and cmd_params.project_id ~= "") then
+            cmd_params.project_id = param_project_id
         end
 
         local ok, normalized, schema_err = command_schema_module.validate_and_normalize(
             command.type,
             spec,
-            params,
+            cmd_params,
             { apply_defaults = true, is_ui_context = (origin == "ui") }
         )
         if ok and normalized ~= nil then
@@ -860,7 +860,7 @@ function M._execute_body(command_or_name, params)
             command.selected_gap_infos_pre = root_selected_gaps_pre
 
             -- Save nested command to DB (shares root's transaction)
-            local saved = command:save(db)
+            saved = command:save(db)
             if saved then
                 -- Advance cursor so next nested command chains correctly
                 history.set_current_sequence_number(sequence_number)
@@ -1970,6 +1970,7 @@ function M.activate_timeline_stack(sequence_id)
     -- Cache state for this sequence
     -- Using implicit knowledge that history doesn't cache state
     -- We need project_id. command_manager has active_project_id.
+    -- luacheck: ignore 542 (empty if branch - preserved for future state caching)
     if db and seq and seq ~= "" then
         -- Ideally we get project_id from sequence, but for now use active
         -- cache_initial_state was local. We removed it.

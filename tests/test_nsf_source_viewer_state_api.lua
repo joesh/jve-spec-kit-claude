@@ -57,8 +57,8 @@ local function test_correct_marks_check_pattern()
 
     -- CORRECT pattern:
     local has_clip = source_viewer_state.has_clip()
-    local mark_in = source_viewer_state.get_mark_in()
-    local mark_out = source_viewer_state.get_mark_out()
+    source_viewer_state.get_mark_in()  -- verify callable
+    source_viewer_state.get_mark_out() -- verify callable
 
     -- When no clip loaded, all should be nil/false
     assert(has_clip == false or has_clip == true,

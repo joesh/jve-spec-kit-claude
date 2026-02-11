@@ -15,10 +15,6 @@
 -- @file undo_hydrator.lua
 local M = {}
 
-local database = require("core.database")
-local json = require("dkjson")
-local logger = require("core.logger")
-
 function M.hydrate_executed_mutations_if_missing(command)
     if not command or not command.get_parameter then
         error("BatchRippleEdit undo: invalid command handle")

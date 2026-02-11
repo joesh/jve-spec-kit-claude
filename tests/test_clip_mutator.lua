@@ -1,7 +1,7 @@
 require("test_env")
 
-local database = require("core.database")
-local command_manager = require("core.command_manager")
+require("core.database")
+require("core.command_manager")
 local ripple_layout = require("helpers.ripple_layout")
 
 local pass_count = 0
@@ -183,7 +183,7 @@ end
 
 print("\n--- resolve_occlusions: nil params → noop ---")
 do
-    local ok, err, actions = ClipMutator.resolve_occlusions(nil, nil)
+    local ok = ClipMutator.resolve_occlusions(nil, nil)
     check("nil params returns true", ok == true)
 end
 
@@ -202,7 +202,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 1000,
         duration = 200,
@@ -225,7 +225,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 0,
         duration = 500,
@@ -251,7 +251,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 300,
         duration = 500,
@@ -277,7 +277,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 0,
         duration = 400,
@@ -304,7 +304,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 300,
         duration = 300,
@@ -332,7 +332,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 0,
         duration = 500,
@@ -360,7 +360,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 100,
         duration = 600,
@@ -390,7 +390,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_occlusions(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
         timeline_start = 100,
         duration = 400,
@@ -434,7 +434,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
         insert_time = 500,
         shift_amount = 200,
@@ -461,7 +461,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
         insert_time = 400,
         shift_amount = 300,
@@ -502,7 +502,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
         insert_time = 0,
         shift_amount = 100,
@@ -529,7 +529,7 @@ do
         }
     })
 
-    local ok, err, actions = ClipMutator.resolve_ripple(layout.db, {
+    local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
         insert_time = 1000,
         shift_amount = 200,
@@ -609,7 +609,7 @@ do
         }
     })
 
-    local ok, err, result = ClipMutator.plan_duplicate_block(layout.db, {
+    local ok, _, result = ClipMutator.plan_duplicate_block(layout.db, {
         sequence_id = layout.sequence_id,
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v1.id,
@@ -634,7 +634,7 @@ do
         }
     })
 
-    local ok, err, result = ClipMutator.plan_duplicate_block(layout.db, {
+    local ok, _, result = ClipMutator.plan_duplicate_block(layout.db, {
         sequence_id = layout.sequence_id,
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v1.id,
@@ -670,7 +670,7 @@ do
         }
     })
 
-    local ok, err, result = ClipMutator.plan_duplicate_block(layout.db, {
+    local ok, _, result = ClipMutator.plan_duplicate_block(layout.db, {
         sequence_id = layout.sequence_id,
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v2.id,
@@ -708,7 +708,7 @@ do
         }
     })
 
-    local ok, err, result = ClipMutator.plan_duplicate_block(layout.db, {
+    local ok, _, result = ClipMutator.plan_duplicate_block(layout.db, {
         sequence_id = layout.sequence_id,
         clip_ids = {"clip_v1_left"},
         target_track_id = layout.tracks.v2.id,

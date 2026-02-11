@@ -22,7 +22,7 @@ assert(x_60 == 300, string.format("expected 300px for 60 frames, got %s", tostri
 assert(x_120 == 600, string.format("expected 600px for 120 frames, got %s", tostring(x_120)))
 
 -- Table payloads are not supported (only integer frames)
-local ok, err = pcall(function()
+local ok = pcall(function()
     return viewport_state.time_to_pixel({ frames = 120 }, WIDTH)
 end)
 assert(not ok, "table inputs must be rejected - only integer frames accepted")

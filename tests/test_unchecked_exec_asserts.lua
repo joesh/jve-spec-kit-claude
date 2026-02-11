@@ -53,10 +53,9 @@ timeline_state.get_sequence_audio_sample_rate = function() return 48000 end
 
 local executors = {}
 local undoers = {}
-local last_error = nil
 
 local delete_sequence = require("core.commands.delete_sequence")
-delete_sequence.register(executors, undoers, db, function(msg) last_error = msg end)
+delete_sequence.register(executors, undoers, db, function() end)  -- error callback unused in test
 
 local Command = require("command")
 local cmd = Command.create("DeleteSequence", "proj1")

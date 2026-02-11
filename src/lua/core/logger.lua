@@ -182,20 +182,20 @@ local function formatComponent(component)
     return "[" .. component .. "] "
 end
 
--- Format log message
-local function formatMessage(level, component, message)
+-- Format log message (kept for future use)
+local function _formatMessage(level, component, message)  -- luacheck: ignore 211
     local timestamp = formatTimestamp()
     local comp_tag = formatComponent(component)
     local level_name = LEVEL_NAMES[level]
-    
+
     local formatted = timestamp .. comp_tag .. level_name .. ": " .. message
-    
+
     -- Add colors for console output
     if config.enable_colors and config.output_destinations.console then
         local color = LEVEL_COLORS[level] or ""
         formatted = color .. formatted .. RESET_COLOR
     end
-    
+
     return formatted
 end
 

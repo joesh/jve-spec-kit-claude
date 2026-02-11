@@ -18,7 +18,7 @@ check("bare table with frames but no fps asserts", not ok1)
 check("error mentions fps", err1 and tostring(err1):find("fps") ~= nil)
 
 -- Test 2: Bare number with no fps_num arg → must error
-local ok2, err2 = pcall(function()
+local ok2 = pcall(function()
     Rational.hydrate(50)
 end)
 check("bare number with no fps asserts", not ok2)

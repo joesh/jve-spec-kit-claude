@@ -26,11 +26,11 @@ assert(viewport_state.time_to_pixel(24, width) == expect_px(24))
 assert(viewport_state.time_to_pixel(120, width) == expect_px(120))
 
 -- Fractional numerics should throw.
-local ok, err = pcall(function() return viewport_state.time_to_pixel(12.5, width) end)
+local ok = pcall(function() return viewport_state.time_to_pixel(12.5, width) end)
 assert(not ok, "fractional numerics must be rejected")
 
 -- Table inputs are no longer supported - everything is integer frames
-local ok2, err2 = pcall(function() return viewport_state.time_to_pixel({frames = 120}, width) end)
+local ok2 = pcall(function() return viewport_state.time_to_pixel({frames = 120}, width) end)
 assert(not ok2, "table inputs must be rejected - only integer frames accepted")
 
 print("✅ viewport_state.time_to_pixel interprets integers as frames and rejects non-integers")

@@ -5,7 +5,7 @@
 
 require("test_env")
 
-local timeline_state = require("ui.timeline.timeline_state")
+require("ui.timeline.timeline_state") -- luacheck: ignore 411 (side-effect require)
 local selection_state = require("ui.timeline.state.selection_state")
 local clip_state = require("ui.timeline.state.clip_state")
 local data = require("ui.timeline.state.timeline_state_data")

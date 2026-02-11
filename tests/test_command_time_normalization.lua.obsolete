@@ -2,7 +2,7 @@
 
 package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua;./?/init.lua"
 
-local command_impl = require("core.command_implementations")
+require("core.command_implementations")
 local command_manager = require("core.command_manager")
 local database = require("core.database")
 local Command = require("command")

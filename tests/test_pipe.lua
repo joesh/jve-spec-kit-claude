@@ -187,7 +187,7 @@ print("\n--- each ---")
 do
     -- Iterates all elements
     local seen = {}
-    local returned = pipe.each(function(v) seen[#seen+1] = v end)({10, 20, 30})
+    pipe.each(function(v) seen[#seen+1] = v end)({10, 20, 30})
     check("each visits all", #seen == 3 and seen[1] == 10 and seen[2] == 20 and seen[3] == 30)
 
     -- Returns original list reference

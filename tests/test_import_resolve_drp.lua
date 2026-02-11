@@ -9,25 +9,11 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 
-local function assert_eq(label, actual, expected)
-    if actual ~= expected then
-        io.stderr:write(string.format("%s: expected %s, got %s\n", label, tostring(expected), tostring(actual)))
-        os.exit(1)
-    end
-end
-
 local function assert_true(label, value)
     if not value then
         io.stderr:write(label .. " failed\n")
         os.exit(1)
     end
-end
-
-local function exec_sql(db, sql)
-    local stmt = db:prepare(sql)
-    assert_true("prepare failed for: " .. sql, stmt ~= nil)
-    assert_true("exec failed for: " .. sql, stmt:exec())
-    stmt:finalize()
 end
 
 local function scalar(db, sql, param)

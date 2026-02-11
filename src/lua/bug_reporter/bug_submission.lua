@@ -73,9 +73,9 @@ function BugSubmission.submit_bug_report(test_path, options)
 
     -- 1. Load test data
     logger.info("bug_reporter", "Loading bug report...")
-    local test, err = json_test_loader.load(test_path)
+    local test, load_err = json_test_loader.load(test_path)
     if not test then
-        return nil, "Failed to load test: " .. err
+        return nil, "Failed to load test: " .. load_err
     end
 
     logger.info("bug_reporter", "Test loaded: " .. test.test_name)
@@ -93,12 +93,12 @@ function BugSubmission.submit_bug_report(test_path, options)
                 tags = {"jve", "bug-report", "video-editor", test.category or "bug"}
             }
 
-            local upload_result, err = youtube_uploader.upload_video(video_path, metadata)
+            local upload_result, upload_err = youtube_uploader.upload_video(video_path, metadata)
             if upload_result then
                 result.video_url = upload_result.url
                 logger.info("bug_reporter", "✓ Video uploaded: " .. upload_result.url)
             else
-                local error_msg = "Failed to upload video: " .. err
+                local error_msg = "Failed to upload video: " .. upload_err
                 table.insert(result.errors, error_msg)
                 logger.error("bug_reporter", "✗ " .. error_msg)
             end
@@ -120,13 +120,13 @@ function BugSubmission.submit_bug_report(test_path, options)
             system_info = github_issue_creator.get_system_info()
         }
 
-        local issue_result, err = github_issue_creator.create_issue(issue_data)
+        local issue_result, issue_err = github_issue_creator.create_issue(issue_data)
         if issue_result then
             result.issue_url = issue_result.url
             result.issue_number = issue_result.issue_number
             logger.info("bug_reporter", "✓ Issue created: " .. issue_result.url)
         else
-            local error_msg = "Failed to create issue: " .. err
+            local error_msg = "Failed to create issue: " .. issue_err
             table.insert(result.errors, error_msg)
             logger.error("bug_reporter", "✗ " .. error_msg)
         end
@@ -240,9 +240,9 @@ function BugSubmission.batch_submit(test_dir, options)
     }
 
     -- Load all tests
-    local tests, err = json_test_loader.load_directory(test_dir)
+    local tests, dir_err = json_test_loader.load_directory(test_dir)
     if not tests then
-        return nil, "Failed to load tests: " .. err
+        return nil, "Failed to load tests: " .. dir_err
     end
 
     summary.total = #tests
@@ -253,9 +253,9 @@ function BugSubmission.batch_submit(test_dir, options)
         logger.info("bug_reporter", "Submitting: " .. test.test_name)
         logger.info("bug_reporter", string.rep("=", 60))
 
-        local result, err = BugSubmission.submit_bug_report(test._source_file, options)
+        local submit_result, submit_err = BugSubmission.submit_bug_report(test._source_file, options)
 
-        if result then
+        if submit_result then
             summary.succeeded = summary.succeeded + 1
         else
             summary.failed = summary.failed + 1
@@ -263,9 +263,9 @@ function BugSubmission.batch_submit(test_dir, options)
 
         table.insert(summary.results, {
             test_name = test.test_name,
-            success = result ~= nil,
-            result = result,
-            error = err
+            success = submit_result ~= nil,
+            result = submit_result,
+            error = submit_err
         })
     end
 

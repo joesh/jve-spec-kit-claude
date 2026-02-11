@@ -51,9 +51,7 @@ package.loaded["core.qt_constants"] = mock_qt_constants
 -- Test scenario (from actual bug)
 --------------------------------------------------------------------------------
 
--- Timeline: 24 fps
-local FPS_NUM = 24
-local FPS_DEN = 1
+-- Timeline: 24 fps (constants documented here, used in calc_time_us_from_frame calls below)
 
 -- Clip parameters (in seconds, will convert to Rational)
 local TIMELINE_START_SEC = 70.667   -- Clip starts at 70.667s in timeline

@@ -167,7 +167,7 @@ local function parse_timecode_or_digits(text, frame_rate)
     if text:find("[:;%.]") then
         return parse_segmented_timecode(text, frame_rate)
     end
-    local frames, err = parse_absolute_frames(text, frame_rate)
+    local frames = parse_absolute_frames(text, frame_rate)
     if frames ~= nil then
         return frames, nil
     end

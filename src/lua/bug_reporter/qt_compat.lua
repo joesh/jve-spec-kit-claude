@@ -171,12 +171,13 @@ function M.SET_WIDGET_PROPERTY(widget, prop, value)
     if prop == "readOnly" then
         qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(widget, value)
     elseif prop == "wordWrap" then
-        -- QLabel doesn't have direct binding, use stylesheet workaround
-        -- Skip for now
+        -- QLabel doesn't have direct binding - no-op
+        return
     elseif prop == "placeholderText" then
         qt.PROPERTIES.SET_PLACEHOLDER_TEXT(widget, value)
     elseif prop == "echoMode" then
-        -- QLineEdit echo mode not yet implemented, skip
+        -- QLineEdit echo mode not yet implemented - no-op
+        return
     elseif prop == "minimum" then
         qt.CONTROL.SET_PROGRESS_BAR_RANGE(widget, value, 100)
     elseif prop == "maximum" then

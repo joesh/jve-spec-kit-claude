@@ -9,7 +9,7 @@ require('test_env')
 local database = require('core.database')
 local Clip = require('models.clip')
 local Media = require('models.media')
-local Track = require('models.track')
+require('models.track')  -- luacheck: ignore 411 (needed for Clip model dependencies)
 local command_manager = require('core.command_manager')
 
 -- Mock Qt timer
@@ -373,11 +373,11 @@ assert(count_clips("track_v1") == 1, "Should have 1 clip on V1")
 assert(count_clips("track_a1") == 1, "Should have 1 clip on A1")
 
 -- Check clips are linked
-local stmt = db:prepare("SELECT COUNT(*) FROM clip_links")
-stmt:exec()
-stmt:next()
-local link_count = stmt:value(0)
-stmt:finalize()
+local link_stmt = db:prepare("SELECT COUNT(*) FROM clip_links")
+link_stmt:exec()
+link_stmt:next()
+local link_count = link_stmt:value(0)
+link_stmt:finalize()
 assert(link_count == 2, string.format("Should have 2 link entries, got %d", link_count))
 
 -- =============================================================================
@@ -391,11 +391,11 @@ assert(count_clips("track_v1") == 0, "V1 should be empty after undo")
 assert(count_clips("track_a1") == 0, "A1 should be empty after undo")
 
 -- Links should be gone
-stmt = db:prepare("SELECT COUNT(*) FROM clip_links")
-stmt:exec()
-stmt:next()
-link_count = stmt:value(0)
-stmt:finalize()
+local link_stmt2 = db:prepare("SELECT COUNT(*) FROM clip_links")
+link_stmt2:exec()
+link_stmt2:next()
+link_count = link_stmt2:value(0)
+link_stmt2:finalize()
 assert(link_count == 0, "Links should be removed after undo")
 
 -- =============================================================================
@@ -446,13 +446,13 @@ result = execute_command("AddClipsToSequence", {
 assert(result.success, "Cross-track insert should succeed")
 
 -- ALL existing clips should be rippled to 50
-start, _ = get_clip_position("v1_clip")
-assert(start == 50, string.format("V1 clip should be at 50, got %s", tostring(start)))
+local v1_start, _ = get_clip_position("v1_clip")
+assert(v1_start == 50, string.format("V1 clip should be at 50, got %s", tostring(v1_start)))
 
-start, _ = get_clip_position("v2_clip")
-assert(start == 50, string.format("V2 clip should be at 50 (cross-track ripple), got %s", tostring(start)))
+local v2_start, _ = get_clip_position("v2_clip")
+assert(v2_start == 50, string.format("V2 clip should be at 50 (cross-track ripple), got %s", tostring(v2_start)))
 
-start, _ = get_clip_position("a1_clip")
-assert(start == 50, string.format("A1 clip should be at 50 (cross-track ripple), got %s", tostring(start)))
+local a1_start, _ = get_clip_position("a1_clip")
+assert(a1_start == 50, string.format("A1 clip should be at 50 (cross-track ripple), got %s", tostring(a1_start)))
 
 print("\n\226\156\133 AddClipsToSequence command tests passed")

@@ -67,7 +67,7 @@ package.loaded["core.database"] = {}
 -- Register command
 local executors = {}
 local undoers = {}
-local last_error = nil
+local last_error
 require("core.commands.extend_edit").register(executors, undoers, nil, function(msg) last_error = msg end)
 
 -- ═══════════════════════════════════════════════════════════
@@ -121,7 +121,6 @@ end
 print("\n--- ExtendEdit: extend in-point backward (ripple) ---")
 do
     ripple_calls = {}
-    last_error = nil
     -- Clip: [100..200), in-point at 100, playhead at 50
     -- Expected delta = 50 - 100 = -50 (move in-point left)
     clip_store["c2"] = {
@@ -163,7 +162,6 @@ end
 print("\n--- ExtendEdit: extend out-point (roll) ---")
 do
     ripple_calls = {}
-    last_error = nil
     clip_store["c3"] = {
         id = "c3",
         timeline_start = 0,
@@ -203,7 +201,6 @@ end
 print("\n--- ExtendEdit: edge at playhead (no-op) ---")
 do
     ripple_calls = {}
-    last_error = nil
     clip_store["c4"] = {
         id = "c4",
         timeline_start = 0,
@@ -237,7 +234,6 @@ end
 print("\n--- ExtendEdit: multiple edges → BatchRippleEdit ---")
 do
     ripple_calls = {}
-    last_error = nil
     clip_store["c5"] = {
         id = "c5",
         timeline_start = 0,
@@ -284,7 +280,6 @@ end
 print("\n--- ExtendEdit: gap_before edge ---")
 do
     ripple_calls = {}
-    last_error = nil
     clip_store["c7"] = {
         id = "c7",
         timeline_start = 100,

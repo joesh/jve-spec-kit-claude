@@ -107,9 +107,8 @@ function TestRunnerGUI.run_test(test_path, options)
     result.test_name = test.test_name
 
     -- 2. Reset application state if requested
-    if reset_state and test.database_snapshot then
-        -- TODO: Load database snapshot
-        -- For now, skip this - requires database integration
+    if reset_state and test.database_snapshot then  -- luacheck: ignore 542 (empty branch - TODO: load database snapshot)
+        -- requires database integration
     end
 
     -- 3. Install command capture hook

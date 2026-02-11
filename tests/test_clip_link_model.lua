@@ -119,13 +119,13 @@ end
 
 print("--- create_link_group: nil clips returns nil ---")
 do
-    local id, err = ClipLink.create_link_group(nil, db)
+    local id, _ = ClipLink.create_link_group(nil, db)
     check("nil for nil input", id == nil)
 end
 
 print("--- create_link_group: empty table returns nil ---")
 do
-    local id, err = ClipLink.create_link_group({}, db)
+    local id, _ = ClipLink.create_link_group({}, db)
     check("nil for empty", id == nil)
 end
 

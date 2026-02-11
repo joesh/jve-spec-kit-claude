@@ -107,7 +107,7 @@ local function init_db(path)
 end
 
 local TEST_DB = "/tmp/jve/test_import_undo_skips_replay.db"
-local db = init_db(TEST_DB)
+init_db(TEST_DB)
 
 command_manager.init("default_sequence", "default_project")
 

@@ -7,7 +7,7 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 require("test_env")
 
 local ui_constants = require("core.ui_constants")
-local edge_utils = require("ui.timeline.edge_utils")
+local _edge_utils = require("ui.timeline.edge_utils")  -- luacheck: no unused
 local roll_detector = require("ui.timeline.roll_detector")
 
 -- Build a tiny viewport with two adjacent clips
@@ -53,14 +53,14 @@ local ROLL = ui_constants.TIMELINE.ROLL_ZONE_PX
 local boundary_px = entries[3].px -- boundary between a.out and b.in
 local search_radius = math.max(EDGE, ROLL) + 2
 
-local function detect_roll_between_clips(left_clip, right_clip, click_x, viewport_width)
+local function detect_roll_between_clips(left_clip, right_clip, click_x, _viewport_width)
     -- Mirror timeline_state.detect_roll_between_clips
-    local EDGE = ui_constants.TIMELINE.ROLL_ZONE_PX
+    local EDGE_ZONE = ui_constants.TIMELINE.ROLL_ZONE_PX
     local sx = time_to_px(left_clip.timeline_start + left_clip.duration)
     local ex = time_to_px(right_clip.timeline_start)
-    if ex - sx < EDGE then
+    if ex - sx < EDGE_ZONE then
         local mid = (sx + ex) / 2
-        if math.abs(click_x - mid) <= EDGE / 2 then
+        if math.abs(click_x - mid) <= EDGE_ZONE / 2 then
             return true
         end
     end
@@ -83,7 +83,7 @@ end
 -- Left edge zone: select only left edge
 do
     local x = boundary_px - EDGE - 2
-    local nearby, sel, pair = run_at(x)
+    local nearby, sel = run_at(x)
     assert(sel == nil, "Should not roll in left edge zone")
     assert(#nearby >= 1, "expected at least one edge nearby")
     local has_left = false
@@ -96,7 +96,7 @@ end
 -- Middle roll zone: select both edges
 do
     local x = boundary_px
-    local nearby, sel, pair = run_at(x)
+    local _, sel, pair = run_at(x)  -- luacheck: ignore _
     assert(sel and #sel == 2, "expected roll selection in middle zone")
     assert(pair and pair.roll_kind == "clip_clip", "expected clip_clip roll pair")
 end
@@ -104,7 +104,7 @@ end
 -- Right edge zone: select only right edge
 do
     local x = boundary_px + EDGE + 2
-    local nearby, sel, pair = run_at(x)
+    local nearby, sel = run_at(x)
     assert(sel == nil, "Should not roll in right edge zone")
     local hit = false
     for _, e in ipairs(nearby) do

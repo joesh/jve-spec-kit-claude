@@ -31,7 +31,7 @@ package.loaded["inspectable"] = function() return {} end
 
 -- Load viewer_panel fresh
 package.loaded["ui.viewer_panel"] = nil
-local viewer_panel = require("ui.viewer_panel")
+require("ui.viewer_panel")
 
 -- Simulate has_media = true by setting internal state
 -- We need to access internals - use debug or just test the calculation

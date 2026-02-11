@@ -70,7 +70,7 @@ end
 -- ============================================================================
 
 print("  Testing: ASSET_INFO error handling")
-local status, result = pcall(function()
+local status = pcall(function()
     return EMP.ASSET_INFO(nil)
 end)
 assert(not status, "ASSET_INFO(nil) should error")
@@ -81,7 +81,7 @@ print("    ✓ ASSET_INFO(nil) throws error")
 -- ============================================================================
 
 print("  Testing: ASSET_CLOSE error handling")
-local status2, result2 = pcall(function()
+local status2 = pcall(function()
     return EMP.ASSET_CLOSE(nil)
 end)
 -- Should error but not crash
@@ -109,7 +109,7 @@ for _, dir in ipairs(test_video_paths) do
         local path = handle:read("*l")
         handle:close()
         if path and path ~= "" then
-            local test_asset, test_err = EMP.ASSET_OPEN(path)
+            local test_asset = EMP.ASSET_OPEN(path)
             if test_asset then
                 EMP.ASSET_CLOSE(test_asset)
                 found_video = path
@@ -120,8 +120,8 @@ for _, dir in ipairs(test_video_paths) do
 end
 
 if found_video then
-    local a1, e1 = EMP.ASSET_OPEN(found_video)
-    local a2, e2 = EMP.ASSET_OPEN(found_video)
+    local a1 = EMP.ASSET_OPEN(found_video)
+    local a2 = EMP.ASSET_OPEN(found_video)
 
     assert(a1 ~= nil, "First open should succeed")
     assert(a2 ~= nil, "Second open should succeed")
@@ -142,10 +142,10 @@ if found_video then
     -- ============================================================================
 
     print("  Testing: ASSET_INFO completeness")
-    local asset = EMP.ASSET_OPEN(found_video)
-    assert(asset, "Asset should open")
+    local info_asset = EMP.ASSET_OPEN(found_video)
+    assert(info_asset, "Asset should open")
 
-    local info = EMP.ASSET_INFO(asset)
+    local info = EMP.ASSET_INFO(info_asset)
     assert(type(info) == "table", "Info should be table")
     assert(type(info.path) == "string", "path should be string")
     assert(type(info.has_video) == "boolean", "has_video should be boolean")
@@ -167,7 +167,7 @@ if found_video then
     print("      Video: " .. info.width .. "x" .. info.height .. " @ " ..
           string.format("%.2f", info.fps_num / info.fps_den) .. " fps")
 
-    EMP.ASSET_CLOSE(asset)
+    EMP.ASSET_CLOSE(info_asset)
 else
     print("    ⚠ No test video found, skipping real video tests")
 end

@@ -91,7 +91,7 @@ cmd:set_parameter("sequence_id", "default_sequence")
 local result = command_manager.execute(cmd)
 assert(result.success, result.error_message or "BatchRippleEdit failed")
 
-local v1_left_end = fetch_start(db, "v1_left") + 2000 -- duration of v1_left
+local _ = fetch_start(db, "v1_left") + 2000 -- duration of v1_left (unused, for doc)
 local v1_right_start = fetch_start(db, "v1_right")
 
 local v2_left_end = fetch_start(db, "v2_left") + 6000 -- duration of v2_left
