@@ -119,9 +119,10 @@ local master_sequence_id = master_clip.master_clip_id
 assert(master_sequence_id ~= nil, "Master clip should store master_clip_id")
 
 -- Verify sequence and tracks created
+-- IS-a refactor: stream clips use owner_sequence_id (not parent_clip_id)
 assert(count_rows(db, "sequences", "id = ?", master_sequence_id) == 1, "Master sequence missing")
 assert(count_rows(db, "tracks", "sequence_id = ?", master_sequence_id) >= 1, "Master sequence should have tracks")
-assert(count_rows(db, "clips", "parent_clip_id = ?", master_clip.clip_id) >= 1, "Master clip should have child clips")
+assert(count_rows(db, "clips", "owner_sequence_id = ?", master_sequence_id) >= 1, "Master sequence should have stream clips")
 assert(count_rows(db, "media", "id = ?", master_clip.media_id) == 1, "Media row missing after import")
 
 -- Undo
@@ -129,7 +130,7 @@ command_manager.undo()
 assert_master_state(0)
 assert(count_rows(db, "sequences", "id = ?", master_sequence_id) == 0, "Master sequence should be removed after undo")
 assert(count_rows(db, "tracks", "sequence_id = ?", master_sequence_id) == 0, "Master tracks should be removed after undo")
-assert(count_rows(db, "clips", "parent_clip_id = ?", master_clip.clip_id) == 0, "Child clips should be removed after undo")
+assert(count_rows(db, "clips", "owner_sequence_id = ?", master_sequence_id) == 0, "Stream clips should be removed after undo")
 assert(count_rows(db, "media", "id = ?", master_clip.media_id) == 0, "Media row should be removed after undo")
 
 -- Redo

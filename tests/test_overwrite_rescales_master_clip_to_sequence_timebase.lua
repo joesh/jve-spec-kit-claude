@@ -1,13 +1,16 @@
 #!/usr/bin/env luajit
 
+-- IS-a refactor: masterclips are now sequences with kind="masterclip"
+
 require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local Media = require("models.media")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
 local Clip = require("models.clip")
-local Rational = require("core.rational")
 
 local SCHEMA_SQL = require("import_schema")
 
@@ -40,6 +43,7 @@ end
 
 local db = setup_database("/tmp/jve/test_overwrite_rescales_master_clip.db")
 
+-- Create media at 25fps
 local media = Media.create({
     id = "media_25fps",
     project_id = "default_project",
@@ -51,10 +55,23 @@ local media = Media.create({
 })
 assert(media:save(db))
 
-local master = Clip.create("Master", media.id, {
-    id = "master_clip_25fps",
-    clip_kind = "master",
+-- IS-a refactor: create masterclip sequence (not a Clip with clip_kind="master")
+local masterclip_seq = Sequence.create("Master 25fps", "default_project",
+    {fps_numerator = 25, fps_denominator = 1},
+    1920, 1080,
+    {id = "masterclip_seq_25fps", kind = "masterclip"})
+assert(masterclip_seq:save())
+
+-- Create video track in masterclip sequence
+local master_video_track = Track.create_video("V1", masterclip_seq.id, {id = "masterclip_video_track"})
+assert(master_video_track:save())
+
+-- Create stream clip in masterclip sequence
+local stream_clip = Clip.create("25fps Video", media.id, {
+    id = "masterclip_stream_clip",
     project_id = "default_project",
+    track_id = master_video_track.id,
+    owner_sequence_id = masterclip_seq.id,
     timeline_start = 0,
     duration = 2500,
     source_in = 0,
@@ -62,13 +79,12 @@ local master = Clip.create("Master", media.id, {
     fps_numerator = 25,
     fps_denominator = 1,
 })
-assert(master:save(db, {skip_occlusion = true}))
+assert(stream_clip:save({skip_occlusion = true}))
 
 local overwrite_cmd = Command.create("Overwrite", "default_project")
-overwrite_cmd:set_parameter("media_id", media.id)
 overwrite_cmd:set_parameter("track_id", "video1")
 overwrite_cmd:set_parameter("overwrite_time", 0)
-overwrite_cmd:set_parameter("master_clip_id", master.id)
+overwrite_cmd:set_parameter("master_clip_id", masterclip_seq.id)  -- Now a sequence ID
 overwrite_cmd:set_parameter("project_id", "default_project")
 overwrite_cmd:set_parameter("sequence_id", "default_sequence")
 overwrite_cmd:set_parameter("advance_playhead", false)

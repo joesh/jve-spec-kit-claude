@@ -220,6 +220,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local created_clip_ids = nested_cmd:get_parameter("created_clip_ids")
             if created_clip_ids and #created_clip_ids > 0 then
                 command:set_parameter("clip_id", created_clip_ids[1])
+                command:set_parameter("created_clip_ids", created_clip_ids)
             end
             -- Forward executed_mutations for tests that inspect them
             local executed_mutations = nested_cmd:get_parameter("executed_mutations")

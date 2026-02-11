@@ -44,14 +44,16 @@ db:exec([[
 
 command_manager.init('sequence', 'project')
 
--- Create 3 media items
+-- Create 3 media items with masterclip sequences (IS-a refactor)
 for i = 1, 3 do
+    local duration = 50 + (i * 25)  -- 75, 100, 125 frames
+
     local media = Media.create({
         id = "media_" .. i,
         project_id = "project",
         file_path = "/tmp/jve/video" .. i .. ".mov",
         name = "Video " .. i,
-        duration_frames = 50 + (i * 25),  -- 75, 100, 125 frames
+        duration_frames = duration,
         fps_numerator = 24,
         fps_denominator = 1,
         width = 1920,
@@ -60,11 +62,23 @@ for i = 1, 3 do
     })
     media:save(db)
 
-    -- Create master clip
+    -- IS-a refactor: create masterclip sequence (not clip with clip_kind='master')
     db:exec(string.format([[
-        INSERT INTO clips (id, project_id, clip_kind, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-        VALUES ('master_%d', 'project', 'master', 'Video %d', 'media_%d', 0, %d, 0, %d, 24, 1, 1, %d, %d);
-    ]], i, i, i, 50 + (i * 25), 50 + (i * 25), now, now))
+        INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+        VALUES ('master_%d', 'project', 'Video %d', 'masterclip', 24, 1, 48000, 1920, 1080, %d, %d);
+    ]], i, i, now, now))
+
+    -- Create video track in masterclip sequence
+    db:exec(string.format([[
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+        VALUES ('master_%d_v1', 'master_%d', 'V1', 'VIDEO', 1, 1);
+    ]], i, i))
+
+    -- Create stream clip in masterclip sequence
+    db:exec(string.format([[
+        INSERT INTO clips (id, project_id, track_id, owner_sequence_id, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
+        VALUES ('stream_%d', 'project', 'master_%d_v1', 'master_%d', 'Video %d', 'media_%d', 0, %d, 0, %d, 24, 1, 1, %d, %d);
+    ]], i, i, i, i, i, duration, duration, now, now))
 end
 
 -- Mock dependencies

@@ -94,7 +94,8 @@ assert(rect_count == 1, "Should draw only background rect without clip, got " ..
 print("  ✓ no-clip render is background only")
 
 print("\nTest 1.3: Render with clip shows playhead")
-source_viewer_state.current_clip_id = "test_clip_1"
+-- IS-a refactor: has_clip() checks current_sequence_id, not current_clip_id
+source_viewer_state.current_sequence_id = "test_masterclip_1"
 source_viewer_state.total_frames = 100
 source_viewer_state.fps_num = 30
 source_viewer_state.fps_den = 1
@@ -256,7 +257,8 @@ print("  ✓ drag seeks on every move")
 print("\n--- Section 4: Edge Cases ---")
 
 print("\nTest 4.1: Click without clip loaded is no-op")
-source_viewer_state.current_clip_id = nil
+-- IS-a refactor: has_clip() checks current_sequence_id
+source_viewer_state.current_sequence_id = nil
 source_viewer_state.total_frames = 0
 show_frame_calls = {}
 pc_calls = {}

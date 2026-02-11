@@ -155,13 +155,19 @@ import_cmd:set_parameter("project_id", "test_project")
 local import_result = command_manager.execute(import_cmd)
 assert(import_result.success, "ImportMedia command failed: " .. tostring(import_result.error_message))
 
--- Get master_clip_id from command parameters (stored during execution)
-local master_clip_ids = import_cmd:get_parameter("master_clip_ids")
-assert(master_clip_ids and type(master_clip_ids) == "table" and #master_clip_ids > 0, "ImportMedia did not produce master_clip_ids")
-local master_clip_id = master_clip_ids[1]
+-- Get masterclip_sequence_id from command parameters (stored during execution)
+-- IS-a refactor: masterclips are now sequences, so the parameter is masterclip_sequence_ids
+local masterclip_sequence_ids = import_cmd:get_parameter("masterclip_sequence_ids")
+assert(masterclip_sequence_ids and type(masterclip_sequence_ids) == "table" and #masterclip_sequence_ids > 0, "ImportMedia did not produce masterclip_sequence_ids")
+local master_clip_id = masterclip_sequence_ids[1]
+
+-- IS-a refactor: to set properties, use stream clip IDs (not sequence ID)
+local video_clip_ids = import_cmd:get_parameter("video_clip_ids")
+assert(video_clip_ids and #video_clip_ids > 0, "ImportMedia did not produce video_clip_ids")
+local source_clip_id = video_clip_ids[1]
 
 local set_property_cmd = Command.create("SetClipProperty", "test_project")
-set_property_cmd:set_parameter("clip_id", master_clip_id)
+set_property_cmd:set_parameter("clip_id", source_clip_id)
 set_property_cmd:set_parameter("property_name", "audio:sample_rate")
 set_property_cmd:set_parameter("value", "48000")
 set_property_cmd:set_parameter("property_type", "STRING")
@@ -185,11 +191,39 @@ insert_cmd:set_parameter("master_clip_id", master_clip_id)
 local insert_result = command_manager.execute(insert_cmd)
 assert(insert_result.success, "Insert command failed: " .. tostring(insert_result.error_message))
 
-local new_clip_id = insert_cmd:get_parameter("clip_id")
-assert(new_clip_id and new_clip_id ~= "", "Insert command did not record new clip_id")
+-- IS-a refactor: Insert creates multiple clips (video + audio). Find the video clip
+-- which is the one we set properties on (via video stream clip in masterclip sequence).
+local created_clip_ids = insert_cmd:get_parameter("created_clip_ids") or {}
+assert(#created_clip_ids > 0, "Insert command did not record created_clip_ids")
+
+-- Find the video clip on the video track
+local video_clip_id = nil
+for _, clip_id in ipairs(created_clip_ids) do
+    local stmt = db:prepare("SELECT track_id FROM clips WHERE id = ?")
+    stmt:bind_value(1, clip_id)
+    if stmt:exec() and stmt:next() then
+        local track_id = stmt:value(0)
+        stmt:finalize()
+        -- Check if this is the video track
+        local track_stmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+        track_stmt:bind_value(1, track_id)
+        if track_stmt:exec() and track_stmt:next() then
+            if track_stmt:value(0) == "VIDEO" then
+                video_clip_id = clip_id
+                track_stmt:finalize()
+                break
+            end
+        end
+        track_stmt:finalize()
+    else
+        stmt:finalize()
+    end
+end
+assert(video_clip_id, "Could not find video clip among created clips")
+local new_clip_id = video_clip_id
 
 local copied_value_raw = fetch_property(db, new_clip_id, "audio:sample_rate")
-assert(copied_value_raw, "Timeline clip missing copied property")
+assert(copied_value_raw, "Timeline video clip missing copied property")
 local decoded_copied = decode_json(copied_value_raw)
 assert(decoded_copied.value == "48000", "Copied property value mismatch: " .. tostring(decoded_copied.value))
 
@@ -202,9 +236,8 @@ print("Test 3: Redo restores copied properties")
 local redo_result = command_manager.redo()
 assert(redo_result.success, "Redo failed: " .. tostring(redo_result.error_message))
 
-local redo_clip_id = insert_cmd:get_parameter("clip_id")
-assert(redo_clip_id == new_clip_id, "Redo produced unexpected clip_id")
-local redo_value_raw = fetch_property(db, redo_clip_id, "audio:sample_rate")
+-- Same clip ID should be recreated after redo (deterministic IDs from command parameters)
+local redo_value_raw = fetch_property(db, new_clip_id, "audio:sample_rate")
 assert(redo_value_raw, "Property missing after redo")
 local decoded_redo = decode_json(redo_value_raw)
 assert(decoded_redo.value == "48000", "Redo restored incorrect property value: " .. tostring(decoded_redo.value))

@@ -27,6 +27,68 @@ local command_helper = require('core.command_helper')
 local clip_mutator = require('core.clip_mutator')
 local clip_link = require('models.clip_link')
 local logger = require('core.logger')
+local Track = require('models.track')
+
+--- Find source stream clip inside a masterclip sequence by role
+-- IS-a refactor: master_clip_id is now a sequence ID. This function finds
+-- the stream clip (video or audio) inside that sequence.
+-- @param db database connection
+-- @param masterclip_sequence_id string - the masterclip sequence ID
+-- @param role string - "video" or "audio"
+-- @return clip_id string or nil
+local function find_source_stream_clip(db, masterclip_sequence_id, role)
+    if not masterclip_sequence_id or masterclip_sequence_id == "" then
+        return nil
+    end
+    if not role then
+        return nil
+    end
+
+    -- Find the appropriate track in the masterclip sequence
+    local track_type = (role == "video") and "VIDEO" or "AUDIO"
+    local track_stmt = db:prepare([[
+        SELECT id FROM tracks
+        WHERE sequence_id = ? AND track_type = ?
+        ORDER BY track_index ASC LIMIT 1
+    ]])
+    if not track_stmt then
+        logger.warn("add_clips_to_sequence", "find_source_stream_clip: failed to prepare track query")
+        return nil
+    end
+    track_stmt:bind_value(1, masterclip_sequence_id)
+    track_stmt:bind_value(2, track_type)
+
+    local track_id = nil
+    if track_stmt:exec() and track_stmt:next() then
+        track_id = track_stmt:value(0)
+    end
+    track_stmt:finalize()
+
+    if not track_id then
+        return nil
+    end
+
+    -- Find the stream clip on that track
+    local clip_stmt = db:prepare([[
+        SELECT id FROM clips
+        WHERE owner_sequence_id = ? AND track_id = ?
+        LIMIT 1
+    ]])
+    if not clip_stmt then
+        logger.warn("add_clips_to_sequence", "find_source_stream_clip: failed to prepare clip query")
+        return nil
+    end
+    clip_stmt:bind_value(1, masterclip_sequence_id)
+    clip_stmt:bind_value(2, track_id)
+
+    local clip_id = nil
+    if clip_stmt:exec() and clip_stmt:next() then
+        clip_id = clip_stmt:value(0)
+    end
+    clip_stmt:finalize()
+
+    return clip_id
+end
 
 --- Populate __timeline_mutations from clip_mutator mutations for UI cache updates
 -- @param command The command to set mutations on
@@ -404,18 +466,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Phase 4: Link groups
         local link_group_ids = link_groups(db, created_clips, groups)
 
-        -- Phase 5: Copy properties from master clips
+        -- Phase 5: Copy properties from source stream clips
+        -- IS-a refactor: master_clip_id is now a sequence ID. To copy properties,
+        -- we must find the source stream clip (video or audio) inside that sequence.
         for _, created in ipairs(created_clips) do
             if created.master_clip_id and created.master_clip_id ~= "" then
-                local copied_props = command_helper.ensure_copied_properties(command, created.master_clip_id)
-                if #copied_props > 0 then
-                    command_helper.delete_properties_for_clip(created.clip_id)
-                    local props_ok = command_helper.insert_properties_for_clip(created.clip_id, copied_props)
-                    if not props_ok then
-                        logger.warn("add_clips_to_sequence", string.format(
-                            "Failed to copy properties from master_clip_id=%s to clip_id=%s",
-                            tostring(created.master_clip_id), tostring(created.clip_id)
-                        ))
+                -- Find source stream clip in the masterclip sequence
+                local source_clip_id = find_source_stream_clip(db, created.master_clip_id, created.role)
+                if source_clip_id then
+                    local copied_props = command_helper.ensure_copied_properties(command, source_clip_id)
+                    if #copied_props > 0 then
+                        command_helper.delete_properties_for_clip(created.clip_id)
+                        local props_ok = command_helper.insert_properties_for_clip(created.clip_id, copied_props)
+                        if not props_ok then
+                            logger.warn("add_clips_to_sequence", string.format(
+                                "Failed to copy properties from source_clip_id=%s to clip_id=%s",
+                                tostring(source_clip_id), tostring(created.clip_id)
+                            ))
+                        end
                     end
                 end
             end

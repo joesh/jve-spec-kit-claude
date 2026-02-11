@@ -75,6 +75,33 @@ local media_insert = Media.create({
 })
 assert(media_insert and media_insert:save(db))
 
+-- IS-a refactor: create masterclip sequence for the media
+local Sequence = require("models.sequence")
+local Track = require("models.track")
+
+local masterclip_seq = Sequence.create("Insert Clip Master", "default_project",
+    {fps_numerator = 30, fps_denominator = 1},
+    1920, 1080,
+    {id = "masterclip_insert", kind = "masterclip"})
+assert(masterclip_seq:save())
+
+local master_video_track = Track.create_video("V1", masterclip_seq.id, {id = "masterclip_insert_v1"})
+assert(master_video_track:save())
+
+local stream_clip = Clip.create("Insert Clip Video", "media_insert", {
+    id = "masterclip_insert_stream",
+    project_id = "default_project",
+    track_id = master_video_track.id,
+    owner_sequence_id = masterclip_seq.id,
+    timeline_start = 0,
+    duration = 4543560,
+    source_in = 0,
+    source_out = 4543560,
+    fps_numerator = 30,
+    fps_denominator = 1,
+})
+assert(stream_clip:save({skip_occlusion = true}))
+
 local base_clip = Clip.create("Existing Clip", "media_existing", {
     id = "clip_existing",
     project_id = "default_project",
@@ -203,7 +230,7 @@ local baseline = clip_count('imported_sequence')
 assert(baseline == 1, string.format("Expected baseline clip count 1, got %d", baseline))
 
 local insert_cmd = Command.create("Insert", 'default_project')
-insert_cmd:set_parameter("media_id", "media_insert")
+insert_cmd:set_parameter("master_clip_id", "masterclip_insert")  -- IS-a: use masterclip sequence ID
 insert_cmd:set_parameter("sequence_id", "imported_sequence")
 insert_cmd:set_parameter("track_id", "imported_v1")
 insert_cmd:set_parameter("insert_time", 111400)

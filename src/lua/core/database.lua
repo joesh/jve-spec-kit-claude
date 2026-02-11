@@ -1046,6 +1046,9 @@ function M.load_media()
 end
 
 function M.load_master_clips(project_id)
+    -- IS-a refactor: masterclips are now Sequences with kind='masterclip'
+    -- (not Clips with clip_kind='master'). Stream clips inside the sequence
+    -- hold the media_id.
     if not project_id or project_id == "" then
         error("FATAL: load_master_clips requires project_id", 2)
     end
@@ -1054,23 +1057,20 @@ function M.load_master_clips(project_id)
         error("FATAL: No database connection - cannot load master clips")
     end
 
+    -- Query masterclip sequences and get media_id from their first stream clip
     local query = db_connection:prepare([[
-        SELECT
-            c.id,
-            c.name,
-            c.project_id,
+        SELECT DISTINCT
+            s.id,
+            s.name,
+            s.project_id,
+            s.fps_numerator,
+            s.fps_denominator,
+            s.width,
+            s.height,
+            s.audio_rate,
+            s.created_at,
+            s.modified_at,
             c.media_id,
-            c.master_clip_id,
-            c.timeline_start_frame,
-            c.duration_frames,
-            c.source_in_frame,
-            c.source_out_frame,
-            c.fps_numerator,
-            c.fps_denominator,
-            c.enabled,
-            c.offline,
-            c.created_at,
-            c.modified_at,
             m.project_id,
             m.name,
             m.file_path,
@@ -1083,22 +1083,14 @@ function M.load_master_clips(project_id)
             m.codec,
             m.metadata,
             m.created_at,
-            m.modified_at,
-            s.project_id,
-            s.fps_numerator,
-            s.fps_denominator,
-            s.width,
-            s.height,
-            s.audio_rate
-        FROM clips c
+            m.modified_at
+        FROM sequences s
+        LEFT JOIN clips c ON c.owner_sequence_id = s.id
         LEFT JOIN media m ON c.media_id = m.id
-        LEFT JOIN sequences s ON c.master_clip_id = s.id
-        WHERE c.clip_kind = 'master'
-          AND (
-                (c.project_id IS NOT NULL AND c.project_id = ?)
-                OR (c.project_id IS NULL AND (s.project_id = ? OR s.project_id IS NULL))
-            )
-        ORDER BY c.name
+        WHERE s.kind = 'masterclip'
+          AND s.project_id = ?
+        GROUP BY s.id
+        ORDER BY s.name
     ]])
 
     if not query then
@@ -1106,134 +1098,94 @@ function M.load_master_clips(project_id)
     end
 
     query:bind_value(1, project_id)
-    query:bind_value(2, project_id)
 
-	    local clips = {}
-	    if query:exec() then
-	        while query:next() do
-	            local clip_id = query:value(0)
-	            local clip_name = query:value(1)
-	            local clip_project_id = query:value(2)
-	            local media_id = query:value(3)
-	            local master_clip_id = query:value(4)
-	            
-	            local start_frame = query:value(5)
-	            local duration_frames = query:value(6)
-	            local source_in_frame = query:value(7)
-	            local source_out_frame = query:value(8)
-	            if start_frame == nil or duration_frames == nil or source_in_frame == nil or source_out_frame == nil then
-	                error(string.format(
-	                    "FATAL: load_master_clips: master clip %s missing timeline/source frame data",
-	                    tostring(clip_id)
-	                ))
-	            end
-	            
-	            local clip_fps_num = query:value(9)
-	            local clip_fps_den = query:value(10)
-	            if not clip_fps_num or not clip_fps_den then
-	                error(string.format(
-	                    "FATAL: load_master_clips: master clip %s missing fps",
-	                    tostring(clip_id)
-	                ))
-	            end
-	            
-	            local enabled = query:value(11) == 1
-	            local offline = query:value(12) == 1
-	            local created_at = query:value(13)
-	            local modified_at = query:value(14)
+    local clips = {}
+    if query:exec() then
+        while query:next() do
+            local seq_id = query:value(0)
+            local seq_name = query:value(1)
+            local seq_project_id = query:value(2)
+            local seq_fps_num = query:value(3)
+            local seq_fps_den = query:value(4)
+            local seq_width = query:value(5)
+            local seq_height = query:value(6)
+            local seq_audio_rate = query:value(7)
+            local seq_created_at = query:value(8)
+            local seq_modified_at = query:value(9)
 
-	            local media_project_id = query:value(15)
-	            local media_name = query:value(16)
-	            local media_path = query:value(17)
-	            local media_duration_frames = query:value(18)
-	            local media_fps_num = query:value(19)
-	            local media_fps_den = query:value(20)
-	            if media_id and media_id ~= "" then
-	                if not media_duration_frames or not media_fps_num or not media_fps_den then
-	                    error(string.format(
-	                        "FATAL: load_master_clips: master clip %s missing media fps/duration (media_id=%s)",
-	                        tostring(clip_id),
-	                        tostring(media_id)
-	                    ))
-	                end
-	            end
-	            local media_width = query:value(21)
-	            local media_height = query:value(22)
-	            local media_channels = query:value(23)
-	            local media_codec = query:value(24)
-            local media_metadata = query:value(25)
-	            local media_created_at = query:value(26)
-	            local media_modified_at = query:value(27)
+            local media_id = query:value(10)
+            local media_project_id = query:value(11)
+            local media_name = query:value(12)
+            local media_path = query:value(13)
+            local media_duration_frames = query:value(14)
+            local media_fps_num = query:value(15)
+            local media_fps_den = query:value(16)
+            local media_width = query:value(17)
+            local media_height = query:value(18)
+            local media_channels = query:value(19)
+            local media_codec = query:value(20)
+            local media_metadata = query:value(21)
+            local media_created_at = query:value(22)
+            local media_modified_at = query:value(23)
 
-	            local sequence_project_id = query:value(28)
-	            local sequence_fps_num = query:value(29)
-	            local sequence_fps_den = query:value(30)
-	            if master_clip_id and (not sequence_fps_num or not sequence_fps_den) then
-	                error(string.format(
-	                    "FATAL: load_master_clips: master clip %s missing source sequence fps (master_clip_id=%s)",
-	                    tostring(clip_id),
-	                    tostring(master_clip_id)
-	                ))
-	            end
-	            local sequence_width = query:value(31)
-	            local sequence_height = query:value(32)
-	            local sequence_audio_rate = query:value(33)
-
-	            local media_info = {
-	                id = media_id,
-	                project_id = media_project_id,
-	                name = media_name,
-	                file_name = media_name,
-	                file_path = media_path,
-	                duration = media_duration_frames,  -- integer frames
-	                frame_rate = { fps_numerator = media_fps_num, fps_denominator = media_fps_den },
-	                width = media_width,
-	                height = media_height,
-	                audio_channels = media_channels,
-	                codec = media_codec,
+            local media_info = {
+                id = media_id,
+                project_id = media_project_id,
+                name = media_name,
+                file_name = media_name,
+                file_path = media_path,
+                duration = media_duration_frames,
+                frame_rate = { fps_numerator = media_fps_num, fps_denominator = media_fps_den },
+                width = media_width,
+                height = media_height,
+                audio_channels = media_channels,
+                codec = media_codec,
                 metadata = media_metadata,
                 created_at = media_created_at,
                 modified_at = media_modified_at,
             }
 
-	            local sequence_info = nil
-	            if master_clip_id then
-	                sequence_info = {
-	                    id = master_clip_id,
-	                    project_id = sequence_project_id,
-	                    frame_rate = { fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den },
-	                    width = sequence_width,
-	                    height = sequence_height,
-	                    audio_sample_rate = sequence_audio_rate
-	                }
-	            end
+            -- The masterclip sequence IS the masterclip (IS-a relationship)
+            local sequence_info = {
+                id = seq_id,
+                project_id = seq_project_id,
+                frame_rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
+                width = seq_width,
+                height = seq_height,
+                audio_sample_rate = seq_audio_rate
+            }
 
+            -- Build entry compatible with old structure
+            -- clip_id = sequence ID (since the sequence IS the masterclip)
+            -- master_clip_id = also sequence ID (self-referential)
             local clip_entry = {
-                clip_id = clip_id,
-                project_id = clip_project_id or media_project_id or sequence_project_id,
-                name = clip_name or (media_name or clip_id),
+                clip_id = seq_id,
+                project_id = seq_project_id,
+                name = seq_name,
                 media_id = media_id,
-                master_clip_id = master_clip_id,
-                
-	                timeline_start = start_frame,  -- integer frames
-	                duration = duration_frames,
-                source_in = source_in_frame,
-                source_out = source_out_frame,
-                
-                rate = { fps_numerator = clip_fps_num, fps_denominator = clip_fps_den },
-                
-                enabled = enabled,
-                offline = offline,
-                created_at = created_at,
-                modified_at = modified_at,
+                master_clip_id = seq_id,  -- IS-a: sequence is the masterclip
+
+                -- Source timing comes from stream clips, but for listing purposes
+                -- use sequence-level defaults (0 to duration)
+                timeline_start = 0,
+                duration = media_duration_frames or 0,
+                source_in = 0,
+                source_out = media_duration_frames or 0,
+
+                rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
+
+                enabled = true,
+                offline = false,
+                created_at = seq_created_at,
+                modified_at = seq_modified_at,
                 media = media_info,
                 sequence = sequence_info,
             }
 
             -- Convenience fields for consumers
             clip_entry.file_path = media_path
-            clip_entry.width = media_width or sequence_width
-            clip_entry.height = media_height or sequence_height
+            clip_entry.width = media_width or seq_width
+            clip_entry.height = media_height or seq_height
             clip_entry.codec = media_codec
 
             table.insert(clips, clip_entry)

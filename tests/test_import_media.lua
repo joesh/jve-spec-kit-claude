@@ -302,10 +302,11 @@ assert(result.success, "Import should succeed")
 local seq_after = count_sequences()
 assert(seq_after > seq_before, "Should have created master sequence")
 
--- Verify the master sequence has correct structure
+-- Verify the masterclip sequence has correct structure
+-- IS-a refactor: masterclips are sequences with kind='masterclip'
 local stmt = db:prepare([[
     SELECT s.id, s.name, s.kind FROM sequences s
-    WHERE s.project_id = 'project' AND s.kind = 'master'
+    WHERE s.project_id = 'project' AND s.kind = 'masterclip'
     ORDER BY s.created_at DESC LIMIT 1
 ]])
 stmt:exec()
@@ -315,8 +316,9 @@ if stmt:next() then
     local seq_kind = stmt:value(2)
     stmt:finalize()
 
-    assert(seq_kind == "master", "Sequence should be of kind 'master'")
-    assert(seq_name:find("Source"), "Master sequence name should contain 'Source'")
+    assert(seq_kind == "masterclip", "Sequence should be of kind 'masterclip'")
+    -- IS-a refactor: name comes from file basename, not "Source"
+    assert(seq_name and seq_name ~= "", "Masterclip sequence should have a name")
 
     -- Verify tracks exist on this sequence
     local track_stmt = db:prepare("SELECT COUNT(*) FROM tracks WHERE sequence_id = ?")
@@ -329,7 +331,7 @@ if stmt:next() then
     assert(track_count >= 1, "Master sequence should have at least 1 track")
 else
     stmt:finalize()
-    assert(false, "No master sequence found")
+    assert(false, "No masterclip sequence found")
 end
 
 -- =============================================================================

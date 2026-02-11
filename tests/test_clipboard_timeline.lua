@@ -235,10 +235,12 @@ local paste_ok, paste_err = clipboard_actions.paste()
 assert(paste_ok, paste_err or "paste failed")
 
 local verify_conn = database.get_connection()
+
+-- IS-a refactor: filter by owner_sequence_id to exclude masterclip stream clips
 local verify_stmt = verify_conn:prepare([[
     SELECT COUNT(*) AS cnt, MIN(timeline_start_frame)
     FROM clips
-    WHERE clip_kind = 'timeline' AND id != 'clip_original'
+    WHERE owner_sequence_id = 'default_sequence' AND id != 'clip_original'
 ]])
 assert(verify_stmt:exec() and verify_stmt:next())
 local pasted_count = verify_stmt:value(0)
@@ -253,7 +255,8 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo Paste should succeed")
 
 local count_conn = database.get_connection()
-local count_stmt = count_conn:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+-- IS-a refactor: filter by owner_sequence_id to exclude masterclip stream clips
+local count_stmt = count_conn:prepare("SELECT COUNT(*) FROM clips WHERE owner_sequence_id = 'default_sequence'")
 assert(count_stmt:exec() and count_stmt:next())
 assert(count_stmt:value(0) == 1, "undo should restore original clip only")
 count_stmt:finalize()

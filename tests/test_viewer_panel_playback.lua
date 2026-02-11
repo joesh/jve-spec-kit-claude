@@ -121,6 +121,12 @@ package.loaded["ui.source_viewer_state"] = {
         svs.current_clip_id = clip_id
         svs.total_frames = total_frames
     end,
+    -- IS-a refactor: add load_masterclip stub
+    load_masterclip = function(sequence_id, total_frames, fps_num, fps_den)
+        local svs = package.loaded["ui.source_viewer_state"]
+        svs.current_clip_id = sequence_id
+        svs.total_frames = total_frames
+    end,
     unload = function() end,
     save_to_db = function() end,
     set_playhead = function() end,
