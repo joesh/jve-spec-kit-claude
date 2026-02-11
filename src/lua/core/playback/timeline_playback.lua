@@ -37,7 +37,7 @@ local M = {}
 --   total_frames   number  >= 1
 --   sequence_id    string  non-empty
 --   current_clip_id string|nil  clip currently playing (for switch detection)
---   last_tick_frame number|nil  frame from previous tick (unused here, used by controller)
+--   last_tick_frame number|nil  frame from previous tick (for stuckness detection)
 --
 -- tick_result:
 --   continue        boolean  true = keep ticking, false = stop
@@ -150,26 +150,25 @@ function M.tick(tick_in, audio_playback, viewer_panel)
     assert_tick_in(tick_in)
 
     -- Frame advancement: video ALWAYS follows audio when audio is active (Rule V1)
-    -- EXHAUSTION DETECTION: SSE starved at boundary = no more PCM to play.
-    -- Note: AOP playhead keeps advancing (plays silence), so time-based stuckness
-    -- (same frame twice) won't work. Use is_exhausted() for authoritative signal.
+    -- STUCKNESS DETECTION: if audio reports the same frame as last tick, it hasn't
+    -- advanced (exhaustion, J-cut, gap). Switch to frame-based to keep video moving.
+    -- No cross-module flags needed — just compare frames.
     local pos
     local audio_can_drive = audio_playback and audio_playback.is_ready()
         and audio_playback.playing and audio_playback.has_audio
 
     if audio_can_drive then
-        -- Check if audio is exhausted (SSE starved at clip boundary)
-        local audio_exhausted = audio_playback.is_exhausted
-            and audio_playback.is_exhausted()
+        local timeline_time_us = audio_playback.get_time_us()
+        local audio_frame = helpers.calc_frame_from_time_us(
+            timeline_time_us, tick_in.fps_num, tick_in.fps_den)
 
-        if audio_exhausted then
-            -- Audio exhausted: advance frame-based (J-cut, gap, end of audio clip)
+        if tick_in.last_tick_frame ~= nil
+           and audio_frame == tick_in.last_tick_frame then
+            -- Audio stuck: advance frame-based (J-cut, gap, end of content)
             pos = tick_in.pos + (tick_in.direction * tick_in.speed)
         else
-            -- Audio active: video follows audio time (spec Rule V1)
-            local timeline_time_us = audio_playback.get_time_us()
-            pos = helpers.calc_frame_from_time_us(
-                timeline_time_us, tick_in.fps_num, tick_in.fps_den)
+            -- Audio advancing: video follows audio time (Rule V1)
+            pos = audio_frame
         end
     else
         -- NO AUDIO: Advance frame independently

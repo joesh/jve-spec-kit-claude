@@ -854,34 +854,11 @@ function M._tick()
 
     if M.timeline_mode and M.sequence_id then
         -- Detect external playhead move (frame-forward, ruler click, undo, etc.)
-        -- Must come BEFORE same-frame skip: external moves override audio-derived position.
+        -- Stuckness detection is in timeline_playback.tick() (same-frame comparison),
+        -- so no same-frame skip needed here — every tick runs.
         local current_pos = M.get_position()
-        local external_move = false
-        if M._last_committed_frame ~= nil
-           and math.floor(current_pos) ~= M._last_committed_frame then
-            external_move = true
-        end
-
-        -- Same-frame skip: if audio hasn't advanced past the last displayed frame
-        -- AND no external move occurred, skip this tick (avoids redundant decode).
-        -- EXCEPTION: When audio is exhausted, we must let tick() run to handle
-        -- the transition to frame-based advancement and eventual boundary stop.
-        if not external_move
-           and audio_playback and audio_playback.is_ready() and audio_playback.playing then
-            local audio_time = audio_playback.get_time_us()
-            local audio_frame = helpers.calc_frame_from_time_us(
-                audio_time, M.fps_num, M.fps_den)
-            if M._last_tick_frame ~= nil and audio_frame == M._last_tick_frame then
-                -- Check if audio is exhausted - if so, don't skip
-                local audio_exhausted = audio_playback.is_exhausted
-                    and audio_playback.is_exhausted()
-                if not audio_exhausted then
-                    M._schedule_tick()
-                    return
-                end
-                -- Audio exhausted: let tick() run to stop playback
-            end
-        end
+        local external_move = M._last_committed_frame ~= nil
+           and math.floor(current_pos) ~= M._last_committed_frame
 
         if external_move then
             -- External move detected — re-anchor audio at new position
