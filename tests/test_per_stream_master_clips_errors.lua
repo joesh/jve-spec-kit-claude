@@ -56,7 +56,7 @@ local function test_frame_to_samples_nil_input()
     local master_clip = Clip.create("Video Only Master", nil, {
         project_id = project_id,
         clip_kind = "master",
-        source_sequence_id = source_seq.id,
+        master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = DURATION_FRAMES,
         source_in = 0,
@@ -111,7 +111,7 @@ local function test_frame_to_samples_type_check()
     local master_clip = Clip.create("Type Test Master", nil, {
         project_id = project_id,
         clip_kind = "master",
-        source_sequence_id = source_seq.id,
+        master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = DURATION_FRAMES,
         source_in = 0,
@@ -199,7 +199,7 @@ local function test_set_all_streams_type_check()
     local master_clip = Clip.create("Master", nil, {
         project_id = project_id,
         clip_kind = "master",
-        source_sequence_id = source_seq.id,
+        master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = DURATION_FRAMES,
         source_in = 0,
@@ -248,7 +248,7 @@ local function test_resolve_video_timing_no_video()
     local master_clip = Clip.create("Audio Only Master", nil, {
         project_id = project_id,
         clip_kind = "master",
-        source_sequence_id = source_seq.id,
+        master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = DURATION_SAMPLES,
         source_in = 0,
@@ -306,7 +306,7 @@ local function test_resolve_audio_timing_no_audio()
     local master_clip = Clip.create("Video Only Master", nil, {
         project_id = project_id,
         clip_kind = "master",
-        source_sequence_id = source_seq.id,
+        master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = DURATION_FRAMES,
         source_in = 0,
@@ -407,7 +407,7 @@ local function test_get_all_streams_in_not_synced()
     local master_clip = Clip.create("Unsynced Master", nil, {
         project_id = project_id,
         clip_kind = "master",
-        source_sequence_id = source_seq.id,
+        master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = DURATION_FRAMES,
         source_in = 0,

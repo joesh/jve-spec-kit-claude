@@ -4,7 +4,7 @@
 -- Tests: basic overwrite, undo/redo, UI context resolution, occlusion handling
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
@@ -56,6 +56,10 @@ local media = Media.create({
     fps_denominator = 1
 })
 media:save(db)
+
+-- Create masterclip sequence for this media (required for Overwrite)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    "project", "OW Video Master", 30, 1, 500, "media_ow")
 
 -- Helper: execute command with proper event wrapping
 local function execute_command(name, params)
@@ -136,9 +140,9 @@ local function count_clips(track_id)
     return count
 end
 
--- Helper: reset timeline
+-- Helper: reset timeline (only timeline clips, not masterclip stream clips)
 local function reset_timeline()
-    db:exec("DELETE FROM clips")
+    db:exec("DELETE FROM clips WHERE track_id IN ('track_v1', 'track_v2')")
 end
 
 -- =============================================================================
@@ -151,7 +155,7 @@ local result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     overwrite_time = 0,
     duration = 100,
     source_in = 0,
@@ -171,7 +175,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "overwrite_clip",
     overwrite_time = 0,
     duration = 100,
@@ -196,7 +200,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "overwrite_start",
     overwrite_time = 0,
     duration = 50,
@@ -251,7 +255,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "middle_overwrite",
     overwrite_time = 75,
     duration = 50,
@@ -275,10 +279,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     overwrite_time = 0,
     duration = 100
-    -- No media_id
+    -- No master_clip_id
 })
 asserts._set_enabled_for_tests(true)
-assert(not result.success, "Overwrite without media_id should fail")
+assert(not result.success, "Overwrite without master_clip_id should fail")
 
 -- =============================================================================
 -- TEST 8: Resolves track_id from sequence when not provided
@@ -289,7 +293,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     -- No track_id - should use first video track
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     overwrite_time = 0,
     duration = 100,
     source_in = 0,
@@ -308,7 +312,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "fallback_dur_clip",
     overwrite_time = 0,
     duration = 0  -- Zero duration - should fallback to media
@@ -330,7 +334,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "ow_1",
     overwrite_time = 0,
     duration = 100,
@@ -344,7 +348,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "ow_2",
     overwrite_time = 100,
     duration = 100,
@@ -358,7 +362,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "ow_3",
     overwrite_time = 200,
     duration = 100,
@@ -388,7 +392,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v2",  -- Different track
-    media_id = "media_ow",
+    master_clip_id = master_clip_id,
     clip_id = "v2_clip",
     overwrite_time = 0,
     duration = 100,

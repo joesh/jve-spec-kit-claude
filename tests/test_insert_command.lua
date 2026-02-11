@@ -4,7 +4,7 @@
 -- Tests: basic insertion, ripple behavior, undo/redo, error cases
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
@@ -84,6 +84,10 @@ local media = Media.create({
 })
 media:save(db)
 
+-- Create masterclip sequence for this media (required for Insert)
+local master_clip_id = test_env.create_test_masterclip_sequence(
+    "project", "Video Master", 30, 1, 100, "media_video")
+
 -- Create downstream clip at [200, 300) to test ripple behavior
 local downstream_clip = Clip.create("Downstream", "media_video", {
     id = "downstream_clip",
@@ -131,7 +135,7 @@ end
 -- =============================================================================
 print("Test 1: Basic insertion at frame 0")
 local insert_cmd = Command.create("Insert", "project")
-insert_cmd:set_parameter("media_id", "media_video")
+insert_cmd:set_parameter("master_clip_id", master_clip_id)
 insert_cmd:set_parameter("track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
 insert_cmd:set_parameter("insert_time", 0)
@@ -154,7 +158,7 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 -- =============================================================================
 print("Test 2: Second insert at frame 0 ripples everything")
 local insert_cmd2 = Command.create("Insert", "project")
-insert_cmd2:set_parameter("media_id", "media_video")
+insert_cmd2:set_parameter("master_clip_id", master_clip_id)
 insert_cmd2:set_parameter("track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
 insert_cmd2:set_parameter("insert_time", 0)
@@ -205,11 +209,11 @@ assert(downstream_start == 280, string.format("Downstream should ripple to 280 a
 -- =============================================================================
 print("Test 5: Insert uses media duration when unspecified")
 -- Clean up first
-db:exec("DELETE FROM clips WHERE id != 'downstream_clip'")
+db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 local insert_cmd3 = Command.create("Insert", "project")
-insert_cmd3:set_parameter("media_id", "media_video")
+insert_cmd3:set_parameter("master_clip_id", master_clip_id)
 insert_cmd3:set_parameter("track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
 insert_cmd3:set_parameter("insert_time", 0)
@@ -231,11 +235,11 @@ assert(inserted_duration == 100, string.format("Clip should have media duration 
 -- =============================================================================
 print("Test 6: Insert at exact clip start boundary")
 -- Reset: put downstream back at 200
-db:exec("DELETE FROM clips WHERE id != 'downstream_clip'")
+db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 local insert_cmd4 = Command.create("Insert", "project")
-insert_cmd4:set_parameter("media_id", "media_video")
+insert_cmd4:set_parameter("master_clip_id", master_clip_id)
 insert_cmd4:set_parameter("track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
 insert_cmd4:set_parameter("insert_time", 200)  -- Exactly at downstream start
@@ -273,7 +277,7 @@ assert(not result.success, "Insert without media_id should fail")
 print("Test 8: Nonexistent master_clip_id fails")
 asserts._set_enabled_for_tests(false)
 local bad_cmd2 = Command.create("Insert", "project")
-bad_cmd2:set_parameter("media_id", "media_video")
+bad_cmd2:set_parameter("master_clip_id", master_clip_id)
 bad_cmd2:set_parameter("track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
 bad_cmd2:set_parameter("insert_time", 0)
@@ -289,13 +293,13 @@ assert(not result.success, "Insert with nonexistent master_clip_id should fail")
 -- =============================================================================
 print("Test 9: Multiple undo/redo cycle")
 -- Reset state
-db:exec("DELETE FROM clips WHERE id != 'downstream_clip'")
+db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Insert 3 clips
 for i = 1, 3 do
     local cmd = Command.create("Insert", "project")
-    cmd:set_parameter("media_id", "media_video")
+    cmd:set_parameter("master_clip_id", master_clip_id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
     cmd:set_parameter("insert_time", 0)

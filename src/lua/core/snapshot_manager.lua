@@ -173,7 +173,7 @@ local function build_snapshot_payload(db, sequence_id, clips)
             track_id = clip.track_id,
             owner_sequence_id = clip.owner_sequence_id,
             parent_clip_id = clip.parent_clip_id,
-            source_sequence_id = clip.source_sequence_id,
+            master_clip_id = clip.master_clip_id,
             media_id = clip.media_id,
 
             timeline_start_frame = clip.timeline_start,
@@ -309,7 +309,7 @@ local function deserialize_snapshot_payload(json_str)
                 project_id = data.project_id,
                 owner_sequence_id = data.owner_sequence_id,
                 parent_clip_id = data.parent_clip_id,
-                source_sequence_id = data.source_sequence_id,
+                master_clip_id = data.master_clip_id,
                 track_id = data.track_id,
                 media_id = data.media_id,
                 

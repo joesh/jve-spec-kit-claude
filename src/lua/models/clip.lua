@@ -64,7 +64,7 @@ local function load_internal(clip_id, raise_errors)
 
     local query = db:prepare([[
         SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+               c.master_clip_id, c.parent_clip_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator, c.enabled, c.offline,
                s.fps_numerator, s.fps_denominator
@@ -139,7 +139,7 @@ local function load_internal(clip_id, raise_errors)
         name = query:value(3),
         track_id = query:value(4),
         media_id = query:value(5),
-        source_sequence_id = query:value(6),
+        master_clip_id = query:value(6),
         parent_clip_id = query:value(7),
         owner_sequence_id = query:value(8),
 
@@ -192,7 +192,7 @@ function M.create(name, media_id, opts)
         name = name,
         track_id = opts.track_id,
         media_id = media_id,
-        source_sequence_id = opts.source_sequence_id,
+        master_clip_id = opts.master_clip_id,
         parent_clip_id = opts.parent_clip_id,
         owner_sequence_id = opts.owner_sequence_id,
         created_at = opts.created_at or now,
@@ -307,10 +307,10 @@ local function ensure_project_context(self, db)
     end
 
     -- Fallback: derive from source sequence if present
-    if not self.project_id and self.source_sequence_id then
+    if not self.project_id and self.master_clip_id then
         local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
         if seq_query then
-            seq_query:bind_value(1, self.source_sequence_id)
+            seq_query:bind_value(1, self.master_clip_id)
             if seq_query:exec() and seq_query:next() then
                 self.project_id = seq_query:value(0)
             end
@@ -319,8 +319,8 @@ local function ensure_project_context(self, db)
     end
 
     assert(self.project_id, string.format(
-        "ensure_project_context: could not derive project_id for clip %s (track_id=%s, source_sequence_id=%s)",
-        tostring(self.id), tostring(self.track_id), tostring(self.source_sequence_id)))
+        "ensure_project_context: could not derive project_id for clip %s (track_id=%s, master_clip_id=%s)",
+        tostring(self.id), tostring(self.track_id), tostring(self.master_clip_id)))
 end
 
 -- Save clip to database (INSERT or UPDATE)
@@ -379,7 +379,7 @@ local function save_internal(self, opts)
         query = db:prepare([[
             UPDATE clips
             SET project_id = ?, clip_kind = ?, name = ?, track_id = ?, media_id = ?,
-                source_sequence_id = ?, parent_clip_id = ?, owner_sequence_id = ?,
+                master_clip_id = ?, parent_clip_id = ?, owner_sequence_id = ?,
                 timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?,
                 fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?, modified_at = strftime('%s','now')
             WHERE id = ?
@@ -388,7 +388,7 @@ local function save_internal(self, opts)
         query = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                source_sequence_id, parent_clip_id, owner_sequence_id,
+                master_clip_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame, 
                 fps_numerator, fps_denominator, enabled, offline, created_at, modified_at
             )
@@ -404,7 +404,7 @@ local function save_internal(self, opts)
         query:bind_value(3, self.name or "")
         query:bind_value(4, self.track_id)
         query:bind_value(5, self.media_id)
-        query:bind_value(6, self.source_sequence_id)
+        query:bind_value(6, self.master_clip_id)
         query:bind_value(7, self.parent_clip_id)
         query:bind_value(8, self.owner_sequence_id)
         query:bind_value(9, db_start_frame)
@@ -423,7 +423,7 @@ local function save_internal(self, opts)
         query:bind_value(4, self.name or "")
         query:bind_value(5, self.track_id)
         query:bind_value(6, self.media_id)
-        query:bind_value(7, self.source_sequence_id)
+        query:bind_value(7, self.master_clip_id)
         query:bind_value(8, self.parent_clip_id)
         query:bind_value(9, self.owner_sequence_id)
         query:bind_value(10, db_start_frame)
@@ -555,7 +555,7 @@ function M.get_master_clip_usage(master_clip_id)
 
     -- Get the master clip's source sequence (to exclude it from results)
     local master = M.load_optional(master_clip_id)
-    local source_seq_id = master and master.source_sequence_id or ""
+    local source_seq_id = master and master.master_clip_id or ""
 
     -- Find all sequences that have timeline clips referencing this master clip
     local query = db:prepare([[

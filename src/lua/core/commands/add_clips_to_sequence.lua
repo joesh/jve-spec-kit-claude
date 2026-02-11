@@ -270,7 +270,7 @@ local function place_clips(db, track_map, project_id, sequence_id, redo_clip_ids
             project_id = project_id,
             track_id = placement.track_id,
             owner_sequence_id = sequence_id,
-            parent_clip_id = clip_desc.master_clip_id,
+            master_clip_id = clip_desc.master_clip_id,
             timeline_start = interval.start,
             duration = clip_desc.duration,
             source_in = clip_desc.source_in,

@@ -825,7 +825,7 @@ local function populate_tree()
             type = "master_clip",
             clip_id = clip.clip_id,
             media_id = clip.media_id,
-            sequence_id = clip.source_sequence_id,
+            sequence_id = clip.master_clip_id,
             bin_id = clip.bin_id,
             name = clip.name or media.name or clip.clip_id,
             file_path = clip.file_path or media.file_path,

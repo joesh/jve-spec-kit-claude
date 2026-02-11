@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
@@ -132,23 +132,34 @@ local function reopen_database(path)
     timeline_state.reload_clips()
 end
 
-local function create_media_record(media_id, duration_value)
+-- Cache masterclip IDs by media_id to avoid recreating
+local masterclip_cache = {}
+
+local function create_media_and_masterclip(media_id, duration_value)
+    if masterclip_cache[media_id] then
+        return masterclip_cache[media_id]
+    end
     local Media = require('models.media')
+    local duration_frames = math.floor(duration_value * 24 / 1000) -- Convert ms to frames approx
     local media = Media.create({
         id = media_id,
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. media_id .. '.mov',
         file_name = media_id .. '.mov',
-        duration_frames = math.floor(duration_value * 24 / 1000), -- Convert ms to frames approx
+        duration_frames = duration_frames,
         frame_rate = 24
     })
     assert(media:save(database.get_connection()))
+    local master_clip_id = test_env.create_test_masterclip_sequence(
+        'default_project', media_id .. ' Master', 24, 1, duration_frames, media_id)
+    masterclip_cache[media_id] = master_clip_id
+    return master_clip_id
 end
 
 local function insert_clip_via_command(params)
-    create_media_record(params.media_id, params.duration_value)
+    local master_clip_id = create_media_and_masterclip(params.media_id, params.duration_value)
     local insert_cmd = Command.create("Insert", "default_project")
-    insert_cmd:set_parameter("media_id", params.media_id)
+    insert_cmd:set_parameter("master_clip_id", master_clip_id)
     insert_cmd:set_parameter("track_id", params.track_id)
     insert_cmd:set_parameter("sequence_id", "default_sequence")
     insert_cmd:set_parameter("insert_time", params.start_value)

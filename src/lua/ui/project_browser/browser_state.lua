@@ -103,7 +103,7 @@ local function normalize_master_clip(item, context)
         file_path = clip.file_path or (media and media.file_path),
         metadata = decode_metadata(media and media.metadata),
         offline = clip.offline,
-        master_sequence_id = clip.source_sequence_id,
+        master_sequence_id = clip.master_clip_id,
         item_type = "master_clip",
         view = "project_browser",
         project_id = project_id,

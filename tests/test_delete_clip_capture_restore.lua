@@ -47,7 +47,7 @@ db:exec([[
         1, 0, 0, 0, 1.0, 0.0
     );
     INSERT INTO clips (
-        id, project_id, clip_kind, source_sequence_id, parent_clip_id, owner_sequence_id,
+        id, project_id, clip_kind, master_clip_id, parent_clip_id, owner_sequence_id,
         track_id, media_id, name,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, offline,

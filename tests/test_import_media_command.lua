@@ -115,8 +115,8 @@ local master_clip = master_clips[1]
 assert(master_clip.media_id == "media_stub", "Master clip should reference stub media id")
 assert(master_clip.sequence and master_clip.sequence.id, "Master clip should point to a source sequence")
 
-local master_sequence_id = master_clip.source_sequence_id
-assert(master_sequence_id ~= nil, "Master clip should store source_sequence_id")
+local master_sequence_id = master_clip.master_clip_id
+assert(master_sequence_id ~= nil, "Master clip should store master_clip_id")
 
 -- Verify sequence and tracks created
 assert(count_rows(db, "sequences", "id = ?", master_sequence_id) == 1, "Master sequence missing")
@@ -136,8 +136,8 @@ assert(count_rows(db, "media", "id = ?", master_clip.media_id) == 0, "Media row 
 command_manager.redo()
 master_clips = assert_master_state(1)
 local redo_clip = master_clips[1]
-assert(redo_clip.source_sequence_id ~= nil, "Redo should recreate master sequence")
-assert(count_rows(db, "tracks", "sequence_id = ?", redo_clip.source_sequence_id) >= 1, "Redo should recreate tracks")
+assert(redo_clip.master_clip_id ~= nil, "Redo should recreate master sequence")
+assert(count_rows(db, "tracks", "sequence_id = ?", redo_clip.master_clip_id) >= 1, "Redo should recreate tracks")
 assert(count_rows(db, "media", "id = ?", redo_clip.media_id) == 1, "Redo should recreate media row")
 
 media_reader.import_media = original_import

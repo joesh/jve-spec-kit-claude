@@ -108,7 +108,7 @@ local function copy_timeline_selection()
             assert(type(clip.timeline_start) == "number", "clipboard_actions: clip.timeline_start must be integer")
             local start_frame = clip.timeline_start
 
-            if clip.media_id == nil and clip.parent_clip_id == nil then
+            if clip.master_clip_id == nil then
                 goto continue
             end
 
@@ -126,7 +126,7 @@ local function copy_timeline_selection()
                 fps_numerator = clip.rate.fps_numerator,
                 fps_denominator = clip.rate.fps_denominator,
                 parent_clip_id = clip.parent_clip_id,
-                source_sequence_id = clip.source_sequence_id,
+                master_clip_id = clip.master_clip_id,
                 owner_sequence_id = clip.owner_sequence_id,
                 clip_kind = clip.clip_kind,
 
@@ -249,17 +249,15 @@ local function paste_timeline(payload)
                 project_id = project_id,
                 clip_id = clip_id,
             })
-            if clip_data.media_id then
-                cmd:set_parameter("media_id", clip_data.media_id)
-            end
-            if clip_data.parent_clip_id then
-                cmd:set_parameter("master_clip_id", clip_data.parent_clip_id)
+            -- master_clip_id is the masterclip sequence ID (master_clip_id on timeline clips)
+            if clip_data.master_clip_id then
+                cmd:set_parameter("master_clip_id", clip_data.master_clip_id)
             end
             if clip_data.name then
                 cmd:set_parameter("clip_name", clip_data.name)
             end
-            assert(clip_data.media_id or clip_data.parent_clip_id,
-                "clipboard_actions.paste_timeline: missing media_id or parent_clip_id")
+            assert(clip_data.master_clip_id,
+                "clipboard_actions.paste_timeline: missing master_clip_id")
 
             local result = command_manager.execute(cmd)
             assert(result and result.success,
@@ -337,7 +335,7 @@ local function copy_browser_selection()
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_in"),
                         source_out = assert(clip.source_out,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_out"),
-                        source_sequence_id = clip.source_sequence_id,
+                        master_clip_id = clip.master_clip_id,
                         start_value = assert(clip.start_value,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing start_value"),
                         enabled = clip.enabled,

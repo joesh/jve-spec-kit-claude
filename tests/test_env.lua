@@ -248,4 +248,46 @@ function M.raw_sql(db, sql, ...)
     return true
 end
 
+--------------------------------------------------------------------------------
+-- Test Masterclip Sequence Helper
+--------------------------------------------------------------------------------
+
+--- Create a masterclip sequence for testing Insert/Overwrite commands.
+-- Creates the sequence, video track, and video stream clip.
+-- @param project_id string: Project ID
+-- @param name string: Name for sequence/clip
+-- @param fps_num number: FPS numerator (e.g., 24)
+-- @param fps_den number: FPS denominator (e.g., 1)
+-- @param duration_frames number: Duration in frames
+-- @param media_id string|nil: Optional media_id for clip
+-- @return string: masterclip sequence ID
+function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, duration_frames, media_id)
+    local Sequence = require("models.sequence")
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+
+    local seq = Sequence.create(name, project_id,
+        {fps_numerator = fps_num, fps_denominator = fps_den},
+        1920, 1080,
+        {kind = "masterclip"})
+    assert(seq:save(), "create_test_masterclip_sequence: failed to save sequence")
+
+    local track = Track.create_video("V1", seq.id, {index = 1})
+    assert(track:save(), "create_test_masterclip_sequence: failed to save track")
+
+    local clip = Clip.create(name, media_id, {
+        track_id = track.id,
+        owner_sequence_id = seq.id,
+        timeline_start = 0,
+        duration = duration_frames,
+        source_in = 0,
+        source_out = duration_frames,
+        fps_numerator = fps_num,
+        fps_denominator = fps_den,
+    })
+    assert(clip:save({skip_occlusion = true}), "create_test_masterclip_sequence: failed to save clip")
+
+    return seq.id
+end
+
 return M

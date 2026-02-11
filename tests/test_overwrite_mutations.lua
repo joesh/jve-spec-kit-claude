@@ -91,7 +91,7 @@ local function init_database(path)
     ]]):format(now, now)))
     assert(db:exec(([[
         INSERT INTO clips (
-            id, project_id, clip_kind, name, track_id, media_id, source_sequence_id, parent_clip_id, owner_sequence_id,
+            id, project_id, clip_kind, name, track_id, media_id, master_clip_id, parent_clip_id, owner_sequence_id,
             timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
             fps_numerator, fps_denominator, enabled, offline, created_at, modified_at
         ) VALUES (

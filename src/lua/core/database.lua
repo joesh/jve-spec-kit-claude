@@ -330,7 +330,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 	        media_id = media_id,
 	        created_at = query:value(21),
 	        modified_at = query:value(22),
-	        source_sequence_id = query:value(7),
+	        master_clip_id = query:value(7),
 	        parent_clip_id = query:value(8),
 	        owner_sequence_id = owner_sequence_id,
 	        track_sequence_id = track_sequence_id,
@@ -822,7 +822,7 @@ function M.load_clips(sequence_id)
 
 	    local query = db_connection:prepare([[
 	        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-	               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+	               c.master_clip_id, c.parent_clip_id, c.owner_sequence_id,
 	               c.timeline_start_frame, c.duration_frames,
 	               c.source_in_frame, c.source_out_frame,
 	               c.enabled, c.offline, c.fps_numerator, c.fps_denominator, t.sequence_id,
@@ -872,7 +872,7 @@ function M.load_clip_entry(clip_id)
 
 	    local query = db_connection:prepare([[
 	        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-	               c.source_sequence_id, c.parent_clip_id, c.owner_sequence_id,
+	               c.master_clip_id, c.parent_clip_id, c.owner_sequence_id,
 	               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
 	               c.enabled, c.offline, c.fps_numerator, c.fps_denominator,
 	               t.sequence_id, m.name, m.file_path,
@@ -1060,7 +1060,7 @@ function M.load_master_clips(project_id)
             c.name,
             c.project_id,
             c.media_id,
-            c.source_sequence_id,
+            c.master_clip_id,
             c.timeline_start_frame,
             c.duration_frames,
             c.source_in_frame,
@@ -1092,7 +1092,7 @@ function M.load_master_clips(project_id)
             s.audio_rate
         FROM clips c
         LEFT JOIN media m ON c.media_id = m.id
-        LEFT JOIN sequences s ON c.source_sequence_id = s.id
+        LEFT JOIN sequences s ON c.master_clip_id = s.id
         WHERE c.clip_kind = 'master'
           AND (
                 (c.project_id IS NOT NULL AND c.project_id = ?)
@@ -1115,7 +1115,7 @@ function M.load_master_clips(project_id)
 	            local clip_name = query:value(1)
 	            local clip_project_id = query:value(2)
 	            local media_id = query:value(3)
-	            local source_sequence_id = query:value(4)
+	            local master_clip_id = query:value(4)
 	            
 	            local start_frame = query:value(5)
 	            local duration_frames = query:value(6)
@@ -1168,11 +1168,11 @@ function M.load_master_clips(project_id)
 	            local sequence_project_id = query:value(28)
 	            local sequence_fps_num = query:value(29)
 	            local sequence_fps_den = query:value(30)
-	            if source_sequence_id and (not sequence_fps_num or not sequence_fps_den) then
+	            if master_clip_id and (not sequence_fps_num or not sequence_fps_den) then
 	                error(string.format(
-	                    "FATAL: load_master_clips: master clip %s missing source sequence fps (source_sequence_id=%s)",
+	                    "FATAL: load_master_clips: master clip %s missing source sequence fps (master_clip_id=%s)",
 	                    tostring(clip_id),
-	                    tostring(source_sequence_id)
+	                    tostring(master_clip_id)
 	                ))
 	            end
 	            local sequence_width = query:value(31)
@@ -1197,9 +1197,9 @@ function M.load_master_clips(project_id)
             }
 
 	            local sequence_info = nil
-	            if source_sequence_id then
+	            if master_clip_id then
 	                sequence_info = {
-	                    id = source_sequence_id,
+	                    id = master_clip_id,
 	                    project_id = sequence_project_id,
 	                    frame_rate = { fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den },
 	                    width = sequence_width,
@@ -1213,7 +1213,7 @@ function M.load_master_clips(project_id)
                 project_id = clip_project_id or media_project_id or sequence_project_id,
                 name = clip_name or (media_name or clip_id),
                 media_id = media_id,
-                source_sequence_id = source_sequence_id,
+                master_clip_id = master_clip_id,
                 
 	                timeline_start = start_frame,  -- integer frames
 	                duration = duration_frames,

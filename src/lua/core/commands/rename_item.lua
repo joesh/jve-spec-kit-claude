@@ -60,7 +60,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return false, "RenameItem: Failed to update timeline clips"
             end
             update_stmt:finalize()
-            command_helper.reload_timeline(clip.owner_sequence_id or clip.source_sequence_id)
+            command_helper.reload_timeline(clip.owner_sequence_id or clip.master_clip_id)
             return true, previous_name
         elseif target_type == "sequence" then
             local Sequence = require("models.sequence")

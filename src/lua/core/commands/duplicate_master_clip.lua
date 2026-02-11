@@ -65,7 +65,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             id = new_clip_id,
             project_id = project_id,
             clip_kind = "master",
-            source_sequence_id = args.clip_snapshot.source_sequence_id,
+            master_clip_id = args.clip_snapshot.master_clip_id,
             timeline_start = timeline_start,
             duration = duration_value,
             source_in = source_in_value,

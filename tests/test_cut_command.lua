@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
-require('test_env')
+local test_env = require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -144,10 +144,14 @@ local function create_clip_via_insert(spec)
     assert(media, "failed to create media for clip " .. tostring(spec.id))
     assert(media:save(db), "failed to save media for clip " .. tostring(spec.id))
 
+    -- Create masterclip sequence for this media
+    local master_clip_id = test_env.create_test_masterclip_sequence(
+        'default_project', spec.id .. ' Master', 30, 1, spec.duration, media_id)
+
     local cmd = Command.create("Insert", "default_project")
     cmd:set_parameter("sequence_id", "default_sequence")
     cmd:set_parameter("track_id", spec.track)
-    cmd:set_parameter("media_id", media_id)
+    cmd:set_parameter("master_clip_id", master_clip_id)
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("insert_time", spec.start)
     cmd:set_parameter("duration", spec.duration)

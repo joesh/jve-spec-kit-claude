@@ -65,7 +65,7 @@ local clips = {
         track_id = "trk1",
         owner_sequence_id = "seq1",
         parent_clip_id = nil,
-        source_sequence_id = nil,
+        master_clip_id = nil,
         media_id = "med1",
         -- INTEGER coordinates (post-refactor)
         timeline_start = 0,

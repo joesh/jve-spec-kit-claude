@@ -321,7 +321,7 @@ fetch_sequence_clips = function(db, sequence_id)
 
     local clip_stmt = db:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
-               source_sequence_id, parent_clip_id, owner_sequence_id,
+               master_clip_id, parent_clip_id, owner_sequence_id,
                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                fps_numerator, fps_denominator, enabled,
                offline, created_at, modified_at
@@ -346,7 +346,7 @@ fetch_sequence_clips = function(db, sequence_id)
                 name = clip_stmt:value(3),
                 track_id = clip_stmt:value(4),
                 media_id = clip_stmt:value(5),
-                source_sequence_id = clip_stmt:value(6),
+                master_clip_id = clip_stmt:value(6),
                 parent_clip_id = clip_stmt:value(7),
                 owner_sequence_id = clip_stmt:value(8),
                 start_value = assert(tonumber(clip_stmt:value(9)), "DeleteSequence.fetch_sequence_clips: missing start_value for clip " .. tostring(clip_id)),
@@ -400,7 +400,7 @@ end
 count_sequence_references = function(db, sequence_id)
     local stmt = db:prepare([[
         SELECT COUNT(*) FROM clips
-        WHERE source_sequence_id = ?
+        WHERE master_clip_id = ?
           AND (owner_sequence_id IS NULL OR owner_sequence_id <> ?)
     ]])
     if not stmt then
@@ -551,7 +551,7 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
         local insert_clip_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                source_sequence_id, parent_clip_id, owner_sequence_id,
+                master_clip_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled,
                 offline, created_at, modified_at
@@ -569,7 +569,7 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
             insert_clip_stmt:bind_value(4, clip.name or "")
             insert_clip_stmt:bind_value(5, clip.track_id)
             insert_clip_stmt:bind_value(6, clip.media_id)
-            insert_clip_stmt:bind_value(7, clip.source_sequence_id)
+            insert_clip_stmt:bind_value(7, clip.master_clip_id)
             insert_clip_stmt:bind_value(8, clip.parent_clip_id)
             insert_clip_stmt:bind_value(9, clip.owner_sequence_id or sequence_row.id)
             insert_clip_stmt:bind_value(10, clip.start_value or 0)

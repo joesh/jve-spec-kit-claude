@@ -172,7 +172,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         track_sequence_id = track_sequence_id,
         owner_sequence_id = source.owner_sequence_id or track_sequence_id,
         media_id = source.media_id,
-        source_sequence_id = source.source_sequence_id,
+        master_clip_id = source.master_clip_id,
         parent_clip_id = source.parent_clip_id,
         
         timeline_start = source.timeline_start,
@@ -375,7 +375,7 @@ function M.restore_clip_state(state)
             track_id = state.track_id,
             parent_clip_id = state.parent_clip_id,
             owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
-            source_sequence_id = state.source_sequence_id,
+            master_clip_id = state.master_clip_id,
             track_sequence_id = state.track_sequence_id or state.owner_sequence_id,
 
             timeline_start = state.timeline_start,
@@ -418,7 +418,7 @@ function M.capture_clip_state(clip)
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
         parent_clip_id = clip.parent_clip_id,
-        source_sequence_id = clip.source_sequence_id,
+        master_clip_id = clip.master_clip_id,
         track_id = clip.track_id,
         media_id = clip.media_id,
         timeline_start = clip.timeline_start,
@@ -589,7 +589,7 @@ function M.apply_mutations(db, mutations)
         insert_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                source_sequence_id, parent_clip_id, owner_sequence_id,
+                master_clip_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
@@ -733,7 +733,7 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(4, mut.name)
             stmt:bind_value(5, mut.track_id)
             stmt:bind_value(6, mut.media_id)
-            stmt:bind_value(7, mut.source_sequence_id)
+            stmt:bind_value(7, mut.master_clip_id)
             stmt:bind_value(8, mut.parent_clip_id)
             stmt:bind_value(9, mut.owner_sequence_id)
             stmt:bind_value(10, mut.timeline_start_frame)
@@ -1001,7 +1001,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         local stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                source_sequence_id, parent_clip_id, owner_sequence_id,
+                master_clip_id, parent_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
@@ -1016,7 +1016,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(4, prev.name)
         stmt:bind_value(5, prev.track_id)
         stmt:bind_value(6, prev.media_id)
-        stmt:bind_value(7, prev.source_sequence_id)
+        stmt:bind_value(7, prev.master_clip_id)
         stmt:bind_value(8, prev.parent_clip_id)
         stmt:bind_value(9, prev.owner_sequence_id or prev.track_sequence_id)
         stmt:bind_value(10, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))

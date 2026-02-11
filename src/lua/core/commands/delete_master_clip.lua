@@ -83,7 +83,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Check for timeline clips referencing this master
         local timeline_clip_snapshots = {}
-        if clip.source_sequence_id and clip.source_sequence_id ~= "" then
+        if clip.master_clip_id and clip.master_clip_id ~= "" then
             local ref_query = db:prepare([[
                 SELECT c.id, c.track_id, c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                        c.enabled, c.offline, c.fps_numerator, c.fps_denominator, c.name, c.owner_sequence_id, t.sequence_id
@@ -98,7 +98,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return false
             end
             ref_query:bind_value(1, args.master_clip_id)
-            ref_query:bind_value(2, clip.source_sequence_id)
+            ref_query:bind_value(2, clip.master_clip_id)
             if ref_query:exec() then
                 while ref_query:next() do
                     table.insert(timeline_clip_snapshots, {
@@ -174,26 +174,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Remove tracks and snapshots for the master clip's source sequence
-        local source_sequence_id = clip.source_sequence_id
-        if source_sequence_id and source_sequence_id ~= "" then
+        local master_clip_id = clip.master_clip_id
+        if master_clip_id and master_clip_id ~= "" then
             local delete_tracks = db:prepare("DELETE FROM tracks WHERE sequence_id = ?")
             if delete_tracks then
-                delete_tracks:bind_value(1, source_sequence_id)
-                assert(delete_tracks:exec(), "DeleteMasterClip: tracks DELETE failed for sequence " .. tostring(source_sequence_id))
+                delete_tracks:bind_value(1, master_clip_id)
+                assert(delete_tracks:exec(), "DeleteMasterClip: tracks DELETE failed for sequence " .. tostring(master_clip_id))
                 delete_tracks:finalize()
             end
 
             local delete_snapshots = db:prepare("DELETE FROM snapshots WHERE sequence_id = ?")
             if delete_snapshots then
-                delete_snapshots:bind_value(1, source_sequence_id)
-                assert(delete_snapshots:exec(), "DeleteMasterClip: snapshots DELETE failed for sequence " .. tostring(source_sequence_id))
+                delete_snapshots:bind_value(1, master_clip_id)
+                assert(delete_snapshots:exec(), "DeleteMasterClip: snapshots DELETE failed for sequence " .. tostring(master_clip_id))
                 delete_snapshots:finalize()
             end
 
             local delete_sequence_stmt = assert(db:prepare("DELETE FROM sequences WHERE id = ?"),
-                "DeleteMasterClip: failed to prepare sequences DELETE for sequence " .. tostring(source_sequence_id))
-            delete_sequence_stmt:bind_value(1, source_sequence_id)
-            assert(delete_sequence_stmt:exec(), "DeleteMasterClip: sequences DELETE failed for sequence " .. tostring(source_sequence_id))
+                "DeleteMasterClip: failed to prepare sequences DELETE for sequence " .. tostring(master_clip_id))
+            delete_sequence_stmt:bind_value(1, master_clip_id)
+            assert(delete_sequence_stmt:exec(), "DeleteMasterClip: sequences DELETE failed for sequence " .. tostring(master_clip_id))
             delete_sequence_stmt:finalize()
         end
 
@@ -204,7 +204,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             name = clip.name,
             track_id = clip.track_id,
             media_id = clip.media_id,
-            source_sequence_id = clip.source_sequence_id,
+            master_clip_id = clip.master_clip_id,
             parent_clip_id = clip.parent_clip_id,
             owner_sequence_id = clip.owner_sequence_id,
             timeline_start = clip.timeline_start,
@@ -269,7 +269,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             track_id = args.master_clip_snapshot.track_id,
             parent_clip_id = args.master_clip_snapshot.parent_clip_id,
             owner_sequence_id = args.master_clip_snapshot.owner_sequence_id,
-            source_sequence_id = args.master_clip_snapshot.source_sequence_id,
+            master_clip_id = args.master_clip_snapshot.master_clip_id,
             timeline_start = args.master_clip_snapshot.timeline_start,
             duration = args.master_clip_snapshot.duration,
             source_in = args.master_clip_snapshot.source_in,

@@ -15,7 +15,7 @@
 -- Architectural note (IS-a model):
 -- A masterclip IS a sequence (kind="masterclip"), not a clip wrapping a sequence.
 -- Stream clips on the sequence's tracks represent video/audio streams.
--- Timeline clips reference the masterclip via source_sequence_id.
+-- Timeline clips reference the masterclip via master_clip_id.
 --
 -- Metadata snapshots:
 -- Stream clips snapshot fps_numerator/fps_denominator at creation time.

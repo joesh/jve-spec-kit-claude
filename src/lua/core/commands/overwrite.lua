@@ -5,7 +5,7 @@
 -- - Delegate to AddClipsToSequence for actual overwrite
 --
 -- Invariants:
--- - Requires source_sequence_id (masterclip sequence)
+-- - Requires master_clip_id (masterclip sequence ID)
 -- - Timing comes from stream clips in native units (frames for video, samples for audio)
 --
 -- @file overwrite.lua
@@ -26,7 +26,7 @@ local SPEC = {
         dry_run = { kind = "boolean" },
         duration = {},
         duration_value = {},
-        source_sequence_id = {},  -- Masterclip sequence (replaces master_clip_id)
+        master_clip_id = {},  -- Masterclip sequence ID
         media_id = {},
         overwrite_time = {},
         project_id = { required = true },
@@ -76,15 +76,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local overwrite_time = clip_edit_helper.resolve_edit_time(args.overwrite_time, command, "overwrite_time")
 
         -- Load masterclip sequence - REQUIRED
-        local source_sequence_id = args.source_sequence_id
-        assert(source_sequence_id and source_sequence_id ~= "",
-            "Overwrite command: source_sequence_id is required")
-        local source_sequence = Sequence.load(source_sequence_id)
+        local master_clip_id = args.master_clip_id
+        assert(master_clip_id and master_clip_id ~= "",
+            "Overwrite command: master_clip_id is required")
+        local source_sequence = Sequence.load(master_clip_id)
         assert(source_sequence, string.format(
-            "Overwrite command: sequence %s not found", source_sequence_id))
+            "Overwrite command: masterclip %s not found", master_clip_id))
         assert(source_sequence:is_masterclip(), string.format(
             "Overwrite command: sequence %s is not a masterclip (kind=%s)",
-            source_sequence_id, tostring(source_sequence.kind)))
+            master_clip_id, tostring(source_sequence.kind)))
 
         -- Get project_id from masterclip sequence
         local project_id = command.project_id or args.project_id or source_sequence.project_id
@@ -97,7 +97,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local audio_streams = source_sequence:audio_streams()
         local media_id = (video_stream and video_stream.media_id) or (audio_streams[1] and audio_streams[1].media_id)
         assert(media_id and media_id ~= "", string.format(
-            "Overwrite command: masterclip %s has no media_id in streams", source_sequence_id))
+            "Overwrite command: masterclip %s has no media_id in streams", master_clip_id))
 
         -- Load media for audio channel info
         local media = Media.load(media_id)
@@ -117,7 +117,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Must have at least one stream
         assert(video_timing or audio_timing, string.format(
-            "Overwrite command: masterclip %s has no video or audio streams", source_sequence_id))
+            "Overwrite command: masterclip %s has no video or audio streams", master_clip_id))
 
         -- overwrite_time must be integer
         assert(overwrite_time == nil or type(overwrite_time) == "number", "Overwrite: overwrite_time must be integer")
@@ -137,7 +137,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             table.insert(clips, {
                 role = "video",
                 media_id = media_id,
-                source_sequence_id = source_sequence_id,
+                master_clip_id = master_clip_id,
                 project_id = project_id,
                 name = clip_name,
                 source_in = video_timing.source_in,
@@ -160,7 +160,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     role = "audio",
                     channel = ch,
                     media_id = media_id,
-                    source_sequence_id = source_sequence_id,
+                    master_clip_id = master_clip_id,
                     project_id = project_id,
                     name = clip_name .. " (Audio)",
                     source_in = audio_timing.source_in,
@@ -180,14 +180,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         assert(#clips > 0, string.format(
-            "Overwrite command: no clips to insert for masterclip %s", source_sequence_id))
+            "Overwrite command: no clips to insert for masterclip %s", master_clip_id))
 
         -- Build group
         local groups = {
             {
                 clips = clips,
                 duration = group_duration,
-                source_sequence_id = source_sequence_id,
+                master_clip_id = master_clip_id,
             }
         }
 

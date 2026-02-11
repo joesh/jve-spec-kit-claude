@@ -96,7 +96,7 @@ local function create_master_clip(id, name)
         id = id,
         project_id = "project",
         clip_kind = "master",
-        source_sequence_id = source_seq.id,
+        master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = 100,
         source_in = 0,

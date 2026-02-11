@@ -69,7 +69,7 @@ assert(audio_track:save(), "Failed to save audio track")
 local master_clip = Clip.create("Test Master", nil, {
     project_id = project_id,
     clip_kind = "master",
-    source_sequence_id = source_seq.id,
+    master_clip_id = source_seq.id,
     timeline_start = 0,
     duration = EXPECTED_VIDEO_FRAMES,
     source_in = 0,
