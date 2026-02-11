@@ -77,9 +77,15 @@ local M = {
     _tick_generation = 0,
 
     -- Frame decimation: last frame displayed by _tick().
-    -- If audio hasn't advanced past this frame, the tick is skipped (no redundant decode).
     -- nil when stopped, set on play/shuttle/slow_play/seek.
     _last_tick_frame = nil,
+
+    -- Stuckness detection: last frame AUDIO reported (timeline mode only).
+    -- Only updated when audio is actually driving (not stuck). Compared against
+    -- current audio frame to detect exhaustion/J-cuts. Separate from _last_tick_frame
+    -- because frame-based advance changes _last_tick_frame but must NOT reset the
+    -- audio stuckness tracker (that would cause oscillation).
+    _last_audio_frame = nil,
 }
 
 -- Viewer panel reference (set via init)
@@ -598,6 +604,7 @@ function M.stop()
     M._last_committed_frame = nil
     M._tick_generation = M._tick_generation + 1
     M._last_tick_frame = nil
+    M._last_audio_frame = nil
     M._clear_latch()
 
     stop_audio()
@@ -756,6 +763,7 @@ function M.seek(frame_idx)
     M.set_position_silent(frame)
     M._last_committed_frame = frame
     M._last_tick_frame = frame
+    M._last_audio_frame = nil
 
     -- If playing, stop audio first to flush hardware buffer.
     -- Without this, get_time_us() returns stale time on the next tick
@@ -868,8 +876,9 @@ function M._tick()
             end
             -- Resolve audio sources at new position
             resolve_and_set_audio_sources(math.floor(current_pos))
-            -- Clear last_tick_frame so the tick proceeds after re-anchor
+            -- Clear frame trackers so tick proceeds fresh after re-anchor
             M._last_tick_frame = nil
+            M._last_audio_frame = nil
             logger.debug("playback_controller",
                 string.format("External move detected: %d → %d, re-anchored audio",
                     M._last_committed_frame, math.floor(current_pos)))
@@ -891,15 +900,22 @@ function M._tick()
             total_frames = content_end,
             sequence_id = M.sequence_id,
             current_clip_id = M.current_clip_id,
-            last_tick_frame = M._last_tick_frame,
+            last_audio_frame = M._last_audio_frame,
         }
         local result = timeline_playback.tick(tick_in, audio_playback, viewer_panel)
 
         -- Video clip switch doesn't affect audio — audio is resolved independently
         M.current_clip_id = result.current_clip_id
 
-        -- Resolve audio independently on every tick
-        resolve_and_set_audio_sources(result.frame_idx)
+        -- Update audio frame tracker (only when audio was driving, not stuck)
+        if result.audio_frame ~= nil then
+            M._last_audio_frame = result.audio_frame
+        end
+
+        -- Resolve audio only when displayed frame changed (avoid per-tick SQL)
+        if result.frame_idx ~= M._last_tick_frame then
+            resolve_and_set_audio_sources(result.frame_idx)
+        end
 
         if result.continue then
             -- Ordering invariant: resolve already done inside tick → now commit position → sync

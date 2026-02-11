@@ -37,13 +37,14 @@ local M = {}
 --   total_frames   number  >= 1
 --   sequence_id    string  non-empty
 --   current_clip_id string|nil  clip currently playing (for switch detection)
---   last_tick_frame number|nil  frame from previous tick (for stuckness detection)
+--   last_audio_frame number|nil  last frame audio reported (for stuckness detection)
 --
 -- tick_result:
 --   continue        boolean  true = keep ticking, false = stop
 --   new_pos         number   updated frame position
 --   current_clip_id string|nil  updated clip id (may change on clip switch)
 --   frame_idx       number|nil  integer frame index (for sync callback)
+--   audio_frame     number|nil  audio-reported frame (nil when frame-based/no audio)
 --------------------------------------------------------------------------------
 
 local function assert_tick_in(tick_in)
@@ -150,10 +151,12 @@ function M.tick(tick_in, audio_playback, viewer_panel)
     assert_tick_in(tick_in)
 
     -- Frame advancement: video ALWAYS follows audio when audio is active (Rule V1)
-    -- STUCKNESS DETECTION: if audio reports the same frame as last tick, it hasn't
-    -- advanced (exhaustion, J-cut, gap). Switch to frame-based to keep video moving.
-    -- No cross-module flags needed — just compare frames.
+    -- STUCKNESS DETECTION: if audio reports the same frame as last_audio_frame,
+    -- it hasn't advanced (exhaustion, J-cut, gap). Switch to frame-based.
+    -- last_audio_frame is tracked separately from displayed frame to avoid oscillation:
+    -- frame-based advance changes displayed frame but must NOT reset the audio tracker.
     local pos
+    local result_audio_frame = nil  -- non-nil when audio is driving (for tracker update)
     local audio_can_drive = audio_playback and audio_playback.is_ready()
         and audio_playback.playing and audio_playback.has_audio
 
@@ -162,13 +165,15 @@ function M.tick(tick_in, audio_playback, viewer_panel)
         local audio_frame = helpers.calc_frame_from_time_us(
             timeline_time_us, tick_in.fps_num, tick_in.fps_den)
 
-        if tick_in.last_tick_frame ~= nil
-           and audio_frame == tick_in.last_tick_frame then
+        if tick_in.last_audio_frame ~= nil
+           and audio_frame == tick_in.last_audio_frame then
             -- Audio stuck: advance frame-based (J-cut, gap, end of content)
             pos = tick_in.pos + (tick_in.direction * tick_in.speed)
+            -- result_audio_frame stays nil → controller won't update tracker
         else
             -- Audio advancing: video follows audio time (Rule V1)
             pos = audio_frame
+            result_audio_frame = audio_frame
         end
     else
         -- NO AUDIO: Advance frame independently
@@ -206,6 +211,7 @@ function M.tick(tick_in, audio_playback, viewer_panel)
         current_clip_id = new_clip_id,
         frame_idx = frame_idx,
         source_time_us = source_time_us,
+        audio_frame = result_audio_frame,
     }
 end
 
