@@ -104,6 +104,7 @@ For short-term debug prints that will immediately be removed you may use print.
 - **Maintaining backward compatibility** without explicitly asking the user first (Rule #7)
 - **Aspirational documentation** - only document verified reality (Rule 0.1)
 - **Command-specific logic in menu_system.lua** - menu dispatch must route through gather_context then command; no parameter resolution in menu handlers
+- **The word "orchestration"** in code, comments, or commit messages — it substitutes for "algorithm" without claiming algorithmic rigor. Use precise terms: "tick loop", "audio-following", "change detection", etc.
 
 ## **✅ SUCCESS PATTERN**
 
