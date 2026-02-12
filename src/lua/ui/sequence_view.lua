@@ -173,6 +173,9 @@ function SequenceView:_create_widgets()
         on_seek = function(frame) self:seek_to_frame(frame) end,
         on_listener = function(fn) self:add_listener(fn) end,
     })
+    assert(self._mark_bar, string.format(
+        "SequenceView(%s):_create_widgets: source_mark_bar.create returned nil",
+        self.view_id))
 
     qt_constants.LAYOUT.SET_ON_WIDGET(content, content_layout)
     qt_constants.LAYOUT.ADD_WIDGET(layout, content)
@@ -194,8 +197,9 @@ end
 -- @param sequence_id string
 -- @param opts table optional: { total_frames = number }
 function SequenceView:load_sequence(sequence_id, opts)
-    assert(sequence_id and sequence_id ~= "",
-        "SequenceView:load_sequence: sequence_id required")
+    assert(sequence_id and sequence_id ~= "", string.format(
+        "SequenceView(%s):load_sequence: sequence_id required, got %s",
+        self.view_id, tostring(sequence_id)))
 
     -- Save current masterclip playhead before switching
     if self.sequence and self.sequence:is_masterclip() then
@@ -273,9 +277,12 @@ end
 --- Seek to frame (for mark bar clicks and external callers).
 -- Stops playback if playing, displays frame, updates playhead.
 function SequenceView:seek_to_frame(frame)
-    assert(type(frame) == "number",
-        "SequenceView:seek_to_frame: frame must be number")
-    if not self.sequence_id then return end
+    assert(type(frame) == "number", string.format(
+        "SequenceView(%s):seek_to_frame: frame must be number, got %s",
+        self.view_id, type(frame)))
+    assert(self.sequence_id, string.format(
+        "SequenceView(%s):seek_to_frame: no sequence loaded",
+        self.view_id))
 
     if self.engine:is_playing() then
         self.engine:stop()
@@ -338,20 +345,22 @@ end
 
 --- Set mark in at frame (masterclip only).
 function SequenceView:set_mark_in(frame)
-    assert(frame ~= nil,
-        "SequenceView:set_mark_in: frame is nil")
-    assert(self.sequence and self.sequence:is_masterclip(),
-        "SequenceView:set_mark_in: no masterclip loaded")
+    assert(frame ~= nil, string.format(
+        "SequenceView(%s):set_mark_in: frame is nil", self.view_id))
+    assert(self.sequence and self.sequence:is_masterclip(), string.format(
+        "SequenceView(%s):set_mark_in: no masterclip loaded (seq=%s)",
+        self.view_id, tostring(self.sequence_id)))
     self.sequence:set_all_streams_in(math.floor(frame))
     self:_notify()
 end
 
 --- Set mark out at frame (masterclip only).
 function SequenceView:set_mark_out(frame)
-    assert(frame ~= nil,
-        "SequenceView:set_mark_out: frame is nil")
-    assert(self.sequence and self.sequence:is_masterclip(),
-        "SequenceView:set_mark_out: no masterclip loaded")
+    assert(frame ~= nil, string.format(
+        "SequenceView(%s):set_mark_out: frame is nil", self.view_id))
+    assert(self.sequence and self.sequence:is_masterclip(), string.format(
+        "SequenceView(%s):set_mark_out: no masterclip loaded (seq=%s)",
+        self.view_id, tostring(self.sequence_id)))
     self.sequence:set_all_streams_out(math.floor(frame))
     self:_notify()
 end
@@ -360,10 +369,12 @@ end
 -- Uses total_frames (computed at load time from original stream clip extent)
 -- rather than current source_out (which may have been narrowed by set_mark_out).
 function SequenceView:clear_marks()
-    assert(self.sequence and self.sequence:is_masterclip(),
-        "SequenceView:clear_marks: no masterclip loaded")
-    assert(self.total_frames > 0,
-        "SequenceView:clear_marks: total_frames must be > 0")
+    assert(self.sequence and self.sequence:is_masterclip(), string.format(
+        "SequenceView(%s):clear_marks: no masterclip loaded (seq=%s)",
+        self.view_id, tostring(self.sequence_id)))
+    assert(self.total_frames > 0, string.format(
+        "SequenceView(%s):clear_marks: total_frames must be > 0, got %d",
+        self.view_id, self.total_frames))
 
     self.sequence:set_all_streams_in(0)
     self.sequence:set_all_streams_out(self.total_frames)
@@ -373,8 +384,8 @@ end
 
 --- Set playhead (clamped, schedules persist for masterclips).
 function SequenceView:set_playhead(frame)
-    assert(frame ~= nil,
-        "SequenceView:set_playhead: frame is nil")
+    assert(frame ~= nil, string.format(
+        "SequenceView(%s):set_playhead: frame is nil", self.view_id))
     local clamped = math.max(0, math.min(
         math.floor(frame), math.max(0, self.total_frames - 1)))
     if clamped == self.playhead then return end
@@ -392,8 +403,9 @@ end
 
 --- Add listener for state changes (redraws, playhead updates).
 function SequenceView:add_listener(fn)
-    assert(type(fn) == "function",
-        "SequenceView:add_listener: fn must be function")
+    assert(type(fn) == "function", string.format(
+        "SequenceView(%s):add_listener: fn must be function, got %s",
+        self.view_id, type(fn)))
     self._listeners[#self._listeners + 1] = fn
 end
 

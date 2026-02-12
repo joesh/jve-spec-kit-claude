@@ -619,13 +619,12 @@ do
     print("  ok")
 end
 
--- ─── Test 17: seek_to_frame with no sequence is no-op ───
-print("\n--- seek without sequence ---")
+-- ─── Test 17: seek_to_frame with no sequence asserts ───
+print("\n--- error: seek without sequence ---")
 do
     local view = SequenceView.new({ view_id = "test_no_seq" })
-    -- Should not error, just return
-    view:seek_to_frame(10)
-    assert(view.playhead == 0, "playhead unchanged without sequence")
+    expect_assert(function() view:seek_to_frame(10) end,
+        "seek_to_frame without sequence")
     view:destroy()
     print("  ok")
 end
@@ -650,6 +649,289 @@ do
     expect_assert(function() view:set_mark_out(10) end,
         "set_mark_out without masterclip")
     view:destroy()
+    print("  ok")
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- NSF: Engine Callback Wiring
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ─── Test 20: _on_show_frame calls SURFACE_SET_FRAME ───
+print("\n--- callback: show_frame ---")
+do
+    local view = SequenceView.new({ view_id = "test_cb_frame" })
+    timer_callbacks = {}
+    qt_log = {}
+
+    view:_on_show_frame("test_handle", { clip_id = "c1", rotation = 0 })
+
+    local found = false
+    for _, entry in ipairs(qt_log) do
+        if entry.type == "set_frame"
+           and entry.surface == view:get_video_surface()
+           and entry.frame == "test_handle" then
+            found = true
+        end
+    end
+    assert(found, "SURFACE_SET_FRAME called with frame handle")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 21: _on_show_gap calls SURFACE_SET_FRAME(nil) ───
+print("\n--- callback: show_gap ---")
+do
+    local view = SequenceView.new({ view_id = "test_cb_gap" })
+    timer_callbacks = {}
+    qt_log = {}
+
+    view:_on_show_gap()
+
+    local found = false
+    for _, entry in ipairs(qt_log) do
+        if entry.type == "set_frame"
+           and entry.surface == view:get_video_surface()
+           and entry.frame == nil then
+            found = true
+        end
+    end
+    assert(found, "SURFACE_SET_FRAME(nil) called for gap")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 22: _on_set_rotation calls SURFACE_SET_ROTATION ───
+print("\n--- callback: set_rotation ---")
+do
+    local view = SequenceView.new({ view_id = "test_cb_rot" })
+    timer_callbacks = {}
+    qt_log = {}
+
+    view:_on_set_rotation(90)
+
+    local found = false
+    for _, entry in ipairs(qt_log) do
+        if entry.type == "set_rotation"
+           and entry.surface == view:get_video_surface()
+           and entry.degrees == 90 then
+            found = true
+        end
+    end
+    assert(found, "SURFACE_SET_ROTATION(90) called")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- NSF: Additional Error Paths
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ─── Test 23: load_sequence with non-existent ID asserts ───
+print("\n--- error: load non-existent sequence ---")
+do
+    local view = SequenceView.new({ view_id = "test_no_exist" })
+    expect_assert(function() view:load_sequence("does_not_exist_abc") end,
+        "load non-existent sequence")
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 24: seek_to_frame type validation ───
+print("\n--- error: seek_to_frame bad types ---")
+do
+    local view = SequenceView.new({ view_id = "test_seek_type" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+
+    expect_assert(function() view:seek_to_frame(nil) end,
+        "seek_to_frame nil")
+    expect_assert(function() view:seek_to_frame("ten") end,
+        "seek_to_frame string")
+    expect_assert(function() view:seek_to_frame(true) end,
+        "seek_to_frame bool")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 25: seek_to_frame boundary clamping ───
+print("\n--- seek_to_frame boundary ---")
+do
+    local view = SequenceView.new({ view_id = "test_seek_bound" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)  -- 100 frames
+
+    -- Seek beyond end → clamped to 99
+    view:seek_to_frame(200)
+    assert(view.playhead == 99,
+        "seek beyond end clamped to 99, got " .. view.playhead)
+
+    -- Seek to negative → engine asserts (frame >= 0)
+    -- engine:seek asserts frame_idx >= 0, so this should assert
+    expect_assert(function() view:seek_to_frame(-5) end,
+        "seek negative frame")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 26: operations after unload assert ───
+print("\n--- error: ops after unload ---")
+do
+    local view = SequenceView.new({ view_id = "test_after_unload" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+    view:unload()
+
+    expect_assert(function() view:set_mark_in(10) end,
+        "set_mark_in after unload")
+    expect_assert(function() view:set_mark_out(10) end,
+        "set_mark_out after unload")
+    expect_assert(function() view:clear_marks() end,
+        "clear_marks after unload")
+    expect_assert(function() view:seek_to_frame(10) end,
+        "seek_to_frame after unload")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 27: set_mark_in/out with nil frame asserts ───
+print("\n--- error: mark nil frame ---")
+do
+    local view = SequenceView.new({ view_id = "test_mark_nil" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+
+    expect_assert(function() view:set_mark_in(nil) end,
+        "set_mark_in nil")
+    expect_assert(function() view:set_mark_out(nil) end,
+        "set_mark_out nil")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 28: add_listener type validation ───
+print("\n--- error: add_listener bad type ---")
+do
+    local view = SequenceView.new({ view_id = "test_listen_type" })
+    expect_assert(function() view:add_listener(nil) end,
+        "add_listener nil")
+    expect_assert(function() view:add_listener("not a function") end,
+        "add_listener string")
+    expect_assert(function() view:add_listener(42) end,
+        "add_listener number")
+    view:destroy()
+    print("  ok")
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- NSF: State Transitions
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ─── Test 29: load → unload → reload restores playhead ───
+print("\n--- reload restores playhead ---")
+do
+    local view = SequenceView.new({ view_id = "test_reload" })
+    timer_callbacks = {}
+
+    view:load_sequence(mc_id)
+    view:set_playhead(55)
+    pump_timers()  -- flush persist
+
+    view:unload()
+    assert(view.playhead == 0, "playhead 0 after unload")
+
+    view:load_sequence(mc_id)
+    assert(view.playhead == 55,
+        "playhead restored from DB after reload, got " .. view.playhead)
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 30: out-of-bounds saved playhead clamped on load ───
+print("\n--- out-of-bounds saved playhead ---")
+do
+    -- Artificially save a playhead beyond total_frames
+    local Sequence = require("models.sequence")
+    local seq = Sequence.load(mc_id)
+    seq.playhead_position = 999
+    seq:save()
+
+    local view = SequenceView.new({ view_id = "test_oob_ph" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+
+    -- total_frames=100, so saved playhead=999 should NOT be restored
+    -- (the condition checks saved_playhead < total_frames)
+    assert(view.playhead == 0,
+        "out-of-bounds playhead not restored, got " .. view.playhead)
+
+    -- Reset for other tests
+    view:set_playhead(0)
+    pump_timers()
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 31: multiple listeners fire independently ───
+print("\n--- multiple listeners ---")
+do
+    local view = SequenceView.new({ view_id = "test_multi_listen" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+
+    local count_a, count_b, count_c = 0, 0, 0
+    local fn_a = function() count_a = count_a + 1 end
+    local fn_b = function() count_b = count_b + 1 end
+    local fn_c = function() count_c = count_c + 1 end
+    view:add_listener(fn_a)
+    view:add_listener(fn_b)
+    view:add_listener(fn_c)
+
+    view:set_playhead(10)
+    assert(count_a == 1, "listener A fired")
+    assert(count_b == 1, "listener B fired")
+    assert(count_c == 1, "listener C fired")
+
+    -- Remove middle listener
+    view:remove_listener(fn_b)
+    view:set_playhead(20)
+    assert(count_a == 2, "listener A fired again")
+    assert(count_b == 1, "listener B NOT fired after removal")
+    assert(count_c == 2, "listener C fired again")
+
+    -- Remove non-existent returns false
+    assert(view:remove_listener(function() end) == false,
+        "remove non-existent returns false")
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 32: destroy saves masterclip playhead ───
+print("\n--- destroy saves playhead ---")
+do
+    local view = SequenceView.new({ view_id = "test_destroy_save" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+    view:set_playhead(77)
+    -- Don't pump timers — destroy should save synchronously
+    view:destroy()
+
+    local Sequence = require("models.sequence")
+    local reloaded = Sequence.load(mc_id)
+    assert(reloaded.playhead_position == 77,
+        "destroy saved playhead, got " .. tostring(reloaded.playhead_position))
+
+    -- Reset
+    reloaded.playhead_position = 0
+    reloaded:save()
     print("  ok")
 end
 
