@@ -34,7 +34,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             print("Executing GoToEnd command")
         end
 
-        local clips = timeline_state.get_clips() or {}
+        local clips = timeline_state.get_clips()
         local max_end = 0
         
         for _, clip in ipairs(clips) do

@@ -28,7 +28,7 @@ local SPEC = {
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     local function collect_edit_points()
-        local clips = timeline_state.get_clips() or {}
+        local clips = timeline_state.get_clips()
 
         -- Collect edit points as integers
         local points = {0}

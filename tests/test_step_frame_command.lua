@@ -232,4 +232,22 @@ assert(result.success, "StepFrame source shift-right should succeed")
 assert(mock_engine._position == 40,
     string.format("Expected source position 40, got %d", mock_engine._position))
 
+-- Test 9: fps_den=0 should assert, not fall back to 30fps
+print("Test 9: fps_den=0 asserts (NSF)")
+mock_engine.fps_den = 0
+mock_engine._position = 10
+timeline_state.playhead_position = 10
+local r9 = command_manager.execute("StepFrame", {
+    project_id = "proj1",
+    direction = 1,
+    shift = true,
+})
+assert(not r9.success, "StepFrame with fps_den=0 should fail, not silently use fallback")
+assert(r9.error_message and r9.error_message:find("fps_den"),
+    "error should mention fps_den, got: " .. tostring(r9.error_message))
+-- Verify playhead unchanged (no fallback math happened)
+assert(timeline_state.playhead_position == 10,
+    "playhead should be unchanged after assert, got " .. timeline_state.playhead_position)
+mock_engine.fps_den = 1  -- restore
+
 print("✅ test_step_frame_command.lua passed")

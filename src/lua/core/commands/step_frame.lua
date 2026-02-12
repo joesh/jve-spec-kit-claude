@@ -32,7 +32,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local shift = args.shift and true or false
         local current_frame = engine:get_position()
 
-        local fps_float = (engine.fps_den > 0) and (engine.fps_num / engine.fps_den) or 30
+        assert(engine.fps_den > 0,
+            string.format("StepFrame: engine.fps_den must be > 0, got %s", tostring(engine.fps_den)))
+        local fps_float = engine.fps_num / engine.fps_den
         local step_frames = shift and math.max(1, math.floor(fps_float + 0.5)) or 1
 
         local new_frame

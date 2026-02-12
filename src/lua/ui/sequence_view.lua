@@ -98,10 +98,10 @@ function SequenceView:_create_widgets()
     self._container = qt_constants.WIDGET.CREATE()
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
     if qt_constants.LAYOUT.SET_SPACING then
-        pcall(qt_constants.LAYOUT.SET_SPACING, layout, 0)
+        qt_constants.LAYOUT.SET_SPACING(layout, 0)
     end
     if qt_constants.LAYOUT.SET_MARGINS then
-        pcall(qt_constants.LAYOUT.SET_MARGINS, layout, 0, 0, 0, 0)
+        qt_constants.LAYOUT.SET_MARGINS(layout, 0, 0, 0, 0)
     end
 
     -- Title label
@@ -119,7 +119,7 @@ function SequenceView:_create_widgets()
     -- Content container (black background for video)
     local content = qt_constants.WIDGET.CREATE()
     if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
-        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, content, "Expanding", "Expanding")
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(content, "Expanding", "Expanding")
     end
     if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_STYLE then
         qt_constants.PROPERTIES.SET_STYLE(content, [[
@@ -132,10 +132,10 @@ function SequenceView:_create_widgets()
 
     local content_layout = qt_constants.LAYOUT.CREATE_VBOX()
     if qt_constants.LAYOUT.SET_MARGINS then
-        pcall(qt_constants.LAYOUT.SET_MARGINS, content_layout, 0, 0, 0, 0)
+        qt_constants.LAYOUT.SET_MARGINS(content_layout, 0, 0, 0, 0)
     end
     if qt_constants.LAYOUT.SET_SPACING then
-        pcall(qt_constants.LAYOUT.SET_SPACING, content_layout, 0)
+        qt_constants.LAYOUT.SET_SPACING(content_layout, 0)
     end
 
     -- GPU video surface
@@ -144,13 +144,21 @@ function SequenceView:_create_widgets()
     self._video_surface = qt_constants.WIDGET.CREATE_GPU_VIDEO_SURFACE()
     assert(self._video_surface,
         "SequenceView: CREATE_GPU_VIDEO_SURFACE returned nil")
+
+    -- Assert EMP bindings required by engine callbacks
+    assert(qt_constants.EMP and qt_constants.EMP.SURFACE_SET_FRAME,
+        "SequenceView: EMP.SURFACE_SET_FRAME not available")
+    assert(qt_constants.EMP.SURFACE_SET_ROTATION,
+        "SequenceView: EMP.SURFACE_SET_ROTATION not available")
+    assert(qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT,
+        "SequenceView: PROPERTIES.SET_TEXT not available")
     if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
-        pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY,
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(
             self._video_surface, "Expanding", "Expanding")
     end
     qt_constants.LAYOUT.ADD_WIDGET(content_layout, self._video_surface)
     if qt_constants.LAYOUT.SET_STRETCH_FACTOR then
-        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR,
+        qt_constants.LAYOUT.SET_STRETCH_FACTOR(
             content_layout, self._video_surface, 1)
     end
 
@@ -180,7 +188,7 @@ function SequenceView:_create_widgets()
     qt_constants.LAYOUT.SET_ON_WIDGET(content, content_layout)
     qt_constants.LAYOUT.ADD_WIDGET(layout, content)
     if qt_constants.LAYOUT.SET_STRETCH_FACTOR then
-        pcall(qt_constants.LAYOUT.SET_STRETCH_FACTOR, layout, content, 1)
+        qt_constants.LAYOUT.SET_STRETCH_FACTOR(layout, content, 1)
     end
 
     qt_constants.LAYOUT.SET_ON_WIDGET(self._container, layout)
@@ -455,27 +463,15 @@ end
 --------------------------------------------------------------------------------
 
 function SequenceView:_on_show_frame(frame_handle, metadata)
-    if self._video_surface
-       and qt_constants.EMP
-       and qt_constants.EMP.SURFACE_SET_FRAME then
-        qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
-    end
+    qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
 end
 
 function SequenceView:_on_show_gap()
-    if self._video_surface
-       and qt_constants.EMP
-       and qt_constants.EMP.SURFACE_SET_FRAME then
-        qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
-    end
+    qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
 end
 
 function SequenceView:_on_set_rotation(degrees)
-    if self._video_surface
-       and qt_constants.EMP
-       and qt_constants.EMP.SURFACE_SET_ROTATION then
-        qt_constants.EMP.SURFACE_SET_ROTATION(self._video_surface, degrees)
-    end
+    qt_constants.EMP.SURFACE_SET_ROTATION(self._video_surface, degrees)
 end
 
 --- Called by engine during playback ticks (set_position fires this).
@@ -492,11 +488,7 @@ end
 --------------------------------------------------------------------------------
 
 function SequenceView:_set_title(text)
-    if self._title_label
-       and qt_constants.PROPERTIES
-       and qt_constants.PROPERTIES.SET_TEXT then
-        qt_constants.PROPERTIES.SET_TEXT(self._title_label, text)
-    end
+    qt_constants.PROPERTIES.SET_TEXT(self._title_label, text)
 end
 
 function SequenceView:_notify()
