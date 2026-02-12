@@ -336,8 +336,36 @@ resolve_and_set_audio_sources = function(timeline_frame)
                 ac.clip.id:sub(1,8), source_end_us / 1000000, media_duration_us / 1000000, ac.media_path))
         end
 
-        -- source_offset relates timeline time to source time (both in microseconds)
-        local source_offset_us = timeline_start_us - seek_us
+        -- "Frames are frames" audio conform: source_offset must account for
+        -- the speed ratio between timeline fps and media video fps.
+        -- At any playhead, video shows source_frame = source_in + (playhead - tl_start).
+        -- Audio must be at the same source time as that video frame.
+        --
+        -- Media video fps < 1000 → real video rate → apply conform.
+        -- Media video fps >= 1000 → audio-only (sample_rate as pseudo-fps) → no conform.
+        local media_fps_num = ac.media_fps_num
+        local media_fps_den = ac.media_fps_den
+        local media_video_fps = media_fps_num and media_fps_den
+            and (media_fps_num / media_fps_den) or nil
+        local needs_conform = media_video_fps
+            and media_video_fps < 1000
+            and math.abs(media_video_fps - M.fps_num / M.fps_den) > 0.01
+
+        local source_offset_us
+        if needs_conform then
+            -- Conform: compute source_offset so audio matches video at current playhead.
+            -- Video source time = seek_time + offset_tl_frames / video_fps
+            -- This offset is recomputed each tick (~33ms), max drift = ~8ms at 25% mismatch.
+            local offset_tl = playhead_frame - timeline_start_frames
+            local conform_source_time_us = seek_us + math.floor(
+                offset_tl * 1000000 * media_fps_den / media_fps_num)
+            local playhead_time_us = math.floor(
+                playhead_frame * 1000000 * M.fps_den / M.fps_num)
+            source_offset_us = playhead_time_us - conform_source_time_us
+        else
+            -- No conform: standard 1:1 time mapping
+            source_offset_us = timeline_start_us - seek_us
+        end
 
         -- Effective volume respects solo/mute
         local effective_volume
@@ -347,10 +375,17 @@ resolve_and_set_audio_sources = function(timeline_frame)
             effective_volume = ac.track.muted and 0 or ac.track.volume
         end
 
-        -- Timeline duration uses CLIP rate (source_out - source_in is in clip units)
-        -- For audio clips: samples at 48000Hz. For video clips: frames at timeline fps.
-        local timeline_duration_us = math.floor(clip_duration_frames * 1000000 * clip_fps_den / clip_fps_num)
-        local clip_end_us = timeline_start_us + timeline_duration_us
+        -- Clip end: use clip.duration (timeline frames) when available.
+        -- "Frames are frames" means the clip occupies exactly clip.duration timeline frames.
+        -- Fall back to source-duration computation for mock clips without duration.
+        local clip_end_us
+        if ac.clip.duration then
+            clip_end_us = math.floor(
+                (timeline_start_frames + ac.clip.duration) * 1000000 * M.fps_den / M.fps_num)
+        else
+            local timeline_duration_us = math.floor(clip_duration_frames * 1000000 * clip_fps_den / clip_fps_num)
+            clip_end_us = timeline_start_us + timeline_duration_us
+        end
 
         -- Debug: show seek derivation
         logger.debug("playback_controller", string.format(

@@ -85,6 +85,7 @@ local timeline_playback = require("core.playback.timeline_playback")
 
 local function make_mock_viewer()
     return {
+        show_frame = function() end,
         show_frame_at_time = function() end,
         show_gap = function() end,
         set_rotation = function() end,
@@ -117,12 +118,9 @@ local function test_resolve_updates_prefetch()
         "direction should be 1, got " .. tostring(set_playhead_calls[1].direction))
     assert(set_playhead_calls[1].speed == 1,
         "speed should be 1, got " .. tostring(set_playhead_calls[1].speed))
-    -- Source frame for timeline frame 10 with source_in=0:
-    -- source_time_us = floor(10/24 * 1e6) = 416666
-    -- source_frame = floor(416666 * 24 / 1e6) = floor(9.999984) = 9 (truncation through us)
-    -- Off-by-one from round-trip is fine for prefetch target
-    assert(set_playhead_calls[1].frame_idx == 9,
-        string.format("source frame_idx should be 9, got %d", set_playhead_calls[1].frame_idx))
+    -- Source frame for timeline frame 10 with source_in=0 = 10 (integer, no round-trip)
+    assert(set_playhead_calls[1].frame_idx == 10,
+        string.format("source frame_idx should be 10, got %d", set_playhead_calls[1].frame_idx))
 
     print("  test_resolve_updates_prefetch passed")
 end

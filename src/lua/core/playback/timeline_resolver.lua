@@ -19,13 +19,17 @@ local Clip = require("models.clip")
 local Media = require("models.media")
 
 --------------------------------------------------------------------------------
--- Internal: Calculate source time for a clip at a given playhead position
--- @param clip Clip object (must have timeline_start, source_in, rate)
--- @param playhead_frame integer playhead position in frames
--- @return source_time_us (integer microseconds)
+-- Internal: Calculate source frame and time for a clip at a given playhead.
+--
+-- "Frames are frames": source_frame = source_in + timeline_offset (1:1 mapping).
+-- A 24fps clip on a 30fps timeline plays each source frame at 1/30s — the clip
+-- runs faster. No rate conversion here; the speed conform is the intended behavior.
+--
+-- @param clip            Clip object (timeline_start, source_in, rate)
+-- @param playhead_frame  integer playhead position in timeline frames
+-- @return source_time_us (integer microseconds), source_frame (integer)
 --------------------------------------------------------------------------------
 local function calc_source_time_us(clip, playhead_frame)
-    -- All coords are integer frames - no rescaling needed
     assert(type(playhead_frame) == "number", "timeline_resolver: playhead must be integer")
     assert(type(clip.timeline_start) == "number", "timeline_resolver: timeline_start must be integer")
     assert(type(clip.source_in) == "number", "timeline_resolver: source_in must be integer")
@@ -38,15 +42,16 @@ local function calc_source_time_us(clip, playhead_frame)
         string.format("timeline_resolver: clip %s has no rate", clip.id))
 
     -- Convert to microseconds: frame * 1000000 * fps_den / fps_num
-    return math.floor(
+    local source_time_us = math.floor(
         source_frame * 1000000 * clip_rate.fps_denominator / clip_rate.fps_numerator
     )
+    return source_time_us, source_frame
 end
 
 --- Resolve the topmost VIDEO clip at a given playhead time
--- @param playhead_frame number: playhead position in frames (integer)
+-- @param playhead_frame number: playhead position in timeline frames (integer)
 -- @param sequence_id string: ID of the sequence to search
--- @return table or nil: {media_path, source_time_us, clip} or nil if gap
+-- @return table or nil: {media_path, source_time_us, source_frame, clip} or nil if gap
 function M.resolve_at_time(playhead_frame, sequence_id)
     assert(type(playhead_frame) == "number", "timeline_resolver.resolve_at_time: playhead_frame must be integer")
     assert(sequence_id, "timeline_resolver.resolve_at_time: sequence_id is required")
@@ -65,11 +70,12 @@ function M.resolve_at_time(playhead_frame, sequence_id)
             local media = Media.load(clip.media_id)
             assert(media, string.format("timeline_resolver.resolve_at_time: clip %s references missing media %s", clip.id, tostring(clip.media_id)))
 
-            local source_time_us = calc_source_time_us(clip, playhead_frame)
+            local source_time_us, source_frame = calc_source_time_us(clip, playhead_frame)
 
             return {
                 media_path = media.file_path,
                 source_time_us = source_time_us,
+                source_frame = source_frame,
                 clip = clip,
             }
         end
@@ -81,9 +87,9 @@ end
 
 --- Resolve ALL active audio clips at a given playhead time
 -- Returns one entry per audio track that has a clip at the playhead.
--- @param playhead_frame number: playhead position in frames (integer)
+-- @param playhead_frame number: playhead position in timeline frames (integer)
 -- @param sequence_id string: ID of the sequence to search
--- @return list of {media_path, source_time_us, clip, track} (may be empty)
+-- @return list of {media_path, source_time_us, source_frame, clip, track} (may be empty)
 function M.resolve_all_audio_at_time(playhead_frame, sequence_id)
     assert(type(playhead_frame) == "number", "timeline_resolver.resolve_all_audio_at_time: playhead_frame must be integer")
     assert(sequence_id, "timeline_resolver.resolve_all_audio_at_time: sequence_id is required")
@@ -100,13 +106,18 @@ function M.resolve_all_audio_at_time(playhead_frame, sequence_id)
             local media = Media.load(clip.media_id)
             assert(media, string.format("timeline_resolver.resolve_all_audio_at_time: audio clip %s references missing media %s", clip.id, tostring(clip.media_id)))
 
-            local source_time_us = calc_source_time_us(clip, playhead_frame)
+            local source_time_us, source_frame = calc_source_time_us(clip, playhead_frame)
 
             results[#results + 1] = {
                 media_path = media.file_path,
                 source_time_us = source_time_us,
+                source_frame = source_frame,
                 clip = clip,
                 track = track,
+                -- Media's video fps for "frames are frames" audio conform.
+                -- Audio clips need the video rate to compute correct source offset.
+                media_fps_num = media.frame_rate.fps_numerator,
+                media_fps_den = media.frame_rate.fps_denominator,
             }
         end
     end

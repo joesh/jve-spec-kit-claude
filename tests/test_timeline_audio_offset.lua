@@ -42,6 +42,7 @@ local mock_clip = { id = "clip_A" }
 local mock_resolver_result = {
     media_path = "/media/clip_a.mov",
     source_time_us = 1000000,  -- 1 second into clip
+    source_frame = 25,         -- 1s at 25fps
     clip = mock_clip,
 }
 package.loaded["core.playback.timeline_resolver"] = {
@@ -57,6 +58,9 @@ _G.qt_create_single_shot_timer = function() end
 local displayed_times = {}
 local gap_count = 0
 local mock_viewer = {
+    show_frame = function(f)
+        table.insert(displayed_times, f)
+    end,
     show_frame_at_time = function(t_us)
         table.insert(displayed_times, t_us)
     end,

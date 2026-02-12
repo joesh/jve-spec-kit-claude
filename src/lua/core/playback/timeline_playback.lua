@@ -110,19 +110,16 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
                     asset_info and asset_info.rotation or 0))
         end
 
-        -- Show the correct source frame (using source_time_us)
-        viewer_panel.show_frame_at_time(resolved.source_time_us)
+        -- Show the correct source frame using integer index (no time round-trip).
+        -- show_frame_at_time(source_time_us) would lose a frame at 24fps due to
+        -- floor(frame*1e6/24) → floor(result*24/1e6) = frame-1 for non-multiples of 3.
+        viewer_panel.show_frame(resolved.source_frame)
 
         -- Update prefetch thread with source-space position so background
         -- decoder stays ahead of playback. Only during active playback
         -- (direction != 0); parked seeks don't need prefetch.
         if direction and direction ~= 0 then
-            local asset_info = media_cache.get_asset_info()
-            assert(asset_info, "timeline_playback.resolve_and_display: media_cache.get_asset_info() returned nil during active playback")
-            local source_frame = math.floor(
-                resolved.source_time_us * asset_info.fps_num
-                / (asset_info.fps_den * 1000000))
-            media_cache.set_playhead(source_frame, direction, speed)
+            media_cache.set_playhead(resolved.source_frame, direction, speed)
         end
     else
         -- Gap at playhead - show black

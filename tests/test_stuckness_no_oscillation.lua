@@ -29,6 +29,7 @@ local mock_resolver = {
             clip = { id = "clip_1" },
             media_path = "/test/clip.mov",
             source_time_us = frame_idx * 1000000 / 24,
+            source_frame = frame_idx,
         }
     end,
 }
@@ -41,6 +42,7 @@ local timeline_playback = require("core.playback.timeline_playback")
 -- Mock viewer panel
 local displayed_frames = {}
 local mock_viewer = {
+    show_frame = function(f) table.insert(displayed_frames, f) end,
     show_frame_at_time = function(t) table.insert(displayed_frames, t) end,
     show_gap = function() table.insert(displayed_frames, "gap") end,
     set_rotation = function() end,
