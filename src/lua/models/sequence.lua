@@ -622,4 +622,120 @@ function Sequence:get_all_streams_out()
     return video_out
 end
 
+-- =============================================================================
+-- PLAYHEAD RESOLUTION (used by Renderer and Mixer)
+-- =============================================================================
+
+--- Internal: Calculate source frame and time for a clip at a given playhead.
+-- "Frames are frames": source_frame = source_in + timeline_offset (1:1 mapping).
+-- A 24fps clip on a 30fps timeline plays each source frame at 1/30s — the clip
+-- runs faster. No rate conversion here; the speed conform is intended behavior.
+-- @param clip Clip object (timeline_start, source_in, rate)
+-- @param playhead_frame integer playhead position in timeline frames
+-- @return source_time_us (integer microseconds), source_frame (integer)
+local function calc_source_time_us(clip, playhead_frame)
+    assert(type(playhead_frame) == "number", "Sequence: playhead must be integer")
+    assert(type(clip.timeline_start) == "number", "Sequence: timeline_start must be integer")
+    assert(type(clip.source_in) == "number", "Sequence: source_in must be integer")
+
+    local offset_frames = playhead_frame - clip.timeline_start
+    local source_frame = clip.source_in + offset_frames
+
+    local clip_rate = clip.rate
+    assert(clip_rate and clip_rate.fps_numerator and clip_rate.fps_denominator,
+        string.format("Sequence: clip %s has no rate", clip.id))
+
+    -- Convert to microseconds: frame * 1000000 * fps_den / fps_num
+    local source_time_us = math.floor(
+        source_frame * 1000000 * clip_rate.fps_denominator / clip_rate.fps_numerator
+    )
+    return source_time_us, source_frame
+end
+
+--- Get ALL video clips at position, ordered by track_index ascending (topmost first).
+-- Returns one entry per video track that has a clip at playhead.
+-- Renderer uses first entry (topmost) for display. Future: composite all layers.
+-- @param playhead_frame integer
+-- @return list of {media_path, source_time_us, source_frame, clip, track} (may be empty = gap)
+function Sequence:get_video_at(playhead_frame)
+    assert(type(playhead_frame) == "number",
+        "Sequence:get_video_at: playhead_frame must be integer")
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    local tracks = Track.find_by_sequence(self.id, "VIDEO")
+    if not tracks or #tracks == 0 then
+        return {}
+    end
+
+    local results = {}
+    -- Tracks are sorted by track_index ASC (topmost = lowest index = highest priority)
+    for _, track in ipairs(tracks) do
+        local clip = Clip.find_at_time(track.id, playhead_frame)
+        if clip then
+            local media = Media.load(clip.media_id)
+            assert(media, string.format(
+                "Sequence:get_video_at: clip %s references missing media %s",
+                clip.id, tostring(clip.media_id)))
+
+            local source_time_us, source_frame = calc_source_time_us(clip, playhead_frame)
+
+            results[#results + 1] = {
+                media_path = media.file_path,
+                source_time_us = source_time_us,
+                source_frame = source_frame,
+                clip = clip,
+                track = track,
+            }
+        end
+    end
+
+    return results
+end
+
+--- Get all audio clips at position (works for any sequence kind).
+-- @param playhead_frame integer
+-- @return list of {media_path, source_time_us, source_frame, clip, track, media_fps_num, media_fps_den}
+function Sequence:get_audio_at(playhead_frame)
+    assert(type(playhead_frame) == "number",
+        "Sequence:get_audio_at: playhead_frame must be integer")
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    local tracks = Track.find_by_sequence(self.id, "AUDIO")
+    if not tracks or #tracks == 0 then
+        return {}
+    end
+
+    local results = {}
+    for _, track in ipairs(tracks) do
+        local clip = Clip.find_at_time(track.id, playhead_frame)
+        if clip then
+            local media = Media.load(clip.media_id)
+            assert(media, string.format(
+                "Sequence:get_audio_at: audio clip %s references missing media %s",
+                clip.id, tostring(clip.media_id)))
+
+            local source_time_us, source_frame = calc_source_time_us(clip, playhead_frame)
+
+            results[#results + 1] = {
+                media_path = media.file_path,
+                source_time_us = source_time_us,
+                source_frame = source_frame,
+                clip = clip,
+                track = track,
+                -- Media's video fps for "frames are frames" audio conform.
+                media_fps_num = media.frame_rate.fps_numerator,
+                media_fps_den = media.frame_rate.fps_denominator,
+            }
+        end
+    end
+
+    return results
+end
+
 return Sequence
