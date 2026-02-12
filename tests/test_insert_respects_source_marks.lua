@@ -42,27 +42,30 @@ end
 mock_cm.begin_command_event = function() end
 mock_cm.end_command_event = function() end
 
--- Mock source_viewer_state (IS-a refactor: methods, not properties)
+-- Mock source SequenceView (registered with panel_manager)
 local _mock_mark_in = 10
 local _mock_mark_out = 50
-local source_viewer_state = {
-    current_sequence_id = "master_1",  -- IS-a: masterclip IS a sequence
+local mock_source_sv = {
+    sequence_id = "master_1",  -- IS-a: masterclip IS a sequence
     total_frames = 100,
     fps_num = 24,
     fps_den = 1,
-    has_clip = function() return true end,
-    get_mark_in = function() return _mock_mark_in end,
-    get_mark_out = function() return _mock_mark_out end,
 }
--- Helper to set mock marks (test code uses these)
+function mock_source_sv:has_clip() return self.sequence_id ~= nil end
+function mock_source_sv:get_mark_in() return _mock_mark_in end
+function mock_source_sv:get_mark_out() return _mock_mark_out end
+
 local function set_mock_marks(mark_in, mark_out)
     _mock_mark_in = mark_in
     _mock_mark_out = mark_out
 end
 local function set_mock_sequence_id(id)
-    source_viewer_state.current_sequence_id = id
+    mock_source_sv.sequence_id = id
 end
-package.loaded["ui.source_viewer_state"] = source_viewer_state
+
+local panel_manager = require("ui.panel_manager")
+panel_manager.register_sequence_view("source_view", mock_source_sv)
+panel_manager.register_sequence_view("timeline_view", mock_source_sv)
 
 -- Mock focus_manager
 package.loaded["core.focus_manager"] = {

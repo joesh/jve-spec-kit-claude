@@ -202,9 +202,14 @@ else
     logger.error("layout", "Failed to load menu system: " .. tostring(menu_error))
 end
 
--- 2. Src/Timeline Viewer (center)
-local viewer_panel_mod = require("ui.viewer_panel")
-local viewer_panel = viewer_panel_mod.create()
+-- 2. Source + Timeline Viewers (center)
+local SequenceView = require("ui.sequence_view")
+local source_view = SequenceView.new({ view_id = "source_view" })
+local timeline_view = SequenceView.new({ view_id = "timeline_view" })
+
+-- Register views early so timeline_panel.create() can access them
+panel_manager.register_sequence_view("source_view", source_view)
+panel_manager.register_sequence_view("timeline_view", timeline_view)
 
 -- 3. Inspector (right) - Create container for Lua inspector
 local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
@@ -244,8 +249,9 @@ if mount_result and mount_result.success then
 
     -- Wire up project browser to timeline for insert button
     project_browser_mod.set_timeline_panel(timeline_panel_mod)
-    project_browser_mod.set_viewer_panel(viewer_panel_mod)
     project_browser_mod.set_inspector(view)
+
+
 
     -- Wire up menu system to timeline for Split command
     menu_system.set_timeline_panel(timeline_panel_mod)
@@ -265,7 +271,8 @@ end
 focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser", {
     focus_widgets = project_browser_mod.get_focus_widgets and project_browser_mod.get_focus_widgets() or nil
 })
-focus_manager.register_panel("viewer", viewer_panel, viewer_panel_mod.get_title_widget and viewer_panel_mod.get_title_widget() or nil, "Viewer")
+focus_manager.register_panel("source_view", source_view:get_widget(), source_view:get_title_widget(), "Source")
+focus_manager.register_panel("timeline_view", timeline_view:get_widget(), timeline_view:get_title_widget(), "Timeline Viewer")
 focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector", {
     focus_widgets = view.get_focus_widgets and view.get_focus_widgets() or nil
 })
@@ -316,9 +323,10 @@ if initial_sequence_id and project_browser_mod.focus_sequence then
     end
 end
 
--- Add three panels to top splitter
+-- Add four panels to top splitter
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, viewer_panel)
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, source_view:get_widget())
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, timeline_view:get_widget())
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
 
 -- Add top row and timeline to main splitter
@@ -376,24 +384,33 @@ end
 
 -- Show window
 qt_constants.DISPLAY.SHOW(main_window)
-logger.info("layout", "Correct layout created: 3 panels top, timeline bottom")
+logger.info("layout", "Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
 
 -- Restore splitter sizes AFTER window is shown (Qt needs layout to be computed first)
 -- Use a short timer to let the layout settle before applying saved sizes
 local saved_splitters = db_module.get_project_setting(active_project_id, SPLITTER_SIZES_KEY)
 qt_create_single_shot_timer(50, function()
+    -- Migrate saved 3-panel top splitter to 4-panel
+    if saved_splitters and saved_splitters.top and #saved_splitters.top == 3 then
+        local old = saved_splitters.top
+        -- Split old viewer (index 2) evenly into source_view + timeline_view
+        local half = math.floor(old[2] / 2)
+        saved_splitters.top = {old[1], half, old[2] - half, old[3]}
+        logger.info("layout", "Migrated 3-panel splitter to 4-panel")
+    end
+
     if not saved_splitters then
         -- First launch: set defaults and persist
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {533, 533, 534})
+        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {350, 350, 350, 350})
         qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {450, 450})
         db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, {
-            top = {533, 533, 534}, main = {450, 450}
+            top = {350, 350, 350, 350}, main = {450, 450}
         })
         logger.debug("layout", "Splitter sizes initialized to defaults")
     else
-        -- Subsequent launches: assert valid and restore
-        assert(saved_splitters.top and #saved_splitters.top == 3,
-            string.format("layout: splitter_sizes.top corrupt, got: %s", dkjson.encode(saved_splitters)))
+        -- Subsequent launches: validate and restore
+        assert(saved_splitters.top and #saved_splitters.top == 4,
+            string.format("layout: splitter_sizes.top corrupt (expected 4), got: %s", dkjson.encode(saved_splitters)))
         assert(saved_splitters.main and #saved_splitters.main == 2,
             string.format("layout: splitter_sizes.main corrupt, got: %s", dkjson.encode(saved_splitters)))
         qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, saved_splitters.top)

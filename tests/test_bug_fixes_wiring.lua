@@ -102,26 +102,22 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════
--- B5: viewer switching based on panel focus
+-- B5: dual SequenceView (mode-switching removed — each view is independent)
 -- ═══════════════════════════════════════════════════════════
-print("\n=== B5: viewer switches based on panel focus ===")
+print("\n=== B5: dual SequenceView (no mode-switching) ===")
 do
     local f = io.open("../src/lua/ui/timeline/timeline_panel.lua", "r")
     assert(f, "Cannot open timeline_panel.lua")
     local content = f:read("*a")
     f:close()
 
-    -- Timeline focus should restore timeline viewer (call show_timeline)
-    -- Viewer/Browser focus should restore source viewer (if has_clip)
-    -- The selection_hub listener should handle both directions
-    local has_timeline_restore = content:find('panel_id == "timeline"')
-        and content:find("load_sequence")
-    check("timeline focus restores timeline viewer", has_timeline_restore)
+    -- timeline_panel should load into timeline_view via panel_manager
+    local uses_panel_manager = content:find('panel_manager') and content:find('get_sequence_view')
+    check("timeline_panel uses panel_manager for timeline_view", uses_panel_manager)
 
-    local has_viewer_restore = content:find('panel_id == "viewer"')
-        and content:find("has_clip")
-        and content:find("set_timeline_mode%(false%)")
-    check("viewer focus restores source viewer", has_viewer_restore)
+    -- No more mode-switching: set_timeline_mode is gone
+    local no_mode_switch = not content:find("set_timeline_mode")
+    check("no set_timeline_mode calls", no_mode_switch)
 end
 
 -- Summary

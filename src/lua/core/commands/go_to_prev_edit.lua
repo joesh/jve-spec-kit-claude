@@ -85,9 +85,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Stop playback before navigating (NLE convention)
-        local ok, pc = pcall(require, 'core.playback.playback_controller')
-        if ok and pc and pc.state == "playing" then
-            pc.stop()
+        local pm = require('ui.panel_manager')
+        local sv = pm.get_active_sequence_view()
+        if sv and sv.engine:is_playing() then
+            sv.engine:stop()
         end
 
         if target ~= playhead then

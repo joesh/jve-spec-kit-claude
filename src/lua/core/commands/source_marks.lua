@@ -10,10 +10,9 @@
 -- @file source_marks.lua
 local M = {}
 
-local source_state = require("ui.source_viewer_state")
-
-local function get_playback_controller()
-    return require("core.playback.playback_controller")
+local function get_source_view()
+    local pm = require("ui.panel_manager")
+    return pm.get_sequence_view("source_view")
 end
 
 local SET_MARK_IN_SPEC = {
@@ -47,56 +46,59 @@ local CLEAR_MARKS_SPEC = {
 
 function M.register(executors, undoers, db)
     executors["SourceViewerSetMarkIn"] = function(command)
-        if not source_state.has_clip() then
+        local sv = get_source_view()
+        if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerSetMarkIn: no clip loaded" }
         end
         local args = command:get_all_parameters()
-        local frame = args.frame or source_state.playhead
-        source_state.set_mark_in(frame)
+        local frame = args.frame or sv.playhead
+        sv:set_mark_in(frame)
         return { success = true }
     end
 
     executors["SourceViewerSetMarkOut"] = function(command)
-        if not source_state.has_clip() then
+        local sv = get_source_view()
+        if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerSetMarkOut: no clip loaded" }
         end
         local args = command:get_all_parameters()
-        local frame = args.frame or source_state.playhead
-        source_state.set_mark_out(frame)
+        local frame = args.frame or sv.playhead
+        sv:set_mark_out(frame)
         return { success = true }
     end
 
     executors["SourceViewerGoToMarkIn"] = function(_command)
-        if not source_state.has_clip() then
+        local sv = get_source_view()
+        if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerGoToMarkIn: no clip loaded" }
         end
-        local mark_in = source_state.get_mark_in()
+        local mark_in = sv:get_mark_in()
         if not mark_in then
             return { success = false, error_message = "SourceViewerGoToMarkIn: no mark in set" }
         end
-        source_state.set_playhead(mark_in)
-        get_playback_controller().set_position(mark_in)
+        sv:seek_to_frame(mark_in)
         return { success = true }
     end
 
     executors["SourceViewerGoToMarkOut"] = function(_command)
-        if not source_state.has_clip() then
+        local sv = get_source_view()
+        if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerGoToMarkOut: no clip loaded" }
         end
-        local mark_out = source_state.get_mark_out()
+        local mark_out = sv:get_mark_out()
         if not mark_out then
             return { success = false, error_message = "SourceViewerGoToMarkOut: no mark out set" }
         end
-        source_state.set_playhead(mark_out)
-        get_playback_controller().set_position(mark_out)
+        sv:seek_to_frame(mark_out)
         return { success = true }
     end
 
     executors["SourceViewerClearMarks"] = function(_command)
-        if not source_state.has_clip() then
+        local sv = get_source_view()
+        if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerClearMarks: no clip loaded" }
         end
-        source_state.clear_marks()
+        sv:clear_marks()
         return { success = true }
     end
 

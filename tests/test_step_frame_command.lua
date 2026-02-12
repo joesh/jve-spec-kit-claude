@@ -93,15 +93,48 @@ end
 
 package.loaded['core.playback.playback_controller'] = mock_pc
 
+-- Create mock SequenceView with mock engine for panel_manager
+local mock_engine = {
+    fps_num = 30,
+    fps_den = 1,
+    total_frames = 1000,
+    _position = 10,
+    audio_played = nil,
+}
+function mock_engine:get_position()
+    return self._position
+end
+function mock_engine:set_position(v)
+    self._position = v
+    -- Also sync timeline_state for timeline tests
+    timeline_state.set_playhead_position(math.floor(v))
+end
+function mock_engine:play_frame_audio(frame_idx)
+    self.audio_played = frame_idx
+    mock_pc.audio_played = frame_idx
+end
+function mock_engine:is_playing() return false end
+function mock_engine:has_source() return true end
+
+local mock_sv = {
+    sequence_id = "seq1",
+    total_frames = 1000,
+    engine = mock_engine,
+}
+
+local panel_manager = require("ui.panel_manager")
+panel_manager.register_sequence_view("source_view", mock_sv)
+panel_manager.register_sequence_view("timeline_view", mock_sv)
+
 command_manager.init('seq1', 'proj1')
 
 print("=== StepFrame Command Tests ===")
 
 -- Test 1: Step right 1 frame in timeline mode
 print("Test 1: Step right 1 frame (timeline mode)")
-mock_pc.timeline_mode = true
+mock_engine._position = 10
 timeline_state.playhead_position = 10
-mock_pc.audio_played = nil
+mock_engine.audio_played = nil
 local result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = 1,
@@ -109,11 +142,12 @@ local result = command_manager.execute("StepFrame", {
 assert(result.success, "StepFrame right should succeed: " .. tostring(result.error_message))
 assert(timeline_state.playhead_position == 11,
     string.format("Expected frame 11, got %d", timeline_state.playhead_position))
-assert(mock_pc.audio_played == 11,
-    string.format("Expected audio at frame 11, got %s", tostring(mock_pc.audio_played)))
+assert(mock_engine.audio_played == 11,
+    string.format("Expected audio at frame 11, got %s", tostring(mock_engine.audio_played)))
 
 -- Test 2: Step left 1 frame in timeline mode
 print("Test 2: Step left 1 frame (timeline mode)")
+mock_engine._position = 10
 timeline_state.playhead_position = 10
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
@@ -125,6 +159,7 @@ assert(timeline_state.playhead_position == 9,
 
 -- Test 3: Step left clamped at 0
 print("Test 3: Step left clamped at frame 0")
+mock_engine._position = 0
 timeline_state.playhead_position = 0
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
@@ -136,6 +171,7 @@ assert(timeline_state.playhead_position == 0,
 
 -- Test 4: Shift step = 1 second (30 frames at 30fps)
 print("Test 4: Shift step = 1 second jump")
+mock_engine._position = 10
 timeline_state.playhead_position = 10
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
@@ -148,6 +184,7 @@ assert(timeline_state.playhead_position == 40,
 
 -- Test 5: Shift step left clamped at 0
 print("Test 5: Shift step left clamped at 0")
+mock_engine._position = 10
 timeline_state.playhead_position = 10
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
@@ -158,47 +195,41 @@ assert(result.success, "StepFrame shift-left should succeed")
 assert(timeline_state.playhead_position == 0,
     string.format("Expected frame 0, got %d", timeline_state.playhead_position))
 
--- Test 6: Source mode step right (seek called via set_position)
+-- Test 6: Source mode step right
 print("Test 6: Source mode step right")
-mock_pc.timeline_mode = false
-mock_pc._position = 50
-mock_pc.audio_played = nil
-mock_pc.seeked_to = nil
+mock_engine._position = 50
+mock_engine.audio_played = nil
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = 1,
 })
 assert(result.success, "StepFrame source-right should succeed: " .. tostring(result.error_message))
-assert(mock_pc._position == 51,
-    string.format("Expected source position 51, got %d", mock_pc._position))
-assert(mock_pc.seeked_to == 51,
-    string.format("Expected seek to frame 51, got %s", tostring(mock_pc.seeked_to)))
-assert(mock_pc.audio_played == 51,
-    string.format("Expected audio at frame 51, got %s", tostring(mock_pc.audio_played)))
+assert(mock_engine._position == 51,
+    string.format("Expected source position 51, got %d", mock_engine._position))
+assert(mock_engine.audio_played == 51,
+    string.format("Expected audio at frame 51, got %s", tostring(mock_engine.audio_played)))
 
 -- Test 7: Source mode step left clamped at 0
 print("Test 7: Source mode step left clamped at 0")
-mock_pc.timeline_mode = false
-mock_pc._position = 0
+mock_engine._position = 0
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = -1,
 })
 assert(result.success, "StepFrame source-left at 0 should succeed")
-assert(mock_pc._position == 0,
-    string.format("Expected source position 0, got %d", mock_pc._position))
+assert(mock_engine._position == 0,
+    string.format("Expected source position 0, got %d", mock_engine._position))
 
 -- Test 8: Source mode shift step
 print("Test 8: Source mode shift step right")
-mock_pc.timeline_mode = false
-mock_pc._position = 10
+mock_engine._position = 10
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = 1,
     shift = true,
 })
 assert(result.success, "StepFrame source shift-right should succeed")
-assert(mock_pc._position == 40,
-    string.format("Expected source position 40, got %d", mock_pc._position))
+assert(mock_engine._position == 40,
+    string.format("Expected source position 40, got %d", mock_engine._position))
 
 print("✅ test_step_frame_command.lua passed")

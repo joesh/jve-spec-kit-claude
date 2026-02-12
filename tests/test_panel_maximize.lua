@@ -12,7 +12,7 @@ local widgets = {
 }
 
 current_splitter_sizes["main_splitter"] = {450, 450}
-current_splitter_sizes["top_splitter"] = {400, 400, 400}
+current_splitter_sizes["top_splitter"] = {300, 300, 300, 300}
 
 local mock_qt_constants = {
     LAYOUT = {
@@ -42,7 +42,7 @@ package.loaded["core.logger"] = {
     trace = function() end,
 }
 
-local focused = "viewer"
+local focused = "source_view"
 local mock_focus_manager = {
     get_focused_panel = function() return focused end,
 }
@@ -57,18 +57,19 @@ panel_manager.init({
 })
 
 --------------------------------------------------------------------------------
--- Test 1: Maximize viewer — splitter sizes correct
+-- Test 1: Maximize source_view — splitter sizes correct
 --------------------------------------------------------------------------------
-print("\nTest 1: Maximize viewer — splitter sizes")
-focused = "viewer"
+print("\nTest 1: Maximize source_view — splitter sizes")
+focused = "source_view"
 
 local ok, err = panel_manager.toggle_maximize(nil)
 assert(ok, "toggle_maximize failed: " .. tostring(err))
 
 local top = current_splitter_sizes["top_splitter"]
 assert(top[1] == 0, "project_browser should be 0, got " .. top[1])
-assert(top[2] > 0, "viewer should be > 0, got " .. top[2])
-assert(top[3] == 0, "inspector should be 0, got " .. top[3])
+assert(top[2] > 0, "source_view should be > 0, got " .. top[2])
+assert(top[3] == 0, "timeline_view should be 0, got " .. top[3])
+assert(top[4] == 0, "inspector should be 0, got " .. top[4])
 
 local main = current_splitter_sizes["main_splitter"]
 assert(main[2] == 0, "timeline should be 0, got " .. main[2])
@@ -84,8 +85,8 @@ assert(ok)
 assert(not panel_manager.is_maximized())
 
 top = current_splitter_sizes["top_splitter"]
-assert(top[1] == 400 and top[2] == 400 and top[3] == 400,
-    string.format("top not restored: %d,%d,%d", top[1], top[2], top[3]))
+assert(top[1] == 300 and top[2] == 300 and top[3] == 300 and top[4] == 300,
+    string.format("top not restored: %d,%d,%d,%d", top[1], top[2], top[3], top[4]))
 
 print("  ✓ sizes restored")
 
@@ -115,9 +116,9 @@ print("  ✓ timeline maximize/restore correct")
 print("\nTest 4: get_persistable_sizes while maximized")
 -- Start from restored state
 current_splitter_sizes["main_splitter"] = {450, 450}
-current_splitter_sizes["top_splitter"] = {400, 400, 400}
+current_splitter_sizes["top_splitter"] = {300, 300, 300, 300}
 
-focused = "viewer"
+focused = "source_view"
 ok = panel_manager.toggle_maximize(nil)
 assert(ok)
 assert(panel_manager.is_maximized())
@@ -128,8 +129,8 @@ assert(current_splitter_sizes["top_splitter"][1] == 0, "sanity: Qt reports 0 for
 -- But get_persistable_sizes must return the REAL pre-maximize sizes
 local persist = panel_manager.get_persistable_sizes()
 assert(persist, "get_persistable_sizes returned nil")
-assert(persist.top[1] == 400 and persist.top[2] == 400 and persist.top[3] == 400,
-    string.format("top not pre-maximize: %d,%d,%d", persist.top[1], persist.top[2], persist.top[3]))
+assert(persist.top[1] == 300 and persist.top[2] == 300 and persist.top[3] == 300 and persist.top[4] == 300,
+    string.format("top not pre-maximize: %d,%d,%d,%d", persist.top[1], persist.top[2], persist.top[3], persist.top[4]))
 assert(persist.main[1] == 450 and persist.main[2] == 450,
     string.format("main not pre-maximize: %d,%d", persist.main[1], persist.main[2]))
 
@@ -144,8 +145,8 @@ assert(not panel_manager.is_maximized())
 
 persist = panel_manager.get_persistable_sizes()
 assert(persist, "get_persistable_sizes returned nil")
-assert(persist.top[1] == 400 and persist.top[2] == 400 and persist.top[3] == 400,
-    string.format("top wrong: %d,%d,%d", persist.top[1], persist.top[2], persist.top[3]))
+assert(persist.top[1] == 300 and persist.top[2] == 300 and persist.top[3] == 300 and persist.top[4] == 300,
+    string.format("top wrong: %d,%d,%d,%d", persist.top[1], persist.top[2], persist.top[3], persist.top[4]))
 assert(persist.main[1] == 450 and persist.main[2] == 450,
     string.format("main wrong: %d,%d", persist.main[1], persist.main[2]))
 

@@ -324,9 +324,10 @@ function M.create(widget, state_module)
             -- Stop playback on click (standard NLE behavior: click-to-park).
             -- Controller must stop BEFORE writing to model so the parked-mode
             -- listener handles the seek (View → Controller → Model).
-            local pc = require("core.playback.playback_controller")
-            if pc.is_playing() then
-                pc.stop()
+            local pm = require("ui.panel_manager")
+            local tl_sv = pm.get_sequence_view("timeline_view")
+            if tl_sv and tl_sv.engine:is_playing() then
+                tl_sv.engine:stop()
             end
 
             -- Check if clicking on playhead (now integer frame)
@@ -378,8 +379,9 @@ function M.create(widget, state_module)
             if scrub_mode_active then
                 local qt_c = require("core.qt_constants")
                 if qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
-                    local pc = require("core.playback.playback_controller")
-                    if pc.is_playing() then
+                    local pm = require("ui.panel_manager")
+                    local tl_sv = pm.get_sequence_view("timeline_view")
+                    if tl_sv and tl_sv.engine:is_playing() then
                         qt_c.EMP.SET_DECODE_MODE("play")
                     else
                         qt_c.EMP.SET_DECODE_MODE("park")

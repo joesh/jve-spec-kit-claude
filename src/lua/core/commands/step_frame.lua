@@ -24,13 +24,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(direction == 1 or direction == -1,
             string.format("StepFrame: direction must be 1 or -1, got %s", tostring(direction)))
 
-        local pc = require('core.playback.playback_controller')
-        assert(pc.has_source(), "StepFrame: no playback source loaded")
+        local pm = require('ui.panel_manager')
+        local sv = pm.get_active_sequence_view()
+        assert(sv and sv.sequence_id, "StepFrame: no sequence loaded in active view")
+        local engine = sv.engine
 
         local shift = args.shift and true or false
-        local current_frame = pc.get_position()
+        local current_frame = engine:get_position()
 
-        local fps_float = (pc.fps_den > 0) and (pc.fps_num / pc.fps_den) or 30
+        local fps_float = (engine.fps_den > 0) and (engine.fps_num / engine.fps_den) or 30
         local step_frames = shift and math.max(1, math.floor(fps_float + 0.5)) or 1
 
         local new_frame
@@ -40,10 +42,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             new_frame = current_frame + step_frames
         end
 
-        pc.set_position(new_frame)
+        engine:set_position(new_frame)
 
-        if pc.play_frame_audio then
-            pc.play_frame_audio(new_frame)
+        if engine.play_frame_audio then
+            engine:play_frame_audio(new_frame)
         end
 
         return true

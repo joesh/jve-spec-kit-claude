@@ -396,7 +396,6 @@ M.selected_items = {}
 M.pending_rename = nil
 M.ignore_tree_item_change = false
 M.project_id = nil
-M.viewer_panel = nil
 M.inspector_view = nil
 M.project_title_widget = nil
 M.pending_project_title = nil
@@ -420,14 +419,6 @@ local function activate_item(item_info)
         else
             focus_manager.set_focused_panel("timeline")
         end
-
-        if M.viewer_panel then
-            if M.viewer_panel.show_timeline then
-                M.viewer_panel.show_timeline(item_info)
-            elseif M.viewer_panel.clear then
-                M.viewer_panel.clear()
-            end
-        end
         return true
     elseif item_info.type == "master_clip" then
         local clip = item_info.clip_id and M.master_clip_map[item_info.clip_id]
@@ -436,33 +427,15 @@ local function activate_item(item_info)
             return false, "Master clip metadata missing"
         end
 
-        local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
-        assert(media, string.format("project_browser.activate_item: missing media for master_clip %s (media_id=%s)", tostring(clip.clip_id), tostring(clip.media_id)))
+        -- Load masterclip into source_view (clip_id IS the masterclip sequence ID)
+        local pm = require("ui.panel_manager")
+        local source_sv = pm.get_sequence_view("source_view")
+        source_sv:load_sequence(clip.clip_id)
 
-        if M.viewer_panel and M.viewer_panel.show_source_clip then
-            local viewer_payload = {
-                -- The viewer/inspectable pipeline requires project context. The browser always
-                -- operates within a project, so we thread it explicitly.
-                project_id = M.project_id,
-                id = clip.clip_id,
-                clip_id = clip.clip_id,
-                media_id = clip.media_id,
-                name = clip.name or media.name or clip.clip_id,
-                duration = clip.duration or media.duration,
-                frame_rate = clip.frame_rate or media.frame_rate,
-                width = clip.width or media.width,
-                height = clip.height or media.height,
-                codec = clip.codec or media.codec,
-                file_path = clip.file_path or media.file_path,
-                metadata = media.metadata,
-                offline = clip.offline,
-            }
-            M.viewer_panel.show_source_clip(viewer_payload)
-        end
         if focus_manager and focus_manager.focus_panel then
-            focus_manager.focus_panel("viewer")
+            focus_manager.focus_panel("source_view")
         else
-            focus_manager.set_focused_panel("viewer")
+            focus_manager.set_focused_panel("source_view")
         end
         return true
     elseif item_info.type == "bin" then
@@ -1288,10 +1261,6 @@ function M.set_project_title(name)
     end
 end
 
-function M.set_viewer_panel(viewer_panel_mod)
-    M.viewer_panel = viewer_panel_mod
-end
-
 function M.set_inspector(inspector_view)
     M.inspector_view = inspector_view
 end
@@ -1785,22 +1754,20 @@ function M.add_selected_to_timeline(command_type, options)
         local clip = selected_clips[1]
         local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
 
-        -- Apply source viewer marks if the viewer is showing this clip
-        -- IS-a refactor: masterclip IS a sequence, so compare current_sequence_id
-        -- Marks are methods now: get_mark_in() / get_mark_out()
+        -- Apply source viewer marks if the source view is showing this clip
         local marks_applied = false
         local source_in_mark, source_out_mark, duration_mark
-        local svs_ok, source_viewer_state = pcall(require, "ui.source_viewer_state")
-        local viewer_mark_in = svs_ok and source_viewer_state.get_mark_in and source_viewer_state.get_mark_in()
-        local viewer_mark_out = svs_ok and source_viewer_state.get_mark_out and source_viewer_state.get_mark_out()
-        if svs_ok and source_viewer_state
-            and source_viewer_state.current_sequence_id == clip.clip_id
-            and viewer_mark_in ~= nil and viewer_mark_out ~= nil then
-            -- mark_in/mark_out are integer frames
-            source_in_mark = viewer_mark_in
-            source_out_mark = viewer_mark_out
-            duration_mark = viewer_mark_out - viewer_mark_in
-            marks_applied = true
+        local pm = require("ui.panel_manager")
+        local source_sv = pm.get_sequence_view("source_view")
+        if source_sv and source_sv.sequence_id == clip.clip_id then
+            local viewer_mark_in = source_sv:get_mark_in()
+            local viewer_mark_out = source_sv:get_mark_out()
+            if viewer_mark_in ~= nil and viewer_mark_out ~= nil then
+                source_in_mark = viewer_mark_in
+                source_out_mark = viewer_mark_out
+                duration_mark = viewer_mark_out - viewer_mark_in
+                marks_applied = true
+            end
         end
 
         -- Build command parameters
@@ -1843,7 +1810,8 @@ function M.add_selected_to_timeline(command_type, options)
         local target_video_track = video_tracks[1]
 
         -- Check source viewer marks (only apply to first clip if viewing it)
-        local svs_ok, source_viewer_state = pcall(require, "ui.source_viewer_state")
+        local pm = require("ui.panel_manager")
+        local source_sv = pm.get_sequence_view("source_view")
 
         -- Build groups for each selected clip (serial arrangement)
         local groups = {}
@@ -1857,14 +1825,11 @@ function M.add_selected_to_timeline(command_type, options)
 
             -- Determine source marks: use viewer marks only for first clip if showing it
             local source_in, source_out, duration
-            -- IS-a refactor: masterclip IS a sequence, so compare current_sequence_id
-            -- Marks are methods now: get_mark_in() / get_mark_out()
-            local viewer_mark_in = svs_ok and source_viewer_state.get_mark_in and source_viewer_state.get_mark_in()
-            local viewer_mark_out = svs_ok and source_viewer_state.get_mark_out and source_viewer_state.get_mark_out()
-            if i == 1 and svs_ok and source_viewer_state
-                and source_viewer_state.current_sequence_id == clip.clip_id
+            local viewer_mark_in = source_sv and source_sv:get_mark_in()
+            local viewer_mark_out = source_sv and source_sv:get_mark_out()
+            if i == 1 and source_sv
+                and source_sv.sequence_id == clip.clip_id
                 and viewer_mark_in ~= nil and viewer_mark_out ~= nil then
-                -- mark_in/mark_out are integer frames
                 source_in = viewer_mark_in
                 source_out = viewer_mark_out
                 duration = viewer_mark_out - viewer_mark_in

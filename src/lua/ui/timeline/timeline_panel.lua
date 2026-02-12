@@ -1595,40 +1595,34 @@ function M.create(opts)
         ))
     end
 
-    -- Wire playback sync callback for timeline playback mode
-    local playback_controller = require("core.playback.playback_controller")
+    -- Wire timeline_view's PlaybackEngine to page-scroll when playhead exits viewport.
+    -- The timeline_view's engine fires on_position_changed; we listen via SequenceView listener.
+    local pm = require("ui.panel_manager")
+    local tl_view = pm.get_sequence_view("timeline_view")
 
-    -- Set timeline sync callback: handles page-scroll only.
-    -- Playhead position is already updated by set_position() in the playback tick.
-    playback_controller.set_timeline_sync_callback(function(frame_idx)
-        local playhead_frame = math.floor(frame_idx)
+    tl_view:add_listener(function()
+        if tl_view.engine:is_playing() then
+            local playhead_frame = tl_view.playhead
 
-        -- Page-scroll: jump viewport when playhead exits visible area
-        -- All viewport coords are now integers (frames)
-        local vp_start = state.get_viewport_start_time()
-        local vp_duration = state.get_viewport_duration()
-        local vp_end = vp_start + vp_duration
+            local vp_start = state.get_viewport_start_time()
+            local vp_duration = state.get_viewport_duration()
+            local vp_end = vp_start + vp_duration
 
-        if playhead_frame < vp_start or playhead_frame >= vp_end then
-            -- Playhead outside viewport - page to follow it
-            local new_start
-            if playhead_frame < vp_start then
-                -- Scrolling backward: put playhead at 75% of viewport
-                new_start = playhead_frame - math.floor(vp_duration * 0.75)
-            else
-                -- Scrolling forward: put playhead at 25% of viewport
-                new_start = playhead_frame - math.floor(vp_duration * 0.25)
+            if playhead_frame < vp_start or playhead_frame >= vp_end then
+                local new_start
+                if playhead_frame < vp_start then
+                    new_start = playhead_frame - math.floor(vp_duration * 0.75)
+                else
+                    new_start = playhead_frame - math.floor(vp_duration * 0.25)
+                end
+                if new_start < 0 then new_start = 0 end
+                state.set_viewport_start_time(new_start)
             end
-            -- Clamp to 0
-            if new_start < 0 then
-                new_start = 0
-            end
-            state.set_viewport_start_time(new_start)
         end
     end)
 
-    -- Enable timeline mode in playback_controller for this sequence
-    playback_controller.set_timeline_mode(true, initial_sequence_id)
+    -- Load initial sequence into timeline_view
+    tl_view:load_sequence(initial_sequence_id)
 
     -- Viewer follows playhead: when parked, any playhead change resolves and displays the frame.
     -- Commands (navigation, edits, timecode, undo/redo) just call state.set_playhead_position();
@@ -1642,58 +1636,19 @@ function M.create(opts)
     local viewer_seek_target = nil
     local VIEWER_SEEK_DEFER_MS = ui_constants.TIMELINE.VIEWER_SEEK_DEFER_MS or 1
     state.add_listener(function()
-        if not playback_controller.is_playing() and playback_controller.timeline_mode then
-            if playback_controller.has_source() then
-                local playhead = state.get_playhead_position()
-                if playhead == last_viewer_playhead then return end
-                viewer_seek_target = playhead
-                if viewer_seek_pending then return end
-                viewer_seek_pending = true
-                -- Deferred: let timeline view paint the new playhead position
-                -- before the potentially-blocking frame decode starts.
-                qt_create_single_shot_timer(VIEWER_SEEK_DEFER_MS, function()
-                    viewer_seek_pending = false
-                    local target = viewer_seek_target
-                    if target == last_viewer_playhead then return end
-                    last_viewer_playhead = target
-                    playback_controller.seek_to_frame(target)
-                end)
-            end
-        end
-    end)
-
-    -- Switch viewer mode based on panel focus.
-    -- selection_hub fires on every active-panel change (focus_manager → set_active_panel).
-    selection_hub.register_listener(function(_, panel_id)
-        logger.info("timeline_panel", string.format("FOCUS: panel_id=%s", tostring(panel_id)))
-        if panel_id == "timeline" then
-            -- Timeline focus → Timeline Viewer
-            local seq_id = state.get_sequence_id and state.get_sequence_id()
-            logger.info("timeline_panel", string.format("FOCUS: timeline, seq_id=%s", tostring(seq_id)))
-            if seq_id and seq_id ~= "" then
-                M.load_sequence(seq_id)
-            end
-        elseif panel_id == "viewer" or panel_id == "project_browser" then
-            -- Viewer/Browser focus → Source Viewer (if clip loaded)
-            local source_viewer_state = require("ui.source_viewer_state")
-            local pc = require("core.playback.playback_controller")
-            local has_clip = source_viewer_state.has_clip()
-            local tl_mode = pc.timeline_mode
-            logger.info("timeline_panel", string.format("FOCUS: %s, has_clip=%s, timeline_mode=%s",
-                panel_id, tostring(has_clip), tostring(tl_mode)))
-            if has_clip and tl_mode then
-                logger.info("timeline_panel", "FOCUS: switching to source viewer")
-                pc.set_timeline_mode(false)
-                local viewer_panel = require("ui.viewer_panel")
-                -- Restore source viewer display (title + selection)
-                -- The frame display is handled by playback_controller mode switch
-                if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
-                    local title_widget = viewer_panel.get_title_widget and viewer_panel.get_title_widget()
-                    if title_widget then
-                        qt_constants.PROPERTIES.SET_TEXT(title_widget, "Source Viewer")
-                    end
-                end
-            end
+        if not tl_view.engine:is_playing() and tl_view.sequence_id then
+            local playhead = state.get_playhead_position()
+            if playhead == last_viewer_playhead then return end
+            viewer_seek_target = playhead
+            if viewer_seek_pending then return end
+            viewer_seek_pending = true
+            qt_create_single_shot_timer(VIEWER_SEEK_DEFER_MS, function()
+                viewer_seek_pending = false
+                local target = viewer_seek_target
+                if target == last_viewer_playhead then return end
+                last_viewer_playhead = target
+                tl_view:seek_to_frame(target)
+            end)
         end
     end)
 
@@ -1705,27 +1660,8 @@ function M.load_sequence(sequence_id)
         return
     end
 
-    local playback_controller = require("core.playback.playback_controller")
-
     local current = state.get_sequence_id and state.get_sequence_id()
     if current == sequence_id then
-        -- Restore timeline mode when timeline panel regains focus.
-        -- Always ensure viewer shows timeline - title must be updated even if mode unchanged.
-        local viewer_panel = require("ui.viewer_panel")
-        if qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
-            local title_widget = viewer_panel.get_title_widget and viewer_panel.get_title_widget()
-            if title_widget then
-                qt_constants.PROPERTIES.SET_TEXT(title_widget, "Timeline Viewer")
-            end
-        end
-        if not playback_controller.timeline_mode then
-            playback_controller.set_timeline_mode(true, sequence_id)
-            local Sequence = require("models.sequence")
-            local seq = Sequence.load(sequence_id)
-            if seq then
-                viewer_panel.show_timeline(seq)
-            end
-        end
         return
     end
 
@@ -1758,7 +1694,10 @@ function M.load_sequence(sequence_id)
     ensure_tab_for_sequence(sequence_id)
     update_tab_styles(sequence_id)
 
-    playback_controller.set_timeline_mode(true, sequence_id)
+    -- Load sequence into the timeline viewer
+    local pm = require("ui.panel_manager")
+    local tl_view = pm.get_sequence_view("timeline_view")
+    tl_view:load_sequence(sequence_id)
 end
 
 -- Check if timeline is currently dragging clips or edges

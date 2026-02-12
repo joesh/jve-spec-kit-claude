@@ -1,7 +1,8 @@
---- Panel maximize/restore
+--- Panel maximize/restore + SequenceView registry
 --
 -- @file panel_manager.lua
 local qt_constants = require("core.qt_constants")
+local logger = require("core.logger")
 
 local M = {}
 
@@ -12,10 +13,14 @@ local state = {
     maximized = nil,
 }
 
+-- SequenceView registry: { [view_id] = SequenceView instance }
+local sequence_views = {}
+
 local PANEL_INDEX = {
     project_browser = 1,
-    viewer = 2,
-    inspector = 3,
+    source_view = 2,
+    timeline_view = 3,
+    inspector = 4,
 }
 
 local function get_splitter_sizes(splitter)
@@ -77,7 +82,9 @@ local function maximize_top_panel(panel_id)
     -- Hide timeline, show top area only
     set_splitter_sizes(state.main_splitter, {total_main, 0})
 
-    local new_top_sizes = {0, 0, 0}
+    local panel_count = #top_sizes
+    local new_top_sizes = {}
+    for i = 1, panel_count do new_top_sizes[i] = 0 end
     new_top_sizes[panel_index] = total_main
     set_splitter_sizes(state.top_splitter, new_top_sizes)
 
@@ -168,6 +175,51 @@ end
 
 function M.toggle_active_panel()
     return M.toggle_maximize(nil)
+end
+
+--------------------------------------------------------------------------------
+-- SequenceView Registry
+--------------------------------------------------------------------------------
+
+--- Register a SequenceView instance.
+-- @param view_id string  "source_view" or "timeline_view"
+-- @param sv SequenceView instance
+function M.register_sequence_view(view_id, sv)
+    assert(view_id and view_id ~= "",
+        "panel_manager.register_sequence_view: view_id required")
+    assert(sv, string.format(
+        "panel_manager.register_sequence_view: sv required for '%s'", view_id))
+    sequence_views[view_id] = sv
+    logger.debug("panel_manager", string.format("registered sequence view '%s'", view_id))
+end
+
+--- Get a SequenceView by view_id.
+-- @param view_id string  "source_view" or "timeline_view"
+-- @return SequenceView
+function M.get_sequence_view(view_id)
+    assert(view_id and view_id ~= "",
+        "panel_manager.get_sequence_view: view_id required")
+    local sv = sequence_views[view_id]
+    assert(sv, string.format(
+        "panel_manager.get_sequence_view: no view registered for '%s'", view_id))
+    return sv
+end
+
+--- Get the SequenceView for the currently focused panel.
+-- Falls back to timeline_view if focused panel is not a sequence view.
+-- @return SequenceView|nil
+function M.get_active_sequence_view()
+    local panel_id = focused_panel(nil)
+
+    -- Map focus panel names to view_ids
+    if panel_id == "source_view" then
+        return sequence_views["source_view"]
+    elseif panel_id == "timeline_view" or panel_id == "timeline" then
+        return sequence_views["timeline_view"]
+    end
+
+    -- Non-viewer panel focused (browser, inspector) — return timeline_view
+    return sequence_views["timeline_view"]
 end
 
 return M

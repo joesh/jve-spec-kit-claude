@@ -20,9 +20,6 @@ local keyboard_shortcuts = {}
 local shortcut_registry = require("core.keyboard_shortcut_registry")
 local panel_manager = require("ui.panel_manager")
 
--- Playback controller for JKL shuttle (lazy loaded to avoid circular deps)
-local playback_controller = nil
-
 -- Self-managed arrow key repeat: bypasses macOS key repeat rate (~12/sec)
 -- with our own timer at ~30fps. Detects keyDown → start timer, keyUp → stop.
 local ARROW_STEP_MS = 33            -- ~30fps stepping (matches NLE convention)
@@ -31,11 +28,22 @@ local arrow_repeat_active = false   -- true while arrow key is held and timer is
 local arrow_repeat_dir = 0          -- 1=right, -1=left
 local arrow_repeat_shift = false    -- shift held = 1-second jumps
 local arrow_repeat_gen = 0          -- generation counter for timer invalidation
-local function get_playback_controller()
-    if not playback_controller then
-        playback_controller = require("core.playback.playback_controller")
-    end
-    return playback_controller
+
+--- Get the PlaybackEngine for the currently active SequenceView.
+-- @return PlaybackEngine|nil
+local function get_active_engine()
+    local sv = panel_manager.get_active_sequence_view()
+    if not sv then return nil end
+    return sv.engine
+end
+
+--- Check if the active view has a sequence loaded and ready for playback.
+local function ensure_playback_initialized()
+    local sv = panel_manager.get_active_sequence_view()
+    if not sv then return false end
+    if not sv.sequence_id then return false end
+    if sv.total_frames <= 0 then return false end
+    return true
 end
 
 -- K key held state for K+J/K+L slow playback
@@ -43,64 +51,40 @@ local k_held = false
 
 -- JKL handler functions (called by registry)
 
--- Initialize playback controller from viewer_panel (shared by J/L handlers)
-local function ensure_playback_initialized()
-    local pc = get_playback_controller()
-    if pc.total_frames > 0 then
-        return true  -- Already initialized
-    end
-
-    local viewer_panel = require("ui.viewer_panel")
-    if not viewer_panel.has_media() then
-        print("JKL: No media loaded in viewer")
-        return false
-    end
-
-    local total = viewer_panel.get_total_frames()
-    local fps = viewer_panel.get_fps()
-    assert(total > 0, string.format("handle_jkl: viewer has media but total_frames=%d", total))
-    assert(fps > 0, string.format("handle_jkl: viewer has media but fps=%s", tostring(fps)))
-
-    pc.init(viewer_panel)
-    pc.set_source(total, fps)
-    pc.set_position(viewer_panel.get_current_frame())
-    return true
-end
-
 local function handle_jkl_forward()
     if not ensure_playback_initialized() then return end
-    local pc = get_playback_controller()
+    local engine = get_active_engine()
     if k_held then
-        pc.slow_play(1)   -- K+L = slow forward
+        engine:slow_play(1)   -- K+L = slow forward
     else
-        pc.shuttle(1)     -- L = forward shuttle
+        engine:shuttle(1)     -- L = forward shuttle
     end
 end
 
 local function handle_jkl_reverse()
     if not ensure_playback_initialized() then return end
-    local pc = get_playback_controller()
+    local engine = get_active_engine()
     if k_held then
-        pc.slow_play(-1)  -- K+J = slow reverse
+        engine:slow_play(-1)  -- K+J = slow reverse
     else
-        pc.shuttle(-1)    -- J = reverse shuttle
+        engine:shuttle(-1)    -- J = reverse shuttle
     end
 end
 
 local function handle_jkl_stop()
     k_held = true
-    local pc = get_playback_controller()
-    pc.stop()
+    local engine = get_active_engine()
+    if engine then engine:stop() end
 end
 
 -- Toggle play/pause handler (Spacebar)
 local function handle_play_toggle()
     if not ensure_playback_initialized() then return end
-    local pc = get_playback_controller()
-    if pc.is_playing() then
-        pc.stop()
+    local engine = get_active_engine()
+    if engine:is_playing() then
+        engine:stop()
     else
-        pc.play()
+        engine:play()
     end
 end
 
@@ -118,7 +102,7 @@ local function register_jkl_commands()
         name = "Play/Pause",
         description = "Toggle playback (play at 1x or stop)",
         default_shortcuts = {"Space"},
-        context = {"timeline", "viewer"},
+        context = {"timeline", "source_view", "timeline_view"},
         handler = handle_play_toggle
     })
     shortcut_registry.assign_shortcut("playback.toggle", "Space")
@@ -129,7 +113,7 @@ local function register_jkl_commands()
         name = "Play Forward / Speed Up",
         description = "Start forward playback or increase speed",
         default_shortcuts = {"L"},
-        context = {"timeline", "viewer"},
+        context = {"timeline", "source_view", "timeline_view"},
         handler = handle_jkl_forward
     })
     shortcut_registry.register_command({
@@ -138,7 +122,7 @@ local function register_jkl_commands()
         name = "Play Reverse / Speed Up",
         description = "Start reverse playback or increase speed",
         default_shortcuts = {"J"},
-        context = {"timeline", "viewer"},
+        context = {"timeline", "source_view", "timeline_view"},
         handler = handle_jkl_reverse
     })
     shortcut_registry.register_command({
@@ -147,7 +131,7 @@ local function register_jkl_commands()
         name = "Stop Playback",
         description = "Stop playback and mark K held for slow-play combo",
         default_shortcuts = {"K"},
-        context = {"timeline", "viewer"},
+        context = {"timeline", "source_view", "timeline_view"},
         handler = handle_jkl_stop
     })
     -- Assign shortcuts
@@ -684,7 +668,8 @@ local function handle_key_impl(event)
 
     local focused_panel = get_focused_panel_id()
     local panel_active_timeline = panel_is_active("timeline", focused_panel)
-    local panel_active_viewer = panel_is_active("viewer", focused_panel)
+    local panel_active_source = panel_is_active("source_view", focused_panel)
+    local panel_active_tl_view = panel_is_active("timeline_view", focused_panel)
     local panel_active_browser = panel_is_active("project_browser", focused_panel)
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
 
@@ -842,7 +827,7 @@ local function handle_key_impl(event)
         return false
     end
 
-    if (key == KEY.Left or key == KEY.Right) and (panel_active_timeline or panel_active_viewer) then
+    if (key == KEY.Left or key == KEY.Right) and (panel_active_timeline or panel_active_source or panel_active_tl_view) then
         if not modifier_meta and not modifier_alt then
             -- Swallow OS autorepeat — we drive our own timer
             if event.is_auto_repeat then
@@ -905,8 +890,12 @@ local function handle_key_impl(event)
     end
 
     -- Mark In/Out controls (source viewer panel)
-    local source_state = require("ui.source_viewer_state")
-    if key == KEY.I and panel_active_viewer and source_state.has_clip() then
+    local source_has_clip = false
+    if panel_active_source then
+        local source_sv = panel_manager.get_sequence_view("source_view")
+        source_has_clip = source_sv and source_sv:has_clip()
+    end
+    if key == KEY.I and panel_active_source and source_has_clip then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
                 execute_command("SourceViewerGoToMarkIn", {})
@@ -917,7 +906,7 @@ local function handle_key_impl(event)
         end
     end
 
-    if key == KEY.O and panel_active_viewer and source_state.has_clip() then
+    if key == KEY.O and panel_active_source and source_has_clip then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
                 execute_command("SourceViewerGoToMarkOut", {})
@@ -928,7 +917,7 @@ local function handle_key_impl(event)
         end
     end
 
-    if key == KEY.X and panel_active_viewer and source_state.has_clip() then
+    if key == KEY.X and panel_active_source and source_has_clip then
         if modifier_alt and not modifier_meta then
             execute_command("SourceViewerClearMarks", {})
             return true
@@ -1475,8 +1464,8 @@ function keyboard_shortcuts.handle_key_release(event)
 
     -- K+J or K+L slow play: releasing J/L while K held → stop
     if (key == KEY.J or key == KEY.L) and k_held then
-        local pc = get_playback_controller()
-        pc.stop()
+        local engine = get_active_engine()
+        if engine then engine:stop() end
     end
 
     -- Stop arrow key repeat on real release

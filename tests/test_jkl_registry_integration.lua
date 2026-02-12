@@ -48,33 +48,45 @@ package.loaded["core.keyboard_shortcut_registry"] = {
     end,
 }
 
--- Mock panel_manager
-package.loaded["ui.panel_manager"] = {
-    toggle_active_panel = function() end,
-}
+-- Track playback calls
+local playback_calls = {}
 
--- Mock focus_manager - return "viewer" context
-local current_focus = "viewer"
+-- Mock engine (used by SequenceView)
+local mock_engine = {
+    total_frames = 100,
+    fps_num = 24,
+    fps_den = 1,
+}
+function mock_engine:is_playing() return false end
+function mock_engine:has_source() return true end
+function mock_engine:stop() table.insert(playback_calls, "stop") end
+function mock_engine:shuttle(dir) table.insert(playback_calls, "shuttle:" .. tostring(dir)) end
+function mock_engine:slow_play(dir) table.insert(playback_calls, "slow_play:" .. tostring(dir)) end
+function mock_engine:play() table.insert(playback_calls, "play") end
+
+-- Mock SequenceView
+local mock_sv = {
+    sequence_id = "test_seq",
+    total_frames = 100,
+    engine = mock_engine,
+}
+function mock_sv:has_clip() return true end
+
+-- Mock panel_manager with SequenceView
+local mock_pm = {
+    toggle_active_panel = function() end,
+    get_active_sequence_view = function() return mock_sv end,
+    get_sequence_view = function() return mock_sv end,
+}
+package.loaded["ui.panel_manager"] = mock_pm
+
+-- Mock focus_manager
+local current_focus = "timeline_view"
 package.loaded["ui.focus_manager"] = {
     get_focused_panel = function() return current_focus end,
 }
 
--- Track playback controller calls
-local playback_calls = {}
-local mock_pc = {
-    total_frames = 100,
-    frame = 0,
-    init = function() end,
-    set_source = function() end,
-    stop = function() table.insert(playback_calls, "stop") end,
-    shuttle = function(dir) table.insert(playback_calls, "shuttle:" .. tostring(dir)) end,
-    slow_play = function(dir) table.insert(playback_calls, "slow_play:" .. tostring(dir)) end,
-}
-
--- Mock playback_controller (at new location)
-package.loaded["core.playback.playback_controller"] = mock_pc
-
--- Mock viewer_panel
+-- Mock viewer_panel (still required by some paths)
 package.loaded["ui.viewer_panel"] = {
     has_media = function() return true end,
     get_total_frames = function() return 100 end,
@@ -107,13 +119,14 @@ print("  ✓ playback.stop registered")
 print("\nTest 4: JKL commands have multi-context (timeline + viewer)")
 local fwd_ctx = registered_commands["playback.forward"].context
 assert(type(fwd_ctx) == "table", "context should be a table for multi-context")
-local has_timeline, has_viewer = false, false
+local has_timeline, has_source, has_tl_view = false, false, false
 for _, ctx in ipairs(fwd_ctx) do
     if ctx == "timeline" then has_timeline = true end
-    if ctx == "viewer" then has_viewer = true end
+    if ctx == "source_view" then has_source = true end
+    if ctx == "timeline_view" then has_tl_view = true end
 end
-assert(has_timeline and has_viewer, "should have both timeline and viewer contexts")
-print("  ✓ playback.forward has contexts: timeline, viewer")
+assert(has_timeline and has_source and has_tl_view, "should have timeline, source_view, timeline_view contexts")
+print("  ✓ playback.forward has contexts: timeline, source_view, timeline_view")
 
 print("\n--- Test JKL shortcuts assigned ---")
 
@@ -147,8 +160,8 @@ print("\n--- Test JKL handlers execute via registry ---")
 -- Clear tracking
 playback_calls = {}
 
-print("\nTest 8: L key in viewer context triggers playback.forward handler")
-current_focus = "viewer"
+print("\nTest 8: L key in timeline_view context triggers playback.forward handler")
+current_focus = "timeline_view"
 local handler = registered_commands["playback.forward"].handler
 assert(handler, "playback.forward should have a handler")
 handler()
