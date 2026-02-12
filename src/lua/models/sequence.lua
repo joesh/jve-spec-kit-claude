@@ -738,4 +738,33 @@ function Sequence:get_audio_at(playhead_frame)
     return results
 end
 
+--- Compute the furthest clip end frame in this sequence.
+-- Returns max(timeline_start + duration) across all clips on all tracks.
+-- @return integer  0 if no clips
+function Sequence:compute_content_end()
+    local database = require("core.database")
+    assert(database.has_connection(),
+        "Sequence:compute_content_end: no database connection")
+    local db = database.get_connection()
+
+    local stmt = db:prepare([[
+        SELECT MAX(c.timeline_start_frame + c.duration_frames)
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE t.sequence_id = ?
+    ]])
+    assert(stmt, "Sequence:compute_content_end: failed to prepare query")
+    stmt:bind_value(1, self.id)
+    assert(stmt:exec(), "Sequence:compute_content_end: query exec failed")
+
+    local max_end = 0
+    if stmt:next() then
+        local val = stmt:value(0)
+        if val then max_end = val end
+    end
+    stmt:finalize()
+
+    return max_end
+end
+
 return Sequence

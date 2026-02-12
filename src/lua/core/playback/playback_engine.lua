@@ -168,19 +168,11 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
 end
 
 --- Compute content end frame from sequence clips (max of timeline_start + duration).
+-- Delegates to Sequence model (SQL isolation: only models/ execute SQL).
 function PlaybackEngine:_compute_content_end()
-    local Track = require("models.track")
-    local Clip = require("models.clip")
-    local max_end = 0
-    local tracks = Track.find_by_sequence(self.sequence_id)
-    for _, track in ipairs(tracks or {}) do
-        local clips = Clip.find_by_track(track.id)
-        for _, clip in ipairs(clips or {}) do
-            local clip_end = clip.timeline_start + clip.duration
-            if clip_end > max_end then max_end = clip_end end
-        end
-    end
-    return max_end
+    assert(self.sequence,
+        "PlaybackEngine:_compute_content_end: no sequence loaded")
+    return self.sequence:compute_content_end()
 end
 
 --------------------------------------------------------------------------------

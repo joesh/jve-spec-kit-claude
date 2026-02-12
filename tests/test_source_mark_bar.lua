@@ -74,7 +74,24 @@ print("\n--- Section 1: Create & Resize Rendering ---")
 
 print("\nTest 1.1: Create mark bar")
 local mock_widget = {}
-local bar = source_mark_bar.create(mock_widget)
+local bar = source_mark_bar.create(mock_widget, {
+    state_provider = source_viewer_state,
+    has_clip = function() return source_viewer_state.has_clip() end,
+    get_mark_in = function() return source_viewer_state.get_mark_in() end,
+    get_mark_out = function() return source_viewer_state.get_mark_out() end,
+    on_seek = function(frame)
+        source_viewer_state.set_playhead(frame)
+        if mock_pc.is_playing() then
+            mock_pc.stop()
+        end
+        local vp = require("ui.viewer_panel")
+        if vp.has_media() then
+            vp.show_frame(frame)
+        end
+        mock_pc.set_position(frame)
+    end,
+    on_listener = function(fn) source_viewer_state.add_listener(fn) end,
+})
 assert(bar, "create should return bar table")
 assert(bar.widget == mock_widget, "bar.widget should be the passed widget")
 assert(type(bar.render) == "function", "bar should have render function")

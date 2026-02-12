@@ -185,7 +185,23 @@ function M.create()
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(mark_bar_widget, "Expanding", "Fixed")
     timeline.set_desired_height(mark_bar_widget, source_mark_bar.BAR_HEIGHT)
     qt_constants.LAYOUT.ADD_WIDGET(content_layout, mark_bar_widget)
-    source_mark_bar.create(mark_bar_widget)
+    source_mark_bar.create(mark_bar_widget, {
+        state_provider = source_viewer_state,
+        has_clip = function() return source_viewer_state.has_clip() end,
+        get_mark_in = function() return source_viewer_state.get_mark_in() end,
+        get_mark_out = function() return source_viewer_state.get_mark_out() end,
+        on_seek = function(frame)
+            source_viewer_state.set_playhead(frame)
+            if playback_controller.is_playing() then
+                playback_controller.stop()
+            end
+            if media_cache.is_loaded(VIEW_CTX) then
+                M.show_frame(frame)
+            end
+            playback_controller.set_position(frame)
+        end,
+        on_listener = function(fn) source_viewer_state.add_listener(fn) end,
+    })
     logger.info("viewer_panel", "Source mark bar created")
 
     -- Initialize playback controller with this viewer panel

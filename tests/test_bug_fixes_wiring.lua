@@ -68,17 +68,20 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════
--- B2: seek_to_frame must sync playback_controller position
+-- B2: mark bar seek must sync playback_controller position
+-- (After mark bar refactor: on_seek callback in viewer_panel handles this)
 -- ═══════════════════════════════════════════════════════════
 print("\n=== B2: seek_to_frame syncs playback_controller ===")
 do
-    local f = io.open("../src/lua/ui/source_mark_bar.lua", "r")
-    assert(f, "Cannot open source_mark_bar.lua")
+    -- Mark bar delegates to on_seek callback; verify viewer_panel provides
+    -- an on_seek that calls playback_controller.set_position
+    local f = io.open("../src/lua/ui/viewer_panel.lua", "r")
+    assert(f, "Cannot open viewer_panel.lua")
     local content = f:read("*a")
     f:close()
 
-    -- The seek_to_frame function must call playback_controller.set_position
-    check("seek_to_frame calls set_position",
+    check("on_seek calls set_position in viewer_panel",
+        content:find("on_seek") ~= nil and
         content:find("set_position") ~= nil and
         content:find("playback_controller") ~= nil)
 end

@@ -2,16 +2,23 @@
 --
 -- Responsibilities:
 -- - Renders a thin horizontal bar showing mark in/out range + playhead
---   for the currently loaded source clip
--- - Listens to source_viewer_state for redraws
+-- - Listens to a state_provider for redraws
 -- - Handles mouse input: click to set playhead, drag marks
 --
 -- Uses ScriptableTimeline widget as a drawing canvas (no tracks/clips).
 -- Visual language matches timeline ruler: cyan mark range, red handles/playhead.
 --
+-- Config table:
+--   state_provider  table with:
+--     .total_frames  number (read)
+--     .playhead      number (read)
+--   has_clip()      → boolean
+--   get_mark_in()   → number|nil
+--   get_mark_out()  → number|nil
+--   on_seek(frame)  function called on click/drag
+--   on_listener(fn) function to register render callback
+--
 -- @file source_mark_bar.lua
-
-local source_viewer_state = require("ui.source_viewer_state")
 
 local M = {}
 
@@ -27,11 +34,32 @@ local DURATION_BAR_COLOR = "#2a2a2a"  -- dark strip for clip extent
 local HANDLE_WIDTH = 2
 local PLAYHEAD_LINE_WIDTH = 2
 
---- Create a source mark bar attached to a ScriptableTimeline widget.
+--- Create a mark bar attached to a ScriptableTimeline widget.
 -- @param widget: ScriptableTimeline widget (created via CREATE_TIMELINE)
--- @return table with {widget, render}
-function M.create(widget)
+-- @param config: { state_provider, has_clip, get_mark_in, get_mark_out, on_seek, on_listener }
+-- @return table with {widget, render, on_mouse_event}
+function M.create(widget, config)
     assert(widget, "source_mark_bar.create: widget is nil")
+    assert(type(config) == "table",
+        "source_mark_bar.create: config table required")
+    assert(config.state_provider,
+        "source_mark_bar.create: config.state_provider required")
+    assert(type(config.on_seek) == "function",
+        "source_mark_bar.create: config.on_seek function required")
+    assert(type(config.has_clip) == "function",
+        "source_mark_bar.create: config.has_clip function required")
+    assert(type(config.get_mark_in) == "function",
+        "source_mark_bar.create: config.get_mark_in function required")
+    assert(type(config.get_mark_out) == "function",
+        "source_mark_bar.create: config.get_mark_out function required")
+    assert(type(config.on_listener) == "function",
+        "source_mark_bar.create: config.on_listener function required")
+
+    local state = config.state_provider
+    local on_seek = config.on_seek
+    local has_clip = config.has_clip
+    local get_mark_in = config.get_mark_in
+    local get_mark_out = config.get_mark_out
 
     local bar = {
         widget = widget,
@@ -39,14 +67,14 @@ function M.create(widget)
 
     -- Convert frame index to pixel x-coordinate
     local function frame_to_x(frame, width)
-        local total = source_viewer_state.total_frames
+        local total = state.total_frames
         if total <= 0 then return 0 end
         return math.floor((frame / total) * width + 0.5)
     end
 
     -- Convert pixel x-coordinate to frame index
     local function x_to_frame(x, width)
-        local total = source_viewer_state.total_frames
+        local total = state.total_frames
         if total <= 0 or width <= 0 then return 0 end
         local frame = math.floor((x / width) * total + 0.5)
         return math.max(0, math.min(frame, total - 1))
@@ -63,7 +91,7 @@ function M.create(widget)
         -- Background
         timeline.add_rect(bar.widget, 0, 0, width, M.BAR_HEIGHT, BACKGROUND_COLOR)
 
-        if not source_viewer_state.has_clip() then
+        if not has_clip() then
             timeline.update(bar.widget)
             return
         end
@@ -71,8 +99,8 @@ function M.create(widget)
         -- Clip duration strip
         timeline.add_rect(bar.widget, 0, 0, width, M.BAR_HEIGHT, DURATION_BAR_COLOR)
 
-        local mark_in = source_viewer_state.get_mark_in()
-        local mark_out = source_viewer_state.get_mark_out()
+        local mark_in = get_mark_in()
+        local mark_out = get_mark_out()
 
         -- Mark range fill
         if mark_in and mark_out and mark_out > mark_in then
@@ -96,7 +124,7 @@ function M.create(widget)
         end
 
         -- Playhead
-        local playhead = source_viewer_state.playhead
+        local playhead = state.playhead
         local playhead_x = frame_to_x(playhead, width)
 
         -- Playhead triangle caret (top)
@@ -115,38 +143,23 @@ function M.create(widget)
         timeline.update(bar.widget)
     end
 
-    -- Seek video to a source frame and sync playback_controller position.
-    local function seek_to_frame(frame)
-        local playback_controller = require("core.playback.playback_controller")
-        if playback_controller.is_playing() then
-            playback_controller.stop()
-        end
-        local viewer_panel = require("ui.viewer_panel")
-        assert(viewer_panel.has_media(),
-            "source_mark_bar.seek_to_frame: no media loaded in viewer_panel")
-        viewer_panel.show_frame(frame)
-        playback_controller.set_position(frame)
-    end
-
     -- Mouse interaction
     local dragging = false
 
     local function on_mouse_event(event_type, x, y, button, modifiers)
-        if not source_viewer_state.has_clip() then return end
+        if not has_clip() then return end
         local width = select(1, timeline.get_dimensions(bar.widget))
         if not width or width <= 0 then return end
 
         if event_type == "press" then
             dragging = true
             local frame = x_to_frame(x, width)
-            source_viewer_state.set_playhead(frame)
-            seek_to_frame(frame)
+            on_seek(frame)
 
         elseif event_type == "move" then
             if dragging then
                 local frame = x_to_frame(x, width)
-                source_viewer_state.set_playhead(frame)
-                seek_to_frame(frame)
+                on_seek(frame)
             end
 
         elseif event_type == "release" then
@@ -172,8 +185,8 @@ function M.create(widget)
     _G[resize_name] = function() render() end
     timeline.set_resize_event_handler(widget, resize_name)
 
-    -- Listen to source_viewer_state changes
-    source_viewer_state.add_listener(render)
+    -- Listen to state changes for redraws
+    config.on_listener(render)
 
     -- Initial render
     render()
