@@ -49,7 +49,9 @@ function M.get_video_frame(sequence, playhead_frame, context_id)
         clip_id = top.clip.id,
         media_path = top.media_path,
         source_frame = top.source_frame,
-        rotation = info and info.rotation or 0,
+        -- info is guaranteed non-nil (activate asserts on failure).
+        -- rotation may be nil for assets without rotation metadata; nil means 0 degrees.
+        rotation = info.rotation or 0,
     }
 
     return frame, metadata

@@ -64,6 +64,8 @@ local function assert_tick_in(tick_in)
         "timeline_playback.tick: tick_in.total_frames must be >= 1")
     assert(type(tick_in.sequence_id) == "string" and tick_in.sequence_id ~= "",
         "timeline_playback.tick: tick_in.sequence_id must be a non-empty string")
+    assert(tick_in.context_id,
+        "timeline_playback.tick: tick_in.context_id is required")
 end
 
 --------------------------------------------------------------------------------
@@ -81,13 +83,15 @@ end
 -- @param viewer_panel table Viewer panel module reference
 -- @param audio_playback table|nil Audio module for source switching during playback
 -- @param frame_idx number Timeline frame index to resolve
+-- @param context_id string Media cache context ID
 -- @return new_current_clip_id string|nil Updated clip id
 function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
-                                direction, speed, viewer_panel, audio_playback, frame_idx)
+                                direction, speed, viewer_panel, audio_playback, frame_idx, context_id)
     assert(viewer_panel, "timeline_playback.resolve_and_display: viewer_panel not set")
     assert(fps_num and fps_den,
         "timeline_playback.resolve_and_display: fps must be set")
     assert(sequence_id, "timeline_playback.resolve_and_display: sequence_id required")
+    assert(context_id, "timeline_playback.resolve_and_display: context_id required")
 
     local resolved = timeline_resolver.resolve_at_time(frame_idx, sequence_id)
 
@@ -96,10 +100,10 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
         if resolved.clip.id ~= current_clip_id then
             current_clip_id = resolved.clip.id
             -- Activate reader in pool (pool lookup, no I/O if cached)
-            media_cache.activate(resolved.media_path)
+            media_cache.activate(resolved.media_path, context_id)
 
             -- Apply rotation from media metadata (phone footage portrait/landscape)
-            local asset_info = media_cache.get_asset_info()
+            local asset_info = media_cache.get_asset_info(context_id)
             if asset_info then
                 viewer_panel.set_rotation(asset_info.rotation or 0)
             end
@@ -119,7 +123,7 @@ function M.resolve_and_display(fps_num, fps_den, sequence_id, current_clip_id,
         -- decoder stays ahead of playback. Only during active playback
         -- (direction != 0); parked seeks don't need prefetch.
         if direction and direction ~= 0 then
-            media_cache.set_playhead(resolved.source_frame, direction, speed)
+            media_cache.set_playhead(resolved.source_frame, direction, speed, context_id)
         end
     else
         -- Gap at playhead - show black
@@ -200,7 +204,7 @@ function M.tick(tick_in, audio_playback, viewer_panel)
     local frame_idx = math.floor(pos)
     local new_clip_id, source_time_us = M.resolve_and_display(
         tick_in.fps_num, tick_in.fps_den, tick_in.sequence_id, tick_in.current_clip_id,
-        tick_in.direction, tick_in.speed, viewer_panel, audio_playback, frame_idx)
+        tick_in.direction, tick_in.speed, viewer_panel, audio_playback, frame_idx, tick_in.context_id)
 
     return {
         continue = true,

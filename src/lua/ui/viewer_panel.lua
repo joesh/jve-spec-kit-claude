@@ -21,6 +21,9 @@ local playback_controller = require("core.playback.playback_controller")
 local source_viewer_state = require("ui.source_viewer_state")
 local source_mark_bar = require("ui.source_mark_bar")
 
+-- Media cache context ID (Phase 3 splits into per-instance IDs)
+local VIEW_CTX = "view"
+
 local M = {}
 
 -- DEBUG: skip video decode+display to isolate audio debugging
@@ -39,7 +42,7 @@ local function cleanup()
     playback_controller.shutdown_audio_session()
 
     -- Unload media cache (releases all EMP resources)
-    media_cache.unload()
+    media_cache.unload(VIEW_CTX)
 
     current_frame_idx = 0
 end
@@ -54,7 +57,7 @@ local function load_video_frame(file_path)
     cleanup()
 
     -- Activate via media_cache pool (opens dual assets, or pool-hit if cached)
-    local info = media_cache.activate(file_path)
+    local info = media_cache.activate(file_path, VIEW_CTX)
 
     -- Apply rotation from media metadata (phone footage portrait/landscape)
     if qt_constants.EMP.SURFACE_SET_ROTATION then
@@ -63,7 +66,7 @@ local function load_video_frame(file_path)
 
     -- Get and display frame 0
     if not SKIP_VIDEO then
-        local frame = media_cache.get_video_frame(0)
+        local frame = media_cache.get_video_frame(0, VIEW_CTX)
         qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
     end
     current_frame_idx = 0
@@ -290,14 +293,14 @@ end
 -- Display a specific frame by index (for playback scrubbing)
 -- Frame comes from media_cache (cache owns the frame, we just display it)
 function M.show_frame(frame_idx)
-    assert(media_cache.is_loaded(), "viewer_panel.show_frame: no media loaded")
+    assert(media_cache.is_loaded(VIEW_CTX), "viewer_panel.show_frame: no media loaded")
     assert(frame_idx, "viewer_panel.show_frame: frame_idx is nil")
     assert(frame_idx >= 0, string.format(
         "viewer_panel.show_frame: frame_idx must be >= 0, got %d", frame_idx))
 
     if not SKIP_VIDEO then
         -- Get frame from cache (cache handles decode and lifecycle)
-        local frame = media_cache.get_video_frame(frame_idx)
+        local frame = media_cache.get_video_frame(frame_idx, VIEW_CTX)
         qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
     end
     current_frame_idx = frame_idx
@@ -305,13 +308,13 @@ end
 
 -- Get current asset info (for playback controller)
 function M.get_asset_info()
-    return media_cache.get_asset_info()
+    return media_cache.get_asset_info(VIEW_CTX)
 end
 
 -- Get total frame count of current media
 -- Computed from duration_us and fps
 function M.get_total_frames()
-    local info = media_cache.get_asset_info()
+    local info = media_cache.get_asset_info(VIEW_CTX)
     if not info then return 0 end
     if not info.duration_us or info.fps_den == 0 then return 0 end
     return math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
@@ -319,7 +322,7 @@ end
 
 -- Get fps of current media
 function M.get_fps()
-    local info = media_cache.get_asset_info()
+    local info = media_cache.get_asset_info(VIEW_CTX)
     if not info then return 0 end
     if info.fps_den == 0 then return 0 end
     return info.fps_num / info.fps_den
@@ -332,7 +335,7 @@ end
 
 -- Check if media is loaded
 function M.has_media()
-    return media_cache.is_loaded()
+    return media_cache.is_loaded(VIEW_CTX)
 end
 
 function M.show_timeline(sequence)
@@ -389,13 +392,13 @@ end
 -- Used for timeline playback to show the correct source position
 -- @param source_time_us number: Source time in microseconds
 function M.show_frame_at_time(source_time_us)
-    assert(media_cache.is_loaded(), "viewer_panel.show_frame_at_time: no media loaded")
+    assert(media_cache.is_loaded(VIEW_CTX), "viewer_panel.show_frame_at_time: no media loaded")
     assert(source_time_us ~= nil, "viewer_panel.show_frame_at_time: source_time_us is nil")
     assert(source_time_us >= 0, string.format(
         "viewer_panel.show_frame_at_time: source_time_us must be >= 0, got %d", source_time_us))
 
     -- Convert time to frame index using media info
-    local info = media_cache.get_asset_info()
+    local info = media_cache.get_asset_info(VIEW_CTX)
     assert(info and info.fps_num and info.fps_den and info.fps_den > 0,
         "viewer_panel.show_frame_at_time: invalid media info")
 
@@ -407,7 +410,7 @@ function M.show_frame_at_time(source_time_us)
 
     -- Get and display frame
     if not SKIP_VIDEO then
-        local frame = media_cache.get_video_frame(frame_idx)
+        local frame = media_cache.get_video_frame(frame_idx, VIEW_CTX)
         qt_constants.EMP.SURFACE_SET_FRAME(video_surface, frame)
     end
     current_frame_idx = frame_idx

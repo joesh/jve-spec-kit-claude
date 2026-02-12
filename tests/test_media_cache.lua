@@ -1,9 +1,9 @@
---- Test media_cache module (dual-asset cache for independent video/audio)
+--- Test media_cache module (per-context cache with shared reader pool)
 -- @file test_media_cache.lua
 --
--- Tests the unified media cache that opens the same file twice
--- (separate AVFormatContexts) to prevent seek conflicts between
--- video and audio decoders.
+-- Tests the per-context media cache with shared LRU reader pool.
+-- Each viewer context (source_view, timeline_view) has independent
+-- active_path, video_cache, and audio_cache state.
 
 require('test_env')
 
@@ -29,6 +29,8 @@ package.loaded["core.qt_constants"] = mock_qt_constants
 
 local media_cache = require("core.media.media_cache")
 
+local CTX = "test_ctx"
+
 print("=== Test media_cache module ===")
 print()
 
@@ -48,19 +50,21 @@ assert(media_cache.get_video_reader, "media_cache.get_video_reader missing")
 assert(media_cache.get_audio_reader, "media_cache.get_audio_reader missing")
 assert(media_cache.get_asset_info, "media_cache.get_asset_info missing")
 assert(media_cache.is_loaded, "media_cache.is_loaded missing")
+assert(media_cache.create_context, "media_cache.create_context missing")
+assert(media_cache.destroy_context, "media_cache.destroy_context missing")
 
 print("  OK: All expected functions present")
 
 --------------------------------------------------------------------------------
--- Test 2: Initial state
+-- Test 2: Initial state (per-context)
 --------------------------------------------------------------------------------
 print("Test 2: Initial state")
 
-assert(media_cache.is_loaded() == false, "Should start unloaded")
-assert(media_cache.get_video_asset() == nil, "video_asset should be nil")
-assert(media_cache.get_audio_asset() == nil, "audio_asset should be nil")
-assert(media_cache.get_video_reader() == nil, "video_reader should be nil")
-assert(media_cache.get_audio_reader() == nil, "audio_reader should be nil")
+assert(media_cache.is_loaded(CTX) == false, "Should start unloaded")
+assert(media_cache.get_video_asset(CTX) == nil, "video_asset should be nil")
+assert(media_cache.get_audio_asset(CTX) == nil, "audio_asset should be nil")
+assert(media_cache.get_video_reader(CTX) == nil, "video_reader should be nil")
+assert(media_cache.get_audio_reader(CTX) == nil, "audio_reader should be nil")
 
 print("  OK: Initial state correct")
 
@@ -70,7 +74,7 @@ print("  OK: Initial state correct")
 print("Test 3: Load validation")
 
 local ok, err = pcall(function()
-    media_cache.load(nil)
+    media_cache.load(nil, CTX)
 end)
 assert(not ok, "load(nil) should assert")
 assert(string.find(tostring(err), "file_path"), "Should mention file_path")
@@ -83,7 +87,7 @@ print("  OK: load validates file_path parameter")
 print("Test 4: get_video_frame requires load")
 
 ok, err = pcall(function()
-    media_cache.get_video_frame(0)
+    media_cache.get_video_frame(0, CTX)
 end)
 assert(not ok, "get_video_frame without load should assert")
 assert(string.find(tostring(err), "not loaded") or string.find(tostring(err), "video_reader"),
@@ -97,7 +101,7 @@ print("  OK: get_video_frame validates loaded state")
 print("Test 5: get_audio_pcm requires load")
 
 ok, err = pcall(function()
-    media_cache.get_audio_pcm(0, 1000000)
+    media_cache.get_audio_pcm(0, 1000000, nil, CTX)
 end)
 assert(not ok, "get_audio_pcm without load should assert")
 assert(string.find(tostring(err), "not loaded") or string.find(tostring(err), "audio_reader"),
@@ -106,28 +110,70 @@ assert(string.find(tostring(err), "not loaded") or string.find(tostring(err), "a
 print("  OK: get_audio_pcm validates loaded state")
 
 --------------------------------------------------------------------------------
--- Test 6: Video cache window configuration
+-- Test 6: Context_id is required
 --------------------------------------------------------------------------------
-print("Test 6: Video cache window configuration")
+print("Test 6: context_id required")
 
-assert(type(media_cache.video_cache) == "table", "video_cache table should exist")
-assert(media_cache.video_cache.window_size and media_cache.video_cache.window_size > 0,
-       "video_cache.window_size should be positive")
-assert(type(media_cache.video_cache.frames) == "table", "video_cache.frames should be table")
+ok, err = pcall(function()
+    media_cache.is_loaded()
+end)
+assert(not ok, "is_loaded() without context_id should assert")
+assert(string.find(tostring(err), "context_id"), "Should mention context_id")
 
-print("  OK: Video cache configuration present")
+print("  OK: context_id is required")
 
 --------------------------------------------------------------------------------
--- Test 7: Audio cache window configuration
+-- Test 7: Explicit context create/destroy
 --------------------------------------------------------------------------------
-print("Test 7: Audio cache window configuration")
+print("Test 7: Context lifecycle")
 
-assert(type(media_cache.audio_cache) == "table", "audio_cache table should exist")
--- Audio cache stores single PCM chunk with time range
-assert(media_cache.audio_cache.start_us ~= nil, "audio_cache.start_us should exist")
-assert(media_cache.audio_cache.end_us ~= nil, "audio_cache.end_us should exist")
+media_cache.create_context("explicit_ctx")
+assert(media_cache.contexts["explicit_ctx"], "Context should exist after create")
 
-print("  OK: Audio cache configuration present")
+media_cache.destroy_context("explicit_ctx")
+assert(not media_cache.contexts["explicit_ctx"], "Context should be gone after destroy")
+
+-- Duplicate create asserts
+media_cache.create_context("dup_ctx")
+ok, err = pcall(function()
+    media_cache.create_context("dup_ctx")
+end)
+assert(not ok, "Duplicate create should assert")
+media_cache.destroy_context("dup_ctx")
+
+-- Destroy non-existent context asserts (catches double-destroy bugs)
+ok, err = pcall(function()
+    media_cache.destroy_context("nonexistent_ctx")
+end)
+assert(not ok, "Destroying non-existent context should assert")
+assert(string.find(tostring(err), "nonexistent_ctx"),
+    "Error should mention the context_id")
+
+print("  OK: Context lifecycle works")
+
+--------------------------------------------------------------------------------
+-- Test 8: context_id required on all per-context APIs
+--------------------------------------------------------------------------------
+print("Test 8: context_id required on all APIs")
+
+local nil_ctx_apis = {
+    { "is_loaded",       function() media_cache.is_loaded() end },
+    { "get_file_path",   function() media_cache.get_file_path() end },
+    { "get_video_asset", function() media_cache.get_video_asset() end },
+    { "get_audio_asset", function() media_cache.get_audio_asset() end },
+    { "get_video_reader",function() media_cache.get_video_reader() end },
+    { "get_audio_reader",function() media_cache.get_audio_reader() end },
+    { "get_asset_info",  function() media_cache.get_asset_info() end },
+    { "get_rotation",    function() media_cache.get_rotation() end },
+}
+for _, case in ipairs(nil_ctx_apis) do
+    ok, err = pcall(case[2])
+    assert(not ok, case[1] .. "() without context_id should assert")
+    assert(string.find(tostring(err), "context_id"),
+        case[1] .. " error should mention context_id, got: " .. tostring(err))
+end
+
+print("  OK: All per-context APIs require context_id")
 
 --------------------------------------------------------------------------------
 -- Tests 8+ require qt_constants (Qt bindings - run in JVEEditor)
@@ -156,6 +202,9 @@ assert(qt_constants.EMP.ASSET_CLOSE, "EMP.ASSET_CLOSE missing")
 print("  OK: EMP bindings available for dual asset creation")
 
 end  -- has_qt
+
+-- Cleanup lazy-created test context
+media_cache.cleanup()
 
 --------------------------------------------------------------------------------
 print()

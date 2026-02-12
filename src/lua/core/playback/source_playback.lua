@@ -61,6 +61,8 @@ local function assert_tick_in(tick_in)
         "source_playback.tick: tick_in.transport_mode must be 'none', 'shuttle', or 'play'")
     assert(type(tick_in.latched) == "boolean",
         "source_playback.tick: tick_in.latched must be a boolean")
+    assert(tick_in.context_id,
+        "source_playback.tick: tick_in.context_id is required")
 end
 
 --------------------------------------------------------------------------------
@@ -181,8 +183,8 @@ function M.tick(tick_in, audio_playback, viewer_panel)
     viewer_panel.show_frame(frame_idx)
 
     -- Notify media_cache of playhead change (triggers prefetch in travel direction)
-    if media_cache.is_loaded() then
-        media_cache.set_playhead(frame_idx, tick_in.direction, tick_in.speed)
+    if media_cache.is_loaded(tick_in.context_id) then
+        media_cache.set_playhead(frame_idx, tick_in.direction, tick_in.speed, tick_in.context_id)
     end
 
     return {

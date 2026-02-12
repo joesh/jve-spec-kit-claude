@@ -111,7 +111,7 @@ local function test_clip_at_playhead()
     -- Frame 10 is inside clip_a (0-48)
     local new_clip_id = timeline_playback.resolve_and_display(
         24, 1, "seq", nil,
-        nil, nil, viewer, nil, 10)
+        nil, nil, viewer, nil, 10, "test")
 
     -- media_cache.activate() should be called for clip switch
     assert(#activate_calls == 1,
@@ -148,7 +148,7 @@ local function test_gap_at_playhead()
     -- Frame 60 is in the gap (clip_a ends at 48, clip_b starts at 72)
     local new_clip_id = timeline_playback.resolve_and_display(
         24, 1, "seq", "clip_a",
-        nil, nil, viewer, nil, 60)
+        nil, nil, viewer, nil, 60, "test")
 
     -- No activate calls for gap
     assert(#activate_calls == 0,
@@ -176,7 +176,7 @@ local function test_same_clip_skips_source_switch()
     -- Frame 20 is still in clip_a (0-48)
     local new_clip_id = timeline_playback.resolve_and_display(
         24, 1, "seq", "clip_a",
-        nil, nil, viewer, nil, 20)
+        nil, nil, viewer, nil, 20, "test")
 
     -- No activate call when same clip
     assert(#activate_calls == 0,
@@ -202,7 +202,7 @@ local function test_clip_switch_triggers_source_change()
     -- Frame 80 is in clip_b (72-120, source_in=10)
     local new_clip_id = timeline_playback.resolve_and_display(
         24, 1, "seq", "clip_a",
-        nil, nil, viewer, nil, 80)
+        nil, nil, viewer, nil, 80, "test")
 
     -- activate() should be called for new clip
     assert(#activate_calls == 1,

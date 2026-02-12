@@ -42,11 +42,14 @@ local function build_sources(audio_clips, playhead_frame, seq_fps_num, seq_fps_d
 
     for _, ac in ipairs(audio_clips) do
         local media_info = media_cache.ensure_audio_pooled(ac.media_path)
+        assert(media_info, string.format(
+            "mixer.build_sources: ensure_audio_pooled returned nil for %s", ac.media_path))
 
         local timeline_start_frames = ac.clip.timeline_start
         local source_in_frames = ac.clip.source_in
         local source_out_frames = ac.clip.source_out
-        local media_start_tc = media_info and media_info.start_tc or 0
+        -- start_tc may be nil for files without embedded timecode; nil means file starts at 0
+        local media_start_tc = media_info.start_tc or 0
 
         assert(type(timeline_start_frames) == "number", "mixer: timeline_start must be integer")
         assert(type(source_in_frames) == "number", "mixer: source_in must be integer")
@@ -56,16 +59,15 @@ local function build_sources(audio_clips, playhead_frame, seq_fps_num, seq_fps_d
 
         -- Derive seek frame: absolute TC → relative to file start
         local seek_frame = source_in_frames - media_start_tc
-        if seek_frame < 0 then
-            logger.warn("mixer", string.format(
-                "clip %s source_in (%d) before media start_tc (%d), clamping to 0",
-                ac.clip.id:sub(1,8), source_in_frames, media_start_tc))
-            seek_frame = 0
-        end
+        assert(seek_frame >= 0, string.format(
+            "mixer.build_sources: clip %s seek_frame=%d < 0 (source_in=%d, media_start_tc=%d)",
+            ac.clip.id, seek_frame, source_in_frames, media_start_tc))
 
-        -- CLIP rate for source coords
-        local clip_fps_num = ac.clip.rate and ac.clip.rate.fps_numerator or seq_fps_num
-        local clip_fps_den = ac.clip.rate and ac.clip.rate.fps_denominator or seq_fps_den
+        -- CLIP rate for source coords — clips MUST have rate (invariant from Rational Refactor)
+        assert(ac.clip.rate and ac.clip.rate.fps_numerator and ac.clip.rate.fps_denominator,
+            string.format("mixer.build_sources: clip %s has no rate", ac.clip.id))
+        local clip_fps_num = ac.clip.rate.fps_numerator
+        local clip_fps_den = ac.clip.rate.fps_denominator
 
         -- Timeline start in microseconds (using SEQUENCE fps)
         local timeline_start_us = math.floor(
@@ -191,9 +193,10 @@ function M.mix_sources(sources, pb_start, pb_end, sample_rate, channels, media_c
         local pcm_ptr, frames, actual_start = media_cache.get_audio_pcm_for_path(
             src.path, src_start, src_end, sample_rate)
 
-        if not pcm_ptr or not frames or frames <= 0 then
-            return nil, 0, pb_start
-        end
+        assert(pcm_ptr and frames and frames > 0, string.format(
+            "mixer.mix_sources: PCM decode failed for '%s' [%.3fs-%.3fs] (ptr=%s frames=%s)",
+            src.path, src_start / 1000000, src_end / 1000000,
+            tostring(pcm_ptr), tostring(frames)))
 
         -- Apply volume if not unity
         if src.volume ~= 1.0 then
@@ -225,12 +228,10 @@ function M.mix_sources(sources, pb_start, pb_end, sample_rate, channels, media_c
         local pcm_ptr, frames, actual_start = media_cache.get_audio_pcm_for_path(
             src.path, src_start, src_end, sample_rate)
 
-        if not pcm_ptr or not frames or frames <= 0 then
-            logger.warn("mixer", string.format(
-                "Failed to decode audio for '%s' [%.3fs-%.3fs]",
-                src.path, src_start / 1000000, src_end / 1000000))
-            goto continue
-        end
+        assert(pcm_ptr and frames and frames > 0, string.format(
+            "mixer.mix_sources: PCM decode failed for '%s' [%.3fs-%.3fs] (ptr=%s frames=%s)",
+            src.path, src_start / 1000000, src_end / 1000000,
+            tostring(pcm_ptr), tostring(frames)))
 
         if not mix_buf then
             mix_frames = frames

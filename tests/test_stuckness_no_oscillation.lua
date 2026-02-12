@@ -82,6 +82,7 @@ for i = 1, 10 do
         sequence_id = "seq_1",
         current_clip_id = "clip_1",
         last_audio_frame = last_audio_frame,
+        context_id = "test",
     }
 
     local result = timeline_playback.tick(tick_in, mock_audio, mock_viewer)
@@ -132,6 +133,7 @@ local tick_in = {
     sequence_id = "seq_1",
     current_clip_id = "clip_1",
     last_audio_frame = last_audio_frame,  -- still 50 from test 1
+    context_id = "test",
 }
 
 local result = timeline_playback.tick(tick_in, mock_audio, mock_viewer)
@@ -161,6 +163,7 @@ for i = 1, 5 do
         sequence_id = "seq_1",
         current_clip_id = "clip_1",
         last_audio_frame = nil,
+        context_id = "test",
     }
     local r = timeline_playback.tick(ti, nil, mock_viewer)  -- no audio_playback
     table.insert(no_audio_positions, r.frame_idx)
@@ -197,6 +200,7 @@ for i = 1, 5 do
         sequence_id = "seq_1",
         current_clip_id = "clip_1",
         last_audio_frame = last_audio_frame,
+        context_id = "test",
     }
     local r = timeline_playback.tick(ti, mock_audio, mock_viewer)
 

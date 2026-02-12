@@ -45,6 +45,7 @@ local function valid_source_tick_in()
         fps_num = 30, fps_den = 1, total_frames = 100,
         transport_mode = "shuttle", latched = false,
         latched_boundary = nil,
+        context_id = "test",
     }
 end
 

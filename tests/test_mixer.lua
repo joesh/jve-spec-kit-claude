@@ -213,6 +213,178 @@ local function test_resolve_solo()
 end
 
 -- ============================================================================
+-- Test NSF: seek_frame < 0 must assert (source_in < media start_tc = bad data)
+-- ============================================================================
+
+local function test_seek_frame_negative_asserts()
+    -- Mock media_cache returning start_tc=100 which exceeds clip source_in=0
+    -- This means source_in references a point BEFORE the media starts — invalid.
+    local bad_media_cache = {
+        ensure_audio_pooled = function(path)
+            return {
+                has_audio = true,
+                audio_sample_rate = 48000,
+                audio_channels = 2,
+                duration_us = 10000000,
+                start_tc = 100,  -- source_in(0) < start_tc(100) → seek_frame < 0
+            }
+        end,
+    }
+
+    -- clip_a1: source_in=0, start_tc=100 → seek_frame = 0 - 100 = -100
+    local ok, err = pcall(function()
+        mixer.resolve_audio_sources(seq, 10, 24, 1, bad_media_cache)
+    end)
+    assert(not ok, "seek_frame < 0 should assert, not silently clamp")
+    assert(string.find(tostring(err), "seek_frame"),
+        "Error should mention seek_frame, got: " .. tostring(err))
+    print("  test_seek_frame_negative_asserts passed")
+end
+
+-- ============================================================================
+-- Test NSF: resolve_audio_sources parameter validation
+-- ============================================================================
+
+local function test_resolve_nil_sequence_asserts()
+    local ok, err = pcall(function()
+        mixer.resolve_audio_sources(nil, 10, 24, 1, mock_media_cache)
+    end)
+    assert(not ok, "nil sequence should assert")
+    assert(string.find(tostring(err), "sequence"),
+        "Error should mention sequence, got: " .. tostring(err))
+    print("  test_resolve_nil_sequence_asserts passed")
+end
+
+local function test_resolve_nil_media_cache_asserts()
+    local ok, err = pcall(function()
+        mixer.resolve_audio_sources(seq, 10, 24, 1, nil)
+    end)
+    assert(not ok, "nil media_cache should assert")
+    assert(string.find(tostring(err), "media_cache"),
+        "Error should mention media_cache, got: " .. tostring(err))
+    print("  test_resolve_nil_media_cache_asserts passed")
+end
+
+local function test_resolve_bad_playhead_asserts()
+    local ok, err = pcall(function()
+        mixer.resolve_audio_sources(seq, "ten", 24, 1, mock_media_cache)
+    end)
+    assert(not ok, "string playhead should assert")
+    assert(string.find(tostring(err), "playhead_frame"),
+        "Error should mention playhead_frame, got: " .. tostring(err))
+    print("  test_resolve_bad_playhead_asserts passed")
+end
+
+-- ============================================================================
+-- Test NSF: mix_sources parameter validation
+-- ============================================================================
+
+local function test_mix_sources_nil_sources_asserts()
+    local ok, err = pcall(function()
+        mixer.mix_sources(nil, 0, 1000000, 48000, 2, mock_media_cache)
+    end)
+    assert(not ok, "nil sources should assert")
+    assert(string.find(tostring(err), "sources"),
+        "Error should mention sources, got: " .. tostring(err))
+    print("  test_mix_sources_nil_sources_asserts passed")
+end
+
+local function test_mix_sources_bad_sample_rate_asserts()
+    local ok, err = pcall(function()
+        mixer.mix_sources({}, 0, 1000000, 0, 2, mock_media_cache)
+    end)
+    assert(not ok, "zero sample_rate should assert")
+    assert(string.find(tostring(err), "sample_rate"),
+        "Error should mention sample_rate, got: " .. tostring(err))
+    print("  test_mix_sources_bad_sample_rate_asserts passed")
+end
+
+local function test_mix_sources_nil_media_cache_asserts()
+    local ok, err = pcall(function()
+        mixer.mix_sources({}, 0, 1000000, 48000, 2, nil)
+    end)
+    assert(not ok, "nil media_cache should assert")
+    assert(string.find(tostring(err), "media_cache"),
+        "Error should mention media_cache, got: " .. tostring(err))
+    print("  test_mix_sources_nil_media_cache_asserts passed")
+end
+
+local function test_mix_sources_empty_returns_nil()
+    local buf, frames, start = mixer.mix_sources(
+        {}, 0, 1000000, 48000, 2, mock_media_cache)
+    assert(buf == nil, "Empty sources should return nil buffer")
+    assert(frames == 0, "Empty sources should return 0 frames")
+    print("  test_mix_sources_empty_returns_nil passed")
+end
+
+-- ============================================================================
+-- Test NSF: PCM decode failure must assert (not silently skip)
+-- ============================================================================
+
+local function test_mix_sources_single_pcm_fail_asserts()
+    -- Single source with mock that returns nil PCM
+    local fail_cache = {
+        get_audio_pcm_for_path = function() return nil, 0, 0 end,
+    }
+    local sources = {{
+        path = "/test/fail.wav",
+        source_offset_us = 0,
+        volume = 1.0,
+        duration_us = 1000000,
+        clip_start_us = 0,
+        clip_end_us = 1000000,
+        clip_id = "clip_fail",
+    }}
+    local ok, err = pcall(function()
+        mixer.mix_sources(sources, 0, 500000, 48000, 2, fail_cache)
+    end)
+    assert(not ok, "Single-source PCM decode failure should assert, not return nil")
+    assert(string.find(tostring(err), "PCM") or string.find(tostring(err), "decode")
+        or string.find(tostring(err), "audio"),
+        "Error should mention PCM/decode/audio, got: " .. tostring(err))
+    print("  test_mix_sources_single_pcm_fail_asserts passed")
+end
+
+local function test_mix_sources_multi_pcm_fail_asserts()
+    -- Two sources, second one fails decode
+    local call_count = 0
+    local ffi = require("ffi")
+    local fail_cache = {
+        get_audio_pcm_for_path = function()
+            call_count = call_count + 1
+            if call_count == 1 then
+                -- First source succeeds: return valid PCM buffer
+                local buf = ffi.new("float[?]", 1024 * 2)
+                return buf, 1024, 0
+            else
+                -- Second source fails
+                return nil, 0, 0
+            end
+        end,
+    }
+    local sources = {
+        {
+            path = "/test/ok.wav", source_offset_us = 0, volume = 1.0,
+            duration_us = 1000000, clip_start_us = 0, clip_end_us = 1000000,
+            clip_id = "clip_ok",
+        },
+        {
+            path = "/test/fail.wav", source_offset_us = 0, volume = 1.0,
+            duration_us = 1000000, clip_start_us = 0, clip_end_us = 1000000,
+            clip_id = "clip_fail",
+        },
+    }
+    local ok, err = pcall(function()
+        mixer.mix_sources(sources, 0, 500000, 48000, 2, fail_cache)
+    end)
+    assert(not ok, "Multi-source PCM decode failure should assert, not skip")
+    assert(string.find(tostring(err), "PCM") or string.find(tostring(err), "decode")
+        or string.find(tostring(err), "audio"),
+        "Error should mention PCM/decode/audio, got: " .. tostring(err))
+    print("  test_mix_sources_multi_pcm_fail_asserts passed")
+end
+
+-- ============================================================================
 -- Run all tests
 -- ============================================================================
 
@@ -224,5 +396,21 @@ test_resolve_gap()
 test_resolve_source_offset()
 test_resolve_clip_end()
 test_resolve_solo()
+
+print("Testing mixer NSF: parameter validation...")
+test_resolve_nil_sequence_asserts()
+test_resolve_nil_media_cache_asserts()
+test_resolve_bad_playhead_asserts()
+test_seek_frame_negative_asserts()
+
+print("Testing mixer.mix_sources() validation...")
+test_mix_sources_nil_sources_asserts()
+test_mix_sources_bad_sample_rate_asserts()
+test_mix_sources_nil_media_cache_asserts()
+test_mix_sources_empty_returns_nil()
+
+print("Testing mixer.mix_sources() PCM decode fail-fast...")
+test_mix_sources_single_pcm_fail_asserts()
+test_mix_sources_multi_pcm_fail_asserts()
 
 print("✅ test_mixer.lua passed")

@@ -29,6 +29,9 @@ local qt_constants = require("core.qt_constants")
 local media_cache = require("core.media.media_cache")
 local source_playback = require("core.playback.source_playback")
 local timeline_playback = require("core.playback.timeline_playback")
+
+-- Media cache context ID (Phase 2: becomes instance property)
+local VIEW_CTX = "view"
 local timeline_resolver = require("core.playback.timeline_resolver")
 local helpers = require("core.playback.playback_helpers")
 
@@ -168,7 +171,7 @@ local function ensure_audio_session()
     if not (qt_constants.SSE and qt_constants.AOP) then return end
 
     -- Get sample rate from current media
-    local info = media_cache.get_asset_info()
+    local info = media_cache.get_asset_info(VIEW_CTX)
     if not info or not info.has_audio then return end
 
     audio_pb.init_session(info.audio_sample_rate, 2)
@@ -180,7 +183,7 @@ end
 --- Configure audio sources for source mode (single media file).
 -- Called by configure_audio_for_mode() when NOT in timeline mode.
 local function configure_source_mode_audio()
-    local info = media_cache.get_asset_info()
+    local info = media_cache.get_asset_info(VIEW_CTX)
     if not info then return end
 
     if not info.has_audio then
@@ -190,7 +193,7 @@ local function configure_source_mode_audio()
         return
     end
 
-    local file_path = media_cache.get_file_path()
+    local file_path = media_cache.get_file_path(VIEW_CTX)
     assert(file_path, "configure_source_mode_audio: no active file_path")
     media_cache.ensure_audio_pooled(file_path)
 
@@ -590,8 +593,8 @@ function M.shuttle(dir)
 
     -- In timeline mode, resolve_and_display handles prefetch with the correct
     -- source frame; get_position() returns a timeline frame which is wrong here.
-    if not M.timeline_mode and media_cache.is_loaded() then
-        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
+    if not M.timeline_mode and media_cache.is_loaded(VIEW_CTX) then
+        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed, VIEW_CTX)
     end
 
     if was_stopped then
@@ -616,8 +619,8 @@ function M.slow_play(dir)
     M._last_tick_frame = math.floor(M.get_position())
     logger.debug("playback_controller", string.format("Slow play %s at 0.5x", dir == 1 and "forward" or "reverse"))
 
-    if not M.timeline_mode and media_cache.is_loaded() then
-        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
+    if not M.timeline_mode and media_cache.is_loaded(VIEW_CTX) then
+        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed, VIEW_CTX)
     end
 
     if was_stopped then
@@ -672,8 +675,8 @@ function M.play()
     -- Play mode: BGRA-convert all intermediates for sequential cache
     qt_constants.EMP.SET_DECODE_MODE("play")
 
-    if not M.timeline_mode and media_cache.is_loaded() then
-        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed)
+    if not M.timeline_mode and media_cache.is_loaded(VIEW_CTX) then
+        media_cache.set_playhead(math.floor(M.get_position()), M.direction, M.speed, VIEW_CTX)
     end
 
     configure_audio_for_mode()
@@ -813,7 +816,7 @@ function M.seek(frame_idx)
         if viewer_panel then
             M.current_clip_id = timeline_playback.resolve_and_display(
                 M.fps_num, M.fps_den, M.sequence_id, M.current_clip_id,
-                nil, nil, viewer_panel, nil, frame)
+                nil, nil, viewer_panel, nil, frame, VIEW_CTX)
 
             -- Resolve audio independently (video clip switch doesn't affect audio)
             resolve_and_set_audio_sources(frame)
@@ -936,6 +939,7 @@ function M._tick()
             sequence_id = M.sequence_id,
             current_clip_id = M.current_clip_id,
             last_audio_frame = M._last_audio_frame,
+            context_id = VIEW_CTX,
         }
         local result = timeline_playback.tick(tick_in, audio_playback, viewer_panel)
 
@@ -997,6 +1001,7 @@ function M._tick()
             transport_mode = M.transport_mode,
             latched = M.latched,
             latched_boundary = M.latched_boundary,
+            context_id = VIEW_CTX,
         }
         local result = source_playback.tick(tick_in, audio_playback, viewer_panel)
 

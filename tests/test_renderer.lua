@@ -192,6 +192,72 @@ end
 -- ============================================================================
 
 -- ============================================================================
+-- NSF: Parameter validation tests
+-- ============================================================================
+
+local renderer = require("core.renderer")
+
+local function test_get_sequence_info_nil_id_asserts()
+    local ok, err = pcall(function()
+        renderer.get_sequence_info(nil)
+    end)
+    assert(not ok, "nil sequence_id should assert")
+    assert(string.find(tostring(err), "sequence_id"),
+        "Error should mention sequence_id, got: " .. tostring(err))
+    print("  test_get_sequence_info_nil_id_asserts passed")
+end
+
+local function test_get_sequence_info_empty_id_asserts()
+    local ok, err = pcall(function()
+        renderer.get_sequence_info("")
+    end)
+    assert(not ok, "empty sequence_id should assert")
+    assert(string.find(tostring(err), "sequence_id"),
+        "Error should mention sequence_id, got: " .. tostring(err))
+    print("  test_get_sequence_info_empty_id_asserts passed")
+end
+
+local function test_get_sequence_info_nonexistent_asserts()
+    local ok, err = pcall(function()
+        renderer.get_sequence_info("nonexistent_seq_id_12345")
+    end)
+    assert(not ok, "nonexistent sequence_id should assert")
+    assert(string.find(tostring(err), "not found"),
+        "Error should mention not found, got: " .. tostring(err))
+    print("  test_get_sequence_info_nonexistent_asserts passed")
+end
+
+local function test_get_video_frame_nil_sequence_asserts()
+    local ok, err = pcall(function()
+        renderer.get_video_frame(nil, 0, "test")
+    end)
+    assert(not ok, "nil sequence should assert")
+    assert(string.find(tostring(err), "sequence"),
+        "Error should mention sequence, got: " .. tostring(err))
+    print("  test_get_video_frame_nil_sequence_asserts passed")
+end
+
+local function test_get_video_frame_nil_playhead_asserts()
+    local ok, err = pcall(function()
+        renderer.get_video_frame(seq, nil, "test")
+    end)
+    assert(not ok, "nil playhead should assert")
+    assert(string.find(tostring(err), "playhead_frame"),
+        "Error should mention playhead_frame, got: " .. tostring(err))
+    print("  test_get_video_frame_nil_playhead_asserts passed")
+end
+
+local function test_get_video_frame_nil_context_asserts()
+    local ok, err = pcall(function()
+        renderer.get_video_frame(seq, 0, nil)
+    end)
+    assert(not ok, "nil context_id should assert")
+    assert(string.find(tostring(err), "context_id"),
+        "Error should mention context_id, got: " .. tostring(err))
+    print("  test_get_video_frame_nil_context_asserts passed")
+end
+
+-- ============================================================================
 -- Run all tests
 -- ============================================================================
 
@@ -208,5 +274,13 @@ test_get_audio_at_gap()
 
 print("Testing Renderer.get_sequence_info()...")
 test_get_sequence_info()
+
+print("Testing Renderer NSF: parameter validation...")
+test_get_sequence_info_nil_id_asserts()
+test_get_sequence_info_empty_id_asserts()
+test_get_sequence_info_nonexistent_asserts()
+test_get_video_frame_nil_sequence_asserts()
+test_get_video_frame_nil_playhead_asserts()
+test_get_video_frame_nil_context_asserts()
 
 print("✅ test_renderer.lua passed")

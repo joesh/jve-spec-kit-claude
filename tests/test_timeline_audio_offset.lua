@@ -103,6 +103,7 @@ local tick_in = {
     total_frames = 90000,  -- 1 hour
     sequence_id = "seq_1",
     current_clip_id = "clip_A",
+    context_id = "test",
 }
 
 displayed_times = {}

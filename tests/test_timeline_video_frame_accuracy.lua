@@ -116,7 +116,8 @@ for _, expected_frame in ipairs(test_frames) do
         nil, nil,           -- direction, speed (parked)
         mock_viewer,        -- viewer_panel
         nil,                -- audio_playback
-        expected_frame      -- frame_idx
+        expected_frame,     -- frame_idx
+        "test"              -- context_id
     )
 
     assert(#viewer_calls > 0,
@@ -152,7 +153,7 @@ local expected_source = 200 + (112 - 100)  -- = 212
 
 viewer_calls = {}
 timeline_playback.resolve_and_display(
-    24, 1, "seq_1", nil, nil, nil, mock_viewer, nil, playhead)
+    24, 1, "seq_1", nil, nil, nil, mock_viewer, nil, playhead, "test")
 
 assert(#viewer_calls > 0, "No viewer call")
 local call = viewer_calls[1]
@@ -181,7 +182,7 @@ local errors = 0
 for f = 0, 239 do
     viewer_calls = {}
     timeline_playback.resolve_and_display(
-        24, 1, "seq_1", "clip_video_1", nil, nil, mock_viewer, nil, f)
+        24, 1, "seq_1", "clip_video_1", nil, nil, mock_viewer, nil, f, "test")
 
     local vc = viewer_calls[1]
     local displayed

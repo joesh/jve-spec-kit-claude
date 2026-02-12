@@ -1,13 +1,14 @@
---- Test media_cache multi-reader LRU pool
+--- Test media_cache multi-reader LRU pool with per-context state
 -- @file test_media_cache_pool.lua
 --
--- Tests the LRU reader pool that replaces single-asset load/unload:
--- - activate() opens reader on first call, no-ops on repeat
+-- Tests the LRU reader pool with per-context active_path:
+-- - activate(path, ctx) opens reader on first call, no-ops on repeat
 -- - Pool tracks multiple open readers (max_readers=8)
 -- - LRU eviction closes oldest reader when pool full
--- - is_loaded() reflects active reader state
--- - get_video_frame() works with active reader
--- - cleanup() releases all pooled readers
+-- - is_loaded(ctx) reflects active reader state per context
+-- - get_video_frame(idx, ctx) works with context's active reader
+-- - cleanup() releases all pooled readers and contexts
+-- - Two contexts can have independent active_path
 
 require('test_env')
 
@@ -90,6 +91,8 @@ package.loaded["core.qt_constants"] = mock_qt_constants
 
 local media_cache = require("core.media.media_cache")
 
+local CTX = "test_pool"
+
 print("=== Test media_cache multi-reader LRU pool ===")
 print()
 
@@ -103,6 +106,8 @@ assert(media_cache.reader_pool, "media_cache.reader_pool missing")
 assert(media_cache.max_readers, "media_cache.max_readers missing")
 assert(media_cache.max_readers == 8, string.format(
     "max_readers should be 8, got %d", media_cache.max_readers))
+assert(media_cache.create_context, "media_cache.create_context missing")
+assert(media_cache.destroy_context, "media_cache.destroy_context missing")
 
 print("  OK: Pool API present")
 
@@ -111,11 +116,11 @@ print("  OK: Pool API present")
 --------------------------------------------------------------------------------
 print("Test 2: activate() opens reader on first call")
 
-media_cache.activate("/test/clip_a.mov")
+media_cache.activate("/test/clip_a.mov", CTX)
 
-assert(media_cache.is_loaded(), "Should be loaded after activate")
-assert(media_cache.active_path == "/test/clip_a.mov",
-    "active_path should be /test/clip_a.mov")
+assert(media_cache.is_loaded(CTX), "Should be loaded after activate")
+assert(media_cache.get_file_path(CTX) == "/test/clip_a.mov",
+    "get_file_path should return /test/clip_a.mov")
 assert(media_cache.reader_pool["/test/clip_a.mov"],
     "Pool should contain /test/clip_a.mov")
 
@@ -135,7 +140,7 @@ print("  OK: activate() opens and pools reader")
 print("Test 3: activate() same path is no-op")
 
 local prev_asset_count = asset_counter
-media_cache.activate("/test/clip_a.mov")
+media_cache.activate("/test/clip_a.mov", CTX)
 assert(asset_counter == prev_asset_count,
     "activate() same path should not open new assets")
 
@@ -146,10 +151,10 @@ print("  OK: activate() same path is no-op")
 --------------------------------------------------------------------------------
 print("Test 4: activate() switches active reader")
 
-media_cache.activate("/test/clip_b.mov")
+media_cache.activate("/test/clip_b.mov", CTX)
 
-assert(media_cache.active_path == "/test/clip_b.mov",
-    "active_path should be /test/clip_b.mov")
+assert(media_cache.get_file_path(CTX) == "/test/clip_b.mov",
+    "get_file_path should return /test/clip_b.mov")
 assert(media_cache.reader_pool["/test/clip_b.mov"],
     "Pool should contain /test/clip_b.mov")
 -- Old reader stays in pool
@@ -164,7 +169,7 @@ print("  OK: activate() switches active reader, old stays pooled")
 print("Test 5: get_video_frame uses active reader")
 
 decode_calls = {}
-local frame = media_cache.get_video_frame(42)
+local frame = media_cache.get_video_frame(42, CTX)
 assert(frame, "get_video_frame should return a frame")
 assert(#decode_calls == 1, "Should have 1 decode call")
 assert(decode_calls[1].frame_idx == 42, "Should decode frame 42")
@@ -177,12 +182,12 @@ print("  OK: get_video_frame works with active reader")
 print("Test 6: LRU eviction at max_readers")
 
 -- Already have clip_a and clip_b. Add clip_c through clip_h to fill pool to 8.
-media_cache.activate("/test/clip_c.mov")
-media_cache.activate("/test/clip_d.mov")
-media_cache.activate("/test/clip_e.mov")
-media_cache.activate("/test/clip_f.mov")
-media_cache.activate("/test/clip_g.mov")
-media_cache.activate("/test/clip_h.mov")
+media_cache.activate("/test/clip_c.mov", CTX)
+media_cache.activate("/test/clip_d.mov", CTX)
+media_cache.activate("/test/clip_e.mov", CTX)
+media_cache.activate("/test/clip_f.mov", CTX)
+media_cache.activate("/test/clip_g.mov", CTX)
+media_cache.activate("/test/clip_h.mov", CTX)
 
 -- Pool should have 8 readers now
 local pool_count = 0
@@ -191,7 +196,7 @@ assert(pool_count == 8, string.format("Pool should have 8, got %d", pool_count))
 
 -- Now activate a 9th — should evict the LRU (clip_a, earliest last_used)
 local pre_close_count = #closed_readers
-media_cache.activate("/test/clip_i.mov")
+media_cache.activate("/test/clip_i.mov", CTX)
 
 pool_count = 0
 for _ in pairs(media_cache.reader_pool) do pool_count = pool_count + 1 end
@@ -212,11 +217,11 @@ print("  OK: LRU eviction works correctly")
 --------------------------------------------------------------------------------
 print("Test 7: Re-activate evicted path opens fresh")
 
-media_cache.activate("/test/clip_a.mov")
+media_cache.activate("/test/clip_a.mov", CTX)
 assert(media_cache.reader_pool["/test/clip_a.mov"],
     "clip_a should be back in pool")
-assert(media_cache.active_path == "/test/clip_a.mov",
-    "active_path should be clip_a")
+assert(media_cache.get_file_path(CTX) == "/test/clip_a.mov",
+    "get_file_path should return clip_a")
 
 print("  OK: Re-activate evicted path opens fresh")
 
@@ -228,8 +233,7 @@ print("Test 8: cleanup() releases all")
 local pre_cleanup_closed = #closed_readers
 media_cache.cleanup()
 
-assert(not media_cache.is_loaded(), "Should not be loaded after cleanup")
-assert(media_cache.active_path == nil, "active_path should be nil after cleanup")
+assert(not media_cache.is_loaded(CTX), "Should not be loaded after cleanup")
 
 pool_count = 0
 for _ in pairs(media_cache.reader_pool) do pool_count = pool_count + 1 end
@@ -245,8 +249,8 @@ print("  OK: cleanup() releases all pooled readers")
 --------------------------------------------------------------------------------
 print("Test 9: get_asset_info returns active reader's info")
 
-media_cache.activate("/test/info_test.mov")
-local info = media_cache.get_asset_info()
+media_cache.activate("/test/info_test.mov", CTX)
+local info = media_cache.get_asset_info(CTX)
 assert(info, "get_asset_info should return info for active reader")
 assert(info.width == 1920, "Info should have correct width")
 assert(info.fps_num == 24, "Info should have correct fps_num")
@@ -254,6 +258,77 @@ assert(info.fps_num == 24, "Info should have correct fps_num")
 media_cache.cleanup()
 
 print("  OK: get_asset_info works with pool")
+
+--------------------------------------------------------------------------------
+-- Test 10: Two contexts with independent active_path
+--------------------------------------------------------------------------------
+print("Test 10: Two contexts, independent active paths")
+
+media_cache.create_context("ctx_a")
+media_cache.create_context("ctx_b")
+
+media_cache.activate("/test/source.mov", "ctx_a")
+media_cache.activate("/test/timeline.mov", "ctx_b")
+
+assert(media_cache.get_file_path("ctx_a") == "/test/source.mov",
+    "ctx_a should point to source.mov")
+assert(media_cache.get_file_path("ctx_b") == "/test/timeline.mov",
+    "ctx_b should point to timeline.mov")
+
+-- Both share the reader pool
+assert(media_cache.reader_pool["/test/source.mov"], "source.mov in pool")
+assert(media_cache.reader_pool["/test/timeline.mov"], "timeline.mov in pool")
+
+-- Switching ctx_a doesn't affect ctx_b
+media_cache.activate("/test/other.mov", "ctx_a")
+assert(media_cache.get_file_path("ctx_a") == "/test/other.mov",
+    "ctx_a should now point to other.mov")
+assert(media_cache.get_file_path("ctx_b") == "/test/timeline.mov",
+    "ctx_b should still point to timeline.mov")
+
+media_cache.cleanup()
+
+print("  OK: Two contexts work independently")
+
+--------------------------------------------------------------------------------
+-- Test 11: LRU eviction skips ALL contexts' active paths
+--------------------------------------------------------------------------------
+print("Test 11: LRU eviction protects all contexts' active paths")
+
+media_cache.create_context("src")
+media_cache.create_context("tl")
+
+-- Fill pool: src active on clip_1, tl active on clip_2
+media_cache.activate("/test/evict_1.mov", "src")
+media_cache.activate("/test/evict_2.mov", "tl")
+
+-- Fill remaining pool slots (6 more to reach 8)
+for i = 3, 8 do
+    media_cache.activate("/test/evict_" .. i .. ".mov", "src")
+end
+-- src now active on evict_8, tl still on evict_2
+
+pool_count = 0
+for _ in pairs(media_cache.reader_pool) do pool_count = pool_count + 1 end
+assert(pool_count == 8, string.format("Pool should be 8, got %d", pool_count))
+
+-- Activate a 9th — must NOT evict tl's active path (evict_2)
+media_cache.activate("/test/evict_9.mov", "src")
+
+assert(media_cache.reader_pool["/test/evict_2.mov"],
+    "tl context's active path must NOT be evicted")
+assert(media_cache.reader_pool["/test/evict_9.mov"],
+    "evict_9 should be in pool")
+assert(media_cache.reader_pool["/test/evict_8.mov"],
+    "src context's active path must NOT be evicted")
+
+-- evict_1 should be gone (oldest, not active in any context)
+assert(not media_cache.reader_pool["/test/evict_1.mov"],
+    "evict_1 should be evicted (not active in any context)")
+
+media_cache.cleanup()
+
+print("  OK: LRU eviction protects all contexts")
 
 --------------------------------------------------------------------------------
 print()
