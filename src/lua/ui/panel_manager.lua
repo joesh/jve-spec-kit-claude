@@ -1,4 +1,4 @@
---- Panel maximize/restore + SequenceView registry
+--- Panel maximize/restore + SequenceMonitor registry
 --
 -- @file panel_manager.lua
 local qt_constants = require("core.qt_constants")
@@ -13,13 +13,13 @@ local state = {
     maximized = nil,
 }
 
--- SequenceView registry: { [view_id] = SequenceView instance }
-local sequence_views = {}
+-- SequenceMonitor registry: { [view_id] = SequenceMonitor instance }
+local sequence_monitors = {}
 
 local PANEL_INDEX = {
     project_browser = 1,
-    source_view = 2,
-    timeline_view = 3,
+    source_monitor = 2,
+    timeline_monitor = 3,
     inspector = 4,
 }
 
@@ -178,48 +178,48 @@ function M.toggle_active_panel()
 end
 
 --------------------------------------------------------------------------------
--- SequenceView Registry
+-- SequenceMonitor Registry
 --------------------------------------------------------------------------------
 
---- Register a SequenceView instance.
--- @param view_id string  "source_view" or "timeline_view"
--- @param sv SequenceView instance
-function M.register_sequence_view(view_id, sv)
+--- Register a SequenceMonitor instance.
+-- @param view_id string  "source_monitor" or "timeline_monitor"
+-- @param sm SequenceMonitor instance
+function M.register_sequence_monitor(view_id, sm)
     assert(view_id and view_id ~= "",
-        "panel_manager.register_sequence_view: view_id required")
-    assert(sv, string.format(
-        "panel_manager.register_sequence_view: sv required for '%s'", view_id))
-    sequence_views[view_id] = sv
-    logger.debug("panel_manager", string.format("registered sequence view '%s'", view_id))
+        "panel_manager.register_sequence_monitor: view_id required")
+    assert(sm, string.format(
+        "panel_manager.register_sequence_monitor: sm required for '%s'", view_id))
+    sequence_monitors[view_id] = sm
+    logger.debug("panel_manager", string.format("registered sequence monitor '%s'", view_id))
 end
 
---- Get a SequenceView by view_id.
--- @param view_id string  "source_view" or "timeline_view"
--- @return SequenceView
-function M.get_sequence_view(view_id)
+--- Get a SequenceMonitor by view_id.
+-- @param view_id string  "source_monitor" or "timeline_monitor"
+-- @return SequenceMonitor
+function M.get_sequence_monitor(view_id)
     assert(view_id and view_id ~= "",
-        "panel_manager.get_sequence_view: view_id required")
-    local sv = sequence_views[view_id]
-    assert(sv, string.format(
-        "panel_manager.get_sequence_view: no view registered for '%s'", view_id))
-    return sv
+        "panel_manager.get_sequence_monitor: view_id required")
+    local sm = sequence_monitors[view_id]
+    assert(sm, string.format(
+        "panel_manager.get_sequence_monitor: no monitor registered for '%s'", view_id))
+    return sm
 end
 
---- Get the SequenceView for the currently focused panel.
--- Falls back to timeline_view if focused panel is not a sequence view.
--- @return SequenceView|nil
-function M.get_active_sequence_view()
+--- Get the SequenceMonitor for the currently focused panel.
+-- Falls back to timeline_monitor if focused panel is not a sequence monitor.
+-- @return SequenceMonitor|nil
+function M.get_active_sequence_monitor()
     local panel_id = focused_panel(nil)
 
     -- Map focus panel names to view_ids
-    if panel_id == "source_view" then
-        return sequence_views["source_view"]
-    elseif panel_id == "timeline_view" or panel_id == "timeline" then
-        return sequence_views["timeline_view"]
+    if panel_id == "source_monitor" then
+        return sequence_monitors["source_monitor"]
+    elseif panel_id == "timeline_monitor" or panel_id == "timeline" then
+        return sequence_monitors["timeline_monitor"]
     end
 
-    -- Non-viewer panel focused (browser, inspector) — return timeline_view
-    return sequence_views["timeline_view"]
+    -- Non-monitor panel focused (browser, inspector) — return timeline_monitor
+    return sequence_monitors["timeline_monitor"]
 end
 
 return M

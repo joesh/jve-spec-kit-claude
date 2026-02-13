@@ -1,14 +1,14 @@
 #!/usr/bin/env luajit
 
 -- Test SourceViewer mark commands (SetMarkIn, SetMarkOut, GoToMarkIn, GoToMarkOut, ClearMarks)
--- These are non-undoable commands that operate on the source viewer's SequenceView.
+-- These are non-undoable commands that operate on the source viewer's SequenceMonitor.
 
 require('test_env')
 
 print("=== test_source_marks.lua ===")
 
 --------------------------------------------------------------------------------
--- Mock SequenceView for source_view
+-- Mock SequenceMonitor for source_monitor
 --------------------------------------------------------------------------------
 
 local mock_sv = {
@@ -34,11 +34,11 @@ local function reset_mock()
     mock_sv._has_clip = true
 end
 
--- Mock panel_manager to return our mock_sv for "source_view"
+-- Mock panel_manager to return our mock_sv for "source_monitor"
 package.loaded['ui.panel_manager'] = {
-    get_sequence_view = function(view_id)
-        assert(view_id == "source_view",
-            "source_marks should request 'source_view', got: " .. tostring(view_id))
+    get_sequence_monitor = function(view_id)
+        assert(view_id == "source_monitor",
+            "source_marks should request 'source_monitor', got: " .. tostring(view_id))
         return mock_sv
     end,
 }

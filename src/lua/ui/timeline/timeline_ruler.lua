@@ -302,7 +302,7 @@ function M.create(widget, state_module)
             -- Controller must stop BEFORE writing to model so the parked-mode
             -- listener handles the seek (View → Controller → Model).
             local pm = require("ui.panel_manager")
-            local tl_sv = pm.get_sequence_view("timeline_view")
+            local tl_sv = pm.get_sequence_monitor("timeline_monitor")
             if tl_sv and tl_sv.engine:is_playing() then
                 tl_sv.engine:stop()
             end
@@ -357,7 +357,7 @@ function M.create(widget, state_module)
                 local qt_c = require("core.qt_constants")
                 if qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
                     local pm = require("ui.panel_manager")
-                    local tl_sv = pm.get_sequence_view("timeline_view")
+                    local tl_sv = pm.get_sequence_monitor("timeline_monitor")
                     if tl_sv and tl_sv.engine:is_playing() then
                         qt_c.EMP.SET_DECODE_MODE("play")
                     else

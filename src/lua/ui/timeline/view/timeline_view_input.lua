@@ -484,7 +484,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         if math.abs(x - playhead_x) < 5 then
             -- Stop playback on click (standard NLE: click-to-park)
             local pm = require("ui.panel_manager")
-            local tl_sv = pm.get_sequence_view("timeline_view")
+            local tl_sv = pm.get_sequence_monitor("timeline_monitor")
             if tl_sv and tl_sv.engine:is_playing() then
                 tl_sv.engine:stop()
             end

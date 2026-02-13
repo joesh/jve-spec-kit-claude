@@ -10,9 +10,9 @@
 -- @file source_marks.lua
 local M = {}
 
-local function get_source_view()
+local function get_source_monitor()
     local pm = require("ui.panel_manager")
-    return pm.get_sequence_view("source_view")
+    return pm.get_sequence_monitor("source_monitor")
 end
 
 local SET_MARK_IN_SPEC = {
@@ -46,7 +46,7 @@ local CLEAR_MARKS_SPEC = {
 
 function M.register(executors, undoers, db)
     executors["SourceViewerSetMarkIn"] = function(command)
-        local sv = get_source_view()
+        local sv = get_source_monitor()
         if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerSetMarkIn: no clip loaded" }
         end
@@ -57,7 +57,7 @@ function M.register(executors, undoers, db)
     end
 
     executors["SourceViewerSetMarkOut"] = function(command)
-        local sv = get_source_view()
+        local sv = get_source_monitor()
         if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerSetMarkOut: no clip loaded" }
         end
@@ -68,7 +68,7 @@ function M.register(executors, undoers, db)
     end
 
     executors["SourceViewerGoToMarkIn"] = function(_command)
-        local sv = get_source_view()
+        local sv = get_source_monitor()
         if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerGoToMarkIn: no clip loaded" }
         end
@@ -81,7 +81,7 @@ function M.register(executors, undoers, db)
     end
 
     executors["SourceViewerGoToMarkOut"] = function(_command)
-        local sv = get_source_view()
+        local sv = get_source_monitor()
         if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerGoToMarkOut: no clip loaded" }
         end
@@ -94,7 +94,7 @@ function M.register(executors, undoers, db)
     end
 
     executors["SourceViewerClearMarks"] = function(_command)
-        local sv = get_source_view()
+        local sv = get_source_monitor()
         if not sv:has_clip() then
             return { success = false, error_message = "SourceViewerClearMarks: no clip loaded" }
         end

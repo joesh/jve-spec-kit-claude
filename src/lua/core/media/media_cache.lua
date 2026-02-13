@@ -8,7 +8,7 @@
 -- - ensure_audio_pooled(path) opens a reader for audio without changing any context
 --
 -- Context model:
--- Each viewer (source_view, timeline_view) creates its own context via create_context().
+-- Each monitor (source_monitor, timeline_monitor) creates its own context via create_context().
 -- Contexts hold per-view state (active_path, video_cache, prefetch).
 -- The shared reader_pool is context-agnostic — readers are shared across contexts.
 --

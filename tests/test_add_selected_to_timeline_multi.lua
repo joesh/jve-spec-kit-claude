@@ -43,14 +43,14 @@ db:exec([[
 
 command_manager.init('sequence', 'project')
 
--- Register mock source_view with panel_manager (project_browser uses it for marks)
+-- Register mock source_monitor with panel_manager (project_browser uses it for marks)
 local panel_manager = require("ui.panel_manager")
 local mock_source_sv = { sequence_id = nil }
 function mock_source_sv:has_clip() return false end
 function mock_source_sv:get_mark_in() return nil end
 function mock_source_sv:get_mark_out() return nil end
-panel_manager.register_sequence_view("source_view", mock_source_sv)
-panel_manager.register_sequence_view("timeline_view", mock_source_sv)
+panel_manager.register_sequence_monitor("source_monitor", mock_source_sv)
+panel_manager.register_sequence_monitor("timeline_monitor", mock_source_sv)
 
 -- Create 3 media items with masterclip sequences (IS-a refactor)
 for i = 1, 3 do

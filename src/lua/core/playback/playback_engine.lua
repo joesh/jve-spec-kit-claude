@@ -1,6 +1,6 @@
 --- PlaybackEngine: instantiable playback controller for any sequence kind.
 --
--- Replaces the singleton playback_controller. Each SequenceView owns one instance.
+-- Replaces the singleton playback_controller. Each SequenceMonitor owns one instance.
 --
 -- Key design: NO sequence-kind branching. Masterclips and timelines use
 -- identical code paths via Renderer (video) and Mixer (audio).

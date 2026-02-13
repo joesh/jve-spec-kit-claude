@@ -1595,10 +1595,10 @@ function M.create(opts)
         ))
     end
 
-    -- Bidirectional playhead sync between timeline_view (engine) and timeline_state.
+    -- Bidirectional playhead sync between timeline_monitor (engine) and timeline_state.
     -- last_viewer_playhead prevents feedback loops between the two listeners.
     local pm = require("ui.panel_manager")
-    local tl_view = pm.get_sequence_view("timeline_view")
+    local tl_view = pm.get_sequence_monitor("timeline_monitor")
 
     local last_viewer_playhead = nil
     local viewer_seek_pending = false
@@ -1614,7 +1614,7 @@ function M.create(opts)
         state.set_playhead_position(playhead_frame)
     end)
 
-    -- Load initial sequence into timeline_view
+    -- Load initial sequence into timeline_monitor
     tl_view:load_sequence(initial_sequence_id)
 
     -- State → Viewer: when parked, state changes (from commands, ruler clicks, timecode entry)
@@ -1679,9 +1679,9 @@ function M.load_sequence(sequence_id)
     ensure_tab_for_sequence(sequence_id)
     update_tab_styles(sequence_id)
 
-    -- Load sequence into the timeline viewer
+    -- Load sequence into the timeline monitor
     local pm = require("ui.panel_manager")
-    local tl_view = pm.get_sequence_view("timeline_view")
+    local tl_view = pm.get_sequence_monitor("timeline_monitor")
     tl_view:load_sequence(sequence_id)
 end
 

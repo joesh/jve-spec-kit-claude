@@ -51,7 +51,7 @@ package.loaded["core.keyboard_shortcut_registry"] = {
 -- Track playback calls
 local playback_calls = {}
 
--- Mock engine (used by SequenceView)
+-- Mock engine (used by SequenceMonitor)
 local mock_engine = {
     total_frames = 100,
     fps_num = 24,
@@ -64,7 +64,7 @@ function mock_engine:shuttle(dir) table.insert(playback_calls, "shuttle:" .. tos
 function mock_engine:slow_play(dir) table.insert(playback_calls, "slow_play:" .. tostring(dir)) end
 function mock_engine:play() table.insert(playback_calls, "play") end
 
--- Mock SequenceView
+-- Mock SequenceMonitor
 local mock_sv = {
     sequence_id = "test_seq",
     total_frames = 100,
@@ -72,16 +72,16 @@ local mock_sv = {
 }
 function mock_sv:has_clip() return true end
 
--- Mock panel_manager with SequenceView
+-- Mock panel_manager with SequenceMonitor
 local mock_pm = {
     toggle_active_panel = function() end,
-    get_active_sequence_view = function() return mock_sv end,
-    get_sequence_view = function() return mock_sv end,
+    get_active_sequence_monitor = function() return mock_sv end,
+    get_sequence_monitor = function() return mock_sv end,
 }
 package.loaded["ui.panel_manager"] = mock_pm
 
 -- Mock focus_manager
-local current_focus = "timeline_view"
+local current_focus = "timeline_monitor"
 package.loaded["ui.focus_manager"] = {
     get_focused_panel = function() return current_focus end,
 }
@@ -122,11 +122,11 @@ assert(type(fwd_ctx) == "table", "context should be a table for multi-context")
 local has_timeline, has_source, has_tl_view = false, false, false
 for _, ctx in ipairs(fwd_ctx) do
     if ctx == "timeline" then has_timeline = true end
-    if ctx == "source_view" then has_source = true end
-    if ctx == "timeline_view" then has_tl_view = true end
+    if ctx == "source_monitor" then has_source = true end
+    if ctx == "timeline_monitor" then has_tl_view = true end
 end
-assert(has_timeline and has_source and has_tl_view, "should have timeline, source_view, timeline_view contexts")
-print("  ✓ playback.forward has contexts: timeline, source_view, timeline_view")
+assert(has_timeline and has_source and has_tl_view, "should have timeline, source_monitor, timeline_monitor contexts")
+print("  ✓ playback.forward has contexts: timeline, source_monitor, timeline_monitor")
 
 print("\n--- Test JKL shortcuts assigned ---")
 
@@ -160,8 +160,8 @@ print("\n--- Test JKL handlers execute via registry ---")
 -- Clear tracking
 playback_calls = {}
 
-print("\nTest 8: L key in timeline_view context triggers playback.forward handler")
-current_focus = "timeline_view"
+print("\nTest 8: L key in timeline_monitor context triggers playback.forward handler")
+current_focus = "timeline_monitor"
 local handler = registered_commands["playback.forward"].handler
 assert(handler, "playback.forward should have a handler")
 handler()

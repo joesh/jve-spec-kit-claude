@@ -2,7 +2,7 @@
 
 -- Regression tests for 4 bugs where fixes existed but were never wired in:
 -- B1: TrimHead/TrimTail not registered in command system
--- B2: mark bar seek must sync engine position (via SequenceView on_seek)
+-- B2: mark bar seek must sync engine position (via SequenceMonitor on_seek)
 -- B3: load_sequence uses content_end, not 24hr fallback
 -- B5: timeline_panel restore clobbers viewer title to "Timeline Viewer"
 
@@ -69,16 +69,16 @@ end
 
 -- ═══════════════════════════════════════════════════════════
 -- B2: mark bar seek must sync engine position
--- (SequenceView on_seek callback calls engine:seek)
+-- (SequenceMonitor on_seek callback calls engine:seek)
 -- ═══════════════════════════════════════════════════════════
-print("\n=== B2: seek syncs engine position (SequenceView) ===")
+print("\n=== B2: seek syncs engine position (SequenceMonitor) ===")
 do
-    local f = io.open("../src/lua/ui/sequence_view.lua", "r")
-    assert(f, "Cannot open sequence_view.lua")
+    local f = io.open("../src/lua/ui/sequence_monitor.lua", "r")
+    assert(f, "Cannot open sequence_monitor.lua")
     local content = f:read("*a")
     f:close()
 
-    check("on_seek calls engine:seek in sequence_view",
+    check("on_seek calls engine:seek in sequence_monitor",
         content:find("on_seek") ~= nil and
         content:find("seek") ~= nil and
         content:find("engine") ~= nil)
@@ -99,18 +99,18 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════
--- B5: dual SequenceView (mode-switching removed — each view is independent)
+-- B5: dual SequenceMonitor (mode-switching removed — each monitor is independent)
 -- ═══════════════════════════════════════════════════════════
-print("\n=== B5: dual SequenceView (no mode-switching) ===")
+print("\n=== B5: dual SequenceMonitor (no mode-switching) ===")
 do
     local f = io.open("../src/lua/ui/timeline/timeline_panel.lua", "r")
     assert(f, "Cannot open timeline_panel.lua")
     local content = f:read("*a")
     f:close()
 
-    -- timeline_panel should load into timeline_view via panel_manager
-    local uses_panel_manager = content:find('panel_manager') and content:find('get_sequence_view')
-    check("timeline_panel uses panel_manager for timeline_view", uses_panel_manager)
+    -- timeline_panel should load into timeline_monitor via panel_manager
+    local uses_panel_manager = content:find('panel_manager') and content:find('get_sequence_monitor')
+    check("timeline_panel uses panel_manager for timeline_monitor", uses_panel_manager)
 
     -- No more mode-switching: set_timeline_mode is gone
     local no_mode_switch = not content:find("set_timeline_mode")

@@ -1,4 +1,4 @@
---- Source Mark Bar Module
+--- Monitor Mark Bar Module
 --
 -- Responsibilities:
 -- - Renders a thin horizontal bar showing mark in/out range + playhead
@@ -18,7 +18,7 @@
 --   on_seek(frame)  function called on click/drag
 --   on_listener(fn) function to register render callback
 --
--- @file source_mark_bar.lua
+-- @file monitor_mark_bar.lua
 
 local M = {}
 
@@ -39,21 +39,21 @@ local PLAYHEAD_LINE_WIDTH = 2
 -- @param config: { state_provider, has_clip, get_mark_in, get_mark_out, on_seek, on_listener }
 -- @return table with {widget, render, on_mouse_event}
 function M.create(widget, config)
-    assert(widget, "source_mark_bar.create: widget is nil")
+    assert(widget, "monitor_mark_bar.create: widget is nil")
     assert(type(config) == "table",
-        "source_mark_bar.create: config table required")
+        "monitor_mark_bar.create: config table required")
     assert(config.state_provider,
-        "source_mark_bar.create: config.state_provider required")
+        "monitor_mark_bar.create: config.state_provider required")
     assert(type(config.on_seek) == "function",
-        "source_mark_bar.create: config.on_seek function required")
+        "monitor_mark_bar.create: config.on_seek function required")
     assert(type(config.has_clip) == "function",
-        "source_mark_bar.create: config.has_clip function required")
+        "monitor_mark_bar.create: config.has_clip function required")
     assert(type(config.get_mark_in) == "function",
-        "source_mark_bar.create: config.get_mark_in function required")
+        "monitor_mark_bar.create: config.get_mark_in function required")
     assert(type(config.get_mark_out) == "function",
-        "source_mark_bar.create: config.get_mark_out function required")
+        "monitor_mark_bar.create: config.get_mark_out function required")
     assert(type(config.on_listener) == "function",
-        "source_mark_bar.create: config.on_listener function required")
+        "monitor_mark_bar.create: config.on_listener function required")
 
     local state = config.state_provider
     local on_seek = config.on_seek
@@ -172,7 +172,7 @@ function M.create(widget, config)
     -- Wire up Lua state and mouse handler
     timeline.set_lua_state(widget)
 
-    local handler_name = "source_mark_bar_mouse_handler_" .. tostring(widget)
+    local handler_name = "monitor_mark_bar_mouse_handler_" .. tostring(widget)
     _G[handler_name] = function(event)
         if event.type ~= "wheel" then
             on_mouse_event(event.type, event.x, event.y, event.button, event)
@@ -181,7 +181,7 @@ function M.create(widget, config)
     timeline.set_mouse_event_handler(widget, handler_name)
 
     -- Resize handler: re-render when layout changes widget dimensions
-    local resize_name = "source_mark_bar_resize_handler_" .. tostring(widget)
+    local resize_name = "monitor_mark_bar_resize_handler_" .. tostring(widget)
     _G[resize_name] = function() render() end
     timeline.set_resize_event_handler(widget, resize_name)
 

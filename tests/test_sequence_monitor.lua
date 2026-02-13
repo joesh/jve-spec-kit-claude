@@ -1,4 +1,4 @@
---- Test: SequenceView construction, sequence loading, playhead persistence,
+--- Test: SequenceMonitor construction, sequence loading, playhead persistence,
 --- marks via masterclip, listener notification, engine callback wiring.
 --
 -- Uses real DB for masterclip/sequence models. Qt and media infra mocked.
@@ -180,7 +180,7 @@ package.loaded["core.signals"] = {
 local database = require("core.database")
 local import_schema = require("import_schema")
 
-local DB_PATH = "/tmp/jve/test_sequence_view.db"
+local DB_PATH = "/tmp/jve/test_sequence_monitor.db"
 os.remove(DB_PATH)
 assert(database.init(DB_PATH))
 local db = database.get_connection()
@@ -243,15 +243,15 @@ mock_renderer_info["timeline1"] = {
 }
 
 --------------------------------------------------------------------------------
--- Load SequenceView
+-- Load SequenceMonitor
 --------------------------------------------------------------------------------
-local SequenceView = require("ui.sequence_view")
+local SequenceMonitor = require("ui.sequence_monitor")
 
 --------------------------------------------------------------------------------
 -- Tests
 --------------------------------------------------------------------------------
 
-print("=== test_sequence_view.lua ===")
+print("=== test_sequence_monitor.lua ===")
 
 local function expect_assert(fn, label)
     local ok, err = pcall(fn)
@@ -262,9 +262,9 @@ end
 -- ─── Test 1: Constructor validates config ───
 print("\n--- constructor validation ---")
 do
-    expect_assert(function() SequenceView.new({}) end,
+    expect_assert(function() SequenceMonitor.new({}) end,
         "missing view_id")
-    expect_assert(function() SequenceView.new({ view_id = "" }) end,
+    expect_assert(function() SequenceMonitor.new({ view_id = "" }) end,
         "empty view_id")
     print("  ok")
 end
@@ -272,7 +272,7 @@ end
 -- ─── Test 2: Construction creates widgets and engine ───
 print("\n--- construction ---")
 do
-    local view = SequenceView.new({ view_id = "test_view_1" })
+    local view = SequenceMonitor.new({ view_id = "test_view_1" })
 
     assert(view.view_id == "test_view_1", "view_id stored")
     assert(view.media_context_id == "test_view_1", "media_context_id matches view_id")
@@ -292,7 +292,7 @@ end
 -- ─── Test 3: Load masterclip sequence ───
 print("\n--- load masterclip ---")
 do
-    local view = SequenceView.new({ view_id = "test_mc" })
+    local view = SequenceMonitor.new({ view_id = "test_mc" })
     timer_callbacks = {}
 
     view:load_sequence(mc_id)
@@ -316,7 +316,7 @@ end
 -- ─── Test 4: Load timeline sequence ───
 print("\n--- load timeline ---")
 do
-    local view = SequenceView.new({ view_id = "test_tl" })
+    local view = SequenceMonitor.new({ view_id = "test_tl" })
     timer_callbacks = {}
 
     view:load_sequence("timeline1")
@@ -339,7 +339,7 @@ end
 -- ─── Test 5: Playhead persistence for masterclip ───
 print("\n--- playhead persistence ---")
 do
-    local view = SequenceView.new({ view_id = "test_persist" })
+    local view = SequenceMonitor.new({ view_id = "test_persist" })
     timer_callbacks = {}
 
     view:load_sequence(mc_id)
@@ -358,7 +358,7 @@ do
         "playhead persisted to DB, got " .. tostring(reloaded.playhead_position))
 
     -- Reload view: should restore playhead
-    local view2 = SequenceView.new({ view_id = "test_persist2" })
+    local view2 = SequenceMonitor.new({ view_id = "test_persist2" })
     view2:load_sequence(mc_id)
     assert(view2.playhead == 42,
         "playhead restored from DB, got " .. view2.playhead)
@@ -371,7 +371,7 @@ end
 -- ─── Test 6: Playhead NOT persisted for timeline ───
 print("\n--- no persist for timeline ---")
 do
-    local view = SequenceView.new({ view_id = "test_no_persist" })
+    local view = SequenceMonitor.new({ view_id = "test_no_persist" })
     timer_callbacks = {}
 
     view:load_sequence("timeline1")
@@ -392,7 +392,7 @@ end
 -- ─── Test 7: set_playhead clamping ───
 print("\n--- playhead clamping ---")
 do
-    local view = SequenceView.new({ view_id = "test_clamp" })
+    local view = SequenceMonitor.new({ view_id = "test_clamp" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -412,7 +412,7 @@ end
 -- ─── Test 8: Listener notification ───
 print("\n--- listener notification ---")
 do
-    local view = SequenceView.new({ view_id = "test_listen" })
+    local view = SequenceMonitor.new({ view_id = "test_listen" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -441,7 +441,7 @@ end
 -- ─── Test 9: Marks on masterclip ───
 print("\n--- marks ---")
 do
-    local view = SequenceView.new({ view_id = "test_marks" })
+    local view = SequenceMonitor.new({ view_id = "test_marks" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -470,7 +470,7 @@ end
 -- ─── Test 10: Marks nil for timeline ───
 print("\n--- no marks for timeline ---")
 do
-    local view = SequenceView.new({ view_id = "test_tl_marks" })
+    local view = SequenceMonitor.new({ view_id = "test_tl_marks" })
     timer_callbacks = {}
     view:load_sequence("timeline1")
 
@@ -491,7 +491,7 @@ end
 -- ─── Test 11: seek_to_frame displays frame and updates playhead ───
 print("\n--- seek_to_frame ---")
 do
-    local view = SequenceView.new({ view_id = "test_seek" })
+    local view = SequenceMonitor.new({ view_id = "test_seek" })
     timer_callbacks = {}
     qt_log = {}
 
@@ -518,7 +518,7 @@ end
 -- ─── Test 12: on_position_changed during playback ───
 print("\n--- position_changed during playback ---")
 do
-    local view = SequenceView.new({ view_id = "test_play" })
+    local view = SequenceMonitor.new({ view_id = "test_play" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -538,7 +538,7 @@ end
 -- ─── Test 13: Unload clears state ───
 print("\n--- unload ---")
 do
-    local view = SequenceView.new({ view_id = "test_unload" })
+    local view = SequenceMonitor.new({ view_id = "test_unload" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
     view:set_playhead(50)
@@ -556,7 +556,7 @@ end
 -- ─── Test 14: Switching sequences saves previous playhead ───
 print("\n--- switch saves playhead ---")
 do
-    local view = SequenceView.new({ view_id = "test_switch" })
+    local view = SequenceMonitor.new({ view_id = "test_switch" })
     timer_callbacks = {}
 
     -- Load masterclip, set playhead
@@ -580,8 +580,8 @@ end
 -- ─── Test 15: Two views have independent state ───
 print("\n--- independent views ---")
 do
-    local view1 = SequenceView.new({ view_id = "view_a" })
-    local view2 = SequenceView.new({ view_id = "view_b" })
+    local view1 = SequenceMonitor.new({ view_id = "view_a" })
+    local view2 = SequenceMonitor.new({ view_id = "view_b" })
     timer_callbacks = {}
 
     assert(created_contexts["view_a"], "context a created")
@@ -611,7 +611,7 @@ end
 -- ─── Test 16: load_sequence with missing ID asserts ───
 print("\n--- error: load_sequence empty ---")
 do
-    local view = SequenceView.new({ view_id = "test_err" })
+    local view = SequenceMonitor.new({ view_id = "test_err" })
     expect_assert(function() view:load_sequence("") end,
         "load_sequence empty string")
     expect_assert(function() view:load_sequence(nil) end,
@@ -623,7 +623,7 @@ end
 -- ─── Test 17: seek_to_frame with no sequence asserts ───
 print("\n--- error: seek without sequence ---")
 do
-    local view = SequenceView.new({ view_id = "test_no_seq" })
+    local view = SequenceMonitor.new({ view_id = "test_no_seq" })
     expect_assert(function() view:seek_to_frame(10) end,
         "seek_to_frame without sequence")
     view:destroy()
@@ -633,7 +633,7 @@ end
 -- ─── Test 18: set_playhead nil asserts ───
 print("\n--- error: set_playhead nil ---")
 do
-    local view = SequenceView.new({ view_id = "test_nil_ph" })
+    local view = SequenceMonitor.new({ view_id = "test_nil_ph" })
     expect_assert(function() view:set_playhead(nil) end,
         "set_playhead nil")
     view:destroy()
@@ -643,7 +643,7 @@ end
 -- ─── Test 19: set_mark_in without masterclip asserts ───
 print("\n--- error: marks without masterclip ---")
 do
-    local view = SequenceView.new({ view_id = "test_mark_err" })
+    local view = SequenceMonitor.new({ view_id = "test_mark_err" })
     -- No sequence loaded
     expect_assert(function() view:set_mark_in(10) end,
         "set_mark_in without masterclip")
@@ -660,7 +660,7 @@ end
 -- ─── Test 20: _on_show_frame calls SURFACE_SET_FRAME ───
 print("\n--- callback: show_frame ---")
 do
-    local view = SequenceView.new({ view_id = "test_cb_frame" })
+    local view = SequenceMonitor.new({ view_id = "test_cb_frame" })
     timer_callbacks = {}
     qt_log = {}
 
@@ -683,7 +683,7 @@ end
 -- ─── Test 21: _on_show_gap calls SURFACE_SET_FRAME(nil) ───
 print("\n--- callback: show_gap ---")
 do
-    local view = SequenceView.new({ view_id = "test_cb_gap" })
+    local view = SequenceMonitor.new({ view_id = "test_cb_gap" })
     timer_callbacks = {}
     qt_log = {}
 
@@ -706,7 +706,7 @@ end
 -- ─── Test 22: _on_set_rotation calls SURFACE_SET_ROTATION ───
 print("\n--- callback: set_rotation ---")
 do
-    local view = SequenceView.new({ view_id = "test_cb_rot" })
+    local view = SequenceMonitor.new({ view_id = "test_cb_rot" })
     timer_callbacks = {}
     qt_log = {}
 
@@ -733,7 +733,7 @@ end
 -- ─── Test 23: load_sequence with non-existent ID asserts ───
 print("\n--- error: load non-existent sequence ---")
 do
-    local view = SequenceView.new({ view_id = "test_no_exist" })
+    local view = SequenceMonitor.new({ view_id = "test_no_exist" })
     expect_assert(function() view:load_sequence("does_not_exist_abc") end,
         "load non-existent sequence")
     view:destroy()
@@ -743,7 +743,7 @@ end
 -- ─── Test 24: seek_to_frame type validation ───
 print("\n--- error: seek_to_frame bad types ---")
 do
-    local view = SequenceView.new({ view_id = "test_seek_type" })
+    local view = SequenceMonitor.new({ view_id = "test_seek_type" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -761,7 +761,7 @@ end
 -- ─── Test 25: seek_to_frame boundary clamping ───
 print("\n--- seek_to_frame boundary ---")
 do
-    local view = SequenceView.new({ view_id = "test_seek_bound" })
+    local view = SequenceMonitor.new({ view_id = "test_seek_bound" })
     timer_callbacks = {}
     view:load_sequence(mc_id)  -- 100 frames
 
@@ -782,7 +782,7 @@ end
 -- ─── Test 26: operations after unload assert ───
 print("\n--- error: ops after unload ---")
 do
-    local view = SequenceView.new({ view_id = "test_after_unload" })
+    local view = SequenceMonitor.new({ view_id = "test_after_unload" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
     view:unload()
@@ -803,7 +803,7 @@ end
 -- ─── Test 27: set_mark_in/out with nil frame asserts ───
 print("\n--- error: mark nil frame ---")
 do
-    local view = SequenceView.new({ view_id = "test_mark_nil" })
+    local view = SequenceMonitor.new({ view_id = "test_mark_nil" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -819,7 +819,7 @@ end
 -- ─── Test 28: add_listener type validation ───
 print("\n--- error: add_listener bad type ---")
 do
-    local view = SequenceView.new({ view_id = "test_listen_type" })
+    local view = SequenceMonitor.new({ view_id = "test_listen_type" })
     expect_assert(function() view:add_listener(nil) end,
         "add_listener nil")
     expect_assert(function() view:add_listener("not a function") end,
@@ -837,7 +837,7 @@ end
 -- ─── Test 29: load → unload → reload restores playhead ───
 print("\n--- reload restores playhead ---")
 do
-    local view = SequenceView.new({ view_id = "test_reload" })
+    local view = SequenceMonitor.new({ view_id = "test_reload" })
     timer_callbacks = {}
 
     view:load_sequence(mc_id)
@@ -864,7 +864,7 @@ do
     seq.playhead_position = 999
     seq:save()
 
-    local view = SequenceView.new({ view_id = "test_oob_ph" })
+    local view = SequenceMonitor.new({ view_id = "test_oob_ph" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -883,7 +883,7 @@ end
 -- ─── Test 31: multiple listeners fire independently ───
 print("\n--- multiple listeners ---")
 do
-    local view = SequenceView.new({ view_id = "test_multi_listen" })
+    local view = SequenceMonitor.new({ view_id = "test_multi_listen" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
@@ -918,7 +918,7 @@ end
 -- ─── Test 32: destroy saves masterclip playhead ───
 print("\n--- destroy saves playhead ---")
 do
-    local view = SequenceView.new({ view_id = "test_destroy_save" })
+    local view = SequenceMonitor.new({ view_id = "test_destroy_save" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
     view:set_playhead(77)
@@ -936,4 +936,4 @@ do
     print("  ok")
 end
 
-print("\n✅ test_sequence_view.lua passed")
+print("\n✅ test_sequence_monitor.lua passed")

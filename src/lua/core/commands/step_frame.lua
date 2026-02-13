@@ -3,7 +3,7 @@
 -- StepFrame: non-undoable command to advance/retreat the playhead by 1 frame
 -- (or 1 second with shift).
 --
--- Mode-agnostic: uses the active SequenceView. seek_to_frame() displays the
+-- Mode-agnostic: uses the active SequenceMonitor. seek_to_frame() displays the
 -- frame via Renderer and updates the view's playhead.
 local M = {}
 
@@ -24,7 +24,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             string.format("StepFrame: direction must be 1 or -1, got %s", tostring(direction)))
 
         local pm = require('ui.panel_manager')
-        local sv = pm.get_active_sequence_view()
+        local sv = pm.get_active_sequence_monitor()
         assert(sv and sv.sequence_id, "StepFrame: no sequence loaded in active view")
         local engine = sv.engine
 

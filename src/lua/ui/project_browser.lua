@@ -427,15 +427,15 @@ local function activate_item(item_info)
             return false, "Master clip metadata missing"
         end
 
-        -- Load masterclip into source_view (clip_id IS the masterclip sequence ID)
+        -- Load masterclip into source_monitor (clip_id IS the masterclip sequence ID)
         local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_view("source_view")
+        local source_sv = pm.get_sequence_monitor("source_monitor")
         source_sv:load_sequence(clip.clip_id)
 
         if focus_manager and focus_manager.focus_panel then
-            focus_manager.focus_panel("source_view")
+            focus_manager.focus_panel("source_monitor")
         else
-            focus_manager.set_focused_panel("source_view")
+            focus_manager.set_focused_panel("source_monitor")
         end
         return true
     elseif item_info.type == "bin" then
@@ -1758,7 +1758,7 @@ function M.add_selected_to_timeline(command_type, options)
         local marks_applied = false
         local source_in_mark, source_out_mark, duration_mark
         local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_view("source_view")
+        local source_sv = pm.get_sequence_monitor("source_monitor")
         if source_sv and source_sv.sequence_id == clip.clip_id then
             local viewer_mark_in = source_sv:get_mark_in()
             local viewer_mark_out = source_sv:get_mark_out()
@@ -1811,7 +1811,7 @@ function M.add_selected_to_timeline(command_type, options)
 
         -- Check source viewer marks (only apply to first clip if viewing it)
         local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_view("source_view")
+        local source_sv = pm.get_sequence_monitor("source_monitor")
 
         -- Build groups for each selected clip (serial arrangement)
         local groups = {}

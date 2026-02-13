@@ -42,7 +42,7 @@ end
 mock_cm.begin_command_event = function() end
 mock_cm.end_command_event = function() end
 
--- Mock source SequenceView (registered with panel_manager)
+-- Mock source SequenceMonitor (registered with panel_manager)
 local _mock_mark_in = 10
 local _mock_mark_out = 50
 local mock_source_sv = {
@@ -64,8 +64,8 @@ local function set_mock_sequence_id(id)
 end
 
 local panel_manager = require("ui.panel_manager")
-panel_manager.register_sequence_view("source_view", mock_source_sv)
-panel_manager.register_sequence_view("timeline_view", mock_source_sv)
+panel_manager.register_sequence_monitor("source_monitor", mock_source_sv)
+panel_manager.register_sequence_monitor("timeline_monitor", mock_source_sv)
 
 -- Mock focus_manager
 package.loaded["core.focus_manager"] = {

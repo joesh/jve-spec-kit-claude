@@ -93,7 +93,7 @@ end
 
 package.loaded['core.playback.playback_controller'] = mock_pc
 
--- Create mock SequenceView with mock engine for panel_manager
+-- Create mock SequenceMonitor with mock engine for panel_manager
 local mock_engine = {
     fps_num = 30,
     fps_den = 1,
@@ -128,8 +128,8 @@ function mock_sv:seek_to_frame(frame)
 end
 
 local panel_manager = require("ui.panel_manager")
-panel_manager.register_sequence_view("source_view", mock_sv)
-panel_manager.register_sequence_view("timeline_view", mock_sv)
+panel_manager.register_sequence_monitor("source_monitor", mock_sv)
+panel_manager.register_sequence_monitor("timeline_monitor", mock_sv)
 
 command_manager.init('seq1', 'proj1')
 

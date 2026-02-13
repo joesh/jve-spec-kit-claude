@@ -42,7 +42,7 @@ package.loaded["core.logger"] = {
     trace = function() end,
 }
 
-local focused = "source_view"
+local focused = "source_monitor"
 local mock_focus_manager = {
     get_focused_panel = function() return focused end,
 }
@@ -57,18 +57,18 @@ panel_manager.init({
 })
 
 --------------------------------------------------------------------------------
--- Test 1: Maximize source_view — splitter sizes correct
+-- Test 1: Maximize source_monitor — splitter sizes correct
 --------------------------------------------------------------------------------
-print("\nTest 1: Maximize source_view — splitter sizes")
-focused = "source_view"
+print("\nTest 1: Maximize source_monitor — splitter sizes")
+focused = "source_monitor"
 
 local ok, err = panel_manager.toggle_maximize(nil)
 assert(ok, "toggle_maximize failed: " .. tostring(err))
 
 local top = current_splitter_sizes["top_splitter"]
 assert(top[1] == 0, "project_browser should be 0, got " .. top[1])
-assert(top[2] > 0, "source_view should be > 0, got " .. top[2])
-assert(top[3] == 0, "timeline_view should be 0, got " .. top[3])
+assert(top[2] > 0, "source_monitor should be > 0, got " .. top[2])
+assert(top[3] == 0, "timeline_monitor should be 0, got " .. top[3])
 assert(top[4] == 0, "inspector should be 0, got " .. top[4])
 
 local main = current_splitter_sizes["main_splitter"]
@@ -118,7 +118,7 @@ print("\nTest 4: get_persistable_sizes while maximized")
 current_splitter_sizes["main_splitter"] = {450, 450}
 current_splitter_sizes["top_splitter"] = {300, 300, 300, 300}
 
-focused = "source_view"
+focused = "source_monitor"
 ok = panel_manager.toggle_maximize(nil)
 assert(ok)
 assert(panel_manager.is_maximized())

@@ -1,4 +1,4 @@
---- SequenceView: a UI component that views any sequence (masterclip or timeline).
+--- SequenceMonitor: a video monitor that displays any sequence (masterclip or timeline).
 --
 -- Each instance owns:
 -- - A PlaybackEngine for transport control
@@ -8,25 +8,25 @@
 -- - A media_cache context for independent frame caching
 --
 -- Absorbs widget creation from viewer_panel.lua and playhead/mark state
--- management from source_viewer_state.lua. SequenceView treats all sequence
+-- management from source_viewer_state.lua. SequenceMonitor treats all sequence
 -- kinds uniformly — masterclips and timelines use identical code paths.
 --
 -- Masterclip-specific behavior:
 -- - Playhead persisted to DB via sequence record (debounced)
 -- - Marks read/write via sequence record (get_in/get_out)
 --
--- @file sequence_view.lua
+-- @file sequence_monitor.lua
 
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
 local media_cache = require("core.media.media_cache")
 local PlaybackEngine = require("core.playback.playback_engine")
 local Sequence = require("models.sequence")
-local source_mark_bar = require("ui.source_mark_bar")
+local monitor_mark_bar = require("ui.monitor_mark_bar")
 local database = require("core.database")
 
-local SequenceView = {}
-SequenceView.__index = SequenceView
+local SequenceMonitor = {}
+SequenceMonitor.__index = SequenceMonitor
 
 -- Debounce interval for playhead persistence (ms)
 local DEBOUNCE_MS = 200
@@ -35,16 +35,16 @@ local DEBOUNCE_MS = 200
 -- Constructor
 --------------------------------------------------------------------------------
 
---- Create a new SequenceView instance.
+--- Create a new SequenceMonitor instance.
 -- @param config table:
---   view_id  string  unique identifier (e.g. "source_view", "timeline_view")
-function SequenceView.new(config)
+--   view_id  string  unique identifier (e.g. "source_monitor", "timeline_monitor")
+function SequenceMonitor.new(config)
     assert(type(config) == "table",
-        "SequenceView.new: config table required")
+        "SequenceMonitor.new: config table required")
     assert(config.view_id and config.view_id ~= "",
-        "SequenceView.new: view_id required")
+        "SequenceMonitor.new: view_id required")
 
-    local self = setmetatable({}, SequenceView)
+    local self = setmetatable({}, SequenceMonitor)
 
     self.view_id = config.view_id
     self.media_context_id = config.view_id
@@ -93,7 +93,7 @@ end
 -- Widget Creation (absorbed from viewer_panel.create)
 --------------------------------------------------------------------------------
 
-function SequenceView:_create_widgets()
+function SequenceMonitor:_create_widgets()
     self._container = qt_constants.WIDGET.CREATE()
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
     if qt_constants.LAYOUT.SET_SPACING then
@@ -139,18 +139,18 @@ function SequenceView:_create_widgets()
 
     -- GPU video surface
     assert(qt_constants.WIDGET.CREATE_GPU_VIDEO_SURFACE,
-        "SequenceView: CREATE_GPU_VIDEO_SURFACE not available")
+        "SequenceMonitor: CREATE_GPU_VIDEO_SURFACE not available")
     self._video_surface = qt_constants.WIDGET.CREATE_GPU_VIDEO_SURFACE()
     assert(self._video_surface,
-        "SequenceView: CREATE_GPU_VIDEO_SURFACE returned nil")
+        "SequenceMonitor: CREATE_GPU_VIDEO_SURFACE returned nil")
 
     -- Assert EMP bindings required by engine callbacks
     assert(qt_constants.EMP and qt_constants.EMP.SURFACE_SET_FRAME,
-        "SequenceView: EMP.SURFACE_SET_FRAME not available")
+        "SequenceMonitor: EMP.SURFACE_SET_FRAME not available")
     assert(qt_constants.EMP.SURFACE_SET_ROTATION,
-        "SequenceView: EMP.SURFACE_SET_ROTATION not available")
+        "SequenceMonitor: EMP.SURFACE_SET_ROTATION not available")
     assert(qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT,
-        "SequenceView: PROPERTIES.SET_TEXT not available")
+        "SequenceMonitor: PROPERTIES.SET_TEXT not available")
     if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
         qt_constants.GEOMETRY.SET_SIZE_POLICY(
             self._video_surface, "Expanding", "Expanding")
@@ -163,16 +163,16 @@ function SequenceView:_create_widgets()
 
     -- Mark bar (ScriptableTimeline widget)
     assert(qt_constants.WIDGET.CREATE_TIMELINE,
-        "SequenceView: CREATE_TIMELINE not available")
+        "SequenceMonitor: CREATE_TIMELINE not available")
     local mark_bar_widget = qt_constants.WIDGET.CREATE_TIMELINE()
     assert(mark_bar_widget,
-        "SequenceView: CREATE_TIMELINE returned nil")
+        "SequenceMonitor: CREATE_TIMELINE returned nil")
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(
         mark_bar_widget, "Expanding", "Fixed")
-    timeline.set_desired_height(mark_bar_widget, source_mark_bar.BAR_HEIGHT)
+    timeline.set_desired_height(mark_bar_widget, monitor_mark_bar.BAR_HEIGHT)
     qt_constants.LAYOUT.ADD_WIDGET(content_layout, mark_bar_widget)
 
-    self._mark_bar = source_mark_bar.create(mark_bar_widget, {
+    self._mark_bar = monitor_mark_bar.create(mark_bar_widget, {
         state_provider = self,
         has_clip = function() return self:has_clip() end,
         get_mark_in = function() return self:get_mark_in() end,
@@ -181,7 +181,7 @@ function SequenceView:_create_widgets()
         on_listener = function(fn) self:add_listener(fn) end,
     })
     assert(self._mark_bar, string.format(
-        "SequenceView(%s):_create_widgets: source_mark_bar.create returned nil",
+        "SequenceMonitor(%s):_create_widgets: monitor_mark_bar.create returned nil",
         self.view_id))
 
     qt_constants.LAYOUT.SET_ON_WIDGET(content, content_layout)
@@ -192,7 +192,7 @@ function SequenceView:_create_widgets()
 
     qt_constants.LAYOUT.SET_ON_WIDGET(self._container, layout)
 
-    logger.info("sequence_view", string.format(
+    logger.info("sequence_monitor", string.format(
         "%s: widgets created", self.view_id))
 end
 
@@ -203,9 +203,9 @@ end
 --- Load a sequence (any kind: masterclip or timeline).
 -- @param sequence_id string
 -- @param opts table optional: { total_frames = number }
-function SequenceView:load_sequence(sequence_id, opts)
+function SequenceMonitor:load_sequence(sequence_id, opts)
     assert(sequence_id and sequence_id ~= "", string.format(
-        "SequenceView(%s):load_sequence: sequence_id required, got %s",
+        "SequenceMonitor(%s):load_sequence: sequence_id required, got %s",
         self.view_id, tostring(sequence_id)))
 
     -- Save current masterclip playhead before switching
@@ -218,7 +218,7 @@ function SequenceView:load_sequence(sequence_id, opts)
     -- Load sequence model
     local seq = Sequence.load(sequence_id)
     assert(seq, string.format(
-        "SequenceView:load_sequence: sequence %s not found", sequence_id))
+        "SequenceMonitor:load_sequence: sequence %s not found", sequence_id))
 
     self.sequence_id = sequence_id
     self.sequence = seq
@@ -251,14 +251,14 @@ function SequenceView:load_sequence(sequence_id, opts)
 
     self:_notify()
 
-    logger.info("sequence_view", string.format(
+    logger.info("sequence_monitor", string.format(
         "%s: loaded %s %s (%d frames @ %d/%d fps)",
         self.view_id, seq.kind or "?", sequence_id:sub(1, 8),
         self.total_frames, self.fps_num, self.fps_den))
 end
 
 --- Unload current sequence.
-function SequenceView:unload()
+function SequenceMonitor:unload()
     if self.sequence and self.sequence:is_masterclip() then
         self:save_playhead_to_db()
     end
@@ -283,12 +283,12 @@ end
 
 --- Seek to frame (for mark bar clicks and external callers).
 -- Stops playback if playing, displays frame, updates playhead.
-function SequenceView:seek_to_frame(frame)
+function SequenceMonitor:seek_to_frame(frame)
     assert(type(frame) == "number", string.format(
-        "SequenceView(%s):seek_to_frame: frame must be number, got %s",
+        "SequenceMonitor(%s):seek_to_frame: frame must be number, got %s",
         self.view_id, type(frame)))
     assert(self.sequence_id, string.format(
-        "SequenceView(%s):seek_to_frame: no sequence loaded",
+        "SequenceMonitor(%s):seek_to_frame: no sequence loaded",
         self.view_id))
 
     if self.engine:is_playing() then
@@ -311,17 +311,17 @@ end
 --------------------------------------------------------------------------------
 
 --- Get container widget for layout embedding.
-function SequenceView:get_widget()
+function SequenceMonitor:get_widget()
     return self._container
 end
 
 --- Get title widget.
-function SequenceView:get_title_widget()
+function SequenceMonitor:get_title_widget()
     return self._title_label
 end
 
 --- Get video surface widget.
-function SequenceView:get_video_surface()
+function SequenceMonitor:get_video_surface()
     return self._video_surface
 end
 
@@ -330,13 +330,13 @@ end
 --------------------------------------------------------------------------------
 
 --- Check if a sequence is loaded.
-function SequenceView:has_clip()
+function SequenceMonitor:has_clip()
     return self.sequence_id ~= nil
 end
 
 --- Get mark in (video frame). Masterclip only.
 -- @return number|nil
-function SequenceView:get_mark_in()
+function SequenceMonitor:get_mark_in()
     if not self.sequence then return nil end
     if not self.sequence:is_masterclip() then return nil end
     return self.sequence:get_in()
@@ -344,38 +344,38 @@ end
 
 --- Get mark out (video frame). Masterclip only.
 -- @return number|nil
-function SequenceView:get_mark_out()
+function SequenceMonitor:get_mark_out()
     if not self.sequence then return nil end
     if not self.sequence:is_masterclip() then return nil end
     return self.sequence:get_out()
 end
 
 --- Set mark in at frame (masterclip only).
-function SequenceView:set_mark_in(frame)
+function SequenceMonitor:set_mark_in(frame)
     assert(frame ~= nil, string.format(
-        "SequenceView(%s):set_mark_in: frame is nil", self.view_id))
+        "SequenceMonitor(%s):set_mark_in: frame is nil", self.view_id))
     assert(self.sequence and self.sequence:is_masterclip(), string.format(
-        "SequenceView(%s):set_mark_in: no masterclip loaded (seq=%s)",
+        "SequenceMonitor(%s):set_mark_in: no masterclip loaded (seq=%s)",
         self.view_id, tostring(self.sequence_id)))
     self.sequence:set_in(math.floor(frame))
     self:_notify()
 end
 
 --- Set mark out at frame (masterclip only).
-function SequenceView:set_mark_out(frame)
+function SequenceMonitor:set_mark_out(frame)
     assert(frame ~= nil, string.format(
-        "SequenceView(%s):set_mark_out: frame is nil", self.view_id))
+        "SequenceMonitor(%s):set_mark_out: frame is nil", self.view_id))
     assert(self.sequence and self.sequence:is_masterclip(), string.format(
-        "SequenceView(%s):set_mark_out: no masterclip loaded (seq=%s)",
+        "SequenceMonitor(%s):set_mark_out: no masterclip loaded (seq=%s)",
         self.view_id, tostring(self.sequence_id)))
     self.sequence:set_out(math.floor(frame))
     self:_notify()
 end
 
 --- Clear marks (masterclip only). Sets sequence mark_in/mark_out to nil.
-function SequenceView:clear_marks()
+function SequenceMonitor:clear_marks()
     assert(self.sequence and self.sequence:is_masterclip(), string.format(
-        "SequenceView(%s):clear_marks: no masterclip loaded (seq=%s)",
+        "SequenceMonitor(%s):clear_marks: no masterclip loaded (seq=%s)",
         self.view_id, tostring(self.sequence_id)))
 
     self.sequence:clear_marks()
@@ -384,9 +384,9 @@ function SequenceView:clear_marks()
 end
 
 --- Set playhead (clamped, schedules persist for masterclips).
-function SequenceView:set_playhead(frame)
+function SequenceMonitor:set_playhead(frame)
     assert(frame ~= nil, string.format(
-        "SequenceView(%s):set_playhead: frame is nil", self.view_id))
+        "SequenceMonitor(%s):set_playhead: frame is nil", self.view_id))
     local clamped = math.max(0, math.min(
         math.floor(frame), math.max(0, self.total_frames - 1)))
     if clamped == self.playhead then return end
@@ -403,15 +403,15 @@ end
 --------------------------------------------------------------------------------
 
 --- Add listener for state changes (redraws, playhead updates).
-function SequenceView:add_listener(fn)
+function SequenceMonitor:add_listener(fn)
     assert(type(fn) == "function", string.format(
-        "SequenceView(%s):add_listener: fn must be function, got %s",
+        "SequenceMonitor(%s):add_listener: fn must be function, got %s",
         self.view_id, type(fn)))
     self._listeners[#self._listeners + 1] = fn
 end
 
 --- Remove listener.
-function SequenceView:remove_listener(fn)
+function SequenceMonitor:remove_listener(fn)
     for i = #self._listeners, 1, -1 do
         if self._listeners[i] == fn then
             table.remove(self._listeners, i)
@@ -426,7 +426,7 @@ end
 --------------------------------------------------------------------------------
 
 --- Save playhead to DB (for masterclip sequences).
-function SequenceView:save_playhead_to_db()
+function SequenceMonitor:save_playhead_to_db()
     if not self.sequence then return end
     if not self.sequence:is_masterclip() then return end
     if not database.has_connection() then return end
@@ -435,7 +435,7 @@ function SequenceView:save_playhead_to_db()
     self.sequence:save()
 end
 
-function SequenceView:_schedule_persist()
+function SequenceMonitor:_schedule_persist()
     self._persist_generation = self._persist_generation + 1
     local gen = self._persist_generation
 
@@ -455,20 +455,20 @@ end
 -- Engine Callbacks
 --------------------------------------------------------------------------------
 
-function SequenceView:_on_show_frame(frame_handle, metadata)
+function SequenceMonitor:_on_show_frame(frame_handle, metadata)
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
 end
 
-function SequenceView:_on_show_gap()
+function SequenceMonitor:_on_show_gap()
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
 end
 
-function SequenceView:_on_set_rotation(degrees)
+function SequenceMonitor:_on_set_rotation(degrees)
     qt_constants.EMP.SURFACE_SET_ROTATION(self._video_surface, degrees)
 end
 
 --- Called by engine during playback ticks (set_position fires this).
-function SequenceView:_on_position_changed(frame)
+function SequenceMonitor:_on_position_changed(frame)
     self.playhead = math.floor(frame)
     if self.sequence and self.sequence:is_masterclip() then
         self:_schedule_persist()
@@ -480,18 +480,18 @@ end
 -- Internal
 --------------------------------------------------------------------------------
 
-function SequenceView:_set_title(text)
+function SequenceMonitor:_set_title(text)
     qt_constants.PROPERTIES.SET_TEXT(self._title_label, text)
 end
 
-function SequenceView:_notify()
+function SequenceMonitor:_notify()
     for _, fn in ipairs(self._listeners) do
         fn()
     end
 end
 
 --- Clean up resources.
-function SequenceView:destroy()
+function SequenceMonitor:destroy()
     if self.sequence and self.sequence:is_masterclip() then
         self:save_playhead_to_db()
     end
@@ -500,4 +500,4 @@ function SequenceView:destroy()
     self._listeners = {}
 end
 
-return SequenceView
+return SequenceMonitor

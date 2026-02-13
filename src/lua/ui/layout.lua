@@ -202,20 +202,20 @@ else
     logger.error("layout", "Failed to load menu system: " .. tostring(menu_error))
 end
 
--- 2. Source + Timeline Viewers (center)
-local SequenceView = require("ui.sequence_view")
-local source_view = SequenceView.new({ view_id = "source_view" })
-local timeline_view = SequenceView.new({ view_id = "timeline_view" })
+-- 2. Source + Timeline Monitors (center)
+local SequenceMonitor = require("ui.sequence_monitor")
+local source_monitor = SequenceMonitor.new({ view_id = "source_monitor" })
+local timeline_monitor = SequenceMonitor.new({ view_id = "timeline_monitor" })
 
--- Register views early so timeline_panel.create() can access them
-panel_manager.register_sequence_view("source_view", source_view)
-panel_manager.register_sequence_view("timeline_view", timeline_view)
+-- Register monitors early so timeline_panel.create() can access them
+panel_manager.register_sequence_monitor("source_monitor", source_monitor)
+panel_manager.register_sequence_monitor("timeline_monitor", timeline_monitor)
 
 -- Initialize audio: PlaybackEngine needs the audio module reference,
--- and timeline_view owns audio by default (source_view activates on focus).
+-- and timeline_monitor owns audio by default (source_monitor activates on focus).
 local PlaybackEngine = require("core.playback.playback_engine")
 PlaybackEngine.init_audio(require("core.media.audio_playback"))
-timeline_view.engine:activate_audio()
+timeline_monitor.engine:activate_audio()
 
 -- 3. Inspector (right) - Create container for Lua inspector
 local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
@@ -237,20 +237,20 @@ keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_brow
 -- 6. Initialize focus manager for visual panel indicators
 local focus_manager = require("ui.focus_manager")
 
--- Audio follows focus: transfer audio ownership when switching between sequence views.
--- Non-viewer panels (browser, inspector) keep the last view's audio active.
+-- Audio follows focus: transfer audio ownership when switching between monitors.
+-- Non-monitor panels (browser, inspector) keep the last monitor's audio active.
 focus_manager.on_focus_change(function(old_id, new_id)
-    local view_for = {
-        source_view = source_view,
-        timeline_view = timeline_view,
-        timeline = timeline_view,
+    local monitor_for = {
+        source_monitor = source_monitor,
+        timeline_monitor = timeline_monitor,
+        timeline = timeline_monitor,
     }
-    local new_view = view_for[new_id]
-    if not new_view then return end
+    local new_mon = monitor_for[new_id]
+    if not new_mon then return end
 
-    source_view.engine:deactivate_audio()
-    timeline_view.engine:deactivate_audio()
-    new_view.engine:activate_audio()
+    source_monitor.engine:deactivate_audio()
+    timeline_monitor.engine:deactivate_audio()
+    new_mon.engine:activate_audio()
 end)
 
 -- Initialize the Lua inspector content following working reference pattern
@@ -293,8 +293,8 @@ end
 focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser", {
     focus_widgets = project_browser_mod.get_focus_widgets and project_browser_mod.get_focus_widgets() or nil
 })
-focus_manager.register_panel("source_view", source_view:get_widget(), source_view:get_title_widget(), "Source")
-focus_manager.register_panel("timeline_view", timeline_view:get_widget(), timeline_view:get_title_widget(), "Timeline Viewer")
+focus_manager.register_panel("source_monitor", source_monitor:get_widget(), source_monitor:get_title_widget(), "Source")
+focus_manager.register_panel("timeline_monitor", timeline_monitor:get_widget(), timeline_monitor:get_title_widget(), "Timeline Monitor")
 focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector", {
     focus_widgets = view.get_focus_widgets and view.get_focus_widgets() or nil
 })
@@ -347,8 +347,8 @@ end
 
 -- Add four panels to top splitter
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, source_view:get_widget())
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, timeline_view:get_widget())
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, source_monitor:get_widget())
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, timeline_monitor:get_widget())
 qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
 
 -- Add top row and timeline to main splitter
@@ -415,7 +415,7 @@ qt_create_single_shot_timer(50, function()
     -- Migrate saved 3-panel top splitter to 4-panel
     if saved_splitters and saved_splitters.top and #saved_splitters.top == 3 then
         local old = saved_splitters.top
-        -- Split old viewer (index 2) evenly into source_view + timeline_view
+        -- Split old viewer (index 2) evenly into source_monitor + timeline_monitor
         local half = math.floor(old[2] / 2)
         saved_splitters.top = {old[1], half, old[2] - half, old[3]}
         logger.info("layout", "Migrated 3-panel splitter to 4-panel")

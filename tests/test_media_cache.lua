@@ -2,7 +2,7 @@
 -- @file test_media_cache.lua
 --
 -- Tests the per-context media cache with shared LRU reader pool.
--- Each viewer context (source_view, timeline_view) has independent
+-- Each monitor context (source_monitor, timeline_monitor) has independent
 -- active_path, video_cache, and audio_cache state.
 
 require('test_env')

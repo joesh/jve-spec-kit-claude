@@ -32,11 +32,11 @@ function mock_sv_no_seq:has_clip() return false end
 
 local mock_pm = {
     toggle_active_panel = function() end,
-    get_active_sequence_view = function() return mock_sv_no_seq end,
-    get_sequence_view = function() return mock_sv_no_seq end,
+    get_active_sequence_monitor = function() return mock_sv_no_seq end,
+    get_sequence_monitor = function() return mock_sv_no_seq end,
 }
 package.loaded["ui.panel_manager"] = mock_pm
-package.loaded["ui.focus_manager"] = { get_focused_panel = function() return "source_view" end }
+package.loaded["ui.focus_manager"] = { get_focused_panel = function() return "source_monitor" end }
 
 package.loaded["core.keyboard_shortcuts"] = nil
 local keyboard_shortcuts = require("core.keyboard_shortcuts")

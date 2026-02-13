@@ -29,17 +29,17 @@ local arrow_repeat_dir = 0          -- 1=right, -1=left
 local arrow_repeat_shift = false    -- shift held = 1-second jumps
 local arrow_repeat_gen = 0          -- generation counter for timer invalidation
 
---- Get the PlaybackEngine for the currently active SequenceView.
+--- Get the PlaybackEngine for the currently active SequenceMonitor.
 -- @return PlaybackEngine|nil
 local function get_active_engine()
-    local sv = panel_manager.get_active_sequence_view()
+    local sv = panel_manager.get_active_sequence_monitor()
     if not sv then return nil end
     return sv.engine
 end
 
 --- Check if the active view has a sequence loaded and ready for playback.
 local function ensure_playback_initialized()
-    local sv = panel_manager.get_active_sequence_view()
+    local sv = panel_manager.get_active_sequence_monitor()
     if not sv then return false end
     if not sv.sequence_id then return false end
     if sv.total_frames <= 0 then return false end
@@ -102,7 +102,7 @@ local function register_jkl_commands()
         name = "Play/Pause",
         description = "Toggle playback (play at 1x or stop)",
         default_shortcuts = {"Space"},
-        context = {"timeline", "source_view", "timeline_view"},
+        context = {"timeline", "source_monitor", "timeline_monitor"},
         handler = handle_play_toggle
     })
     shortcut_registry.assign_shortcut("playback.toggle", "Space")
@@ -113,7 +113,7 @@ local function register_jkl_commands()
         name = "Play Forward / Speed Up",
         description = "Start forward playback or increase speed",
         default_shortcuts = {"L"},
-        context = {"timeline", "source_view", "timeline_view"},
+        context = {"timeline", "source_monitor", "timeline_monitor"},
         handler = handle_jkl_forward
     })
     shortcut_registry.register_command({
@@ -122,7 +122,7 @@ local function register_jkl_commands()
         name = "Play Reverse / Speed Up",
         description = "Start reverse playback or increase speed",
         default_shortcuts = {"J"},
-        context = {"timeline", "source_view", "timeline_view"},
+        context = {"timeline", "source_monitor", "timeline_monitor"},
         handler = handle_jkl_reverse
     })
     shortcut_registry.register_command({
@@ -131,7 +131,7 @@ local function register_jkl_commands()
         name = "Stop Playback",
         description = "Stop playback and mark K held for slow-play combo",
         default_shortcuts = {"K"},
-        context = {"timeline", "source_view", "timeline_view"},
+        context = {"timeline", "source_monitor", "timeline_monitor"},
         handler = handle_jkl_stop
     })
     -- Assign shortcuts
@@ -668,8 +668,8 @@ local function handle_key_impl(event)
 
     local focused_panel = get_focused_panel_id()
     local panel_active_timeline = panel_is_active("timeline", focused_panel)
-    local panel_active_source = panel_is_active("source_view", focused_panel)
-    local panel_active_tl_view = panel_is_active("timeline_view", focused_panel)
+    local panel_active_source = panel_is_active("source_monitor", focused_panel)
+    local panel_active_tl_view = panel_is_active("timeline_monitor", focused_panel)
     local panel_active_browser = panel_is_active("project_browser", focused_panel)
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
 
@@ -892,7 +892,7 @@ local function handle_key_impl(event)
     -- Mark In/Out controls (source viewer panel)
     local source_has_clip = false
     if panel_active_source then
-        local source_sv = panel_manager.get_sequence_view("source_view")
+        local source_sv = panel_manager.get_sequence_monitor("source_monitor")
         source_has_clip = source_sv and source_sv:has_clip()
     end
     if key == KEY.I and panel_active_source and source_has_clip then

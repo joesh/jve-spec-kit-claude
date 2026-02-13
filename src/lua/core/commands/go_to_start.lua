@@ -40,7 +40,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Stop playback before navigating (NLE convention)
         local pm = require('ui.panel_manager')
-        local sv = pm.get_active_sequence_view()
+        local sv = pm.get_active_sequence_monitor()
         if sv and sv.engine:is_playing() then
             sv.engine:stop()
         end
