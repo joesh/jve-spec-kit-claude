@@ -1762,10 +1762,11 @@ function M.add_selected_to_timeline(command_type, options)
         if source_sv and source_sv.sequence_id == clip.clip_id then
             local viewer_mark_in = source_sv:get_mark_in()
             local viewer_mark_out = source_sv:get_mark_out()
-            if viewer_mark_in ~= nil and viewer_mark_out ~= nil then
-                source_in_mark = viewer_mark_in
-                source_out_mark = viewer_mark_out
-                duration_mark = viewer_mark_out - viewer_mark_in
+            -- Implicit boundary: 0 if mark_in nil, total_frames if mark_out nil
+            if viewer_mark_in ~= nil or viewer_mark_out ~= nil then
+                source_in_mark = viewer_mark_in or 0
+                source_out_mark = viewer_mark_out or source_sv.total_frames
+                duration_mark = source_out_mark - source_in_mark
                 marks_applied = true
             end
         end

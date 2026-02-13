@@ -196,27 +196,67 @@ check("nil mark_in persists after clear+reload", mc_reloaded.mark_in == nil)
 check("nil mark_out persists after clear+reload", mc_reloaded.mark_out == nil)
 
 --------------------------------------------------------------------------------
--- 7. Asserts on non-masterclip
+-- 7. Marks work on any sequence kind (no is_masterclip guard)
 --------------------------------------------------------------------------------
-print("\n--- Non-masterclip guards ---")
-local timeline = Sequence.create("Timeline", "project",
+print("\n--- Marks on timeline (any sequence kind) ---")
+local tl = Sequence.create("Timeline", "project",
     {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
-assert(timeline:save(), "Failed to save timeline")
+assert(tl:save(), "Failed to save timeline")
 
-local ok = pcall(function() timeline:set_in(10) end)
-check("set_in asserts on timeline", not ok)
+tl:set_in(10)
+check("set_in works on timeline", tl:get_in() == 10)
 
-ok = pcall(function() timeline:set_out(10) end)
-check("set_out asserts on timeline", not ok)
+tl:set_out(90)
+check("set_out works on timeline", tl:get_out() == 90)
 
-ok = pcall(function() timeline:get_in() end)
-check("get_in asserts on timeline", not ok)
+tl:clear_marks()
+check("clear_marks works on timeline (in)", tl:get_in() == nil)
+check("clear_marks works on timeline (out)", tl:get_out() == nil)
 
-ok = pcall(function() timeline:get_out() end)
-check("get_out asserts on timeline", not ok)
+--------------------------------------------------------------------------------
+-- 8. Implicit mark boundaries (one mark set → other at begin/end)
+--------------------------------------------------------------------------------
+print("\n--- Implicit mark boundaries ---")
 
-ok = pcall(function() timeline:clear_marks() end)
-check("clear_marks asserts on timeline", not ok)
+-- Use masterclip mc for these tests (100 frames of video)
+mc:clear_marks()
+
+-- has_marks: false when neither set
+check("has_marks false when both nil", mc:has_marks() == false)
+
+-- Only mark_in set → effective_out = total_frames
+mc:set_in(20)
+check("has_marks true with mark_in only", mc:has_marks() == true)
+check("get_effective_in returns mark_in", mc:get_effective_in() == 20)
+check("get_effective_out returns total_frames",
+    mc:get_effective_out(100) == 100,
+    "expected 100, got " .. tostring(mc:get_effective_out(100)))
+check("raw get_out still nil", mc:get_out() == nil)
+
+-- Only mark_out set → effective_in = 0
+mc:clear_marks()
+mc:set_out(80)
+check("has_marks true with mark_out only", mc:has_marks() == true)
+check("get_effective_in returns 0", mc:get_effective_in() == 0)
+check("get_effective_out returns mark_out", mc:get_effective_out(100) == 80)
+check("raw get_in still nil", mc:get_in() == nil)
+
+-- Both set → effective = raw
+mc:set_in(10)
+check("both set: effective_in = mark_in", mc:get_effective_in() == 10)
+check("both set: effective_out = mark_out", mc:get_effective_out(100) == 80)
+
+-- Neither set → effective = full range
+mc:clear_marks()
+check("neither set: effective_in = 0", mc:get_effective_in() == 0)
+check("neither set: effective_out = total_frames", mc:get_effective_out(100) == 100)
+
+-- Error: get_effective_out requires total_frames
+local ok_eff = pcall(function() mc:get_effective_out() end)
+check("get_effective_out asserts without total_frames", not ok_eff)
+
+local ok_eff2 = pcall(function() mc:get_effective_out("bad") end)
+check("get_effective_out asserts on non-number", not ok_eff2)
 
 --------------------------------------------------------------------------------
 -- Summary

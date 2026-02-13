@@ -221,12 +221,9 @@ M.get_sequence_fps_denominator = function()
     return data.state.sequence_frame_rate.fps_denominator
 end
 
--- Marks
-M.get_mark_in = function() return data.state.mark_in_value end
-M.get_mark_out = function() return data.state.mark_out_value end
-M.set_mark_in = function(val) data.state.mark_in_value = val; data.notify_listeners(); core.persist_state_to_db() end
-M.set_mark_out = function(val) data.state.mark_out_value = val; data.notify_listeners(); core.persist_state_to_db() end
-M.clear_marks = function() data.state.mark_in_value=nil; data.state.mark_out_value=nil; data.notify_listeners(); core.persist_state_to_db() end
+-- Marks: read from sequence model (set via undoable mark commands)
+M.get_mark_in = function() return data.sequence and data.sequence.mark_in end
+M.get_mark_out = function() return data.sequence and data.sequence.mark_out end
 
 -- Debug (Proxied to local vars in original? No, original had local debug_layouts. We can move that to view logic or keep it here if views call it.)
 -- Since views call `debug_record...`, we need to support it.
@@ -279,6 +276,7 @@ end
 function M.on_project_change()
     data.state.sequence_id = nil
     data.state.project_id = nil
+    data.sequence = nil
 end
 
 -- Register for project_changed signal

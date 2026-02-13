@@ -45,12 +45,14 @@ local module_aliases = {
     LinkClips = "core.commands.link_clips",
     UnlinkClips = "core.commands.link_clips",
 
-    -- Source viewer mark commands live in source_marks.lua
-    SourceViewerSetMarkIn = "core.commands.source_marks",
-    SourceViewerSetMarkOut = "core.commands.source_marks",
-    SourceViewerGoToMarkIn = "core.commands.source_marks",
-    SourceViewerGoToMarkOut = "core.commands.source_marks",
-    SourceViewerClearMarks = "core.commands.source_marks",
+    -- Unified mark commands live in set_marks.lua
+    SetMarkIn = "core.commands.set_marks",
+    SetMarkOut = "core.commands.set_marks",
+    ClearMarkIn = "core.commands.set_marks",
+    ClearMarkOut = "core.commands.set_marks",
+    ClearMarks = "core.commands.set_marks",
+    GetMarkIn = "core.commands.set_marks",
+    GetMarkOut = "core.commands.set_marks",
 }
 function M.init(database, set_last_error_fn)
     db = database

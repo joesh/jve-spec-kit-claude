@@ -25,6 +25,8 @@ local Sequence = require("models.sequence")
 local monitor_mark_bar = require("ui.monitor_mark_bar")
 local database = require("core.database")
 
+local Signals = require("core.signals")
+
 local SequenceMonitor = {}
 SequenceMonitor.__index = SequenceMonitor
 
@@ -85,6 +87,25 @@ function SequenceMonitor.new(config)
 
     -- Create widgets
     self:_create_widgets()
+
+    -- Re-read marks from model when mark commands execute
+    self._marks_changed_id = Signals.connect("marks_changed", function(sequence_id)
+        if self.sequence and self.sequence_id == sequence_id then
+            local fresh = Sequence.load(sequence_id)
+            if fresh then
+                self.sequence.mark_in = fresh.mark_in
+                self.sequence.mark_out = fresh.mark_out
+            end
+            self:_notify()
+        end
+    end)
+
+    -- Seek when SetPlayhead command targets this sequence
+    self._playhead_changed_id = Signals.connect("playhead_changed", function(sequence_id, frame)
+        if self.sequence_id == sequence_id and type(frame) == "number" then
+            self:seek_to_frame(frame)
+        end
+    end)
 
     return self
 end
@@ -334,53 +355,18 @@ function SequenceMonitor:has_clip()
     return self.sequence_id ~= nil
 end
 
---- Get mark in (video frame). Masterclip only.
+--- Get mark in (video frame). Works on any sequence kind.
 -- @return number|nil
 function SequenceMonitor:get_mark_in()
     if not self.sequence then return nil end
-    if not self.sequence:is_masterclip() then return nil end
     return self.sequence:get_in()
 end
 
---- Get mark out (video frame). Masterclip only.
+--- Get mark out (video frame). Works on any sequence kind.
 -- @return number|nil
 function SequenceMonitor:get_mark_out()
     if not self.sequence then return nil end
-    if not self.sequence:is_masterclip() then return nil end
     return self.sequence:get_out()
-end
-
---- Set mark in at frame (masterclip only).
-function SequenceMonitor:set_mark_in(frame)
-    assert(frame ~= nil, string.format(
-        "SequenceMonitor(%s):set_mark_in: frame is nil", self.view_id))
-    assert(self.sequence and self.sequence:is_masterclip(), string.format(
-        "SequenceMonitor(%s):set_mark_in: no masterclip loaded (seq=%s)",
-        self.view_id, tostring(self.sequence_id)))
-    self.sequence:set_in(math.floor(frame))
-    self:_notify()
-end
-
---- Set mark out at frame (masterclip only).
-function SequenceMonitor:set_mark_out(frame)
-    assert(frame ~= nil, string.format(
-        "SequenceMonitor(%s):set_mark_out: frame is nil", self.view_id))
-    assert(self.sequence and self.sequence:is_masterclip(), string.format(
-        "SequenceMonitor(%s):set_mark_out: no masterclip loaded (seq=%s)",
-        self.view_id, tostring(self.sequence_id)))
-    self.sequence:set_out(math.floor(frame))
-    self:_notify()
-end
-
---- Clear marks (masterclip only). Sets sequence mark_in/mark_out to nil.
-function SequenceMonitor:clear_marks()
-    assert(self.sequence and self.sequence:is_masterclip(), string.format(
-        "SequenceMonitor(%s):clear_marks: no masterclip loaded (seq=%s)",
-        self.view_id, tostring(self.sequence_id)))
-
-    self.sequence:clear_marks()
-
-    self:_notify()
 end
 
 --- Set playhead (clamped, schedules persist for masterclips).
@@ -498,6 +484,14 @@ function SequenceMonitor:destroy()
     self.engine:stop()
     media_cache.destroy_context(self.media_context_id)
     self._listeners = {}
+    if self._marks_changed_id then
+        Signals.disconnect(self._marks_changed_id)
+        self._marks_changed_id = nil
+    end
+    if self._playhead_changed_id then
+        Signals.disconnect(self._playhead_changed_id)
+        self._playhead_changed_id = nil
+    end
 end
 
 return SequenceMonitor

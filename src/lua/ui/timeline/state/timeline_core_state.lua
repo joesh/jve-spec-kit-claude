@@ -26,6 +26,7 @@ local json = require("dkjson")
 local ui_constants = require("core.ui_constants")
 local command_manager = require("core.command_manager")
 local Command = require("command")
+local Signals = require("core.signals")
 
 local persist_timer = nil
 local persist_dirty = false
@@ -161,15 +162,7 @@ local function flush_state_to_db()
     })
     command_manager.execute(viewport_cmd)
 
-    -- Persist marks
-    local marks_cmd = Command.create("SetMarks", project_id)
-    marks_cmd:set_parameters({
-        project_id = project_id,
-        sequence_id = sequence_id,
-        mark_in = data.state.mark_in_value,
-        mark_out = data.state.mark_out_value,
-    })
-    command_manager.execute(marks_cmd)
+    -- Marks: persisted via undoable mark commands, not flush
 
     -- Serialize and persist selection
     local selected_ids = {}
@@ -298,6 +291,7 @@ function M.init(sequence_id, project_id)
 
     data.state.project_id = sequence.project_id
     data.state.sequence_frame_rate = sequence.frame_rate
+    data.sequence = sequence  -- Model reference for mark getters
 
     assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
         string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(sequence_id)))
@@ -347,9 +341,7 @@ function M.init(sequence_id, project_id)
         end
     end
 
-    -- Marks from sequence model
-    data.state.mark_in_value = sequence.mark_in
-    data.state.mark_out_value = sequence.mark_out
+    -- Marks: read directly from data.sequence (no cache copy)
 
     -- Viewport from sequence model
     data.state.viewport_start_time = sequence.viewport_start_time
@@ -419,5 +411,26 @@ function M.reload_clips(target_sequence_id, opts)
     data.notify_listeners()
     return true
 end
+
+-- Re-read marks from DB when a mark command executes (or undoes)
+Signals.connect("marks_changed", function(sequence_id)
+    if data.sequence and data.state.sequence_id == sequence_id then
+        local Sequence = require("models.sequence")
+        local fresh = Sequence.load(sequence_id)
+        if fresh then
+            data.sequence.mark_in = fresh.mark_in
+            data.sequence.mark_out = fresh.mark_out
+        end
+        data.notify_listeners()
+    end
+end)
+
+-- Update playhead when SetPlayhead command fires
+Signals.connect("playhead_changed", function(sequence_id, frame)
+    if data.state.sequence_id == sequence_id and type(frame) == "number" then
+        data.state.playhead_position = frame
+        data.notify_listeners()
+    end
+end)
 
 return M

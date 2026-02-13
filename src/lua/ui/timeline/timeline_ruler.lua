@@ -104,10 +104,12 @@ function M.create(widget, state_module)
             local edge_color = colors.mark_range_edge or colors.playhead or "#ff6b6b"
             local handle_width = 2
 
-            -- Fill between marks
-            if mark_in_frame and mark_out_frame and mark_out_frame > mark_in_frame then
-                local visible_start = math.max(mark_in_frame, viewport_start_frames)
-                local visible_end = math.min(mark_out_frame, viewport_end_frames)
+            -- Fill between marks (implicit boundary: 0 if mark_in nil, viewport_end if mark_out nil)
+            local eff_in = mark_in_frame or 0
+            local eff_out = mark_out_frame or viewport_end_frames
+            if eff_out > eff_in then
+                local visible_start = math.max(eff_in, viewport_start_frames)
+                local visible_end = math.min(eff_out, viewport_end_frames)
                 if visible_end > visible_start then
                     local start_x = state_module.time_to_pixel(visible_start, width)
                     local end_x = state_module.time_to_pixel(visible_end, width)

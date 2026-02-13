@@ -75,17 +75,21 @@ function SequenceInspectable:set(field, value)
         self._record[field] = value
     end
 
-    if timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id() == self.sequence_id then
-        if field == "mark_in_time" then
-            timeline_state.set_mark_in(value)
-        elseif field == "mark_out_time" then
-            timeline_state.set_mark_out(value)
-        elseif field == "playhead_value" then
-            timeline_state.set_playhead_position(value or 0)
-        elseif field == "viewport_start_value" then
-            timeline_state.set_viewport_start_time(value or 0)
-        elseif field == "viewport_duration" then
-            timeline_state.set_viewport_duration(value or 0)
+    -- Dispatch signal-emitting commands so all views update
+    if field == "mark_in_time" then
+        command_manager.execute("SetMarkIn", {sequence_id = self.sequence_id, frame = value, project_id = self.project_id})
+    elseif field == "mark_out_time" then
+        command_manager.execute("SetMarkOut", {sequence_id = self.sequence_id, frame = value, project_id = self.project_id})
+    elseif field == "playhead_value" then
+        command_manager.execute("SetPlayhead", {sequence_id = self.sequence_id, playhead_position = value or 0, project_id = self.project_id})
+    elseif field == "viewport_start_value" or field == "viewport_duration" then
+        -- Viewport commands don't have signals yet — use direct setter for now
+        if timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id() == self.sequence_id then
+            if field == "viewport_start_value" then
+                timeline_state.set_viewport_start_time(value or 0)
+            else
+                timeline_state.set_viewport_duration(value or 0)
+            end
         end
     end
 

@@ -95,9 +95,12 @@ function M.create(widget, state_module)
             local edge_color = colors.mark_range_edge or "#ff6b6b"
             local handle_width = 2
 
-            if mark_in and mark_out and mark_out > mark_in then
-                local start_x = math.floor((mark_in / total_duration) * width)
-                local end_x = math.floor((mark_out / total_duration) * width)
+            -- Fill (implicit boundary: 0 if mark_in nil, total_duration if mark_out nil)
+            local eff_in = mark_in or 0
+            local eff_out = mark_out or total_duration
+            if eff_out > eff_in then
+                local start_x = math.floor((eff_in / total_duration) * width)
+                local end_x = math.floor((eff_out / total_duration) * width)
                 if end_x <= start_x then end_x = start_x + 1 end
                 timeline.add_rect(scrollbar.widget, start_x, 0, math.max(1, end_x - start_x), M.SCROLLBAR_HEIGHT, fill_color)
             end

@@ -167,10 +167,21 @@ package.loaded["core.mixer"] = {
     end,
 }
 
--- Mock signals
+-- Mock signals (captures handlers for manual triggering)
+local signal_handlers = {}
 package.loaded["core.signals"] = {
-    connect = function() end,
-    emit = function() end,
+    connect = function(name, handler)
+        signal_handlers[name] = signal_handlers[name] or {}
+        local id = #signal_handlers[name] + 1
+        signal_handlers[name][id] = handler
+        return id
+    end,
+    disconnect = function() end,
+    emit = function(name, ...)
+        for _, handler in ipairs(signal_handlers[name] or {}) do
+            handler(...)
+        end
+    end,
 }
 
 --------------------------------------------------------------------------------
@@ -438,9 +449,10 @@ do
     print("  ok")
 end
 
--- ─── Test 9: Marks on masterclip ───
+-- ─── Test 9: Marks via signal on masterclip ───
 print("\n--- marks ---")
 do
+    local Sequence = require("models.sequence")
     local view = SequenceMonitor.new({ view_id = "test_marks" })
     timer_callbacks = {}
     view:load_sequence(mc_id)
@@ -451,15 +463,26 @@ do
     assert(mi == nil, "mark_in initially nil, got " .. tostring(mi))
     assert(mo == nil, "mark_out initially nil, got " .. tostring(mo))
 
-    -- Set marks
-    view:set_mark_in(10)
-    assert(view:get_mark_in() == 10, "mark_in updated")
+    -- Update marks in DB + trigger signal (simulates what SetMarkIn command does)
+    local seq = Sequence.load(mc_id)
+    seq.mark_in = 10
+    seq:save()
+    local Signals = package.loaded["core.signals"]
+    Signals.emit("marks_changed", mc_id)
+    assert(view:get_mark_in() == 10, "mark_in updated via signal, got " .. tostring(view:get_mark_in()))
 
-    view:set_mark_out(80)
-    assert(view:get_mark_out() == 80, "mark_out updated")
+    seq = Sequence.load(mc_id)
+    seq.mark_out = 80
+    seq:save()
+    Signals.emit("marks_changed", mc_id)
+    assert(view:get_mark_out() == 80, "mark_out updated via signal, got " .. tostring(view:get_mark_out()))
 
-    -- Clear marks (resets to nil)
-    view:clear_marks()
+    -- Clear marks
+    seq = Sequence.load(mc_id)
+    seq.mark_in = nil
+    seq.mark_out = nil
+    seq:save()
+    Signals.emit("marks_changed", mc_id)
     assert(view:get_mark_in() == nil, "mark_in cleared to nil")
     assert(view:get_mark_out() == nil, "mark_out cleared to nil")
 
@@ -467,22 +490,26 @@ do
     print("  ok")
 end
 
--- ─── Test 10: Marks nil for timeline ───
-print("\n--- no marks for timeline ---")
+-- ─── Test 10: Marks work on timeline (no is_masterclip guard) ───
+print("\n--- marks on timeline ---")
 do
+    local Sequence = require("models.sequence")
     local view = SequenceMonitor.new({ view_id = "test_tl_marks" })
     timer_callbacks = {}
     view:load_sequence("timeline1")
 
-    assert(view:get_mark_in() == nil, "no mark_in for timeline")
-    assert(view:get_mark_out() == nil, "no mark_out for timeline")
+    assert(view:get_mark_in() == nil, "no mark_in initially")
+    assert(view:get_mark_out() == nil, "no mark_out initially")
 
-    expect_assert(function() view:set_mark_in(10) end,
-        "set_mark_in on timeline")
-    expect_assert(function() view:set_mark_out(80) end,
-        "set_mark_out on timeline")
-    expect_assert(function() view:clear_marks() end,
-        "clear_marks on timeline")
+    -- Set marks via DB + signal (marks now work on any sequence kind)
+    local seq = Sequence.load("timeline1")
+    seq.mark_in = 5
+    seq.mark_out = 50
+    seq:save()
+    local Signals = package.loaded["core.signals"]
+    Signals.emit("marks_changed", "timeline1")
+    assert(view:get_mark_in() == 5, "timeline mark_in via signal, got " .. tostring(view:get_mark_in()))
+    assert(view:get_mark_out() == 50, "timeline mark_out via signal, got " .. tostring(view:get_mark_out()))
 
     view:destroy()
     print("  ok")

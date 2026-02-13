@@ -29,7 +29,7 @@ end
 
 local timeline_state = {}
 local timeline_moves = {}
-local timeline_marks = { in_calls = 0, out_calls = 0, last_in = nil, last_out = nil }
+local timeline_marks = { last_in = nil, last_out = nil }
 
 function timeline_state.get_sequence_frame_rate()
     return 24
@@ -56,19 +56,8 @@ function timeline_state.get_mark_out()
     return timeline_marks.last_out
 end
 
-function timeline_state.set_mark_in(value)
-    timeline_marks.in_calls = timeline_marks.in_calls + 1
-    timeline_marks.last_in = value
-end
-
-function timeline_state.set_mark_out(value)
-    timeline_marks.out_calls = timeline_marks.out_calls + 1
-    timeline_marks.last_out = value
-end
-
-function timeline_state.clear_marks()
-    timeline_marks.cleared = true
-end
+-- Marks now go through commands (SetMarkIn, SetMarkOut, ClearMarks)
+-- No mock setters needed — mark dispatch is verified via command_manager_stub.executed_commands
 
 function timeline_state.get_clips()
     return {}
@@ -174,7 +163,7 @@ local function reset_environment()
     command_manager_stub.executed_commands = {}
     timeline_state.playhead = 100
     timeline_moves = {}
-    timeline_marks = { in_calls = 0, out_calls = 0, last_in = nil, last_out = nil }
+    timeline_marks = { last_in = nil, last_out = nil }
     focus_manager.set_focused_panel(nil)
     keyboard_shortcuts.init(timeline_state, command_manager_stub, nil, timeline_panel_stub)
 end
@@ -218,7 +207,12 @@ handled = keyboard_shortcuts.handle_key({
     focus_widget_is_text_input = true,
 })
 assert_false(handled, "Character keys should pass through when typing in a text field")
-assert_equal(timeline_marks.in_calls, 0, "Timeline mark-in should not update while typing")
+-- Marks now dispatched via commands — verify no SetMarkIn was executed
+local found_mark_in = false
+for _, cmd in ipairs(command_manager_stub.executed_commands) do
+    if cmd == "SetMarkIn" then found_mark_in = true; break end
+end
+assert_false(found_mark_in, "SetMarkIn should not dispatch while typing in text field")
 
 -- Test 4: Undo is still handled as a global shortcut
 reset_environment()

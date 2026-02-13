@@ -57,8 +57,6 @@ local function fresh_state()
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},
-        mark_in_value = nil,
-        mark_out_value = nil,
 
         -- Interaction
         dragging_playhead = false,
@@ -84,6 +82,7 @@ M.dimensions = {
 
 function M.reset()
     M.state = fresh_state()
+    M.sequence = nil
     listeners = {}
     notify_timer = nil
 end

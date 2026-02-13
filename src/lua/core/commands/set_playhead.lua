@@ -1,7 +1,8 @@
---- SetPlayhead Command - Persist playhead position
+--- SetPlayhead Command - Persist playhead position + emit signal
 --
 -- @file set_playhead.lua
 local M = {}
+local Signals = require("core.signals")
 
 local SPEC = {
     undoable = false,
@@ -15,15 +16,20 @@ local SPEC = {
 function M.register(executors, undoers, db)
     executors["SetPlayhead"] = function(command)
         local args = command:get_all_parameters()
+        assert(args.sequence_id and args.sequence_id ~= "",
+            "SetPlayhead: sequence_id is required")
+        assert(type(args.playhead_position) == "number",
+            "SetPlayhead: playhead_position must be a number")
+
         local Sequence = require("models.sequence")
         local sequence = Sequence.load(args.sequence_id)
-        if not sequence then
-            return { success = false, error_message = "SetPlayhead: sequence not found" }
-        end
+        assert(sequence,
+            "SetPlayhead: sequence not found: " .. tostring(args.sequence_id))
+
         sequence.playhead_position = args.playhead_position
-        if not sequence:save() then
-            return { success = false, error_message = "SetPlayhead: failed to save" }
-        end
+        assert(sequence:save(), "SetPlayhead: failed to save")
+
+        Signals.emit("playhead_changed", args.sequence_id, args.playhead_position)
         return { success = true }
     end
 

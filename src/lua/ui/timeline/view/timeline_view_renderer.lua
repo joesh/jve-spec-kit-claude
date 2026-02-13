@@ -998,9 +998,13 @@ function M.render(view)
 
     -- Mark In/Out highlight (on top of clips, behind playhead)
     local function draw_mark_overlay()
-        if not mark_in or not mark_out or mark_out <= mark_in then return end
-        local visible_start = math.max(mark_in, viewport_start)
-        local visible_end = math.min(mark_out, viewport_end)
+        if not mark_in and not mark_out then return end
+        -- Implicit boundary: 0 if mark_in nil, viewport_end if mark_out nil
+        local eff_in = mark_in or 0
+        local eff_out = mark_out or viewport_end
+        if eff_out <= eff_in then return end
+        local visible_start = math.max(eff_in, viewport_start)
+        local visible_end = math.min(eff_out, viewport_end)
         if visible_end <= visible_start then return end
 
         local start_x = state_module.time_to_pixel(visible_start, width)

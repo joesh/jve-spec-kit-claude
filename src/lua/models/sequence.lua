@@ -503,49 +503,60 @@ end
 -- mark_out_frame columns). Stream clips keep source_in=0, source_out=full
 -- always — marks do NOT constrain the rendering view.
 
---- Set mark-in point (video frame units). Masterclip only.
+--- Set mark-in point (video frame units).
 -- @param frame number Frame position in video timebase
 function Sequence:set_in(frame)
     assert(type(frame) == "number", "Sequence:set_in: frame must be a number")
-    assert(self:is_masterclip(), string.format(
-        "Sequence:set_in: sequence %s is not a masterclip", tostring(self.id)))
     self.mark_in = frame
     self:save()
 end
 
---- Set mark-out point (video frame units). Masterclip only.
+--- Set mark-out point (video frame units).
 -- @param frame number Frame position in video timebase
 function Sequence:set_out(frame)
     assert(type(frame) == "number", "Sequence:set_out: frame must be a number")
-    assert(self:is_masterclip(), string.format(
-        "Sequence:set_out: sequence %s is not a masterclip", tostring(self.id)))
     self.mark_out = frame
     self:save()
 end
 
---- Get mark-in point (video frame units, nil = no mark). Masterclip only.
+--- Get mark-in point (video frame units, nil = no mark).
 -- @return number|nil
 function Sequence:get_in()
-    assert(self:is_masterclip(), string.format(
-        "Sequence:get_in: sequence %s is not a masterclip", tostring(self.id)))
     return self.mark_in
 end
 
---- Get mark-out point (video frame units, nil = no mark). Masterclip only.
+--- Get mark-out point (video frame units, nil = no mark).
 -- @return number|nil
 function Sequence:get_out()
-    assert(self:is_masterclip(), string.format(
-        "Sequence:get_out: sequence %s is not a masterclip", tostring(self.id)))
     return self.mark_out
 end
 
---- Clear both marks. Masterclip only.
+--- Clear both marks.
 function Sequence:clear_marks()
-    assert(self:is_masterclip(), string.format(
-        "Sequence:clear_marks: sequence %s is not a masterclip", tostring(self.id)))
     self.mark_in = nil
     self.mark_out = nil
     self:save()
+end
+
+--- Check if any mark is set.
+-- @return boolean
+function Sequence:has_marks()
+    return self.mark_in ~= nil or self.mark_out ~= nil
+end
+
+--- Get effective mark-in (0 if unset).
+-- @return number
+function Sequence:get_effective_in()
+    return self.mark_in or 0
+end
+
+--- Get effective mark-out (total_frames if unset).
+-- @param total_frames number The sequence length (exclusive end)
+-- @return number
+function Sequence:get_effective_out(total_frames)
+    assert(type(total_frames) == "number",
+        "Sequence:get_effective_out: total_frames must be a number")
+    return self.mark_out or total_frames
 end
 
 -- =============================================================================

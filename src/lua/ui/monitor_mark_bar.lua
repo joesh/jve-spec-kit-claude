@@ -102,13 +102,17 @@ function M.create(widget, config)
         local mark_in = get_mark_in()
         local mark_out = get_mark_out()
 
-        -- Mark range fill
-        if mark_in and mark_out and mark_out > mark_in then
-            local start_x = frame_to_x(mark_in, width)
-            local end_x = frame_to_x(mark_out, width)
-            if end_x <= start_x then end_x = start_x + 1 end
-            local region_width = math.max(1, end_x - start_x)
-            timeline.add_rect(bar.widget, start_x, 0, region_width, M.BAR_HEIGHT, MARK_RANGE_FILL)
+        -- Mark range fill (implicit boundary: 0 if mark_in nil, total_frames if mark_out nil)
+        if mark_in or mark_out then
+            local eff_in = mark_in or 0
+            local eff_out = mark_out or state.total_frames
+            if eff_out > eff_in then
+                local start_x = frame_to_x(eff_in, width)
+                local end_x = frame_to_x(eff_out, width)
+                if end_x <= start_x then end_x = start_x + 1 end
+                local region_width = math.max(1, end_x - start_x)
+                timeline.add_rect(bar.widget, start_x, 0, region_width, M.BAR_HEIGHT, MARK_RANGE_FILL)
+            end
         end
 
         -- Mark edge handles

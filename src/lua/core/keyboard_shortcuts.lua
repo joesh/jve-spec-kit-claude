@@ -856,79 +856,71 @@ local function handle_key_impl(event)
         end
     end
 
-    -- Mark In/Out controls (timeline panel)
-    if key == KEY.I and timeline_state and panel_active_timeline then
-        if not modifier_meta and not modifier_alt then
-            if modifier_shift then
-                local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
-                if mark_in then
-                    timeline_state.set_playhead_position(mark_in)
-                end
-            else
-                local playhead = assert(timeline_state.get_playhead_position and timeline_state.get_playhead_position(),
-                    "keyboard_shortcuts.handle_key: get_playhead_position returned nil for mark_in")
-                timeline_state.set_mark_in(playhead)
-            end
-            return true
-        end
-    end
-
-    if key == KEY.O and timeline_state and panel_active_timeline then
-        if not modifier_meta and not modifier_alt then
-            if modifier_shift then
-                local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
-                if mark_out then
-                    timeline_state.set_playhead_position(mark_out)
-                end
-            else
-                local playhead = assert(timeline_state.get_playhead_position and timeline_state.get_playhead_position(),
-                    "keyboard_shortcuts.handle_key: get_playhead_position returned nil for mark_out")
-                timeline_state.set_mark_out(playhead)
-            end
-            return true
-        end
-    end
-
-    -- Mark In/Out controls (source viewer panel)
-    local source_has_clip = false
-    if panel_active_source then
+    -- Mark In/Out controls (unified: same commands for timeline + source panels)
+    -- Resolve active sequence_id + playhead from focused panel
+    local mark_seq_id, mark_playhead
+    if panel_active_timeline and timeline_state then
+        mark_seq_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+        mark_playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
+    elseif panel_active_source then
         local source_sv = panel_manager.get_sequence_monitor("source_monitor")
-        source_has_clip = source_sv and source_sv:has_clip()
-    end
-    if key == KEY.I and panel_active_source and source_has_clip then
-        if not modifier_meta and not modifier_alt then
-            if modifier_shift then
-                execute_command("SourceViewerGoToMarkIn", {})
-            else
-                execute_command("SourceViewerSetMarkIn", {})
-            end
-            return true
+        if source_sv and source_sv:has_clip() then
+            mark_seq_id = source_sv.sequence_id
+            mark_playhead = source_sv.playhead
         end
     end
 
-    if key == KEY.O and panel_active_source and source_has_clip then
+    if key == KEY.I and mark_seq_id then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
-                execute_command("SourceViewerGoToMarkOut", {})
+                -- GoTo mark in: read mark, set playhead via command (signal drives UI)
+                local r_mi = execute_command("GetMarkIn", {sequence_id = mark_seq_id})
+                local frame = r_mi and r_mi.result_data and r_mi.result_data.mark_in
+                if frame then
+                    execute_command("SetPlayhead", {sequence_id = mark_seq_id, playhead_position = frame})
+                end
             else
-                execute_command("SourceViewerSetMarkOut", {})
+                assert(mark_playhead, "keyboard_shortcuts: playhead nil for SetMarkIn")
+                execute_command("SetMarkIn", {sequence_id = mark_seq_id, frame = mark_playhead})
             end
             return true
         end
-    end
-
-    if key == KEY.X and panel_active_source and source_has_clip then
         if modifier_alt and not modifier_meta then
-            execute_command("SourceViewerClearMarks", {})
+            execute_command("ClearMarkIn", {sequence_id = mark_seq_id})
+            return true
+        end
+    end
+
+    if key == KEY.O and mark_seq_id then
+        if not modifier_meta and not modifier_alt then
+            if modifier_shift then
+                -- GoTo mark out: read mark, set playhead via command (signal drives UI)
+                local r_mo = execute_command("GetMarkOut", {sequence_id = mark_seq_id})
+                local frame = r_mo and r_mo.result_data and r_mo.result_data.mark_out
+                if frame then
+                    execute_command("SetPlayhead", {sequence_id = mark_seq_id, playhead_position = frame})
+                end
+            else
+                assert(mark_playhead, "keyboard_shortcuts: playhead nil for SetMarkOut")
+                execute_command("SetMarkOut", {sequence_id = mark_seq_id, frame = mark_playhead})
+            end
+            return true
+        end
+        if modifier_alt and not modifier_meta then
+            execute_command("ClearMarkOut", {sequence_id = mark_seq_id})
+            return true
+        end
+    end
+
+    if key == KEY.X and mark_seq_id then
+        if modifier_alt and not modifier_meta then
+            execute_command("ClearMarks", {sequence_id = mark_seq_id})
             return true
         end
     end
 
     if key == KEY.X and timeline_state and panel_active_timeline then
-        if modifier_alt and not modifier_meta then
-            timeline_state.clear_marks()
-            return true
-        elseif not modifier_meta and not modifier_alt then
+        if not modifier_meta and not modifier_alt then
             assert(timeline_state.get_playhead_position, "keyboard_shortcuts.handle_key: timeline_state missing get_playhead_position")
             local playhead = timeline_state.get_playhead_position()
             assert(timeline_state.get_clips, "keyboard_shortcuts.handle_key: timeline_state missing get_clips")
@@ -961,8 +953,9 @@ local function handle_key_impl(event)
             if best_clip then
                 local clip_start = best_clip.timeline_start or best_clip.start_value
                 local clip_out = clip_start + best_clip.duration
-                timeline_state.set_mark_in(clip_start)
-                timeline_state.set_mark_out(clip_out)
+                local seq_id = timeline_state.get_sequence_id()
+                execute_command("SetMarkIn", {sequence_id = seq_id, frame = clip_start})
+                execute_command("SetMarkOut", {sequence_id = seq_id, frame = clip_out})
             end
             return true
         end
