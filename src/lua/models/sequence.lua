@@ -742,7 +742,7 @@ end
 -- Returns max(timeline_start + duration) across all clips on all tracks.
 -- @return integer  0 if no clips
 function Sequence:compute_content_end()
-    local database = require("core.database")
+    local database = require("core.database") -- luacheck: ignore 431
     assert(database.has_connection(),
         "Sequence:compute_content_end: no database connection")
     local db = database.get_connection()

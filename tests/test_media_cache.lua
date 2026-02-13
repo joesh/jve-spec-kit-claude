@@ -135,10 +135,11 @@ assert(not media_cache.contexts["explicit_ctx"], "Context should be gone after d
 
 -- Duplicate create asserts
 media_cache.create_context("dup_ctx")
-ok, err = pcall(function()
+local ok2, err2 = pcall(function()
     media_cache.create_context("dup_ctx")
 end)
-assert(not ok, "Duplicate create should assert")
+assert(not ok2, "Duplicate create should assert")
+assert(err2, "Should have error message")  -- use err2
 media_cache.destroy_context("dup_ctx")
 
 -- Destroy non-existent context asserts (catches double-destroy bugs)

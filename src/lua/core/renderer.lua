@@ -11,7 +11,6 @@
 --
 -- @file renderer.lua
 
-local logger = require("core.logger")
 local media_cache = require("core.media.media_cache")
 local Sequence = require("models.sequence")
 

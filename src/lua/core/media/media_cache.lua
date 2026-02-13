@@ -17,6 +17,9 @@
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
 
+-- Forward declarations for functions used before definition
+local release_context_caches
+
 local M = {
     -- LRU reader pool: { [file_path] = pool_entry }
     -- pool_entry = { video_asset, video_reader, audio_asset, audio_reader, info,
@@ -327,8 +330,7 @@ end
 -- Internal: Release Lua-side caches for a context
 --------------------------------------------------------------------------------
 
--- Forward declaration (used by destroy_context before definition)
-function release_context_caches(ctx)
+release_context_caches = function(ctx)
     -- Release cached video frames
     for idx, frame in pairs(ctx.video_cache.frames) do
         if frame then

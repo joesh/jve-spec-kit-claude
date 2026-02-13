@@ -111,7 +111,8 @@ package.loaded["core.mixer"] = {
         -- Default: one audio clip for frames 0-99
         if frame >= 0 and frame < 100 then
             return {
-                { path = "/test.mov", source_offset_us = 0, volume = 1.0,
+                { path = "/test.mov", source_offset_us = 0, seek_us = 0,
+                  speed_ratio = 1.0, volume = 1.0,
                   duration_us = 4166666, clip_start_us = 0,
                   clip_end_us = 4166666, clip_id = "aclip1" },
             }, { aclip1 = true }
@@ -218,11 +219,11 @@ print("=== test_playback_engine.lua ===")
 -- ─── Test 1: Constructor validates config ───
 print("\n--- constructor validation ---")
 do
-    local ok, err = pcall(PlaybackEngine.new, {})
+    local ok, _ = pcall(PlaybackEngine.new, {})
     assert(not ok, "missing media_context_id should assert")
     print("  missing context_id: asserts ok")
 
-    ok, err = pcall(PlaybackEngine.new, {
+    ok, _ = pcall(PlaybackEngine.new, {
         media_context_id = "x",
         on_show_frame = function() end,
         on_show_gap = function() end,
@@ -236,7 +237,7 @@ end
 -- ─── Test 2: load_sequence sets fps and total_frames ───
 print("\n--- load_sequence ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -274,7 +275,7 @@ end
 -- ─── Test 4: shuttle speed ramping and unwinding ───
 print("\n--- shuttle speed ramp ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -312,7 +313,7 @@ end
 -- ─── Test 5: boundary stop in play mode ───
 print("\n--- boundary stop (play mode) ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 5)
     engine:set_position_silent(3)
@@ -330,7 +331,7 @@ end
 -- ─── Test 6: boundary latch in shuttle mode + unlatch ───
 print("\n--- boundary latch (shuttle mode) ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 5)
     engine:set_position_silent(3)
@@ -359,7 +360,7 @@ end
 -- ─── Test 7: audio following (video follows audio time) ───
 print("\n--- audio following ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -389,7 +390,7 @@ end
 -- ─── Test 8: stuckness detection → frame-based advance ───
 print("\n--- stuckness detection ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -464,7 +465,7 @@ end
 -- ─── Test 11: seek while playing ───
 print("\n--- seek while playing ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -502,7 +503,7 @@ end
 -- ─── Test 13: audio ownership ───
 print("\n--- audio ownership ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -519,7 +520,7 @@ end
 -- ─── Test 14: slow_play ───
 print("\n--- slow_play ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -536,7 +537,7 @@ end
 -- ─── Test 15: tick generation prevents stale callbacks ───
 print("\n--- tick generation ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -557,7 +558,7 @@ end
 -- ─── Test 16: reverse shuttle → latch at start boundary ───
 print("\n--- reverse latch at start ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
     engine:set_position_silent(1)
@@ -576,7 +577,7 @@ end
 -- ─── Test 17: get_status ───
 print("\n--- get_status ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -599,7 +600,7 @@ end
 -- ─── Test 18: has_source ───
 print("\n--- has_source ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     assert(not engine:has_source(), "no source before load")
 
     engine:load_sequence("seq1", 100)
@@ -620,7 +621,7 @@ end
 -- ─── Test 19: seek without sequence loaded → assert ───
 print("\n--- seek without sequence asserts ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     expect_assert(function() engine:seek(0) end,
         "seek without sequence")
     print("  ok")
@@ -629,7 +630,7 @@ end
 -- ─── Test 20: shuttle with dir=0 → assert ───
 print("\n--- shuttle dir=0 asserts ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
     expect_assert(function() engine:shuttle(0) end,
@@ -640,7 +641,7 @@ end
 -- ─── Test 21: seek with nil frame → assert ───
 print("\n--- seek nil frame asserts ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
     expect_assert(function() engine:seek(nil) end,
@@ -651,7 +652,7 @@ end
 -- ─── Test 22: seek with negative frame → assert ───
 print("\n--- seek negative frame asserts ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
     expect_assert(function() engine:seek(-1) end,
@@ -662,7 +663,7 @@ end
 -- ─── Test 23: slow_play with dir=0 → assert ───
 print("\n--- slow_play dir=0 asserts ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
     expect_assert(function() engine:slow_play(0) end,
@@ -673,7 +674,7 @@ end
 -- ─── Test 24: load_sequence with empty string → assert ───
 print("\n--- load_sequence empty string asserts ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     expect_assert(function() engine:load_sequence("") end,
         "load_sequence empty string")
     print("  ok")
@@ -686,7 +687,7 @@ end
 -- ─── Test 25: total_frames = 1 (single frame) ───
 print("\n--- single frame sequence ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 1)
 
@@ -703,7 +704,7 @@ end
 -- ─── Test 26: play when already playing → no-op ───
 print("\n--- play when already playing ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -723,7 +724,7 @@ end
 -- ─── Test 27: stop when already stopped → no error ───
 print("\n--- stop when already stopped ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -736,7 +737,7 @@ end
 -- ─── Test 28: load_sequence while playing → stops first ───
 print("\n--- load_sequence while playing ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
@@ -767,7 +768,7 @@ end
 -- ─── Test 30: seek to last frame (end boundary, parked) ───
 print("\n--- seek to last frame ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 

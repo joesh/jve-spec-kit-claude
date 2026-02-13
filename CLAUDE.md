@@ -33,11 +33,14 @@ pgrep -x JVEEditor || rm -f "$HOME/Documents/JVE Projects/Untitled Project.jvp-s
 ```
 
 ## Commands
-make -j4            # Builds with warnings, LuaJIT linking issues
+make -j4            # Builds C++ AND runs luacheck on all Lua files
 make clean          # Clean build artifacts
 
 # Run the application
 ./build/bin/JVEEditor      # Launches, shows 3-panel layout, timeline panel
+
+## Dev Cycle
+After any Lua change: `make -j4` to run luacheck (0 warnings required), then `./tests/run_lua_tests_all.sh`.
 
 ## Running Tests
 ```bash
