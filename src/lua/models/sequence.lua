@@ -497,129 +497,55 @@ function Sequence:samples_to_frame(samples)
 end
 
 -- =============================================================================
--- STREAM MARK METHODS (set/get source_in/source_out on stream clips)
+-- MARK METHODS (read/write sequence-level mark_in/mark_out)
 -- =============================================================================
+-- Marks are UI metadata stored on the sequence record (mark_in_frame,
+-- mark_out_frame columns). Stream clips keep source_in=0, source_out=full
+-- always — marks do NOT constrain the rendering view.
 
---- Set in point for all streams in sync
--- Asserts if called on non-masterclip sequence
--- Video stream gets frame value; audio streams get converted sample value
+--- Set mark-in point (video frame units). Masterclip only.
 -- @param frame number Frame position in video timebase
-function Sequence:set_all_streams_in(frame)
-    assert(type(frame) == "number", "Sequence:set_all_streams_in: frame must be a number")
+function Sequence:set_in(frame)
+    assert(type(frame) == "number", "Sequence:set_in: frame must be a number")
     assert(self:is_masterclip(), string.format(
-        "Sequence:set_all_streams_in: sequence %s is not a masterclip", tostring(self.id)))
-
-    local video = self:video_stream()
-    local audio_streams = self:audio_streams()
-
-    -- Must have at least one stream
-    assert(video or #audio_streams > 0, string.format(
-        "Sequence:set_all_streams_in: masterclip %s has no streams", tostring(self.id)))
-
-    if video then
-        video.source_in = frame
-        video:save()
-    end
-
-    local samples = self:frame_to_samples(frame)
-    if samples then
-        for _, audio in ipairs(audio_streams) do
-            audio.source_in = samples
-            audio:save()
-        end
-    end
-
-    -- Invalidate cache since we modified stream clips
-    self:invalidate_stream_cache()
+        "Sequence:set_in: sequence %s is not a masterclip", tostring(self.id)))
+    self.mark_in = frame
+    self:save()
 end
 
---- Set out point for all streams in sync
--- Asserts if called on non-masterclip sequence
--- Video stream gets frame value; audio streams get converted sample value
+--- Set mark-out point (video frame units). Masterclip only.
 -- @param frame number Frame position in video timebase
-function Sequence:set_all_streams_out(frame)
-    assert(type(frame) == "number", "Sequence:set_all_streams_out: frame must be a number")
+function Sequence:set_out(frame)
+    assert(type(frame) == "number", "Sequence:set_out: frame must be a number")
     assert(self:is_masterclip(), string.format(
-        "Sequence:set_all_streams_out: sequence %s is not a masterclip", tostring(self.id)))
-
-    local video = self:video_stream()
-    local audio_streams = self:audio_streams()
-
-    -- Must have at least one stream
-    assert(video or #audio_streams > 0, string.format(
-        "Sequence:set_all_streams_out: masterclip %s has no streams", tostring(self.id)))
-
-    if video then
-        video.source_out = frame
-        video:save()
-    end
-
-    local samples = self:frame_to_samples(frame)
-    if samples then
-        for _, audio in ipairs(audio_streams) do
-            audio.source_out = samples
-            audio:save()
-        end
-    end
-
-    -- Invalidate cache since we modified stream clips
-    self:invalidate_stream_cache()
+        "Sequence:set_out: sequence %s is not a masterclip", tostring(self.id)))
+    self.mark_out = frame
+    self:save()
 end
 
---- Get the synced in point for all streams (video frame value)
--- Asserts if called on non-masterclip sequence
--- For A/V: Returns video stream's source_in if all streams synchronized
--- For audio-only: Returns nil (no video frame reference)
--- @return number|nil Video frame position, or nil if not synced or audio-only
-function Sequence:get_all_streams_in()
+--- Get mark-in point (video frame units, nil = no mark). Masterclip only.
+-- @return number|nil
+function Sequence:get_in()
     assert(self:is_masterclip(), string.format(
-        "Sequence:get_all_streams_in: sequence %s is not a masterclip", tostring(self.id)))
-
-    local video = self:video_stream()
-    if not video then
-        return nil  -- Audio-only: no video frame reference
-    end
-
-    local video_in = video.source_in
-    local expected_samples = self:frame_to_samples(video_in)
-
-    if expected_samples then
-        for _, audio in ipairs(self:audio_streams()) do
-            if audio.source_in ~= expected_samples then
-                return nil  -- Not synced
-            end
-        end
-    end
-
-    return video_in
+        "Sequence:get_in: sequence %s is not a masterclip", tostring(self.id)))
+    return self.mark_in
 end
 
---- Get the synced out point for all streams (video frame value)
--- Asserts if called on non-masterclip sequence
--- For A/V: Returns video stream's source_out if all streams synchronized
--- For audio-only: Returns nil (no video frame reference)
--- @return number|nil Video frame position, or nil if not synced or audio-only
-function Sequence:get_all_streams_out()
+--- Get mark-out point (video frame units, nil = no mark). Masterclip only.
+-- @return number|nil
+function Sequence:get_out()
     assert(self:is_masterclip(), string.format(
-        "Sequence:get_all_streams_out: sequence %s is not a masterclip", tostring(self.id)))
+        "Sequence:get_out: sequence %s is not a masterclip", tostring(self.id)))
+    return self.mark_out
+end
 
-    local video = self:video_stream()
-    if not video then
-        return nil  -- Audio-only: no video frame reference
-    end
-
-    local video_out = video.source_out
-    local expected_samples = self:frame_to_samples(video_out)
-
-    if expected_samples then
-        for _, audio in ipairs(self:audio_streams()) do
-            if audio.source_out ~= expected_samples then
-                return nil  -- Not synced
-            end
-        end
-    end
-
-    return video_out
+--- Clear both marks. Masterclip only.
+function Sequence:clear_marks()
+    assert(self:is_masterclip(), string.format(
+        "Sequence:clear_marks: sequence %s is not a masterclip", tostring(self.id)))
+    self.mark_in = nil
+    self.mark_out = nil
+    self:save()
 end
 
 -- =============================================================================

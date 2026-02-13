@@ -333,6 +333,47 @@ else
 end
 
 -- =============================================================================
+-- TEST 10: Audio stream clip duration is in timeline frames, not samples
+-- =============================================================================
+print("Test 10: Audio stream clip duration in timeline frames (not samples)")
+-- Import a fresh A/V file
+local av_result = execute_command("ImportMedia", {
+    project_id = "project",
+    file_paths = {"/tmp/jve/av_duration_test.mp4"}
+})
+assert(av_result.success, "Import should succeed")
+
+-- Find the masterclip sequence just created
+local mc_stmt = db:prepare([[
+    SELECT s.id FROM sequences s
+    WHERE s.project_id = 'project' AND s.kind = 'masterclip'
+    ORDER BY s.created_at DESC LIMIT 1
+]])
+mc_stmt:exec()
+assert(mc_stmt:next(), "Should find masterclip sequence")
+local mc_seq_id = mc_stmt:value(0)
+mc_stmt:finalize()
+
+-- compute_content_end should return video-frame-scale value
+-- Mock metadata: 5000ms, 30fps, 48000Hz
+-- duration_frames = floor(5000 * 30 / 1000 + 0.5) = 150
+-- duration_samples = floor(5000 * 48000 / 1000 + 0.5) = 240000
+-- Bug: compute_content_end returns 240000 (samples) instead of 150 (frames)
+local Sequence = require("models.sequence")
+local mc_seq = Sequence.load(mc_seq_id)
+assert(mc_seq, "Should load masterclip sequence")
+local content_end = mc_seq:compute_content_end()
+
+-- With the bug: content_end = 240000 (audio clip duration in samples)
+-- Fixed:       content_end = 150 (both clips use timeline frames)
+assert(content_end <= 1000,
+    string.format("compute_content_end should be frame-scale (expected ~150), got %d (sample-scale?)", content_end))
+assert(content_end == 150,
+    string.format("compute_content_end should be 150 frames (5s at 30fps), got %d", content_end))
+
+print("  content_end = " .. content_end .. " (correct: timeline frames)")
+
+-- =============================================================================
 -- Cleanup: Restore original MediaReader
 -- =============================================================================
 MediaReader.import_media = original_import_media

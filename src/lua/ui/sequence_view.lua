@@ -13,7 +13,7 @@
 --
 -- Masterclip-specific behavior:
 -- - Playhead persisted to DB via sequence record (debounced)
--- - Marks read/write via stream clips (get_all_streams_in/out)
+-- - Marks read/write via sequence record (get_in/get_out)
 --
 -- @file sequence_view.lua
 
@@ -339,7 +339,7 @@ end
 function SequenceView:get_mark_in()
     if not self.sequence then return nil end
     if not self.sequence:is_masterclip() then return nil end
-    return self.sequence:get_all_streams_in()
+    return self.sequence:get_in()
 end
 
 --- Get mark out (video frame). Masterclip only.
@@ -347,7 +347,7 @@ end
 function SequenceView:get_mark_out()
     if not self.sequence then return nil end
     if not self.sequence:is_masterclip() then return nil end
-    return self.sequence:get_all_streams_out()
+    return self.sequence:get_out()
 end
 
 --- Set mark in at frame (masterclip only).
@@ -357,7 +357,7 @@ function SequenceView:set_mark_in(frame)
     assert(self.sequence and self.sequence:is_masterclip(), string.format(
         "SequenceView(%s):set_mark_in: no masterclip loaded (seq=%s)",
         self.view_id, tostring(self.sequence_id)))
-    self.sequence:set_all_streams_in(math.floor(frame))
+    self.sequence:set_in(math.floor(frame))
     self:_notify()
 end
 
@@ -368,23 +368,17 @@ function SequenceView:set_mark_out(frame)
     assert(self.sequence and self.sequence:is_masterclip(), string.format(
         "SequenceView(%s):set_mark_out: no masterclip loaded (seq=%s)",
         self.view_id, tostring(self.sequence_id)))
-    self.sequence:set_all_streams_out(math.floor(frame))
+    self.sequence:set_out(math.floor(frame))
     self:_notify()
 end
 
---- Clear marks (reset to full duration, masterclip only).
--- Uses total_frames (computed at load time from original stream clip extent)
--- rather than current source_out (which may have been narrowed by set_mark_out).
+--- Clear marks (masterclip only). Sets sequence mark_in/mark_out to nil.
 function SequenceView:clear_marks()
     assert(self.sequence and self.sequence:is_masterclip(), string.format(
         "SequenceView(%s):clear_marks: no masterclip loaded (seq=%s)",
         self.view_id, tostring(self.sequence_id)))
-    assert(self.total_frames > 0, string.format(
-        "SequenceView(%s):clear_marks: total_frames must be > 0, got %d",
-        self.view_id, self.total_frames))
 
-    self.sequence:set_all_streams_in(0)
-    self.sequence:set_all_streams_out(self.total_frames)
+    self.sequence:clear_marks()
 
     self:_notify()
 end

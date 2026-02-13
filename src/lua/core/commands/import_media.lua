@@ -313,7 +313,7 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
             track_id = track_id,
             owner_sequence_id = sequence.id,
             timeline_start = 0,
-            duration = duration_samples,
+            duration = duration_frames,
             source_in = 0,
             source_out = duration_samples,
             enabled = true,

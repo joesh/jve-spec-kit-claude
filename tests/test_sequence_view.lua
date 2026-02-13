@@ -445,11 +445,11 @@ do
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
-    -- Initially marks come from stream clip (source_in=0, source_out=100)
+    -- Initially no marks (nil = no mark set)
     local mi = view:get_mark_in()
     local mo = view:get_mark_out()
-    assert(mi == 0, "mark_in from stream clip, got " .. tostring(mi))
-    assert(mo == 100, "mark_out from stream clip, got " .. tostring(mo))
+    assert(mi == nil, "mark_in initially nil, got " .. tostring(mi))
+    assert(mo == nil, "mark_out initially nil, got " .. tostring(mo))
 
     -- Set marks
     view:set_mark_in(10)
@@ -458,10 +458,10 @@ do
     view:set_mark_out(80)
     assert(view:get_mark_out() == 80, "mark_out updated")
 
-    -- Clear marks (resets to full duration)
+    -- Clear marks (resets to nil)
     view:clear_marks()
-    assert(view:get_mark_in() == 0, "mark_in cleared to 0")
-    assert(view:get_mark_out() == 100, "mark_out cleared to source_out")
+    assert(view:get_mark_in() == nil, "mark_in cleared to nil")
+    assert(view:get_mark_out() == nil, "mark_out cleared to nil")
 
     view:destroy()
     print("  ok")
