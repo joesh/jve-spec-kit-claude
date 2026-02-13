@@ -84,6 +84,36 @@ function M.create(widget, state_module)
         -- Ensure thumb is at least 20 pixels wide
         thumb_width = math.max(20, thumb_width)
 
+        -- Mark In/Out overlay
+        local function draw_mark_overlay()
+            local mark_in = state_module.get_mark_in and state_module.get_mark_in()
+            local mark_out = state_module.get_mark_out and state_module.get_mark_out()
+            if not mark_in and not mark_out then return end
+
+            local colors = state_module.colors or {}
+            local fill_color = colors.mark_range_fill
+            local edge_color = colors.mark_range_edge or "#ff6b6b"
+            local handle_width = 2
+
+            if mark_in and mark_out and mark_out > mark_in then
+                local start_x = math.floor((mark_in / total_duration) * width)
+                local end_x = math.floor((mark_out / total_duration) * width)
+                if end_x <= start_x then end_x = start_x + 1 end
+                timeline.add_rect(scrollbar.widget, start_x, 0, math.max(1, end_x - start_x), M.SCROLLBAR_HEIGHT, fill_color)
+            end
+
+            local function draw_handle(frame)
+                if not frame then return end
+                local x = math.floor((frame / total_duration) * width)
+                local handle_x = math.max(0, x - math.floor(handle_width / 2))
+                timeline.add_rect(scrollbar.widget, handle_x, 0, math.max(handle_width, 2), M.SCROLLBAR_HEIGHT, edge_color)
+            end
+
+            draw_handle(mark_in)
+            draw_handle(mark_out)
+        end
+        draw_mark_overlay()
+
         -- Thumb
         timeline.add_rect(scrollbar.widget, thumb_x, 2, thumb_width, M.SCROLLBAR_HEIGHT - 4, "#4a4a4a")
 

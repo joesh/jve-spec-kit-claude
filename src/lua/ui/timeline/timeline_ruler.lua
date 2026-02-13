@@ -94,62 +94,39 @@ function M.create(widget, state_module)
 
         local mark_in_frame = state_module.get_mark_in and state_module.get_mark_in()
         local mark_out_frame = state_module.get_mark_out and state_module.get_mark_out()
-        local explicit_mark_in = state_module.has_explicit_mark_in and state_module.has_explicit_mark_in()
-        local explicit_mark_out = state_module.has_explicit_mark_out and state_module.has_explicit_mark_out()
 
         local function draw_mark_region()
-            if (not mark_in_frame) and (not mark_out_frame) then
-                return
-            end
+            if not mark_in_frame and not mark_out_frame then return end
 
             local colors = state_module.colors or {}
-            local fill_color = colors.mark_range_fill
-            if not fill_color then
-                error("timeline_state.colors.mark_range_fill is nil; expected translucent color for mark range overlay")
-            end
+            local fill_color = assert(colors.mark_range_fill,
+                "timeline_state.colors.mark_range_fill is nil; expected translucent color for mark range overlay")
             local edge_color = colors.mark_range_edge or colors.playhead or "#ff6b6b"
             local handle_width = 2
 
+            -- Fill between marks
             if mark_in_frame and mark_out_frame and mark_out_frame > mark_in_frame then
-                local visible_start = mark_in_frame
-                if visible_start < viewport_start_frames then visible_start = viewport_start_frames end
-                local visible_end = mark_out_frame
-                if visible_end > viewport_end_frames then visible_end = viewport_end_frames end
+                local visible_start = math.max(mark_in_frame, viewport_start_frames)
+                local visible_end = math.min(mark_out_frame, viewport_end_frames)
                 if visible_end > visible_start then
                     local start_x = state_module.time_to_pixel(visible_start, width)
                     local end_x = state_module.time_to_pixel(visible_end, width)
-                    if end_x <= start_x then
-                        end_x = start_x + 1
-                    end
-                    local region_width = end_x - start_x
-                    if region_width <= 0 then
-                        region_width = 1
-                    end
-                    timeline.add_rect(ruler.widget, start_x, 0, region_width, M.RULER_HEIGHT, fill_color)
+                    if end_x <= start_x then end_x = start_x + 1 end
+                    timeline.add_rect(ruler.widget, start_x, 0, math.max(1, end_x - start_x), M.RULER_HEIGHT, fill_color)
                 end
             end
 
+            -- Edge handles at each mark position
             local function draw_handle(time_frame)
-                if not time_frame then
-                    return
-                end
-                if time_frame < viewport_start_frames or time_frame > viewport_end_frames then
-                    return
-                end
+                if not time_frame then return end
+                if time_frame < viewport_start_frames or time_frame > viewport_end_frames then return end
                 local x = state_module.time_to_pixel(time_frame, width)
-                local handle_x = x - math.floor(handle_width / 2)
-                if handle_x < 0 then
-                    handle_x = 0
-                end
+                local handle_x = math.max(0, x - math.floor(handle_width / 2))
                 timeline.add_rect(ruler.widget, handle_x, 0, math.max(handle_width, 2), M.RULER_HEIGHT, edge_color)
             end
 
-            if explicit_mark_in then
-                draw_handle(mark_in_frame)
-            end
-            if explicit_mark_out then
-                draw_handle(mark_out_frame)
-            end
+            draw_handle(mark_in_frame)
+            draw_handle(mark_out_frame)
         end
 
         draw_mark_region()

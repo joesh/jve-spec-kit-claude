@@ -600,22 +600,6 @@ function M.render(view)
     local mark_in = state_module.get_mark_in and state_module.get_mark_in()
     local mark_out = state_module.get_mark_out and state_module.get_mark_out()
 
-    -- Draw Mark Overlays
-    if mark_in and mark_out and mark_out > mark_in then
-        local fill_color = state_module.colors.mark_range_fill
-        local visible_start = math.max(mark_in, viewport_start)
-        local visible_end = mark_out
-        if viewport_end < visible_end then visible_end = viewport_end end
-
-        if visible_end > visible_start then
-            local start_x = state_module.time_to_pixel(visible_start, width)
-            local end_x = state_module.time_to_pixel(visible_end, width)
-            if end_x <= start_x then end_x = start_x + 1 end
-            local region_width = math.max(1, end_x - start_x)
-            timeline.add_rect(view.widget, start_x, 0, region_width, height, fill_color)
-        end
-    end
-
     -- Compute layout
     view.update_layout_cache(height) -- Call layout logic on view object
 
@@ -1011,6 +995,21 @@ function M.render(view)
             end
         end
     end
+
+    -- Mark In/Out highlight (on top of clips, behind playhead)
+    local function draw_mark_overlay()
+        if not mark_in or not mark_out or mark_out <= mark_in then return end
+        local visible_start = math.max(mark_in, viewport_start)
+        local visible_end = math.min(mark_out, viewport_end)
+        if visible_end <= visible_start then return end
+
+        local start_x = state_module.time_to_pixel(visible_start, width)
+        local end_x = state_module.time_to_pixel(visible_end, width)
+        if end_x <= start_x then end_x = start_x + 1 end
+        local region_width = math.max(1, end_x - start_x)
+        timeline.add_rect(view.widget, start_x, 0, region_width, height, state_module.colors.mark_range_fill)
+    end
+    draw_mark_overlay()
 
     -- Playhead
     if playhead_position >= viewport_start and playhead_position <= viewport_end then
