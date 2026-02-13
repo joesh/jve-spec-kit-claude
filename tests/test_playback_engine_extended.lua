@@ -125,7 +125,8 @@ package.loaded["core.mixer"] = {
         if entry then return entry.sources, entry.clip_ids end
         if frame >= 0 and frame < 100 then
             return {
-                { path = "/test.mov", source_offset_us = 0, volume = 1.0,
+                { path = "/test.mov", source_offset_us = 0, seek_us = 0,
+                  speed_ratio = 1.0, volume = 1.0,
                   duration_us = 4166666, clip_start_us = 0,
                   clip_end_us = 4166666, clip_id = "aclip1" },
             }, { aclip1 = true }
@@ -244,7 +245,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
 
@@ -277,7 +278,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     -- No activate_audio → frame-based advance (simpler for latch tests)
     engine:set_position_silent(98)
@@ -310,7 +311,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     -- No activate_audio → frame-based advance
 
@@ -387,7 +388,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:set_position_silent(80)
 
@@ -462,7 +463,7 @@ do
     mock_audio._time_us = math.floor(50 * 1000000 / 24)
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
     engine:set_position_silent(50)
@@ -501,7 +502,7 @@ do
     mock_audio._time_us = math.floor(50 * 1000000 / 24)
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
     engine:set_position_silent(50)
@@ -537,7 +538,7 @@ do
     mock_audio.has_audio = true
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
 
@@ -575,7 +576,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
     mock_audio._calls = {}
@@ -645,7 +646,7 @@ do
         audio_sources_map[f] = { sources = {}, clip_ids = {} }
     end
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
     engine:set_position_silent(48)
@@ -692,7 +693,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
 
@@ -719,7 +720,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
     mock_audio._calls = {}
@@ -756,7 +757,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
 
@@ -781,7 +782,7 @@ do
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     -- NOT calling activate_audio()
     mock_audio._calls = {}
@@ -816,7 +817,7 @@ do
         }
     end
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:set_position_silent(10)
 
@@ -844,7 +845,7 @@ do
     -- All frames are gaps
     set_video_map({})
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
 
     -- Seek to gap frame (direction=0 for seek, so no prefetch anyway)
@@ -883,14 +884,15 @@ do
     end
     for f = 0, 199 do
         audio_sources_map[f] = {
-            sources = {{ path = "/test.mov", source_offset_us = 0, volume = 1.0,
+            sources = {{ path = "/test.mov", source_offset_us = 0, seek_us = 0,
+                         speed_ratio = 1.0, volume = 1.0,
                          duration_us = 8000000, clip_start_us = 0,
                          clip_end_us = 8000000, clip_id = "aclip1" }},
             clip_ids = { aclip1 = true },
         }
     end
 
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 200)
     engine:activate_audio()
     engine:set_position_silent(0)
@@ -935,7 +937,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local helpers = require("core.playback.playback_helpers")
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:activate_audio()
     engine:set_position_silent(50)
@@ -981,6 +983,106 @@ do
         "_last_audio_frame should be nil after stop")
 
     print("  _last_audio_frame separate tracking passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 13: activate_audio() must call set_max_time (B10 regression)
+--
+-- Bug: audio ownership transfer didn't update audio_playback.max_media_time_us.
+-- The shared audio device retained the PREVIOUS engine's max, causing
+-- clamp_media_us() to clamp the new engine's playback time backward.
+--------------------------------------------------------------------------------
+print("\n--- B10: activate_audio sets max_media_time_us ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    -- Two engines with different sequence lengths.
+    -- Both call load_sequence BEFORE activate_audio (real startup order).
+    local engine_a, _ = make_engine({ context_id = "ctx_a" })
+    engine_a:load_sequence("seq1", 100)
+    local a_max = engine_a.max_media_time_us
+    assert(a_max > 0, "Engine A max_media_time_us should be positive")
+
+    local engine_b, _ = make_engine({ context_id = "ctx_b" })
+    engine_b:load_sequence("seq1", 500)
+    local b_max = engine_b.max_media_time_us
+    assert(b_max > a_max, "Engine B max should be > engine A max")
+
+    -- Activate A — should push A's max_time
+    mock_audio._calls = {}
+    engine_a:activate_audio()
+    local found_a_max = false
+    for _, call in ipairs(mock_audio._calls) do
+        if call.name == "set_max_time" and call.args[1] == a_max then
+            found_a_max = true
+        end
+    end
+    assert(found_a_max,
+        string.format("activate_audio(A) must push set_max_time(%d)", a_max))
+
+    -- Transfer: deactivate A, activate B — should push B's (larger) max_time
+    mock_audio._calls = {}
+    engine_a:deactivate_audio()
+    engine_b:activate_audio()
+    local found_b_max = false
+    for _, call in ipairs(mock_audio._calls) do
+        if call.name == "set_max_time" and call.args[1] == b_max then
+            found_b_max = true
+        end
+    end
+    assert(found_b_max,
+        string.format("activate_audio(B) must push set_max_time(%d), calls: %s",
+            b_max, (function()
+                local parts = {}
+                for _, c in ipairs(mock_audio._calls) do
+                    parts[#parts+1] = c.name
+                end
+                return table.concat(parts, ", ")
+            end)()))
+
+    print("  activate_audio sets max_media_time_us passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 14: activate_audio() must clear stale current_audio_clip_ids (B11)
+--
+-- Bug: after audio ownership transfer, the engine's cached clip IDs from its
+-- previous session caused _audio_clips_changed() to return false, skipping
+-- the set_audio_sources call for the new sources.
+--------------------------------------------------------------------------------
+print("\n--- B11: activate_audio clears stale clip IDs ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+
+    -- Simulate previous session: engine had audio, cached some clip IDs
+    engine.current_audio_clip_ids = { old_clip1 = true, old_clip2 = true }
+
+    -- Now activate audio
+    engine:activate_audio()
+
+    -- After activation, current_audio_clip_ids must be cleared (empty table)
+    -- so that _resolve_and_set_audio() sees a change and pushes fresh sources.
+    -- The resolve call itself will set the new clip IDs.
+    -- Key invariant: the OLD IDs must not persist (they'd cause false no-change).
+
+    -- Check that set_audio_sources was called (meaning change detection fired)
+    local saw_set_sources = false
+    for _, call in ipairs(mock_audio._calls) do
+        if call.name == "set_audio_sources" then
+            saw_set_sources = true
+        end
+    end
+    assert(saw_set_sources,
+        "activate_audio must re-push audio sources (stale clip IDs should be cleared)")
+
+    print("  activate_audio clears stale clip IDs passed")
 end
 
 print("\n✅ test_playback_engine_extended.lua passed")

@@ -399,9 +399,16 @@ end
 --------------------------------------------------------------------------------
 
 --- Claim audio output for this engine instance.
+-- Updates max_media_time_us on the shared audio device (each engine has
+-- different content length) and clears stale clip ID cache to force
+-- a fresh resolve (the shared device may have another engine's sources).
 function PlaybackEngine:activate_audio()
     self._audio_owner = true
+    self.current_audio_clip_ids = {}
     if self.sequence and self.fps_num then
+        if audio_playback and audio_playback.session_initialized then
+            audio_playback.set_max_time(self.max_media_time_us)
+        end
         self:_resolve_and_set_audio(math.floor(self._position))
     end
 end

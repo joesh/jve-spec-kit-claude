@@ -3,9 +3,8 @@
 -- StepFrame: non-undoable command to advance/retreat the playhead by 1 frame
 -- (or 1 second with shift).
 --
--- Mode-agnostic: uses playback_controller's API which internally handles
--- timeline vs source mode. set_position() updates the model and triggers
--- viewer display in both modes.
+-- Mode-agnostic: uses the active SequenceView. seek_to_frame() displays the
+-- frame via Renderer and updates the view's playhead.
 local M = {}
 
 local SPEC = {
@@ -44,7 +43,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             new_frame = current_frame + step_frames
         end
 
-        engine:set_position(new_frame)
+        sv:seek_to_frame(new_frame)
 
         if engine.play_frame_audio then
             engine:play_frame_audio(new_frame)

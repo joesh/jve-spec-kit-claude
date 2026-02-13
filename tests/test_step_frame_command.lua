@@ -121,6 +121,11 @@ local mock_sv = {
     total_frames = 1000,
     engine = mock_engine,
 }
+function mock_sv:seek_to_frame(frame)
+    local clamped = math.max(0, math.min(math.floor(frame), self.total_frames - 1))
+    self.engine._position = clamped
+    timeline_state.set_playhead_position(clamped)
+end
 
 local panel_manager = require("ui.panel_manager")
 panel_manager.register_sequence_view("source_view", mock_sv)

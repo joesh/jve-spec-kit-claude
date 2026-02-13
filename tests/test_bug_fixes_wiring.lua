@@ -117,6 +117,80 @@ do
     check("no set_timeline_mode calls", no_mode_switch)
 end
 
+-- ═══════════════════════════════════════════════════════════
+-- B6: PlaybackEngine audio must be initialized at startup
+-- (layout.lua must call init_audio + activate_audio)
+-- ═══════════════════════════════════════════════════════════
+print("\n=== B6: audio init wiring in layout.lua ===")
+do
+    local f = io.open("../src/lua/ui/layout.lua", "r")
+    assert(f, "Cannot open layout.lua")
+    local content = f:read("*a")
+    f:close()
+
+    check("layout calls init_audio", content:find("init_audio") ~= nil)
+    check("layout calls activate_audio", content:find("activate_audio") ~= nil)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- B7: Playhead must sync from engine to timeline_state during playback
+-- (timeline_panel's tl_view listener must call set_playhead_position)
+-- ═══════════════════════════════════════════════════════════
+print("\n=== B7: playhead sync during playback ===")
+do
+    local f = io.open("../src/lua/ui/timeline/timeline_panel.lua", "r")
+    assert(f, "Cannot open timeline_panel.lua")
+    local content = f:read("*a")
+    f:close()
+
+    -- The tl_view playback listener must sync tl_view.playhead → state.
+    -- set_playhead_position(playhead_frame) must appear (not snapped_frame/parsed).
+    check("tl_view listener syncs playhead to state during playback",
+        content:find("set_playhead_position%(playhead_frame%)") ~= nil)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- B8: StepFrame must display frame via seek_to_frame (not bare set_position)
+-- ═══════════════════════════════════════════════════════════
+print("\n=== B8: StepFrame uses seek_to_frame ===")
+do
+    local f = io.open("../src/lua/core/commands/step_frame.lua", "r")
+    assert(f, "Cannot open step_frame.lua")
+    local content = f:read("*a")
+    f:close()
+
+    -- Must use seek_to_frame (which displays frame + updates playhead)
+    check("StepFrame calls seek_to_frame", content:find("seek_to_frame") ~= nil)
+    -- Must NOT use bare engine:set_position (which skips frame display)
+    check("StepFrame does not use bare set_position",
+        content:find("set_position%(") == nil)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- B9: Audio ownership transfers on focus change
+-- ═══════════════════════════════════════════════════════════
+print("\n=== B9: audio follows focus ===")
+do
+    local f = io.open("../src/lua/ui/focus_manager.lua", "r")
+    assert(f, "Cannot open focus_manager.lua")
+    local content = f:read("*a")
+    f:close()
+
+    check("focus_manager has on_focus_change callback",
+        content:find("on_focus_change") ~= nil)
+end
+do
+    local f = io.open("../src/lua/ui/layout.lua", "r")
+    assert(f, "Cannot open layout.lua")
+    local content = f:read("*a")
+    f:close()
+
+    check("layout wires audio transfer on focus change",
+        content:find("on_focus_change") ~= nil
+        and content:find("activate_audio") ~= nil
+        and content:find("deactivate_audio") ~= nil)
+end
+
 -- Summary
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
 assert(fail_count == 0, string.format("%d test(s) failed", fail_count))

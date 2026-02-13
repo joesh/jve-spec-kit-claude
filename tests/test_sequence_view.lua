@@ -157,7 +157,8 @@ package.loaded["core.mixer"] = {
     resolve_audio_sources = function(seq, frame, fps_num, fps_den, mc)
         if frame >= 0 and frame < 100 then
             return {
-                { path = "/test.mov", source_offset_us = 0, volume = 1.0,
+                { path = "/test.mov", source_offset_us = 0, seek_us = 0,
+                  speed_ratio = 1.0, volume = 1.0,
                   duration_us = 4166666, clip_start_us = 0,
                   clip_end_us = 4166666, clip_id = "aclip1" },
             }, { aclip1 = true }

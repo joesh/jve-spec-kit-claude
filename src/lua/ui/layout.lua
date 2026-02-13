@@ -211,6 +211,12 @@ local timeline_view = SequenceView.new({ view_id = "timeline_view" })
 panel_manager.register_sequence_view("source_view", source_view)
 panel_manager.register_sequence_view("timeline_view", timeline_view)
 
+-- Initialize audio: PlaybackEngine needs the audio module reference,
+-- and timeline_view owns audio by default (source_view activates on focus).
+local PlaybackEngine = require("core.playback.playback_engine")
+PlaybackEngine.init_audio(require("core.media.audio_playback"))
+timeline_view.engine:activate_audio()
+
 -- 3. Inspector (right) - Create container for Lua inspector
 local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
 
@@ -230,6 +236,22 @@ keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_brow
 
 -- 6. Initialize focus manager for visual panel indicators
 local focus_manager = require("ui.focus_manager")
+
+-- Audio follows focus: transfer audio ownership when switching between sequence views.
+-- Non-viewer panels (browser, inspector) keep the last view's audio active.
+focus_manager.on_focus_change(function(old_id, new_id)
+    local view_for = {
+        source_view = source_view,
+        timeline_view = timeline_view,
+        timeline = timeline_view,
+    }
+    local new_view = view_for[new_id]
+    if not new_view then return end
+
+    source_view.engine:deactivate_audio()
+    timeline_view.engine:deactivate_audio()
+    new_view.engine:activate_audio()
+end)
 
 -- Initialize the Lua inspector content following working reference pattern
 local view = require("ui.inspector.view")

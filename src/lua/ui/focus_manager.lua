@@ -29,6 +29,9 @@ end
 -- Currently focused panel ID
 local focused_panel_id = nil
 
+-- Focus change callbacks: called with (old_panel_id, new_panel_id)
+local focus_change_callbacks = {}
+
 -- Focus indicator colors
 local FOCUS_COLOR = assert(ui_constants.COLORS.FOCUS_BORDER_COLOR, "focus_manager: ui_constants.COLORS.FOCUS_BORDER_COLOR is not defined")
 
@@ -169,6 +172,10 @@ function M.set_focused_panel(panel_id)
     end
 
     selection_hub.set_active_panel(focused_panel_id)
+
+    for _, fn in ipairs(focus_change_callbacks) do
+        fn(old_panel_id, focused_panel_id)
+    end
 end
 
 -- Update header visual for a single panel
@@ -242,6 +249,14 @@ function M.focus_panel(panel_id)
     -- Qt will trigger the focus event which will call our handler
     qt_set_focus(target_widget)
     return true
+end
+
+--- Register a callback for focus changes.
+-- @param fn function(old_panel_id, new_panel_id)
+function M.on_focus_change(fn)
+    assert(type(fn) == "function",
+        "focus_manager.on_focus_change: fn must be a function")
+    focus_change_callbacks[#focus_change_callbacks + 1] = fn
 end
 
 -- Initialize all registered panels to unfocused state

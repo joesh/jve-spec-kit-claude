@@ -1595,46 +1595,31 @@ function M.create(opts)
         ))
     end
 
-    -- Wire timeline_view's PlaybackEngine to page-scroll when playhead exits viewport.
-    -- The timeline_view's engine fires on_position_changed; we listen via SequenceView listener.
+    -- Bidirectional playhead sync between timeline_view (engine) and timeline_state.
+    -- last_viewer_playhead prevents feedback loops between the two listeners.
     local pm = require("ui.panel_manager")
     local tl_view = pm.get_sequence_view("timeline_view")
 
+    local last_viewer_playhead = nil
+    local viewer_seek_pending = false
+    local viewer_seek_target = nil
+    local VIEWER_SEEK_DEFER_MS = ui_constants.TIMELINE.VIEWER_SEEK_DEFER_MS or 1
+
+    -- Viewer → State: engine position changes sync to timeline state.
+    -- Fires during playback (every tick) and parked operations (arrow keys via seek_to_frame).
+    -- set_playhead_position also calls ensure_playhead_visible (auto-scroll).
     tl_view:add_listener(function()
-        if tl_view.engine:is_playing() then
-            local playhead_frame = tl_view.playhead
-
-            local vp_start = state.get_viewport_start_time()
-            local vp_duration = state.get_viewport_duration()
-            local vp_end = vp_start + vp_duration
-
-            if playhead_frame < vp_start or playhead_frame >= vp_end then
-                local new_start
-                if playhead_frame < vp_start then
-                    new_start = playhead_frame - math.floor(vp_duration * 0.75)
-                else
-                    new_start = playhead_frame - math.floor(vp_duration * 0.25)
-                end
-                if new_start < 0 then new_start = 0 end
-                state.set_viewport_start_time(new_start)
-            end
-        end
+        local playhead_frame = tl_view.playhead
+        last_viewer_playhead = playhead_frame
+        state.set_playhead_position(playhead_frame)
     end)
 
     -- Load initial sequence into timeline_view
     tl_view:load_sequence(initial_sequence_id)
 
-    -- Viewer follows playhead: when parked, any playhead change resolves and displays the frame.
-    -- Commands (navigation, edits, timecode, undo/redo) just call state.set_playhead_position();
-    -- this listener propagates that to the viewer without commands knowing about the viewer.
-    --
-    -- Decimation: only one decode in flight at a time. If a new playhead arrives while
-    -- decoding, the stale request is skipped and the latest position wins.
-    -- Deferred via 0ms timer so timeline repaints aren't blocked by frame decode.
-    local last_viewer_playhead = nil
-    local viewer_seek_pending = false
-    local viewer_seek_target = nil
-    local VIEWER_SEEK_DEFER_MS = ui_constants.TIMELINE.VIEWER_SEEK_DEFER_MS or 1
+    -- State → Viewer: when parked, state changes (from commands, ruler clicks, timecode entry)
+    -- propagate to the viewer for frame display.
+    -- Decimation: deferred via timer so timeline repaints aren't blocked by frame decode.
     state.add_listener(function()
         if not tl_view.engine:is_playing() and tl_view.sequence_id then
             local playhead = state.get_playhead_position()
