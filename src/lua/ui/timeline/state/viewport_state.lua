@@ -66,8 +66,10 @@ end
 
 -- Helper: Clamp viewport start (all integer frames)
 local function clamp_viewport_start(desired_start, duration)
-    assert(type(desired_start) == "number", "viewport_state: desired_start must be integer")
-    assert(type(duration) == "number", "viewport_state: duration must be integer")
+    assert(type(desired_start) == "number" and desired_start == math.floor(desired_start),
+        "viewport_state: desired_start must be integer, got " .. tostring(desired_start))
+    assert(type(duration) == "number" and duration == math.floor(duration),
+        "viewport_state: duration must be integer, got " .. tostring(duration))
 
     local total_extent = calculate_timeline_extent()
     local max_start = math.max(0, total_extent - duration)
@@ -108,6 +110,8 @@ function M.get_viewport_duration()
 end
 
 function M.set_viewport_start_time(time_obj, persist_callback)
+    assert(type(time_obj) == "number" and time_obj == math.floor(time_obj),
+        "viewport_state.set_viewport_start_time: time must be integer, got " .. tostring(time_obj))
     local state = data.state
     local clamped = clamp_viewport_start(time_obj, state.viewport_duration)
     if state.viewport_start_time ~= clamped then
@@ -119,7 +123,8 @@ end
 
 function M.set_viewport_duration(duration_obj, persist_callback)
     local state = data.state
-    assert(type(duration_obj) == "number", "viewport_state.set_viewport_duration: duration must be integer")
+    assert(type(duration_obj) == "number" and duration_obj == math.floor(duration_obj),
+        "viewport_state.set_viewport_duration: duration must be integer, got " .. tostring(duration_obj))
 
     if state.viewport_duration ~= duration_obj then
         local playhead = state.playhead_position
@@ -140,7 +145,8 @@ end
 
 function M.set_playhead_position(time_obj, persist_callback, selection_callback)
     local state = data.state
-    assert(type(time_obj) == "number", "viewport_state.set_playhead_position: time must be integer frame")
+    assert(type(time_obj) == "number" and time_obj == math.floor(time_obj),
+        "viewport_state.set_playhead_position: time must be integer frame, got " .. tostring(time_obj))
 
     local changed = state.playhead_position ~= time_obj
     state.playhead_position = time_obj

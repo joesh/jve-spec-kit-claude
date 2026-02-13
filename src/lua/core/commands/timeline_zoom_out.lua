@@ -35,7 +35,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local dur = timeline_state.get_viewport_duration()
-        timeline_state.set_viewport_duration(dur * 1.25)
+        timeline_state.set_viewport_duration(math.floor(dur * 1.25))
         return true
     end
 

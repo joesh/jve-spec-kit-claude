@@ -555,6 +555,9 @@ local function build_timeline_metadata_map(tmp_dir)
                             if resolution_elem then
                                 local hex_str = get_text(resolution_elem)
                                 width, height = decode_hex_resolution(hex_str)
+                                -- Floor: hex-decoded doubles may have fractional bits
+                                if width then width = math.floor(width) end
+                                if height then height = math.floor(height) end
                             end
 
                             metadata_map[seq_id] = {
@@ -962,8 +965,11 @@ function M.parse_drp_file(drp_path)
                 timeline.fps = fps_for_parsing
 
                 -- Store resolution from metadata (or use project defaults)
-                timeline.width = (metadata and metadata.width) or project.settings.width
-                timeline.height = (metadata and metadata.height) or project.settings.height
+                -- NOTE: Lua truthy-zero — `0 or fallback` == 0, so check > 0 explicitly
+                local meta_w = metadata and metadata.width
+                local meta_h = metadata and metadata.height
+                timeline.width = (meta_w and meta_w > 0) and meta_w or project.settings.width
+                timeline.height = (meta_h and meta_h > 0) and meta_h or project.settings.height
 
                 table.insert(timelines, timeline)
             end

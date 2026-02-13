@@ -161,7 +161,7 @@ function M.handle_wheel(view, delta_x, delta_y, modifiers)
         if width and width > 0 then
             local viewport_duration = view.state.get_viewport_duration()
             local delta_time = (-horizontal / width) * viewport_duration
-            local new_start = view.state.get_viewport_start_time() + delta_time
+            local new_start = math.floor(view.state.get_viewport_start_time() + delta_time)
             view.state.set_viewport_start_time(new_start)
             view.render()
         end

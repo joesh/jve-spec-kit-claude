@@ -405,7 +405,7 @@ function M.create(widget, state_module)
             if width and width > 0 then
                 local viewport_duration = state_module.get_viewport_duration()
                 local delta_time = (-horizontal / width) * viewport_duration
-                local new_start = state_module.get_viewport_start_time() + delta_time
+                local new_start = math.floor(state_module.get_viewport_start_time() + delta_time)
                 state_module.set_viewport_start_time(new_start)
                 render()
             end

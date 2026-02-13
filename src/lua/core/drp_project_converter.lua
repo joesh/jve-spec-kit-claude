@@ -321,8 +321,11 @@ function M.convert(drp_path, jvp_path)
         -- STEP 4: Create the sequence with computed settings
         -- =====================================================================
         -- Use per-timeline resolution if available, else fall back to project defaults
-        local seq_width = timeline_data.width or settings.width
-        local seq_height = timeline_data.height or settings.height
+        -- NOTE: Lua truthy-zero — `0 or fallback` == 0, so check > 0 explicitly
+        local seq_width = (timeline_data.width and timeline_data.width > 0)
+            and timeline_data.width or settings.width
+        local seq_height = (timeline_data.height and timeline_data.height > 0)
+            and timeline_data.height or settings.height
 
         local sequence = Sequence.create(
             timeline_data.name,
