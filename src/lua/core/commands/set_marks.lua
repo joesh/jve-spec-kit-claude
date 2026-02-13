@@ -1,13 +1,21 @@
 --- Mark Commands — undoable mark in/out on any sequence
 --
 -- Commands:
--- - SetMarkIn (undoable): set mark_in at frame
--- - SetMarkOut (undoable): set mark_out at frame
+-- - SetMarkIn (undoable): set mark_in at frame (inclusive)
+-- - SetMarkOut (undoable): set mark_out at frame (inclusive — stored as frame+1, exclusive)
 -- - ClearMarkIn (undoable): clear mark_in only
 -- - ClearMarkOut (undoable): clear mark_out only
 -- - ClearMarks (undoable): clear both marks
--- - GetMarkIn (query): return mark_in value
--- - GetMarkOut (query): return mark_out value
+-- - GetMarkIn (query): return mark_in value (inclusive)
+-- - GetMarkOut (query): return mark_out value (exclusive)
+-- - GoToMarkIn (non-undoable): set playhead to mark_in
+-- - GoToMarkOut (non-undoable): set playhead to mark_out - 1 (last included frame)
+--
+-- Out-point convention (industry standard):
+-- mark_in is INCLUSIVE (first frame in range).
+-- mark_out is EXCLUSIVE (first frame NOT in range).
+-- SetMarkOut accepts the inclusive frame (what user sees) and stores frame+1.
+-- Duration = mark_out - mark_in.
 --
 -- All take sequence_id (required). Set commands take frame (required).
 -- Undoable commands store old value on command for undo.
@@ -80,6 +88,20 @@ local GET_MARK_OUT_SPEC = {
     },
 }
 
+local GO_TO_MARK_IN_SPEC = {
+    undoable = false,
+    args = {
+        sequence_id = { required = true, kind = "string" },
+    },
+}
+
+local GO_TO_MARK_OUT_SPEC = {
+    undoable = false,
+    args = {
+        sequence_id = { required = true, kind = "string" },
+    },
+}
+
 function M.register(executors, undoers)
     ---------------------------------------------------------------------------
     -- SetMarkIn
@@ -124,7 +146,9 @@ function M.register(executors, undoers)
         local old_value = seq.mark_out
         command:set_parameter("_old_mark_out", old_value)
 
-        seq.mark_out = args.frame
+        -- Store exclusive boundary: frame is the last included frame,
+        -- stored value is first excluded frame (industry standard)
+        seq.mark_out = args.frame + 1
         seq:save()
         emit_marks_changed(args.sequence_id)
         return { success = true }
@@ -245,6 +269,42 @@ function M.register(executors, undoers)
     end
 
     ---------------------------------------------------------------------------
+    -- GoToMarkIn (non-undoable): set playhead to mark_in
+    ---------------------------------------------------------------------------
+    executors["GoToMarkIn"] = function(command)
+        local args = command:get_all_parameters()
+        assert(args.sequence_id and args.sequence_id ~= "",
+            "GoToMarkIn: sequence_id is required")
+
+        local seq = load_sequence(args.sequence_id)
+        if seq.mark_in then
+            seq.playhead_position = seq.mark_in
+            seq:save()
+            Signals.emit("playhead_changed", args.sequence_id, seq.mark_in)
+        end
+        return { success = true }
+    end
+
+    ---------------------------------------------------------------------------
+    -- GoToMarkOut (non-undoable): set playhead to last included frame
+    ---------------------------------------------------------------------------
+    executors["GoToMarkOut"] = function(command)
+        local args = command:get_all_parameters()
+        assert(args.sequence_id and args.sequence_id ~= "",
+            "GoToMarkOut: sequence_id is required")
+
+        local seq = load_sequence(args.sequence_id)
+        if seq.mark_out then
+            -- mark_out is exclusive; last included frame = mark_out - 1
+            local target = seq.mark_out - 1
+            seq.playhead_position = target
+            seq:save()
+            Signals.emit("playhead_changed", args.sequence_id, target)
+        end
+        return { success = true }
+    end
+
+    ---------------------------------------------------------------------------
     -- Return registrations (multi-command style B)
     ---------------------------------------------------------------------------
     return {
@@ -255,6 +315,8 @@ function M.register(executors, undoers)
         ["ClearMarks"] = { executor = executors["ClearMarks"], undoer = undoers["ClearMarks"], spec = CLEAR_MARKS_SPEC },
         ["GetMarkIn"] = { executor = executors["GetMarkIn"], spec = GET_MARK_IN_SPEC },
         ["GetMarkOut"] = { executor = executors["GetMarkOut"], spec = GET_MARK_OUT_SPEC },
+        ["GoToMarkIn"] = { executor = executors["GoToMarkIn"], spec = GO_TO_MARK_IN_SPEC },
+        ["GoToMarkOut"] = { executor = executors["GoToMarkOut"], spec = GO_TO_MARK_OUT_SPEC },
     }
 end
 

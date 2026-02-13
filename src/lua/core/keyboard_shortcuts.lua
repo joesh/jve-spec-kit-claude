@@ -873,12 +873,7 @@ local function handle_key_impl(event)
     if key == KEY.I and mark_seq_id then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
-                -- GoTo mark in: read mark, set playhead via command (signal drives UI)
-                local r_mi = execute_command("GetMarkIn", {sequence_id = mark_seq_id})
-                local frame = r_mi and r_mi.result_data and r_mi.result_data.mark_in
-                if frame then
-                    execute_command("SetPlayhead", {sequence_id = mark_seq_id, playhead_position = frame})
-                end
+                execute_command("GoToMarkIn", {sequence_id = mark_seq_id})
             else
                 assert(mark_playhead, "keyboard_shortcuts: playhead nil for SetMarkIn")
                 execute_command("SetMarkIn", {sequence_id = mark_seq_id, frame = mark_playhead})
@@ -894,12 +889,7 @@ local function handle_key_impl(event)
     if key == KEY.O and mark_seq_id then
         if not modifier_meta and not modifier_alt then
             if modifier_shift then
-                -- GoTo mark out: read mark, set playhead via command (signal drives UI)
-                local r_mo = execute_command("GetMarkOut", {sequence_id = mark_seq_id})
-                local frame = r_mo and r_mo.result_data and r_mo.result_data.mark_out
-                if frame then
-                    execute_command("SetPlayhead", {sequence_id = mark_seq_id, playhead_position = frame})
-                end
+                execute_command("GoToMarkOut", {sequence_id = mark_seq_id})
             else
                 assert(mark_playhead, "keyboard_shortcuts: playhead nil for SetMarkOut")
                 execute_command("SetMarkOut", {sequence_id = mark_seq_id, frame = mark_playhead})
@@ -952,10 +942,11 @@ local function handle_key_impl(event)
 
             if best_clip then
                 local clip_start = best_clip.timeline_start or best_clip.start_value
-                local clip_out = clip_start + best_clip.duration
+                -- Last included frame = clip_start + duration - 1
+                local clip_last_frame = clip_start + best_clip.duration - 1
                 local seq_id = timeline_state.get_sequence_id()
                 execute_command("SetMarkIn", {sequence_id = seq_id, frame = clip_start})
-                execute_command("SetMarkOut", {sequence_id = seq_id, frame = clip_out})
+                execute_command("SetMarkOut", {sequence_id = seq_id, frame = clip_last_frame})
             end
             return true
         end

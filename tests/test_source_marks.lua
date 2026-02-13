@@ -101,7 +101,8 @@ cmd = make_command({sequence_id = "mc_1", frame = 99})
 r = executors["SetMarkOut"](cmd)
 check("SetMarkOut succeeds", r.success)
 s = Sequence.load("mc_1")
-check("mark_out persisted to 99", s.mark_out == 99)
+-- SetMarkOut stores exclusive: frame + 1 = 100
+check("mark_out persisted to 100 (exclusive)", s.mark_out == 100)
 
 -- Undo
 undoers["SetMarkOut"](cmd)
@@ -127,7 +128,8 @@ check("both marks cleared", s.mark_in == nil and s.mark_out == nil)
 undoers["ClearMarks"](cmd)
 s = Sequence.load("mc_1")
 check("ClearMarks undo restores mark_in", s.mark_in == 10, "got " .. tostring(s.mark_in))
-check("ClearMarks undo restores mark_out", s.mark_out == 50, "got " .. tostring(s.mark_out))
+-- SetMarkOut(50) stored 51 (exclusive)
+check("ClearMarks undo restores mark_out", s.mark_out == 51, "got " .. tostring(s.mark_out))
 
 --------------------------------------------------------------------------------
 -- GetMarkIn / GetMarkOut
@@ -140,7 +142,8 @@ check("GetMarkIn returns 10", r.result_data and r.result_data.mark_in == 10)
 
 r = executors["GetMarkOut"](make_command({sequence_id = "mc_1"}))
 check("GetMarkOut succeeds", r.success)
-check("GetMarkOut returns 50", r.result_data and r.result_data.mark_out == 50)
+-- GetMarkOut returns exclusive boundary (50 + 1 = 51)
+check("GetMarkOut returns 51 (exclusive)", r.result_data and r.result_data.mark_out == 51)
 
 --------------------------------------------------------------------------------
 -- Error: missing sequence_id asserts

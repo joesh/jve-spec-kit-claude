@@ -53,6 +53,8 @@ local module_aliases = {
     ClearMarks = "core.commands.set_marks",
     GetMarkIn = "core.commands.set_marks",
     GetMarkOut = "core.commands.set_marks",
+    GoToMarkIn = "core.commands.set_marks",
+    GoToMarkOut = "core.commands.set_marks",
 }
 function M.init(database, set_last_error_fn)
     db = database

@@ -121,7 +121,8 @@ signal_emissions = {}
 r = execute_cmd("SetMarkOut", {sequence_id = S, frame = 96})
 check("SetMarkOut succeeds", r.success)
 s = reload_seq()
-check("SetMarkOut persisted", s.mark_out == 96, "expected 96, got " .. tostring(s.mark_out))
+-- SetMarkOut stores exclusive: frame + 1 = 97
+check("SetMarkOut persisted (exclusive)", s.mark_out == 97, "expected 97, got " .. tostring(s.mark_out))
 check("mark_in preserved", s.mark_in == 48, "expected 48, got " .. tostring(s.mark_in))
 check("marks_changed signal emitted", #signal_emissions == 1)
 
@@ -136,7 +137,7 @@ check("mark_in still 48 after undo", s.mark_in == 48)
 r = redo()
 check("SetMarkOut redo succeeds", r.success)
 s = reload_seq()
-check("SetMarkOut redo restores 96", s.mark_out == 96)
+check("SetMarkOut redo restores 97", s.mark_out == 97)
 
 --------------------------------------------------------------------------------
 -- SetMarkIn overwrites existing
@@ -148,7 +149,7 @@ r = execute_cmd("SetMarkIn", {sequence_id = S, frame = 10})
 check("SetMarkIn overwrite succeeds", r.success)
 s = reload_seq()
 check("mark_in now 10", s.mark_in == 10, "expected 10, got " .. tostring(s.mark_in))
-check("mark_out still 96", s.mark_out == 96)
+check("mark_out still 97", s.mark_out == 97)
 
 -- Undo restores PREVIOUS mark_in (48), not nil
 undo()
@@ -170,14 +171,14 @@ r = execute_cmd("ClearMarkIn", {sequence_id = S})
 check("ClearMarkIn succeeds", r.success, tostring(r.error_message))
 s = reload_seq()
 check("mark_in cleared", s.mark_in == nil, "expected nil, got " .. tostring(s.mark_in))
-check("mark_out preserved", s.mark_out == 96)
+check("mark_out preserved", s.mark_out == 97)
 check("marks_changed signal emitted", #signal_emissions >= 1)
 
 -- Undo
 undo()
 s = reload_seq()
 check("ClearMarkIn undo restores 10", s.mark_in == 10, "expected 10, got " .. tostring(s.mark_in))
-check("mark_out still 96", s.mark_out == 96)
+check("mark_out still 97", s.mark_out == 97)
 
 -- Redo
 redo()
@@ -202,7 +203,7 @@ check("mark_in preserved", s.mark_in == 10)
 -- Undo
 undo()
 s = reload_seq()
-check("ClearMarkOut undo restores 96", s.mark_out == 96, "expected 96, got " .. tostring(s.mark_out))
+check("ClearMarkOut undo restores 97", s.mark_out == 97, "expected 97, got " .. tostring(s.mark_out))
 
 -- Redo
 redo()
@@ -217,10 +218,10 @@ undo()
 --------------------------------------------------------------------------------
 print("\n--- ClearMarks ---")
 
--- State: mark_in=10, mark_out=96
+-- State: mark_in=10, mark_out=97
 s = reload_seq()
 check("pre-ClearMarks: mark_in=10", s.mark_in == 10)
-check("pre-ClearMarks: mark_out=96", s.mark_out == 96)
+check("pre-ClearMarks: mark_out=97", s.mark_out == 97)
 
 signal_emissions = {}
 r = execute_cmd("ClearMarks", {sequence_id = S})
@@ -233,7 +234,7 @@ check("marks_changed signal emitted", #signal_emissions >= 1)
 undo()
 s = reload_seq()
 check("ClearMarks undo restores mark_in", s.mark_in == 10, "expected 10, got " .. tostring(s.mark_in))
-check("ClearMarks undo restores mark_out", s.mark_out == 96, "expected 96, got " .. tostring(s.mark_out))
+check("ClearMarks undo restores mark_out", s.mark_out == 97, "expected 97, got " .. tostring(s.mark_out))
 
 -- Redo
 redo()
@@ -258,8 +259,9 @@ check("GetMarkIn returns frame", type(rd) == "table" and rd.mark_in == 24,
 r = execute_cmd("GetMarkOut", {sequence_id = S})
 check("GetMarkOut succeeds", r.success)
 rd = r.result_data
-check("GetMarkOut returns frame", type(rd) == "table" and rd.mark_out == 72,
-    "expected 72, got " .. tostring(rd and rd.mark_out))
+-- GetMarkOut returns exclusive boundary (72 + 1 = 73)
+check("GetMarkOut returns exclusive", type(rd) == "table" and rd.mark_out == 73,
+    "expected 73, got " .. tostring(rd and rd.mark_out))
 
 -- Query with no marks
 execute_cmd("ClearMarks", {sequence_id = S})
